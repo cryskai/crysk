@@ -12,8 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manual override) used to edit its earlier notice in place. GitHub neither notifies on an edit nor
   moves the comment down the timeline, so a skip on a later push was invisible. On #315 the budget
   notice was created at 01:48 and silently re-edited at 02:48. The notice is now posted fresh at the
-  bottom of the PR, and the older notices with the same marker are deleted afterwards, so the PR
-  still carries a single notice. If the post fails, nothing is deleted. If a delete fails, it is
+  bottom of the PR. Afterwards, older notices with the same marker are deleted, but only those
+  posted by the same account, so the PR still carries a single notice. If the post fails, nothing is
+  deleted. Every GitHub call is bounded by a timeout. A failed, rejected or hung listing or delete is
   logged and the run continues.
 
 ## [0.2.2] - 2026-10-07

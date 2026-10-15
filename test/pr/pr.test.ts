@@ -2018,34 +2018,77 @@ describe("upsertAdmissionCheckRun", () => {
 // silently edited 02:48). repostMarkedPrComment posts the fresh notice at the
 // bottom FIRST, then deletes the older ones under the same marker.
 describe("repostMarkedPrComment — a CI skip notice stays visible", () => {
-  test("posts the new notice, then deletes every older one under the same marker", async () => {
-    const { spawnFn, calls } = makeFakeGh([
-      {
-        match: ["--paginate", "issues/42/comments"],
-        response: {
-          stdout: ndjson([
-            { id: 91, user: "bot", body: `${SKIP_SIZE_COMMENT_MARKER}\nold` },
-            {
-              id: 92,
-              user: "bot",
-              body: `${PR_COMMENT_MARKER_PREFIX}head=${"a".repeat(40)} -->\nsummary`,
-            },
-            {
-              id: 94,
-              user: "bot",
-              body: `${SKIP_SIZE_COMMENT_MARKER}\nolder dup`,
-            },
-          ]),
+  const BOT = "github-actions[bot]";
+  const posted = (id: number) => ({
+    match: ["--method", "POST", "issues/42/comments"],
+    response: { stdout: JSON.stringify({ id, user: { login: BOT } }) },
+  });
+  const listing = (rows: { id: number; user: string; body: string }[]) => ({
+    match: ["--paginate", "issues/42/comments"],
+    response: { stdout: ndjson(rows) },
+  });
+  const notice = (id: number, user = BOT) => ({
+    id,
+    user,
+    body: `${SKIP_SIZE_COMMENT_MARKER}\nnotice ${id}`,
+  });
+
+  // Overrides the fake for the calls `when` selects: `hang` never settles
+  // until killed (gh()'s watchdog is the only way out), `throw` makes the
+  // spawn itself reject, the shape a gh() failure takes before any exit code.
+  function override(
+    spawnFn: typeof Bun.spawn,
+    when: (argv: string[]) => boolean,
+    mode: "hang" | "throw",
+  ): typeof Bun.spawn {
+    return ((argv: string[], opts?: unknown) => {
+      if (!when(argv)) {
+        return (spawnFn as unknown as (a: string[], o?: unknown) => unknown)(
+          argv,
+          opts,
+        );
+      }
+      if (mode === "throw") throw new Error("spawn exploded");
+      // A real process's pipes close when it is killed, and gh() reads both
+      // streams before it reports, so the fake closes them in kill() too.
+      let resolveExit: (code: number) => void = () => {};
+      const held: ReadableStreamDefaultController<Uint8Array>[] = [];
+      const open = () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            held.push(controller);
+          },
+        });
+      return {
+        stdout: open(),
+        stderr: open(),
+        exited: new Promise<number>((r) => {
+          resolveExit = r;
+        }),
+        kill() {
+          for (const controller of held) controller.close();
+          resolveExit(143);
         },
-      },
-      {
-        match: ["--method", "POST", "issues/42/comments"],
-        response: { stdout: JSON.stringify({ id: 95 }) },
-      },
-      {
-        match: ["--method", "DELETE"],
-        response: { stdout: "" },
-      },
+      };
+    }) as unknown as typeof Bun.spawn;
+  }
+
+  const isDelete = (argv: string[]) => argv.includes("DELETE");
+
+  test("posts the new notice, then deletes every older own notice under the same marker", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      posted(95),
+      listing([
+        notice(91),
+        {
+          id: 92,
+          user: BOT,
+          body: `${PR_COMMENT_MARKER_PREFIX}head=${"a".repeat(40)} -->\nsummary`,
+        },
+        notice(94),
+        notice(95),
+      ]),
+      { match: ["--method", "DELETE"], response: { stdout: "" } },
     ]);
     const result = await repostMarkedPrComment({
       operatorRoot: OPERATOR_ROOT,
@@ -2059,31 +2102,28 @@ describe("repostMarkedPrComment — a CI skip notice stays visible", () => {
       argvContains(c.argv, ["--method", "POST", "issues/42/comments"]),
     );
     expect(calls[postIndex]?.stdin).toBe(`${SKIP_SIZE_COMMENT_MARKER}\nnew`);
-    const deletes = calls
-      .map((c, i) => ({ c, i }))
-      .filter(({ c }) => argvContains(c.argv, ["--method", "DELETE"]));
-    expect(deletes.map(({ c }) => c.argv.join(" "))).toEqual([
+    // The listing is read AFTER the POST, so a notice a concurrent run
+    // created in between is still seen and cleaned up.
+    const listIndex = calls.findIndex((c) =>
+      argvContains(c.argv, ["--paginate", "issues/42/comments"]),
+    );
+    expect(listIndex).toBeGreaterThan(postIndex);
+    const deletes = calls.filter((c) => isDelete(c.argv));
+    expect(deletes.map((c) => c.argv.join(" "))).toEqual([
       expect.stringContaining("issues/comments/91"),
       expect.stringContaining("issues/comments/94"),
     ]);
-    for (const { i } of deletes) expect(i).toBeGreaterThan(postIndex);
-    // Never a PATCH, and never the summary under a different marker.
     expect(calls.some((c) => c.argv.includes("PATCH"))).toBe(false);
     expect(
       calls.some((c) => c.argv.join(" ").includes("issues/comments/92")),
     ).toBe(false);
   });
 
-  test("with no prior notice, posts and deletes nothing", async () => {
+  test("a marked comment written by someone else is never deleted", async () => {
     const { spawnFn, calls } = makeFakeGh([
-      {
-        match: ["--paginate", "issues/42/comments"],
-        response: { stdout: "" },
-      },
-      {
-        match: ["--method", "POST", "issues/42/comments"],
-        response: { stdout: JSON.stringify({ id: 96 }) },
-      },
+      posted(95),
+      listing([notice(90, "a-collaborator"), notice(91)]),
+      { match: ["--method", "DELETE"], response: { stdout: "" } },
     ]);
     const result = await repostMarkedPrComment({
       operatorRoot: OPERATOR_ROOT,
@@ -2092,24 +2132,48 @@ describe("repostMarkedPrComment — a CI skip notice stays visible", () => {
       markerPrefix: SKIP_SIZE_COMMENT_MARKER,
       spawnFn,
     });
+    expect(result.deletedIds).toEqual([91]);
+    expect(
+      calls.some((c) => c.argv.join(" ").includes("issues/comments/90")),
+    ).toBe(false);
+  });
+
+  test("when the new notice's author is unknown, nothing is deleted", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["--method", "POST", "issues/42/comments"],
+        response: { stdout: JSON.stringify({ id: 95 }) },
+      },
+      listing([notice(91)]),
+    ]);
+    const result = await repostMarkedPrComment({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+      markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+      spawnFn,
+    });
+    expect(result).toEqual({ commentId: 95, deletedIds: [] });
+    expect(calls.some((c) => isDelete(c.argv))).toBe(false);
+  });
+
+  test("with no prior notice, posts and deletes nothing", async () => {
+    const { spawnFn, calls } = makeFakeGh([posted(96), listing([notice(96)])]);
+    const result = await repostMarkedPrComment({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+      markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+      spawnFn,
+    });
     expect(result).toEqual({ commentId: 96, deletedIds: [] });
-    expect(calls.some((c) => c.argv.includes("DELETE"))).toBe(false);
+    expect(calls.some((c) => isDelete(c.argv))).toBe(false);
   });
 
   test("a failed delete is logged and skipped — the fresh notice already landed", async () => {
     const { spawnFn } = makeFakeGh([
-      {
-        match: ["--paginate", "issues/42/comments"],
-        response: {
-          stdout: ndjson([
-            { id: 91, user: "bot", body: `${SKIP_SIZE_COMMENT_MARKER}\nold` },
-          ]),
-        },
-      },
-      {
-        match: ["--method", "POST", "issues/42/comments"],
-        response: { stdout: JSON.stringify({ id: 97 }) },
-      },
+      posted(97),
+      listing([notice(91)]),
       {
         match: ["--method", "DELETE"],
         response: { stderr: "HTTP 403", exitCode: 1 },
@@ -2125,16 +2189,78 @@ describe("repostMarkedPrComment — a CI skip notice stays visible", () => {
     expect(result).toEqual({ commentId: 97, deletedIds: [] });
   });
 
+  test("a delete whose gh call rejects is caught and the next one still runs", async () => {
+    const base = makeFakeGh([
+      posted(97),
+      listing([notice(91), notice(92)]),
+      { match: ["--method", "DELETE"], response: { stdout: "" } },
+    ]);
+    const result = await repostMarkedPrComment({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+      markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+      spawnFn: override(
+        base.spawnFn,
+        (argv) => isDelete(argv) && argv.join(" ").includes("comments/91"),
+        "throw",
+      ),
+    });
+    expect(result).toEqual({ commentId: 97, deletedIds: [92] });
+  });
+
+  test("a delete that never answers is bounded and the run still returns", async () => {
+    const base = makeFakeGh([posted(97), listing([notice(91)])]);
+    const result = await repostMarkedPrComment({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+      markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+      spawnFn: override(base.spawnFn, isDelete, "hang"),
+      timeoutMs: 50,
+    });
+    expect(result).toEqual({ commentId: 97, deletedIds: [] });
+  });
+
+  test("a POST that never answers is bounded, throws, and deletes nothing", async () => {
+    const base = makeFakeGh([listing([notice(91)])]);
+    await expect(
+      repostMarkedPrComment({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+        markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+        spawnFn: override(
+          base.spawnFn,
+          (argv) => argv.includes("POST"),
+          "hang",
+        ),
+        timeoutMs: 50,
+      }),
+    ).rejects.toThrow(/post PR comment/);
+    expect(base.calls.some((c) => isDelete(c.argv))).toBe(false);
+  });
+
+  test("a listing that never answers is bounded; the notice stays posted", async () => {
+    const base = makeFakeGh([posted(97)]);
+    const result = await repostMarkedPrComment({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+      markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+      spawnFn: override(
+        base.spawnFn,
+        (argv) => argv.includes("--paginate"),
+        "hang",
+      ),
+      timeoutMs: 50,
+    });
+    expect(result).toEqual({ commentId: 97, deletedIds: [] });
+  });
+
   test("a failed POST throws and deletes nothing — the old notice survives", async () => {
     const { spawnFn, calls } = makeFakeGh([
-      {
-        match: ["--paginate", "issues/42/comments"],
-        response: {
-          stdout: ndjson([
-            { id: 91, user: "bot", body: `${SKIP_SIZE_COMMENT_MARKER}\nold` },
-          ]),
-        },
-      },
+      listing([notice(91)]),
       {
         match: ["--method", "POST", "issues/42/comments"],
         response: { stderr: "HTTP 502", exitCode: 1 },
@@ -2149,6 +2275,6 @@ describe("repostMarkedPrComment — a CI skip notice stays visible", () => {
         spawnFn,
       }),
     ).rejects.toThrow(/post PR comment/);
-    expect(calls.some((c) => c.argv.includes("DELETE"))).toBe(false);
+    expect(calls.some((c) => isDelete(c.argv))).toBe(false);
   });
 });
