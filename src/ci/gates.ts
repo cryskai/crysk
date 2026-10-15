@@ -149,10 +149,10 @@ export interface CiGateSkip {
 // Exported (Phase 3): both are legitimate consumers of these exact bytes —
 // test/pr/preflight.test.ts's marker-prefix-disjointness registry (proving
 // neither collides with PR_COMMENT/PR_FINDING/PR_STATE/TRIAGE, the pattern
-// that test already established) and pr/pr.ts's postPrComment, which now takes
-// a `markerPrefix` parameter so a CI skip comment is idempotent — a second
-// CI run on the same still-oversized PR (every `synchronize` push) updates
-// the existing skip comment in place instead of stacking a new one. Both are
+// that test already established) and pr/pr.ts's repostMarkedPrComment, which
+// keys on the marker so a second CI run on the same still-oversized PR (every
+// `synchronize` push) posts a fresh notice at the bottom and deletes the old
+// one: never stacked, and never a silent in-place edit. Both are
 // self-closing, field-less tags (unlike the four `<!-- pr-hero-<noun> ` +
 // trailing-space prefixes above): a skip decision has no code to anchor a
 // `head=` declaration to, and no fields to encode — see the module header.

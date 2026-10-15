@@ -742,6 +742,132 @@ export async function postPrComment(
   return { action, commentId };
 }
 
+// The CI skip notice's channel (pr/admission.ts's publishCiSkip). It used to
+// go through postPrComment's find-and-update, which PATCHed the previous
+// notice on every push. GitHub neither notifies on an edit nor moves the
+// comment down the timeline, so a later skip was invisible: on #315 the
+// budget notice was created at 01:48 and silently re-edited at 02:48.
+//
+// Repost instead: POST the fresh notice at the bottom FIRST, then list the
+// comments and DELETE the older ones under the same marker. That order is
+// the point. A failed POST throws before anything is deleted, so the old
+// notice survives. Listing AFTER the POST also catches a notice a concurrent
+// run created in between. Everything after the POST is best-effort cleanup:
+// a failed, rejected or hung listing or DELETE is logged and never fails the
+// run, because the fresh notice already landed and one stale duplicate is
+// the safe direction of error (the next skip removes it).
+//
+// Every call is bounded. gh() arms its watchdog only when given a timeout,
+// and an accepted-but-unanswered request would otherwise park publishCiSkip
+// before the step summary and CI outputs are written.
+//
+// Deletes only what this identity wrote: the body must START WITH the marker
+// (findMarkedCommentId's rule, so a quoted marker or the summary is never
+// touched) AND the author must be the one GitHub returned for the new
+// notice. A PATCH on someone else's comment fails on its own; a DELETE with
+// a write-scoped token does not, so a collaborator who pastes the notice's
+// source would otherwise lose their comment. Unknown author → delete nothing.
+const SKIP_NOTICE_GH_TIMEOUT_MS = 30_000;
+
+export async function repostMarkedPrComment(input: {
+  operatorRoot: string;
+  pr: number;
+  body: string;
+  markerPrefix: string;
+  spawnFn?: typeof Bun.spawn;
+  // Test-only seam, like spawnFn.
+  timeoutMs?: number;
+}): Promise<{ commentId: number; deletedIds: number[] }> {
+  const { operatorRoot, pr, spawnFn } = input;
+  const timeoutMs = input.timeoutMs ?? SKIP_NOTICE_GH_TIMEOUT_MS;
+  const created = await gh(
+    operatorRoot,
+    [
+      "api",
+      "--method",
+      "POST",
+      `repos/{owner}/{repo}/issues/${pr}/comments`,
+      "-F",
+      "body=@-",
+    ],
+    input.body,
+    spawnFn,
+    timeoutMs,
+  );
+  if (!created.ok) {
+    throw new CliError(
+      `gh api (post PR comment) failed: ${created.stderr.trim()}`,
+    );
+  }
+  const commentId = parsePostedCommentId(created.stdout, "PR comment");
+  const deletedIds: number[] = [];
+  const author = postedCommentAuthor(created.stdout);
+  if (author === undefined) {
+    log(
+      "could not tell who posted the new notice — older notices left in place",
+    );
+    return { commentId, deletedIds };
+  }
+  let previous: number[];
+  try {
+    previous = (await fetchPrComments(operatorRoot, pr, { spawnFn, timeoutMs }))
+      .filter(
+        (c) =>
+          c.id !== commentId &&
+          c.user === author &&
+          typeof c.body === "string" &&
+          c.body.startsWith(input.markerPrefix),
+      )
+      .map((c) => c.id);
+  } catch (error) {
+    log(
+      "could not list older notices " +
+        `(${error instanceof Error ? error.message : String(error)}) — the new one was posted`,
+    );
+    return { commentId, deletedIds };
+  }
+  for (const id of previous) {
+    try {
+      const deleted = await gh(
+        operatorRoot,
+        [
+          "api",
+          "--method",
+          "DELETE",
+          `repos/{owner}/{repo}/issues/comments/${id}`,
+        ],
+        undefined,
+        spawnFn,
+        timeoutMs,
+      );
+      if (deleted.ok) {
+        deletedIds.push(id);
+      } else {
+        log(
+          `could not delete the previous notice ${id} ` +
+            `(${deleted.stderr.trim()}) — the new one was posted`,
+        );
+      }
+    } catch (error) {
+      log(
+        `could not delete the previous notice ${id} ` +
+          `(${error instanceof Error ? error.message : String(error)}) — the new one was posted`,
+      );
+    }
+  }
+  return { commentId, deletedIds };
+}
+
+function postedCommentAuthor(stdout: string): string | undefined {
+  try {
+    const login = (JSON.parse(stdout) as { user?: { login?: unknown } } | null)
+      ?.user?.login;
+    return typeof login === "string" && login !== "" ? login : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Mirror of scripts/compare-pr.ts's fetch, kept shape-identical on purpose.
 // --paginate matters: a busy PR accumulates enough comments to push
 // Greptile's off page 1, and a missing comment looks identical to "Greptile
@@ -755,7 +881,7 @@ export async function postPrComment(
 export async function fetchPrComments(
   operatorRoot: string,
   pr: number,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<
   {
     id: number;
@@ -776,6 +902,7 @@ export async function fetchPrComments(
     ],
     undefined,
     options?.spawnFn,
+    options?.timeoutMs,
   );
   if (!result.ok) {
     // Live evidence on MusiveTech/musive 2026-08-17: REST GET on
