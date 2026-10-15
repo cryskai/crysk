@@ -1662,6 +1662,7 @@ async function postIssueCommentBody(
   pr: number,
   body: string,
   spawnFn?: typeof Bun.spawn,
+  timeoutMs?: number,
 ): Promise<number> {
   const result = await gh(
     operatorRoot,
@@ -1675,6 +1676,7 @@ async function postIssueCommentBody(
     ],
     body,
     spawnFn,
+    timeoutMs,
   );
   if (!result.ok) {
     throw new CliError(
@@ -2711,9 +2713,12 @@ export async function postInlineFindings(input: {
   // not tell "ran and found nothing" from "never ran". A first review needs
   // none: the summary it just created is already the new comment.
   //
-  // Last, after the collapse loop, so it really is the closing word. Caught,
-  // like the collapse loop's reply: the review is already paid for and
-  // published, and losing the receipt must never turn into a failed run.
+  // Last, after the collapse loop, so it really is the closing word. Caught
+  // AND bounded, like the collapse loop's reply: the review is already paid
+  // for and published, so losing the receipt must never fail the run, and a
+  // catch alone cannot stop a request that is accepted but never answered.
+  // As the last await here, a hang would park the caller's receipt write
+  // and teardown forever.
   let closingCommentId: number | undefined;
   if (existingSummaryId !== null) {
     try {
@@ -2724,6 +2729,7 @@ export async function postInlineFindings(input: {
           headSha,
           delta: overlayDelta(delta),
           newPosted: reachedIds.size,
+          totalFindings: doc.findings.length,
           runStatus: doc.run_status,
           summaryUrl:
             webUrl === undefined
@@ -2731,6 +2737,7 @@ export async function postInlineFindings(input: {
               : findingCommentUrl(webUrl, pr, "issue", existingSummaryId),
         }),
         spawnFn,
+        ghTimeoutMs,
       );
       log(`posted: re-review closing comment ${closingCommentId}`);
     } catch (error) {

@@ -1007,25 +1007,47 @@ function deltaLine(delta: PrCommentDelta): string {
 export function renderRereviewClosedComment(input: {
   headSha: string;
   delta: PrCommentDelta;
+  // Findings this pass actually published (fresh review comments plus fresh
+  // Outside Diff entries). NOT the delta's `new`: on a re-review that number
+  // is the discovery count and includes findings that persisted onto an
+  // existing comment, so a sentence built from it could say "no new" right
+  // under a delta line that says "1 new".
   newPosted: number;
+  // Every finding this pass reported, posted or kept.
+  totalFindings: number;
   runStatus: RunStatus;
   summaryUrl: string | undefined;
 }): string {
+  const sha = code(input.headSha.slice(0, 8));
+  const complete = input.runStatus === "complete";
+  // The heading is what the notification and the timeline preview show, so
+  // a partial pass never gets the green "complete": the summary already
+  // refuses a clean bill to a partial run (issue #42), and this comment must
+  // not hand one back.
   const lines = [
     `${PR_REREVIEW_CLOSED_MARKER_PREFIX}head=${input.headSha} -->`,
-    `### ✅ pr-hero re-review complete — ${code(input.headSha.slice(0, 8))}`,
+    complete
+      ? `### ✅ pr-hero re-review complete — ${sha}`
+      : `### ⚠️ pr-hero re-review finished with partial coverage — ${sha}`,
     "",
-    deltaLine(input.delta),
-    "",
-    input.newPosted === 0
-      ? "No new findings in this pass."
-      : `${input.newPosted} new finding(s) posted in this pass.`,
   ];
-  if (input.runStatus !== "complete") {
+  if (!complete) {
     lines.push(
-      "",
       "⚠️ Partial coverage: some review steps failed, so this pass may have missed findings.",
+      "",
     );
+  }
+  lines.push(deltaLine(input.delta), "");
+  if (input.newPosted > 0) {
+    lines.push(`${input.newPosted} new finding(s) posted in this pass.`);
+  } else if (input.totalFindings > 0) {
+    lines.push(
+      "Nothing new was posted in this pass; findings already on the PR were kept.",
+    );
+  } else if (complete) {
+    lines.push("No findings in this pass.");
+  } else {
+    lines.push("No findings reported by the steps that completed.");
   }
   lines.push(
     "",

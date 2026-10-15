@@ -1812,7 +1812,7 @@ describe("postInlineFindings — re-review closing comment", () => {
     ).toBe(true);
     expect(body).toContain("pr-hero re-review complete");
     expect(body).toContain(`\`${HEAD.slice(0, 8)}\``);
-    expect(body).toContain("No new findings in this pass.");
+    expect(body).toContain("No findings in this pass.");
     expect(body).toContain(`Δ since \`${OLD_HEAD.slice(0, 8)}\``);
     expect(body).toContain(
       "[view summary](https://github.com/o/r/pull/42#issuecomment-1)\n",
@@ -1860,6 +1860,92 @@ describe("postInlineFindings — re-review closing comment", () => {
     });
     const body = closingPosts(calls)[0]?.stdin ?? "";
     expect(body).toContain("Partial coverage");
+    // The heading is what the notification and timeline preview show: a
+    // partial pass must never read as a green "complete".
+    const heading = body.split("\n")[1] ?? "";
+    expect(heading).toContain(
+      "### ⚠️ pr-hero re-review finished with partial coverage",
+    );
+    expect(heading).not.toContain("✅");
+    expect(body).not.toContain("No findings in this pass.");
+  });
+
+  test("a finding that persists on an existing comment is not reported as 'no findings'", async () => {
+    const marker = findingMarker({
+      path: "src/a.ts",
+      line: 10,
+      headSha: HEAD,
+      claim: "unchanged claim",
+    });
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: priorSummary }]),
+        },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 9,
+              user: "pr-hero",
+              body: `${marker}\nunchanged claim`,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: null,
+            },
+          ]),
+        },
+      },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 10,
+            claim: "unchanged claim",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    const body = closingPosts(calls)[0]?.stdin ?? "";
+    expect(body).not.toContain("No findings in this pass.");
+    expect(body).toContain(
+      "Nothing new was posted in this pass; findings already on the PR were kept.",
+    );
+  });
+
+  test("a closing POST that never answers is bounded and the run still returns", async () => {
+    const { spawnFn } = rereviewScript([
+      {
+        match: ["--method", "POST", "issues/42/comments"],
+        response: { hang: true },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      ghTimeoutMs: 50,
+    });
+    expect(outcome.closingCommentId).toBeUndefined();
+    expect(outcome.summary.action).toBe("updated");
   });
 
   test("a first review posts no closing comment — the new summary is already visible", async () => {

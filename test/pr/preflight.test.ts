@@ -684,6 +684,7 @@ describe("marker prefix disjointness", () => {
     ["SKIP_SIZE_COMMENT_MARKER", SKIP_SIZE_COMMENT_MARKER],
     ["SKIP_BUDGET_COMMENT_MARKER", SKIP_BUDGET_COMMENT_MARKER],
     ["SKIP_COVERAGE_COMMENT_MARKER", SKIP_COVERAGE_COMMENT_MARKER],
+    ["PR_REREVIEW_CLOSED_MARKER_PREFIX", PR_REREVIEW_CLOSED_MARKER_PREFIX],
   ];
 
   test("neither marker prefix is a prefix of the other (legacy pair, kept for regression pinning)", () => {
