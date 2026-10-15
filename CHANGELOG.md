@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Re-reviews post a closing comment**: a re-review with `--post` only edits the existing summary
+  comment in place, and GitHub neither notifies on an edit nor moves the comment down the timeline.
+  A re-review that found nothing therefore left the PR looking untouched, so nobody could tell "ran
+  and found nothing" from "never ran". Every re-review now ends with a new comment
+  (`<!-- pr-hero-rereview-closed head=<sha> -->`) carrying the reviewed head, the same delta line as
+  the summary, how many new findings it posted, a partial-coverage warning when steps failed, and a
+  link to the updated summary. A first review posts none, because its new summary is already visible.
+  If the closing comment fails to post, the run logs it and still succeeds.
+
 ### Fixed
 - **CI skip notices stay visible on later pushes**: a skipped review (size, budget, coverage, or
   manual override) used to edit its earlier notice in place. GitHub neither notifies on an edit nor

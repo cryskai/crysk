@@ -32,6 +32,7 @@ import {
   PR_COMMENT_COVERAGE_PARTIAL_TOKEN,
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
+  PR_REREVIEW_CLOSED_MARKER_PREFIX,
   parseFindingMarker,
   prCommentMarker,
   prHtmlUrl,
@@ -683,6 +684,7 @@ describe("marker prefix disjointness", () => {
     ["SKIP_SIZE_COMMENT_MARKER", SKIP_SIZE_COMMENT_MARKER],
     ["SKIP_BUDGET_COMMENT_MARKER", SKIP_BUDGET_COMMENT_MARKER],
     ["SKIP_COVERAGE_COMMENT_MARKER", SKIP_COVERAGE_COMMENT_MARKER],
+    ["PR_REREVIEW_CLOSED_MARKER_PREFIX", PR_REREVIEW_CLOSED_MARKER_PREFIX],
   ];
 
   test("neither marker prefix is a prefix of the other (legacy pair, kept for regression pinning)", () => {
@@ -1337,5 +1339,21 @@ describe("isInFlightCommitStatus", () => {
         now,
       ),
     ).toBe(false);
+  });
+});
+
+describe("findMarkedCommentId — the re-review closing comment is never the summary", () => {
+  test("a closing comment posted after the summary does not steal the summary's id", () => {
+    const comments = [
+      {
+        id: 1,
+        body: `<!-- pr-hero-report head=${"a".repeat(40)} -->\nsummary`,
+      },
+      {
+        id: 2,
+        body: `${PR_REREVIEW_CLOSED_MARKER_PREFIX}head=${"b".repeat(40)} -->\nclosed`,
+      },
+    ];
+    expect(findMarkedCommentId(comments)).toBe(1);
   });
 });

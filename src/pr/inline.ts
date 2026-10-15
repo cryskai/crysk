@@ -427,6 +427,9 @@ export interface InlinePostOutcome {
   // its fields one by one, so the receipt's shape is unchanged, and a Map
   // would JSON.stringify to `{}` anyway.
   commentUrls: ReadonlyMap<string, string>;
+  // The re-review closing comment's id (postInlineFindings). Absent on a
+  // first review, which posts none, and when the closing POST failed.
+  closingCommentId?: number;
   // GitHub #39: the PR's head as GitHub reported it immediately before the
   // review submission, when it was NOT the head this run reviewed. Undefined
   // on an unmoved head AND on a re-read that could not be made — the two are
