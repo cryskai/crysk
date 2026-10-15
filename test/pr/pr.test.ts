@@ -45,6 +45,7 @@ import {
   postPrComment,
   postPrReview,
   postReviewCommentReply,
+  repostMarkedPrComment,
   resolveReviewThreadForComment,
   upsertAdmissionCheckRun,
 } from "#pr/pr";
@@ -2008,5 +2009,146 @@ describe("upsertAdmissionCheckRun", () => {
     const argv = calls[0]?.argv ?? [];
     expect(argv).toContain("status=completed");
     expect(argv).toContain("conclusion=skipped");
+  });
+});
+
+// A CI skip notice used to be edited in place on every push (postPrComment's
+// find-and-update). GitHub neither notifies on an edit nor moves the comment
+// down the timeline, so a later skip was invisible (#315: created 01:48,
+// silently edited 02:48). repostMarkedPrComment posts the fresh notice at the
+// bottom FIRST, then deletes the older ones under the same marker.
+describe("repostMarkedPrComment — a CI skip notice stays visible", () => {
+  test("posts the new notice, then deletes every older one under the same marker", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["--paginate", "issues/42/comments"],
+        response: {
+          stdout: ndjson([
+            { id: 91, user: "bot", body: `${SKIP_SIZE_COMMENT_MARKER}\nold` },
+            {
+              id: 92,
+              user: "bot",
+              body: `${PR_COMMENT_MARKER_PREFIX}head=${"a".repeat(40)} -->\nsummary`,
+            },
+            {
+              id: 94,
+              user: "bot",
+              body: `${SKIP_SIZE_COMMENT_MARKER}\nolder dup`,
+            },
+          ]),
+        },
+      },
+      {
+        match: ["--method", "POST", "issues/42/comments"],
+        response: { stdout: JSON.stringify({ id: 95 }) },
+      },
+      {
+        match: ["--method", "DELETE"],
+        response: { stdout: "" },
+      },
+    ]);
+    const result = await repostMarkedPrComment({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+      markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+      spawnFn,
+    });
+    expect(result).toEqual({ commentId: 95, deletedIds: [91, 94] });
+    const postIndex = calls.findIndex((c) =>
+      argvContains(c.argv, ["--method", "POST", "issues/42/comments"]),
+    );
+    expect(calls[postIndex]?.stdin).toBe(`${SKIP_SIZE_COMMENT_MARKER}\nnew`);
+    const deletes = calls
+      .map((c, i) => ({ c, i }))
+      .filter(({ c }) => argvContains(c.argv, ["--method", "DELETE"]));
+    expect(deletes.map(({ c }) => c.argv.join(" "))).toEqual([
+      expect.stringContaining("issues/comments/91"),
+      expect.stringContaining("issues/comments/94"),
+    ]);
+    for (const { i } of deletes) expect(i).toBeGreaterThan(postIndex);
+    // Never a PATCH, and never the summary under a different marker.
+    expect(calls.some((c) => c.argv.includes("PATCH"))).toBe(false);
+    expect(
+      calls.some((c) => c.argv.join(" ").includes("issues/comments/92")),
+    ).toBe(false);
+  });
+
+  test("with no prior notice, posts and deletes nothing", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["--paginate", "issues/42/comments"],
+        response: { stdout: "" },
+      },
+      {
+        match: ["--method", "POST", "issues/42/comments"],
+        response: { stdout: JSON.stringify({ id: 96 }) },
+      },
+    ]);
+    const result = await repostMarkedPrComment({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+      markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+      spawnFn,
+    });
+    expect(result).toEqual({ commentId: 96, deletedIds: [] });
+    expect(calls.some((c) => c.argv.includes("DELETE"))).toBe(false);
+  });
+
+  test("a failed delete is logged and skipped — the fresh notice already landed", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["--paginate", "issues/42/comments"],
+        response: {
+          stdout: ndjson([
+            { id: 91, user: "bot", body: `${SKIP_SIZE_COMMENT_MARKER}\nold` },
+          ]),
+        },
+      },
+      {
+        match: ["--method", "POST", "issues/42/comments"],
+        response: { stdout: JSON.stringify({ id: 97 }) },
+      },
+      {
+        match: ["--method", "DELETE"],
+        response: { stderr: "HTTP 403", exitCode: 1 },
+      },
+    ]);
+    const result = await repostMarkedPrComment({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+      markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+      spawnFn,
+    });
+    expect(result).toEqual({ commentId: 97, deletedIds: [] });
+  });
+
+  test("a failed POST throws and deletes nothing — the old notice survives", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["--paginate", "issues/42/comments"],
+        response: {
+          stdout: ndjson([
+            { id: 91, user: "bot", body: `${SKIP_SIZE_COMMENT_MARKER}\nold` },
+          ]),
+        },
+      },
+      {
+        match: ["--method", "POST", "issues/42/comments"],
+        response: { stderr: "HTTP 502", exitCode: 1 },
+      },
+    ]);
+    await expect(
+      repostMarkedPrComment({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        body: `${SKIP_SIZE_COMMENT_MARKER}\nnew`,
+        markerPrefix: SKIP_SIZE_COMMENT_MARKER,
+        spawnFn,
+      }),
+    ).rejects.toThrow(/post PR comment/);
+    expect(calls.some((c) => c.argv.includes("DELETE"))).toBe(false);
   });
 });

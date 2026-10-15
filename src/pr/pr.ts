@@ -741,6 +741,79 @@ export async function postPrComment(
   return { action, commentId };
 }
 
+// The CI skip notice's channel (pr/admission.ts's publishCiSkip). It used to
+// go through postPrComment's find-and-update, which PATCHed the previous
+// notice on every push. GitHub neither notifies on an edit nor moves the
+// comment down the timeline, so a later skip was invisible: on #315 the
+// budget notice was created at 01:48 and silently re-edited at 02:48.
+//
+// Repost instead: POST the fresh notice at the bottom FIRST, then DELETE
+// every older comment under the same marker. That order is the point. A
+// failed POST throws before anything is deleted, so the old notice survives.
+// A failed DELETE is only logged, because the fresh notice already landed
+// and one stale duplicate is the safe direction of error. The PR still ends
+// with exactly one notice in the normal case, as the old find-and-update
+// guaranteed. Matching is findMarkedCommentId's own rule (body STARTS WITH
+// the marker), so a quoted marker or the summary is never touched.
+export async function repostMarkedPrComment(input: {
+  operatorRoot: string;
+  pr: number;
+  body: string;
+  markerPrefix: string;
+  spawnFn?: typeof Bun.spawn;
+}): Promise<{ commentId: number; deletedIds: number[] }> {
+  const { operatorRoot, pr, spawnFn } = input;
+  const previous = (await fetchPrComments(operatorRoot, pr, { spawnFn }))
+    .filter(
+      (c) =>
+        typeof c?.body === "string" && c.body.startsWith(input.markerPrefix),
+    )
+    .map((c) => c.id);
+  const created = await gh(
+    operatorRoot,
+    [
+      "api",
+      "--method",
+      "POST",
+      `repos/{owner}/{repo}/issues/${pr}/comments`,
+      "-F",
+      "body=@-",
+    ],
+    input.body,
+    spawnFn,
+  );
+  if (!created.ok) {
+    throw new CliError(
+      `gh api (post PR comment) failed: ${created.stderr.trim()}`,
+    );
+  }
+  const commentId = parsePostedCommentId(created.stdout, "PR comment");
+  const deletedIds: number[] = [];
+  for (const id of previous) {
+    if (id === commentId) continue;
+    const deleted = await gh(
+      operatorRoot,
+      [
+        "api",
+        "--method",
+        "DELETE",
+        `repos/{owner}/{repo}/issues/comments/${id}`,
+      ],
+      undefined,
+      spawnFn,
+    );
+    if (deleted.ok) {
+      deletedIds.push(id);
+    } else {
+      log(
+        `could not delete the previous notice ${id} ` +
+          `(${deleted.stderr.trim()}) — the new one was posted`,
+      );
+    }
+  }
+  return { commentId, deletedIds };
+}
+
 // Mirror of scripts/compare-pr.ts's fetch, kept shape-identical on purpose.
 // --paginate matters: a busy PR accumulates enough comments to push
 // Greptile's off page 1, and a missing comment looks identical to "Greptile

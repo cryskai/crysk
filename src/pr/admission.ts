@@ -18,7 +18,7 @@ import {
   formatWorkflowCommand,
 } from "#ci/reporter";
 import type { CiReviewPolicy } from "#ci/review-admission";
-import { postPrComment, upsertAdmissionCheckRun } from "#pr/pr";
+import { repostMarkedPrComment, upsertAdmissionCheckRun } from "#pr/pr";
 import { log } from "#ui/primitives";
 
 // ROADMAP Pillar 3 (GitHub Actions CI). The mechanical glue behind a gate
@@ -26,9 +26,10 @@ import { log } from "#ui/primitives";
 // outputs are) already happened in `plan` (planCiSizeSkip/planCiBudgetSkip,
 // ci/gates.ts) — this function has nothing left to decide, only three
 // straight-line I/O calls gated by shouldWriteStepSummary/shouldWriteCiOutputs.
-// `postPrComment`'s own `markerPrefix` (Phase 3's parameterization) makes
-// this idempotent: a repeat CI run on the same still-failing PR updates its
-// own prior skip comment rather than stacking a new one on every push.
+// `repostMarkedPrComment` keeps one notice per marker without hiding it: a
+// repeat CI run on the same still-failing PR posts the fresh notice at the
+// bottom and deletes its own older ones, instead of silently editing the old
+// one in place (an edit neither notifies nor moves down the timeline).
 export type CiAdmissionLedgerState = {
   record: AdmissionRecord;
   checkRunId: number;
@@ -210,14 +211,15 @@ export async function publishCiSkip(input: {
 }): Promise<number> {
   log(formatWorkflowCommand("notice", input.noticeMessage));
   if (input.post) {
-    await postPrComment(
-      input.operatorRoot,
-      input.prNumber,
-      input.plan.comment,
-      undefined,
-      undefined,
-      input.plan.markerPrefix,
-    );
+    // Repost, never edit in place: an edited notice is invisible on GitHub,
+    // so a later push that was skipped again looked like nothing happened.
+    // See repostMarkedPrComment's WHY.
+    await repostMarkedPrComment({
+      operatorRoot: input.operatorRoot,
+      pr: input.prNumber,
+      body: input.plan.comment,
+      markerPrefix: input.plan.markerPrefix,
+    });
   }
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (shouldWriteStepSummary(input.isCi, input.stepSummaryFlag, summaryPath)) {
