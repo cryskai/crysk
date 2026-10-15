@@ -412,6 +412,14 @@ export function decideWorktree(input: {
 // a foreign lookalike marker such as `<!-- pr-hero-reporter -->` does not.
 export const PR_COMMENT_MARKER_PREFIX = "<!-- pr-hero-report ";
 
+// The re-review closing comment (pr/pr.ts's postInlineFindings). A re-review
+// only PATCHes the summary, and GitHub neither notifies on an edit nor moves
+// the comment down the timeline, so a clean re-review used to leave the PR
+// looking untouched. This marker tags the short comment that closes the run.
+// Its own `pr-hero-<noun>` namespace, so findMarkedCommentId's summary lookup
+// (prefix `pr-hero-report `) can never mistake it for the summary.
+export const PR_REREVIEW_CLOSED_MARKER_PREFIX = "<!-- pr-hero-rereview-closed ";
+
 // Rereview-coverage fix (GitHub #42's re-review half, MusiveTech/musive
 // #1823): a PARTIAL run (some hunters or the refuter failed, but not all —
 // `sessionFailed` false) used to post the exact same marker a COMPLETE run

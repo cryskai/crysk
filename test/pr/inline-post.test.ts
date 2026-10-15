@@ -29,6 +29,7 @@ import {
   claimFingerprint,
   findingMarker,
   PR_FINDING_MARKER_PREFIX,
+  PR_REREVIEW_CLOSED_MARKER_PREFIX,
 } from "#pr/preflight";
 import type { RereviewProvenance } from "#rereview/prepare";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
@@ -1757,5 +1758,229 @@ describe("postInlineFindings — the collapse loop cannot hang (F005)", () => {
     expect(logged).toContain("resolve failed for R001");
     expect(logged).toContain("timed out after 30 ms");
     expect(logged).not.toContain("resolved: review thread for R001");
+  });
+});
+
+// A re-review PATCHes the summary in place, and GitHub neither notifies on an
+// edit nor moves the comment down the timeline. A clean re-review used to
+// leave the PR looking untouched, so a reader could not tell "ran and found
+// nothing" from "never ran". The closing comment is the visible receipt.
+describe("postInlineFindings — re-review closing comment", () => {
+  const priorSummary = `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`;
+
+  function closingPosts(calls: RecordedCall[]): RecordedCall[] {
+    return calls.filter(
+      (c) =>
+        c.argv.join(" ").includes("issues/42/comments") &&
+        c.argv.includes("POST") &&
+        c.stdin?.startsWith(PR_REREVIEW_CLOSED_MARKER_PREFIX),
+    );
+  }
+
+  function rereviewScript(
+    extra: ScriptEntry[] = [],
+  ): ReturnType<typeof makeFakeGh> {
+    return makeFakeGh([
+      ...extra,
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: priorSummary }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+  }
+
+  test("a clean re-review posts one closing comment after the summary PATCH", async () => {
+    const { spawnFn, calls } = rereviewScript();
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: "https://github.com/o/r",
+      spawnFn,
+    });
+    const closing = closingPosts(calls);
+    expect(closing.length).toBe(1);
+    const body = closing[0]?.stdin ?? "";
+    expect(
+      body.startsWith(`<!-- pr-hero-rereview-closed head=${HEAD} -->`),
+    ).toBe(true);
+    expect(body).toContain("pr-hero re-review complete");
+    expect(body).toContain(`\`${HEAD.slice(0, 8)}\``);
+    expect(body).toContain("No findings in this pass.");
+    expect(body).toContain(`Δ since \`${OLD_HEAD.slice(0, 8)}\``);
+    expect(body).toContain(
+      "[view summary](https://github.com/o/r/pull/42#issuecomment-1)\n",
+    );
+    // Posted LAST: after the summary PATCH, so it closes the run.
+    const patchIndex = calls.findIndex(
+      (c) =>
+        c.argv.includes("PATCH") && c.stdin?.startsWith("<!-- pr-hero-report "),
+    );
+    const closingIndex = calls.indexOf(closing[0] as RecordedCall);
+    expect(patchIndex).toBeGreaterThanOrEqual(0);
+    expect(closingIndex).toBeGreaterThan(patchIndex);
+    expect(outcome.closingCommentId).toBeGreaterThan(0);
+    expect(outcome.summary.action).toBe("updated");
+  });
+
+  test("a re-review with new findings names how many were posted", async () => {
+    const { spawnFn, calls } = rereviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    const body = closingPosts(calls)[0]?.stdin ?? "";
+    expect(body).toContain("1 new finding(s) posted in this pass.");
+    expect(body).toContain("The summary comment above was updated.");
+  });
+
+  test("a partial re-review says so in the closing comment", async () => {
+    const { spawnFn, calls } = rereviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [], run_status: "partial" }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    const body = closingPosts(calls)[0]?.stdin ?? "";
+    expect(body).toContain("Partial coverage");
+    // The heading is what the notification and timeline preview show: a
+    // partial pass must never read as a green "complete".
+    const heading = body.split("\n")[1] ?? "";
+    expect(heading).toContain(
+      "### ⚠️ pr-hero re-review finished with partial coverage",
+    );
+    expect(heading).not.toContain("✅");
+    expect(body).not.toContain("No findings in this pass.");
+  });
+
+  test("a finding that persists on an existing comment is not reported as 'no findings'", async () => {
+    const marker = findingMarker({
+      path: "src/a.ts",
+      line: 10,
+      headSha: HEAD,
+      claim: "unchanged claim",
+    });
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: priorSummary }]),
+        },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 9,
+              user: "pr-hero",
+              body: `${marker}\nunchanged claim`,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: null,
+            },
+          ]),
+        },
+      },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 10,
+            claim: "unchanged claim",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    const body = closingPosts(calls)[0]?.stdin ?? "";
+    expect(body).not.toContain("No findings in this pass.");
+    expect(body).toContain(
+      "Nothing new was posted in this pass; findings already on the PR were kept.",
+    );
+  });
+
+  test("a closing POST that never answers is bounded and the run still returns", async () => {
+    const { spawnFn } = rereviewScript([
+      {
+        match: ["--method", "POST", "issues/42/comments"],
+        response: { hang: true },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      ghTimeoutMs: 50,
+    });
+    expect(outcome.closingCommentId).toBeUndefined();
+    expect(outcome.summary.action).toBe("updated");
+  });
+
+  test("a first review posts no closing comment — the new summary is already visible", async () => {
+    const { spawnFn, calls } = makeFakeGh(emptyCommentScript());
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(closingPosts(calls).length).toBe(0);
+    expect(outcome.closingCommentId).toBeUndefined();
+  });
+
+  test("a failed closing POST degrades to a log line, never fails the paid run", async () => {
+    const { spawnFn, calls } = rereviewScript([
+      {
+        match: ["--method", "POST", "issues/42/comments"],
+        response: { stderr: "HTTP 502", exitCode: 1 },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(closingPosts(calls).length).toBe(1);
+    expect(outcome.closingCommentId).toBeUndefined();
+    expect(outcome.summary.action).toBe("updated");
   });
 });
