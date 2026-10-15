@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-16
+
+### Added
+- **Re-reviews post a closing comment**: a re-review with `--post` only edits the existing summary
+  comment in place, and GitHub neither notifies on an edit nor moves the comment down the timeline.
+  A re-review that found nothing therefore left the PR looking untouched, so nobody could tell "ran
+  and found nothing" from "never ran". Every re-review now ends with a new comment
+  (`<!-- pr-hero-rereview-closed head=<sha> -->`) carrying the reviewed head, the same delta line as
+  the summary, how many new findings it posted, a partial-coverage warning when steps failed, and a
+  link to the updated summary. A first review posts none, because its new summary is already visible.
+  If the closing comment fails to post, the run logs it and still succeeds.
+
+### Fixed
+- **CI skip notices stay visible on later pushes**: a skipped review (size, budget, coverage, or
+  manual override) used to edit its earlier notice in place. GitHub neither notifies on an edit nor
+  moves the comment down the timeline, so a skip on a later push was invisible. On #315 the budget
+  notice was created at 01:48 and silently re-edited at 02:48. The notice is now posted fresh at the
+  bottom of the PR. Afterwards, older notices with the same marker are deleted, but only those
+  posted by the same account, so the PR still carries a single notice. If the post fails, nothing is
+  deleted. Every GitHub call is bounded by a timeout. A failed, rejected or hung listing or delete is
+  logged and the run continues.
+
 ## [0.2.2] - 2026-10-07
 
 ### Added
@@ -281,7 +303,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/juanmaagd/pr-hero/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/juanmaagd/pr-hero/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/juanmaagd/pr-hero/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/juanmaagd/pr-hero/compare/v1.1.0...v0.2.0

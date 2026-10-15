@@ -12,6 +12,7 @@ import type { ResolvedModelRoute, ResolvedStepRoute } from "#model/routing";
 import {
   findingMarker,
   PR_FINDING_MARKER_PREFIX,
+  PR_REREVIEW_CLOSED_MARKER_PREFIX,
   prCommentMarker,
 } from "#pr/preflight";
 import {
@@ -21,6 +22,7 @@ import {
 import type {
   Finding,
   FindingsDocument,
+  RunStatus,
   Severity,
   Tier,
 } from "#review/findings";
@@ -993,6 +995,67 @@ function deltaLine(delta: PrCommentDelta): string {
     return `${since}: ${parts.join(" · ")}`;
   }
   return `${since}: ${delta.resolved} resolved · ${delta.new} new · ${delta.persist} persist`;
+}
+
+// The re-review closing comment (pr/pr.ts's postInlineFindings): a short,
+// NEW issue comment posted after the summary's closing PATCH. The summary is
+// edited in place on a re-review, and an edit is invisible on GitHub (no
+// notification, no move down the timeline), so without this a clean
+// re-review looked exactly like a run that never happened. The delta line is
+// the summary's own `deltaLine`, so the two comments cannot disagree on the
+// numbers.
+export function renderRereviewClosedComment(input: {
+  headSha: string;
+  delta: PrCommentDelta;
+  // Findings this pass actually published (fresh review comments plus fresh
+  // Outside Diff entries). NOT the delta's `new`: on a re-review that number
+  // is the discovery count and includes findings that persisted onto an
+  // existing comment, so a sentence built from it could say "no new" right
+  // under a delta line that says "1 new".
+  newPosted: number;
+  // Every finding this pass reported, posted or kept.
+  totalFindings: number;
+  runStatus: RunStatus;
+  summaryUrl: string | undefined;
+}): string {
+  const sha = code(input.headSha.slice(0, 8));
+  const complete = input.runStatus === "complete";
+  // The heading is what the notification and the timeline preview show, so
+  // a partial pass never gets the green "complete": the summary already
+  // refuses a clean bill to a partial run (issue #42), and this comment must
+  // not hand one back.
+  const lines = [
+    `${PR_REREVIEW_CLOSED_MARKER_PREFIX}head=${input.headSha} -->`,
+    complete
+      ? `### ✅ pr-hero re-review complete — ${sha}`
+      : `### ⚠️ pr-hero re-review finished with partial coverage — ${sha}`,
+    "",
+  ];
+  if (!complete) {
+    lines.push(
+      "⚠️ Partial coverage: some review steps failed, so this pass may have missed findings.",
+      "",
+    );
+  }
+  lines.push(deltaLine(input.delta), "");
+  if (input.newPosted > 0) {
+    lines.push(`${input.newPosted} new finding(s) posted in this pass.`);
+  } else if (input.totalFindings > 0) {
+    lines.push(
+      "Nothing new was posted in this pass; findings already on the PR were kept.",
+    );
+  } else if (complete) {
+    lines.push("No findings in this pass.");
+  } else {
+    lines.push("No findings reported by the steps that completed.");
+  }
+  lines.push(
+    "",
+    input.summaryUrl === undefined
+      ? "The summary comment above was updated."
+      : `The summary comment was updated: [view summary](${input.summaryUrl})`,
+  );
+  return `${lines.join("\n")}\n`;
 }
 
 // Greptile-shaped bucket (issues #16/#17): un-anchorable and 422-demoted

@@ -66,7 +66,7 @@ function resolveVersion(): string {
     // Ignore read errors
   }
 
-  return "0.2.2";
+  return "0.2.3";
 }
 
 export function resolveEngineAssets(): EngineAssets {
