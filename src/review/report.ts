@@ -12,6 +12,7 @@ import type { ResolvedModelRoute, ResolvedStepRoute } from "#model/routing";
 import {
   findingMarker,
   PR_FINDING_MARKER_PREFIX,
+  PR_REREVIEW_CLOSED_MARKER_PREFIX,
   prCommentMarker,
 } from "#pr/preflight";
 import {
@@ -21,6 +22,7 @@ import {
 import type {
   Finding,
   FindingsDocument,
+  RunStatus,
   Severity,
   Tier,
 } from "#review/findings";
@@ -993,6 +995,45 @@ function deltaLine(delta: PrCommentDelta): string {
     return `${since}: ${parts.join(" · ")}`;
   }
   return `${since}: ${delta.resolved} resolved · ${delta.new} new · ${delta.persist} persist`;
+}
+
+// The re-review closing comment (pr/pr.ts's postInlineFindings): a short,
+// NEW issue comment posted after the summary's closing PATCH. The summary is
+// edited in place on a re-review, and an edit is invisible on GitHub (no
+// notification, no move down the timeline), so without this a clean
+// re-review looked exactly like a run that never happened. The delta line is
+// the summary's own `deltaLine`, so the two comments cannot disagree on the
+// numbers.
+export function renderRereviewClosedComment(input: {
+  headSha: string;
+  delta: PrCommentDelta;
+  newPosted: number;
+  runStatus: RunStatus;
+  summaryUrl: string | undefined;
+}): string {
+  const lines = [
+    `${PR_REREVIEW_CLOSED_MARKER_PREFIX}head=${input.headSha} -->`,
+    `### ✅ pr-hero re-review complete — ${code(input.headSha.slice(0, 8))}`,
+    "",
+    deltaLine(input.delta),
+    "",
+    input.newPosted === 0
+      ? "No new findings in this pass."
+      : `${input.newPosted} new finding(s) posted in this pass.`,
+  ];
+  if (input.runStatus !== "complete") {
+    lines.push(
+      "",
+      "⚠️ Partial coverage: some review steps failed, so this pass may have missed findings.",
+    );
+  }
+  lines.push(
+    "",
+    input.summaryUrl === undefined
+      ? "The summary comment above was updated."
+      : `The summary comment was updated: [view summary](${input.summaryUrl})`,
+  );
+  return `${lines.join("\n")}\n`;
 }
 
 // Greptile-shaped bucket (issues #16/#17): un-anchorable and 422-demoted

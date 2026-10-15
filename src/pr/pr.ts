@@ -53,6 +53,7 @@ import {
   renderInlineComment,
   renderIssueFindingComment,
   renderPrComment,
+  renderRereviewClosedComment,
   rereviewDeltaFromProvenance,
 } from "#review/report";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
@@ -1653,6 +1654,36 @@ export async function postIssueComment(
   return commentId;
 }
 
+// A fresh top-level issue comment with a pre-rendered body. Always a POST,
+// never find-and-update: unlike the summary, every re-review's closing
+// comment is its own entry in the timeline on purpose.
+async function postIssueCommentBody(
+  operatorRoot: string,
+  pr: number,
+  body: string,
+  spawnFn?: typeof Bun.spawn,
+): Promise<number> {
+  const result = await gh(
+    operatorRoot,
+    [
+      "api",
+      "--method",
+      "POST",
+      `repos/{owner}/{repo}/issues/${pr}/comments`,
+      "-F",
+      "body=@-",
+    ],
+    body,
+    spawnFn,
+  );
+  if (!result.ok) {
+    throw new CliError(
+      `gh api (post issue comment) failed: ${result.stderr.trim()}`,
+    );
+  }
+  return parsePostedCommentId(result.stdout, "issue comment");
+}
+
 function parsePostedCommentId(stdout: string, what: string): number {
   let parsed: unknown = null;
   try {
@@ -2673,6 +2704,44 @@ export async function postInlineFindings(input: {
     }
   }
 
+  // Closes a RE-review with a visible comment. Everything above only PATCHed
+  // the existing summary, and an edit is invisible on GitHub: no
+  // notification, no move down the timeline. With zero new findings no
+  // review is submitted either, so the PR looked untouched and a reader could
+  // not tell "ran and found nothing" from "never ran". A first review needs
+  // none: the summary it just created is already the new comment.
+  //
+  // Last, after the collapse loop, so it really is the closing word. Caught,
+  // like the collapse loop's reply: the review is already paid for and
+  // published, and losing the receipt must never turn into a failed run.
+  let closingCommentId: number | undefined;
+  if (existingSummaryId !== null) {
+    try {
+      closingCommentId = await postIssueCommentBody(
+        operatorRoot,
+        pr,
+        renderRereviewClosedComment({
+          headSha,
+          delta: overlayDelta(delta),
+          newPosted: reachedIds.size,
+          runStatus: doc.run_status,
+          summaryUrl:
+            webUrl === undefined
+              ? undefined
+              : findingCommentUrl(webUrl, pr, "issue", existingSummaryId),
+        }),
+        spawnFn,
+      );
+      log(`posted: re-review closing comment ${closingCommentId}`);
+    } catch (error) {
+      log(
+        "re-review closing comment did not post " +
+          `(${error instanceof Error ? error.message : String(error)}) ` +
+          "— the summary was still updated",
+      );
+    }
+  }
+
   return {
     reviewOutcome: reviewResult.outcome,
     reviewFindingCount: reviewFindings.length,
@@ -2683,6 +2752,7 @@ export async function postInlineFindings(input: {
     droppedFindingIds,
     commentUrls: commentUrlByFindingId,
     movedHeadSha,
+    ...(closingCommentId === undefined ? {} : { closingCommentId }),
   };
 }
 
