@@ -2,7 +2,7 @@
 // Public API surface; the deep-review lab consumes exactly these exports.
 
 export const ENGINE_NAME = "pr-hero";
-export const ENGINE_VERSION = "0.2.2";
+export const ENGINE_VERSION = "0.2.3";
 
 // errors and git/refs used to reach this surface only through re-exports in
 // review/preflight.ts; they are exported directly now that those re-exports
