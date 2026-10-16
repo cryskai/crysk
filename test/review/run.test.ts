@@ -6,10 +6,10 @@
 // the two functions produce today, not a restatement of the implementation.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { GOTCHAS_PLACEHOLDER_MARKER } from "#review/preflight";
+import { GOTCHAS_PLACEHOLDER_MARKER, localReviewSpec } from "#review/preflight";
 import {
   assertDistinctRange,
   buildTelemetry,
@@ -19,12 +19,14 @@ import {
   prepareRunnerForRoute,
   resolveGotchasPath,
   resolveParityFires,
+  resolvePromptSet,
   selectActiveHunters,
   validateGotchas,
   writeMcpConfig,
 } from "#review/run";
 import { ClaudeCodeRunner } from "#review/step-runner";
-import { CliError } from "../../src/errors";
+import { loadEffectiveConfig } from "../../src/config/config";
+import { CliError, recordClassOf } from "../../src/errors";
 
 describe("assertDistinctRange", () => {
   test("distinct base and head shas: no throw", () => {
@@ -187,6 +189,80 @@ describe("writeMcpConfig / validateGotchas (P2.2)", () => {
       `<!-- ${GOTCHAS_PLACEHOLDER_MARKER} -->\nfill me in`,
     );
     await expect(validateGotchas(gotchasPath)).rejects.toThrow(CliError);
+  });
+
+  // T2d-1 (S2): the gotchas gate's two reasons carry their record class, and the
+  // message is the one the gate always printed.
+  test("validateGotchas carries the empty reason for a missing file, same message", async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "pr-hero-run-gotchas-"));
+    const gotchasPath = path.join(dir, "does-not-exist.md");
+    const error = await validateGotchas(gotchasPath).catch((e) => e);
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as CliError).cls).toEqual({
+      kind: "gotchas",
+      reason: "empty",
+    });
+    expect(
+      (error as CliError).message.startsWith(
+        `missing or empty gotchas file: ${gotchasPath}`,
+      ),
+    ).toBe(true);
+  });
+
+  test("validateGotchas carries the placeholder reason for the unedited scaffold", async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "pr-hero-run-gotchas-"));
+    const gotchasPath = path.join(dir, "gotchas.md");
+    await Bun.write(
+      gotchasPath,
+      `<!-- ${GOTCHAS_PLACEHOLDER_MARKER} -->\nfill me in`,
+    );
+    const error = await validateGotchas(gotchasPath).catch((e) => e);
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as CliError).cls).toEqual({
+      kind: "gotchas",
+      reason: "placeholder",
+    });
+    expect(
+      (error as CliError).message.startsWith(
+        `gotchas file is still the scaffold nobody filled in: ${gotchasPath}`,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("resolvePromptSet: an agent file that does not parse (T2d-1)", () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  test("throws the error parseAgentFile threw, with the prompt-set class recorded beside it", async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "pr-hero-run-promptset-"));
+    const agentsDir = path.join(dir, "agents");
+    await mkdir(agentsDir);
+    const files = localReviewSpec({}).agents.map((agent) => agent.file);
+    for (const file of files) {
+      await Bun.write(path.join(agentsDir, file), "---\nname: ok\n---\nbody\n");
+    }
+    const broken = path.join(agentsDir, files[0] ?? "");
+    await Bun.write(broken, "no frontmatter block here\n");
+    const loaded = await loadEffectiveConfig({ root: dir, home: dir });
+
+    const error = await resolvePromptSet({ agents: agentsDir }, loaded).catch(
+      (e) => e,
+    );
+    expect(error).toBeInstanceOf(Error);
+    // WHY not a CliError: main() in src/cli.ts prints a CliError as one line, and a
+    // local run has always let this failure take the uncaught path.
+    expect(error).not.toBeInstanceOf(CliError);
+    expect(recordClassOf(error)).toEqual({ kind: "prompt-set" });
+    expect((error as Error).message).toBe(
+      `${broken}: agent file has no frontmatter block`,
+    );
+    // WHY the stack is pinned: the uncaught print starts its excerpt at the top
+    // frame, so the original throw site (prompt-set.ts) must stay there.
+    expect((error as Error).stack ?? "").toContain("prompt-set.ts");
   });
 });
 

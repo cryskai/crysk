@@ -31,7 +31,7 @@ import { type EngineAssets, resolveEngineAssets } from "../assets";
 // and imported by value into git.ts — the bottom layer depending on a
 // review-domain module. They live in ../errors and ../git/refs; this file
 // imports only the ones it uses itself.
-import { CliError, CliUsageError } from "../errors";
+import { CliError, CliUsageError, withUsageClass } from "../errors";
 import { DEFAULT_BASE_REF, listPaths } from "../git/refs";
 import { redactDiagnostic } from "../security/redact";
 // review/size-gate.ts imports only a TYPE from here, so this is not a runtime
@@ -1828,7 +1828,9 @@ export function resolveAgentsDir(
   // before a single step spawned. A bundled set's conformance is checked by
   // preflightAgentsDir over the manifest's keys instead.
   if (resolution.kind === "dir" && !existsSync(resolution.dir)) {
-    throw new CliError(`agents dir does not exist: ${resolution.dir}`);
+    throw new CliError(`agents dir does not exist: ${resolution.dir}`, {
+      cls: { kind: "prompt-set" },
+    });
   }
   return resolution;
 }
@@ -1859,6 +1861,7 @@ export async function preflightAgentsDir(
     throw new CliError(
       `prompt set ${agents.dir} does not match the review spec:\n` +
         problems.map((p) => `  - ${p}`).join("\n"),
+      { cls: { kind: "prompt-set" } },
     );
   }
 }
@@ -1930,7 +1933,11 @@ export function localReviewSpec(
         role: "hunter",
         trigger: "input",
       },
-      ...parseExtraHunters(env.PRHERO_EXTRA_HUNTERS),
+      // The boundary, not the three throws: assertBasenameOnly inside
+      // parseExtraHunters is a fourth usage throw of the same parse (T2d-1).
+      ...withUsageClass({ kind: "config-parse", source: "extra-hunters" }, () =>
+        parseExtraHunters(env.PRHERO_EXTRA_HUNTERS),
+      ),
       { key: "refuter", file: "review-refuter.md", role: "refuter" },
     ],
   };
@@ -2094,8 +2101,12 @@ const GLOBAL_CONFIG_LABEL = "~/.prhero/config.json";
 // can still see was absent. The `?? []` locals below stay exactly as they
 // are: they feed the validators, and validating an absent key against the
 // empty array is what keeps every error string byte-identical.
+// The repo layer's usage errors carry the repo-config class (T2d-1). The person
+// layer's do not: its catalog text names the repo file (see parseGlobalConfig).
 export function parseLocalConfig(raw: string): ConfigLayer {
-  return parseConfigLayer(raw, REPO_CONFIG_LABEL, LOCAL_CONFIG_KEYS);
+  return withUsageClass({ kind: "config-parse", source: "repo-config" }, () =>
+    parseConfigLayer(raw, REPO_CONFIG_LABEL, LOCAL_CONFIG_KEYS),
+  );
 }
 
 // The global layer's parser: same JSON dialect, same validators, same strict
@@ -2470,7 +2481,19 @@ function parseRouteMapping(
   };
 }
 
+// Every usage error of the routing object carries the routing class (T2d-1). The
+// two callers are the person layer and the CI routing input (src/ci/setup.ts, which
+// keeps its own class and discards this one).
 export function parseRoutingConfig(
+  value: unknown,
+  file: string,
+): RoutingConfig | undefined {
+  return withUsageClass({ kind: "config-parse", source: "routing" }, () =>
+    parseRoutingValue(value, file),
+  );
+}
+
+function parseRoutingValue(
   value: unknown,
   file: string,
 ): RoutingConfig | undefined {

@@ -21,8 +21,16 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { CliRecord, TriggerRecord } from "#ci/outcome";
+import { classifyCliError } from "#ci/classify-error";
+import { writeFatalCliRecord } from "#ci/cli-record";
+import {
+  CLI_RECORD_FILE,
+  type CliRecord,
+  parseCliRecord,
+  type TriggerRecord,
+} from "#ci/outcome";
 import { decidePublication, runPublish } from "#ci/publish";
+import { CliError } from "../../src/errors";
 
 const REPO = "acme/widgets";
 const SHA = "c".repeat(40);
@@ -188,6 +196,43 @@ describe("decidePublication — the pure table", () => {
       if (plan.kind !== "remote") return;
       expect(plan.rendered.code).toBe("PRH-ROUTE-UNRESOLVABLE");
       expect(plan.rendered.owner).toBe("config");
+    });
+
+    // T2d-1 (S2), end to end: the CLI's fatal writer leaves cli.json, the publisher
+    // reads it back, and the config-owned code and its owner lead reach the PR.
+    test("a gotchas error written by the CLI renders PRH-GOTCHAS-MISSING under 'Your configuration:'", () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "pr-hero-gotchas-e2e-"));
+      try {
+        const env = { PRHERO_OUTCOME_DIR: dir };
+        writeFatalCliRecord(
+          classifyCliError(
+            new CliError("gotchas file is still the scaffold", {
+              cls: { kind: "gotchas", reason: "placeholder" },
+            }),
+          ),
+          env,
+        );
+        const cliRecord = parseCliRecord(
+          readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8"),
+        );
+        const plan = decidePublication({
+          record: record(),
+          cliStarted: true,
+          cliRecord,
+        });
+        expect(plan.kind).toBe("remote");
+        if (plan.kind !== "remote") return;
+        expect(plan.rendered.code).toBe("PRH-GOTCHAS-MISSING");
+        expect(plan.rendered.owner).toBe("config");
+        expect(plan.rendered.summary.join("\n")).toContain(
+          "Your configuration: .prhero/gotchas.md is missing or still the scaffold",
+        );
+        expect(plan.status?.state).toBe("error");
+        expect(plan.status?.description).toStartWith("PRH-GOTCHAS-MISSING");
+        expect(plan.headSha).toBe(SHA);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     test("a CLI error for an unusable runtime is the runtime code, owned by pr-hero in action mode", () => {

@@ -1,6 +1,7 @@
 // The CLI's error classifier for cli.json (odd/tasks/agent-first-ci.md, T2c). It maps
-// a thrown error to a class by instanceof alone. A message is never parsed, so a
-// wording change cannot move an error to another owner.
+// a thrown error to a class by instanceof, or by the class the throw site named on
+// the error (T2d-1: CliError.cls, or a record class beside a plain error), which wins.
+// A message is never parsed, so a wording change cannot move an error to another owner.
 //
 // Each mapping is justified by the throw site and by the catalog text of its code
 // (src/ci/outcome.ts ERROR_CATALOG):
@@ -30,6 +31,7 @@
 // trigger.ts: it is imported only by the CLI, after the install, never by a step
 // that runs before it.
 
+import { CliError, CliUsageError, recordClassOf } from "../errors";
 import {
   AmbiguousMappingError,
   UnauthorizedRouteError,
@@ -40,6 +42,16 @@ import { OpenCodeSdkUnavailableError } from "../transports/opencode-admission";
 import type { CliErrorClass } from "./outcome";
 
 export function classifyCliError(error: unknown): CliErrorClass {
+  // The class the throw site named wins over the instanceof mapping below. WHY: the
+  // parser or the step that threw knows its failure, and no class of its type can.
+  const named = recordClassOf(error);
+  if (named !== undefined) return named;
+  if (
+    (error instanceof CliError || error instanceof CliUsageError) &&
+    error.cls !== undefined
+  ) {
+    return error.cls;
+  }
   if (error instanceof UnmappedRouteError) {
     return { kind: "route", reason: "unmapped" };
   }

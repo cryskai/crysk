@@ -75,7 +75,7 @@ import {
   validateReviewSpec,
 } from "#review/spec";
 import { ClaudeCodeRunner } from "#review/step-runner";
-import { CliError } from "../errors";
+import { CliError, withRecordClass } from "../errors";
 import {
   createProductionRuntime,
   type ProductionAdmissionContext,
@@ -170,7 +170,11 @@ export async function validateGotchas(gotchasPath: string): Promise<void> {
   const gotchas = (await file.exists()) ? await file.text() : "";
   const unusable = gotchasUnusableReason(gotchas);
   if (unusable !== undefined) {
-    throw new CliError(gotchasErrorMessage(gotchasPath, unusable));
+    // The class carries the gate's reason into cli.json (T2d-1). Both reasons render
+    // the one gotchas code today; the reason stays on the record for that reason only.
+    throw new CliError(gotchasErrorMessage(gotchasPath, unusable), {
+      cls: { kind: "gotchas", reason: unusable },
+    });
   }
 }
 
@@ -383,10 +387,18 @@ export async function resolvePromptSet(
   for (const agent of spec.agents) {
     // Parsing every agent file now is a preflight too: a malformed
     // frontmatter block must fail here, not three spawned steps later.
-    agentFiles.set(
-      agent.key,
-      await parseAgentFile(agentFilePath(agents, agent.file)),
-    );
+    // A failure is the error parseAgentFile threw, with its prompt-set class
+    // recorded beside it (T2d-1). It stays a plain Error, not a CliError: main()
+    // prints a CliError as one line, and a local run has always let this failure
+    // take the uncaught path with its excerpt and stack. Wrapping it in a helper
+    // would add a stack frame, so the try stays here.
+    let parsed: ParsedAgent;
+    try {
+      parsed = await parseAgentFile(agentFilePath(agents, agent.file));
+    } catch (error) {
+      throw withRecordClass(error, { kind: "prompt-set" });
+    }
+    agentFiles.set(agent.key, parsed);
   }
   // The prompt set's identity (§3.9), computed from the spec's DECLARATION
   // order — the same order the lab's promptSetFingerprint hashes in, so the

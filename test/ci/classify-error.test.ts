@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { classifyCliError } from "#ci/classify-error";
-import { CliError } from "../../src/errors";
+import { CliError, CliUsageError, withRecordClass } from "../../src/errors";
 import {
   AmbiguousMappingError,
   ModelRoutingError,
@@ -130,5 +130,43 @@ describe("classifyCliError: everything else is unclassified", () => {
     expect(
       classifyCliError(new Error("No route mapping found for logical model x")),
     ).toEqual({ kind: "unknown" });
+  });
+});
+
+// T2d-1 (S2): a throw site that knows its class says so on the error, and the
+// classifier reads that class before its instanceof mapping.
+describe("classifyCliError: the class an error carries", () => {
+  test("a CliError's own class wins", () => {
+    expect(
+      classifyCliError(
+        new CliError("gotchas", { cls: { kind: "gotchas", reason: "empty" } }),
+      ),
+    ).toEqual({ kind: "gotchas", reason: "empty" });
+  });
+
+  test("a CliUsageError's own class wins", () => {
+    expect(
+      classifyCliError(
+        new CliUsageError("bad", {
+          cls: { kind: "config-parse", source: "extra-hunters" },
+        }),
+      ),
+    ).toEqual({ kind: "config-parse", source: "extra-hunters" });
+  });
+
+  test("a plain error with a recorded class is read by its class", () => {
+    expect(
+      classifyCliError(withRecordClass(new Error("x"), { kind: "prompt-set" })),
+    ).toEqual({ kind: "prompt-set" });
+  });
+
+  test("the invariant class is read from a CliError", () => {
+    expect(
+      classifyCliError(
+        new CliError("internal: pipeline returned no result", {
+          cls: { kind: "invariant" },
+        }),
+      ),
+    ).toEqual({ kind: "invariant" });
   });
 });
