@@ -298,6 +298,16 @@ function sentinelFill(text: string): string {
   );
 }
 
+type CatalogFixes = CatalogEntry["variants"][string]["fixes"];
+
+// Every fix list a variant can render: its own list, or one per backend when a
+// function fix picks the steps by backend (missing_subscription_record).
+function fixListsOf(fixes: CatalogFixes): (readonly string[])[] {
+  return typeof fixes === "function"
+    ? ["claude-code", "opencode"].map((backend) => fixes({ backend }))
+    : [fixes];
+}
+
 function entryOf(code: ErrorCode): CatalogEntry {
   const entry = ERROR_CATALOG[code];
   expect(entry, `catalog entry for ${code}`).toBeDefined();
@@ -499,7 +509,9 @@ describe("the code list and its catalog", () => {
           variant.why.endsWith("."),
           `${code} ${key} why has no trailing period`,
         ).toBe(false);
-        expect(variant.fixes.length, `${code} ${key} fixes`).toBeGreaterThan(0);
+        for (const fixes of fixListsOf(variant.fixes)) {
+          expect(fixes.length, `${code} ${key} fixes`).toBeGreaterThan(0);
+        }
       }
     }
   });
@@ -571,9 +583,13 @@ describe("docs parity: ## Error codes in docs/github-actions.md", () => {
       expect(body.includes(entry.what), `${code} what`).toBe(true);
       for (const [key, variant] of Object.entries(entry.variants)) {
         expect(body.includes(variant.why), `${code} ${key} why`).toBe(true);
-        for (const fix of variant.fixes) {
-          const text = fix.startsWith("$ ") ? fix.slice(2) : fix;
-          expect(body.includes(text), `${code} ${key} fix: ${text}`).toBe(true);
+        for (const fixes of fixListsOf(variant.fixes)) {
+          for (const fix of fixes) {
+            const text = fix.startsWith("$ ") ? fix.slice(2) : fix;
+            expect(body.includes(text), `${code} ${key} fix: ${text}`).toBe(
+              true,
+            );
+          }
         }
         if (key !== "default") {
           expect(
@@ -948,6 +964,30 @@ describe("renderCode and renderError: the annotation", () => {
     );
   });
 
+  test("a missing subscription record names the login its backend uses", () => {
+    const claude = renderError(
+      { kind: "credential", failureClass: "missing_subscription_record" },
+      { backend: "claude-code", secret: "CLAUDE_CODE_OAUTH_TOKEN" },
+      "action",
+    );
+    expect(claude.annotation).toContain("claude setup-token");
+    expect(claude.annotation).not.toContain("ChatGPT");
+    expect(claude.summary.join("\n")).toContain(
+      "claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+    );
+    expect(claude.summary.join("\n")).not.toContain("ChatGPT");
+
+    const openai = renderError(
+      { kind: "credential", failureClass: "missing_subscription_record" },
+      { backend: "opencode", provider: "openai", secret: "OPENCODE_AUTH_JSON" },
+      "action",
+    );
+    expect(openai.annotation).toContain("ChatGPT");
+    expect(openai.annotation).toContain("opencode auth login");
+    expect(openai.summary.join("\n")).toContain("ChatGPT");
+    expect(openai.summary.join("\n")).toContain("opencode auth login");
+  });
+
   test("a route reason picks its own fix", () => {
     const ambiguous = renderError(
       { kind: "route", reason: "ambiguous" },
@@ -1095,6 +1135,33 @@ describe("renderCode and renderError: the annotation", () => {
     );
   });
 
+  test("an install failure names the step its class carries, and an explicit step wins", () => {
+    const named = renderError(
+      { kind: "install", step: "Install OpenCode CLI" },
+      {},
+      "action",
+    );
+    expect(named.annotation).toContain("The Install OpenCode CLI step failed");
+    expect(named.summary.join("\n")).toContain(
+      "The Install OpenCode CLI step failed",
+    );
+    const explicit = renderError(
+      { kind: "install", step: "Install OpenCode CLI" },
+      { step: "install node" },
+      "action",
+    );
+    expect(explicit.annotation).toContain("The install node step failed");
+    for (const step of ["", "   "]) {
+      const blank = renderError({ kind: "install", step }, {}, "action");
+      expect(blank.annotation, JSON.stringify(step)).toContain(
+        "An install step failed",
+      );
+      expect(blank.annotation, JSON.stringify(step)).not.toContain(
+        "this step step",
+      );
+    }
+  });
+
   test("an install failure with no step says an install step failed, never the placeholder", () => {
     for (const params of [{}, { step: "" }, { step: "   " }] as const) {
       const { annotation, summary } = renderCode(
@@ -1132,7 +1199,11 @@ describe("renderCode and renderError: the annotation", () => {
         expect(summary, `${code} ${key} why`).toContain(
           `Why: ${sentinelFill(selected.why)}`,
         );
-        for (const fix of selected.fixes) {
+        const fixes =
+          typeof selected.fixes === "function"
+            ? selected.fixes(FULL)
+            : selected.fixes;
+        for (const fix of fixes) {
           const text = fix.startsWith("$ ") ? fix.slice(2) : fix;
           expect(summary, `${code} ${key}: ${text}`).toContain(
             sentinelFill(text),

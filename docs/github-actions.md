@@ -704,7 +704,24 @@ gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 
 #### `missing_subscription_record`
 
-Provider `openai` means ChatGPT OAuth: log in that way, or rename the provider in PRHERO_ROUTING.
+On the Claude route (`backend` is `claude-code`, or no OpenCode backend):
+
+Log in again with `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`:
+
+```bash
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+```
+
+On the OpenCode route (`backend` is `opencode`):
+
+Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then re-set the secret:
+
+```bash
+opencode auth login
+gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+Or rename the provider in PRHERO_ROUTING.
 
 #### `malformed_payload`
 

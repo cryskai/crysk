@@ -101,7 +101,11 @@ interface CatalogVariant {
   // Replaces the entry's owner for this sub-class.
   readonly owner?: OwnerRule;
   readonly why: string;
-  readonly fixes: readonly string[];
+  // A list of fix lines, or a function of the params when the steps depend on
+  // them (the backend, for missing_subscription_record).
+  readonly fixes:
+    | readonly string[]
+    | ((params: ErrorParams) => readonly string[]);
   // The annotation's Fix: ONE short imperative sentence that names the real
   // fixing step, with no trailing period. A string is filled like the other
   // text; a function reads the params when one value picks the step.
@@ -503,6 +507,23 @@ const OPENCODE_STORE =
   "$ gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json";
 const CRED_STORE_WHY =
   "the credential store does not hold what this route needs";
+// missing_subscription_record is raised for a Claude keychain record and for an
+// OpenAI OAuth record alike, so each route's fix names the login it really uses.
+const CLAUDE_SUBSCRIPTION_FIXES = [
+  "Log in again with `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`:",
+  "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+];
+const OPENCODE_SUBSCRIPTION_FIXES = [
+  "Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then re-set the secret:",
+  "$ opencode auth login",
+  OPENCODE_STORE,
+  "Or rename the provider in PRHERO_ROUTING.",
+];
+// Only the OpenCode route stores a ChatGPT login; any other backend, or none, is
+// the Claude route.
+function isOpencodeRoute(params: ErrorParams): boolean {
+  return params.backend?.trim() === "opencode";
+}
 const ROUTE_WHY = "every agent needs exactly one backend, provider and model";
 const PROVIDER_REFUSED_WHY = "the provider's safety system declined this input";
 const UNCLASSIFIED_FIXES = [
@@ -594,11 +615,14 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
       missing_subscription_record: {
         why: CRED_STORE_WHY,
-        fixes: [
-          "Provider `openai` means ChatGPT OAuth: log in that way, or rename the provider in PRHERO_ROUTING.",
-        ],
-        annotationFix:
-          "log in the way the provider expects (ChatGPT OAuth for `openai`), or rename the provider in PRHERO_ROUTING",
+        fixes: (params) =>
+          isOpencodeRoute(params)
+            ? OPENCODE_SUBSCRIPTION_FIXES
+            : CLAUDE_SUBSCRIPTION_FIXES,
+        annotationFix: (params) =>
+          isOpencodeRoute(params)
+            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then re-set OPENCODE_AUTH_JSON, or rename the provider in PRHERO_ROUTING"
+            : "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
       },
       malformed_payload: {
         why: CRED_STORE_WHY,
@@ -946,7 +970,10 @@ export function renderError(
   ctx: OutcomeContext,
 ): RenderedError {
   const detail = isBlank(params.detail) ? classDetail(cls) : params.detail;
-  const merged = detail === undefined ? params : { ...params, detail };
+  // An install class carries the step it failed on; an explicit non-blank step wins.
+  const step =
+    cls.kind === "install" && isBlank(params.step) ? cls.step : params.step;
+  const merged: ErrorParams = { ...params, detail, step };
   return renderCode(codeOf(cls), merged, ctx, variantOf(cls));
 }
 
@@ -1099,6 +1126,16 @@ function annotationFixOf(picked: CatalogVariant, params: ErrorParams): string {
   return fill(raw, params, "annotation").replace(/[:.]+$/, "");
 }
 
+// The variant's fix lines; a function fix picks its list from the params.
+function fixesOf(
+  picked: CatalogVariant,
+  params: ErrorParams,
+): readonly string[] {
+  return typeof picked.fixes === "function"
+    ? picked.fixes(params)
+    : picked.fixes;
+}
+
 function summaryLines(
   code: ErrorCode,
   entry: CatalogEntry,
@@ -1119,7 +1156,7 @@ function summaryLines(
     "",
     "Fix:",
     "",
-    ...fixBlocks(picked.fixes, prose, command),
+    ...fixBlocks(fixesOf(picked, params), prose, command),
     `Docs: ${link}`,
   ];
 }
