@@ -4,12 +4,17 @@ import {
   type PhaseBContext,
   type PriorRecord,
 } from "#rereview/classify";
+import { priorsFromStateFindings } from "#rereview/prepare";
 import {
   assembleLive,
   type GateRow,
   type GateSurvivor,
+  parseStateBlock,
+  renderStateBlock,
   unresolvedBlockingCount,
 } from "#rereview/state";
+
+const HEAD = "8da9fad5bc9f650df38fc8cb0237253d80ff3245";
 
 // One survivor of THIS run, as doc.findings carries it. Only the identity
 // fields and the tier are read by the count.
@@ -301,6 +306,64 @@ describe("S7 — self-asserted triage never lowers the gate", () => {
         verifyVerdicts: new Map(),
       });
       expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(1);
+    });
+  }
+});
+
+// S7 across pushes. The author's triage stays on the thread, so every run
+// re-reads it. The only memory a run hands the next one is the state block, so
+// the round trip goes through renderStateBlock and parseStateBlock, the same
+// seam the next run reads.
+describe("S7 — a triage-returned blocking prior stays open across pushes", () => {
+  const ctx: PhaseBContext = {
+    case: "C",
+    deletedFiles: new Set(),
+    renameMap: new Map(),
+    touched: () => false,
+    summaryUpdatedAt: null,
+  };
+
+  const triages: readonly { name: string; triage: PriorRecord["triage"] }[] = [
+    {
+      name: "misclassified",
+      triage: { tag: "misclassified", verdict: null, createdAt: null },
+    },
+    {
+      name: "dismissed + rejected",
+      triage: { tag: "dismissed", verdict: "rejected", createdAt: null },
+    },
+  ];
+
+  for (const t of triages) {
+    test(`${t.name}: run N and run N+1 both count the prior`, () => {
+      const runNPrior: PriorRecord = {
+        id: "R001",
+        sev: "CRITICAL",
+        tier: "blocking",
+        channel: "inline",
+        locs: ["src/app.ts:10"],
+        claim: "a live defect",
+        triage: t.triage,
+        newThreadReply: false,
+      };
+      const runN = assembleLive({
+        settled: [classifyPrior(runNPrior, ctx)],
+        priors: [runNPrior],
+        verifyVerdicts: new Map(),
+      });
+      expect(unresolvedBlockingCount([], runN.gateRows)).toBe(1);
+      expect(runN.live.map((row) => row.status)).toEqual(["carried"]);
+
+      const stored = parseStateBlock(renderStateBlock(HEAD, runN.live));
+      const restored = priorsFromStateFindings(stored?.findings ?? []);
+      expect(restored.map((p) => p.id)).toEqual(["R001"]);
+      const runN1Priors = restored.map((p) => ({ ...p, triage: t.triage }));
+      const runN1 = assembleLive({
+        settled: runN1Priors.map((p) => classifyPrior(p, ctx)),
+        priors: runN1Priors,
+        verifyVerdicts: new Map(),
+      });
+      expect(unresolvedBlockingCount([], runN1.gateRows)).toBe(1);
     });
   }
 });

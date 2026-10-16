@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left
   open stays counted through a re-review that carries it, through a same-head `/pr-hero review` that runs no
-  hunters, and through a triage reply on its own. Before this, each of those read green. A finding leaves the
+  hunters, through a triage reply on its own, and through later pushes after a rejected dismissal or a
+  `misclassified` reply. Before this, each of those read green. A finding leaves the
   count only when the re-review verifies it gone, its files were deleted, or this run re-tiers it below
   blocking.
 

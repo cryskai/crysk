@@ -311,6 +311,14 @@ export function isLiveStatus(status: GateStatus): status is LiveStatus {
   );
 }
 
+// WHY a triage-driven return or re-tier is persisted as `carried`: the state
+// block is the only memory the next run has, and its live rows are the next
+// run's priors. The author's triage stays on the thread and is re-read every
+// run, so a misclassified prior, or a dismissal the adjudicator rejected,
+// settles the same way again. Dropping it here let two pushes clear a blocking
+// finding: run N counted it, the block forgot it, and run N+1 read zero. That
+// is self-grading (S7). A worsening return is not kept, because this run's own
+// stronger survivor is what carries that finding forward.
 export function assembleLive(input: {
   settled: readonly PhaseBResult[];
   priors: readonly PriorRecord[];
@@ -318,7 +326,9 @@ export function assembleLive(input: {
 }): {
   live: LiveFinding[];
   // Every prior the re-review did not verify gone, returned and re-tiered rows
-  // included. `live` drops those two, and the gate must not: see unresolvedBlockingCount below.
+  // included. `live` keeps the triage-driven ones (see the WHY above
+  // assembleLive) and drops only a worsening return. The gate keeps all of
+  // them: see unresolvedBlockingCount below.
   // Written to the in-memory result only, never to the state block or
   // pipeline.json, so the persisted `live[]` contract is unchanged.
   gateRows: GateRow[];
@@ -351,26 +361,34 @@ export function assembleLive(input: {
         status,
       });
     }
+    // Only a triage-driven settlement persists, as `carried`: the author's
+    // misclassified tag, or a dismissal the adjudicator rejected. A worsening
+    // return stays out, because this run's own stronger survivor carries it.
+    let persisted: LiveStatus | undefined;
     if (status === "returned") {
       returned++;
-      continue;
-    }
-    if (status === "re-tiered") {
+      if (
+        gatePrior?.triage?.tag === "dismissed" &&
+        gatePrior.triage.verdict === "rejected"
+      ) {
+        persisted = "carried";
+      }
+    } else if (status === "re-tiered") {
       reTiered++;
-      continue;
+      persisted = "carried";
+    } else if (isLiveStatus(status)) {
+      persisted = status;
     }
-    if (!isLiveStatus(status)) continue;
-    const prior = priorById.get(row.id);
-    if (prior === undefined) continue;
+    if (persisted === undefined || gatePrior === undefined) continue;
     live.push({
-      id: prior.id,
-      sev: prior.sev,
-      tier: prior.tier,
-      channel: prior.channel,
+      id: gatePrior.id,
+      sev: gatePrior.sev,
+      tier: gatePrior.tier,
+      channel: gatePrior.channel,
       locs: row.locs,
-      c: liveFingerprint(prior.id, prior.claim),
-      claim: prior.claim,
-      status,
+      c: liveFingerprint(gatePrior.id, gatePrior.claim),
+      claim: gatePrior.claim,
+      status: persisted,
     });
   }
   return {
@@ -401,6 +419,8 @@ export function assembleLive(input: {
 // lands as `re-tiered` (classifyPrior), and its tier is the author's claim,
 // not the pipeline's, so it is not evidence. A dismissal the adjudicator upheld
 // is `suppressed`, and it stays counted for the same reason.
+// The next run's count reads the state block, so assembleLive keeps a
+// triage-returned prior there as `carried`. Dropping it let two pushes clear it (S7).
 //
 // Dedupe key. Two rules, both stated so a reader can check them:
 //   - a gate row is one prior, keyed by its id (R###). A duplicate row for the
