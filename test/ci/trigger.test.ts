@@ -1277,6 +1277,51 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     }
   });
 
+  test("a stale setup.json that cannot be removed still fails the record write, as before", () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-trigger-setup-eperm-"),
+    );
+    try {
+      const dir = path.join(root, "outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "setup.json"), "{}");
+      const run = runShell(
+        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        undefined,
+        undefined,
+        fsWhereRemovalFails((filePath) => filePath.endsWith("setup.json")),
+      );
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(false);
+      expect(run.stdout).toContain("could not write its outcome record");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a stale cli.json that cannot be removed still fails the record write, as before", () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-trigger-cli-eperm-"),
+    );
+    try {
+      const dir = path.join(root, "outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "cli.json"),
+        '{"v":1,"outcome":"reviewed"}\n',
+      );
+      const run = runShell(
+        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        undefined,
+        undefined,
+        fsWhereRemovalFails((filePath) => filePath.endsWith("cli.json")),
+      );
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(false);
+      expect(run.stdout).toContain("could not write its outcome record");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a record that cannot be written leaves no partial file and keeps the decision's exit code", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-atomic-"));
     try {
