@@ -21,6 +21,7 @@
 // better: it resolves to a src module whose own imports reach packages. Keep
 // every import here `node:` or `bun`.
 
+import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -460,9 +461,16 @@ export const NODE_FS: OutcomeFs = {
   },
 };
 
-// The suffix of the temp file writeRecordAtomically writes before its rename. The
-// stale-file clearing below names the same file, so the two cannot drift apart.
 const RECORD_TEMP_SUFFIX = ".tmp";
+
+// The temp file a record write goes through before its rename. The name is unique
+// per write: a temp file that another job or user left at a fixed name (cli.json.tmp,
+// say) could otherwise make every write of that record in the run fail (F003 on
+// #330). The suffix stays `.tmp`, so an interrupted write still reads as temporary.
+// Builtins only: the setup step uses it too, and it must not reach for a package.
+export function recordTempPath(finalPath: string): string {
+  return `${finalPath}.${process.pid}.${randomBytes(6).toString("hex")}${RECORD_TEMP_SUFFIX}`;
+}
 
 // WHY tmp then rename: the publish step reads the record in a later step, and
 // it must never see a half-written file. A failed write removes its temp file,
@@ -475,7 +483,7 @@ export function writeRecordAtomically(
   fs: OutcomeFs,
 ): void {
   const finalPath = path.join(dir, name);
-  const tempPath = `${finalPath}${RECORD_TEMP_SUFFIX}`;
+  const tempPath = recordTempPath(finalPath);
   fs.mkdir(dir);
   try {
     fs.writeFile(tempPath, text);
@@ -547,23 +555,13 @@ function runIdentity(deps: CiTriggerDeps): RunIdentity {
 const CLI_STARTED_MARKER = "cli-started";
 const SETUP_RECORD = "setup.json";
 const CLI_RECORD = "cli.json";
-// WHY the temp file too: the CLI's record write goes through writeRecordAtomically,
-// which writes cli.json.tmp before its rename. A stale one another user left in
-// this directory can make that write fail (EACCES), so the record is lost. Cleared
-// here, the CLI's write starts from no temp file.
-const CLI_RECORD_TEMP = `${CLI_RECORD}${RECORD_TEMP_SUFFIX}`;
 
 function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
   // The markers the publisher reads stay strict: a stale one would mislead it.
+  // Temp files are not cleared here: each write's temp name is unique, so no
+  // stale one can collide with it (see recordTempPath).
   for (const name of [CLI_STARTED_MARKER, SETUP_RECORD, CLI_RECORD]) {
     fs.remove(path.join(dir, name));
-  }
-  // WHY best effort (F003 on #330): the temp file only affects the optional CLI
-  // record, and a stale one that cannot be removed must not stop the trigger record.
-  try {
-    fs.remove(path.join(dir, CLI_RECORD_TEMP));
-  } catch {
-    // Ignored on purpose; see the WHY above.
   }
 }
 

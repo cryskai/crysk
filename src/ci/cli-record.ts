@@ -7,7 +7,11 @@
 // or none at all. The write goes through the trigger's atomic writer, so the
 // publisher never reads a half-written file.
 //
-// The record names what was DELIVERED, and the first, most specific writer wins:
+// The record names what was DELIVERED, and the first, most specific writer wins.
+// Before any of them, just before the CLI posts its pending hold, it writes a progress
+// record instead: reviewing, which names the head the lock is on (recordReviewing,
+// called from src/pr/plan.ts). It is progress, not an outcome, so every outcome
+// below overwrites it.
 // - hunters-failed: recordPipelineOutcome (src/pr/review-pr.ts), when the pipeline
 //   returns with every hunter failed. Nothing was delivered, so it is a record of its own.
 // - skipped: publishCiSkip (src/pr/admission.ts), once the notice is on the PR (or
@@ -46,11 +50,12 @@ export function writeCliRecord(
 ): void {
   const dir = env.PRHERO_OUTCOME_DIR ?? "";
   if (dir === "") return;
+  const written = inheritProgressHead(record, dir);
   try {
     writeRecordAtomically(
       dir,
       CLI_RECORD_FILE,
-      `${JSON.stringify(record)}\n`,
+      `${JSON.stringify(written)}\n`,
       NODE_FS,
     );
   } catch (error) {
@@ -58,6 +63,38 @@ export function writeCliRecord(
       `pr-hero: could not write the outcome record: ${errnoCode(error)}\n`,
     );
   }
+}
+
+// WHY an outcome inherits the reviewing head (F002 on #330): the pending lock sits on
+// the head the reviewing record names, and an outcome written after the hold may name
+// no head of its own. The publisher would then answer on the trigger's head and leave
+// the real lock pending. The reviewing record is this run's own statement of that head,
+// so an outcome without one takes it. An outcome that names its head keeps its own.
+function inheritProgressHead(record: CliRecord, dir: string): CliRecord {
+  if (record.head_sha !== undefined || record.outcome === "reviewing") {
+    return record;
+  }
+  const earlier = readEarlierRecord(dir);
+  if (earlier?.outcome !== "reviewing" || earlier.head_sha === undefined) {
+    return record;
+  }
+  return { ...record, head_sha: earlier.head_sha };
+}
+
+// The progress writer: src/pr/plan.ts calls it just before posting the pending hold, with
+// the head that status is about to be posted on. It is written before the post, so no
+// kill can leave a landed lock without a record. It is written whether or not the post
+// lands, because the CLI tried to hold: the publisher must be able to tell this run's
+// lock from a run that took none. A head that is not a 40-character lowercase SHA
+// writes nothing, since the record would not parse, and the publisher reads an
+// unparseable record as none.
+export function recordReviewing(
+  headSha: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  const head = cliHeadField(headSha);
+  if (head.head_sha === undefined) return;
+  writeCliRecord({ v: 1, outcome: "reviewing", head_sha: head.head_sha }, env);
 }
 
 // The head field a record may name: 40 lowercase hex, or nothing, so the record still
@@ -76,13 +113,17 @@ export function recordReviewDelivered(
 }
 
 // The fatal path's writer: the CLI's catches call this, never writeCliRecord. It keeps
-// ANY record this job already wrote, terminal or error, and writes its own error only
-// when there is no parseable record (none, or a malformed file). One line on stderr
-// says which outcome was kept.
+// any terminal or error record this job already wrote, and writes its own error when
+// there is none, when the file does not parse, or when the earlier record is reviewing.
+// One line on stderr says which outcome was kept.
 //
 // WHY keep an error record too: the writer closest to the failure knows more than this
 // top-level catch. A posting or a skip notice that threw has already named its step, and
 // replacing that record with an unclassified error would discard the step.
+//
+// WHY a reviewing record is overwritten (F001 on #330): it is progress, not an outcome.
+// The error replaces it, and writeCliRecord carries its head over, so the publisher
+// answers on the head the lock is on.
 //
 // WHY no check that the record belongs to this job: the trigger clears cli.json at
 // job start (clearStaleMarkers in trigger.ts), so a record present here was written
@@ -94,7 +135,7 @@ export function writeFatalCliRecord(
   const dir = env.PRHERO_OUTCOME_DIR ?? "";
   if (dir === "") return;
   const earlier = readEarlierRecord(dir);
-  if (earlier !== undefined) {
+  if (earlier !== undefined && earlier.outcome !== "reviewing") {
     process.stderr.write(
       `pr-hero: kept the recorded ${earlier.outcome} outcome; a later step failed\n`,
     );

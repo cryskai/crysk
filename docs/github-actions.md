@@ -118,8 +118,8 @@ empty string, not broken YAML.
 model credential, the pull request number or head cannot be resolved, the commenter's permission
 cannot be verified, or an install step fails before pr-hero starts, pr-hero posts one `pr-hero`
 commit status (`error`) and one comment on the pull request. A review that starts and then fails also
-does, when the CLI reports an error or every review hunter fails; if the run stops before it reports an
-outcome, pr-hero posts the comment, and its `error` status too when the head's `pr-hero` status is still `pending` or cannot be read. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
+does, when the CLI reports an error or every review hunter fails; if the CLI takes the review's lock and then
+stops before it reports an outcome, pr-hero posts the comment, and its `error` status on the head that lock is on, when that head's `pr-hero` status is still `pending` or cannot be read. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
 or unclassified) and the command that fixes it.
 A newer comment replaces the older one from the same author. pr-hero removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/pr-hero review`
 comment posts nothing. Outcomes of a run that did start (review results, size and budget skips) keep

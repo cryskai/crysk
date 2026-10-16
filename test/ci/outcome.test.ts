@@ -1590,6 +1590,11 @@ describe("parseCliRecord — the cli.json contract", () => {
       { v: 1, outcome: "skipped", skip: "manual-required" },
     ],
     ["yielded", { v: 1, outcome: "yielded" }],
+    // The progress record: the CLI took the pending lock and has no outcome yet.
+    [
+      "reviewing, with the head its pending status was posted on",
+      { v: 1, outcome: "reviewing", head_sha: SHA },
+    ],
     [
       "error, unclassified",
       { v: 1, outcome: "error", cls: { kind: "unknown" } },
@@ -1674,6 +1679,30 @@ describe("parseCliRecord — the cli.json contract", () => {
         outcome: "error",
         cls: { kind: "capability", issue: "binary_unresolved" },
       }),
+    ],
+    // A progress record names the lock's head and nothing else: the publisher
+    // scopes its status read to that head, so a looser reader would read another.
+    ["reviewing without a head", text({ v: 1, outcome: "reviewing" })],
+    [
+      "reviewing with a head that is not a SHA",
+      text({ v: 1, outcome: "reviewing", head_sha: "C".repeat(40) }),
+    ],
+    [
+      "reviewing that carries a class",
+      text({
+        v: 1,
+        outcome: "reviewing",
+        head_sha: SHA,
+        cls: { kind: "unknown" },
+      }),
+    ],
+    [
+      "reviewing that carries params",
+      text({ v: 1, outcome: "reviewing", head_sha: SHA, params: { pr: 7 } }),
+    ],
+    [
+      "reviewing that names a skip",
+      text({ v: 1, outcome: "reviewing", head_sha: SHA, skip: "size" }),
     ],
     [
       "a head that is uppercase",

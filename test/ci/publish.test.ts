@@ -2,7 +2,8 @@
 // for the outcomes that happen BEFORE the CLI step starts: no credential, an
 // unresolved PR, an unverifiable commenter permission, and an install step
 // that failed. Once the CLI started, its cli.json decides: a reviewed run cleans
-// up, and an error, a hunters-failed run or a missing record is published.
+// up, and an error, a hunters-failed run or a progress record with no outcome is
+// published. A run with no record took no lock, so it gets its comment alone.
 // decidePublication is the pure table; runPublish is the shell.
 //
 // The builtins-only guard at the bottom mirrors the one in outcome.test.ts. The
@@ -254,14 +255,17 @@ describe("decidePublication — the pure table", () => {
     // exited without writing one, a crash, a kill, a usage error, or a record
     // write that failed. The text claims only what is known: it stopped before
     // it reported an outcome.
-    // WHY the head's status decides (F001 on #330): a kill leaves the CLI's
-    // `pending` status on the head, and the admission gate yields to that
-    // status for 90 minutes. A settled status means the CLI finished, so the
-    // publisher never overrides it (F004).
-    test("a no-record run whose head's pr-hero status is still pending replaces the lock: PRH-UNCLASSIFIED as the status and the comment", () => {
+    // WHY the progress record scopes the lock (F001 and F002 on #330): a reviewing
+    // record says this run took the pending lock on its own head, so the status
+    // the publisher reads and replaces is that head's, never the trigger's. A
+    // settled status means the CLI finished, so the publisher never overrides it (F004).
+    // CHANGED: this case used to be a run with no record at all. A no-record run
+    // took no lock, so it now gets the comment alone (see the test.each below).
+    test("a reviewing record whose head's pr-hero status is still pending replaces the lock on the record's head: PRH-UNCLASSIFIED as the status and the comment", () => {
       const plan = decidePublication({
-        record: record(),
+        record: record({ head_sha: TRIGGER_HEAD }),
         cliStarted: true,
+        cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
         latestStatusState: "pending",
       });
       expect(plan.kind).toBe("remote");
@@ -271,7 +275,7 @@ describe("decidePublication — the pure table", () => {
       expect(plan.rendered.annotation).toContain(
         "pr-hero stopped at the review before it reported an outcome and could not tell why",
       );
-      expect(plan.headSha).toBe(SHA);
+      expect(plan.headSha).toBe(REVIEWED_HEAD);
       expect(plan.status?.state).toBe("error");
       expect(plan.status?.context).toBe("pr-hero");
       expect(plan.status?.targetUrl).toBe(RUN_URL);
@@ -279,30 +283,35 @@ describe("decidePublication — the pure table", () => {
         true,
       );
       expect(plan.commentBody.split("\n")[0]).toBe(
-        `<!-- pr-hero-outcome v=1 head=${SHA} run=4242 attempt=1 -->`,
+        `<!-- pr-hero-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
       );
     });
 
-    test("a no-record run whose head's pr-hero status cannot be read posts the error status and the comment", () => {
+    // CHANGED (F001 on #330): the same scoping as the pending case above. The
+    // lock is this run's own, so a visible red is recoverable and the record's
+    // head carries it.
+    test("a reviewing record whose head's status cannot be read posts the error status on the record's head, and the comment", () => {
       const plan = decidePublication({
-        record: record(),
+        record: record({ head_sha: TRIGGER_HEAD }),
         cliStarted: true,
+        cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
         latestStatusState: "unknown",
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
       expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
-      expect(plan.headSha).toBe(SHA);
+      expect(plan.headSha).toBe(REVIEWED_HEAD);
       expect(plan.status?.state).toBe("error");
       expect(plan.commentBody.split("\n")[0]).toBe(
-        `<!-- pr-hero-outcome v=1 head=${SHA} run=4242 attempt=1 -->`,
+        `<!-- pr-hero-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
       );
     });
 
-    test("a no-record run whose head's pr-hero status settled posts its comment only: the CLI's status stands", () => {
+    test("a reviewing record whose head's pr-hero status settled posts its comment only: the CLI's status stands", () => {
       const plan = decidePublication({
-        record: record(),
+        record: record({ head_sha: TRIGGER_HEAD }),
         cliStarted: true,
+        cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
         latestStatusState: "settled",
       });
       expect(plan.kind).toBe("remote");
@@ -319,11 +328,14 @@ describe("decidePublication — the pure table", () => {
       );
     });
 
+    // CHANGED (F001 and F002 on #330): with no progress record this run took no
+    // lock, so neither the status read nor the trigger's head can decide anything.
+    // Every case is the comment alone, with no status, whatever the trigger holds.
     test.each(["pending", "settled", "unknown"] as const)(
-      "a no-record run with no trigger head posts its comment only, whatever the status read (%s)",
+      "a no-record run posts its comment alone, whatever the status read and whatever head the trigger holds (%s)",
       (latestStatusState) => {
         const plan = decidePublication({
-          record: record({ head_sha: undefined }),
+          record: record({ head_sha: TRIGGER_HEAD }),
           cliStarted: true,
           latestStatusState,
         });
@@ -747,9 +759,9 @@ function runPublishIn(options: {
           return options.viewer ?? fail("gh: viewer not answered");
         }
         const endpoint = args.find((arg) => arg.startsWith("repos/")) ?? "";
-        // The publisher reads a commit status in one case only: a no-record run
-        // on a known head (decideCliOutcome). Every other read is a regression,
-        // and the tests assert which calls route here.
+        // The publisher reads a commit status in one case only: a progress record
+        // (reviewing) on the head it names (decideCliOutcome). Every other read is
+        // a regression, and the tests assert which calls route here.
         if (endpoint.includes("/commits/")) {
           return options.latestStatus ?? fail("gh: status read not answered");
         }
@@ -933,36 +945,12 @@ describe("runPublish — the shell", () => {
     );
   });
 
-  // WHY no status: F004 on #330. A completed review whose cli.json write failed
-  // (ENOSPC, or EACCES on a stale cli.json.tmp) used to get an `error` status
-  // after the CLI's own success status, and turned green into red.
-  // CHANGED (F001 on #330): this test asserted that no status was posted. With
-  // the head known and no readable pr-hero status, the publisher now posts the
-  // error status (the read fails here by default) before the comment.
-  test("with no CLI record and no readable pr-hero status on the head, PRH-UNCLASSIFIED is the status and the comment", () => {
-    const run = runPublishIn({ record: record(), cliStarted: true });
-    expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
-    expect(run.stdout).toContain(
-      "pr-hero stopped at the review before it reported an outcome",
-    );
-    expect(run.summary).toContain("### PRH-UNCLASSIFIED");
-    expect(statusReadEndpoints(run.calls)).toHaveLength(1);
-    const statuses = statusCalls(run.calls);
-    expect(statuses).toHaveLength(1);
-    expect(statuses[0]?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
-    expect(statuses[0]?.args).toContain("state=error");
-    const comment = commentPost(run.calls);
-    expect(comment?.args).toContain(`repos/${REPO}/issues/7/comments`);
-    expect(run.calls.indexOf(statuses[0] as Call)).toBeLessThan(
-      run.calls.indexOf(comment as Call),
-    );
-  });
-
-  // WHY the status read is the only new call: the admission gate yields to a
-  // pending status for 90 minutes, so a killed CLI's lock has to be replaced
-  // here (F001 on #330). One read, on the trigger's head, and no other read.
-  test("a no-record run with a pending pr-hero status on the head reads it once, replaces it with an error status, then posts the comment", () => {
+  // WHY no status (F001 and F002 on #330): a run with no progress record took no
+  // lock, so the publisher writes no status on any head. A status here would turn
+  // a skipped or yielded run red, or overwrite another process's live lock.
+  // CHANGED (F001 on #330): this test used to read the trigger's head and post the
+  // error status. With no record it now posts the comment alone, and reads nothing.
+  test("with no CLI record, the run posts its comment alone: no status read and no status write, even with a pending status on the trigger's head", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
@@ -970,16 +958,43 @@ describe("runPublish — the shell", () => {
       list: listing(),
     });
     expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+    expect(run.stdout).toContain(
+      "pr-hero stopped at the review before it reported an outcome",
+    );
+    expect(run.summary).toContain("### PRH-UNCLASSIFIED");
+    expect(statusReadEndpoints(run.calls)).toEqual([]);
+    expect(statusCalls(run.calls)).toEqual([]);
+    expect(commentPost(run.calls)?.args).toContain(
+      `repos/${REPO}/issues/7/comments`,
+    );
+  });
+
+  // WHY the progress record is the only status read (F001 and F002 on #330): the
+  // admission gate yields to a pending status for 90 minutes, so a killed CLI's
+  // lock is replaced here. One read, on the head the record names, and no other.
+  test("a reviewing record with a pending pr-hero status on its head reads that head once, replaces it with an error status on that head, then posts the comment", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+      latestStatus: statusRows(["pr-hero", "pending", "2026-10-16T10:00:00Z"]),
+      list: listing(),
+    });
+    expect(run.exitCode).toBe(0);
     expect(statusReadEndpoints(run.calls)).toEqual([
-      `repos/${REPO}/commits/${SHA}/status?per_page=100`,
+      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
     ]);
     const statuses = statusCalls(run.calls);
     expect(statuses).toHaveLength(1);
-    expect(statuses[0]?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
+    expect(statuses[0]?.args).toContain(
+      `repos/${REPO}/statuses/${REVIEWED_HEAD}`,
+    );
     expect(statuses[0]?.args).toContain("state=error");
     expect(statuses[0]?.args).toContain("context=pr-hero");
     const comment = commentPost(run.calls);
     expect(comment?.args).toContain(`repos/${REPO}/issues/7/comments`);
+    expect(comment?.stdin).toContain(`head=${REVIEWED_HEAD} run=4242`);
     expect(run.calls.indexOf(statuses[0] as Call)).toBeLessThan(
       run.calls.indexOf(comment as Call),
     );
@@ -990,16 +1005,19 @@ describe("runPublish — the shell", () => {
     ["error", "error"],
     ["failure", "failure"],
   ])(
-    "a no-record run whose head's pr-hero status is %s reads it once and posts the comment alone",
+    "a reviewing record whose record head's pr-hero status is %s reads that head once and posts the comment alone",
     (_label, state) => {
       const run = runPublishIn({
-        record: record(),
+        record: record({ head_sha: TRIGGER_HEAD }),
         cliStarted: true,
+        cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
         latestStatus: statusRows(["pr-hero", state, "2026-10-16T10:00:00Z"]),
         list: listing(),
       });
       expect(run.exitCode).toBe(0);
-      expect(statusReadEndpoints(run.calls)).toHaveLength(1);
+      expect(statusReadEndpoints(run.calls)).toEqual([
+        `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
+      ]);
       expect(statusCalls(run.calls)).toEqual([]);
       expect(commentPost(run.calls)?.args).toContain(
         `repos/${REPO}/issues/7/comments`,
@@ -1007,31 +1025,44 @@ describe("runPublish — the shell", () => {
     },
   );
 
-  test("a no-record run whose status read fails posts the error status and the comment", () => {
+  test("a reviewing record whose status read fails posts the error status on the record's head, and the comment", () => {
     const run = runPublishIn({
-      record: record(),
+      record: record({ head_sha: TRIGGER_HEAD }),
       cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
       latestStatus: fail("gh: HTTP 502"),
       list: listing(),
     });
     expect(run.exitCode).toBe(0);
-    expect(statusReadEndpoints(run.calls)).toHaveLength(1);
+    expect(statusReadEndpoints(run.calls)).toEqual([
+      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
+    ]);
     const statuses = statusCalls(run.calls);
     expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.args).toContain(
+      `repos/${REPO}/statuses/${REVIEWED_HEAD}`,
+    );
     expect(statuses[0]?.args).toContain("state=error");
     expect(commentPost(run.calls)).toBeDefined();
   });
 
-  test("a no-record run with no trigger head reads no status and posts its comment alone", () => {
+  // CHANGED (F002 on #330): the record's head is the only one the lock is on, so
+  // a trigger that recorded no head does not stop the lock from being replaced.
+  test("a reviewing record whose trigger recorded no head still reads and replaces the lock on the record's head", () => {
     const run = runPublishIn({
       record: record({ head_sha: undefined }),
       cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
       latestStatus: statusRows(["pr-hero", "pending", "2026-10-16T10:00:00Z"]),
       list: listing(),
     });
     expect(run.exitCode).toBe(0);
-    expect(statusReadEndpoints(run.calls)).toEqual([]);
-    expect(statusCalls(run.calls)).toEqual([]);
+    expect(statusReadEndpoints(run.calls)).toEqual([
+      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
+    ]);
+    expect(statusCalls(run.calls)[0]?.args).toContain(
+      `repos/${REPO}/statuses/${REVIEWED_HEAD}`,
+    );
     expect(commentPost(run.calls)).toBeDefined();
   });
 
@@ -1088,13 +1119,14 @@ describe("runPublish — the shell", () => {
       });
       expect(run.exitCode).toBe(0);
       expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
-      // CHANGED (F001 on #330): an unreadable cli.json is the same as a missing
-      // one, so the head's status decides. The default status read here fails,
-      // which posts the error status on the head.
-      expect(statusReadEndpoints(run.calls)).toHaveLength(1);
-      const statuses = statusCalls(run.calls);
-      expect(statuses).toHaveLength(1);
-      expect(statuses[0]?.args).toContain("state=error");
+      // CHANGED (F001 and F002 on #330): an unreadable cli.json is the same as a
+      // missing one, and a missing one has no progress record, so the publisher
+      // cannot tell whose lock a head holds. It posts the comment alone: no status
+      // read and no status write, on any head. It used to read the trigger's head
+      // and post the error status there.
+      expect(statusReadEndpoints(run.calls)).toEqual([]);
+      expect(statusCalls(run.calls)).toEqual([]);
+      expect(commentPost(run.calls)).toBeDefined();
     },
   );
 

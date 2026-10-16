@@ -3,12 +3,13 @@
 // known, ONE sticky comment on that PR. The commit status is posted only when a
 // valid head sha is known: a status needs a sha, a comment does not. The
 // comment's marker says head=unknown when no head is known. One case decides on
-// the head's own status: a CLI-started run with no cli.json. Its status is posted
-// only when that head's pr-hero status is pending or unreadable, and the comment
-// alone when it settled (see decideCliOutcome). The trigger writes
+// the head's own status: a CLI-started run whose cli.json is a `reviewing` progress
+// record. That record says the CLI took the pending lock on its own head, so the
+// status on that head is replaced when it is still pending or unreadable, and the
+// comment alone is posted when it settled (see decideCliOutcome). The trigger writes
 // the decision to trigger.json, the setup step may leave setup.json, and the CLI
-// leaves cli.json for each terminal outcome of a review it started. This step
-// reads them and speaks.
+// leaves cli.json: a progress record while it holds the lock, then its outcome. This
+// step reads them and speaks.
 //
 // It runs `if: !cancelled()`: a failed install skips every later step, and this
 // step is the only one that can still say so, while a cancelled job (a
@@ -20,18 +21,19 @@
 // the run step writes before the CLI runs, and cli.json says what the run did.
 // A `reviewed` record cleans up: a completed review contradicts an older run's
 // outcome comment, so pr-hero's own older outcome comments on the PR go. An
-// `error`, a `hunters-failed`, or a run with no record is published here with its
+// `error`, a `hunters-failed`, or a `reviewing` record is published here with its
 // code, because the CLI posts no comment for those. A `skipped` or `yielded` run
 // is left alone: the CLI posted its own notice. A record that is absent,
-// unreadable or malformed reads as no record, so the run stopped before it
-// reported an outcome. Its status is posted only when the head's pr-hero status is
-// still pending or cannot be read (see decideCliOutcome). Cleanup needs a PR, and
-// it never posts a status.
+// unreadable or malformed reads as no record: the run took no lock the publisher
+// can see, so it gets the comment alone and no status (see decideCliOutcome).
+// Cleanup needs a PR, and it never posts a status on a run with no lock.
 //
-// WHY the CLI's head comes first: cli.json names the head the CLI reviewed or
-// resolved, when it knows one, and that is the head its outcome belongs to. The
-// trigger's head is the fallback, since a failed `gh pr view` at trigger time can
-// leave it out.
+// WHY the lock's head comes from the record (F002 on #330): the CLI posts its pending
+// hold on the head it resolved itself, and the reviewing record names that head. The
+// trigger's head can differ after a push, so it is never read for a lock. For the
+// other outcomes, cli.json names the head the CLI reviewed or resolved, when it knows
+// one, and the trigger's head is the fallback, since a failed `gh pr view` at trigger
+// time can leave it out.
 //
 // WHY ONLY BUILTINS (plus ./outcome): the step runs before anything is installed,
 // so a package import has no node_modules to resolve against. ./outcome is a
@@ -74,10 +76,10 @@ const SETUP_RECORD_FILE = "setup.json";
 // The step a CLI outcome names. A CLI record carries no step, and every CLI
 // outcome is about the review, so the publisher names it.
 const REVIEW_STEP = "the review";
-// The step a run names when no cli.json exists. The CLI exits without writing a
-// record on a usage error, on a crash or kill, or when its record write failed,
-// and the publisher cannot tell which, so the text claims only that it stopped
-// before it reported an outcome.
+// The step a run names when it has no outcome: no cli.json, or a reviewing record
+// that no outcome followed. The CLI exits without an outcome on a usage error, on a
+// crash or kill, or when its record write failed, and the publisher cannot tell
+// which, so the text claims only that it stopped before it reported an outcome.
 const STOPPED_STEP = "the review before it reported an outcome";
 // What a hunters-failed record says about the failure: the CLI writes no detail,
 // and the publisher's wording names what its own record means (sessionFailed:
@@ -104,7 +106,7 @@ interface StatusPost {
   targetUrl: string;
 }
 
-// The head's newest pr-hero status, as the no-record branch needs it: a pending
+// The newest pr-hero status of the head a reviewing record names: a pending
 // status is a CLI that never settled, a settled one is a finished CLI, and anything
 // else (an unreadable answer, no pr-hero row, a state this table does not name) is
 // unknown.
@@ -133,8 +135,8 @@ export type Publication =
       // comments of an older run, or of an earlier attempt of this run.
       runId: string;
       runAttempt: number;
-      // Undefined when no head is known (no valid head in the record, or a
-      // CLI-started run with no cli.json): the comment still posts.
+      // Undefined when no head is known (no valid head in the record, or a run that
+      // took no lock): the comment still posts.
       headSha: string | undefined;
       // Undefined exactly when headSha is: a commit status needs a sha.
       status: StatusPost | undefined;
@@ -151,9 +153,8 @@ export function decidePublication(input: {
   // the file is absent, unreadable or malformed: the same as no record.
   cliRecord?: CliRecord;
   setup?: SetupRecord;
-  // The head's pr-hero status. runPublish reads it only for a review the CLI started
-  // with no CLI record on a known head; undefined elsewhere, and treated as unknown
-  // in that one case.
+  // The status of the head a reviewing record names. runPublish reads it only for
+  // that case; undefined elsewhere, and treated as unknown in that one case.
   latestStatusState?: LatestStatusState;
 }): Publication {
   const record = input.record;
@@ -184,9 +185,9 @@ export function decidePublication(input: {
 // for a crash, a class it could not map, or all hunters failing, so the publisher
 // speaks for those with the code the record names. Cleanup needs a completed
 // review: a stale outcome comment contradicts it, and nothing else removes that
-// comment. A run with no record stopped before it reported, so it is the code for
-// that, never silence. Its status follows the head's own pr-hero status (see the
-// no-record branch below).
+// comment. A run with no record took no lock the publisher can see, so it gets the
+// comment alone (see the no-record branch below). A reviewing record decides its status
+// by the head it names (see that case), never by the trigger's head.
 function decideCliOutcome(
   record: TriggerRecord,
   cliRecord: CliRecord | undefined,
@@ -198,18 +199,13 @@ function decideCliOutcome(
     runUrl: record.run_url,
   };
   if (cliRecord === undefined) {
-    // WHY the head's status decides (F001 and F004 on #330). Without a record the
-    // publisher cannot tell a killed CLI from one whose record write failed. A kill
-    // leaves the CLI's `pending` status on the head, and the admission gate yields
-    // to a pending status for 90 minutes (yieldToInFlightReview), so every re-run
-    // on that head would silently do nothing. The error status here replaces that
-    // lock. A settled status (success, error, failure) means the CLI finished, so
-    // the publisher never overrides it, and the comment alone explains the run.
-    // An unreadable status, or no pr-hero status at all, takes the error status
-    // too: a visible red is recoverable with a re-run, a stuck lock is not. No
-    // head means no status and no read, since a status needs a sha. The marker
-    // says head=unknown whenever no status is posted; nothing reads that field.
-    const replacesLock = latestStatusState !== "settled";
+    // WHY no status (F001 and F002 on #330): without a progress record the publisher
+    // cannot tell whose pending lock sits on a head, so it writes no status on any
+    // head. A skipped or yielded run must not turn red, and another process's live
+    // lock must not be overwritten. The comment alone says what happened. The one
+    // case this leaves is a CLI that held the lock but whose every record write
+    // failed: its pending then ends with the admission gate's 90-minute TTL. The
+    // marker says head=unknown, and nothing reads that field.
     return remoteOrLocal(
       record,
       renderError(
@@ -217,10 +213,28 @@ function decideCliOutcome(
         { ...runParams, step: STOPPED_STEP },
         "action",
       ),
-      replacesLock ? record.head_sha : undefined,
+      undefined,
     );
   }
   switch (cliRecord.outcome) {
+    case "reviewing": {
+      // WHY the record's head (F002 on #330): the CLI posted its pending hold on the
+      // head this record names, so the lock to replace is there, whatever head the
+      // trigger saw. The CLI holds the lock and recorded no outcome (it was killed, or
+      // its terminal write failed), so the lock is this run's own and a visible red is
+      // recoverable. A settled status means the CLI finished, so it stands (F004). An
+      // unreadable status takes the error status too, the same reasoning.
+      const replacesLock = latestStatusState !== "settled";
+      return remoteOrLocal(
+        record,
+        renderError(
+          { kind: "unknown" },
+          { ...runParams, step: STOPPED_STEP },
+          "action",
+        ),
+        replacesLock ? cliRecord.head_sha : undefined,
+      );
+    }
     case "reviewed":
       // WHY the cleanup needs a PR and no head: the older comments are on the
       // PR, and the completed review is the proof, whatever head the trigger saw.
@@ -807,16 +821,15 @@ export function runPublish(deps: PublishDeps): number {
   // CLI's record.
   const cliRecord =
     record.decision === "review" && cliStarted ? readCliRecord(dir) : undefined;
-  // WHY the read is here, and only here (F001 on #330): the head's status decides
-  // only for a review the CLI started that left no record, on a PR with a known
-  // head. Every other outcome decides without it, so it makes no call.
+  // WHY the read is here, and only here (F001 and F002 on #330): the status decides
+  // only for a reviewing record, the one case where this run holds the lock, and it is
+  // read on the head that record names, never the trigger's. Every other outcome decides
+  // without it, so it makes no call.
   const latestStatusState =
-    record.decision === "review" &&
-    cliStarted &&
-    cliRecord === undefined &&
-    record.pr !== undefined &&
-    record.head_sha !== undefined
-      ? readLatestCliStatusState(deps, record.repository, record.head_sha)
+    cliRecord?.outcome === "reviewing" &&
+    cliRecord.head_sha !== undefined &&
+    record.pr !== undefined
+      ? readLatestCliStatusState(deps, record.repository, cliRecord.head_sha)
       : undefined;
   const plan = decidePublication({
     record,

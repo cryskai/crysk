@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -17,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   recordReviewDelivered,
+  recordReviewing,
   writeCliRecord,
   writeFatalCliRecord,
 } from "#ci/cli-record";
@@ -68,12 +70,71 @@ describe("writeCliRecord", () => {
     expect(existsSync(path.join(root, CLI_RECORD_FILE))).toBe(false);
   });
 
+  // CHANGED (F003 on #330): the temp name is unique per write, so a leftover can
+  // sit under any name. The check looks for any `.tmp` entry instead of the old
+  // fixed `cli.json.tmp`, which a unique name would never produce.
   test("with PRHERO_OUTCOME_DIR set, cli.json parses back to the same record and leaves no temp file", () => {
     const dir = path.join(root, "outcome");
     writeCliRecord(record, { PRHERO_OUTCOME_DIR: dir });
     const written = readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
     expect(parseCliRecord(written)).toEqual(record);
-    expect(existsSync(path.join(dir, `${CLI_RECORD_FILE}.tmp`))).toBe(false);
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual(
+      [],
+    );
+  });
+
+  // WHY a directory, not a read-only file (F003 on #330): a directory at a path
+  // fails any write to that path for every user, root included, where a chmod
+  // does not. The old fixed temp name is the one a stale file would occupy.
+  test("a directory left at the old fixed temp name does not stop the write", () => {
+    const dir = path.join(root, "outcome");
+    mkdirSync(path.join(dir, `${CLI_RECORD_FILE}.tmp`), { recursive: true });
+    const { chunks } = captureStderr(() =>
+      writeCliRecord(record, { PRHERO_OUTCOME_DIR: dir }),
+    );
+    expect(chunks).toEqual([]);
+    expect(
+      parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
+    ).toEqual(record);
+  });
+
+  // WHY the head is inherited (F002 on #330): a terminal record written after this
+  // run's pending hold names no head of its own, and the publisher would then post
+  // on the trigger's head, not the one the lock is on. The reviewing record is this
+  // run's own statement of that head, so the terminal record carries it forward.
+  test("a terminal record with no head of its own takes the head of this run's reviewing record", () => {
+    const env = { PRHERO_OUTCOME_DIR: path.join(root, "outcome") };
+    recordReviewing(SHA, env);
+    const posting = {
+      v: 1,
+      outcome: "error",
+      cls: { kind: "unknown" },
+      params: { step: "posting the review" },
+    } as const;
+    writeCliRecord(posting, env);
+    expect(
+      parseCliRecord(
+        readFileSync(
+          path.join(env.PRHERO_OUTCOME_DIR, CLI_RECORD_FILE),
+          "utf8",
+        ),
+      ),
+    ).toEqual({ ...posting, head_sha: SHA });
+  });
+
+  test("a terminal record that names its own head keeps it over the reviewing record's", () => {
+    const env = { PRHERO_OUTCOME_DIR: path.join(root, "outcome") };
+    const other = "f".repeat(40);
+    recordReviewing(SHA, env);
+    writeCliRecord({ v: 1, outcome: "reviewed", head_sha: other }, env);
+    expect(
+      parseCliRecord(
+        readFileSync(
+          path.join(env.PRHERO_OUTCOME_DIR, CLI_RECORD_FILE),
+          "utf8",
+        ),
+      ),
+    ).toEqual({ v: 1, outcome: "reviewed", head_sha: other });
   });
 
   test("a write that cannot land does not throw and prints exactly one line naming only the errno code", () => {
@@ -194,6 +255,21 @@ describe("writeFatalCliRecord", () => {
     ]);
   });
 
+  // WHY overwritten, not kept (F001 on #330): a reviewing record is this run's
+  // progress, not an outcome, so the fatal error replaces it. The error keeps the
+  // reviewing head, so the publisher posts on the head the lock is on.
+  test("a reviewing record is overwritten by the fatal error, which keeps the reviewing head, and nothing is printed", () => {
+    recordReviewing(SHA, env);
+    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    expect(parseCliRecord(onDisk())).toEqual({
+      v: 1,
+      outcome: "error",
+      cls: unmapped,
+      head_sha: SHA,
+    });
+    expect(chunks).toEqual([]);
+  });
+
   test("with PRHERO_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
     const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, {}));
     expect(chunks).toEqual([]);
@@ -257,6 +333,49 @@ describe("recordReviewDelivered", () => {
 
   test("with PRHERO_OUTCOME_DIR unset, nothing is written", () => {
     recordReviewDelivered(SHA, {});
+    expect(existsSync(dir)).toBe(false);
+  });
+});
+
+describe("recordReviewing", () => {
+  let root: string;
+  let dir: string;
+  let env: Record<string, string>;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-reviewing-"));
+    dir = path.join(root, "outcome");
+    env = { PRHERO_OUTCOME_DIR: dir };
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function onDisk(): string {
+    return readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
+  }
+
+  // WHY this record: the CLI took the pending lock on this head, and nothing else
+  // is known yet. The publisher reads the lock on this head, so the head is the
+  // whole record.
+  test("writes reviewing with the head the pending status was posted on", () => {
+    recordReviewing(SHA, env);
+    expect(parseCliRecord(onDisk())).toEqual({
+      v: 1,
+      outcome: "reviewing",
+      head_sha: SHA,
+    });
+  });
+
+  test("a head that is not a 40-character lowercase SHA writes nothing, since the record would not parse", () => {
+    const { chunks } = captureStderr(() => recordReviewing("not-a-sha", env));
+    expect(chunks).toEqual([]);
+    expect(existsSync(path.join(dir, CLI_RECORD_FILE))).toBe(false);
+  });
+
+  test("with PRHERO_OUTCOME_DIR unset, nothing is written", () => {
+    recordReviewing(SHA, {});
     expect(existsSync(dir)).toBe(false);
   });
 });

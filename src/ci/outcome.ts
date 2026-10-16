@@ -202,10 +202,21 @@ export type CliErrorClass =
 
 export interface CliRecord {
   v: 1;
-  outcome: "reviewed" | "hunters-failed" | "skipped" | "yielded" | "error";
+  // "reviewing" is progress, not an outcome: the CLI took the pending lock on
+  // head_sha and has not reported one yet. Every outcome overwrites it, and the
+  // publisher reads it as the one case where the lock is this run's own.
+  outcome:
+    | "reviewing"
+    | "reviewed"
+    | "hunters-failed"
+    | "skipped"
+    | "yielded"
+    | "error";
   // Only for outcome "skipped".
   skip?: "size" | "budget" | "coverage" | "manual-required";
   // The head the CLI reviewed or resolved, when it knows one. 40 lowercase hex.
+  // Required for "reviewing": the head the CLI is about to post its pending
+  // status on (the head it holds the review lock for).
   head_sha?: string;
   // Only for outcome "error".
   cls?: CliErrorClass;
@@ -376,6 +387,7 @@ export function parseTriggerRecord(text: string): TriggerRecord | undefined {
 }
 
 const CLI_OUTCOMES: readonly CliRecord["outcome"][] = [
+  "reviewing",
   "reviewed",
   "hunters-failed",
   "skipped",
@@ -418,9 +430,10 @@ function parseCliClass(value: unknown): CliErrorClass | undefined {
 
 // Returns undefined for anything the publisher must not act on. The rules mirror
 // the writer's: `skip` is present exactly for a skipped outcome, `cls` exactly
-// for an error, and `params` only for an error, carrying only the keys a record
-// may name. The publisher reads this shape, so a looser reader would accept a
-// record the writer never produces.
+// for an error, `params` only for an error, carrying only the keys a record
+// may name, and `head_sha` is required for a reviewing record, which names the
+// lock's head and nothing else. The publisher reads this shape, so a looser
+// reader would accept a record the writer never produces.
 export function parseCliRecord(text: string): CliRecord | undefined {
   let value: unknown;
   try {
@@ -447,6 +460,9 @@ export function parseCliRecord(text: string): CliRecord | undefined {
       return undefined;
     }
     record.head_sha = value.head_sha;
+  }
+  if (outcome === "reviewing" && record.head_sha === undefined) {
+    return undefined;
   }
   if (outcome === "error") {
     const cls = parseCliClass(value.cls);
