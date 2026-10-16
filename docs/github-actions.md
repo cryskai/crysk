@@ -56,7 +56,7 @@ jobs:
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review'))
     concurrency:
-      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || startsWith(github.event.comment.body, '/pr-hero review')) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -90,16 +90,22 @@ Three choices in the job are load-bearing:
 - **Concurrency is per job and keyed on the pull request number.** A workflow-level group keyed on
   `github.head_ref || github.ref` would put every comment on every pull request into one group, because
   `head_ref` is empty on `issue_comment`, so any comment could cancel any in-flight review. A fork's
-  push and a comment that does not start with `/pr-hero review` each get a unique group, so their
-  skipped jobs never cancel or replace a review.
+  push, a comment that does not start with `/pr-hero review`, and a comment whose author GitHub does not
+  associate with the repository as `OWNER`, `MEMBER` or `COLLABORATOR` each get a unique group, so
+  those jobs never cancel or replace a review.
 - **Only a new push cancels.** The `if:` filter is a prefix, so a near-miss comment ("/pr-hero review
-  please") lands in the pull request's group too; cancelling there would kill a paid review in flight
-  before the action ignores the comment. A comment run queues instead. A push never waits: it cancels
-  whatever is running, a forced review included, because that head is gone; comment again on the new
-  head. Known gap: GitHub keeps one *pending* run per group, so a later comment starting with
-  `/pr-hero review` (a near-miss, a refused one, or a second real one) replaces a comment run already
-  waiting behind a running review, and `--full` followed by a plain `/pr-hero review` loses the
-  `--full`. Comment again to recover.
+  please") from an associated author lands in the pull request's group too; cancelling there would kill
+  a paid review in flight before the action ignores the comment. A comment run queues instead. A push
+  never waits: it cancels whatever is running, a forced review included, because that head is gone;
+  comment again on the new head. GitHub keeps one *pending* run per group and a newer run replaces it,
+  which is why a stranger's comment never enters the group: it could otherwise replace a maintainer's
+  queued review with a run the action then refuses. Known gap: an associated author's later comment (a
+  writer's near-miss or second real command, or a read-only member's or collaborator's refused one)
+  still replaces a comment run already waiting behind a running review, and `--full` followed by a plain
+  `/pr-hero review` loses the `--full`. Comment again to recover. The job `if:` does not check the
+  association, so a writer GitHub reports under another one (a private org member shown as
+  `CONTRIBUTOR`) still gets a review, because the action checks the real permission, but in its own
+  group, unserialized beside a review already running.
 - **Fork pushes are skipped.** GitHub gives fork `pull_request` runs no secrets. A maintainer comments
   `/pr-hero review` instead; see [Fork pull requests](#fork-pull-requests).
 
@@ -294,11 +300,21 @@ a fork pull request, a user with write access comments `/pr-hero review` on it. 
 `issue_comment` run in the base repository's context, with its secrets: the action fetches the fork's
 head commit and reviews it, while config and gotchas still come from the base checkout. A comment from
 a user without write access is refused, so nobody outside the repository can spend its credentials.
-No `pull_request_target` is involved.
+If GitHub's API fails while checking that access (a 5xx, a rate limit, a timeout), the action retries
+once and then fails the run red, asking for the comment again: it never reviews unchecked, and never
+refuses silently.
+No `pull_request_target` is involved. If you wire `pull_request_target` yourself, the action reviews
+fork heads there too: that event runs in the base repository's context, with its secrets, so choosing
+it is choosing base-context reviews of forks. pr-hero reads the head as text and never runs its code.
 
 The job `if` never reads `secrets` (GitHub does not allow it there). Credential presence is checked
 inside the action instead: a same-repo pull request with none of the three credential secrets fails
-red, with the commands that fix it, rather than skipping green and reading as a clean review.
+red, with the commands that fix it, rather than skipping green and reading as a clean review. A
+credential already on the runner counts too: a Claude session file in `$HOME` or the OpenCode
+`auth.json` store. A self-hosted runner with none of these is left to the engine's own credential
+check, which can also see a macOS keychain entry. `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` set
+in the job's own `env:` does not count: the action's run step binds both from its inputs, so wire the
+secret as an input.
 
 In this repository only, a comment run checks out the pull request's head and runs that engine
 (`uses: ./`), so it refuses fork pull requests outright: there the fork would supply the engine and run

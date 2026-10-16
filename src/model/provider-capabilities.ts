@@ -472,6 +472,16 @@ function defaultKeychainCredentialPresent(): boolean {
   );
 }
 
+// The on-disk Claude sessions the default probe accepts, relative to HOME.
+// Exported because src/ci/trigger.ts must reach the same verdict before
+// `bun install` and so keeps its own copy (it may import only builtins); a
+// drift test in test/ci/trigger.test.ts pins that copy to this list.
+export const CLAUDE_SESSION_FILES: readonly string[] = [
+  ".claude.json",
+  path.join(".claude", "session.json"),
+  path.join(".claude", ".credentials.json"),
+];
+
 function defaultClaudeAuthProbe(
   env: Record<string, string | undefined>,
   home: string,
@@ -483,10 +493,9 @@ function defaultClaudeAuthProbe(
     Boolean(env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) ||
     Boolean(env.ANTHROPIC_API_KEY?.trim());
   if (hasToken) return "passed";
-  const hasSessionFile =
-    exists(path.join(home, ".claude.json")) ||
-    exists(path.join(home, ".claude", "session.json")) ||
-    exists(path.join(home, ".claude", ".credentials.json"));
+  const hasSessionFile = CLAUDE_SESSION_FILES.some((file) =>
+    exists(path.join(home, file)),
+  );
   if (hasSessionFile) return "passed";
   if (platform === "darwin" && exists("/usr/bin/security")) {
     return keychainProbe() ? "passed" : "failed";

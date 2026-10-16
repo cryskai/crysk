@@ -85,7 +85,8 @@ const own = () => generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
 
 // The exact job-level group and cancel rule. Spelled out in full because
 // every clause is load-bearing; see the template's own comments for why.
-const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || startsWith(github.event.comment.body, '/pr-hero review')) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
+const WRITER_ASSOCIATION = `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)`;
+const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION})) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
 const PUSH_ONLY_CANCEL = `\${{ github.event_name == 'pull_request' }}`;
 
 describe("generateCiWorkflowTemplate (pure)", () => {
@@ -150,6 +151,34 @@ describe("generateCiWorkflowTemplate (pure)", () => {
       });
     },
   );
+
+  // GitHub keeps one PENDING run per group and a newer run replaces it, so
+  // whoever can enter the pull request's group can cancel a maintainer's
+  // queued `/pr-hero review`. Only a comment from an associated author may;
+  // the job `if:` stays association-free, so a writer GitHub reports under
+  // another association still runs (the action checks the real permission),
+  // in its own group.
+  test("only an OWNER, MEMBER or COLLABORATOR comment can enter the pull request's group", () => {
+    const parsed = parseWorkflow(scaffolded());
+    const group = String(
+      (parsed.jobs.review?.concurrency as { group?: unknown } | undefined)
+        ?.group ?? "",
+    );
+    expect(group).toContain(
+      `(startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION})`,
+    );
+    expect(String(parsed.jobs.review?.if ?? "")).not.toContain(
+      "author_association",
+    );
+  });
+
+  test("the docs' workflow snippet carries the generator's exact concurrency group", () => {
+    const docs = readFileSync(
+      path.resolve(import.meta.dir, "../../docs/github-actions.md"),
+      "utf-8",
+    );
+    expect(docs).toContain(`\n      group: ${REVIEW_CONCURRENCY_GROUP}\n`);
+  });
 
   test("there is exactly one job, so its bound is the whole workflow's bound", () => {
     // The old `credentials` gate job needed its own bound: it ran FIRST and
@@ -398,30 +427,50 @@ describe("this repo's own comment runs pin the pull request head", () => {
     headRefOid: string | null;
   };
 
+  // A permission lookup that fails `times` times with `stderr` (gh's own
+  // wording), then answers `answer`.
+  type PermissionFailure = { stderr: string; times: number; answer?: string };
+  const NOT_FOUND = "gh: Not Found (HTTP 404)";
+
   // Runs the gate step's own script under `bash -e`, the shell a `run:` step
   // gets by default, with `gh` replaced by a function that logs its arguments
   // and answers through real jq: gh's --jq flag speaks the same filter
   // language, so the parsing under test is the script's own. The commenter's
-  // permission lookup answers `permission`, and `null` makes that one call
-  // fail the way gh does on a 404 or a rate limit.
+  // permission lookup answers `permission`; `null` makes every lookup fail
+  // the way gh does on a 404, and a PermissionFailure scripts any other
+  // failure. `sleep` is a function too, so the retry's pause is recorded and
+  // costs no wall time.
   function runGate(
     template: string,
     pr: PrHead,
-    permission: string | null = "write",
+    permission: string | null | PermissionFailure = "write",
   ) {
     const gate = workflowSteps(template).find((step) => step.id === "gate");
     const dir = mkdtempSync(path.join(tmpdir(), "prhero-head-gate-"));
     const outputFile = path.join(dir, "github-output");
     const callLog = path.join(dir, "gh-calls");
+    const sleepLog = path.join(dir, "sleeps");
+    const failuresFile = path.join(dir, "permission-failures");
+    const failure: PermissionFailure | undefined =
+      permission === null
+        ? { stderr: NOT_FOUND, times: 1_000 }
+        : typeof permission === "string"
+          ? undefined
+          : permission;
     writeFileSync(outputFile, "");
     writeFileSync(callLog, "");
+    writeFileSync(sleepLog, "");
+    writeFileSync(failuresFile, String(failure?.times ?? 0));
     const fakeGh = [
+      'sleep() { printf "%s\\n" "$*" >> "$SLEEP_LOG"; }',
       "gh() {",
       '  printf "%s\\n" "$*" >> "$GH_CALL_LOG"',
       '  case "$*" in',
       "    *collaborators*)",
-      '      if [ "$FAKE_PERMISSION_FAILS" = "1" ]; then',
-      '        echo "gh: Not Found (HTTP 404)" >&2',
+      '      failures=$(<"$FAKE_FAILURES_FILE")',
+      '      if [ "$failures" -gt 0 ]; then',
+      '        printf "%s\\n" "$((failures - 1))" > "$FAKE_FAILURES_FILE"',
+      '        printf "%s\\n" "$FAKE_PERMISSION_STDERR" >&2',
       "        return 1",
       "      fi",
       '      printf "%s\\n" "$FAKE_PERMISSION"',
@@ -446,27 +495,34 @@ describe("this repo's own comment runs pin the pull request head", () => {
           GITHUB_REPOSITORY: REPOSITORY,
           GITHUB_OUTPUT: outputFile,
           GH_CALL_LOG: callLog,
+          SLEEP_LOG: sleepLog,
           FAKE_PR_JSON: JSON.stringify(pr),
-          FAKE_PERMISSION: permission ?? "",
-          FAKE_PERMISSION_FAILS: permission === null ? "1" : "0",
+          FAKE_PERMISSION:
+            typeof permission === "string"
+              ? permission
+              : (failure?.answer ?? ""),
+          FAKE_PERMISSION_STDERR: failure?.stderr ?? "",
+          FAKE_FAILURES_FILE: failuresFile,
         },
       },
     );
-    const outputs = Object.fromEntries(
-      readFileSync(outputFile, "utf-8")
+    const lines = (file: string) =>
+      readFileSync(file, "utf-8")
         .split("\n")
-        .filter((line) => line !== "")
-        .map((line) => line.split("=", 2)),
+        .filter((line) => line !== "");
+    const outputs = Object.fromEntries(
+      lines(outputFile).map((line) => line.split("=", 2)),
     );
-    const calls = readFileSync(callLog, "utf-8")
-      .split("\n")
-      .filter((line) => line !== "");
+    const calls = lines(callLog);
+    const sleeps = lines(sleepLog);
     rmSync(dir, { recursive: true, force: true });
     return {
       exitCode: result.exitCode,
       stdout: result.stdout.toString(),
       outputs,
       calls,
+      lookups: calls.filter((call) => call.includes("collaborators")).length,
+      sleeps,
     };
   }
 
@@ -515,14 +571,15 @@ describe("this repo's own comment runs pin the pull request head", () => {
   // that predates the check (an old bot branch) would let anyone who can
   // comment start a review with this repository's secrets. The gate is the
   // only code that runs before the head does, so the check has to live here,
-  // and it fails closed: anything but admin or write, including a lookup that
-  // errors, refuses without reading the PR or checking anything out.
+  // and it fails closed: anything but admin or write refuses without reading
+  // the PR or checking anything out. A 404 is GitHub's definitive answer for
+  // a non-collaborator, so it refuses quietly after ONE lookup.
   test.each([
     ["read", "read"],
     ["triage", "triage"],
     ["none", "none"],
     ["an empty answer", ""],
-    ["a failed lookup", null],
+    ["a failed lookup (HTTP 404)", null],
   ])(
     "refuses a commenter with %s before touching the PR head",
     (_label, permission) => {
@@ -532,8 +589,47 @@ describe("this repo's own comment runs pin the pull request head", () => {
       expect(gate.stdout).toContain("::notice");
       expect(gate.stdout).toContain("write access");
       expect(gate.calls.some((call) => call.startsWith("pr view"))).toBe(false);
+      expect(gate.lookups).toBe(1);
+      expect(gate.sleeps).toEqual([]);
     },
   );
+
+  // Any other lookup failure says nothing about the commenter, only about
+  // the API. Refusing quietly there would show a maintainer the same notice
+  // a stranger gets, on a default-branch run nobody sees from the PR. Still
+  // fail-closed (no head is read or checked out), but red.
+  test.each([
+    ["a 5xx", "gh: Server Error (HTTP 502)"],
+    [
+      "a rate limit",
+      "gh: API rate limit exceeded for installation. (HTTP 403)",
+    ],
+    ["a gh that cannot run", "bash: gh: command not found"],
+  ])(
+    "fails the job red on %s twice, after exactly one retry, before touching the PR head",
+    (_label, stderr) => {
+      const gate = runGate(own(), sameRepoPr, { stderr, times: 2 });
+      expect(gate.exitCode).toBe(1);
+      expect(gate.outputs).toEqual({});
+      expect(gate.stdout).toContain("::error title=pr-hero::");
+      expect(gate.stdout).toContain("/pr-hero review");
+      expect(gate.lookups).toBe(2);
+      expect(gate.sleeps).toHaveLength(1);
+      expect(gate.calls.some((call) => call.startsWith("pr view"))).toBe(false);
+    },
+  );
+
+  test("a lookup that fails once and then answers write proceeds", () => {
+    const gate = runGate(own(), sameRepoPr, {
+      stderr: "gh: Server Error (HTTP 502)",
+      times: 1,
+      answer: "write",
+    });
+    expect(gate.exitCode).toBe(0);
+    expect(gate.outputs).toEqual({ proceed: "true", sha: HEAD_SHA });
+    expect(gate.lookups).toBe(2);
+    expect(gate.sleeps).toHaveLength(1);
+  });
 
   test.each([["admin"], ["write"]])(
     "lets a commenter with %s through, after checking it first",

@@ -20,7 +20,8 @@
 // better: it resolves to a src module whose own imports reach packages. Keep
 // every import here `node:` or `bun`.
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
+import path from "node:path";
 
 export const REVIEW_COMMAND = "/pr-hero review";
 export const REVIEW_FULL_COMMAND = "/pr-hero review --full";
@@ -41,8 +42,17 @@ const CREDENTIAL_INPUTS = [
 export const UNKNOWN_HEAD_SHA = "unknown";
 
 export type CommenterPermission =
+  // GitHub answered. A 404 is its definitive answer for a login that is not
+  // a collaborator, recorded as the permission `none`.
   | { kind: "resolved"; permission: string }
-  | { kind: "unavailable"; detail: string };
+  // No usable answer, and asking again cannot produce one: the event named
+  // nobody, or gh succeeded and printed no permission. Denied.
+  | { kind: "unavailable"; detail: string }
+  // The lookup itself failed: a 5xx, a 403 rate limit, a timeout, no
+  // network, no gh. That says nothing about the commenter, only about the
+  // API. Retried once; if it reaches the decision, it is neither a review
+  // nor a quiet denial.
+  | { kind: "indeterminate"; detail: string };
 
 // Presence only. The action passes `inputs.<credential> != ''`, never the
 // value, so nothing in this module can print a secret it never received.
@@ -50,6 +60,43 @@ export interface CiCredentialPresence {
   anthropicApiKey: boolean;
   claudeToken: boolean;
   opencodeAuth: boolean;
+  // A Claude session file or the OpenCode auth store already on the runner
+  // (see runnerCredentialPaths). The engine authenticates with either.
+  runnerFile: boolean;
+}
+
+// The engine's Claude session files, relative to HOME, and its OpenCode
+// auth-store rule. Copied rather than imported, because this module may
+// import only builtins (see the header): the originals are
+// CLAUDE_SESSION_FILES in src/model/provider-capabilities.ts and
+// resolveOpenCodeAuthPath in src/security/credential-broker.ts, and a drift
+// test in test/ci/trigger.test.ts pins this copy to both.
+const CLAUDE_SESSION_FILES: readonly string[] = [
+  ".claude.json",
+  path.join(".claude", "session.json"),
+  path.join(".claude", ".credentials.json"),
+];
+
+// HOME comes from the env this shell was handed, never os.homedir(): the
+// engine's homedir() reads HOME first and every runner sets it, while an env
+// without one (a test, a stripped container) must not fall through to the
+// passwd home of whoever runs the process and find THEIR session. An empty
+// XDG_DATA_HOME counts as unset, exactly as the engine reads it.
+export function runnerCredentialPaths(
+  env: Readonly<Record<string, string | undefined>>,
+): string[] {
+  const home = env.HOME ?? "";
+  const dataHome = env.XDG_DATA_HOME ?? "";
+  const paths =
+    home === ""
+      ? []
+      : CLAUDE_SESSION_FILES.map((file) => path.join(home, file));
+  if (dataHome !== "") {
+    paths.push(path.join(dataHome, "opencode", "auth.json"));
+  } else if (home !== "") {
+    paths.push(path.join(home, ".local", "share", "opencode", "auth.json"));
+  }
+  return paths;
 }
 
 export interface CiTriggerInput {
@@ -64,6 +111,8 @@ export interface CiTriggerInput {
   // Absent means nobody looked it up, which is denied like a failed lookup.
   commenterPermission?: CommenterPermission;
   credentials: CiCredentialPresence;
+  // RUNNER_ENVIRONMENT is `self-hosted`.
+  selfHostedRunner: boolean;
   forceInput: boolean;
   fullInput: boolean;
 }
@@ -72,6 +121,7 @@ export type CiTriggerDecision =
   | { kind: "review"; force: boolean; full: boolean }
   | { kind: "ignore"; reason: string }
   | { kind: "denied"; reason: string }
+  | { kind: "unverifiable"; reason: string }
   | { kind: "no-credentials"; inputs: readonly string[] };
 
 // Exact match after trimming, and nothing else: no case folding, no inner
@@ -95,10 +145,15 @@ type EventVerdict =
 // commenterPermissionNeeded, so the shell can never look a permission up for
 // an event the decision would have ignored anyway.
 function classifyEvent(input: CiTriggerInput): EventVerdict {
-  if (
-    input.eventName === "pull_request" ||
-    input.eventName === "pull_request_target"
-  ) {
+  // The fork filter is `pull_request`'s alone, because only there is its
+  // reason true: GitHub hands a fork's `pull_request` run no secrets.
+  // `pull_request_target` runs in the BASE repository's context, with its
+  // secrets, and the bash this module replaced accepted it. The scaffolded
+  // template never wires it; a consumer who does has chosen base-context
+  // reviews of fork heads, so it goes on to the credential check like any
+  // other review event (there is no commenter to check). pr-hero itself
+  // never executes the pull request's code: it reads the head as text.
+  if (input.eventName === "pull_request") {
     if (input.prHeadRepo !== input.repository) {
       return {
         kind: "ignore",
@@ -142,7 +197,15 @@ export function commenterPermissionNeeded(input: CiTriggerInput): boolean {
   return classifyEvent(input).kind === "comment";
 }
 
-function deniedReason(input: CiTriggerInput): string | undefined {
+// Undefined lets the command through. A definitive non-writer is `denied`
+// (a notice, exit 0, as for any stranger). A lookup that failed is
+// `unverifiable`: still no review, but red, because a denial is only a
+// notice on a default-branch run, invisible from the pull request, and a
+// maintainer whose command met a GitHub outage would see nothing happen.
+function commenterVerdict(
+  input: CiTriggerInput,
+  full: boolean,
+): CiTriggerDecision | undefined {
   const permission = input.commenterPermission;
   if (
     permission?.kind === "resolved" &&
@@ -151,19 +214,38 @@ function deniedReason(input: CiTriggerInput): string | undefined {
     return undefined;
   }
   const who = `@${input.commenterLogin || "unknown"}`;
+  if (permission?.kind === "indeterminate") {
+    const command = full ? REVIEW_FULL_COMMAND : REVIEW_COMMAND;
+    return {
+      kind: "unverifiable",
+      reason:
+        `pr-hero could not verify whether ${who} has write access to ` +
+        `${input.repository}, because the GitHub API call failed ` +
+        `(${permission.detail}), so no review was started. Comment ` +
+        `\`${command}\` again to retry.`,
+    };
+  }
   const rule =
     `Only a maintainer (write or admin access to ${input.repository}) can ` +
     `request a review with \`${REVIEW_COMMAND}\`.`;
   if (permission === undefined) {
-    return `The permission of ${who} was not checked, so the command was refused. ${rule}`;
+    return {
+      kind: "denied",
+      reason: `The permission of ${who} was not checked, so the command was refused. ${rule}`,
+    };
   }
   if (permission.kind === "unavailable") {
-    return (
-      `Could not verify the permission of ${who} (${permission.detail}), ` +
-      `so the command was refused. ${rule}`
-    );
+    return {
+      kind: "denied",
+      reason:
+        `Could not verify the permission of ${who} (${permission.detail}), ` +
+        `so the command was refused. ${rule}`,
+    };
   }
-  return `${who} has \`${permission.permission || "no"}\` permission. ${rule}`;
+  return {
+    kind: "denied",
+    reason: `${who} has \`${permission.permission || "no"}\` permission. ${rule}`,
+  };
 }
 
 // Precedence, in this order: event filter, commenter permission,
@@ -175,12 +257,31 @@ export function decideCiTrigger(input: CiTriggerInput): CiTriggerDecision {
   if (event.kind === "ignore") return event;
 
   if (event.kind === "comment") {
-    const reason = deniedReason(input);
-    if (reason !== undefined) return { kind: "denied", reason };
+    const verdict = commenterVerdict(input, event.full);
+    if (verdict !== undefined) return verdict;
   }
 
-  const { anthropicApiKey, claudeToken, opencodeAuth } = input.credentials;
-  if (!anthropicApiKey && !claudeToken && !opencodeAuth) {
+  // `no-credentials` is red, so it fires only when nothing the engine can
+  // authenticate with is within reach: no credential input, no Claude
+  // session file and no OpenCode auth store on the runner, and a runner that
+  // is not self-hosted. A self-hosted runner may hold a macOS keychain entry,
+  // which this builtins-only step cannot probe, so there the engine's own
+  // capability gate decides.
+  //
+  // ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN in the JOB's environment do
+  // not count, and nothing here reads them. action.yml's Run pr-hero step
+  // binds both from the inputs in its own `env:`, which overrides the job's,
+  // so a job-level value never reaches the engine: counting it would trade
+  // this clear red for a confusing auth failure later.
+  const { anthropicApiKey, claudeToken, opencodeAuth, runnerFile } =
+    input.credentials;
+  if (
+    !anthropicApiKey &&
+    !claudeToken &&
+    !opencodeAuth &&
+    !runnerFile &&
+    !input.selfHostedRunner
+  ) {
     return { kind: "no-credentials", inputs: CREDENTIAL_INPUTS };
   }
 
@@ -274,7 +375,7 @@ export function renderNoCredentialsSummary(context: {
   return [
     "### :x: pr-hero could not review this pull request",
     "",
-    `**What is wrong:** no model credential reached the action. Its ${inputs} inputs were all empty.`,
+    `**What is wrong:** no model credential reached the action. Its ${inputs} inputs were all empty, and the runner holds no Claude session file or OpenCode auth store.`,
     "",
     "**Why this run is red:** pr-hero reviews with a model it can authenticate to. A run that skipped quietly would report green, and that looks exactly like a clean review.",
     "",
@@ -337,18 +438,28 @@ export interface GhResult {
 export interface CiTriggerDeps {
   env: Readonly<Record<string, string | undefined>>;
   gh: (args: readonly string[]) => GhResult;
+  // The pause before the one permission-lookup retry. Optional so callers
+  // that predate it (test/packaging.test.ts's action simulation) keep
+  // working; the default really sleeps, so tests inject it.
+  sleep?: (ms: number) => void;
+  // Asks whether an on-runner credential file exists. The default is the
+  // real filesystem; the paths come from `env` (runnerCredentialPaths).
+  exists?: (filePath: string) => boolean;
   stdout: (text: string) => void;
   appendOutput: (text: string) => void;
   appendSummary: (text: string) => void;
 }
 
 // Every name below is bound by the trigger step's `env:` in action.yml,
-// except GITHUB_REPOSITORY and GITHUB_RUN_ID, which every step inherits.
+// except GITHUB_REPOSITORY, GITHUB_RUN_ID, RUNNER_ENVIRONMENT, HOME and
+// XDG_DATA_HOME, which every step inherits from the runner.
 function readTriggerInput(
-  env: CiTriggerDeps["env"],
+  deps: CiTriggerDeps,
 ): Omit<CiTriggerInput, "commenterPermission"> {
+  const { env } = deps;
   const text = (name: string): string => env[name] ?? "";
   const flag = (name: string): boolean => text(name) === "true";
+  const exists = deps.exists ?? existsSync;
   return {
     eventName: text("EVENT_NAME"),
     repository: text("GITHUB_REPOSITORY"),
@@ -360,7 +471,9 @@ function readTriggerInput(
       anthropicApiKey: flag("HAS_ANTHROPIC_API_KEY"),
       claudeToken: flag("HAS_CLAUDE_TOKEN"),
       opencodeAuth: flag("HAS_OPENCODE_AUTH"),
+      runnerFile: runnerCredentialPaths(env).some((file) => exists(file)),
     },
+    selfHostedRunner: text("RUNNER_ENVIRONMENT") === "self-hosted",
     forceInput: flag("FORCE_INPUT"),
     fullInput: flag("FULL_INPUT"),
   };
@@ -383,9 +496,42 @@ function ghFailureDetail(result: GhResult): string {
   return detail.length > 160 ? `${detail.slice(0, 157)}...` : detail;
 }
 
-// Fails closed: a gh that cannot start, a non-zero exit (a 404 for a
-// non-collaborator included) or an empty answer is "unavailable", which the
-// decision denies. Only a clean `admin` / `write` answer can spend money.
+// One lookup, classified. gh prints `HTTP 404` on stderr when GitHub says
+// the login is not a collaborator: a definitive answer, so it is `none`.
+// Every other failure (a 5xx, a 403 rate limit, a timeout, no network, a gh
+// that cannot start) is about the API, not the commenter.
+function askCommenterPermission(
+  deps: CiTriggerDeps,
+  repository: string,
+  login: string,
+): CommenterPermission {
+  const result = callGh(deps, [
+    "api",
+    `repos/${repository}/collaborators/${encodeURIComponent(login)}/permission`,
+    "--jq",
+    ".permission",
+  ]);
+  if (result.exitCode !== 0) {
+    if (result.stderr.includes("HTTP 404")) {
+      return { kind: "resolved", permission: "none" };
+    }
+    return { kind: "indeterminate", detail: ghFailureDetail(result) };
+  }
+  const permission = result.stdout.trim();
+  if (permission === "") {
+    return { kind: "unavailable", detail: "gh returned no permission" };
+  }
+  return { kind: "resolved", permission };
+}
+
+// Short and fixed: long enough for a transient 5xx to clear, short enough
+// that a real outage costs the comment run seconds, not minutes.
+const PERMISSION_RETRY_DELAY_MS = 2_000;
+
+// Fails closed either way: only a clean `admin` / `write` answer can spend
+// money. An indeterminate lookup is retried ONCE, because a red "comment
+// again" is a cost to a maintainer and one blip should not cause it; more
+// retries would only hold every comment run hostage to an outage.
 function lookupCommenterPermission(
   deps: CiTriggerDeps,
   repository: string,
@@ -397,20 +543,11 @@ function lookupCommenterPermission(
       detail: "the event carried no commenter login or repository",
     };
   }
-  const result = callGh(deps, [
-    "api",
-    `repos/${repository}/collaborators/${encodeURIComponent(login)}/permission`,
-    "--jq",
-    ".permission",
-  ]);
-  if (result.exitCode !== 0) {
-    return { kind: "unavailable", detail: ghFailureDetail(result) };
-  }
-  const permission = result.stdout.trim();
-  if (permission === "") {
-    return { kind: "unavailable", detail: "gh returned no permission" };
-  }
-  return { kind: "resolved", permission };
+  const first = askCommenterPermission(deps, repository, login);
+  if (first.kind !== "indeterminate") return first;
+  const sleep = deps.sleep ?? ((ms: number) => Bun.sleepSync(ms));
+  sleep(PERMISSION_RETRY_DELAY_MS);
+  return askCommenterPermission(deps, repository, login);
 }
 
 const SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
@@ -456,7 +593,7 @@ function resolveHeadSha(
 }
 
 export function runCiTrigger(deps: CiTriggerDeps): number {
-  const base = readTriggerInput(deps.env);
+  const base = readTriggerInput(deps);
   const input: CiTriggerInput = commenterPermissionNeeded(base)
     ? {
         ...base,
@@ -473,6 +610,11 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
     deps.appendOutput(formatTriggerOutputs(NO_RUN));
     deps.stdout(workflowCommand("notice", decision.reason));
     return 0;
+  }
+  if (decision.kind === "unverifiable") {
+    deps.appendOutput(formatTriggerOutputs(NO_RUN));
+    deps.stdout(workflowCommand("error", decision.reason));
+    return 1;
   }
   if (decision.kind === "no-credentials") {
     deps.appendOutput(formatTriggerOutputs(NO_RUN));
@@ -535,6 +677,8 @@ if (import.meta.main) {
           stderr: result.stderr.toString(),
         };
       },
+      sleep: (ms) => Bun.sleepSync(ms),
+      exists: existsSync,
       stdout: (text) => process.stdout.write(text),
       appendOutput: appendTo(process.env.GITHUB_OUTPUT),
       appendSummary: appendTo(process.env.GITHUB_STEP_SUMMARY),

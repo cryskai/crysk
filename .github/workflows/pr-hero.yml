@@ -57,15 +57,28 @@ jobs:
     # any comment anywhere could cancel any in-flight review.
     #
     # Only a new push cancels. The group filter is a prefix, so a near-miss
-    # comment claims the pull request's group too; cancelling there would
+    # comment can claim the pull request's group too; cancelling there would
     # kill a paid in-flight review before the action ignored the comment. A
     # comment run queues instead. A push never waits: it cancels whatever is
     # running, a forced comment run included, because the head it reviewed
-    # is gone (comment again on the new head). KNOWN GAP: GitHub keeps one
-    # PENDING run per group, so a later comment starting with /pr-hero review
-    # (a near-miss, a refused one, or a second real one) replaces a comment
-    # run already waiting behind a running review; `--full` followed by a
-    # plain `/pr-hero review` loses the `--full`. Comment again to recover.
+    # is gone (comment again on the new head).
+    #
+    # GitHub keeps one PENDING run per group, and a newer run replaces it. So
+    # a comment enters the pull request's group only when it starts with
+    # /pr-hero review AND GitHub associates its author with the repository
+    # as OWNER, MEMBER or COLLABORATOR; every other comment gets its own
+    # group. Without that, anyone who can comment could replace a
+    # maintainer's queued review with a run the action then refuses. The job
+    # `if:` above does NOT check the association: a writer GitHub reports
+    # under another one (a private org member shown as CONTRIBUTOR) still
+    # runs, because the action checks the real permission, just in its own
+    # group. KNOWN GAP: an associated author's later comment (a writer's
+    # near-miss or second real command, or a read-only member's or
+    # collaborator's refused one) still replaces a comment run waiting
+    # behind a running review, and `--full` followed by a plain
+    # `/pr-hero review` loses the `--full`; comment again to recover. A
+    # writer reported under another association runs unserialized, beside
+    # any review already running.
     #
     # A fork's push never enters the pull request's group: its job is skipped
     # above, and if a skipped job still claimed the group, the fork author's
@@ -73,7 +86,7 @@ jobs:
     # other event gets a unique per-run group for the same reason, so a
     # skipped job can never cancel or replace a review.
     concurrency:
-      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || startsWith(github.event.comment.body, '/pr-hero review')) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     # Backstop for a HUNG runner, not a second review budget. pr-hero already
@@ -102,8 +115,14 @@ jobs:
       # is the checked-out head's own, so a same-repo head that predates that
       # check (an old bot branch) would let anyone who can comment start a
       # review with this repository's secrets. This step is the only code that
-      # runs before the head does. It fails closed: anything but admin or
-      # write, including a lookup that errors, refuses.
+      # runs before the head does. It fails closed: nothing but admin or write
+      # proceeds. A 404 (GitHub's answer for a non-collaborator) or an answer
+      # that is not admin or write refuses quietly with a notice, exit 0.
+      # Any other lookup failure (a 5xx,
+      # a rate limit, a timeout) says nothing about the commenter, so it is
+      # retried once and then fails the job red: a quiet refusal would show a
+      # maintainer whose command met a GitHub hiccup the same notice a
+      # stranger gets, on a default-branch run nobody sees from the PR.
       - name: Resolve the pull request head
         id: gate
         if: github.event_name == 'issue_comment'
@@ -112,7 +131,22 @@ jobs:
           COMMENTER: ${{ github.event.comment.user.login }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$COMMENTER/permission" --jq .permission) || permission=""
+          gh_err=$(mktemp)
+          trap 'rm -f "$gh_err"' EXIT
+          for attempt in 1 2; do
+            if permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$COMMENTER/permission" --jq .permission 2>"$gh_err"); then
+              break
+            fi
+            permission=""
+            case "$(<"$gh_err")" in
+              *"HTTP 404"*) break ;;
+            esac
+            if [ "$attempt" = 2 ]; then
+              echo "::error title=pr-hero::could not verify the commenter's write access: the GitHub API call failed twice, so no review was started. Comment /pr-hero review again to retry"
+              exit 1
+            fi
+            sleep 2
+          done
           case "$permission" in
             admin|write) ;;
             *)

@@ -57,15 +57,28 @@ jobs:
     # any comment anywhere could cancel any in-flight review.
     #
     # Only a new push cancels. The group filter is a prefix, so a near-miss
-    # comment claims the pull request's group too; cancelling there would
+    # comment can claim the pull request's group too; cancelling there would
     # kill a paid in-flight review before the action ignored the comment. A
     # comment run queues instead. A push never waits: it cancels whatever is
     # running, a forced comment run included, because the head it reviewed
-    # is gone (comment again on the new head). KNOWN GAP: GitHub keeps one
-    # PENDING run per group, so a later comment starting with /pr-hero review
-    # (a near-miss, a refused one, or a second real one) replaces a comment
-    # run already waiting behind a running review; `--full` followed by a
-    # plain `/pr-hero review` loses the `--full`. Comment again to recover.
+    # is gone (comment again on the new head).
+    #
+    # GitHub keeps one PENDING run per group, and a newer run replaces it. So
+    # a comment enters the pull request's group only when it starts with
+    # /pr-hero review AND GitHub associates its author with the repository
+    # as OWNER, MEMBER or COLLABORATOR; every other comment gets its own
+    # group. Without that, anyone who can comment could replace a
+    # maintainer's queued review with a run the action then refuses. The job
+    # `if:` above does NOT check the association: a writer GitHub reports
+    # under another one (a private org member shown as CONTRIBUTOR) still
+    # runs, because the action checks the real permission, just in its own
+    # group. KNOWN GAP: an associated author's later comment (a writer's
+    # near-miss or second real command, or a read-only member's or
+    # collaborator's refused one) still replaces a comment run waiting
+    # behind a running review, and `--full` followed by a plain
+    # `/pr-hero review` loses the `--full`; comment again to recover. A
+    # writer reported under another association runs unserialized, beside
+    # any review already running.
     #
     # A fork's push never enters the pull request's group: its job is skipped
     # above, and if a skipped job still claimed the group, the fork author's
@@ -73,7 +86,7 @@ jobs:
     # other event gets a unique per-run group for the same reason, so a
     # skipped job can never cancel or replace a review.
     concurrency:
-      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || startsWith(github.event.comment.body, '/pr-hero review')) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     # Backstop for a HUNG runner, not a second review budget. pr-hero already
