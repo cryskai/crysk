@@ -21,6 +21,11 @@ import {
 // Both the outcome comment and the status carry it, and both read as the same path.
 const HUNTERS_FAILED_CODE = "PRH-HUNTERS-FAILED";
 
+// The slack allowed between a comment's created_at and the run it started. GitHub
+// stamps both, so the gap is small; the window only keeps a run created a moment
+// before the comment from being mistaken for an earlier one.
+export const COMMENT_RUN_CLOCK_SKEW_MS = 5_000;
+
 export type CommentKind = "report" | "finding" | "outcome" | "skip" | "other";
 
 export interface CommentFact {
@@ -32,6 +37,9 @@ export interface CommentFact {
   // the head under test counts as this run's review, and only an outcome for it
   // decides this run's path: an earlier head's comment on the same PR is not.
   head?: string;
+  // When GitHub stored the comment. Set for the comments of a phase that waits on a
+  // comment run, so a skip marker can be tied to that run and not to an earlier one.
+  createdAt?: string;
 }
 
 export interface RunFact {
@@ -57,6 +65,9 @@ export interface Observation {
   status?: StatusFact;
   comments: CommentFact[];
   artifacts: string[];
+  // When the trigger comment of the phase was created, in epoch ms. Only set for a
+  // phase that waits on a comment run; a run it started was created after this.
+  triggeredAt?: number;
 }
 
 export type SmokePath =

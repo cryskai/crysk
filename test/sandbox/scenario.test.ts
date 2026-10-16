@@ -12,7 +12,7 @@ import {
 } from "../../scripts/sandbox/report";
 import { runScenarios } from "../../scripts/sandbox/scenario";
 import { sandboxFiles, WORKFLOW_PATH } from "../../scripts/sandbox/seed";
-import { fail } from "./fakes";
+import { fail, START_ISO } from "./fakes";
 import { FakeGithub } from "./world";
 
 const REF = "v0.2.0";
@@ -433,5 +433,96 @@ describe("the final table", () => {
     expect(lines).toContain(
       "  REFUSED  comment-trigger: 1 scenario PR(s) still open",
     );
+  });
+});
+
+// The comment run is matched by this scenario's PR title and by the comment's time.
+// The title carries the branch stamp, which is the harness clock's start, so the
+// tests can name it before the run starts.
+const STAMP = START_ISO.replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+const COMMENT_TITLE = `pr-hero sandbox comment-trigger sandbox/comment-trigger-${STAMP}`;
+
+describe("run: the comment run is its own run, with its own evidence", () => {
+  test("a comment run that uploads no artifact fails phase 2, though its step, the report and the status all pass", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      commentRunsLeaveNoArtifact: true,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.includes(
+        "  PASS  comment-trigger: [2] the run's review step succeeded",
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        l.startsWith(
+          "  FAIL  comment-trigger: [2] the run left its own evidence",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("a stray run from earlier with this PR's title is ignored: the comment run is the one created after the comment", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const stray = world.addRun({
+      event: "issue_comment",
+      displayTitle: COMMENT_TITLE,
+      createdAt: "2000-01-01T00:00:00Z",
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+    expect(
+      h.ghCalls.some(
+        (c) => c[0] === "run" && c[1] === "view" && c[2] === String(stray),
+      ),
+    ).toBe(false);
+  });
+
+  test("a run that shows another PR's title is ignored, even when it was created after the comment", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const other = world.addRun({
+      event: "issue_comment",
+      displayTitle: "pr-hero sandbox cleanup sandbox/cleanup-20261016T000000Z",
+      createdAt: "2099-01-01T00:00:00Z",
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+    expect(
+      h.ghCalls.some(
+        (c) => c[0] === "run" && c[1] === "view" && c[2] === String(other),
+      ),
+    ).toBe(false);
+  });
+
+  test("two runs carrying this PR's title after the comment are ambiguous: the scenario errors and cleans up", async () => {
+    const world = new FakeGithub({ ref: REF });
+    for (let i = 0; i < 2; i += 1) {
+      world.addRun({
+        event: "issue_comment",
+        displayTitle: COMMENT_TITLE,
+        createdAt: "2099-01-01T00:00:00Z",
+      });
+    }
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.includes("the comment run is ambiguous"))).toBe(
+      true,
+    );
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(true);
+  });
+});
+
+describe("run: a phase that outlives its poll", () => {
+  test("a comment run still in progress at the deadline is cancelled before its PR closes, and the scenario exits 1", async () => {
+    const world = new FakeGithub({ ref: REF, stuckCommentRuns: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.startsWith("timed out after"))).toBe(true);
+    const cancelAt = world.events.findIndex((e) => e.startsWith("run cancel"));
+    const closeAt = world.events.findIndex((e) => e.startsWith("pr close"));
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(closeAt).toBeGreaterThan(cancelAt);
   });
 });

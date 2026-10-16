@@ -4,7 +4,11 @@
 // are not checks here: the runner applies them to every observation itself.
 
 import { RUN_STEP_NAME } from "./markers";
-import { classifyPath, type Observation } from "./observe";
+import {
+  COMMENT_RUN_CLOCK_SKEW_MS,
+  classifyPath,
+  type Observation,
+} from "./observe";
 
 export type Check =
   // `skipped` accepts any documented skip, `skipped:<reason>`.
@@ -17,7 +21,11 @@ export type Check =
   | { kind: "run-completed"; event: string }
   // The review step of the observed run itself succeeded. A report and a status
   // on the head can be left by an earlier run, so this is the run's own evidence.
-  | { kind: "step-succeeded" };
+  | { kind: "step-succeeded" }
+  // The run's own evidence for the path it observed. A reviewed path needs the
+  // run's own artifact; a skip needs a skip marker the run posted after its trigger.
+  // Checks on the head alone cannot tell this run from one that did nothing.
+  | { kind: "own-evidence" };
 
 export interface CheckResult {
   label: string;
@@ -51,6 +59,8 @@ export function describeCheck(check: Check): string {
       return `${check.event} run completed`;
     case "step-succeeded":
       return "the run's review step succeeded";
+    case "own-evidence":
+      return "the run left its own evidence (its artifact, or its skip marker)";
   }
 }
 
@@ -122,6 +132,33 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         step?.conclusion === "success",
         `got ${step?.conclusion ?? "no step"} for ${RUN_STEP_NAME}`,
       );
+    }
+    case "own-evidence": {
+      // A reviewed head reads as reviewed from an earlier run's report too, so
+      // only this run's artifact proves this run reviewed. The artifact is named
+      // by PR and head, and collect() fetches it by this run's id.
+      const path = classifyPath(obs);
+      if (path === "reviewed") {
+        const artifact = `pr-hero-run-${obs.prNumber}-${obs.headSha}`;
+        return pass(
+          obs.artifacts.includes(artifact),
+          `no ${artifact} artifact on this run (artifacts: ${obs.artifacts.join(", ") || "none"})`,
+        );
+      }
+      // A skip uploads nothing and its marker names no run, so the marker must be
+      // a comment this run created: posted at or after the trigger, less the skew.
+      if (path.startsWith("skipped:")) {
+        const triggeredAt = obs.triggeredAt;
+        const own = obs.comments.some(
+          (c) =>
+            c.kind === "skip" &&
+            triggeredAt !== undefined &&
+            c.createdAt !== undefined &&
+            Date.parse(c.createdAt) >= triggeredAt - COMMENT_RUN_CLOCK_SKEW_MS,
+        );
+        return pass(own, "no skip marker posted after this run's trigger");
+      }
+      return pass(false, `path ${path} leaves no evidence this run could own`);
     }
   }
 }

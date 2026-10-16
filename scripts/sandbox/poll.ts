@@ -3,11 +3,11 @@
 // and the scenario's cleanup then runs in its finally (scenario.ts), so an
 // operator's Ctrl-C never leaves a scenario PR behind.
 
-import type { Signal, SandboxDeps, SignalSource } from "./ports";
+import type { SandboxDeps, Signal, SignalSource } from "./ports";
 
 // Consecutive failed reads before a poll gives up. One transient gh error must
 // not tear the PR down while the run is in flight.
-export const MAX_CONSECUTIVE_POLL_FAILURES = 5;
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 
 // The exit codes of an interrupted invocation, the shell's convention for the
 // signal (128 + number), so a wrapper can tell an interrupt from a failure.
@@ -76,7 +76,7 @@ export function watchInterrupts(
   };
 }
 
-export function throwIfInterrupted(interrupts: Interrupts | undefined): void {
+function throwIfInterrupted(interrupts: Interrupts | undefined): void {
   const signal = interrupts?.received();
   if (signal !== undefined) throw new Interrupted(signal);
 }

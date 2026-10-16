@@ -339,3 +339,55 @@ describe("comment-trigger: phase 1 accepts a flake, and the cleanup check is con
     ).toBe(true);
   });
 });
+
+// The run's own evidence: a reviewed head needs this run's artifact, and a skip
+// needs a skip marker this run posted after its trigger. A head-level report and
+// status from an earlier run satisfy neither.
+describe("own-evidence: only this run's artifact or skip marker counts", () => {
+  const TRIGGERED = Date.parse("2026-10-16T14:31:00Z");
+  const commentRun = (overrides: Partial<Observation> = {}) =>
+    obs({
+      run: {
+        id: 43,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      triggeredAt: TRIGGERED,
+      ...overrides,
+    });
+
+  test("reviewed passes with this run's artifact, and fails without it even when the report and status are present", () => {
+    const check = { kind: "own-evidence" } as const;
+    expect(evaluateCheck(check, commentRun()).pass).toBe(true);
+    const missing = evaluateCheck(check, commentRun({ artifacts: [] }));
+    expect(missing.pass).toBe(false);
+    expect(missing.detail).toContain(`pr-hero-run-7-${NEW}`);
+  });
+
+  test("a skip passes with a skip marker created after the trigger, and fails with one from before it", () => {
+    const check = { kind: "own-evidence" } as const;
+    const skip = (createdAt: string) =>
+      commentRun({
+        status: undefined,
+        artifacts: [],
+        comments: [{ source: "issue", kind: "skip", skip: "size", createdAt }],
+      });
+    expect(evaluateCheck(check, skip("2026-10-16T14:31:02Z")).pass).toBe(true);
+    expect(evaluateCheck(check, skip("2026-10-16T14:30:00Z")).pass).toBe(false);
+  });
+
+  test("no-outcome and error paths leave no evidence this run could own", () => {
+    const check = { kind: "own-evidence" } as const;
+    expect(
+      evaluateCheck(
+        check,
+        commentRun({
+          comments: [],
+          status: { state: "error", description: "review did not finish" },
+        }),
+      ).pass,
+    ).toBe(false);
+  });
+});

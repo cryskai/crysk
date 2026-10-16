@@ -9,6 +9,7 @@
 import { type CheckResult, describeCheck, evaluateChecks } from "./expect";
 import { STATUS_CONTEXT, WORKFLOW_NAME } from "./markers";
 import {
+  COMMENT_RUN_CLOCK_SKEW_MS,
   type CommentFact,
   classifyComment,
   classifyPath,
@@ -20,8 +21,8 @@ import {
 import {
   Interrupted,
   type Interrupts,
-  pollUntil,
   type PollTiming,
+  pollUntil,
   SIGNAL_EXIT_CODES,
   stopAfterInterrupt,
   Unrecoverable,
@@ -68,7 +69,7 @@ const DEFAULT_TIMEOUT_MS = 25 * 60_000;
 // How long cleanup waits for a cancelled run to report completed. The workflow's
 // own ceiling is 90 minutes, so a run still going past this is left to finish on
 // its own, and its PR stays open until it does.
-export const DEFAULT_CANCEL_WAIT_MS = 10 * 60_000;
+const DEFAULT_CANCEL_WAIT_MS = 10 * 60_000;
 
 export interface RunOptions {
   ref: string;
@@ -86,10 +87,14 @@ interface RunListItem {
   workflowName: string;
   url: string;
   event?: string;
+  // The run's title, which for a PR-triggered run is the PR's title. A comment run
+  // shows the title of the PR it was started on.
+  displayTitle: string;
+  createdAt: string;
 }
 
 const RUN_FIELDS =
-  "databaseId,headSha,status,conclusion,workflowName,url,event";
+  "databaseId,headSha,status,conclusion,workflowName,url,event,displayTitle,createdAt";
 
 // What a running scenario knows so far. Named Live, not Scenario, because the
 // scenario data in scenarios.ts is the Scenario type.
@@ -105,9 +110,9 @@ interface Live {
   // The run of the current wait as last seen, recorded as each poll reads it. A
   // wait that is interrupted or times out leaves it set, so cleanup can cancel it.
   inFlight?: { databaseId: number; completed: boolean };
-  // The issue_comment runs that existed before this scenario's comment. The
-  // comment's own run is the one that appears after it.
-  commentRunsBefore?: Set<number>;
+  // When the scenario's comment was created, in epoch ms. Its run is created after
+  // it, so a run created before it (less a skew) cannot be the comment's run.
+  commentCreatedAt?: number;
 }
 
 function utcStamp(date: Date): string {
@@ -347,9 +352,6 @@ async function perform(
     return;
   }
   const pr = requirePr(live);
-  live.commentRunsBefore = new Set(
-    (await listCommentRuns(deps)).map((r) => r.databaseId),
-  );
   const url = await ghOk(deps, [
     "pr",
     "comment",
@@ -360,6 +362,24 @@ async function perform(
     action.body,
   ]);
   deps.log(`comment: ${url.trim()}`);
+  live.commentCreatedAt = await commentCreatedAt(deps, url);
+}
+
+// When GitHub stored the comment whose URL gh printed. The comment's run is matched
+// against this time, so it is read from the comment itself, not from this clock.
+async function commentCreatedAt(
+  deps: SandboxDeps,
+  url: string,
+): Promise<number> {
+  const id = /#issuecomment-(\d+)$/.exec(url.trim())?.[1];
+  if (id === undefined) {
+    throw new Error(`gh pr comment printed no comment URL: ${url.trim()}`);
+  }
+  const comment = await ghJson<{ created_at: string }>(deps, [
+    "api",
+    `repos/${SANDBOX_REPO}/issues/comments/${id}`,
+  ]);
+  return Date.parse(comment.created_at);
 }
 
 // Writes the variant's workflow onto the branch when it differs, and commits it.
@@ -426,7 +446,7 @@ async function openPr(deps: SandboxDeps, live: Live): Promise<ScenarioPr> {
     "--head",
     live.branch,
     "--title",
-    `pr-hero sandbox ${live.scenario} ${live.branch}`,
+    scenarioTitle(live),
     "--body",
     `Scenario PR from pr-hero's sandbox runner (\`bun scripts/sandbox.ts run ${live.scenario}\`). ` +
       "It is closed by the runner unless --keep was given.",
@@ -442,6 +462,12 @@ async function openPr(deps: SandboxDeps, live: Live): Promise<ScenarioPr> {
   };
   live.pr = pr;
   return pr;
+}
+
+// The PR title names the scenario and its stamped branch, so it is unique per run.
+// That is what tells this scenario's comment run apart from any other run in the repo.
+function scenarioTitle(live: Live): string {
+  return `pr-hero sandbox ${live.scenario} ${live.branch}`;
 }
 
 function requirePr(live: Live): ScenarioPr {
@@ -524,22 +550,28 @@ async function findPullRequestRun(
 }
 
 // The issue_comment run of the comment. It runs main's workflow, so its head is
-// main's and it names no PR branch: it is found as the one run that appeared
-// after the comment was posted, not by branch or head sha.
+// main's and it names no PR branch, and it is not found by sha. It is the one run
+// that shows this scenario's PR title and was created at or after the comment. The
+// title keeps out a run from another scenario; the time keeps out an earlier run
+// that carries this title, such as one left by a timed-out attempt.
 async function findCommentRun(
   deps: SandboxDeps,
   live: Live,
 ): Promise<RunListItem | undefined> {
-  if (live.commentRunsBefore === undefined) {
+  const commentedAt = live.commentCreatedAt;
+  if (commentedAt === undefined) {
     throw new Error("waiting for a comment run before any comment was posted");
   }
-  const before = live.commentRunsBefore;
+  const title = scenarioTitle(live);
   const fresh = (await listCommentRuns(deps)).filter(
-    (r) => !before.has(r.databaseId) && r.workflowName === WORKFLOW_NAME,
+    (r) =>
+      r.workflowName === WORKFLOW_NAME &&
+      r.displayTitle === title &&
+      Date.parse(r.createdAt) >= commentedAt - COMMENT_RUN_CLOCK_SKEW_MS,
   );
   if (fresh.length > 1) {
     throw new Unrecoverable(
-      `${fresh.length} new issue_comment runs appeared, so the comment run is ambiguous`,
+      `${fresh.length} issue_comment runs carry this PR's title after its comment, so the comment run is ambiguous`,
     );
   }
   return fresh[0];
@@ -587,10 +619,10 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Observation> {
   const combined = await ghJson<{
     statuses: { context: string; state: string; description: string }[];
   }>(deps, ["api", `repos/${SANDBOX_REPO}/commits/${headSha}/status`]);
-  const issueComments = await ghJson<{ body: string }[]>(deps, [
-    "api",
-    `repos/${SANDBOX_REPO}/issues/${pr.number}/comments?per_page=100`,
-  ]);
+  const issueComments = await ghJson<{ body: string; created_at: string }[]>(
+    deps,
+    ["api", `repos/${SANDBOX_REPO}/issues/${pr.number}/comments?per_page=100`],
+  );
   const inlineComments = await ghJson<{ body: string }[]>(deps, [
     "api",
     `repos/${SANDBOX_REPO}/pulls/${pr.number}/comments?per_page=100`,
@@ -605,7 +637,10 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Observation> {
           ])
         ).artifacts.map((a) => a.name);
   const comments: CommentFact[] = [
-    ...issueComments.map((c) => classifyComment(c.body, "issue")),
+    ...issueComments.map((c) => ({
+      ...classifyComment(c.body, "issue"),
+      createdAt: c.created_at,
+    })),
     ...inlineComments.map((c) => classifyComment(c.body, "inline")),
   ];
   const latest = combined.statuses.find((s) => s.context === STATUS_CONTEXT);
@@ -630,6 +665,10 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Observation> {
         : { state: latest.state, description: latest.description },
     comments,
     artifacts,
+    // Only a comment run was started by the comment, so only it is judged against
+    // the comment's time.
+    triggeredAt:
+      run?.event === "issue_comment" ? live.commentCreatedAt : undefined,
   };
 }
 

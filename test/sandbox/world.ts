@@ -34,6 +34,10 @@ interface RunRow {
   stepConclusion: string;
   prNumber: number;
   reviewSha: string;
+  // gh's displayTitle: a PR-triggered run shows its PR's title, and so does a
+  // comment run started on that PR (checked against GitHub, pr-hero-sandbox).
+  displayTitle: string;
+  createdAt: string;
 }
 
 interface PrRow {
@@ -41,6 +45,13 @@ interface PrRow {
   headRefName: string;
   url: string;
   closed: boolean;
+  title: string;
+}
+
+interface CommentRow {
+  id: number;
+  body: string;
+  createdAt: string;
 }
 
 // What a run leaves behind. `hunters-failed` is the free model's flake: every
@@ -69,6 +80,12 @@ export interface WorldOptions {
   keepOutcomeComments?: boolean;
   // A PR comment fails at the transport, so the scenario ends early.
   failComment?: boolean;
+  // A comment run reports success and reviews, but uploads no artifact: the
+  // evidence a trigger that ignored the command would lack.
+  commentRunsLeaveNoArtifact?: boolean;
+  // An issue_comment run stays in progress, and posts nothing, until it is
+  // cancelled: a run that outlives the poll.
+  stuckCommentRuns?: boolean;
 }
 
 export class FakeGithub {
@@ -79,11 +96,14 @@ export class FakeGithub {
   readonly branches = new Map<string, string>();
   readonly runs: RunRow[] = [];
   readonly statuses = new Map<string, { state: string; description: string }>();
-  readonly comments = new Map<number, { id: number; body: string }[]>();
+  readonly comments = new Map<number, CommentRow[]>();
   readonly mainFiles: Map<string, string>;
   private readonly options: WorldOptions;
   private nextId = 100;
   private shaCounter = 0;
+  // A fake clock: every event takes one second, so the order of runs and comments
+  // is the order of the calls, as on GitHub.
+  private clock = Date.parse("2026-10-16T12:00:00Z");
   private readonly cwdHead = new Map<string, string>();
   private readonly pushedWorkflow = new Map<string, string>();
   private readonly queued: Outcome[];
@@ -111,8 +131,40 @@ export class FakeGithub {
       headRefName,
       url: `${REPO_URL}/pull/${number}`,
       closed: false,
+      title: `pr-hero sandbox foreign ${headRefName}`,
     });
     this.comments.set(number, []);
+  }
+
+  // A run the runner did not start, such as one left by an earlier attempt. It is
+  // in the repository's run list like any other.
+  addRun(run: {
+    event: "pull_request" | "issue_comment";
+    displayTitle: string;
+    createdAt: string;
+  }): number {
+    const id = this.nextId++;
+    this.runs.push({
+      databaseId: id,
+      headSha: MAIN_SHA,
+      headBranch: "main",
+      event: run.event,
+      status: "completed",
+      conclusion: "success",
+      workflowName: WORKFLOW_NAME,
+      url: `${REPO_URL}/actions/runs/${id}`,
+      stepConclusion: "success",
+      prNumber: 0,
+      reviewSha: MAIN_SHA,
+      displayTitle: run.displayTitle,
+      createdAt: run.createdAt,
+    });
+    return id;
+  }
+
+  private stamp(): string {
+    this.clock += 1000;
+    return new Date(this.clock).toISOString();
   }
 
   private shaFor(counter: number): string {
@@ -142,21 +194,34 @@ export class FakeGithub {
     const outcome = this.queued.shift() ?? this.decide(workflow);
     // A run whose hunters all failed fails its review step, as the engine exits non-zero.
     const failed = outcome === "hunters-failed";
+    const displayTitle = this.prs.get(prNumber)?.title ?? "";
+    const stuck =
+      event === "issue_comment" && this.options.stuckCommentRuns === true;
     this.runs.push({
+      displayTitle,
+      createdAt: this.stamp(),
       databaseId: id,
       headSha,
       headBranch,
       event,
-      status: "completed",
-      conclusion: failed ? "failure" : "success",
+      status: stuck ? "in_progress" : "completed",
+      conclusion: stuck ? null : failed ? "failure" : "success",
       workflowName: WORKFLOW_NAME,
       url: `${REPO_URL}/actions/runs/${id}`,
       stepConclusion: failed ? "failure" : "success",
       prNumber,
       reviewSha,
     });
+    if (stuck) {
+      this.events.push(`run ${id} ${event} in_progress`);
+      return;
+    }
     this.events.push(`run ${id} ${event} completed`);
     this.post(outcome, prNumber, reviewSha, id);
+  }
+
+  private comment(body: string): CommentRow {
+    return { id: this.nextId++, body, createdAt: this.stamp() };
   }
 
   // What the publisher leaves on the PR for one run's outcome.
@@ -167,8 +232,8 @@ export class FakeGithub {
       const at = list.findIndex((c) =>
         c.body.startsWith(`${REPORT_PREFIX} head=${sha}`),
       );
-      if (at >= 0) list[at] = { id: this.nextId++, body: report };
-      else list.push({ id: this.nextId++, body: report });
+      if (at >= 0) list[at] = this.comment(report);
+      else list.push(this.comment(report));
       // Cleanup: the outcome comments of earlier runs are removed once a review completes.
       if (this.options.keepOutcomeComments !== true) {
         const kept = list.filter((c) => !c.body.startsWith(OUTCOME_PREFIX));
@@ -180,10 +245,11 @@ export class FakeGithub {
       });
     } else {
       const code = OUTCOME_CODE[outcome];
-      list.push({
-        id: this.nextId++,
-        body: `${OUTCOME_PREFIX} v=1 head=${sha} run=${runId} attempt=1 -->\n\n## ${code}\n\nfake outcome`,
-      });
+      list.push(
+        this.comment(
+          `${OUTCOME_PREFIX} v=1 head=${sha} run=${runId} attempt=1 -->\n\n## ${code}\n\nfake outcome`,
+        ),
+      );
       this.statuses.set(sha, {
         state: "error",
         description: `${code}: fake outcome`,
@@ -220,6 +286,7 @@ export class FakeGithub {
         headRefName: branch,
         url: `${REPO_URL}/pull/${number}`,
         closed: false,
+        title: flag(args, "--title") ?? "",
       });
       this.comments.set(number, []);
       this.events.push(`pr create ${number}`);
@@ -246,8 +313,9 @@ export class FakeGithub {
       this.events.push(`comment ${body}`);
       if (this.options.failComment === true)
         return fail("HTTP 502: Bad Gateway");
-      const id = this.nextId++;
-      (this.comments.get(number) ?? []).push({ id, body });
+      const posted = this.comment(body);
+      const id = posted.id;
+      (this.comments.get(number) ?? []).push(posted);
       if (body === "/pr-hero review") {
         const pr = this.prs.get(number);
         const head = this.branches.get(pr?.headRefName ?? "") ?? MAIN_SHA;
@@ -280,8 +348,19 @@ export class FakeGithub {
           workflowName: r.workflowName,
           url: r.url,
           event: r.event,
+          displayTitle: r.displayTitle,
+          createdAt: r.createdAt,
         }));
       return ok(JSON.stringify(rows));
+    }
+    if (verb === "run" && sub === "cancel") {
+      // A cancelled run completes without posting anything.
+      const run = this.runs.find((r) => r.databaseId === Number(args[2]));
+      if (run === undefined) return fail("run not found");
+      run.status = "completed";
+      run.conclusion = "cancelled";
+      this.events.push(`run cancel ${run.databaseId}`);
+      return ok();
     }
     if (verb === "run" && sub === "view") {
       const run = this.runs.find((r) => r.databaseId === Number(args[2]));
@@ -324,14 +403,28 @@ export class FakeGithub {
     const issue = /\/issues\/(\d+)\/comments/.exec(path);
     if (issue !== null) {
       const list = this.comments.get(Number(issue[1])) ?? [];
-      return ok(JSON.stringify(list.map((c) => ({ body: c.body }))));
+      return ok(
+        JSON.stringify(
+          list.map((c) => ({ body: c.body, created_at: c.createdAt })),
+        ),
+      );
+    }
+    const one = /\/issues\/comments\/(\d+)$/.exec(path);
+    if (one !== null) {
+      const found = [...this.comments.values()]
+        .flat()
+        .find((c) => c.id === Number(one[1]));
+      if (found === undefined) return fail("comment not found");
+      return ok(JSON.stringify({ created_at: found.createdAt }));
     }
     if (/\/pulls\/\d+\/comments/.test(path)) return ok("[]");
     const artifacts = /\/actions\/runs\/(\d+)\/artifacts$/.exec(path);
     if (artifacts !== null) {
       const run = this.runs.find((r) => r.databaseId === Number(artifacts[1]));
       const names =
-        run === undefined
+        run === undefined ||
+        (run.event === "issue_comment" &&
+          this.options.commentRunsLeaveNoArtifact)
           ? []
           : [`pr-hero-run-${run.prNumber}-${run.reviewSha}`];
       return ok(JSON.stringify({ artifacts: names.map((name) => ({ name })) }));

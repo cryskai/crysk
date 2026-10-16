@@ -202,9 +202,9 @@ describe("classifyPath", () => {
     expect(path).toBe("no-outcome");
     // ADAPTED (was exitCodeFor, removed with the smoke-only exit rule): the runner
     // decides the exit, and review-free requires the reviewed path, so this fails.
-    expect(evaluateCheck({ kind: "path", accept: ["reviewed"] }, obs).pass).toBe(
-      false,
-    );
+    expect(
+      evaluateCheck({ kind: "path", accept: ["reviewed"] }, obs).pass,
+    ).toBe(false);
   });
 
   test("hunters-failed from the status alone: the error status names the code and no comment is visible yet", () => {

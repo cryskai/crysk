@@ -40,7 +40,7 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   the expectations of that run that fail are printed as
   `FAIL (free-model hunters failed: re-run)`. The exit code stays 1. Re-run the
   scenario. Only that label marks a flake; a plain `FAIL` is a finding until a re-run
-  shows otherwise.
+  shows otherwise. The hunters-failed tolerance and this label need an action ref at or after T2c (`98569d1`), where the publisher renders `PRH-HUNTERS-FAILED`; on an older ref an all-hunters-failed run shows `review did not finish` with no PRH code, and S7 reports it.
 
 ## Scenarios
 
@@ -53,7 +53,7 @@ one observation of the PR. S7 invariants are checked on every observation.
 | `bad-routing` | A malformed routing input is refused before any model runs. | Outcome comment `PRH-ROUTING-INVALID`; status `error` with that code; no report on the head. | $0 |
 | `review-free` | The normal workflow on the free route reviews the planted bug end to end. | Path `reviewed`; status `success`; at least one report on the head; no outcome comment. | $0 (free route) |
 | `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; status `success`; a report; no outcome comment. | $0 (phase 2 on the free route) |
-| `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; path `reviewed` or `skipped`; status `success`; a report. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (free route) |
+| `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own evidence (its `pr-hero-run-<pr>-<sha>` artifact for `reviewed`, or a skip marker posted after the trigger for `skipped`); path `reviewed` or `skipped`; status `success`; a report. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (free route) |
 
 The S7 invariants, checked on every observation, are: an `error` status without a `PRH-`
 code; an outcome comment on a head whose status is `success`; a status still `pending`

@@ -125,6 +125,10 @@ export const SCENARIOS: readonly Scenario[] = [
         wait: "pull_request",
         // A precondition, not the subject: the free route may fail its hunters on
         // this first run (a flake), and the comment run is what is under test.
+        // The hunters-failed tolerance and its flake label need an action ref at or
+        // after T2c (98569d1), where the publisher renders PRH-HUNTERS-FAILED; on an
+        // older ref an all-hunters-failed run shows `review did not finish` with no
+        // PRH code, and S7 reports it.
         checks: [{ kind: "path", accept: ["reviewed", "hunters-failed"] }],
       },
       {
@@ -134,6 +138,10 @@ export const SCENARIOS: readonly Scenario[] = [
           { kind: "run-completed", event: "issue_comment" },
           // The comment's own review step, not the first run's report on the same head.
           { kind: "step-succeeded" },
+          // The comment run's own evidence. Phase 1's report and status still read
+          // as reviewed here, so without this a trigger that ignored the command
+          // would pass.
+          { kind: "own-evidence" },
           // A forced run may review again or skip with a recorded reason; the
           // source says force bypasses every skip gate, so a skip here is a signal.
           { kind: "path", accept: ["reviewed", "skipped"] },
