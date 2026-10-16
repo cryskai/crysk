@@ -33,9 +33,10 @@ export interface CommentFact {
   kind: CommentKind;
   code?: string;
   skip?: SkipReason;
-  // A report or an outcome names the head it was written for. Only a report for
-  // the head under test counts as this run's review, and only an outcome for it
-  // decides this run's path: an earlier head's comment on the same PR is not.
+  // A report, an outcome or a finding names the head it was written for (a finding
+  // in its marker). Only a report for the head under test counts as this run's
+  // review, and only an outcome for it decides this run's path: an earlier head's
+  // comment on the same PR is not.
   head?: string;
   // When GitHub stored the comment. Set for the comments of a phase that waits on a
   // comment run, so a skip marker can be tied to that run and not to an earlier one.
@@ -43,6 +44,10 @@ export interface CommentFact {
   // S4: set only on a finding whose header reads `🔴 blocking`. Absent otherwise,
   // so an advisory finding's fact is the same shape it always was.
   blocking?: true;
+  // Fix A: a report's blocking entries in its `### Comments Outside Diff` section,
+  // the findings the PR shows with no inline anchor. Set only when there is at
+  // least one, so a report without one keeps the shape it always had.
+  outsideDiffBlocking?: number;
 }
 
 export interface RunFact {
@@ -85,6 +90,27 @@ export function outcomeCodeOf(body: string): string | undefined {
   return PRH_CODE.exec(body)?.[0];
 }
 
+// The blocking entries in a report's `### Comments Outside Diff` section
+// (report.ts outsideDiffSection): one entry per finding, each opening with its
+// header line. The section ends at the next heading or at the `---` rule that
+// precedes the footer, so a blocking-looking line after either is not an entry.
+const OUTSIDE_DIFF_HEADING = "### Comments Outside Diff";
+const BLOCKING_ENTRY_HEADER = "🔴 blocking · ";
+
+export function outsideDiffBlockingCount(body: string): number {
+  let inSection = false;
+  let count = 0;
+  for (const line of body.split("\n")) {
+    if (!inSection) {
+      if (line.startsWith(OUTSIDE_DIFF_HEADING)) inSection = true;
+      continue;
+    }
+    if (/^#{1,3} /.test(line) || line === "---") break;
+    if (line.startsWith(BLOCKING_ENTRY_HEADER)) count += 1;
+  }
+  return count;
+}
+
 export function classifyComment(
   body: string,
   source: "issue" | "inline",
@@ -92,16 +118,26 @@ export function classifyComment(
   const first = (body.split("\n", 1)[0] ?? "").trim();
   if (first.startsWith(REPORT_MARKER_PREFIX)) {
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
-    return head === undefined
-      ? { source, kind: "report" }
-      : { source, kind: "report", head };
+    const outside = outsideDiffBlockingCount(body);
+    return {
+      source,
+      kind: "report",
+      ...(head === undefined ? {} : { head }),
+      ...(outside === 0 ? {} : { outsideDiffBlocking: outside }),
+    };
   }
   if (first.startsWith(FINDING_MARKER_PREFIX)) {
     // The tier is in the finding's header line (report.ts findingHeaderLine),
-    // and it is the only tier evidence a reader of the PR sees.
-    return body.includes("🔴 blocking")
-      ? { source, kind: "finding", blocking: true }
-      : { source, kind: "finding" };
+    // and it is the only tier evidence a reader of the PR sees. Its marker names
+    // the head, so the check can tell this head's finding from an older one.
+    const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
+    const blocking = body.includes("🔴 blocking");
+    return {
+      source,
+      kind: "finding",
+      ...(head === undefined ? {} : { head }),
+      ...(blocking ? { blocking: true as const } : {}),
+    };
   }
   if (first.startsWith(OUTCOME_MARKER_PREFIX)) {
     // The head is "unknown" when the publisher had no sha; such an outcome has no head.

@@ -41,8 +41,9 @@ const REPORT_PREFIX = "<!-- pr-hero-report";
 const RUN_DURATION_MS = 5 * 60_000;
 // A posted blocking finding, shaped the way the product posts one: its marker,
 // then the header whose tier word the classifier reads (report.ts findingHeaderLine).
-const BLOCKING_FINDING =
-  "<!-- pr-hero-finding id=F001 path=src/a.ts line=3 -->\n\n🔴 blocking · BLOCKER · introduced · reliability";
+// The head is the reviewed sha, as findingMarker writes it (src/pr/preflight.ts).
+const blockingFinding = (head: string): string =>
+  `<!-- pr-hero-finding id=F001 path=src/a.ts line=3 head=${head} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
 
 interface RunRow {
   databaseId: number;
@@ -347,7 +348,7 @@ export class FakeGithub {
       // finding under the gate is failure; advisory is success whatever it finds,
       // and statusIgnoresFindings is the mutation that keeps the gate green.
       if (this.options.blockingFindings === true) {
-        list.push(this.comment(BLOCKING_FINDING));
+        list.push(this.comment(blockingFinding(sha)));
       }
       const gateFails =
         outcome === "review" &&

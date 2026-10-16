@@ -500,17 +500,36 @@ describe("own-evidence: only this run's artifact or skip marker counts", () => {
 // things run to run. It checks instead that the status agrees with the blocking
 // findings the PR shows: failure with any, success without. The comment bodies
 // are the product's own finding headers, read back through classifyComment.
+// Fix A: a blocking finding counts as visible on the observed head only, either as an
+// inline comment whose marker names that head, or as an entry in the outside-diff
+// section of that head's report. A failure whose description counts at least the
+// visible ones passes; with none visible, a failure whose description counts a
+// carried prior passes too.
 describe("status-matches-findings: the status agrees with the blocking findings (S4)", () => {
-  const BLOCKING = `<!-- pr-hero-finding id=F001 -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
-  const ADVISORY = `<!-- pr-hero-finding id=F002 -->\n\n🟡 advisory · WARNING · introduced · reliability`;
+  const BLOCKING = `<!-- pr-hero-finding id=F001 head=${NEW} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
+  const BLOCKING_2 = `<!-- pr-hero-finding id=F004 head=${NEW} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
+  const ADVISORY = `<!-- pr-hero-finding id=F002 head=${NEW} -->\n\n🟡 advisory · WARNING · introduced · reliability`;
+  const STALE_BLOCKING = `<!-- pr-hero-finding id=F003 head=${OLD} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
+  const OUTSIDE_BLOCKING =
+    "🔴 blocking · BLOCKER · introduced · reliability\n`src/app.ts:10` — run()\n\nThe claim.";
+  const COUNTS_ONE =
+    "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override";
 
-  function withFindings(bodies: readonly string[], state: string): Observation {
+  function reportWithOutside(entry: string): string {
+    return `<!-- pr-hero-report head=${NEW} -->\n\n# pr-hero review\n\n### Comments Outside Diff (1)\n\n${entry}\n\n---\n\n<sub>footer</sub>`;
+  }
+
+  function withFindings(
+    bodies: readonly string[],
+    state: string,
+    description = "pr-hero: the description",
+  ): Observation {
     return obs({
       comments: [
         { source: "issue", kind: "report", head: NEW },
         ...bodies.map((body) => classifyComment(body, "inline")),
       ],
-      status: { state, description: "pr-hero: the description" },
+      status: { state, description },
     });
   }
 
@@ -523,19 +542,20 @@ describe("status-matches-findings: the status agrees with the blocking findings 
   test("no blocking finding and a failure status fail: nothing blocks", () => {
     const result = evaluateCheck(check, withFindings([], "failure"));
     expect(result.pass).toBe(false);
-    expect(result.detail).toContain("0 blocking finding comment(s)");
+    expect(result.detail).toContain("no visible blocking finding");
   });
 
-  test("a blocking finding and a failure status pass", () => {
-    expect(evaluateCheck(check, withFindings([BLOCKING], "failure")).pass).toBe(
-      true,
-    );
+  test("a visible blocking finding and a failure that counts it pass", () => {
+    expect(
+      evaluateCheck(check, withFindings([BLOCKING], "failure", COUNTS_ONE))
+        .pass,
+    ).toBe(true);
   });
 
-  test("a blocking finding and a success status fail: the gate missed it", () => {
+  test("a visible blocking finding and a success status fail: the gate missed it", () => {
     const result = evaluateCheck(check, withFindings([BLOCKING], "success"));
     expect(result.pass).toBe(false);
-    expect(result.detail).toContain("1 blocking finding comment(s)");
+    expect(result.detail).toContain("1 visible blocking finding(s)");
   });
 
   test("an advisory-only finding and a success status pass", () => {
@@ -544,9 +564,53 @@ describe("status-matches-findings: the status agrees with the blocking findings 
     );
   });
 
+  test("a blocking entry only in the outside-diff section is visible: success fails, a failure that counts it passes", () => {
+    const comments = [
+      classifyComment(reportWithOutside(OUTSIDE_BLOCKING), "issue"),
+    ];
+    const onSuccess = evaluateCheck(
+      check,
+      obs({
+        comments,
+        status: { state: "success", description: "review posted" },
+      }),
+    );
+    expect(onSuccess.pass).toBe(false);
+    expect(onSuccess.detail).toContain("1 visible blocking finding(s)");
+    const onFailure = evaluateCheck(
+      check,
+      obs({ comments, status: { state: "failure", description: COUNTS_ONE } }),
+    );
+    expect(onFailure.pass).toBe(true);
+  });
+
+  test("a blocking finding on an earlier head is not visible: success passes beside it", () => {
+    expect(
+      evaluateCheck(check, withFindings([STALE_BLOCKING], "success")).pass,
+    ).toBe(true);
+  });
+
+  test("no visible blocking finding and a failure that counts one (a carried prior) pass, and the detail says so", () => {
+    const result = evaluateCheck(
+      check,
+      withFindings([], "failure", COUNTS_ONE),
+    );
+    expect(result.pass).toBe(true);
+    expect(result.detail).toContain("carried");
+  });
+
+  test("two visible blocking findings and a failure that counts one fail: the description undercounts", () => {
+    const result = evaluateCheck(
+      check,
+      withFindings([BLOCKING, BLOCKING_2], "failure", COUNTS_ONE),
+    );
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain("2 visible blocking finding(s)");
+  });
+
   test("its label names the rule", () => {
     expect(evaluateCheck(check, withFindings([], "success")).label).toBe(
-      "status matches the blocking findings: failure with any, success without",
+      "status matches the blocking findings: failure when any is visible, success or a counted failure otherwise",
     );
   });
 });

@@ -126,6 +126,76 @@ describe("classifyComment: the blocking tier of a finding (S4)", () => {
   });
 });
 
+// Fix A: the status check counts blocking findings the PR shows on the observed
+// head, so a finding comment names its head and a report counts its blocking
+// entries in the outside-diff section (the findings that have no inline anchor).
+describe("classifyComment: where a blocking finding is shown (Fix A)", () => {
+  const OUTSIDE_BLOCKING =
+    "🔴 blocking · BLOCKER · introduced · reliability\n`src/app.ts:10` — run()\n\nThe claim.";
+  const OUTSIDE_ADVISORY =
+    "🟡 advisory · WARNING · introduced · reliability\n`src/app.ts:20` — run()\n\nA note.";
+
+  function reportWith(entries: readonly string[], after: string): string {
+    return `<!-- pr-hero-report head=${SHA} -->\n\n# pr-hero review\n\n### Comments Outside Diff (${entries.length})\n\n${entries.join("\n\n")}${after}`;
+  }
+  const FOOTER = "\n\n---\n\n<sub>run completed</sub>";
+
+  test("an inline blocking finding names the head its marker carries", () => {
+    expect(
+      classifyComment(
+        `<!-- pr-hero-finding path=src/a.ts line=3 head=${SHA} c=x -->\n\n🔴 blocking · BLOCKER · introduced · reliability`,
+        "inline",
+      ),
+    ).toEqual({
+      source: "inline",
+      kind: "finding",
+      blocking: true,
+      head: SHA,
+    });
+  });
+
+  test("a report counts its blocking entries in the outside-diff section and carries no count for advisory ones", () => {
+    expect(
+      classifyComment(
+        reportWith(
+          [OUTSIDE_BLOCKING, OUTSIDE_ADVISORY, OUTSIDE_BLOCKING],
+          FOOTER,
+        ),
+        "issue",
+      ),
+    ).toEqual({
+      source: "issue",
+      kind: "report",
+      head: SHA,
+      outsideDiffBlocking: 2,
+    });
+    expect(
+      classifyComment(reportWith([OUTSIDE_ADVISORY], FOOTER), "issue"),
+    ).toEqual({ source: "issue", kind: "report", head: SHA });
+  });
+
+  test("a blocking-looking line after the section ends, at a rule or a heading, is not an entry", () => {
+    expect(
+      classifyComment(
+        reportWith(
+          [OUTSIDE_ADVISORY],
+          "\n\n---\n\n🔴 blocking · quoted in the footer",
+        ),
+        "issue",
+      ),
+    ).toEqual({ source: "issue", kind: "report", head: SHA });
+    expect(
+      classifyComment(
+        reportWith(
+          [OUTSIDE_ADVISORY],
+          "\n\n### Next\n\n🔴 blocking · quoted under a heading",
+        ),
+        "issue",
+      ),
+    ).toEqual({ source: "issue", kind: "report", head: SHA });
+  });
+});
+
 describe("classifyPath", () => {
   test("reviewed: a summary posted and the status success", () => {
     expect(classifyPath(observation())).toBe("reviewed");

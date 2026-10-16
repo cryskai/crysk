@@ -33,7 +33,9 @@ export type Check =
 export interface CheckResult {
   label: string;
   pass: boolean;
-  // What was seen, when it was not what the check asked for.
+  // What was seen, when it was not what the check asked for. A check that names
+  // its case on a pass (status-matches-findings) sets it too; the report prints
+  // only failed details.
   detail?: string;
   // Set on a failed check whose phase observed `hunters-failed`: the free
   // model's flake, which a re-run is expected to clear.
@@ -55,7 +57,7 @@ export function describeCheck(check: Check): string {
         ? `status is ${check.state}`
         : `status is ${check.state}, description starts with ${check.descriptionStartsWith}`;
     case "status-matches-findings":
-      return "status matches the blocking findings: failure with any, success without";
+      return "status matches the blocking findings: failure when any is visible, success or a counted failure otherwise";
     case "report-min":
       return `at least ${check.min} report on the head`;
     case "no-report":
@@ -67,6 +69,13 @@ export function describeCheck(check: Check): string {
     case "own-evidence":
       return "the run left its own evidence (its artifact, or its skip marker)";
   }
+}
+
+// The N the gate writes into its own description: `pr-hero: N blocking finding(s) …`
+// (blockingCommitStatusRequest). Undefined when the description carries no count.
+function gateBlockingCount(description: string): number | undefined {
+  const match = /^pr-hero: (\d+) blocking finding\(s\)/.exec(description);
+  return match === null ? undefined : Number(match[1]);
 }
 
 function headReports(obs: Observation): number {
@@ -116,15 +125,52 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
     case "status-matches-findings": {
       const status = obs.status;
       if (status === undefined) return pass(false, "no status on the head");
-      // Counted from the posted comments, the only blocking evidence the PR
-      // shows, so the check agrees with what a reader of the PR can see.
-      const blocking = obs.comments.filter(
-        (c) => c.kind === "finding" && c.blocking === true,
+      // Visible on THIS head only: an inline blocking finding whose marker names the
+      // observed head, plus the blocking entries in that head's report's outside-diff
+      // section. The gate counts every unresolved blocking finding, including the
+      // carried priors that show no comment, so a failure may count more than is
+      // visible. Inline comments from older heads are never deleted and never count.
+      const inline = obs.comments.filter(
+        (c) =>
+          c.kind === "finding" && c.blocking === true && c.head === obs.headSha,
       ).length;
-      const expected = blocking > 0 ? "failure" : "success";
-      return pass(
-        status.state === expected,
-        `got ${status.state} with ${blocking} blocking finding comment(s)`,
+      const outside = obs.comments.reduce(
+        (sum, c) =>
+          c.kind === "report" && c.head === obs.headSha
+            ? sum + (c.outsideDiffBlocking ?? 0)
+            : sum,
+        0,
+      );
+      const visible = inline + outside;
+      const counted = gateBlockingCount(status.description);
+      // Each branch names its case in the detail, so a pass says which rule it used.
+      const verdict = (ok: boolean, detail: string): CheckResult => ({
+        label,
+        pass: ok,
+        detail,
+      });
+      if (visible > 0) {
+        const ok =
+          status.state === "failure" &&
+          counted !== undefined &&
+          counted >= visible;
+        return verdict(
+          ok,
+          `${visible} visible blocking finding(s) (${inline} inline, ${outside} outside the diff); ${status.state} counts ${counted ?? "none"}`,
+        );
+      }
+      if (status.state === "success") {
+        return verdict(true, "no visible blocking finding; success");
+      }
+      if (status.state === "failure" && counted !== undefined && counted >= 1) {
+        return verdict(
+          true,
+          `no visible blocking finding; failure counts ${counted} carried prior blocking finding(s)`,
+        );
+      }
+      return verdict(
+        false,
+        `no visible blocking finding, and the ${status.state} does not count one`,
       );
     }
     case "report-min": {
