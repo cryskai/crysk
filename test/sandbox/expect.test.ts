@@ -811,3 +811,36 @@ describe("status-matches-findings: the status agrees with the blocking findings 
     );
   });
 });
+
+// T2e: the triggering comment carries the reaction its run earned. The check is
+// not in any scenario yet (its observation is wired by scenario.ts), so its pass
+// and fail pair is written out here rather than in the phase table.
+describe("reaction: the triggering comment carries the reaction (T2e)", () => {
+  const check = { kind: "reaction", content: "eyes" } as const;
+
+  test("a recorded pass carries the reaction, and a recorded fail carries another", () => {
+    const pass = obs({ reactions: ["eyes"] });
+    const fail = obs({ reactions: ["-1"] });
+    expect(evaluateCheck(check, pass).pass).toBe(true);
+    expect(evaluateCheck(check, fail).pass).toBe(false);
+    expect(evaluateCheck(check, fail).detail).toBe("got -1");
+  });
+
+  test("a comment with no reaction fails and says so", () => {
+    const result = evaluateCheck(check, obs({ reactions: [] }));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("got no reaction");
+  });
+
+  test("no observed trigger comment fails as not observed, never as a missing reaction", () => {
+    const result = evaluateCheck(check, obs());
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("no triggering comment observed");
+  });
+
+  test("its label names the reaction", () => {
+    expect(evaluateCheck(check, obs()).label).toBe(
+      "the triggering comment has the eyes reaction",
+    );
+  });
+});

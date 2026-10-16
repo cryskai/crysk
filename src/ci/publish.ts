@@ -198,7 +198,8 @@ export function decidePublication(input: {
   const record = input.record;
   if (record === undefined) return { kind: "none" };
   if (record.decision === "ignore" || record.decision === "denied") {
-    // Denied and ignored commands publish nothing, by design (T2e adds reactions).
+    // Denied and ignored commands publish nothing: the trigger answers them with a
+    // reaction on the comment instead (T2e), so the PR gets no text reply.
     return { kind: "none" };
   }
   // WHY before the outcome fallthrough below: an override is not an error, and

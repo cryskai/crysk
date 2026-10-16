@@ -33,7 +33,10 @@ export type Check =
   | { kind: "own-evidence" }
   // S8: the run posted an override comment on the observed head. An override on an
   // earlier head, or one posted before this run's trigger, does not count.
-  | { kind: "override-comment" };
+  | { kind: "override-comment" }
+  // T2e: the triggering comment carries this reaction. A refused or near-miss comment
+  // gets its reaction and no text reply, so the reaction is the only trace it leaves.
+  | { kind: "reaction"; content: string };
 
 export interface CheckResult {
   label: string;
@@ -77,6 +80,8 @@ export function describeCheck(check: Check): string {
       return "the run left its own evidence (its artifact, or its skip marker)";
     case "override-comment":
       return "an override comment this run posted on this head";
+    case "reaction":
+      return `the triggering comment has the ${check.content} reaction`;
   }
 }
 
@@ -254,6 +259,18 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
           postedByThisRun(c, obs),
       );
       return pass(ok, `no override comment on ${obs.headSha} from this run`);
+    }
+    case "reaction": {
+      // Without a trigger comment there is nothing to read: that is a failure of
+      // the observation, not of the reaction, so the detail says which it is.
+      const seen = obs.reactions;
+      if (seen === undefined) {
+        return pass(false, "no triggering comment observed");
+      }
+      return pass(
+        seen.includes(check.content),
+        `got ${seen.join(", ") || "no reaction"}`,
+      );
     }
   }
 }

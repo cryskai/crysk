@@ -144,13 +144,18 @@ export interface CiTriggerInput {
   // GITHUB_RUN_ATTEMPT when it is a positive integer. Absent outside Actions.
   // Above 1 the run is a re-run, which replays the original comment event.
   runAttempt?: number;
+  // EVENT_COMMENT_ID when it is all digits: the comment that triggered the run,
+  // which the reaction names. Absent for any other event, or any other value.
+  commentId?: string;
 }
 
 export type CiTriggerDecision =
   | { kind: "review"; force: boolean; full: boolean }
   // A human's override: no CLI run, $0. `actor` is the login that unlocked the gate.
   | { kind: "override"; actor: string }
-  | { kind: "ignore"; reason: string }
+  // `nearMiss` is set on a comment that starts like a command but is not one: it
+  // runs nothing, and its reaction says so (confused).
+  | { kind: "ignore"; reason: string; nearMiss?: true }
   | { kind: "denied"; reason: string }
   | {
       kind: "unverifiable";
@@ -177,9 +182,18 @@ export function parseReviewCommand(
 type CommentCommand = { kind: "review"; full: boolean } | { kind: "override" };
 
 type EventVerdict =
-  | { kind: "ignore"; reason: string }
+  | { kind: "ignore"; reason: string; nearMiss?: true }
   | { kind: "comment"; command: CommentCommand }
   | { kind: "event" };
+
+// A comment that starts like a command but is not an exact one: "/pr-hero review
+// please", "/pr-hero override --force". It is judged on the trimmed text, the same way
+// as the command. The job's own `startsWith` filter lets such a comment start a run,
+// and that run reviews nothing; its reaction (confused) is the only word it says.
+function isNearMiss(body: string): boolean {
+  const text = body.trim();
+  return text.startsWith(REVIEW_COMMAND) || text.startsWith(OVERRIDE_COMMAND);
+}
 
 // The exact text a commenter typed, for the messages that name it.
 function commandText(command: CommentCommand): string {
@@ -238,6 +252,7 @@ function classifyEvent(input: CiTriggerInput): EventVerdict {
         `This comment is not a pr-hero command. Comment exactly ` +
         `\`${REVIEW_COMMAND}\` or \`${REVIEW_FULL_COMMAND}\` to request ` +
         `a review, or \`${OVERRIDE_COMMAND}\` to unlock a gate.`,
+      ...(isNearMiss(input.commentBody) ? { nearMiss: true as const } : {}),
     };
   }
   // workflow_dispatch and anything else a consumer wires: the caller's own
@@ -774,6 +789,10 @@ function readTriggerInput(
   const flag = (name: string): boolean => text(name) === "true";
   const exists = deps.exists ?? existsSync;
   const runAttempt = positiveInteger(text("GITHUB_RUN_ATTEMPT"));
+  // Digits only: the id is written into an API path, so any other value is no id.
+  const commentId = /^[0-9]+$/.test(text("EVENT_COMMENT_ID"))
+    ? text("EVENT_COMMENT_ID")
+    : undefined;
   return {
     eventName: text("EVENT_NAME"),
     repository: text("GITHUB_REPOSITORY"),
@@ -791,7 +810,37 @@ function readTriggerInput(
     forceInput: flag("FORCE_INPUT"),
     fullInput: flag("FULL_INPUT"),
     ...(runAttempt === undefined ? {} : { runAttempt }),
+    ...(commentId === undefined ? {} : { commentId }),
   };
+}
+
+// The reaction a comment earns. Best effort: it runs only on an issue_comment with an
+// id, and a failure prints one warning. It never changes the decision or the exit code,
+// because the reaction is a courtesy and the decision is the product.
+type CommentReaction = "eyes" | "-1" | "confused";
+
+function react(
+  deps: CiTriggerDeps,
+  input: Pick<CiTriggerInput, "eventName" | "repository" | "commentId">,
+  content: CommentReaction,
+): void {
+  if (input.eventName !== "issue_comment" || input.commentId === undefined)
+    return;
+  const result = callGh(deps, [
+    "api",
+    "-X",
+    "POST",
+    `repos/${input.repository}/issues/comments/${input.commentId}/reactions`,
+    "-f",
+    `content=${content}`,
+  ]);
+  if (result.exitCode === 0) return;
+  deps.stdout(
+    workflowCommand(
+      "warning",
+      `Could not add the ${content} reaction to the comment (${ghFailureDetail(result)}). The outcome is unchanged.`,
+    ),
+  );
 }
 
 function callGh(deps: CiTriggerDeps, args: readonly string[]): GhResult {
@@ -926,8 +975,9 @@ function resolveHeadSha(
 }
 
 // Short, like the permission retry: long enough for a transient gh failure to
-// clear, short enough that a real outage costs the comment run seconds.
-const OVERRIDE_HEAD_RETRY_DELAY_MS = 2_000;
+// clear, short enough that a real outage costs the comment run seconds. Shared by
+// the override's head lookup and the no-credentials head lookup.
+const HEAD_RETRY_DELAY_MS = 2_000;
 
 // The notice a refused override prints. docs/github-actions.md ("Overriding a red
 // gate") describes the same refusal in prose, so keep the two in step.
@@ -1002,8 +1052,26 @@ function lookupOverrideHead(
   if (first.crossRepository === true) return first;
   if (first.crossRepository === false && first.head !== undefined) return first;
   const sleep = deps.sleep ?? ((ms: number) => Bun.sleepSync(ms));
-  sleep(OVERRIDE_HEAD_RETRY_DELAY_MS);
+  sleep(HEAD_RETRY_DELAY_MS);
   return askOverrideHead(deps, repository, pr);
+}
+
+// WHY one retry, on an issue_comment only: when the head lookup fails, the record
+// carries no head, and the publisher posts a comment with no status on a red
+// repository, a silent gate. The retry is the same one the override makes. A
+// pull_request names its head in the event, so its lookup is never the gap.
+function lookupNoCredentialsHead(
+  deps: CiTriggerDeps,
+  base: Pick<CiTriggerInput, "eventName" | "repository">,
+  pr: string,
+): string {
+  const first = resolveHeadSha(deps, base.eventName, base.repository, pr, true);
+  if (first !== UNKNOWN_HEAD_SHA || base.eventName !== "issue_comment") {
+    return first;
+  }
+  const sleep = deps.sleep ?? ((ms: number) => Bun.sleepSync(ms));
+  sleep(HEAD_RETRY_DELAY_MS);
+  return resolveHeadSha(deps, base.eventName, base.repository, pr, true);
 }
 
 export function runCiTrigger(deps: CiTriggerDeps): number {
@@ -1029,6 +1097,8 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
     writeRecord(deps, run, { decision: decision.kind, params: {} });
     deps.appendOutput(formatTriggerOutputs(NO_RUN));
     deps.stdout(workflowCommand("notice", decision.reason));
+    if (decision.kind === "denied") react(deps, base, "-1");
+    else if (decision.nearMiss === true) react(deps, base, "confused");
     return 0;
   }
 
@@ -1053,10 +1123,13 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
   }
 
   if (decision.kind === "no-credentials") {
+    // An authorised commenter's command is accepted; the run is red for the missing
+    // credential, and its comment says why.
+    react(deps, base, "eyes");
     const head =
       pr === undefined
         ? UNKNOWN_HEAD_SHA
-        : resolveHeadSha(deps, base.eventName, base.repository, pr, true);
+        : lookupNoCredentialsHead(deps, base, pr);
     const write = writeRecord(deps, run, {
       decision: "no-credentials",
       params: { backend: backendOf(deps) },
@@ -1115,8 +1188,10 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
             : OVERRIDE_UNKNOWN_FORK_REFUSAL,
         ),
       );
+      react(deps, base, "-1");
       return 0;
     }
+    react(deps, base, "eyes");
     // WHY the no-head path is kept: a same-repository answer with no usable sha
     // still posts, and the publisher's comment says no status could be set.
     const head = answer.head ?? UNKNOWN_HEAD_SHA;
@@ -1152,6 +1227,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
     pr: prNumber,
     headSha: validSha(head),
   });
+  react(deps, base, "eyes");
   deps.appendOutput(
     formatTriggerOutputs({
       run: true,

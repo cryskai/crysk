@@ -763,6 +763,49 @@ describe("Packaging & distribution configuration", () => {
       }
     });
 
+    test("the comment id reaches the trigger through env:, and the reaction it drives names that id", async () => {
+      expect(triggerStep()?.env?.EVENT_COMMENT_ID).toBe(
+        `\${{ github.event.comment.id }}`,
+      );
+      const calls: string[][] = [];
+      const gh: FakeGh = (args) => {
+        calls.push([...args]);
+        return {
+          exitCode: 0,
+          stdout: args.includes("POST")
+            ? "{}"
+            : args[0] === "api"
+              ? "write\n"
+              : `${HEAD}\n`,
+          stderr: "",
+        };
+      };
+      const run = await runAction(
+        CREDENTIAL,
+        {
+          repository: REPOSITORY,
+          event_name: "issue_comment",
+          "event.issue.number": "21",
+          "event.issue.pull_request.url": `https://api.github.com/repos/${REPOSITORY}/pulls/21`,
+          "event.comment.body": "/pr-hero review",
+          "event.comment.user.login": "maintainer",
+          "event.comment.id": "9001",
+        },
+        gh,
+      );
+      expect(run.trigger).toMatchObject({ run: "true", pr: "21" });
+      expect(calls.filter((args) => args.includes("POST"))).toEqual([
+        [
+          "api",
+          "-X",
+          "POST",
+          `repos/${REPOSITORY}/issues/comments/9001/reactions`,
+          "-f",
+          "content=eyes",
+        ],
+      ]);
+    });
+
     test("credentials reach the trigger as presence booleans, never as values", () => {
       const env = triggerStep()?.env ?? {};
       for (const input of [
