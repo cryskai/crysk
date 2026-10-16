@@ -753,14 +753,27 @@ export type CommitStatusContext =
   | typeof COMMIT_STATUS_CONTEXT
   | typeof LOCAL_COMMIT_STATUS_CONTEXT;
 
-// Every context a run's status can sit on. The watcher reads all of them: it
-// must not start a review of a head that CI or a local run is already
-// reviewing. The CI admission gate reads only COMMIT_STATUS_CONTEXT: a CI run
-// stands down for CI, never for a local run whose result the gate cannot see.
+// Every context a run's status can sit on. The watcher and local runs (no --ci)
+// read all of them: neither may start a review of a head that CI or another
+// local run is already reviewing. A `--ci` run reads only COMMIT_STATUS_CONTEXT:
+// it stands down for CI, never for a local run whose result the gate cannot see
+// (ci-admission-gate.ts yieldToInFlightReview picks the set by posture).
 export const RUN_STATUS_CONTEXTS: readonly CommitStatusContext[] = [
   COMMIT_STATUS_CONTEXT,
   LOCAL_COMMIT_STATUS_CONTEXT,
 ];
+
+// The contexts a run's in-flight yield reads (ci-admission-gate.ts
+// yieldToInFlightReview). A `--ci` run reads only the gate; every other run reads
+// all of them. Kept here, beside the constants, so the admission gate never names
+// the gate context itself (test/pr/status-context.test.ts pins who may).
+export function inFlightContextsFor(
+  statusContext: CommitStatusContext,
+): readonly CommitStatusContext[] {
+  return statusContext === COMMIT_STATUS_CONTEXT
+    ? [COMMIT_STATUS_CONTEXT]
+    : RUN_STATUS_CONTEXTS;
+}
 
 // DEFAULT_PIPELINE_TIMEOUT_MS is 75 min (pipeline.ts). A TTL inside that
 // window would double-launch a slow live run still inside its watchdog.
@@ -1009,7 +1022,8 @@ export function latestStatusInContext(
 // must be allowed to launch.
 // In-flight in ANY of the given contexts: each context's own latest status is
 // judged, so a fresh pending on one never hides behind a settled one on another.
-// The default reads the gate alone, which is the CI admission gate's yield.
+// The default reads the gate alone, which is a `--ci` run's yield. A non-CI run
+// passes RUN_STATUS_CONTEXTS, so it also stands down for a local pending.
 export function isInFlightCommitStatus(
   statuses: readonly CommitStatusFact[],
   nowMs: number,

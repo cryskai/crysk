@@ -66,6 +66,14 @@ async function settleLedgerIfPending(
 // `::error::` annotation. The throw skips the ledger settle below, and
 // finalizePrReviewRun (the outer finally) settles that reservation instead.
 //
+// The exception is a body that already threw (`bodyFailed`, set by reviewPr's
+// catch). The body's error is then the run's failure, and it must reach the
+// CLI unchanged: a throw from this finally would replace it, and
+// writeFatalCliRecord would record the status error's class instead of the
+// real cause. So that write still goes out, through tryPublishCommitStatus,
+// and a failed post only logs. Nothing throws on that path, so the ledger
+// settles here too, rather than in finalizePrReviewRun.
+//
 // `spawnFn` threads into the write (status.ts's own seam, invisible to
 // production), so a test can prove the real `gh` boundary: a failed gh post
 // still lets this function release the lock and settle the ledger in
@@ -87,6 +95,9 @@ export async function settleCommitStatusAndLedger(input: {
   // The blocking-tier count of the findings doc, or null when publishing never
   // built one. Gate reads it; advisory ignores it.
   blockingCount: number | null;
+  // True when the review body threw (reviewPr's inner catch). Gate then writes
+  // best-effort, so the body's own error is never replaced by a status error.
+  bodyFailed?: boolean;
   spawnFn?: typeof Bun.spawn;
   settle?: typeof settleCiAdmissionLedger;
 }): Promise<void> {
@@ -116,7 +127,7 @@ export async function settleCommitStatusAndLedger(input: {
           context: input.statusContext,
         });
   try {
-    if (effectiveMode === "gate") {
+    if (effectiveMode === "gate" && input.bodyFailed !== true) {
       await publishFinalCommitStatus(
         input.operatorRoot,
         input.headSha,

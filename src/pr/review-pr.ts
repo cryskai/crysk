@@ -389,6 +389,7 @@ export async function reviewPr(
       operatorRoot,
       headSha,
       options,
+      statusContext,
       ciAdmissionLedger,
     });
     if (inFlightExit !== undefined) return inFlightExit;
@@ -476,6 +477,9 @@ export async function reviewPr(
     // S4: written by publishRunOutcome's onBlockingCount sink, read by the
     // commit-status finally. Null until the findings doc exists.
     let blockingCount: number | null = null;
+    // Set by the catch below, read by the commit-status finally: a body that threw
+    // must keep its own error, so a failed status write there only logs.
+    let bodyFailed = false;
     try {
       // 8-10 — the review root, its own codegraph index, and the MCP
       // registry the hunters read. See setupPrWorktree
@@ -661,11 +665,14 @@ export async function reviewPr(
           blockingCount = count;
         },
       });
+    } catch (error) {
+      bodyFailed = true;
+      throw error;
     } finally {
       // The commit status must settle BEFORE the lock is released, and the
       // ledger settlement must still run on throw or early return. See
       // settleCommitStatusAndLedger (src/pr/teardown.ts) for the full
-      // rationale.
+      // rationale, including why a failed write never replaces a body's error.
       await settleCommitStatusAndLedger({
         result,
         posted,
@@ -676,6 +683,7 @@ export async function reviewPr(
         ciMode,
         statusContext,
         blockingCount,
+        bodyFailed,
       });
     }
   } finally {
