@@ -5,6 +5,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { runInit } from "../../scripts/sandbox/init";
+import { WORKFLOW_NAME } from "../../scripts/sandbox/markers";
+import { runClean, runList } from "../../scripts/sandbox/pr";
 import {
   assertGhArgs,
   assertGitArgs,
@@ -14,7 +16,7 @@ import {
   SANDBOX_REPO,
 } from "../../scripts/sandbox/rails";
 import { runSmoke } from "../../scripts/sandbox/smoke";
-import { harness, ok } from "./fakes";
+import { type GhScript, harness, ok } from "./fakes";
 
 const sandboxApi = (path: string) => `repos/${SANDBOX_REPO}/${path}`;
 
@@ -142,6 +144,49 @@ describe("gh rail: attached flags and repeated flags", () => {
   });
 });
 
+describe("gh rail: short-flag clusters", () => {
+  // pflag reads `-iXDELETE` as `-i` then `-X DELETE`, and `-ifbody=x` as `-i`
+  // then `-f`. `-i` is boolean, so the cluster is invisible to a check that looks
+  // only for a leading -X or -f. Any single-dash argument longer than two
+  // characters is refused, so no cluster reaches gh.
+  test("refuses any single-dash argument longer than two characters", () => {
+    const refused: string[][] = [
+      ["api", sandboxApi("git/refs/heads/main"), "-iXDELETE"],
+      ["api", sandboxApi("git/refs/heads/sandbox/x"), "-iXDELETE"],
+      ["api", sandboxApi("issues/1/comments"), "-ifbody=x"],
+      ["api", sandboxApi("issues/1"), "-iF"],
+      ["api", sandboxApi("git/refs/heads/sandbox/x"), "-XDELETE"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+
+  // Every gh api call the runner makes, one vector per call site, so a future
+  // rail tightening that breaks a real call fails here rather than live.
+  test("accepts every gh api call the runner sends", () => {
+    const sent: string[][] = [
+      // smoke.ts, the head's combined status
+      ["api", sandboxApi(`commits/${"b".repeat(40)}/status`)],
+      // smoke.ts, issue comments and inline review comments
+      ["api", sandboxApi("issues/7/comments?per_page=100")],
+      ["api", sandboxApi("pulls/7/comments?per_page=100")],
+      // smoke.ts, the run's artifacts
+      ["api", sandboxApi("actions/runs/42/artifacts")],
+      // pr.ts, the scenario branch ref delete
+      [
+        "api",
+        sandboxApi("git/refs/heads/sandbox/smoke-20261016T143000Z"),
+        "-X",
+        "DELETE",
+      ],
+    ];
+    for (const args of sent) {
+      expect(() => assertGhArgs(args)).not.toThrow();
+    }
+  });
+});
+
 describe("gh rail: run cancel", () => {
   test("accepts a cancel of a run in the sandbox", () => {
     expect(() =>
@@ -234,6 +279,184 @@ describe("scenario branches", () => {
   });
 });
 
+// Class 1. The cluster check used to live in assertApi, so a cluster on any other
+// verb reached gh: `-dR other/repo` is `-d -R other/repo` to pflag, and the -R
+// then names another repository. The two api cases were already refused there;
+// they are here so the rule is proven for every verb, not for api alone.
+describe("gh rail: short-flag clusters on every verb", () => {
+  test("refuses a single-dash argument longer than two characters, on any verb", () => {
+    const refused: string[][] = [
+      ["api", "repos/juanmaagd/pr-hero-sandbox", "-iX", "DELETE"],
+      ["api", "repos/juanmaagd/pr-hero-sandbox/issues", "-if", "title=x"],
+      [
+        "pr",
+        "close",
+        "5",
+        "-R",
+        SANDBOX_REPO,
+        "-dR",
+        "juanmaagd/other",
+        "--delete-branch",
+      ],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
+// Class 2. gh resolves a URL positional to the repository the URL names, and that
+// overrides -R, so the -R check passes while the call lands elsewhere.
+describe("gh rail: a URL cannot override -R", () => {
+  test("refuses a URL or a github.com/ path in any argument", () => {
+    const url = "https://github.com/other-owner/other-repo/pull/9";
+    const refused: string[][] = [
+      ["pr", "close", url, "-R", SANDBOX_REPO, "--delete-branch"],
+      ["pr", "view", url, "-R", SANDBOX_REPO],
+      [
+        "pr",
+        "view",
+        "github.com/other-owner/other-repo/pull/9",
+        "-R",
+        SANDBOX_REPO,
+      ],
+      // The verifier's pr comment case. `pr comment` is not an allowed verb, so
+      // the verb check refuses it; the cases above are what test the URL rule.
+      ["pr", "comment", url, "-R", SANDBOX_REPO, "--body", "x"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
+// Class 3. --org, --user and --env aim a secret or variable at an organization, a
+// user or an environment, and --hostname aims any call at another GitHub host.
+// The short forms are two characters, so the cluster rule does not catch them.
+describe("gh rail: scope and host flags, on every gh call", () => {
+  test("refuses each scope or host flag, long, short and attached", () => {
+    const refused: string[][] = [
+      [
+        "secret",
+        "set",
+        "X",
+        "-R",
+        SANDBOX_REPO,
+        "--org",
+        "someorg",
+        "--body",
+        "x",
+      ],
+      ["secret", "set", "X", "-R", SANDBOX_REPO, "--user", "--body", "x"],
+      [
+        "variable",
+        "set",
+        "X",
+        "-R",
+        SANDBOX_REPO,
+        "--org",
+        "someorg",
+        "--body",
+        "x",
+      ],
+      [
+        "secret",
+        "set",
+        "X",
+        "-R",
+        SANDBOX_REPO,
+        "--org=someorg",
+        "--body",
+        "x",
+      ],
+      [
+        "secret",
+        "set",
+        "X",
+        "-R",
+        SANDBOX_REPO,
+        "-o",
+        "someorg",
+        "--body",
+        "x",
+      ],
+      ["secret", "set", "X", "-R", SANDBOX_REPO, "-u", "--body", "x"],
+      ["variable", "set", "X", "-R", SANDBOX_REPO, "-e", "prod", "--body", "x"],
+      ["variable", "set", "X", "-R", SANDBOX_REPO, "--env=prod", "--body", "x"],
+      ["api", sandboxApi("actions/variables"), "--hostname", "ghe.example.com"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
+// Class 4, branch half. `sandbox/../main` passes the prefix and the character test,
+// but git and GitHub resolve the `..`, so the name reads as main.
+describe("scenario branches: no dot or empty segment", () => {
+  test("refuses a dot, dot-dot or empty segment", () => {
+    for (const name of [
+      "sandbox/../main",
+      "sandbox/../../tags/v1",
+      "sandbox//x",
+      "sandbox/x/.",
+    ]) {
+      expect(() => assertScenarioBranch(name)).toThrow(RailViolation);
+    }
+    expect(() => assertGitArgs(["push", "origin", "sandbox/../main"])).toThrow(
+      RailViolation,
+    );
+  });
+
+  test("still accepts a dot inside a segment", () => {
+    expect(() => assertScenarioBranch("sandbox/smoke.v2")).not.toThrow();
+  });
+});
+
+// Class 4, api half. The prefix test reads the path as written. GitHub resolves
+// `..` and decodes `%2e`, so a path that starts inside the sandbox can end in
+// another repository, and a DELETE can reach main.
+describe("gh api: dot segments and percent-encoding are refused before the prefix test", () => {
+  test("refuses the verifier's paths, reads and writes alike", () => {
+    const refused: string[][] = [
+      [
+        "api",
+        "repos/juanmaagd/pr-hero-sandbox/git/refs/heads/sandbox/../main",
+        "-X",
+        "DELETE",
+      ],
+      ["api", "repos/juanmaagd/pr-hero-sandbox/%2e%2e/x"],
+      ["api", "repos/juanmaagd/pr-hero-sandbox/../pr-hero/pulls"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
+// Class 5, rail half. The clone check reads both the fetch URL and the push URL
+// of origin; the rail allows exactly those two reads and no other remote read.
+describe("git rail: the remote is read only as origin's fetch and push URLs", () => {
+  test("accepts exactly the two reads the clone check makes", () => {
+    expect(() => assertGitArgs(["remote", "get-url", "origin"])).not.toThrow();
+    expect(() =>
+      assertGitArgs(["remote", "get-url", "--push", "origin"]),
+    ).not.toThrow();
+  });
+
+  test("refuses any other remote read, and a push to a literal URL", () => {
+    const refused: string[][] = [
+      ["remote", "get-url", "upstream"],
+      ["remote", "get-url", "--push", "upstream"],
+      ["remote", "get-url", "--all", "origin"],
+      ["push", "https://github.com/juanmaagd/pr-hero-sandbox.git", "main"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGitArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
 describe("guards", () => {
   test("a refused call never reaches the inner transport", async () => {
     const calls: string[][] = [];
@@ -248,60 +471,63 @@ describe("guards", () => {
   });
 });
 
+// The GitHub a happy run of init and smoke meets: an empty remote to seed, a
+// missing repo to create, and a scenario run that completes on its first read.
+const happyGh: GhScript = (args, world) => {
+  if (args[0] === "repo" && args[1] === "view") {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: "Could not resolve to a Repository",
+    };
+  }
+  if (args[0] === "repo" && args[1] === "clone") {
+    world.workspace.seed(args[3] ?? "", new Map());
+    return ok();
+  }
+  if (args[0] === "variable" && args[1] === "get") {
+    return { exitCode: 1, stdout: "", stderr: "HTTP 404: Not Found" };
+  }
+  if (args[0] === "secret" && args[1] === "list") return ok("[]");
+  if (args[0] === "pr" && args[1] === "list") return ok("[]");
+  if (args[0] === "pr" && args[1] === "create") {
+    return ok("https://github.com/juanmaagd/pr-hero-sandbox/pull/7\n");
+  }
+  if (args[0] === "run" && args[1] === "list") {
+    return ok(
+      JSON.stringify([
+        {
+          databaseId: 42,
+          headSha: "b".repeat(40),
+          status: "completed",
+          conclusion: "success",
+          url: "u",
+          workflowName: "pr-hero Review",
+        },
+      ]),
+    );
+  }
+  if (args[0] === "run" && args[1] === "view") {
+    return ok(
+      JSON.stringify({
+        status: "completed",
+        conclusion: "success",
+        jobs: [],
+      }),
+    );
+  }
+  if (args[0] === "api" && String(args[1]).includes("/commits/")) {
+    return ok(JSON.stringify({ statuses: [] }));
+  }
+  if (args[0] === "api" && String(args[1]).includes("/actions/runs/")) {
+    return ok(JSON.stringify({ artifacts: [] }));
+  }
+  return ok("[]");
+};
+
 describe("recorded calls", () => {
   test("init and smoke send only sandbox-scoped, non-destructive calls", async () => {
-    const h = harness({
-      gh: (args, world) => {
-        // Make both runners do their full work: an empty remote to seed, a
-        // missing repo to create, and a happy scenario run.
-        if (args[0] === "repo" && args[1] === "view") {
-          return {
-            exitCode: 1,
-            stdout: "",
-            stderr: "Could not resolve to a Repository",
-          };
-        }
-        if (args[0] === "repo" && args[1] === "clone") {
-          world.workspace.seed(args[3] ?? "", new Map());
-          return ok();
-        }
-        if (args[0] === "variable" && args[1] === "get") {
-          return { exitCode: 1, stdout: "", stderr: "HTTP 404: Not Found" };
-        }
-        if (args[0] === "secret" && args[1] === "list") return ok("[]");
-        if (args[0] === "pr" && args[1] === "list") return ok("[]");
-        if (args[0] === "pr" && args[1] === "create") {
-          return ok("https://github.com/juanmaagd/pr-hero-sandbox/pull/7\n");
-        }
-        if (args[0] === "run" && args[1] === "list") {
-          return ok(
-            JSON.stringify([
-              {
-                databaseId: 42,
-                headSha: "b".repeat(40),
-                status: "completed",
-                conclusion: "success",
-                url: "u",
-                workflowName: "pr-hero Review",
-              },
-            ]),
-          );
-        }
-        if (args[0] === "run" && args[1] === "view") {
-          return ok(
-            JSON.stringify({
-              status: "completed",
-              conclusion: "success",
-              jobs: [],
-            }),
-          );
-        }
-        if (args[0] === "api" && String(args[1]).includes("/commits/")) {
-          return ok(JSON.stringify({ statuses: [] }));
-        }
-        return ok("[]");
-      },
-    });
+    const h = harness({ gh: happyGh });
     await runInit(h.deps, "v0.2.0");
     await runSmoke(h.deps, {
       ref: "v0.2.0",
@@ -325,6 +551,92 @@ describe("recorded calls", () => {
       expect(call.args).not.toContain("-f");
       expect(call.args.some((a) => a.startsWith("+"))).toBe(false);
       expect(call.cwd.startsWith("/scratch/")).toBe(true);
+    }
+  });
+});
+
+// The hardened rails must still admit every call the runners really make. A
+// refusal would surface as a non-zero exit or a "sandbox rail" line, so both are
+// checked, and the recorded calls are re-checked against the rails directly.
+describe("every real call site passes the hardened rails", () => {
+  test("init, smoke, list and clean each reach their normal end", async () => {
+    const scenarioPr = {
+      number: 7,
+      headRefName: "sandbox/smoke-20261016T143000Z",
+      url: "https://github.com/juanmaagd/pr-hero-sandbox/pull/7",
+      isCrossRepository: false,
+      headRepositoryOwner: { login: "juanmaagd" },
+    };
+    const inFlight = {
+      databaseId: 42,
+      headSha: "b".repeat(40),
+      status: "in_progress",
+      conclusion: null,
+      workflowName: WORKFLOW_NAME,
+      url: "u",
+    };
+
+    const init = harness({ gh: happyGh });
+    await runInit(init.deps, "v0.2.0");
+
+    // The fake stages no review, so the scenario's verdict is no-outcome and smoke
+    // exits 1 by design. What is checked is that it got through to cleanup: the PR
+    // closed, and no call was refused on the way.
+    const smoke = harness({ gh: happyGh });
+    await runSmoke(smoke.deps, {
+      ref: "v0.2.0",
+      keep: false,
+      pollIntervalMs: 1,
+      timeoutMs: 1000,
+    });
+    expect(smoke.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(
+      true,
+    );
+    expect(smoke.logs.some((l) => l.startsWith("cleanup failed"))).toBe(false);
+
+    const list = harness({
+      gh: (args) =>
+        args[0] === "pr" && args[1] === "list"
+          ? ok(JSON.stringify([scenarioPr]))
+          : ok(),
+    });
+    expect(await runList(list.deps)).toBe(0);
+
+    // A run still in flight, so clean's cancel is one of the real calls.
+    let cancelled = false;
+    const clean = harness({
+      gh: (args) => {
+        if (args[0] === "pr" && args[1] === "list") {
+          return ok(JSON.stringify([scenarioPr]));
+        }
+        if (args[0] === "run" && args[1] === "list") {
+          return ok(JSON.stringify([inFlight]));
+        }
+        if (args[0] === "run" && args[1] === "cancel") {
+          cancelled = true;
+          return ok();
+        }
+        if (args[0] === "run" && args[1] === "view") {
+          return ok(
+            JSON.stringify({ status: cancelled ? "completed" : "in_progress" }),
+          );
+        }
+        return ok();
+      },
+    });
+    expect(await runClean(clean.deps)).toBe(0);
+    expect(clean.ghCalls.some((c) => c[0] === "run" && c[1] === "cancel")).toBe(
+      true,
+    );
+
+    for (const h of [init, smoke, list, clean]) {
+      for (const args of h.ghCalls) {
+        expect(() => assertGhArgs(args)).not.toThrow();
+      }
+      for (const call of h.gitCalls) {
+        expect(() => assertGitArgs(call.args)).not.toThrow();
+      }
+      expect(h.logs.some((l) => l.includes("sandbox rail"))).toBe(false);
     }
   });
 });

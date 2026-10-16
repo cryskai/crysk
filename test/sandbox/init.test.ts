@@ -25,6 +25,8 @@ interface World {
   exists: boolean;
   hasCommits: boolean;
   remoteUrl: string;
+  // The push URL, when it differs from the fetch URL; `git push` uses this one.
+  pushUrl?: string;
   remoteFiles: Map<string, string>;
   secretNames: string[];
   variable: string | undefined;
@@ -100,7 +102,10 @@ function scriptFor(w: World) {
           ? gitOk(`${"b".repeat(40)}\n`)
           : gitFail("fatal: Needed a single revision", 128);
       }
-      if (args[0] === "remote") return gitOk(`${w.remoteUrl}\n`);
+      if (args[0] === "remote") {
+        const pushing = args.includes("--push");
+        return gitOk(`${pushing ? (w.pushUrl ?? w.remoteUrl) : w.remoteUrl}\n`);
+      }
       return gitOk();
     },
   };
@@ -211,6 +216,18 @@ describe("init: main", () => {
 
   test("refuses a clone whose origin is not the sandbox", async () => {
     const w = world({ remoteUrl: "https://github.com/juanmaagd/pr-hero.git" });
+    const h = harness(scriptFor(w));
+    await expect(runInit(h.deps, REF)).rejects.toThrow(RailViolation);
+    expect(h.gitCalls.some((c) => c.args[0] === "push")).toBe(false);
+  });
+
+  // git push uses the push URL, which can differ from the fetch URL that a bare
+  // get-url reads. A clone whose fetch URL is the sandbox but whose push URL is not
+  // must be refused before anything is pushed.
+  test("refuses a clone whose push URL is not the sandbox, even when its fetch URL is", async () => {
+    const w = world({
+      pushUrl: "https://github.com/juanmaagd/pr-hero.git",
+    });
     const h = harness(scriptFor(w));
     await expect(runInit(h.deps, REF)).rejects.toThrow(RailViolation);
     expect(h.gitCalls.some((c) => c.args[0] === "push")).toBe(false);

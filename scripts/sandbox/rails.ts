@@ -1,5 +1,5 @@
 // The safety rails of the sandbox runner (ROADMAP CI sandbox S6). Every gh and
-// git call the runners make passes through here first, so the runner cannot
+// git call the runner makes passes through here first, so the runner cannot
 // reach another repository, delete one, force a push, or rewrite main, even by
 // a bug in the runner itself. The rails are allowlists: a verb is refused unless
 // it is named here, so a new gh or git verb cannot reach the sandbox by accident.
@@ -43,6 +43,61 @@ const GH_TARGETED = new Set([
   "run cancel",
 ]);
 
+// The rules in this block apply to every gh call, whatever its verb, so a verb
+// added later inherits them. Each refuses a whole class of argument the runner never
+// sends, rather than a list of spellings to chase.
+
+// pflag reads a cluster of short flags, and an attached value, as one argument:
+// -iXDELETE is -i then -X DELETE, and -dR other/repo is -d then -R other/repo. The
+// -i and -d are boolean, so a check on the first letter alone never sees the flag
+// inside the cluster. The runner sends only long flags and the bare -X, -f, -F and
+// -R, so no single-dash argument longer than two characters is ever needed.
+function isShortFlagCluster(arg: string): boolean {
+  return arg.startsWith("-") && !arg.startsWith("--") && arg.length > 2;
+}
+
+// gh resolves a URL positional to the repository the URL names, and that overrides
+// -R, so the -R check passes while the call lands in another repository.
+function isUrlArgument(arg: string): boolean {
+  return arg.includes("://") || arg.startsWith("github.com/");
+}
+
+// These widen a call from the sandbox to an organization, a user, a deployment
+// environment, or another GitHub host. The short forms are two characters, so the
+// cluster rule does not catch them; each is listed, in its `=` form too.
+const SCOPE_FLAGS = [
+  "--org",
+  "--user",
+  "--env",
+  "--hostname",
+  "-o",
+  "-u",
+  "-e",
+];
+function isScopeFlag(arg: string): boolean {
+  return SCOPE_FLAGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`));
+}
+
+function assertCommonGhArgs(args: readonly string[]): void {
+  for (const arg of args) {
+    if (isShortFlagCluster(arg)) {
+      throw new RailViolation(
+        `gh ${arg} is a short-flag cluster or attached value, which the runner never sends`,
+      );
+    }
+    if (isUrlArgument(arg)) {
+      throw new RailViolation(
+        `gh ${arg} is a URL, which gh resolves to its own repository over -R`,
+      );
+    }
+    if (isScopeFlag(arg)) {
+      throw new RailViolation(
+        `gh ${arg} widens the call beyond ${SANDBOX_REPO}`,
+      );
+    }
+  }
+}
+
 // `gh api` is GET on a path inside the sandbox, plus one DELETE of a scenario
 // branch ref. No field flags, which would turn the call into a write.
 const API_WRITE_FLAGS = new Set([
@@ -53,10 +108,6 @@ const API_WRITE_FLAGS = new Set([
   "--input",
 ]);
 const API_WRITE_FLAG_PREFIXES = ["--field=", "--raw-field=", "--input="];
-// pflag takes an attached value as readily as a separated one: -XDELETE,
-// -fbody=x and -Fk=v all write or change the method. The bare -X is the only
-// form the runner uses, and -f/-F are refused by the list above.
-const ATTACHED_API_FLAG = /^-[XfF]./;
 
 // Every method flag, in either spelling. gh keeps the last one it is given, so
 // a list is returned and the caller refuses more than one.
@@ -74,9 +125,9 @@ function methodFlags(args: readonly string[]): string[] {
   return methods;
 }
 
-// Every -R or --repo value, in each spelling gh accepts: separated, `=`, or
-// pflag's attached shorthand. gh keeps the last occurrence, so the caller
-// checks all of them rather than the first.
+// Every -R or --repo value, in each separated or `=` spelling gh accepts. An
+// attached -R value is a cluster, which the common rule refuses first. gh keeps
+// the last occurrence, so the caller checks all of them rather than the first.
 function repoFlagValues(args: readonly string[]): string[] {
   const values: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -86,11 +137,19 @@ function repoFlagValues(args: readonly string[]): string[] {
       i += 1;
     } else if (arg.startsWith("--repo=")) {
       values.push(arg.slice("--repo=".length));
-    } else if (arg.startsWith("-R")) {
-      values.push(arg.slice(2).replace(/^=/, ""));
     }
   }
   return values;
+}
+
+// A path segment that is `.`, `..`, or empty (`//`, or a trailing slash). GitHub and
+// git resolve the first two, so `sandbox/../main` names main, and an empty segment is
+// the same malformed shape. A prefix or character test reads the path as written, so
+// it cannot see any of them.
+function hasUnsafeSegment(path: string): boolean {
+  return path
+    .split("/")
+    .some((segment) => segment === "" || segment === "." || segment === "..");
 }
 
 function assertApi(args: readonly string[]): void {
@@ -98,17 +157,19 @@ function assertApi(args: readonly string[]): void {
   if (endpoint === undefined || endpoint.startsWith("-")) {
     throw new RailViolation("gh api needs an endpoint");
   }
+  // Before the prefix test, which reads the path as written. GitHub decodes `%2e`
+  // and resolves `..`, so a path that starts inside the sandbox can name another
+  // repository, or main, once it is read.
+  if (endpoint.includes("%") || hasUnsafeSegment(endpoint)) {
+    throw new RailViolation(
+      `gh api ${endpoint} has a dot, empty or percent-encoded segment`,
+    );
+  }
   if (
     !endpoint.startsWith(`repos/${SANDBOX_REPO}/`) &&
     endpoint !== `repos/${SANDBOX_REPO}`
   ) {
     throw new RailViolation(`gh api ${endpoint} is outside ${SANDBOX_REPO}`);
-  }
-  const attached = args.find((arg) => ATTACHED_API_FLAG.test(arg));
-  if (attached !== undefined) {
-    throw new RailViolation(
-      `gh api ${attached} attaches a method or field value, which the runner never sends`,
-    );
   }
   if (
     args.some(
@@ -129,12 +190,11 @@ function assertApi(args: readonly string[]): void {
   }
   const method = (methods[0] ?? "GET").toUpperCase();
   if (method === "GET") return;
-  const scenarioRef = `repos/${SANDBOX_REPO}/git/refs/heads/${SCENARIO_BRANCH_PREFIX}`;
-  if (
-    method === "DELETE" &&
-    endpoint.startsWith(scenarioRef) &&
-    endpoint.length > scenarioRef.length
-  ) {
+  // The one write the runner makes: a DELETE of a scenario branch's ref. The branch
+  // is taken from the path and given the branch rule, so the two cannot disagree.
+  const refs = `repos/${SANDBOX_REPO}/git/refs/heads/`;
+  if (method === "DELETE" && endpoint.startsWith(refs)) {
+    assertScenarioBranch(endpoint.slice(refs.length));
     return;
   }
   throw new RailViolation(
@@ -167,6 +227,7 @@ function assertRepoTarget(args: readonly string[]): void {
 }
 
 export function assertGhArgs(args: readonly string[]): void {
+  assertCommonGhArgs(args);
   if (args[0] === "api") {
     assertApi(args);
     return;
@@ -224,6 +285,10 @@ function assertPush(rest: readonly string[]): void {
   if (refspec !== MAIN) assertScenarioBranch(refspec);
 }
 
+function sameArgs(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((arg, i) => arg === b[i]);
+}
+
 export function assertGitArgs(args: readonly string[]): void {
   const [verb, ...rest] = args;
   if (verb === undefined || !GIT_VERBS.has(verb)) {
@@ -238,8 +303,16 @@ export function assertGitArgs(args: readonly string[]): void {
     return;
   }
   if (verb === "remote") {
-    if (rest[0] !== "get-url")
-      throw new RailViolation("git remote is limited to get-url");
+    // Exactly the two reads the clone check makes: origin's fetch URL and its push
+    // URL. Any other remote read, or a read of another remote, is refused.
+    if (
+      !sameArgs(rest, ["get-url", "origin"]) &&
+      !sameArgs(rest, ["get-url", "--push", "origin"])
+    ) {
+      throw new RailViolation(
+        `git remote ${rest.join(" ")} is not a sandbox read`,
+      );
+    }
     return;
   }
   if (verb === "checkout") {
@@ -256,13 +329,15 @@ export function assertGitArgs(args: readonly string[]): void {
 }
 
 // A scenario branch is sandbox/<name> and nothing else: never main, never a
-// name that could be read as a flag or a refspec.
+// name that could be read as a flag or a refspec, and never a path that git or
+// GitHub would resolve to another ref (a `.` or `..` segment, or an empty one).
 export function assertScenarioBranch(name: string): void {
   const suffix = name.slice(SCENARIO_BRANCH_PREFIX.length);
   if (
     !name.startsWith(SCENARIO_BRANCH_PREFIX) ||
     suffix.length === 0 ||
-    !BRANCH_NAME.test(name)
+    !BRANCH_NAME.test(name) ||
+    hasUnsafeSegment(name)
   ) {
     throw new RailViolation(`${name} is not a scenario branch`);
   }

@@ -41,14 +41,22 @@ export async function git(
 
 // Clones the sandbox into `dir` and confirms that its origin is the sandbox
 // before anything is pushed. `git push origin` trusts the remote it finds, so
-// the check belongs here, at the one place a clone is made.
+// the check belongs here, at the one place a clone is made. origin has two URLs:
+// the fetch URL that a bare get-url reads, and the push URL that `git push` uses.
+// They can differ (remote.origin.pushurl, pushInsteadOf), so both are checked.
 export async function cloneSandbox(
   deps: SandboxDeps,
   dir: string,
 ): Promise<void> {
   await ghOk(deps, ["repo", "clone", SANDBOX_REPO, dir]);
-  const origin = (await git(deps, dir, ["remote", "get-url", "origin"])).trim();
-  assertSandboxRemote(origin);
+  const fetchUrl = (
+    await git(deps, dir, ["remote", "get-url", "origin"])
+  ).trim();
+  const pushUrl = (
+    await git(deps, dir, ["remote", "get-url", "--push", "origin"])
+  ).trim();
+  assertSandboxRemote(fetchUrl);
+  assertSandboxRemote(pushUrl);
 }
 
 // Commits exactly `paths` with `message`. Only the named paths are staged, so a
