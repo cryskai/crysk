@@ -345,9 +345,26 @@ async function runOne(
           );
         }
       }
-      const asserted = priorOutcome
-        ? [...phase.checks, ...after]
-        : phase.checks;
+      // Same blocking test the status-matches-findings check reads: a finding
+      // comment whose header is the blocking tier. A phase that carried none has
+      // nothing for the next run to keep red, so its checks say so instead.
+      const priorBlocking =
+        previous?.comments.some(
+          (c) => c.kind === "finding" && c.blocking === true,
+        ) === true;
+      const afterBlocking = phase.afterPriorBlocking ?? [];
+      if (!priorBlocking) {
+        for (const check of afterBlocking) {
+          deps.log(
+            `  not asserted: ${scenario.name} [${index + 1}] ${describeCheck(check)} (phase ${index} posted no blocking finding to carry)`,
+          );
+        }
+      }
+      const asserted = [
+        ...phase.checks,
+        ...(priorOutcome ? after : []),
+        ...(priorBlocking ? afterBlocking : []),
+      ];
       // A failed check of a run whose hunters failed is the free model's flake. It
       // keeps its failure and exit code; only its label says why. A head that posted
       // success was reviewed, whatever an outcome comment still says, so it is no flake.

@@ -11,6 +11,8 @@ import type { InlinePostOutcome } from "#pr/inline";
 import {
   blockingCommitStatusRequest,
   type CiMode,
+  COMMIT_STATUS_CONTEXT,
+  type CommitStatusContext,
   commitStatusCompletion,
   commitStatusRequest,
 } from "#pr/preflight";
@@ -79,16 +81,25 @@ export async function settleCommitStatusAndLedger(input: {
   statusTargetUrl: string | undefined;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   ciMode: CiMode;
+  // The context this run's status posts on (resolveCiPosture). Only the gate's
+  // own context is ever graded: a run on any other context is advisory.
+  statusContext: CommitStatusContext;
   // The blocking-tier count of the findings doc, or null when publishing never
   // built one. Gate reads it; advisory ignores it.
   blockingCount: number | null;
   spawnFn?: typeof Bun.spawn;
   settle?: typeof settleCiAdmissionLedger;
 }): Promise<void> {
+  // Only the gate's own context is graded (T3 S7): any other context is
+  // advisory, so a run asked for gate without a `--ci` context still cannot
+  // write a verdict onto pr-hero. resolveCiPosture keeps the pair consistent in
+  // production; this keeps the write safe if they ever diverge.
+  const effectiveMode: CiMode =
+    input.statusContext === COMMIT_STATUS_CONTEXT ? input.ciMode : "advisory";
   const completion = commitStatusCompletion({
     pipelineFinished: input.result !== undefined,
     sessionFailed: input.result?.sessionFailed === true,
-    ciMode: input.ciMode,
+    ciMode: effectiveMode,
     blockingCount: input.blockingCount,
   });
   const request =
@@ -96,14 +107,16 @@ export async function settleCommitStatusAndLedger(input: {
       ? blockingCommitStatusRequest({
           blockingCount: completion.blockingCount,
           targetUrl: input.statusTargetUrl,
+          context: input.statusContext,
         })
       : commitStatusRequest({
           phase: completion.phase,
           posted: input.posted !== null,
           targetUrl: input.statusTargetUrl,
+          context: input.statusContext,
         });
   try {
-    if (input.ciMode === "gate") {
+    if (effectiveMode === "gate") {
       await publishFinalCommitStatus(
         input.operatorRoot,
         input.headSha,

@@ -66,8 +66,10 @@ metrics sidecar is not enough to ship. Rubric: if a stranger's second push, a CI
 would lie, fail mute, or be impossible → before launch. If it only makes reviews better or prettier
 → after.
 
-The engine already does the *first* review on musive (local, `--pr --post`, watcher, triage, size gate)
-as an **assistant, not a merge gate**. Claude Code only — no OpenCode, no model mix.
+Before the S4 gate mode (T3, 2026-10-17) the engine did the *first* review on musive (local, `--pr --post`,
+watcher, triage, size gate) as an **assistant, not a merge gate**. Since T3, CI runs are a required check in
+`gate` mode, while local runs and the watcher stay advisory on `pr-hero/local`. Claude Code only — no OpenCode,
+no model mix.
 
 **How to read this file from here.** Four layers, one ship goal:
 

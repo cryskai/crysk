@@ -27,6 +27,10 @@ export interface Phase {
   // as the cleanup of that comment. Otherwise they are not asserted, and the
   // runner says so.
   afterPriorOutcome?: readonly Check[];
+  // Asserted only when the phase before this one posted at least one blocking
+  // finding comment, such as a re-run on the same head that must keep a red gate
+  // red. Otherwise they are not asserted, and the runner says why.
+  afterPriorBlocking?: readonly Check[];
 }
 
 export interface Scenario {
@@ -239,6 +243,31 @@ export const SCENARIOS: readonly Scenario[] = [
         // The cleanup of phase 1's outcome comment. Only meaningful when phase 1
         // left one, so it is not asserted otherwise.
         afterPriorOutcome: [{ kind: "no-outcome" }],
+      },
+    ],
+  },
+  {
+    name: "same-head-rereview",
+    description:
+      "a blocking finding survives /pr-hero review on the same head: the gate stays red, so the author cannot re-run its way to green (S7)",
+    phases: [
+      {
+        action: { kind: "open", variant: "normal" },
+        wait: "pull_request",
+        checks: [REVIEWED, STATUS_MATCHES_FINDINGS],
+      },
+      {
+        action: { kind: "comment", body: "/pr-hero review" },
+        wait: "issue_comment",
+        // The comment run itself is asserted every time: the trigger is the
+        // subject. Its status is asserted only when phase 1 left a blocking
+        // finding to carry, because the free model's clean run has nothing to
+        // carry and the scenario says so rather than failing on it.
+        checks: [
+          { kind: "run-completed", event: "issue_comment" },
+          STEP_SUCCEEDED,
+        ],
+        afterPriorBlocking: [{ kind: "status", state: "failure" }],
       },
     ],
   },

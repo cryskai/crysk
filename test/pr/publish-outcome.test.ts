@@ -55,6 +55,12 @@ import {
   type PublishRunOutcomeInput,
   publishRunOutcome,
 } from "#pr/publish-outcome";
+import {
+  classifyPrior,
+  type PhaseBContext,
+  type PriorRecord,
+} from "#rereview/classify";
+import { assembleLive, type GateRow } from "#rereview/state";
 import type { Finding, SkillOutput } from "#review/findings";
 import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
@@ -121,7 +127,11 @@ function findingFixture(id: string, tier: "blocking" | "advisory"): Finding {
 }
 
 function baseResult(
-  over: { sessionFailed?: boolean; skillOutput?: SkillOutput } = {},
+  over: {
+    sessionFailed?: boolean;
+    skillOutput?: SkillOutput;
+    gatePriors?: readonly GateRow[];
+  } = {},
 ): PipelineResult {
   return {
     skillOutput: over.skillOutput ?? baseSkillOutput(),
@@ -129,7 +139,35 @@ function baseResult(
     usage: { ...zeroUsage(), cost_usd_est: 0.42 },
     sessionFailed: over.sessionFailed ?? false,
     unresolved: [],
+    ...(over.gatePriors === undefined ? {} : { gatePriors: over.gatePriors }),
   } as unknown as PipelineResult;
+}
+
+// The gate rows the pipeline hands over, built by the same two functions the
+// pipeline itself calls, so these tests run the real classification.
+function gateRowsOf(
+  priors: readonly PriorRecord[],
+  ctx: PhaseBContext,
+  verifyVerdicts: ReadonlyMap<
+    string,
+    "verified-gone" | "unconfirmed" | "carried"
+  > = new Map(),
+): GateRow[] {
+  const settled = priors.map((prior) => classifyPrior(prior, ctx));
+  return assembleLive({ settled, priors, verifyVerdicts }).gateRows;
+}
+
+function blockingPrior(id: string, locs: string[]): PriorRecord {
+  return {
+    id,
+    sev: "CRITICAL",
+    tier: "blocking",
+    channel: "inline",
+    locs,
+    claim: `prior ${id}`,
+    triage: null,
+    newThreadReply: false,
+  };
 }
 
 // Every test uses the SAME sentinel discipline for the onPosted capture:
@@ -282,7 +320,7 @@ describe("publishRunOutcome", () => {
   // exit code 0 with nothing posted and no CI ledger to settle).
   // S4: the gate reads the blocking count from the same findings document the
   // CI publish reads, so the sink must carry the tier:"blocking" count only.
-  test("onBlockingCount carries the blocking-tier count of the findings doc, not the advisory one", async () => {
+  test("onBlockingCount carries this run's blocking survivors when no prior is live", async () => {
     const blockingCounts: number[] = [];
     const exitCode = await publishRunOutcome(
       baseInput({
@@ -303,6 +341,103 @@ describe("publishRunOutcome", () => {
     );
     expect(exitCode).toBe(0);
     expect(blockingCounts).toEqual([2]);
+  });
+
+  // The gate count is UNRESOLVED blocking findings, not this run's survivors:
+  // this run's blocking survivors plus every live blocking prior that nothing
+  // verified gone. Three holes read green before it: a re-review carrying a
+  // blocking prior, a same-head forced re-review with zero survivors, and a
+  // self-asserted triage suppressing the prior.
+  describe("the gate count is unresolved, not this run's survivors", () => {
+    const caseC: PhaseBContext = {
+      case: "C",
+      deletedFiles: new Set(),
+      renameMap: new Map(),
+      touched: () => false,
+      summaryUpdatedAt: null,
+    };
+
+    async function unresolvedCountFor(result: PipelineResult): Promise<number> {
+      const counts: number[] = [];
+      await publishRunOutcome(
+        baseInput({
+          result,
+          onBlockingCount: (count) => {
+            counts.push(count);
+          },
+        }),
+      );
+      expect(counts).toHaveLength(1);
+      return counts[0] ?? -1;
+    }
+
+    test("a same-head forced re-review with a live blocking prior is unresolved, not green", async () => {
+      // Case B: discovery is skipped, so there are no survivors at all. The one
+      // carried blocking prior is still unresolved.
+      const gatePriors = gateRowsOf(
+        [blockingPrior("R001", ["src/app.ts:10"])],
+        { ...caseC, case: "B" },
+      );
+      expect(await unresolvedCountFor(baseResult({ gatePriors }))).toBe(1);
+    });
+
+    test("case C with an untouched blocking prior counts it beside this run's own survivor", async () => {
+      const gatePriors = gateRowsOf(
+        [blockingPrior("R001", ["src/old.ts:4"])],
+        caseC,
+      );
+      expect(
+        await unresolvedCountFor(
+          baseResult({
+            gatePriors,
+            skillOutput: {
+              ...baseSkillOutput(),
+              findings: [findingFixture("F001", "blocking")],
+            },
+          }),
+        ),
+      ).toBe(2);
+    });
+
+    test("a fix the verifier refuted reads green: the prior leaves the count", async () => {
+      // touched, so the prior is queued and the verifier's refuted verdict
+      // settles it verified-gone.
+      const gatePriors = gateRowsOf(
+        [blockingPrior("R001", ["src/app.ts:10"])],
+        { ...caseC, touched: () => true },
+        new Map([["R001", "verified-gone"]]),
+      );
+      expect(await unresolvedCountFor(baseResult({ gatePriors }))).toBe(0);
+    });
+
+    test("a prior whose every file was deleted reads green", async () => {
+      const gatePriors = gateRowsOf(
+        [blockingPrior("R001", ["src/app.ts:10"])],
+        { ...caseC, deletedFiles: new Set(["src/app.ts"]) },
+      );
+      expect(await unresolvedCountFor(baseResult({ gatePriors }))).toBe(0);
+    });
+
+    test("a blocking prior this run's own survivor re-tiers to advisory does not count", async () => {
+      // The pipeline's own classification is the one tier allowed to lower it.
+      const gatePriors = gateRowsOf(
+        [blockingPrior("R001", ["src/app.ts:10"])],
+        caseC,
+      );
+      const advisorySurvivor = {
+        ...findingFixture("F001", "advisory"),
+        path: "src/app.ts",
+        line: 10,
+      } as Finding;
+      expect(
+        await unresolvedCountFor(
+          baseResult({
+            gatePriors,
+            skillOutput: { ...baseSkillOutput(), findings: [advisorySurvivor] },
+          }),
+        ),
+      ).toBe(0);
+    });
   });
 
   // S4, report artifact chain: publishRunOutcome -> writeRunReport -> report.md.

@@ -734,10 +734,33 @@ function prheroClaim(finding: PrHeroFindingRef): ComparisonPrHeroClaim {
 // Commit status (in-flight signal on the PR head). GitHub Check Runs need a
 // GitHub App; this CLI posts as the operator via `gh`, so the write path is
 // the Commit Statuses API. Same yellow/green dot in the merge box, no
-// Conversation comment. context is stable so the watcher can read the latest
-// `pr-hero` status back as the cross-machine in-flight lock.
+// Conversation comment. context is stable so the CI admission gate can read
+// the latest `pr-hero` status back as the cross-machine in-flight lock.
 
+// The gate. The required check reads this name, and only an explicit `--ci`
+// run writes it (T3 S7): the author's agent, a local run and the watcher can
+// never move the gate, so their statuses go to LOCAL_COMMIT_STATUS_CONTEXT.
 export const COMMIT_STATUS_CONTEXT = "pr-hero";
+
+// Every non-CI run posts here: a local `review --pr`, the watcher's child, and
+// CI=1 without --ci. Advisory states and descriptions only, so a local run
+// that finishes with blocking findings cannot overwrite a red gate on the same
+// head. A different context, not a different state set, is what keeps the gate
+// safe: the posting code is shared and only the context name differs.
+export const LOCAL_COMMIT_STATUS_CONTEXT = "pr-hero/local";
+
+export type CommitStatusContext =
+  | typeof COMMIT_STATUS_CONTEXT
+  | typeof LOCAL_COMMIT_STATUS_CONTEXT;
+
+// Every context a run's status can sit on. The watcher reads all of them: it
+// must not start a review of a head that CI or a local run is already
+// reviewing. The CI admission gate reads only COMMIT_STATUS_CONTEXT: a CI run
+// stands down for CI, never for a local run whose result the gate cannot see.
+export const RUN_STATUS_CONTEXTS: readonly CommitStatusContext[] = [
+  COMMIT_STATUS_CONTEXT,
+  LOCAL_COMMIT_STATUS_CONTEXT,
+];
 
 // DEFAULT_PIPELINE_TIMEOUT_MS is 75 min (pipeline.ts). A TTL inside that
 // window would double-launch a slow live run still inside its watchdog.
@@ -764,17 +787,30 @@ export type CommitStatusState = "pending" | "success" | "failure" | "error";
 // CI runs have a mode; a local run is always advisory (see resolveCiMode).
 export type CiMode = "gate" | "advisory";
 
-// The mode a run actually uses. Local runs are advisory whatever the flag
-// says: the gate is the CI surface, and a local `review --pr` that posted
+// The mode a run actually uses. Only an explicit `--ci` run has a mode, and
+// `ci` is that flag, never the CI/GITHUB_ACTIONS environment: a developer shell
+// that exports CI=1 is not the gate, and a local `review --pr` that posted
 // `failure` would turn a required check red for a reason its operator did not
 // ask for. `ciMode` is undefined when --ci-mode was not given; gate is the
-// default for CI.
-export function resolveCiMode(
-  ciMode: CiMode | undefined,
-  isCi: boolean,
-): CiMode {
-  if (!isCi) return "advisory";
+// default for an explicit CI run.
+export function resolveCiMode(ciMode: CiMode | undefined, ci: boolean): CiMode {
+  if (!ci) return "advisory";
   return ciMode ?? "gate";
+}
+
+// The one posture a run resolves from its own flags: the mode and the context
+// its statuses post on. Both key on `--ci` alone, so no path can pair the
+// gate's context with an advisory local run, and reviewPr resolves once and
+// threads both values down (T3 S7).
+export function resolveCiPosture(options: { ci?: boolean; ciMode?: CiMode }): {
+  ciMode: CiMode;
+  statusContext: CommitStatusContext;
+} {
+  const ci = options.ci === true;
+  return {
+    ciMode: resolveCiMode(options.ciMode, ci),
+    statusContext: ci ? COMMIT_STATUS_CONTEXT : LOCAL_COMMIT_STATUS_CONTEXT,
+  };
 }
 
 export interface CommitStatusFact {
@@ -785,7 +821,9 @@ export interface CommitStatusFact {
 
 export interface CommitStatusRequest {
   state: CommitStatusState;
-  context: string;
+  // The POST writes this context, so it is the request's to choose: a non-CI
+  // run's request names the local context, and only a `--ci` run's names pr-hero.
+  context: CommitStatusContext;
   description: string;
   targetUrl: string | undefined;
 }
@@ -804,6 +842,7 @@ export function commitStatusRequest(input: {
   phase: "pending" | "success" | "error";
   posted: boolean;
   targetUrl: string | undefined;
+  context: CommitStatusContext;
 }): CommitStatusRequest {
   const description =
     input.phase === "pending"
@@ -815,25 +854,31 @@ export function commitStatusRequest(input: {
           : "review complete";
   return {
     state: input.phase === "pending" ? "pending" : input.phase,
-    context: COMMIT_STATUS_CONTEXT,
+    context: input.context,
     description: clipStatusDescription(description),
     targetUrl: input.targetUrl,
   };
 }
 
-// S4, gate mode: a finished review with blocking findings. The description
-// names the unlock, but `/pr-hero review` alone re-reviews this same head: a
-// head whose blocking findings are still there stays red. The honest unlock is
-// a fix and a push, which runs a new review on the new head.
+// S4, gate mode: a finished review with unresolved blocking findings. The count
+// is the gate's own (rereview/state.ts): this run's blocking survivors plus every
+// live blocking prior that a verifier verdict or a deletion did not clear. A
+// same-head `/pr-hero review` re-runs that same count, so it stays red. The
+// ways to green are a fix that the re-review verifies gone, or
+// `/pr-hero override`. A triage reply never lowers the count on its own (S7).
+// Gate-only: the only caller is a gate-mode settle, which is always a `--ci` run.
+// The context defaults to LOCAL so a caller that forgets it cannot reach the
+// gate; the gate's callers pass COMMIT_STATUS_CONTEXT explicitly.
 export function blockingCommitStatusRequest(input: {
   blockingCount: number;
   targetUrl: string | undefined;
+  context?: CommitStatusContext;
 }): CommitStatusRequest {
   return {
     state: "failure",
-    context: COMMIT_STATUS_CONTEXT,
+    context: input.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
     description: clipStatusDescription(
-      `pr-hero: ${input.blockingCount} blocking finding(s) — fix and push; /pr-hero review re-runs this head`,
+      `pr-hero: ${input.blockingCount} blocking finding(s) — fix and push, or /pr-hero override`,
     ),
     targetUrl: input.targetUrl,
   };
@@ -842,9 +887,12 @@ export function blockingCommitStatusRequest(input: {
 // S4, gate mode: a size or budget skip is red, so an unreviewed head cannot
 // read as a clean one. `/pr-hero review` force-runs the review past both
 // gates, which is the unlock the description names.
+// Gate-only, like blockingCommitStatusRequest: the context defaults to LOCAL, and
+// the one production caller (the admission gate's publishCiSkip) passes pr-hero.
 export function skipCommitStatusRequest(input: {
   kind: "size" | "budget";
   targetUrl: string | undefined;
+  context?: CommitStatusContext;
 }): CommitStatusRequest {
   const reason =
     input.kind === "size"
@@ -852,7 +900,7 @@ export function skipCommitStatusRequest(input: {
       : "estimated cost over the CI budget";
   return {
     state: "failure",
-    context: COMMIT_STATUS_CONTEXT,
+    context: input.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
     description: clipStatusDescription(
       `pr-hero skipped the review: ${reason}. /pr-hero review reviews it anyway`,
     ),
@@ -868,6 +916,10 @@ export interface HeldCommitStatusLock {
   operatorRoot: string;
   sha: string;
   targetUrl: string | undefined;
+  // The context the held pending was posted on, so the signal settle clears
+  // that pending and no other. Absent means local: the settle then never names
+  // the gate, so a lock taken without one cannot overwrite a CI verdict (T3 S7).
+  context?: CommitStatusContext;
 }
 
 // The pure half of the cancellation settle: lock in, the exact three
@@ -889,6 +941,7 @@ export function settleRequestForCancellation(
       phase: "error",
       posted: false,
       targetUrl: lock.targetUrl,
+      context: lock.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
     }),
   };
 }
@@ -932,13 +985,14 @@ export function prHtmlUrl(
   return URL.canParse(url) ? url : undefined;
 }
 
-export function latestPrHeroStatus(
+export function latestStatusInContext(
   statuses: readonly CommitStatusFact[],
+  context: CommitStatusContext,
 ): CommitStatusFact | null {
   let latest: CommitStatusFact | null = null;
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const status of statuses) {
-    if (status.context !== COMMIT_STATUS_CONTEXT) continue;
+    if (status.context !== context) continue;
     const createdMs = Date.parse(status.created_at);
     if (Number.isNaN(createdMs)) continue;
     if (createdMs >= latestMs) {
@@ -953,14 +1007,20 @@ export function latestPrHeroStatus(
 // newest-first, but the watcher must not depend on that. A pending older
 // than the TTL is NOT in-flight: the process likely died, and the next tick
 // must be allowed to launch.
+// In-flight in ANY of the given contexts: each context's own latest status is
+// judged, so a fresh pending on one never hides behind a settled one on another.
+// The default reads the gate alone, which is the CI admission gate's yield.
 export function isInFlightCommitStatus(
   statuses: readonly CommitStatusFact[],
   nowMs: number,
   ttlMs: number = IN_FLIGHT_TTL_MS,
+  contexts: readonly CommitStatusContext[] = [COMMIT_STATUS_CONTEXT],
 ): boolean {
-  const latest = latestPrHeroStatus(statuses);
-  if (latest === null || latest.state !== "pending") return false;
-  const createdMs = Date.parse(latest.created_at);
-  if (Number.isNaN(createdMs)) return false;
-  return nowMs - createdMs < ttlMs;
+  return contexts.some((context) => {
+    const latest = latestStatusInContext(statuses, context);
+    if (latest === null || latest.state !== "pending") return false;
+    const createdMs = Date.parse(latest.created_at);
+    if (Number.isNaN(createdMs)) return false;
+    return nowMs - createdMs < ttlMs;
+  });
 }

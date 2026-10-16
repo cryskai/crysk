@@ -281,7 +281,15 @@ describe("publishCiSkip: the outcome record", () => {
       rmSync(dir, { recursive: true, force: true });
     });
 
-    type StatusCall = { sha: string; state: string; description: string };
+    type StatusCall = {
+      sha: string;
+      state: string;
+      description: string;
+      targetUrl: string | undefined;
+    };
+
+    // The run's repo web url, injected so no test shells out to `gh`.
+    const REPO_WEB_URL = "https://github.com/org/repo";
 
     function recordingStatus(
       calls: StatusCall[],
@@ -292,6 +300,7 @@ describe("publishCiSkip: the outcome record", () => {
           sha,
           state: request.state,
           description: request.description,
+          targetUrl: request.targetUrl,
         });
         if (failWith) throw failWith;
       };
@@ -313,9 +322,24 @@ describe("publishCiSkip: the outcome record", () => {
         ciMode: "gate" as const,
         headSha: STATUS_HEAD,
         postStatus,
+        repoWebUrl: async () => REPO_WEB_URL,
         ...over,
       };
     }
+
+    // T3 advisory 3: a size or budget skip status names the run, like every
+    // other status the CLI writes, so a reader can click through to the PR.
+    test("a size skip's failure status carries the run's pull URL", async () => {
+      const calls: StatusCall[] = [];
+      await publishCiSkip(gateInput("skipped-size", recordingStatus(calls)));
+      expect(calls[0]?.targetUrl).toBe(`${REPO_WEB_URL}/pull/${PR}`);
+    });
+
+    test("a budget skip's failure status carries the run's pull URL", async () => {
+      const calls: StatusCall[] = [];
+      await publishCiSkip(gateInput("skipped-budget", recordingStatus(calls)));
+      expect(calls[0]?.targetUrl).toBe(`${REPO_WEB_URL}/pull/${PR}`);
+    });
 
     test("a size skip in gate mode posts one failure status on the head, naming the unlock", async () => {
       const calls: StatusCall[] = [];

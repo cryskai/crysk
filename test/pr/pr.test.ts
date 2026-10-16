@@ -57,6 +57,7 @@ import {
   COMMIT_STATUS_TIMEOUT_MS,
   commitStatusRequest,
   findingMarker,
+  LOCAL_COMMIT_STATUS_CONTEXT,
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
 } from "#pr/preflight";
@@ -1585,6 +1586,7 @@ describe("postCommitStatus", () => {
       phase: "pending",
       posted: false,
       targetUrl: "https://github.com/org/repo/pull/7",
+      context: COMMIT_STATUS_CONTEXT,
     });
     await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn);
     expect(calls).toHaveLength(1);
@@ -1597,6 +1599,28 @@ describe("postCommitStatus", () => {
     expect(argv).toContain(`description=${request.description}`);
     expect(argv).toContain(`target_url=${request.targetUrl}`);
     expect(calls[0]?.stdin).toBeUndefined();
+  });
+
+  // T3 S7: the POST carries the context the request was built with, never a
+  // constant. A local run's status must land on pr-hero/local, so the gate's
+  // context is named only by a CI run's request.
+  test("POSTs the request's own context: a local request never names pr-hero", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["statuses", HEAD],
+        response: { stdout: "{}", exitCode: 0 },
+      },
+    ]);
+    const request = commitStatusRequest({
+      phase: "success",
+      posted: false,
+      targetUrl: undefined,
+      context: LOCAL_COMMIT_STATUS_CONTEXT,
+    });
+    await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn);
+    const argv = calls[0]?.argv ?? [];
+    expect(argv).toContain(`context=${LOCAL_COMMIT_STATUS_CONTEXT}`);
+    expect(argv).not.toContain(`context=${COMMIT_STATUS_CONTEXT}`);
   });
 
   test("omits target_url when the request has none", async () => {
@@ -1613,6 +1637,7 @@ describe("postCommitStatus", () => {
         phase: "success",
         posted: false,
         targetUrl: undefined,
+        context: COMMIT_STATUS_CONTEXT,
       }),
       spawnFn,
     );
@@ -1638,6 +1663,7 @@ describe("postCommitStatus", () => {
           phase: "pending",
           posted: false,
           targetUrl: undefined,
+          context: COMMIT_STATUS_CONTEXT,
         }),
         spawnFn,
       ),
@@ -1655,6 +1681,7 @@ describe("postCommitStatus", () => {
           phase: "pending",
           posted: false,
           targetUrl: undefined,
+          context: COMMIT_STATUS_CONTEXT,
         }),
         spawnFn,
       ),
@@ -1695,6 +1722,7 @@ describe("postCommitStatus bounds", () => {
     phase: "error",
     posted: false,
     targetUrl: undefined,
+    context: COMMIT_STATUS_CONTEXT,
   });
 
   test("the default settle keeps two attempts at the 15s bound", async () => {

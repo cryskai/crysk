@@ -693,3 +693,55 @@ describe("run: the S4 gate verdicts against the fake repository", () => {
     ).toBe(true);
   });
 });
+
+// same-head-rereview: the gate must stay red when the author re-runs a head
+// whose blocking finding is still open. Phase 2's status check is conditional
+// on phase 1 having posted a blocking finding to carry, so the scenario skips
+// that assertion, and says so, when the free model finds nothing blocking.
+describe("same-head-rereview: the status check after a re-run depends on phase 1", () => {
+  test("a blocking finding on phase 1 is still failure after /pr-hero review on the same head", async () => {
+    const world = new FakeGithub({ ref: REF, blockingFindings: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["same-head-rereview"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}same-head-rereview: \[2\] status is failure/.test(l),
+      ),
+    ).toBe(true);
+  });
+
+  test("a clean phase 1 names phase 2's status as not asserted, and asserts nothing else about it", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["same-head-rereview"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /not asserted: same-head-rereview \[2\] status is failure \(phase 1 posted no blocking finding to carry\)/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some(
+        (l) =>
+          /same-head-rereview: \[2\] status is failure/.test(l) &&
+          /^PASS/.test(l.trim()),
+      ),
+    ).toBe(false);
+  });
+
+  test("a status that drops the blocking finding on the re-run fails the scenario", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      blockingFindings: true,
+      statusIgnoresFindings: true,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["same-head-rereview"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        /FAIL {2}same-head-rereview: \[2\] status is failure/.test(l),
+      ),
+    ).toBe(true);
+  });
+});

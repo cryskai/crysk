@@ -487,7 +487,9 @@ PR makes it eligible again on the next tick, because the gate is recomputed ever
 - Findings vary run to run on the same tree. That is the nature of the instrument: treat single
   runs as evidence, not verdicts, and triage before acting.
 - Verify what it reports. Findings are claims with cited code, tiered by deterministic rules — the
-  report says so itself: *assistant report, not a merge gate; every line is a claim to verify.*
+  report says so itself. An advisory report reads *assistant report, not a merge gate; every line is a claim to
+  verify.* A CI report in gate mode backs the `pr-hero` commit status, the required check: a blocking finding
+  sets that status to failure.
 
 ## Isolation model
 
