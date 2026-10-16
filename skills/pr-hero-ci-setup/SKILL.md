@@ -1,6 +1,6 @@
 ---
 name: pr-hero-ci-setup
-description: "Trigger: setup CI, add pr-hero to CI, GitHub Actions review, OpenCode, OPENCODE_AUTH_JSON, PRHERO_ROUTING, DeepSeek, admission policy, configure CI workflow, retrigger, force review, skipped review, /pr-hero review, pr-hero-force. Scaffolds the one workflow, secrets, routing, and admission config."
+description: "Trigger: setup CI, add pr-hero to CI, GitHub Actions review, OpenCode, OPENCODE_AUTH_JSON, PRHERO_ROUTING, DeepSeek, admission policy, configure CI workflow, retrigger, force review, skipped review, /pr-hero review, /pr-hero override, pr-hero-force. Scaffolds the one workflow, secrets, routing, and admission config."
 license: Apache-2.0
 metadata:
   author: juanmaagd
@@ -54,6 +54,7 @@ Load when the user asks to:
 | User wants max CI spend | Lower `ci_max_attempts` and/or raise `ci_rereview_min_score` |
 | Custom bot posts findings | Add login to `ci_trusted_actors` |
 | CI skipped (size, admission, or budget) | `gh pr comment <n> --body "/pr-hero review"`. The review runs on GitHub Actions. Do not run `pr-hero review --force` locally for this. Legacy scaffold (no `issue_comment` trigger): `gh workflow run pr-hero-force.yml -f pr=<n>`. |
+| Gate is red with blocking findings the team accepts | `gh pr comment <n> --body "/pr-hero override"` (write access, same-repo PRs only, valid for that head only; a same-head `/pr-hero review` keeps it red). |
 | Prior review of the same head was hollow or wrong; re-runs say "No changes to discover" | `gh pr comment <n> --body "/pr-hero review --full"`. A plain `/pr-hero review` keeps the narrowed discovery. |
 | A `/pr-hero review` comment did nothing | The workflow is not on the default branch yet, the comment is not exact, the author lacks write access, or the workflow predates the comment trigger (re-scaffold with `--force`). |
 

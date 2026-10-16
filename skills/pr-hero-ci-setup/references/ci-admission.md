@@ -90,3 +90,11 @@ Who can force: anyone with write access to the repository; a comment from anyone
 A workflow scaffolded before the comment trigger has no `issue_comment` listener. There, use the legacy `gh workflow run pr-hero-force.yml -f pr=<n>`, or re-scaffold with `pr-hero ci init --force`.
 
 A local agent posts the comment. It does not run `pr-hero review --pr <n> --force` when the review should happen in CI.
+
+A red gate with blocking findings that the team accepts is unlocked by commenting exactly `/pr-hero override` on the pull request, not by `/pr-hero review`. In gate mode a same-head review re-runs the same blocking count and leaves the `failure` in place, so the gate clears only when a pushed fix is verified gone or the override is posted:
+
+```bash
+gh pr comment <n> --body "/pr-hero override"
+```
+
+The override sets the `pr-hero` status on that head to `success` with no review, no spend, and no credential, and only a user with write or admin access may post it. Each override is recorded: the status names who acted, and a `<!-- pr-hero-override` comment names who, which head, and when. It is valid only for the head it names, so a new push or a later `/pr-hero review` on that head replaces it, and it works only on pull requests from this repository, never on forks.
