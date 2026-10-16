@@ -6,12 +6,28 @@
 // Phases run in order, and a later phase starts only after the earlier one's run
 // completed, so the second push of `cleanup` always meets a finished first run.
 
+import { GOTCHAS_TEMPLATE } from "#review/preflight";
 import type { Check } from "./expect";
+import { GOTCHAS_PATH } from "./seed";
 import type { VariantName } from "./variants";
 
+// A file the scenario branch commits on top of the planted volume. The path is a
+// seed constant, so a scenario can only replace a file the sandbox main already
+// defines. Variants edit only the workflow, so this is the one other way a
+// scenario changes the branch.
+export interface FileOverride {
+  path: typeof GOTCHAS_PATH;
+  contents: string;
+}
+
 export type Action =
-  // The first phase: the branch, its first commit and the PR.
-  | { kind: "open"; variant: VariantName }
+  // The first phase: the branch, its first commit and the PR. `overrides` are
+  // committed with that first commit.
+  | {
+      kind: "open";
+      variant: VariantName;
+      overrides?: readonly FileOverride[];
+    }
   // A later commit on the same branch, a plain fast-forward push.
   | { kind: "push"; variant: VariantName }
   // A PR comment, posted as the authenticated user.
@@ -83,6 +99,36 @@ export const SCENARIOS: readonly Scenario[] = [
             kind: "status",
             state: "error",
             descriptionStartsWith: "PRH-ROUTING-INVALID",
+          },
+          { kind: "no-report" },
+        ],
+      },
+    ],
+  },
+  {
+    name: "bad-gotchas",
+    description:
+      "the branch commits the scaffold gotchas file: PRH-GOTCHAS-MISSING under your configuration, an error status, no report ($0)",
+    phases: [
+      {
+        // The scaffold carries the marker gotchasUnusableReason refuses, so the
+        // CLI fails before admission, spend and the reservation (review-pr.ts).
+        action: {
+          kind: "open",
+          variant: "normal",
+          overrides: [{ path: GOTCHAS_PATH, contents: GOTCHAS_TEMPLATE }],
+        },
+        wait: "pull_request",
+        checks: [
+          {
+            kind: "outcome",
+            code: "PRH-GOTCHAS-MISSING",
+            lead: "Your configuration:",
+          },
+          {
+            kind: "status",
+            state: "error",
+            descriptionStartsWith: "PRH-GOTCHAS-MISSING",
           },
           { kind: "no-report" },
         ],

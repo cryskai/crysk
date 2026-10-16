@@ -450,7 +450,17 @@ async function perform(
     await git(deps, live.dir, ["checkout", "-b", live.branch]);
     await pinVariant(deps, live, action.variant, ref);
     await deps.workspace.write(live.dir, VOLUME_PATH, plantedVolume());
-    await commitPaths(deps, live.dir, [VOLUME_PATH], PLANTED_COMMIT_MESSAGE);
+    // The scenario's own file overrides ride on the same first commit (scenarios.ts).
+    const overrides = action.overrides ?? [];
+    for (const file of overrides) {
+      await deps.workspace.write(live.dir, file.path, file.contents);
+    }
+    await commitPaths(
+      deps,
+      live.dir,
+      [VOLUME_PATH, ...overrides.map((file) => file.path)],
+      PLANTED_COMMIT_MESSAGE,
+    );
     await pushBranch(deps, live);
     const pr = await openPr(deps, live);
     deps.log(`PR: ${pr.url}`);

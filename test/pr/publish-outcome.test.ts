@@ -283,6 +283,23 @@ describe("publishRunOutcome", () => {
     expect(calls).toEqual([]);
   });
 
+  // T2d-1 (S2): this is an engine invariant, so the record names it as the
+  // pr-hero defect class (PRH-ENGINE-DEFECT), and the message stays the same.
+  test("the no-result invariant carries the invariant class", async () => {
+    const { onPosted } = captureOnPosted();
+    const error = await publishRunOutcome(
+      baseInput({ result: undefined, onPosted }),
+    ).then(
+      () => {
+        throw new Error("expected publishRunOutcome to throw");
+      },
+      (e: CliError) => e,
+    );
+    expect(error).toBeInstanceOf(CliError);
+    expect(error.cls).toEqual({ kind: "invariant" });
+    expect(error.message).toBe("internal: pipeline returned no result");
+  });
+
   // Task item 2 (first half): posting disabled is postFindingsIfEnabled's
   // own real, zero-I/O early return — onPosted must receive exactly what
   // that early return produced (null), and the non-CI exit code follows

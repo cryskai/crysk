@@ -21,6 +21,11 @@ import {
 // Both the outcome comment and the status carry it, and both read as the same path.
 const HUNTERS_FAILED_CODE = "PRH-HUNTERS-FAILED";
 
+// The owner lead an outcome's summary opens with (src/ci/outcome.ts ownerLead). It is
+// read off the body, so a check can name the owner the reader sees, not the code alone.
+const OWNER_LEAD =
+  /^(Your configuration:|Provider(?: [^:\n]+)?:|pr-hero defect:|Unclassified:)/m;
+
 // The slack allowed between a comment's created_at and the run it started. GitHub
 // stamps both, so the gap is small; the window only keeps a run created a moment
 // before the comment from being mistaken for an earlier one.
@@ -32,6 +37,8 @@ export interface CommentFact {
   source: "issue" | "inline";
   kind: CommentKind;
   code?: string;
+  // An outcome's owner lead, when its summary names one (OWNER_LEAD).
+  lead?: string;
   skip?: SkipReason;
   // A report, an outcome or a finding names the head it was written for (a finding
   // in its marker). Only a report for the head under test counts as this run's
@@ -143,9 +150,14 @@ export function classifyComment(
     // The head is "unknown" when the publisher had no sha; such an outcome has no head.
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     const code = outcomeCodeOf(body);
-    return head === undefined
-      ? { source, kind: "outcome", code }
-      : { source, kind: "outcome", code, head };
+    const lead = OWNER_LEAD.exec(body)?.[1];
+    return {
+      source,
+      kind: "outcome",
+      code,
+      ...(head === undefined ? {} : { head }),
+      ...(lead === undefined ? {} : { lead }),
+    };
   }
   for (const [reason, marker] of Object.entries(SKIP_MARKERS)) {
     if (first === marker)

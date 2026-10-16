@@ -194,11 +194,21 @@ export interface SetupRecord {
 export const CLI_RECORD_FILE = "cli.json";
 
 // The only classes the CLI writes (src/ci/classify-error.ts). A wider reader
-// would hide a writer's bug, the same rule as parseRecordClass below.
+// would hide a writer's bug, the same rule as parseRecordClass below. The config
+// classes are the ones a throw site names (T2d-1). The person layer is not one of
+// them: its catalog text names the repo file, so the record would send the reader
+// to the wrong file.
 export type CliErrorClass =
   | { kind: "unknown" }
   | { kind: "route"; reason: "unmapped" | "ambiguous" | "spend-disabled" }
-  | { kind: "capability"; issue: "sdk_unavailable" | "version_unsupported" };
+  | { kind: "capability"; issue: "sdk_unavailable" | "version_unsupported" }
+  | {
+      kind: "config-parse";
+      source: "routing" | "repo-config" | "extra-hunters";
+    }
+  | { kind: "prompt-set" }
+  | { kind: "gotchas"; reason: "empty" | "placeholder" }
+  | { kind: "invariant" };
 
 // The final commit status a gate run could not write after its review was delivered.
 // The publisher posts it once more on the record's head (see CliRecord.unsettled_status).
@@ -441,6 +451,24 @@ function parseCliClass(value: unknown): CliErrorClass | undefined {
       return { kind: "capability", issue: value.issue };
     }
   }
+  if (value.kind === "config-parse") {
+    if (
+      value.source === "routing" ||
+      value.source === "repo-config" ||
+      value.source === "extra-hunters"
+    ) {
+      return { kind: "config-parse", source: value.source };
+    }
+    return undefined;
+  }
+  if (value.kind === "prompt-set") return { kind: "prompt-set" };
+  if (value.kind === "gotchas") {
+    if (value.reason === "empty" || value.reason === "placeholder") {
+      return { kind: "gotchas", reason: value.reason };
+    }
+    return undefined;
+  }
+  if (value.kind === "invariant") return { kind: "invariant" };
   return undefined;
 }
 

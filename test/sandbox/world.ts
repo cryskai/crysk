@@ -7,7 +7,8 @@
 //
 // The product behaviour it encodes is the minimum the scenarios rely on: no model
 // credential input gives PRH-CRED-MISSING, a malformed routing literal gives
-// PRH-ROUTING-INVALID, a review upserts the report for its head and removes the
+// PRH-ROUTING-INVALID, a scaffold gotchas file on the head gives PRH-GOTCHAS-MISSING,
+// a review upserts the report for its head and removes the
 // outcome comments of earlier runs. Live runs are the proof of the product; this
 // fake is the proof of the runner's sequencing and its reads.
 
@@ -15,6 +16,7 @@ import {
   blockingCommitStatusRequest,
   skipCommitStatusRequest,
 } from "#pr/preflight";
+import { gotchasUnusableReason } from "#review/preflight";
 import {
   RUN_STEP_NAME,
   SKIP_MARKERS,
@@ -22,7 +24,11 @@ import {
 } from "../../scripts/sandbox/markers";
 import type { GhResult, GitResult } from "../../scripts/sandbox/ports";
 import { SANDBOX_REMOTE_URL, SANDBOX_REPO } from "../../scripts/sandbox/rails";
-import { sandboxFiles, WORKFLOW_PATH } from "../../scripts/sandbox/seed";
+import {
+  GOTCHAS_PATH,
+  sandboxFiles,
+  WORKFLOW_PATH,
+} from "../../scripts/sandbox/seed";
 import {
   fail,
   gitOk,
@@ -86,6 +92,7 @@ interface CommentRow {
 type Outcome =
   | "credential"
   | "routing"
+  | "gotchas"
   | "review"
   | "review-advisory"
   | "size-skip"
@@ -97,7 +104,14 @@ const OUTCOME_CODE: Record<
 > = {
   credential: "PRH-CRED-MISSING",
   routing: "PRH-ROUTING-INVALID",
+  gotchas: "PRH-GOTCHAS-MISSING",
   "hunters-failed": "PRH-HUNTERS-FAILED",
+};
+
+// The owner lead the real summary opens with (src/ci/outcome.ts). The fake writes it
+// for the outcomes whose lead a scenario checks, so the check reads the same line.
+const OUTCOME_LEAD: Partial<Record<Outcome, string>> = {
+  gotchas: "Your configuration:",
 };
 
 export interface WorldOptions {
@@ -174,6 +188,8 @@ export class FakeGithub {
   private clock = Date.parse("2026-10-16T12:00:00Z");
   private readonly cwdHead = new Map<string, string>();
   private readonly pushedWorkflow = new Map<string, string>();
+  // The gotchas file each pushed head carries, for the CLI's gate (decide).
+  private readonly pushedGotchas = new Map<string, string>();
   private readonly queued: Outcome[];
 
   constructor(options: WorldOptions) {
@@ -252,6 +268,7 @@ export class FakeGithub {
   private decide(
     workflow: string,
     event: "pull_request" | "issue_comment",
+    gotchas: string | undefined,
   ): Outcome {
     if (this.options.forceCredentialOutcome === true) return "credential";
     if (
@@ -260,6 +277,11 @@ export class FakeGithub {
       return "credential";
     }
     if (/^\s+routing: "\{not json"$/m.test(workflow)) return "routing";
+    // The CLI's gate reads the gotchas file (review-pr.ts validateGotchas), after
+    // routing and before any spend.
+    if (gotchas !== undefined && gotchasUnusableReason(gotchas) !== undefined) {
+      return "gotchas";
+    }
     // A pull_request run over a size gate of 1 skips. A /pr-hero review comment
     // is forced past the gate, so it never skips on size.
     if (
@@ -280,7 +302,16 @@ export class FakeGithub {
     workflow: string,
   ): void {
     const id = this.nextId++;
-    const outcome = this.queued.shift() ?? this.decide(workflow, event);
+    // A pull_request run checks out the PR, so it reads that head's gotchas. A
+    // comment run reads the base branch (the ERROR_CATALOG fix text says so), which
+    // this fake does not model: it passes no gotchas, so the gate does not fire.
+    const outcome =
+      this.queued.shift() ??
+      this.decide(
+        workflow,
+        event,
+        event === "pull_request" ? this.pushedGotchas.get(headSha) : undefined,
+      );
     // A run whose hunters all failed fails its review step, as the engine exits non-zero.
     const failed = outcome === "hunters-failed";
     const stepFails =
@@ -365,9 +396,11 @@ export class FakeGithub {
       this.statuses.set(sha, skipStatus());
     } else {
       const code = OUTCOME_CODE[outcome];
+      const lead = OUTCOME_LEAD[outcome];
+      const body = lead === undefined ? "fake outcome" : `${lead} fake outcome`;
       list.push(
         this.comment(
-          `${OUTCOME_PREFIX} v=1 head=${sha} run=${runId} attempt=1 -->\n\n## ${code}\n\nfake outcome`,
+          `${OUTCOME_PREFIX} v=1 head=${sha} run=${runId} attempt=1 -->\n\n## ${code}\n\n${body}`,
         ),
       );
       this.statuses.set(sha, {
@@ -578,6 +611,8 @@ export class FakeGithub {
       const sha = this.cwdHead.get(cwd) ?? MAIN_SHA;
       const workflow = h.workspace.dirs.get(cwd)?.get(WORKFLOW_PATH) ?? "";
       this.pushedWorkflow.set(sha, workflow);
+      const gotchas = h.workspace.dirs.get(cwd)?.get(GOTCHAS_PATH);
+      if (gotchas !== undefined) this.pushedGotchas.set(sha, gotchas);
       this.branches.set(branch, sha);
       this.events.push(`push ${sha}`);
       const pr = [...this.prs.values()].find(

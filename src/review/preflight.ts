@@ -31,7 +31,7 @@ import { type EngineAssets, resolveEngineAssets } from "../assets";
 // and imported by value into git.ts — the bottom layer depending on a
 // review-domain module. They live in ../errors and ../git/refs; this file
 // imports only the ones it uses itself.
-import { CliError, CliUsageError } from "../errors";
+import { CliError, CliUsageError, withUsageClass } from "../errors";
 import { DEFAULT_BASE_REF, listPaths } from "../git/refs";
 import { redactDiagnostic } from "../security/redact";
 // review/size-gate.ts imports only a TYPE from here, so this is not a runtime
@@ -1854,7 +1854,9 @@ export function resolveAgentsDir(
   // before a single step spawned. A bundled set's conformance is checked by
   // preflightAgentsDir over the manifest's keys instead.
   if (resolution.kind === "dir" && !existsSync(resolution.dir)) {
-    throw new CliError(`agents dir does not exist: ${resolution.dir}`);
+    throw new CliError(`agents dir does not exist: ${resolution.dir}`, {
+      cls: { kind: "prompt-set" },
+    });
   }
   return resolution;
 }
@@ -1885,6 +1887,7 @@ export async function preflightAgentsDir(
     throw new CliError(
       `prompt set ${agents.dir} does not match the review spec:\n` +
         problems.map((p) => `  - ${p}`).join("\n"),
+      { cls: { kind: "prompt-set" } },
     );
   }
 }
@@ -1956,7 +1959,11 @@ export function localReviewSpec(
         role: "hunter",
         trigger: "input",
       },
-      ...parseExtraHunters(env.PRHERO_EXTRA_HUNTERS),
+      // The boundary, not the three throws: assertBasenameOnly inside
+      // parseExtraHunters is a fourth usage throw of the same parse (T2d-1).
+      ...withUsageClass({ kind: "config-parse", source: "extra-hunters" }, () =>
+        parseExtraHunters(env.PRHERO_EXTRA_HUNTERS),
+      ),
       { key: "refuter", file: "review-refuter.md", role: "refuter" },
     ],
   };
@@ -2120,8 +2127,19 @@ const GLOBAL_CONFIG_LABEL = "~/.prhero/config.json";
 // can still see was absent. The `?? []` locals below stay exactly as they
 // are: they feed the validators, and validating an absent key against the
 // empty array is what keeps every error string byte-identical.
+// The repo layer's usage errors carry the repo-config class (T2d-1). It passes the
+// classed routing parser for symmetry only: `routing` is not a repo key, so the file is
+// rejected as a per-person key before any routing value is parsed. The person layer's
+// errors carry no class (see parseGlobalConfig).
 export function parseLocalConfig(raw: string): ConfigLayer {
-  return parseConfigLayer(raw, REPO_CONFIG_LABEL, LOCAL_CONFIG_KEYS);
+  return withUsageClass({ kind: "config-parse", source: "repo-config" }, () =>
+    parseConfigLayer(
+      raw,
+      REPO_CONFIG_LABEL,
+      LOCAL_CONFIG_KEYS,
+      parseRoutingConfig,
+    ),
+  );
 }
 
 // The global layer's parser: same JSON dialect, same validators, same strict
@@ -2130,8 +2148,16 @@ export function parseLocalConfig(raw: string): ConfigLayer {
 // rejects the three that are, because no global answer to them could be
 // right: two are lists of paths inside one repository and the third selects a
 // commit range ahead of an autodetection that already works.
+// Its routing object is parsed without the routing class. That class renders
+// PRH-ROUTING-INVALID, whose text names PRHERO_ROUTING and `gh variable set`: the
+// fix for the CI routing input, not for this personal file. The message is the same.
 export function parseGlobalConfig(raw: string): ConfigLayer {
-  return parseConfigLayer(raw, GLOBAL_CONFIG_LABEL, GLOBAL_CONFIG_KEYS);
+  return parseConfigLayer(
+    raw,
+    GLOBAL_CONFIG_LABEL,
+    GLOBAL_CONFIG_KEYS,
+    parseRoutingValue,
+  );
 }
 
 // `??` is what makes an explicit `null` mean "absent" for the two arrays, and
@@ -2153,10 +2179,13 @@ function parseOptionalBoolean(
   return value;
 }
 
+// `parseRouting` is the layer's routing parser: the classed one for the repo file, the
+// unclassed one for the person file (see parseGlobalConfig for why it differs).
 function parseConfigLayer(
   raw: string,
   file: string,
   admitted: ReadonlySet<string>,
+  parseRouting: typeof parseRoutingConfig,
 ): ConfigLayer {
   let parsed: unknown;
   try {
@@ -2221,7 +2250,7 @@ function parseConfigLayer(
     }
   }
   const summary = parseSummaryConfig(config.summary, file);
-  const routing = parseRoutingConfig(config.routing, file);
+  const routing = parseRouting(config.routing, file);
   const maxVerificationSteps = parseNonNegativeInteger(
     config.max_verification_steps,
     "max_verification_steps",
@@ -2496,7 +2525,21 @@ function parseRouteMapping(
   };
 }
 
+// Every usage error of the routing object carries the routing class (T2d-1). The CI
+// routing input (src/ci/setup.ts) keeps its own class and discards this one. The repo
+// layer passes this parser too, but never reaches a routing value (see
+// parseLocalConfig). The person layer calls parseRoutingValue directly, so its errors
+// carry no class.
 export function parseRoutingConfig(
+  value: unknown,
+  file: string,
+): RoutingConfig | undefined {
+  return withUsageClass({ kind: "config-parse", source: "routing" }, () =>
+    parseRoutingValue(value, file),
+  );
+}
+
+function parseRoutingValue(
   value: unknown,
   file: string,
 ): RoutingConfig | undefined {

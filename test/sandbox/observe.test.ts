@@ -95,8 +95,22 @@ describe("classifyComment", () => {
       kind: "outcome",
       code: "PRH-CRED-MISSING",
       head: SHA,
+      // T2d-1 (S2): the owner lead the reader sees, read off the same body.
+      lead: "Your configuration:",
     });
     expect(outcomeCodeOf(body)).toBe("PRH-CRED-MISSING");
+  });
+
+  test("reads the owner lead of a pr-hero defect outcome, and no lead from a report", () => {
+    const defect = `<!-- pr-hero-outcome v=1 head=${SHA} run=1 attempt=1 -->\n\n### PRH-ENGINE-DEFECT\n\npr-hero defect: pr-hero hit an internal error\n`;
+    expect(classifyComment(defect, "issue")).toEqual({
+      source: "issue",
+      kind: "outcome",
+      code: "PRH-ENGINE-DEFECT",
+      head: SHA,
+      lead: "pr-hero defect:",
+    });
+    expect(classifyComment(REPORT, "issue")).not.toHaveProperty("lead");
   });
 
   test("a report marker quoted in prose is not a report", () => {
