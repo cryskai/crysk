@@ -57,6 +57,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "review-policy",
       "review-risk",
       "setup",
+      "trigger",
     ],
   },
   {

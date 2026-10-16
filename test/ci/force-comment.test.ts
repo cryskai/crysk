@@ -1,50 +1,47 @@
 import { describe, expect, test } from "bun:test";
 import {
   CI_FORCE_WORKFLOW_FILE,
+  CI_REVIEW_COMMENT,
+  CI_REVIEW_FULL_COMMENT,
   ciForceReviewDispatch,
+  ciForceReviewHintLine,
 } from "#ci/force-comment";
 import { planCiReviewManualRequired, planCiReviewSkip } from "#ci/gates";
-import {
-  generateCiForceWorkflowTemplate,
-  CI_FORCE_WORKFLOW_FILE as setupFile,
-} from "#ci/setup";
+import { generateCiWorkflowTemplate } from "#ci/setup";
 
+describe("the review comment", () => {
+  test("is the exact command the scaffolded workflow starts on", () => {
+    expect(CI_REVIEW_COMMENT).toBe("/pr-hero review");
+    expect(CI_REVIEW_FULL_COMMENT).toBe(`${CI_REVIEW_COMMENT} --full`);
+    // The hint and the trigger must name the same command, or the hint
+    // sends people to a comment the workflow never starts on.
+    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
+      jobs: { review: { if: string } };
+    };
+    expect(parsed.jobs.review.if).toContain(
+      `startsWith(github.event.comment.body, '${CI_REVIEW_COMMENT}')`,
+    );
+  });
+});
+
+// The legacy fallback: workflows scaffolded before the comment trigger have
+// only the dispatch-only pr-hero-force.yml.
 describe("ciForceReviewDispatch", () => {
-  test("dispatches the force workflow on GitHub and names the PR", () => {
+  test("dispatches the legacy force workflow on GitHub and names the PR", () => {
     expect(ciForceReviewDispatch(55)).toBe(
       "gh workflow run pr-hero-force.yml -f pr=55",
     );
-    expect(CI_FORCE_WORKFLOW_FILE).toBe(setupFile);
+    expect(CI_FORCE_WORKFLOW_FILE).toBe("pr-hero-force.yml");
   });
 
   test("refuses a PR number that is not a positive integer", () => {
     expect(() => ciForceReviewDispatch(0)).toThrow();
     expect(() => ciForceReviewDispatch(1.5)).toThrow();
+    expect(() => ciForceReviewHintLine(-3)).toThrow();
   });
 });
 
-describe("pr-hero-force workflow", () => {
-  test("is workflow_dispatch only and passes --force for that PR", () => {
-    const template = generateCiForceWorkflowTemplate();
-    const parsed = Bun.YAML.parse(template) as {
-      on: { workflow_dispatch: { inputs: { pr: { required: boolean } } } };
-      jobs: {
-        review: { steps: Array<{ with?: Record<string, unknown> }> };
-      };
-    };
-    expect(parsed.on.workflow_dispatch.inputs.pr.required).toBe(true);
-    expect(template).not.toContain("pull_request:");
-    expect(template).not.toContain("issue_comment:");
-    const run = parsed.jobs.review.steps.find(
-      (step) => step.with?.force !== undefined,
-    );
-    expect(run?.with?.force).toBe(true);
-    expect(String(run?.with?.["pr-number"])).toContain("inputs.pr");
-    expect(template).toContain("fetch-depth: 0");
-  });
-});
-
-describe("skip comments name the Actions dispatch", () => {
+describe("skip comments name the review comment, then the legacy dispatch", () => {
   const prior = {
     blocking: 0,
     advisory: 0,
@@ -52,7 +49,7 @@ describe("skip comments name the Actions dispatch", () => {
     source: "none" as const,
   };
 
-  test("an admission skip tells the reader to dispatch, not to review locally", () => {
+  test("an admission skip tells the reader to ask GitHub, not to review locally", () => {
     const plan = planCiReviewSkip({
       prNumber: 7,
       verdict: {
@@ -68,7 +65,31 @@ describe("skip comments name the Actions dispatch", () => {
     expect(plan.comment).not.toContain("locally");
   });
 
-  test("manual-required names the same dispatch", () => {
+  // The comment is the override now; the dispatch line stays for repos
+  // whose workflow was scaffolded before the comment trigger existed, where
+  // a `/pr-hero review` comment does nothing at all.
+  test("a skip names the comment first, then the legacy dispatch and the re-scaffold", () => {
+    const plan = planCiReviewSkip({
+      prNumber: 7,
+      verdict: {
+        action: "skip",
+        reason: "once-per-pr",
+        prior,
+        reviewCount: 1,
+        maxAttempts: 2,
+        minScore: 4,
+      },
+    });
+    const comment = plan.comment;
+    expect(comment).toContain("Comment `/pr-hero review` on this pull request");
+    expect(comment).toContain("`/pr-hero review --full`");
+    expect(comment).toContain("`pr-hero ci init --force`");
+    expect(comment.indexOf("`/pr-hero review`")).toBeLessThan(
+      comment.indexOf(ciForceReviewDispatch(7)),
+    );
+  });
+
+  test("manual-required names the same comment and dispatch", () => {
     const plan = planCiReviewManualRequired({
       prNumber: 9,
       verdict: {
@@ -80,6 +101,7 @@ describe("skip comments name the Actions dispatch", () => {
         minScore: 4,
       },
     });
+    expect(plan.comment).toContain(ciForceReviewHintLine(9));
     expect(plan.comment).toContain(ciForceReviewDispatch(9));
     expect(plan.comment).not.toContain("pr-hero review --pr");
   });

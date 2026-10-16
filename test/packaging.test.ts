@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import {
-  generateCiForceWorkflowTemplate,
-  generateCiWorkflowTemplate,
-  OWN_CI_WORKFLOW_OPTIONS,
-} from "#ci/setup";
+import { generateCiWorkflowTemplate, OWN_CI_WORKFLOW_OPTIONS } from "#ci/setup";
 import { ENGINE_VERSION } from "../src/index";
 
 describe("Packaging & distribution configuration", () => {
@@ -445,33 +441,6 @@ describe("Packaging & distribution configuration", () => {
       expect(ours).toContain("claude-token");
     });
 
-    // The force workflow hands the action keys the automatic one never does
-    // (`pr-number`, `force`, `full`), so the guard above cannot see them.
-    test.each([
-      ["scaffolded", () => generateCiForceWorkflowTemplate()],
-      [
-        "this repo's own",
-        () => generateCiForceWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS),
-      ],
-    ])(
-      "every `with:` key the %s force workflow hands the action is a declared input",
-      (_label, template) => {
-        const declared = Object.keys(parsedAction().inputs);
-        const workflow = Bun.YAML.parse(template()) as {
-          jobs: {
-            review: {
-              steps: Array<{ id?: string; with?: Record<string, unknown> }>;
-            };
-          };
-        };
-        const ours = workflow.jobs.review.steps
-          .filter((step) => step.id === "pr-hero")
-          .flatMap((step) => Object.keys(step.with ?? {}));
-        expect(ours).toContain("full");
-        expect(ours.filter((key) => !declared.includes(key))).toEqual([]);
-      },
-    );
-
     test("run step invokes bin/pr-hero.js — the entrypoint verified to actually run", () => {
       const action = parsedAction();
       const runStep = action.runs.steps.find(
@@ -489,23 +458,112 @@ describe("Packaging & distribution configuration", () => {
       expect(runStep?.run).toContain("--yes");
     });
 
-    // Runs the run step's own argument-building script under the composite
-    // `shell: bash` flags, with `bun` replaced by a function that prints the
-    // CLI arguments it receives. Inputs reach the script through the step's
-    // real `env:` bindings, falling back to each input's declared default, so
-    // a missing binding or a wrong default fails here like a wrong branch.
-    function cliArgsFor(inputs: Record<string, string>): string[] {
+    type ActionStep = {
+      id?: string;
+      name?: string;
+      if?: string;
+      uses?: string;
+      env?: Record<string, string>;
+      with?: Record<string, string | number | boolean>;
+      run?: string;
+    };
+    const steps = () => parsedAction().runs.steps as ActionStep[];
+    const triggerStep = () => steps().find((step) => step.id === "trigger");
+
+    // The `${{ }}` forms this action's `env:` bindings use, evaluated the way
+    // the runner would. Anything else throws, so a new expression shape fails
+    // here loudly instead of reaching a script as a literal string.
+    interface ActionContext {
+      inputs: Record<string, string>;
+      github: Record<string, string>;
+      trigger: Record<string, string>;
+    }
+    function resolveEnv(
+      env: Record<string, string>,
+      ctx: ActionContext,
+    ): Record<string, string> {
       const action = parsedAction();
-      const runStep = action.runs.steps.find(
-        (step) => step.id === "run-pr-hero",
-      ) as { env?: Record<string, string>; run?: string } | undefined;
-      const env = Object.fromEntries(
-        Object.entries(runStep?.env ?? {}).map(([name, value]) => {
-          const input = /^\$\{\{\s*inputs\.([\w-]+)\s*\}\}$/.exec(value)?.[1];
-          if (input === undefined) return [name, value];
-          return [name, inputs[input] ?? action.inputs[input]?.default ?? ""];
-        }),
+      const input = (name: string): string =>
+        ctx.inputs[name] ?? action.inputs[name]?.default ?? "";
+      const resolve = (value: string): string => {
+        const expr = /^\$\{\{\s*(.+?)\s*\}\}$/.exec(value)?.[1];
+        if (expr === undefined) return value;
+        const ref = /^inputs\.([\w-]+)$/.exec(expr)?.[1];
+        if (ref !== undefined) return input(ref);
+        const presence = /^inputs\.([\w-]+) != ''$/.exec(expr)?.[1];
+        if (presence !== undefined) return String(input(presence) !== "");
+        const github = /^github\.([\w.]+)$/.exec(expr)?.[1];
+        if (github !== undefined) return ctx.github[github] ?? "";
+        const output = /^steps\.trigger\.outputs\.(\w+)$/.exec(expr)?.[1];
+        if (output !== undefined) return ctx.trigger[output] ?? "";
+        throw new Error(`unsupported expression in an action.yml env: ${expr}`);
+      };
+      return Object.fromEntries(
+        Object.entries(env).map(([name, value]) => [name, resolve(value)]),
       );
+    }
+
+    type FakeGh = (args: readonly string[]) => {
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+    };
+    const offlineGh: FakeGh = () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "offline",
+    });
+
+    // Runs the action the way the runner would, minus the network: the
+    // trigger step's real `env:` bindings feed the real trigger shell (with
+    // a fake `gh`), and its outputs then feed the run step's own
+    // argument-building script under the composite `shell: bash` flags, with
+    // `bun` replaced by a function that prints the CLI arguments it receives.
+    // Inputs fall back to each input's declared default, so a missing
+    // binding, a wrong default or an env name the two sides disagree on fails
+    // here like a wrong branch. `args` is undefined when the trigger did not
+    // let the run step run.
+    async function runAction(
+      inputs: Record<string, string>,
+      github: Record<string, string>,
+      gh: FakeGh = offlineGh,
+    ): Promise<{
+      exitCode: number;
+      trigger: Record<string, string>;
+      args: string[] | undefined;
+    }> {
+      const { runCiTrigger } = await import("#ci/trigger");
+      let output = "";
+      const exitCode = runCiTrigger({
+        env: {
+          ...resolveEnv(triggerStep()?.env ?? {}, {
+            inputs,
+            github,
+            trigger: {},
+          }),
+          // A runner default every step inherits, not an `env:` binding.
+          GITHUB_REPOSITORY: github.repository ?? "",
+        },
+        gh,
+        stdout: () => {},
+        appendOutput: (text) => {
+          output += text;
+        },
+        appendSummary: () => {},
+      });
+      const trigger = Object.fromEntries(
+        output
+          .split("\n")
+          .filter((line) => line.includes("="))
+          .map((line) => [
+            line.slice(0, line.indexOf("=")),
+            line.slice(line.indexOf("=") + 1),
+          ]),
+      );
+      if (trigger.run !== "true") return { exitCode, trigger, args: undefined };
+
+      const runStep = steps().find((step) => step.id === "run-pr-hero");
+      const env = resolveEnv(runStep?.env ?? {}, { inputs, github, trigger });
       const script = (runStep?.run ?? "").replaceAll(
         `\${{ github.action_path }}`,
         "/action",
@@ -523,10 +581,27 @@ describe("Packaging & distribution configuration", () => {
         ],
         { env: { ...env, PATH: process.env.PATH ?? "" } },
       );
-      return result.stdout
+      const args = result.stdout
         .toString()
         .split("\n")
         .filter((line) => line !== "");
+      return { exitCode, trigger, args };
+    }
+
+    const REPOSITORY = "acme/widgets";
+    const HEAD = "c".repeat(40);
+    const CREDENTIAL = { "claude-token": "oauth-test-token" };
+    const dispatchContext = {
+      repository: REPOSITORY,
+      event_name: "workflow_dispatch",
+    };
+
+    async function cliArgsFor(inputs: Record<string, string>) {
+      const run = await runAction(
+        { ...CREDENTIAL, ...inputs },
+        dispatchContext,
+      );
+      return run.args ?? [];
     }
 
     // `full` is the only CI recovery when a prior review of the same head was
@@ -538,8 +613,8 @@ describe("Packaging & distribution configuration", () => {
       ["full unset", { "pr-number": "305" }, []],
     ])(
       "%s passes --full only when the input is exactly 'true'",
-      (_label, inputs, fullFlags) => {
-        const args = cliArgsFor(inputs);
+      async (_label, inputs, fullFlags) => {
+        const args = await cliArgsFor(inputs);
         // Proves the script ran to the CLI call, so an empty result below is
         // the branch's verdict and not a script that died early.
         expect(args.slice(0, 5)).toEqual([
@@ -554,6 +629,145 @@ describe("Packaging & distribution configuration", () => {
         );
       },
     );
+
+    // ---------------------------------------------------------------------
+    // The trigger step (odd/tasks/agent-first-ci.md, T1/S1): credential
+    // detection and the `/pr-hero review` comment command live in the
+    // action, so the calling workflow can be one short file.
+    // ---------------------------------------------------------------------
+
+    test("the trigger runs right after Setup Bun, before anything is installed", () => {
+      const all = steps();
+      const setupBun = all.findIndex((step) => step.name === "Setup Bun");
+      expect(setupBun).toBeGreaterThan(-1);
+      const trigger = all[setupBun + 1];
+      expect(trigger?.id).toBe("trigger");
+      expect(trigger?.run).toContain("src/ci/trigger.ts");
+    });
+
+    test("every step after the trigger is gated on its run output", () => {
+      const all = steps();
+      const after = all.slice(
+        all.findIndex((step) => step.id === "trigger") + 1,
+      );
+      expect(after.length).toBeGreaterThan(0);
+      const ungated = after
+        .filter(
+          (step) =>
+            !String(step.if ?? "").includes(
+              "steps.trigger.outputs.run == 'true'",
+            ),
+        )
+        .map((step) => step.name);
+      expect(ungated).toEqual([]);
+    });
+
+    test("the comment body reaches the trigger only through env:", () => {
+      // Free text anyone can type. In a `run:` or an `if:` it is command
+      // injection; in any other step's env it is a value nothing there needs.
+      expect(triggerStep()?.env?.COMMENT_BODY).toBe(
+        `\${{ github.event.comment.body }}`,
+      );
+      for (const step of steps()) {
+        expect(String(step.run ?? "")).not.toContain("github.event.comment");
+        expect(String(step.if ?? "")).not.toContain("github.event.comment");
+        if (step.id !== "trigger") {
+          expect(JSON.stringify(step.env ?? {})).not.toContain(
+            "github.event.comment",
+          );
+        }
+      }
+    });
+
+    test("credentials reach the trigger as presence booleans, never as values", () => {
+      const env = triggerStep()?.env ?? {};
+      for (const input of [
+        "anthropic-api-key",
+        "claude-token",
+        "opencode-auth",
+      ]) {
+        const bound = Object.values(env).filter((value) =>
+          value.includes(`inputs.${input}`),
+        );
+        expect(bound).toEqual([`\${{ inputs.${input} != '' }}`]);
+      }
+    });
+
+    test("the trigger has a token for its permission and head lookups", () => {
+      expect(triggerStep()?.env?.GH_TOKEN).toBe(`\${{ inputs.github-token }}`);
+    });
+
+    test("the legacy force dispatch still passes --pr, --force and --full", async () => {
+      const args = await cliArgsFor({
+        "pr-number": "305",
+        force: "true",
+        full: "true",
+      });
+      expect(args.slice(0, 3)).toEqual(["review", "--pr", "305"]);
+      expect(args).toContain("--force");
+      expect(args).toContain("--full");
+    });
+
+    test("a same-repo pull_request reviews its own number, without --force", async () => {
+      const run = await runAction(CREDENTIAL, {
+        repository: REPOSITORY,
+        event_name: "pull_request",
+        "event.pull_request.number": "12",
+        "event.pull_request.head.repo.full_name": REPOSITORY,
+        "event.pull_request.head.sha": HEAD,
+      });
+      expect(run.trigger).toMatchObject({
+        run: "true",
+        pr: "12",
+        head_sha: HEAD,
+      });
+      expect(run.args?.slice(0, 3)).toEqual(["review", "--pr", "12"]);
+      expect(run.args).not.toContain("--force");
+    });
+
+    test("a `/pr-hero review --full` comment from a writer passes --force and --full", async () => {
+      const gh: FakeGh = (args) => ({
+        exitCode: 0,
+        stdout: args[0] === "api" ? "write\n" : `${HEAD}\n`,
+        stderr: "",
+      });
+      const run = await runAction(
+        CREDENTIAL,
+        {
+          repository: REPOSITORY,
+          event_name: "issue_comment",
+          "event.issue.number": "21",
+          "event.issue.pull_request.url": `https://api.github.com/repos/${REPOSITORY}/pulls/21`,
+          "event.comment.body": "/pr-hero review --full",
+          "event.comment.user.login": "maintainer",
+        },
+        gh,
+      );
+      expect(run.trigger).toMatchObject({ pr: "21", head_sha: HEAD });
+      expect(run.args?.slice(0, 3)).toEqual(["review", "--pr", "21"]);
+      expect(run.args).toContain("--force");
+      expect(run.args).toContain("--full");
+    });
+
+    test("a fork pull_request never reaches the run step", async () => {
+      const run = await runAction(CREDENTIAL, {
+        repository: REPOSITORY,
+        event_name: "pull_request",
+        "event.pull_request.number": "12",
+        "event.pull_request.head.repo.full_name": "stranger/widgets",
+        "event.pull_request.head.sha": HEAD,
+      });
+      expect(run.exitCode).toBe(0);
+      expect(run.trigger.run).toBe("false");
+      expect(run.args).toBeUndefined();
+    });
+
+    test("no credential stops the action red before the run step", async () => {
+      const run = await runAction({ "pr-number": "305" }, dispatchContext);
+      expect(run.exitCode).toBe(1);
+      expect(run.trigger.run).toBe("false");
+      expect(run.args).toBeUndefined();
+    });
 
     test("never interpolates a free-text input directly into the shell script body", () => {
       // Every input / github-context value the run step needs must be
@@ -618,6 +832,102 @@ describe("Packaging & distribution configuration", () => {
       const raw = readFileSync(actionPath, "utf-8");
       expect(raw).not.toMatch(/sk-ant-|ghp_|ghs_/);
     });
+
+    // -------------------------------------------------------------------
+    // Run-directory artifact upload, moved here from the generated workflow
+    // so a consumer gets it without copying a step.
+    //
+    // `pr-hero triage reply --from <run-dir>` is the ONLY supported way to
+    // answer a posted finding, and it hard-fails without a run directory on
+    // disk (runTriageCommand needs comparison.json; the reply path needs
+    // findings.json to map F00N onto the posted marker). In CI that directory
+    // is `~/.prhero/.../runs/pr-<n>-<sha>-1` on an EPHEMERAL runner — it dies
+    // with the job. Uploading it is what keeps the triage half of the loop
+    // reachable once reviews move to Actions.
+    // -------------------------------------------------------------------
+    const uploadStep = () =>
+      steps().find((step) =>
+        String(step.uses ?? "").startsWith("actions/upload-artifact@"),
+      );
+
+    test("uploads the run step's run_dir as the action's last step", () => {
+      const all = steps();
+      const upload = all.at(-1);
+      expect(upload?.uses).toBe("actions/upload-artifact@v4");
+      expect(
+        all.filter((step) =>
+          String(step.uses ?? "").startsWith("actions/upload-artifact@"),
+        ),
+      ).toHaveLength(1);
+      // `run_dir` is the key the CLI writes to $GITHUB_OUTPUT
+      // (formatCiOutputs); `run-dir` would read as empty and skip forever.
+      expect(upload?.with?.path).toBe(
+        `\${{ steps.run-pr-hero.outputs.run_dir }}`,
+      );
+      expect(parsedAction().outputs["run-dir"].value).toBe(
+        `\${{ steps.run-pr-hero.outputs.run_dir }}`,
+      );
+    });
+
+    test("the upload runs on always(), only for a run that reviewed and wrote a directory", () => {
+      // The incident this pins: every hunter died with `Not logged in ·
+      // Please run /login` and the per-attempt logs — the only evidence
+      // naming the cause — were on the runner. A failed review is exactly
+      // when the run directory matters most, so the upload must not hang off
+      // step success. An ignored run has nothing to upload.
+      const condition = String(uploadStep()?.if);
+      expect(condition).toContain("always()");
+      expect(condition).toContain("steps.trigger.outputs.run == 'true'");
+      expect(condition).toContain("steps.run-pr-hero.outputs.run_dir != ''");
+    });
+
+    test("a review that wrote no run directory never turns the job red", () => {
+      // A size-gated or budget-gated review exits 0 having written nothing.
+      // `if-no-files-found: error` would fail the job for a skip that worked
+      // exactly as designed.
+      expect(uploadStep()?.with?.["if-no-files-found"]).toBe("warn");
+    });
+
+    test("the artifact name pins BOTH the PR number and the head sha, from the trigger", () => {
+      // A PR is reviewed once per push, and the run directory itself is named
+      // `pr-<n>-<sha>-1`. A comment event carries no pull_request payload, so
+      // both halves come from the trigger, which resolves them for every
+      // event that reviews.
+      const name = String(uploadStep()?.with?.name);
+      expect(name).toBe(
+        `pr-hero-run-\${{ steps.trigger.outputs.pr }}-\${{ steps.trigger.outputs.head_sha }}`,
+      );
+    });
+
+    test("a re-run overwrites its artifact instead of failing on a name clash", () => {
+      // v4 artifact names are unique per workflow RUN, and `gh run rerun`
+      // reuses the run id — which the no-credentials summary tells people to
+      // do. Without `overwrite`, the second attempt's upload 409s, and under
+      // `always()` that turns the job red for a re-run that otherwise
+      // succeeded.
+      expect(uploadStep()?.with?.overwrite).toBe(true);
+    });
+
+    test("retention is bounded — the artifact carries the diff and the prompts", () => {
+      // On a PUBLIC repository every workflow artifact is downloadable by
+      // anyone: long enough to triage, short enough to limit exposure.
+      expect(uploadStep()?.with?.["retention-days"]).toBe(7);
+    });
+
+    test("uploads hidden files — the run directory lives under a hidden ancestor", () => {
+      // upload-artifact excludes hidden files by default since v4.4, and the
+      // run directory sits under `~/.prhero`. With `if-no-files-found: warn`,
+      // an exclusion would produce an EMPTY artifact and a warning nobody
+      // reads, which is worse than no artifact at all.
+      expect(uploadStep()?.with?.["include-hidden-files"]).toBe(true);
+    });
+
+    test("explains WHY the run directory is uploaded, not merely that it is", () => {
+      const raw = readFileSync(actionPath, "utf-8");
+      expect(raw).toMatch(/triage reply --from/);
+      expect(raw).toMatch(/ephemeral/i);
+      expect(raw).toMatch(/public repositor/i);
+    });
   });
 
   test("committed .github/workflows/pr-hero.yml never drifts from generateCiWorkflowTemplate()", () => {
@@ -637,32 +947,27 @@ describe("Packaging & distribution configuration", () => {
     expect(committed).toBe(generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS));
   });
 
-  test("committed .github/workflows/pr-hero-force.yml never drifts from generateCiForceWorkflowTemplate()", () => {
-    const workflowPath = path.join(
-      rootDir,
-      ".github",
-      "workflows",
-      "pr-hero-force.yml",
-    );
-    expect(existsSync(workflowPath)).toBe(true);
-    const committed = readFileSync(workflowPath, "utf-8");
-    expect(committed).toBe(
-      generateCiForceWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS),
-    );
-  });
-
-  test("skills/pr-hero-ci-setup/assets/workflow-force.yml never drifts from generateCiForceWorkflowTemplate()", () => {
-    const assetPath = path.join(
-      rootDir,
-      "skills",
-      "pr-hero-ci-setup",
-      "assets",
-      "workflow-force.yml",
-    );
-    expect(existsSync(assetPath)).toBe(true);
-    expect(readFileSync(assetPath, "utf-8")).toBe(
-      generateCiForceWorkflowTemplate(),
-    );
+  // The force workflow is retired: `/pr-hero review` on the pull request is
+  // the forced run now, and pr-hero.yml listens for it. A committed or shipped
+  // copy would be a second, drifting way to do the same thing, and nothing
+  // generates it any more to keep it honest.
+  test("neither this repo nor the ci-setup skill ships a separate force workflow", () => {
+    expect(
+      existsSync(
+        path.join(rootDir, ".github", "workflows", "pr-hero-force.yml"),
+      ),
+    ).toBe(false);
+    expect(
+      existsSync(
+        path.join(
+          rootDir,
+          "skills",
+          "pr-hero-ci-setup",
+          "assets",
+          "workflow-force.yml",
+        ),
+      ),
+    ).toBe(false);
   });
 
   test("skills/pr-hero-ci-setup/assets/workflow.yml never drifts from generateCiWorkflowTemplate()", () => {

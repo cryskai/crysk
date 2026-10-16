@@ -238,7 +238,7 @@ Flags worth knowing: `--dry-run` (plan + cost band, creates nothing), `--yes`, `
 `--scout` / `--no-scout` (toggle pre-hunt reconnaissance scout),
 `--post` / `--no-post` (toggle PR comment publishing),
 `--force` (local only: review this diff even when the size gate would skip it;
-in GitHub Actions the same override is `gh workflow run pr-hero-force.yml -f pr=<n>`,
+in GitHub Actions the same override is a `/pr-hero review` comment on the pull request,
 which runs on the Actions runner),
 `--full` (run un-capped refuter verification steps),
 `--no-summary` (skip the summarizer; see `summary` in config above),
@@ -401,11 +401,11 @@ because an unattended watcher must not be the thing that discovers it.
 **It is not a claim about quality.** We have no evidence that a bigger diff reviews worse: attention
 dilution was tested and falsified (`fixtures/scale-probe.ts`), and the one measured Greptile-only
 miss came from a 7-file PR. If a large diff is worth its price, review it anyway.
-Locally that is `--force`. In GitHub Actions it is a separate workflow,
-`pr-hero-force.yml`, dispatched with `gh workflow run pr-hero-force.yml -f pr=<n>`.
-That command does not review on your machine; the Actions runner does. It also
-clears the CI admission rules and the budget ceiling for that one run. `gh run rerun`
-on the automatic workflow does not: it measures the gates again and skips again.
+Locally that is `--force`. In GitHub Actions it is a pull request comment, `/pr-hero review`,
+from a user with write access (a workflow scaffolded before the comment trigger uses
+`gh workflow run pr-hero-force.yml -f pr=<n>` instead). The comment does not review on your
+machine; the Actions runner does. It also clears the CI admission rules and the budget ceiling for
+that one run. `gh run rerun` on a skipped run does not: it measures the gates again and skips again.
 
 The gate counts **effective** changed lines (insertions + deletions) and files — excluded content is
 subtracted first, so a regenerated lockfile beside a ten-line change does not trip it. Excluded by
@@ -470,7 +470,7 @@ only ever over-count, never under-count.
 ```bash
 pr-hero review --pr 42 --dry-run          # prints the gate verdict, spends nothing
 pr-hero review --pr 42 --force            # local: review it anyway (does NOT skip the cost prompt)
-gh workflow run pr-hero-force.yml -f pr=42 # CI: same override, on the Actions runner
+gh pr comment 42 --body "/pr-hero review"  # CI: same override, on the Actions runner
 pr-hero review --pr 42 --max-changed-lines 0   # 0 disables that limit entirely
 pr-hero watch add --max-changed-lines 800       # per-repo threshold for the watcher
 ```
