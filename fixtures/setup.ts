@@ -61,13 +61,13 @@ async function git(repoDir: string, args: string[]): Promise<string> {
 // fraction; player.ts clamps to unity (a no-op then) and scales the fraction
 // back up for display. Commit 2 plants the defect.
 
-const README = `# fixture-player
+export const README = `# fixture-player
 
 Tiny volume pipeline: \`volumeToGain\` produces the gain the player consumes,
 \`applyVolume\` hands it to the engine and formats the display label.
 `;
 
-const VOLUME_CORRECT = `// Converts a user-facing volume (0-100) into the value the player consumes.
+export const VOLUME_CORRECT = `// Converts a user-facing volume (0-100) into the value the player consumes.
 export function volumeToGain(volume: number): number {
   const clamped = Math.min(100, Math.max(0, volume));
   return clamped / 100;
@@ -80,14 +80,14 @@ export function volumeToGain(volume: number): number {
 // and (b) multiplies by 100 for display, double-scaling the label. The code
 // carries no tell-tale comment: the hunter must see the contradiction, not
 // read a confession.
-const VOLUME_BUGGY = `// Converts a user-facing volume into the value the player consumes.
+export const VOLUME_BUGGY = `// Converts a user-facing volume into the value the player consumes.
 export function volumeToGain(volume: number): number {
   // Percent in, percent out: display code owns any further scaling.
   return Math.min(100, Math.max(0, volume));
 }
 `;
 
-const PLAYER = `// Applies a user-requested volume to the audio engine.
+export const PLAYER = `// Applies a user-requested volume to the audio engine.
 import { formatPercent } from "./format";
 import { volumeToGain } from "./volume";
 
@@ -100,13 +100,13 @@ export function applyVolume(volume: number): { gain: number; label: string } {
 }
 `;
 
-const FORMAT = `// Display formatting helpers.
+export const FORMAT = `// Display formatting helpers.
 export function formatPercent(value: number): string {
   return \`\${Math.round(value)}%\`;
 }
 `;
 
-const INDEX = `import { applyVolume } from "./player";
+export const INDEX = `import { applyVolume } from "./player";
 
 export function main(volume: number): string {
   const { label } = applyVolume(volume);
@@ -225,7 +225,7 @@ const AGENT_SOURCES: Record<(typeof AGENT_NAMES)[number], string> = {
   "review-refuter": REFUTER_AGENT,
 };
 
-const GOTCHAS = `- Volume values are 0-1 gain fractions everywhere in this codebase.
+export const GOTCHAS = `- Volume values are 0-1 gain fractions everywhere in this codebase.
 - The audio engine hard-rejects gain above unity; clamps must stay no-ops.
 - Display code owns percentage formatting; nothing else scales by 100.
 `;
