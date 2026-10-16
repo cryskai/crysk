@@ -62,6 +62,53 @@ describe("evaluateCheck: each kind passes and fails on its own fact", () => {
     expect(failed.detail).toBe("got no-outcome");
   });
 
+  // T2d-1 (S2): an outcome check may name the owner lead the reader sees, so a
+  // scenario can pin whose fix a code says it is.
+  test("outcome with a lead passes only when that code's comment carries the lead", () => {
+    const owned = obs({
+      comments: [
+        { ...outcome("PRH-GOTCHAS-MISSING"), lead: "Your configuration:" },
+      ],
+    });
+    expect(
+      evaluateCheck(
+        {
+          kind: "outcome",
+          code: "PRH-GOTCHAS-MISSING",
+          lead: "Your configuration:",
+        },
+        owned,
+      ).pass,
+    ).toBe(true);
+    const wrongOwner = evaluateCheck(
+      {
+        kind: "outcome",
+        code: "PRH-GOTCHAS-MISSING",
+        lead: "pr-hero defect:",
+      },
+      owned,
+    );
+    expect(wrongOwner.pass).toBe(false);
+    expect(wrongOwner.label).toBe(
+      "outcome comment with code PRH-GOTCHAS-MISSING, owner lead pr-hero defect:",
+    );
+    expect(wrongOwner.detail).toBe("got Your configuration:");
+  });
+
+  test("outcome with a lead fails on a code-less or lead-less comment", () => {
+    const bare = obs({ comments: [outcome("PRH-GOTCHAS-MISSING")] });
+    const result = evaluateCheck(
+      {
+        kind: "outcome",
+        code: "PRH-GOTCHAS-MISSING",
+        lead: "Your configuration:",
+      },
+      bare,
+    );
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("got no lead");
+  });
+
   test("outcome and no-outcome read the outcome comments", () => {
     const withCode = obs({ comments: [outcome("PRH-CRED-MISSING")] });
     expect(
@@ -205,6 +252,22 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     fail: obs({
       status: errorStatus("PRH-CRED-MISSING"),
       comments: [outcome("PRH-CRED-MISSING")],
+    }),
+  },
+  // T2d-1 (S2): the owner lead is the one the reader sees. A pr-hero lead on the same
+  // code is the wrong owner, and must fail the check.
+  "bad-gotchas/0": {
+    pass: obs({
+      status: errorStatus("PRH-GOTCHAS-MISSING"),
+      comments: [
+        { ...outcome("PRH-GOTCHAS-MISSING"), lead: "Your configuration:" },
+      ],
+    }),
+    fail: obs({
+      status: errorStatus("PRH-GOTCHAS-MISSING"),
+      comments: [
+        { ...outcome("PRH-GOTCHAS-MISSING"), lead: "pr-hero defect:" },
+      ],
     }),
   },
   "review-free/0": {

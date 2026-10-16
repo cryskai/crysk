@@ -13,7 +13,8 @@ import {
 export type Check =
   // `skipped` accepts any documented skip, `skipped:<reason>`.
   | { kind: "path"; accept: readonly string[] }
-  | { kind: "outcome"; code: string }
+  // `lead` (optional) names the owner the outcome's comment must open with.
+  | { kind: "outcome"; code: string; lead?: string }
   | { kind: "no-outcome" }
   | { kind: "status"; state: string; descriptionStartsWith?: string }
   | { kind: "report-min"; min: number }
@@ -44,7 +45,9 @@ export function describeCheck(check: Check): string {
     case "path":
       return `path is ${check.accept.join(" or ")}`;
     case "outcome":
-      return `outcome comment with code ${check.code}`;
+      return check.lead === undefined
+        ? `outcome comment with code ${check.code}`
+        : `outcome comment with code ${check.code}, owner lead ${check.lead}`;
     case "no-outcome":
       return "no outcome comment";
     case "status":
@@ -83,12 +86,24 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       return pass(ok, `got ${path}`);
     }
     case "outcome": {
-      const codes = obs.comments
-        .filter((c) => c.kind === "outcome")
-        .map((c) => c.code ?? "no-code");
+      const outcomes = obs.comments.filter((c) => c.kind === "outcome");
+      const codes = outcomes.map((c) => c.code ?? "no-code");
+      if (check.lead === undefined) {
+        return pass(
+          codes.includes(check.code),
+          codes.length === 0 ? "no outcome comment" : `got ${codes.join(", ")}`,
+        );
+      }
+      // The lead is read from the comment that carries this code, so a comment
+      // of another code cannot satisfy it.
+      const leads = outcomes
+        .filter((c) => c.code === check.code)
+        .map((c) => c.lead ?? "no lead");
       return pass(
-        codes.includes(check.code),
-        codes.length === 0 ? "no outcome comment" : `got ${codes.join(", ")}`,
+        outcomes.some((c) => c.code === check.code && c.lead === check.lead),
+        codes.length === 0
+          ? "no outcome comment"
+          : `got ${leads.length === 0 ? codes.join(", ") : leads.join(", ")}`,
       );
     }
     case "no-outcome": {
