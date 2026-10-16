@@ -21,7 +21,18 @@ import {
   formatWorkflowCommand,
 } from "#ci/reporter";
 import type { CiReviewPolicy } from "#ci/review-admission";
-import { repostMarkedPrComment, upsertAdmissionCheckRun } from "#pr/pr";
+import {
+  ghRepoWebUrl,
+  repostMarkedPrComment,
+  upsertAdmissionCheckRun,
+} from "#pr/pr";
+import {
+  type CiMode,
+  COMMIT_STATUS_CONTEXT,
+  prHtmlUrl,
+  skipCommitStatusRequest,
+} from "#pr/preflight";
+import { publishFinalCommitStatus } from "#pr/status";
 import { log } from "#ui/primitives";
 
 // ROADMAP Pillar 3 (GitHub Actions CI). The mechanical glue behind a gate
@@ -249,8 +260,15 @@ export async function publishCiSkip(input: {
   stepSummaryFlag: boolean | undefined;
   plan: CiGateSkipPlan;
   noticeMessage: string;
-  // Test-only seam (default: the real repostMarkedPrComment).
+  // S4. In gate mode with a known head, a size or budget skip posts a failure
+  // status. Absent means no status, which is every caller but the two gates.
+  ciMode?: CiMode;
+  headSha?: string;
+  // Test-only seams (defaults: the real repostMarkedPrComment and
+  // publishFinalCommitStatus).
   repost?: typeof repostMarkedPrComment;
+  postStatus?: typeof publishFinalCommitStatus;
+  repoWebUrl?: typeof ghRepoWebUrl;
 }): Promise<number> {
   log(formatWorkflowCommand("notice", input.noticeMessage));
   // The record names the skip kind only. The plan carries no head, so none is
@@ -277,6 +295,36 @@ export async function publishCiSkip(input: {
       });
       throw error;
     }
+  }
+  // S4: the head's status is part of "this skip reached the PR", so it is
+  // written before the record. A failed write rethrows, leaving no skipped
+  // record behind. Admission skips (coverage, same-head, low-risk,
+  // below-threshold) and manual-required post no status in either mode: an
+  // open decision, not a verdict on the diff.
+  if (
+    input.ciMode === "gate" &&
+    input.headSha !== undefined &&
+    (skip === "size" || skip === "budget")
+  ) {
+    // The run's pull URL, like every other status the CLI writes (T3 advisory
+    // 3): a skip is a red check, and the link is how a reader reaches the PR.
+    // Best effort: ghRepoWebUrl answers undefined when it cannot, and the status
+    // still lands, without a link.
+    const targetUrl = prHtmlUrl(
+      await (input.repoWebUrl ?? ghRepoWebUrl)(input.operatorRoot),
+      input.prNumber,
+    );
+    // Gate-only, and gate implies `--ci` (resolveCiPosture), so this is the gate's
+    // own context: the one skip write that names pr-hero.
+    await (input.postStatus ?? publishFinalCommitStatus)(
+      input.operatorRoot,
+      input.headSha,
+      skipCommitStatusRequest({
+        kind: skip,
+        targetUrl,
+        context: COMMIT_STATUS_CONTEXT,
+      }),
+    );
   }
   // Written only once the notice is on the PR, or once the log line is out when
   // posting is off: the record is what the publisher reads as "this skip was

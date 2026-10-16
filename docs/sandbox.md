@@ -38,7 +38,8 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
 
 ## Cost
 
-- The pre-model scenarios, `no-credential` and `bad-routing`, cost $0. No model is reached.
+- The pre-model scenarios, `no-credential`, `bad-routing`, and the first phase of `size-skip`, cost $0.
+  No model is reached.
 - Reviews use the OpenCode free route `opencode/big-pickle`, which the OpenCode catalog
   lists at cost 0. It was proven live on 2026-10-16 with `OPENCODE_AUTH_JSON` set to `{}`.
   `init` sets no Anthropic or Claude secret, so no scenario can spend on a paid model.
@@ -58,9 +59,19 @@ one observation of the PR. S7 invariants are checked on every observation.
 | `no-credential` | With no model credential input, the action stops before any model. | Outcome comment `PRH-CRED-MISSING`; status `error` with that code; no report on the head. | $0 |
 | `bad-routing` | A malformed routing input is refused before any model runs. | Outcome comment `PRH-ROUTING-INVALID`; status `error` with that code; no report on the head. | $0 |
 | `bad-gotchas` | A scaffold `.prhero/gotchas.md` on the branch is refused before admission and spend, and the outcome names its owner. | Outcome comment `PRH-GOTCHAS-MISSING` with the owner lead `Your configuration:`; status `error` with that code; no report on the head. The branch commits the scaffold on top of the planted volume (the scenario's file override). | $0 |
-| `review-free` | The normal workflow on the free route reviews the planted bug end to end. | Path `reviewed`; the run's review step succeeded; status `success`; at least one report on the head; no outcome comment. | $0 (free route) |
-| `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; the run's review step succeeded; status `success`; a report; no outcome comment. | $0 (phase 2 on the free route) |
+| `review-free` | The normal workflow on the free route reviews the planted bug end to end, and its gate status agrees with the findings it posted. | Path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings on the PR (see Gate status below); at least one report on the head; no outcome comment. | $0 (free route) |
+| `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings; a report; no outcome comment. | $0 (phase 2 on the free route) |
 | `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own artifact (`pr-hero-run-<pr>-<sha>`); path `reviewed`. Only the run's own review passes: a skip is a failure, because a forced run bypasses admission and budget. Status and report are not asserted here, since phase 1 left them on the same head. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (free route) |
+
+| `same-head-rereview` | A blocking finding survives `/pr-hero review` on the same head, so the gate stays red and the author cannot re-run its way to green (S7). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings on the PR. Phase 2 (`/pr-hero review`, same head): the comment run completed and its review step succeeded. Its status must still be `failure`, but only when phase 1 posted a blocking finding to carry; otherwise that check is printed as `not asserted: no blocking finding to carry`, because the free model may find nothing to carry. | $0 (free route) |
+| `review-advisory` | With `mode: advisory`, the status stays `success` for a finished review, whatever it finds. | Path `reviewed`; the run's review step succeeded; status `success`; at least one report on the head; no outcome comment. | $0 (free route) |
+| `size-skip` | In gate mode, a diff over the size gate sets a red head, and `/pr-hero review` reviews that same head. | Phase 1 (`size-skip` variant, `max-changed-lines: 1`): path `skipped:size`; status `failure` with a description that starts `pr-hero skipped the review`; no report. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own evidence; path `reviewed`. | $0 (phase 1 reaches no model; phase 2 on the free route) |
+
+**Gate status.** `review-free` and `cleanup` do not pin the status to one state, because the free model
+finds different things from run to run. Their check, `status matches the blocking findings`, requires
+`failure` when the PR shows a blocking finding comment (the `🔴 blocking` header the product posts) and
+`success` when it shows none. `review-advisory` pins `success`. The offline fake (`test/sandbox/world.ts`)
+models blocking findings only behind an option, so the live runs remain the proof of the product's gate.
 
 The S7 invariants, checked on every observation, are: an `error` status without a `PRH-`
 code; an outcome comment on a head whose status is `success`; a status still `pending`
@@ -99,12 +110,16 @@ The runner can reach one repository, and nothing else.
 
 Faults enter only through the sandbox workflow's own inputs and steps, never through
 product code. The workflow is the product's scaffold, with `uses: juanmaagd/pr-hero@<ref>`.
+The `advisory` variant replaces the scaffold's `mode: gate` line, and `size-skip` adds
+`max-changed-lines: 1` after `opencode-auth`. Each refuses unless its anchor line appears exactly
+once, so a scaffold change fails the run loudly instead of testing a different workflow.
 
 ## Adding a scenario
 
 1. Add the data in `scripts/sandbox/scenarios.ts`: phases, each with an action (`open`,
    `push`, or `comment`), a `wait`, and its `checks`. Use `afterPriorOutcome` for a check
-   that only applies when the phase before posted an outcome comment.
+   that only applies when the phase before posted an outcome comment. Use `afterPriorBlocking`
+   for a check that only applies when the phase before posted a blocking finding comment.
 2. If the scenario needs a different workflow, add a variant in
    `scripts/sandbox/variants.ts`. A variant is a transform that refuses unless its anchor
    line appears exactly once in the scaffold.

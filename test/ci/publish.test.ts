@@ -129,6 +129,91 @@ describe("decidePublication — the pure table", () => {
       ).toEqual({ kind: "none" });
     });
 
+    // WHY the status rides on the cleanup: the review completed, but the CLI's final
+    // status write did not land, and the CLI recorded that status. The publisher posts
+    // it on the head that record names (the status's head, not the trigger's), then
+    // cleans up as it does for any reviewed record.
+    test("a reviewed record with an unsettled status names that status on the record's head, and still cleans up", () => {
+      const description = "pr-hero: 2 blocking finding(s) — fix and push";
+      expect(
+        decidePublication({
+          record: record({ head_sha: TRIGGER_HEAD }),
+          cliStarted: true,
+          cliRecord: {
+            ...REVIEWED,
+            head_sha: REVIEWED_HEAD,
+            unsettled_status: { state: "failure", description },
+          },
+        }),
+      ).toEqual({
+        kind: "cleanup",
+        repository: REPO,
+        pr: 7,
+        runId: "4242",
+        runAttempt: 1,
+        headSha: REVIEWED_HEAD,
+        status: {
+          state: "failure",
+          context: "pr-hero",
+          description,
+          targetUrl: RUN_URL,
+        },
+      });
+    });
+
+    test("a reviewed record with an unsettled status and no PR still posts the status, and cleans nothing", () => {
+      expect(
+        decidePublication({
+          record: record({ pr: undefined, head_sha: undefined }),
+          cliStarted: true,
+          cliRecord: {
+            ...REVIEWED,
+            head_sha: REVIEWED_HEAD,
+            unsettled_status: {
+              state: "success",
+              description: "review complete",
+            },
+          },
+        }),
+      ).toEqual({
+        kind: "cleanup",
+        repository: REPO,
+        pr: undefined,
+        runId: "4242",
+        runAttempt: 1,
+        headSha: REVIEWED_HEAD,
+        status: {
+          state: "success",
+          context: "pr-hero",
+          description: "review complete",
+          targetUrl: RUN_URL,
+        },
+      });
+    });
+
+    test("an unsettled status without a head names no status: the cleanup stands as before", () => {
+      // toEqual, not toMatchObject: a key set to undefined must be absent here.
+      expect(
+        decidePublication({
+          record: record(),
+          cliStarted: true,
+          cliRecord: {
+            ...REVIEWED,
+            unsettled_status: {
+              state: "success",
+              description: "review complete",
+            },
+          },
+        }),
+      ).toEqual({
+        kind: "cleanup",
+        repository: REPO,
+        pr: 7,
+        runId: "4242",
+        runAttempt: 1,
+      });
+    });
+
     test.each(["size", "budget", "coverage", "manual-required"] as const)(
       "a CLI skip for %s posts nothing: the CLI already posted its own notice",
       (skip) => {
@@ -1741,6 +1826,81 @@ describe("runPublish — cleanup once the CLI started", () => {
     expect(commentPost(run.calls)).toBeDefined();
     expect(run.calls.some((call) => call.args.includes("graphql"))).toBe(false);
     expect(removedIds(run)).toEqual(["10"]);
+  });
+
+  // The `-f key=value` flags of a status write, read back as an object.
+  function statusFlags(args: readonly string[]): Record<string, string> {
+    const flags: Record<string, string> = {};
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] !== "-f") continue;
+      const raw = args[i + 1] ?? "";
+      const eq = raw.indexOf("=");
+      if (eq !== -1) flags[raw.slice(0, eq)] = raw.slice(eq + 1);
+    }
+    return flags;
+  }
+
+  // WHY this post: the CLI's review completed, but its final status write did not land,
+  // and the CLI recorded that status. The publisher posts it once, on the head the record
+  // names, before the cleanup of older comments.
+  test("a reviewed record with an unsettled status posts that state and description on pr-hero for the record's head, then cleans up", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: {
+        ...REVIEWED,
+        head_sha: REVIEWED_HEAD,
+        unsettled_status: { state: "success", description: "review complete" },
+      },
+      status: [ok()],
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(0);
+    const posted = statusCalls(run.calls);
+    expect(posted).toHaveLength(1);
+    const status = posted[0] as Call;
+    expect(status.args).toContain(`repos/${REPO}/statuses/${REVIEWED_HEAD}`);
+    expect(statusFlags(status.args)).toEqual({
+      state: "success",
+      context: "pr-hero",
+      description: "review complete",
+      target_url: RUN_URL,
+    });
+    const firstDeletion = run.calls.findIndex((call) =>
+      call.args.includes("DELETE"),
+    );
+    expect(run.calls.indexOf(status)).toBeLessThan(firstDeletion);
+    expect(removedIds(run)).toEqual(["10"]);
+  });
+
+  // WHY one attempt: the teardown already retried the write twice, so the publisher's
+  // one more chance is one call. A failure is named as the status write failure, on one
+  // annotation line, and the cleanup still runs.
+  test("a failed unsettled status is one attempt, names PRH-STATUS-WRITE-FAILED on one line, still cleans up, and exits 1", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      cliRecord: {
+        ...REVIEWED,
+        head_sha: REVIEWED_HEAD,
+        unsettled_status: {
+          state: "failure",
+          description: "pr-hero: 2 blocking finding(s) — fix and push",
+        },
+      },
+      status: [fail("gh: Server Error (HTTP 500)")],
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+    });
+    expect(statusCalls(run.calls)).toHaveLength(1);
+    const annotations = run.stdout
+      .split("\n")
+      .filter((line) => line.startsWith("::error"));
+    expect(annotations).toHaveLength(1);
+    expect(annotations[0]).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(removedIds(run)).toEqual(["10"]);
+    expect(run.exitCode).toBe(1);
   });
 });
 

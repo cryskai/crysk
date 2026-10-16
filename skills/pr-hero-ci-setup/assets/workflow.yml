@@ -136,3 +136,4 @@ jobs:
           claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           routing: "${{ vars.PRHERO_ROUTING }}"
           opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
+          mode: gate

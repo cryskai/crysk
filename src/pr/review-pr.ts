@@ -53,7 +53,7 @@ import {
   fetchPrReviewComments,
   ghPrFiles,
 } from "#pr/pr";
-import { createPrRunDir } from "#pr/preflight";
+import { createPrRunDir, resolveCiPosture } from "#pr/preflight";
 import { publishRunOutcome } from "#pr/publish-outcome";
 import { resolveEagerLocalIgnore, resolvePrFetchAndRange } from "#pr/range";
 import {
@@ -120,6 +120,11 @@ export async function reviewPr(
   const step1 = await resolvePrRunOptions(options, prArg);
   options = step1.options;
   const { operatorRoot, prNumber, home, isCi, loaded, config, summary } = step1;
+  // S4 + T3 S7: the run's one posture. Every gate, skip, status, comment and
+  // summary below takes these values; nothing re-resolves them. Both key on the
+  // explicit --ci flag, never on `isCi` (which also folds in the CI/GITHUB_ACTIONS
+  // environment): a shell that exports CI=1 is advisory, on pr-hero/local.
+  const { ciMode, statusContext } = resolveCiPosture(options);
   // The eager, non-CI-only `.prheroignore` read (O-8). See
   // resolveEagerLocalIgnore (src/pr/range.ts) for the full rationale — under
   // CI this stays `undefined` on purpose; the CI read instead needs the
@@ -162,6 +167,7 @@ export async function reviewPr(
     headSha: target.headSha,
     config,
     isCi,
+    ciMode,
     options,
   });
   if (ciAdmissionGate.exitCode !== undefined) return ciAdmissionGate.exitCode;
@@ -327,6 +333,7 @@ export async function reviewPr(
         prNumber,
         maxChangedLines: gateConfig.maxChangedLines,
         maxChangedFiles: gateConfig.maxChangedFiles,
+        ciMode,
       });
       if (sizePlan !== null) {
         await settleCiGateSkip(
@@ -342,6 +349,8 @@ export async function reviewPr(
           plan: sizePlan,
           noticeMessage:
             "pr-hero review skipped — diff exceeds the configured size gate",
+          ciMode,
+          headSha,
         });
       }
     }
@@ -380,6 +389,7 @@ export async function reviewPr(
       operatorRoot,
       headSha,
       options,
+      statusContext,
       ciAdmissionLedger,
     });
     if (inFlightExit !== undefined) return inFlightExit;
@@ -441,6 +451,8 @@ export async function reviewPr(
       summary,
       loaded,
       isCi,
+      ciMode,
+      statusContext,
       ciBudgetCeiling,
       ciAdmissionLedger,
       skipDiscovery,
@@ -462,6 +474,12 @@ export async function reviewPr(
 
     let result: PipelineResult | undefined;
     let posted: InlinePostOutcome | null = null;
+    // S4: written by publishRunOutcome's onBlockingCount sink, read by the
+    // commit-status finally. Null until the findings doc exists.
+    let blockingCount: number | null = null;
+    // Set by the catch below, read by the commit-status finally: a body that threw
+    // must keep its own error, so a failed status write there only logs.
+    let bodyFailed = false;
     try {
       // 8-10 — the review root, its own codegraph index, and the MCP
       // registry the hunters read. See setupPrWorktree
@@ -637,17 +655,24 @@ export async function reviewPr(
         gitDirOwner,
         worktreePath,
         isCi,
+        ciMode,
         estimate,
         ciAdmissionLedger,
         onPosted: (outcome) => {
           posted = outcome;
         },
+        onBlockingCount: (count) => {
+          blockingCount = count;
+        },
       });
+    } catch (error) {
+      bodyFailed = true;
+      throw error;
     } finally {
       // The commit status must settle BEFORE the lock is released, and the
       // ledger settlement must still run on throw or early return. See
       // settleCommitStatusAndLedger (src/pr/teardown.ts) for the full
-      // rationale.
+      // rationale, including why a failed write never replaces a body's error.
       await settleCommitStatusAndLedger({
         result,
         posted,
@@ -655,6 +680,10 @@ export async function reviewPr(
         headSha,
         statusTargetUrl,
         ciAdmissionLedger,
+        ciMode,
+        statusContext,
+        blockingCount,
+        bodyFailed,
       });
     }
   } finally {

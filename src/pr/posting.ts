@@ -16,6 +16,7 @@
 
 import type { InlinePostOutcome } from "#pr/inline";
 import { ghRepoWebUrl, postInlineIfEligible, writePostReceipt } from "#pr/pr";
+import type { CiMode } from "#pr/preflight";
 import type { RereviewProvenance } from "#rereview/prepare";
 import type { FindingsDocument } from "#review/findings";
 import { log } from "#ui/primitives";
@@ -51,6 +52,8 @@ export async function postFindingsIfEnabled(input: {
   // delivery, never a failed delivery. Never fired when posting is off, or when the
   // session failed and nothing was posted.
   onDelivered?: () => void;
+  // S4: the mode this run resolved. It reaches the summary comment's footer.
+  ciMode: CiMode;
 }): Promise<PostingStageResult> {
   if (!input.postEnabled) {
     return { posted: null, postedWebUrl: undefined };
@@ -75,6 +78,7 @@ export async function postFindingsIfEnabled(input: {
     spawnFn: input.spawnFn,
     rereview: input.rereview,
     rereviewPriors: input.rereviewPriors,
+    ciMode: input.ciMode,
   });
   if (posted) {
     input.onDelivered?.();

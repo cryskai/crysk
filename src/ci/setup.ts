@@ -104,6 +104,10 @@ export interface CiWorkflowTemplateOptions {
   // template runs a published tag, where the checkout selects no engine, and
   // the scaffolded output must not change shape because of a ref string.
   forceEngineFromPr?: boolean;
+  // S4: the action's `mode` input. Always written (default `gate`), so the
+  // scaffolded file names the gate and does not inherit it silently. `advisory`
+  // keeps the status green whatever the review finds, as before S4.
+  mode?: "gate" | "advisory";
 }
 
 export const DEFAULT_CI_ACTION_REF = "juanmaagd/pr-hero@v0";
@@ -129,6 +133,7 @@ export const OWN_CI_WORKFLOW_OPTIONS: CiWorkflowTemplateOptions = {
   actionRef: "./",
   maxChangedLines: "5000",
   budgetUsd: "0",
+  mode: "gate",
   forceEngineFromPr: true,
 };
 
@@ -147,6 +152,10 @@ export function generateCiWorkflowTemplate(
     options.maxChangedLines === undefined
       ? ""
       : `\n          max-changed-lines: ${options.maxChangedLines}`;
+  // S4: always written, never inherited. The gate is what makes a scaffolded
+  // repo's pr-hero check red, so the file names it instead of relying on the
+  // action's default, and a reader sees the consequence where they edit.
+  const modeLine = `\n          mode: ${options.mode ?? "gate"}`;
   // Pinned, the sha is what checkout lands on, so the fork verdict and the
   // sha come from ONE read: two reads could straddle a push and describe two
   // different heads. An assignment, not a here-string into `read`, so a
@@ -388,7 +397,7 @@ ${gateStep}      - name: Checkout${checkoutGate}
           anthropic-api-key: \${{ secrets.ANTHROPIC_API_KEY }}
           claude-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           routing: "\${{ vars.PRHERO_ROUTING }}"
-          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}${sizeGateLine}${budgetLine}
+          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}${sizeGateLine}${budgetLine}${modeLine}
 `;
 }
 

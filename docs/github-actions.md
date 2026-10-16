@@ -1,8 +1,9 @@
 # GitHub Actions Integration
 
 pr-hero reviews every pull request automatically: a multi-agent hunt with adversarial refutation runs
-inside a GitHub Actions job, posts findings as PR comments, writes a step summary, and never blocks the
-merge on its own findings.
+inside a GitHub Actions job, posts findings as PR comments, and writes a step summary. Its commit status
+(`pr-hero`) is a gate by default: blocking findings turn it red, so require it in branch protection to
+block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mode-the-status-is-the-check).
 
 ## Quick path
 
@@ -122,8 +123,8 @@ does, when the CLI reports an error or every review hunter fails; if the CLI tak
 stops before it reports an outcome, pr-hero posts the comment, and its `error` status on the head that lock is on, when that head's `pr-hero` status is still `pending` or cannot be read. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
 or unclassified) and the command that fixes it.
 A newer comment replaces the older one from the same author. pr-hero removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/pr-hero review`
-comment posts nothing. Outcomes of a run that did start (review results, size and budget skips) keep
-their own status and comment for now.
+comment posts nothing. A review that ran keeps its own status. A size or budget skip sets a `failure`
+status in gate mode and none in advisory (see [Gate mode](#gate-mode-the-status-is-the-check)).
 
 ### Why `fetch-depth: 0`
 
@@ -292,7 +293,7 @@ The workflow's `permissions:` block needs six scopes, each for a specific reason
 - **`pull-requests: write`** — posting inline findings, the summary review, and the step summary.
 - **`issues: write`** — resolving and replying on review threads. GitHub's API models every PR
   conversation as an issue thread, so this scope is required even though nothing here touches an issue.
-- **`statuses: write`** — updating the PR commit status context (pending, success, error).
+- **`statuses: write`** — updating the PR commit status context (pending, success, failure, error).
 - **`checks: write`** — durable CI admission ledger (attempt reservations and terminal outcomes on Check Runs).
 - **`actions: read`** — the admission gate lists this workflow's past runs (`gh run list`). A public
   repo serves that without the scope, so a missing grant only fails on a private repo, with HTTP 403.
@@ -525,13 +526,72 @@ Skipped and manual-required outcomes include admission metadata in the step summ
 current head, reviewed head, risk class, score, attempt count, remaining budget, policy mode, and a
 short policy hash.
 
-## Assistant posture: it never blocks your merge
+## Gate mode: the status is the check
 
-pr-hero is a reviewer, not a merge gate. The job exits `0` even when it finds blocking-tier issues —
-findings are published as comments and a summary, and the decision to act on them is yours. Nothing
-about *what* a review found can turn the job red.
+The `pr-hero` commit status is the check you require in branch protection. The job's exit code does not
+carry the review's findings: a finished review exits `0` even when it finds blocking-tier issues. Findings
+are published as comments and a summary, and the commit status decides the gate.
 
-Three things can. Only the first sets `status=error`:
+The action's `mode` input picks what the status says. It defaults to `gate`:
+
+- **`gate`** (the default): a finished review with blocking findings sets `failure`. A size or budget
+  skip also sets `failure`, so an unreviewed head cannot read as a clean one. A clean review, or one with
+  only advisory findings, sets `success`.
+- **`advisory`**: the status is `success` for every finished review, whatever it finds. This is the
+  posture pr-hero had before the gate. Skipped reviews post no status, as before.
+
+Either way, a crash, a failed session and a missing findings count set `error`, which is a red check too.
+The table shows the status and the job exit for each case:
+
+| Cause | `gate` status | `advisory` status | Exit |
+|---|---|---|---|
+| Finished review with unresolved blocking findings (see below) | `failure`: `pr-hero: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
+| Finished review, clean or advisory-only | `success` | `success` | `0` |
+| Size or budget skip (`/pr-hero review` reviews it anyway) | `failure`: `pr-hero skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
+| Admission skip (coverage, same head, low risk, below threshold) or manual override required | none | none | `0` |
+| Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
+
+Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
+below keep their own status and exit, as they did before the gate.
+
+**What counts as unresolved.** The count behind a blocking `failure` is every blocking finding that is still
+open: this run's blocking findings, plus each blocking finding from an earlier review of the PR that has not
+been cleared (subject to the known gap at the end of this paragraph). A finding is still open when it is carried forward unchanged, when the verifier could not
+decide, when a triage reply deferred it, or when a triage reply dismissed it. A dismissal the adjudicator
+upheld counts too. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, or when every file it
+names was deleted. Triage replies (`applied`, `dismissed`,
+`deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator that
+would check them does not exist yet. The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. Known gap: the review after a re-review remembers only the findings of the pull request's first review and the earlier findings still open, not the new findings that re-review raised. A blocking finding first raised by a re-review counts on that re-review, but a later review, including a same-head `/pr-hero review` that runs no hunters, does not count it unless that review finds it again. Until this is fixed, check that re-review's own report, or comment `/pr-hero review` on a new head after pushing a fix.
+
+**Unlocking a gate.** A `failure` for blocking findings clears in one of two ways. A fix pushed to a new head
+clears its own finding once the re-review verifies it gone. `/pr-hero override` from a user with write access
+turns the status green for that head with no new review. The re-review does not clear it by itself: a same-head
+`/pr-hero review` runs the same count, so the `failure` stays. The size and budget `failure` is the one that
+`/pr-hero review` clears, because that run passes both gates.
+
+**A failed final write.** In gate mode, when the review itself finished, the job fails with an `::error::`
+annotation if the final status cannot be written. When the review was also delivered, the CLI records the status
+it could not write, even if a step after delivery then failed, and the publisher step later in the same job posts that status once more, so the required
+check can settle without a new run. The job still fails with its `::error::` annotation. If that second write
+fails too, the publisher adds its own `::error::` annotation, and the head stays `pending` until a
+`/pr-hero review` comment forces a review. If the review had already failed before delivery, the job exits with that failure,
+and the failed status write is only logged, so it never replaces the review's own error. Either way the
+commit-status lock is still released. On an already-reviewed head, the same-head admission skip runs first and
+posts no status, so the head stays `pending` until a `/pr-hero review` comment forces a review, which writes the
+status again. The pending status, written when a review starts, is best-effort in both modes.
+
+**Local runs and the watcher post on `pr-hero/local`.** Only an explicit `--ci` run writes the `pr-hero`
+status, which is the required check. A `pr-hero review --pr` you run locally, and each review that
+`pr-hero watch` starts, post advisory statuses on `pr-hero/local` instead, so they cannot overwrite a red gate
+on the same head. Only the `--ci` flag makes a run post to the gate; `CI=1` in your shell does not. The watcher yields
+to a review in flight on either context, and it settles only its own leftover pending, on `pr-hero/local`. A `--ci`
+run stands down only for a pending on `pr-hero`, because only it writes that context, so a local pending never
+leaves the required check unsettled.
+
+Local statuses used to share the `pr-hero` name. A status a local run wrote there before this change stays in
+that head's history, and the next `--ci` run on the head is what settles the gate.
+
+Three things can make the job fail. Only the first sets `status=error`:
 
 | Cause | Exit | `status` |
 |---|---|---|
@@ -567,7 +627,7 @@ rather than silently absorbed into the enum (see
 `openspec/changes/pillar3-github-actions-ci/spec.md` §1.1's Phase 5 amendment for the full reasoning).
 
 **A review where every hunter died.** The job exits `1` and writes nothing, for the reason given under
-"Assistant posture" above: there is no outcome to report, and the alternative — a step summary reading
+"Gate mode" above: there is no outcome to report, and the alternative — a step summary reading
 "No findings detected" over a review that never ran — is worse than silence. Giving this case a status
 of its own is an open follow-up.
 
@@ -651,7 +711,8 @@ Three properties of the action's upload step are load-bearing:
 | Input | Default | Purpose |
 |---|---|---|
 | `pr-number` | resolved from the triggering event | Override when triggering from an event that carries no pull request. Only a legacy `pr-hero-force.yml` sets it, from its dispatch input; the current workflow passes nothing. |
-| `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. A `/pr-hero review` comment from a user with write access sets it on its own; a legacy `pr-hero-force.yml` sets it to `true`. |
+| `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. A `/pr-hero review` comment from a user with write access sets it on its own; a legacy `pr-hero-force.yml` sets it to `true`. A forced run that reviews a head clears a size or budget skip's `failure` status. |
+| `mode` | `gate` | The commit status the review sets: `gate` turns it `failure` on blocking findings and on a size or budget skip, `advisory` keeps it `success` for a finished review. See [Gate mode](#gate-mode-the-status-is-the-check). |
 | `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). A `/pr-hero review --full` comment sets it on its own; a legacy `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
 | `model` | engine default | Override every agent's model. |
 | `scout` | `false` | Experimental diff-only pre-hunt stage; off by default. |
@@ -1309,5 +1370,5 @@ gh pr comment {pr} --body "/pr-hero review"
 - **The review job is red** — never because of findings. Read `status` to tell the three causes apart:
   `error` is a fatal failure and the `::error::` annotation in the log names it; an **empty** `status`
   means every hunter died (the log shows their failures); `reviewed` means the review itself succeeded
-  but some comments could not be posted. See "Assistant posture" above. OpenCode routing without
+  but some comments could not be posted. See "Gate mode" above. OpenCode routing without
   `OPENCODE_AUTH_JSON` fails closed rather than skipping.

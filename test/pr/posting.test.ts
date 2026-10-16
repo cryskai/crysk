@@ -44,12 +44,21 @@ function argvContains(argv: string[], tokens: string[]): boolean {
 function makeFakeGh(script: ScriptEntry[]): {
   spawnFn: typeof Bun.spawn;
   calls: string[][];
+  // The stdin of every call that had one: the summary comment's body travels
+  // this way, so a test reads what was posted, not what was rendered.
+  stdins: string[];
 } {
   const calls: string[][] = [];
+  const stdins: string[] = [];
   const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
   let nextId = 100;
-  const spawnFn = ((argv: string[]) => {
+  const spawnFn = ((
+    argv: string[],
+    opts?: { stdin?: Uint8Array; timeout?: number },
+  ) => {
     calls.push(argv);
+    if (opts?.stdin !== undefined) stdins.push(decoder.decode(opts.stdin));
     const entry = script.find((s) => argvContains(argv, s.match));
     const scripted =
       entry?.response ??
@@ -70,7 +79,7 @@ function makeFakeGh(script: ScriptEntry[]): {
       kill() {},
     };
   }) as unknown as typeof Bun.spawn;
-  return { spawnFn, calls };
+  return { spawnFn, calls, stdins };
 }
 
 function headRefOidScript(headSha: string): ScriptEntry {
@@ -138,6 +147,7 @@ describe("postFindingsIfEnabled — postEnabled gate", () => {
   test("post disabled: makes no gh call and reports nothing posted", async () => {
     const runDir = await tmpRunDir();
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: false,
       sessionFailed: false,
       operatorRoot: OPERATOR_ROOT,
@@ -166,6 +176,7 @@ describe("postFindingsIfEnabled — sessionFailed suppression", () => {
       },
     ]);
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: true,
       sessionFailed: true,
       operatorRoot: OPERATOR_ROOT,
@@ -198,6 +209,7 @@ describe("postFindingsIfEnabled — repo web url resolution", () => {
       ...emptyCommentScript(),
     ]);
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: true,
       sessionFailed: false,
       operatorRoot: OPERATOR_ROOT,
@@ -224,6 +236,7 @@ describe("postFindingsIfEnabled — real posting writes the post.json receipt", 
       ...emptyCommentScript(),
     ]);
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: true,
       sessionFailed: false,
       operatorRoot: OPERATOR_ROOT,
@@ -274,6 +287,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     let calls = 0;
     let receiptAtDelivery: boolean | undefined;
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: true,
       sessionFailed: false,
       operatorRoot: OPERATOR_ROOT,
@@ -302,6 +316,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     let calls = 0;
     await expect(
       postFindingsIfEnabled({
+        ciMode: "advisory",
         postEnabled: true,
         sessionFailed: false,
         operatorRoot: OPERATOR_ROOT,
@@ -331,6 +346,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     let calls = 0;
     await expect(
       postFindingsIfEnabled({
+        ciMode: "advisory",
         postEnabled: true,
         sessionFailed: false,
         operatorRoot: OPERATOR_ROOT,
@@ -353,6 +369,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     const { spawnFn } = makeFakeGh(cleanRunScripts());
     let calls = 0;
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: true,
       sessionFailed: true,
       operatorRoot: OPERATOR_ROOT,
@@ -374,6 +391,7 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     const runDir = await tmpRunDir();
     let calls = 0;
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: false,
       sessionFailed: false,
       operatorRoot: OPERATOR_ROOT,
@@ -388,5 +406,49 @@ describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
     });
     expect(result.posted).toBeNull();
     expect(calls).toBe(0);
+  });
+});
+
+// S4, PR comment chain: publish-outcome -> postFindingsIfEnabled -> the
+// summary comment -> renderPrComment. Each run's mode reaches the comment
+// body it posts; an advisory run keeps today's disclaimer.
+describe("postFindingsIfEnabled — the CI gate mode reaches the PR comment (S4)", () => {
+  async function postedSummary(ciMode: "gate" | "advisory"): Promise<string> {
+    const runDir = await tmpRunDir();
+    const { spawnFn, stdins } = makeFakeGh([
+      {
+        match: ["repo", "view", "url"],
+        response: { stdout: "https://github.com/acme/widgets\n" },
+      },
+      ...emptyCommentScript(),
+    ]);
+    await postFindingsIfEnabled({
+      postEnabled: true,
+      sessionFailed: false,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/app.ts", 5),
+      runDir,
+      spawnFn,
+      ciMode,
+    });
+    return stdins.find((body) => body.startsWith("<!-- pr-hero-report ")) ?? "";
+  }
+
+  test("a gate run's summary comment backs the required status, and never disclaims a merge gate", async () => {
+    const summary = await postedSummary("gate");
+    expect(summary).toContain(
+      "Assistant report backing the pr-hero commit status, the required check in gate mode: every line above is a claim to verify.",
+    );
+    expect(summary).not.toContain("not a merge gate");
+  });
+
+  test("an advisory run's summary comment keeps today's disclaimer", async () => {
+    const summary = await postedSummary("advisory");
+    expect(summary).toContain(
+      "Assistant report, not a merge gate: every line above is a claim to verify.",
+    );
   });
 });

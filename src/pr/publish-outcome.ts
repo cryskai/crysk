@@ -44,6 +44,8 @@ import { computeGreptileComparison } from "#pr/comparison";
 import type { PrDiscoveryResult } from "#pr/discovery";
 import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
 import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
+import type { CiMode } from "#pr/preflight";
+import { unresolvedBlockingCount } from "#rereview/state";
 import type { Telemetry } from "#review/findings";
 import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
@@ -83,11 +85,19 @@ export interface PublishRunOutcomeInput {
   gitDirOwner: string;
   worktreePath: string;
   isCi: boolean;
+  // The run's one resolved CI mode (resolveCiMode, reviewPr). The report, the
+  // summary comment and the step summary all name it; nothing re-resolves it.
+  ciMode: CiMode;
   estimate: ReturnType<typeof estimateCost>;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   // Fired the instant `posted` would have been assigned inside reviewPr()
   // itself — see the header above.
   onPosted: (posted: InlinePostOutcome | null) => void;
+  // S4's sibling sink, for the same reason as onPosted: the commit status
+  // (settleCommitStatusAndLedger) reads this count in reviewPr()'s finally,
+  // and a throw later in this tail must not leave it unknown. The count is the
+  // gate's UNRESOLVED blocking count (rereview/state.ts), not this run's survivors.
+  onBlockingCount: (count: number) => void;
   // Test-only seam (default: the real postFindingsIfEnabled). The posting stage
   // reaches gh with no offline seam of its own, so the suite passes a fake that
   // rejects or resolves, the way it drives the throw and the delivery point.
@@ -124,6 +134,18 @@ export async function publishRunOutcome(
     engine: await engineIdentity(),
     telemetry,
   });
+  // S4: the gate's unresolved count, read by the commit status in teardown.
+  // It is this run's blocking survivors PLUS every live blocking prior that no
+  // verifier verdict and no deletion cleared (rereview/state.ts owns the rule and
+  // its dedupe key). Counting only this run's survivors read green on a
+  // same-head forced re-review and on any re-review that carried a blocking
+  // prior. Computed once here, and fired the moment the doc exists, so a later
+  // throw still leaves the gate a count to read.
+  const blockingCount = unresolvedBlockingCount(
+    doc.findings,
+    result.gatePriors ?? [],
+  );
+  input.onBlockingCount(blockingCount);
   const reportPath = await writeRunReport({
     runDir: input.runDir,
     doc,
@@ -134,6 +156,7 @@ export async function publishRunOutcome(
     droppedPaths: input.droppedPaths,
     result,
     wallMs,
+    ciMode: input.ciMode,
   });
   // The delivery point when posting is off: nothing is posted, so the written
   // artifacts are the delivery. Written after writeRunReport, never before, so a
@@ -216,6 +239,7 @@ export async function publishRunOutcome(
         recordReviewDelivered(input.headSha);
         delivered = true;
       },
+      ciMode: input.ciMode,
     });
   } catch (error) {
     if (!delivered) {
@@ -322,6 +346,7 @@ export async function publishRunOutcome(
     delta: posted?.delta,
     runDir: input.runDir,
     stepSummaryFlag: input.options.stepSummary,
+    ciMode: input.ciMode,
   });
   if (result.sessionFailed) {
     await settleCiAdmissionLedger(
@@ -344,7 +369,7 @@ export async function publishRunOutcome(
     ? ciExitCode({
         sessionFailed: result.sessionFailed,
         droppedFindingIds: posted?.droppedFindingIds.length ?? 0,
-        blockingCount: doc.findings.filter((f) => f.tier === "blocking").length,
+        blockingCount,
       })
     : postingExitCode(posted);
 }

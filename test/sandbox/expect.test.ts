@@ -6,7 +6,10 @@
 import { describe, expect, test } from "bun:test";
 import { evaluateCheck, evaluateChecks } from "../../scripts/sandbox/expect";
 import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
-import type { Observation } from "../../scripts/sandbox/observe";
+import {
+  classifyComment,
+  type Observation,
+} from "../../scripts/sandbox/observe";
 import { SCENARIOS } from "../../scripts/sandbox/scenarios";
 
 const OLD = "a".repeat(40);
@@ -280,6 +283,76 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       comments: [outcome("PRH-HUNTERS-FAILED")],
     }),
   },
+  "review-advisory/0": {
+    pass: obs(),
+    // Advisory is success whatever the review finds: a failure status is the
+    // gate's verdict leaking into advisory mode.
+    fail: obs({
+      status: {
+        state: "failure",
+        description:
+          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+    }),
+  },
+  "size-skip/0": {
+    pass: obs({
+      status: {
+        state: "failure",
+        description:
+          "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway",
+      },
+      comments: [{ source: "issue", kind: "skip", skip: "size" }],
+      artifacts: [],
+    }),
+    // A reviewed head: the review ran, so the size gate did not skip it.
+    fail: obs(),
+  },
+  "size-skip/1": {
+    pass: obs({
+      triggeredAt: Date.parse("2026-10-16T12:10:00Z"),
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      // The size notice of the earlier run stays on the PR, as the product
+      // leaves it, and it predates this run's trigger: the forced review of the
+      // same head is still a review.
+      comments: [
+        {
+          source: "issue",
+          kind: "skip",
+          skip: "size",
+          createdAt: "2026-10-16T12:00:00Z",
+        },
+        { source: "issue", kind: "report", head: NEW },
+      ],
+    }),
+    // This run's own skip notice, posted after its trigger: the run skipped, so
+    // it is not a review. The path check and the run check both catch it.
+    fail: obs({
+      triggeredAt: Date.parse("2026-10-16T12:10:00Z"),
+      run: {
+        id: 8,
+        event: "pull_request",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      comments: [
+        {
+          source: "issue",
+          kind: "skip",
+          skip: "size",
+          createdAt: "2026-10-16T12:10:30Z",
+        },
+      ],
+      artifacts: [],
+    }),
+  },
   "cleanup/0": {
     pass: obs({
       status: errorStatus("PRH-CRED-MISSING"),
@@ -319,6 +392,37 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       },
     }),
     // The pull_request run was read again instead of the comment run: the check must catch it.
+    fail: obs({
+      run: {
+        id: 8,
+        event: "pull_request",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+    }),
+  },
+  "same-head-rereview/0": {
+    pass: obs(),
+    fail: obs({
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed",
+      },
+      comments: [outcome("PRH-HUNTERS-FAILED")],
+    }),
+  },
+  "same-head-rereview/1": {
+    pass: obs({
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+    }),
+    // The pull_request run was read instead of the comment run: the trigger never ran.
     fail: obs({
       run: {
         id: 8,
@@ -452,5 +556,124 @@ describe("own-evidence: only this run's artifact or skip marker counts", () => {
         }),
       ).pass,
     ).toBe(false);
+  });
+});
+
+// S4: review-free cannot pin a status, because the free model finds different
+// things run to run. It checks instead that the status agrees with the blocking
+// findings the PR shows: failure with any, success without. The comment bodies
+// are the product's own finding headers, read back through classifyComment.
+// Fix A: a blocking finding counts as visible on the observed head only, either as an
+// inline comment whose marker names that head, or as an entry in the outside-diff
+// section of that head's report. A failure whose description counts at least the
+// visible ones passes; with none visible, a failure whose description counts a
+// carried prior passes too.
+describe("status-matches-findings: the status agrees with the blocking findings (S4)", () => {
+  const BLOCKING = `<!-- pr-hero-finding id=F001 head=${NEW} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
+  const BLOCKING_2 = `<!-- pr-hero-finding id=F004 head=${NEW} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
+  const ADVISORY = `<!-- pr-hero-finding id=F002 head=${NEW} -->\n\n🟡 advisory · WARNING · introduced · reliability`;
+  const STALE_BLOCKING = `<!-- pr-hero-finding id=F003 head=${OLD} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
+  const OUTSIDE_BLOCKING =
+    "🔴 blocking · BLOCKER · introduced · reliability\n`src/app.ts:10` — run()\n\nThe claim.";
+  const COUNTS_ONE =
+    "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override";
+
+  function reportWithOutside(entry: string): string {
+    return `<!-- pr-hero-report head=${NEW} -->\n\n# pr-hero review\n\n### Comments Outside Diff (1)\n\n${entry}\n\n---\n\n<sub>footer</sub>`;
+  }
+
+  function withFindings(
+    bodies: readonly string[],
+    state: string,
+    description = "pr-hero: the description",
+  ): Observation {
+    return obs({
+      comments: [
+        { source: "issue", kind: "report", head: NEW },
+        ...bodies.map((body) => classifyComment(body, "inline")),
+      ],
+      status: { state, description },
+    });
+  }
+
+  const check = { kind: "status-matches-findings" } as const;
+
+  test("no blocking finding and a success status pass", () => {
+    expect(evaluateCheck(check, withFindings([], "success")).pass).toBe(true);
+  });
+
+  test("no blocking finding and a failure status fail: nothing blocks", () => {
+    const result = evaluateCheck(check, withFindings([], "failure"));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain("no visible blocking finding");
+  });
+
+  test("a visible blocking finding and a failure that counts it pass", () => {
+    expect(
+      evaluateCheck(check, withFindings([BLOCKING], "failure", COUNTS_ONE))
+        .pass,
+    ).toBe(true);
+  });
+
+  test("a visible blocking finding and a success status fail: the gate missed it", () => {
+    const result = evaluateCheck(check, withFindings([BLOCKING], "success"));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain("1 visible blocking finding(s)");
+  });
+
+  test("an advisory-only finding and a success status pass", () => {
+    expect(evaluateCheck(check, withFindings([ADVISORY], "success")).pass).toBe(
+      true,
+    );
+  });
+
+  test("a blocking entry only in the outside-diff section is visible: success fails, a failure that counts it passes", () => {
+    const comments = [
+      classifyComment(reportWithOutside(OUTSIDE_BLOCKING), "issue"),
+    ];
+    const onSuccess = evaluateCheck(
+      check,
+      obs({
+        comments,
+        status: { state: "success", description: "review posted" },
+      }),
+    );
+    expect(onSuccess.pass).toBe(false);
+    expect(onSuccess.detail).toContain("1 visible blocking finding(s)");
+    const onFailure = evaluateCheck(
+      check,
+      obs({ comments, status: { state: "failure", description: COUNTS_ONE } }),
+    );
+    expect(onFailure.pass).toBe(true);
+  });
+
+  test("a blocking finding on an earlier head is not visible: success passes beside it", () => {
+    expect(
+      evaluateCheck(check, withFindings([STALE_BLOCKING], "success")).pass,
+    ).toBe(true);
+  });
+
+  test("no visible blocking finding and a failure that counts one (a carried prior) pass, and the detail says so", () => {
+    const result = evaluateCheck(
+      check,
+      withFindings([], "failure", COUNTS_ONE),
+    );
+    expect(result.pass).toBe(true);
+    expect(result.detail).toContain("carried");
+  });
+
+  test("two visible blocking findings and a failure that counts one fail: the description undercounts", () => {
+    const result = evaluateCheck(
+      check,
+      withFindings([BLOCKING, BLOCKING_2], "failure", COUNTS_ONE),
+    );
+    expect(result.pass).toBe(false);
+    expect(result.detail).toContain("2 visible blocking finding(s)");
+  });
+
+  test("its label names the rule", () => {
+    expect(evaluateCheck(check, withFindings([], "success")).label).toBe(
+      "status matches the blocking findings: failure when any is visible, success or a counted failure otherwise",
+    );
   });
 });

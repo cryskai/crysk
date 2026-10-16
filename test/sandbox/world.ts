@@ -12,6 +12,10 @@
 // outcome comments of earlier runs. Live runs are the proof of the product; this
 // fake is the proof of the runner's sequencing and its reads.
 
+import {
+  blockingCommitStatusRequest,
+  skipCommitStatusRequest,
+} from "#pr/preflight";
 import { gotchasUnusableReason } from "#review/preflight";
 import {
   RUN_STEP_NAME,
@@ -38,6 +42,14 @@ const MAIN_SHA = "f".repeat(40);
 const REPO_URL = `https://github.com/${SANDBOX_REPO}`;
 const OUTCOME_PREFIX = "<!-- pr-hero-outcome";
 const REPORT_PREFIX = "<!-- pr-hero-report";
+// How long a fake run takes on the fake clock. Five minutes is well past the
+// comment-run clock skew (scripts/sandbox/observe.ts), as a real run is.
+const RUN_DURATION_MS = 5 * 60_000;
+// A posted blocking finding, shaped the way the product posts one: its marker,
+// then the header whose tier word the classifier reads (report.ts findingHeaderLine).
+// The head is the reviewed sha, as findingMarker writes it (src/pr/preflight.ts).
+const blockingFinding = (head: string): string =>
+  `<!-- pr-hero-finding id=F001 path=src/a.ts line=3 head=${head} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
 
 interface RunRow {
   databaseId: number;
@@ -74,14 +86,22 @@ interface CommentRow {
 
 // What a run leaves behind. `hunters-failed` is the free model's flake: every
 // hunter returned nothing, so the publisher posts PRH-HUNTERS-FAILED.
+// `review-advisory` is a review under `mode: advisory`: the same comments, a
+// success status whatever it finds. `size-skip` is a pull_request run over the
+// size gate: the skip marker and a failure status, and no report.
 type Outcome =
   | "credential"
   | "routing"
   | "gotchas"
   | "review"
+  | "review-advisory"
+  | "size-skip"
   | "hunters-failed";
 
-const OUTCOME_CODE: Record<Exclude<Outcome, "review">, string> = {
+const OUTCOME_CODE: Record<
+  Exclude<Outcome, "review" | "review-advisory" | "size-skip">,
+  string
+> = {
   credential: "PRH-CRED-MISSING",
   routing: "PRH-ROUTING-INVALID",
   gotchas: "PRH-GOTCHAS-MISSING",
@@ -124,6 +144,30 @@ export interface WorldOptions {
   // A review run whose review step fails, though the head still reads as reviewed
   // from the status and report it left behind.
   stepFailsOnReview?: boolean;
+  // S4: a review posts one blocking finding comment. Under the gate (no
+  // `mode: advisory`) its status is failure, the way the product's gate writes it.
+  blockingFindings?: boolean;
+  // The mutation the consistency check must catch: with blockingFindings on, the
+  // gate's status stays success anyway.
+  statusIgnoresFindings?: boolean;
+}
+
+// The gate's own status texts, from the product's request builders, so the fake
+// cannot drift from the words the runner's checks read.
+function blockingStatus(): { state: string; description: string } {
+  const request = blockingCommitStatusRequest({
+    blockingCount: 1,
+    targetUrl: undefined,
+  });
+  return { state: request.state, description: request.description };
+}
+
+function skipStatus(): { state: string; description: string } {
+  const request = skipCommitStatusRequest({
+    kind: "size",
+    targetUrl: undefined,
+  });
+  return { state: request.state, description: request.description };
 }
 
 export class FakeGithub {
@@ -221,7 +265,11 @@ export class FakeGithub {
     return counter.toString(16).padStart(40, "0");
   }
 
-  private decide(workflow: string, gotchas: string | undefined): Outcome {
+  private decide(
+    workflow: string,
+    event: "pull_request" | "issue_comment",
+    gotchas: string | undefined,
+  ): Outcome {
     if (this.options.forceCredentialOutcome === true) return "credential";
     if (
       !/^\s+(?:opencode-auth|anthropic-api-key|claude-token):/m.test(workflow)
@@ -234,7 +282,15 @@ export class FakeGithub {
     if (gotchas !== undefined && gotchasUnusableReason(gotchas) !== undefined) {
       return "gotchas";
     }
-    return "review";
+    // A pull_request run over a size gate of 1 skips. A /pr-hero review comment
+    // is forced past the gate, so it never skips on size.
+    if (
+      event === "pull_request" &&
+      /^\s+max-changed-lines: 1$/m.test(workflow)
+    ) {
+      return "size-skip";
+    }
+    return /^\s+mode: advisory$/m.test(workflow) ? "review-advisory" : "review";
   }
 
   private startRun(
@@ -253,6 +309,7 @@ export class FakeGithub {
       this.queued.shift() ??
       this.decide(
         workflow,
+        event,
         event === "pull_request" ? this.pushedGotchas.get(headSha) : undefined,
       );
     // A run whose hunters all failed fails its review step, as the engine exits non-zero.
@@ -290,9 +347,13 @@ export class FakeGithub {
       const list = this.comments.get(prNumber) ?? [];
       list.push(this.comment(SKIP_MARKERS.size));
       this.comments.set(prNumber, list);
-      return;
+    } else {
+      this.post(outcome, prNumber, reviewSha, id);
     }
-    this.post(outcome, prNumber, reviewSha, id);
+    // A run takes minutes, and the runner's next comment comes after it. The
+    // one-second step only orders events within a run, so the next phase's
+    // trigger is stamped a run's length after this run's own comments.
+    this.clock += RUN_DURATION_MS;
   }
 
   private comment(body: string): CommentRow {
@@ -302,7 +363,7 @@ export class FakeGithub {
   // What the publisher leaves on the PR for one run's outcome.
   private post(outcome: Outcome, prNumber: number, sha: string, runId: number) {
     const list = this.comments.get(prNumber) ?? [];
-    if (outcome === "review") {
+    if (outcome === "review" || outcome === "review-advisory") {
       const report = `${REPORT_PREFIX} head=${sha} -->\n\n# pr-hero review`;
       const at = list.findIndex((c) =>
         c.body.startsWith(`${REPORT_PREFIX} head=${sha}`),
@@ -314,10 +375,25 @@ export class FakeGithub {
         const kept = list.filter((c) => !c.body.startsWith(OUTCOME_PREFIX));
         list.splice(0, list.length, ...kept);
       }
-      this.statuses.set(sha, {
-        state: "success",
-        description: "review posted",
-      });
+      // S4: the status is the gate's verdict on the posted findings. A blocking
+      // finding under the gate is failure; advisory is success whatever it finds,
+      // and statusIgnoresFindings is the mutation that keeps the gate green.
+      if (this.options.blockingFindings === true) {
+        list.push(this.comment(blockingFinding(sha)));
+      }
+      const gateFails =
+        outcome === "review" &&
+        this.options.blockingFindings === true &&
+        this.options.statusIgnoresFindings !== true;
+      this.statuses.set(
+        sha,
+        gateFails
+          ? blockingStatus()
+          : { state: "success", description: "review posted" },
+      );
+    } else if (outcome === "size-skip") {
+      list.push(this.comment(SKIP_MARKERS.size));
+      this.statuses.set(sha, skipStatus());
     } else {
       const code = OUTCOME_CODE[outcome];
       const lead = OUTCOME_LEAD[outcome];

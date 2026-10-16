@@ -585,6 +585,7 @@ describe("observability — admission metadata in step summaries", () => {
     if (verdict.action !== "skip") return;
     const rendered = planCiReviewSkip({
       prNumber: PR,
+      ciMode: "advisory",
       verdict,
       admission: {
         currentHead: HEAD_B,
@@ -620,6 +621,7 @@ describe("observability — admission metadata in step summaries", () => {
     if (verdict.action !== "manual-required") return;
     const rendered = planCiReviewManualRequired({
       prNumber: PR,
+      ciMode: "advisory",
       verdict,
       admission: {
         currentHead: HEAD_D,

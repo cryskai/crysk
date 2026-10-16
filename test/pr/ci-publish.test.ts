@@ -85,6 +85,7 @@ describe("publishCiReviewIfEligible — eligibility guard", () => {
     const { summaryPath, outputPath } = await tmpCiFiles();
     await withCiEnv(summaryPath, outputPath, () =>
       publishCiReviewIfEligible({
+        ciMode: "advisory",
         isCi,
         sessionFailed,
         prNumber: PR,
@@ -109,6 +110,7 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
     const { summaryPath, outputPath } = await tmpCiFiles();
     await withCiEnv(summaryPath, outputPath, () =>
       publishCiReviewIfEligible({
+        ciMode: "advisory",
         isCi: true,
         sessionFailed: false,
         prNumber: PR,
@@ -145,6 +147,7 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
     const { summaryPath, outputPath } = await tmpCiFiles();
     await withCiEnv(summaryPath, outputPath, () =>
       publishCiReviewIfEligible({
+        ciMode: "advisory",
         isCi: true,
         sessionFailed: false,
         prNumber: PR,
@@ -176,6 +179,7 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
     const { summaryPath, outputPath } = await tmpCiFiles();
     await withCiEnv(summaryPath, outputPath, () =>
       publishCiReviewIfEligible({
+        ciMode: "advisory",
         isCi: true,
         sessionFailed: false,
         prNumber: PR,
@@ -199,6 +203,7 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
     await writeFile(summaryPath, "## Earlier step\n");
     await withCiEnv(summaryPath, outputPath, () =>
       publishCiReviewIfEligible({
+        ciMode: "advisory",
         isCi: true,
         sessionFailed: false,
         prNumber: PR,
@@ -233,6 +238,7 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
           outputEnvSet ? outputPath : undefined,
           () =>
             publishCiReviewIfEligible({
+              ciMode: "advisory",
               isCi: true,
               sessionFailed: false,
               prNumber: PR,

@@ -52,6 +52,7 @@ describe("skip comments name the review comment, then the legacy dispatch", () =
   test("an admission skip tells the reader to ask GitHub, not to review locally", () => {
     const plan = planCiReviewSkip({
       prNumber: 7,
+      ciMode: "advisory",
       verdict: {
         action: "skip",
         reason: "once-per-pr",
@@ -71,6 +72,7 @@ describe("skip comments name the review comment, then the legacy dispatch", () =
   test("a skip names the comment first, then the legacy dispatch and the re-scaffold", () => {
     const plan = planCiReviewSkip({
       prNumber: 7,
+      ciMode: "advisory",
       verdict: {
         action: "skip",
         reason: "once-per-pr",
@@ -92,6 +94,7 @@ describe("skip comments name the review comment, then the legacy dispatch", () =
   test("manual-required names the same comment and dispatch", () => {
     const plan = planCiReviewManualRequired({
       prNumber: 9,
+      ciMode: "advisory",
       verdict: {
         action: "manual-required",
         reason: "max-attempts-exhausted",

@@ -43,6 +43,10 @@ export interface Phase {
   // as the cleanup of that comment. Otherwise they are not asserted, and the
   // runner says so.
   afterPriorOutcome?: readonly Check[];
+  // Asserted only when the phase before this one posted at least one blocking
+  // finding comment, such as a re-run on the same head that must keep a red gate
+  // red. Otherwise they are not asserted, and the runner says why.
+  afterPriorBlocking?: readonly Check[];
 }
 
 export interface Scenario {
@@ -55,7 +59,9 @@ const REVIEWED: Check = { kind: "path", accept: ["reviewed"] };
 // The review step of the observed run itself, not an earlier run's report on the
 // same head. A run that did not succeed cannot pass a phase on what it left behind.
 const STEP_SUCCEEDED: Check = { kind: "step-succeeded" };
-const POSTED_STATUS: Check = { kind: "status", state: "success" };
+// S4: the free model finds different things run to run, so the status cannot be
+// pinned to one state. It must agree with the blocking findings the PR shows.
+const STATUS_MATCHES_FINDINGS: Check = { kind: "status-matches-findings" };
 const ONE_REPORT: Check = { kind: "report-min", min: 1 };
 
 export const SCENARIOS: readonly Scenario[] = [
@@ -132,7 +138,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "review-free",
     description:
-      "the normal workflow on the free route: a reviewed head, a success status, a report",
+      "the normal workflow on the free route: a reviewed head, a report, and a status that agrees with the blocking findings",
     phases: [
       {
         action: { kind: "open", variant: "normal" },
@@ -140,9 +146,57 @@ export const SCENARIOS: readonly Scenario[] = [
         checks: [
           REVIEWED,
           STEP_SUCCEEDED,
-          POSTED_STATUS,
+          STATUS_MATCHES_FINDINGS,
           ONE_REPORT,
           { kind: "no-outcome" },
+        ],
+      },
+    ],
+  },
+  {
+    name: "review-advisory",
+    description:
+      "the advisory gate mode: a reviewed head whose status is success whatever the review finds (S4)",
+    phases: [
+      {
+        action: { kind: "open", variant: "advisory" },
+        wait: "pull_request",
+        checks: [
+          REVIEWED,
+          STEP_SUCCEEDED,
+          { kind: "status", state: "success" },
+          ONE_REPORT,
+          { kind: "no-outcome" },
+        ],
+      },
+    ],
+  },
+  {
+    name: "size-skip",
+    description:
+      "a diff over the size gate in gate mode: a skip with a failure status that names /pr-hero review, and a /pr-hero review comment that reviews the same head with its own evidence (S4)",
+    phases: [
+      {
+        action: { kind: "open", variant: "size-skip" },
+        wait: "pull_request",
+        checks: [
+          { kind: "path", accept: ["skipped:size"] },
+          {
+            kind: "status",
+            state: "failure",
+            descriptionStartsWith: "pr-hero skipped the review",
+          },
+          { kind: "no-report" },
+        ],
+      },
+      {
+        action: { kind: "comment", body: "/pr-hero review" },
+        wait: "issue_comment",
+        checks: [
+          { kind: "run-completed", event: "issue_comment" },
+          STEP_SUCCEEDED,
+          { kind: "own-evidence" },
+          REVIEWED,
         ],
       },
     ],
@@ -163,7 +217,7 @@ export const SCENARIOS: readonly Scenario[] = [
         checks: [
           REVIEWED,
           STEP_SUCCEEDED,
-          POSTED_STATUS,
+          STATUS_MATCHES_FINDINGS,
           ONE_REPORT,
           // The publisher's cleanup is the only thing that removes this comment.
           { kind: "no-outcome" },
@@ -204,6 +258,31 @@ export const SCENARIOS: readonly Scenario[] = [
         // The cleanup of phase 1's outcome comment. Only meaningful when phase 1
         // left one, so it is not asserted otherwise.
         afterPriorOutcome: [{ kind: "no-outcome" }],
+      },
+    ],
+  },
+  {
+    name: "same-head-rereview",
+    description:
+      "a blocking finding survives /pr-hero review on the same head: the gate stays red, so the author cannot re-run its way to green (S7)",
+    phases: [
+      {
+        action: { kind: "open", variant: "normal" },
+        wait: "pull_request",
+        checks: [REVIEWED, STATUS_MATCHES_FINDINGS],
+      },
+      {
+        action: { kind: "comment", body: "/pr-hero review" },
+        wait: "issue_comment",
+        // The comment run itself is asserted every time: the trigger is the
+        // subject. Its status is asserted only when phase 1 left a blocking
+        // finding to carry, because the free model's clean run has nothing to
+        // carry and the scenario says so rather than failing on it.
+        checks: [
+          { kind: "run-completed", event: "issue_comment" },
+          STEP_SUCCEEDED,
+        ],
+        afterPriorBlocking: [{ kind: "status", state: "failure" }],
       },
     ],
   },

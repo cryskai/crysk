@@ -19,6 +19,7 @@ import path from "node:path";
 import {
   recordReviewDelivered,
   recordReviewing,
+  recordUnsettledStatus,
   writeCliRecord,
   writeFatalCliRecord,
 } from "#ci/cli-record";
@@ -199,6 +200,20 @@ describe("writeFatalCliRecord", () => {
     ["hunters-failed", { v: 1, outcome: "hunters-failed", head_sha: SHA }],
     ["skipped", { v: 1, outcome: "skipped", skip: "size" }],
     ["yielded", { v: 1, outcome: "yielded" }],
+    // WHY this row: the publisher reads the unsettled status from this record. A
+    // fatal error after the teardown rethrows must keep it, or the fix is lost.
+    [
+      "reviewed",
+      {
+        v: 1,
+        outcome: "reviewed",
+        head_sha: SHA,
+        unsettled_status: {
+          state: "failure",
+          description: "pr-hero: 1 blocking finding(s)",
+        },
+      },
+    ],
   ];
 
   test.each(kept)(
@@ -376,6 +391,78 @@ describe("recordReviewing", () => {
 
   test("with PRHERO_OUTCOME_DIR unset, nothing is written", () => {
     recordReviewing(SHA, {});
+    expect(existsSync(dir)).toBe(false);
+  });
+});
+
+// WHY this writer: the teardown's final status write failed after the review was
+// delivered. It rewrites the reviewed record with the status the CLI could not write,
+// so the publisher step later in the same job can post it. It only ever upgrades a
+// reviewed record: any other record keeps its own outcome.
+describe("recordUnsettledStatus", () => {
+  let root: string;
+  let dir: string;
+  let env: Record<string, string>;
+  const UNSETTLED = {
+    state: "failure",
+    description:
+      "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+  } as const;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-unsettled-"));
+    dir = path.join(root, "outcome");
+    env = { PRHERO_OUTCOME_DIR: dir };
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function onDisk(): string {
+    return readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
+  }
+
+  test("rewrites a reviewed record with its head and the status the CLI could not write", () => {
+    recordReviewDelivered(SHA, env);
+    recordUnsettledStatus(SHA, UNSETTLED, env);
+    expect(parseCliRecord(onDisk())).toEqual({
+      v: 1,
+      outcome: "reviewed",
+      head_sha: SHA,
+      unsettled_status: UNSETTLED,
+    });
+  });
+
+  test.each([
+    ["an error", { v: 1, outcome: "error", cls: { kind: "unknown" } }],
+    ["a hunters-failed", { v: 1, outcome: "hunters-failed", head_sha: SHA }],
+  ] as const)("leaves an earlier %s record alone", (_label, earlier) => {
+    writeCliRecord(earlier as CliRecord, env);
+    recordUnsettledStatus(SHA, UNSETTLED, env);
+    expect(parseCliRecord(onDisk())).toEqual(earlier);
+  });
+
+  test("writes nothing when no record exists yet", () => {
+    recordUnsettledStatus(SHA, UNSETTLED, env);
+    expect(existsSync(path.join(dir, CLI_RECORD_FILE))).toBe(false);
+  });
+
+  test("a head that is not a 40-character lowercase SHA leaves the record as it was", () => {
+    recordReviewDelivered(SHA, env);
+    recordUnsettledStatus("not-a-sha", UNSETTLED, env);
+    expect(parseCliRecord(onDisk())).toEqual({
+      v: 1,
+      outcome: "reviewed",
+      head_sha: SHA,
+    });
+  });
+
+  test("with PRHERO_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
+    const { chunks } = captureStderr(() =>
+      recordUnsettledStatus(SHA, UNSETTLED, {}),
+    );
+    expect(chunks).toEqual([]);
     expect(existsSync(dir)).toBe(false);
   });
 });

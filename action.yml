@@ -1,5 +1,5 @@
 name: 'pr-hero'
-description: 'Multi-agent AI code review engine with adversarial refutation and assistant posture'
+description: 'Multi-agent AI code review engine with adversarial refutation. Its commit status is a gate by default (mode: gate); mode: advisory keeps it green'
 author: 'juanmaagd'
 branding:
   icon: 'eye'
@@ -45,6 +45,10 @@ inputs:
     description: 'Spend gate: skip the review when its estimated cost exceeds this USD ceiling. Leave unset to resolve the ceiling from the route billing mode - no ceiling on a Claude subscription (a run draws on quota, not a per-token invoice), a default ceiling on a metered ANTHROPIC_API_KEY route. An explicit value is honoured on any route; a value <= 0 disables the ceiling (still gated by the size limits above).'
     required: false
     default: ''
+  mode:
+    description: 'gate (default): the pr-hero commit status, the required check, turns failure on blocking findings or a size/budget skip and error on a crash, and success on a clean or advisory-only review. Comment /pr-hero review to review a skipped head anyway. advisory: the status is always success for a finished review, as before.'
+    required: false
+    default: 'gate'
   post:
     description: 'Publish findings as inline PR comments and a review'
     required: false
@@ -215,6 +219,7 @@ runs:
         MAX_CHANGED_LINES_INPUT: ${{ inputs.max-changed-lines }}
         MAX_CHANGED_FILES_INPUT: ${{ inputs.max-changed-files }}
         BUDGET_USD_INPUT: ${{ inputs.budget-usd }}
+        MODE_INPUT: ${{ inputs.mode }}
         POST_INPUT: ${{ inputs.post }}
         STEP_SUMMARY_INPUT: ${{ inputs.step-summary }}
       run: |
@@ -234,10 +239,12 @@ runs:
         # The PR number is not re-derived here: the trigger step owns it, and
         # it reports a missing number as an error before this step can run.
 
-        # --ci is unconditional: --budget-usd and --step-summary both
-        # require it at parse time, and it is what puts the CLI into
-        # headless/assistant-posture mode (never blocks the job on
-        # findings). --yes skips the interactive confirmation prompt, which
+        # --ci is unconditional: --budget-usd, --step-summary and --ci-mode
+        # all require it at parse time, and it is what puts the CLI into
+        # headless CI mode. The job's exit code still does not carry the
+        # findings (ciExitCode): the pr-hero commit status does. In gate mode
+        # (the default) that status is the required check; in advisory it
+        # stays green. --yes skips the interactive confirmation prompt, which
         # has no TTY to run against here.
         set -- review --pr "$TRIGGER_PR" --ci --yes
         if [ "$POST_INPUT" = "true" ]; then set -- "$@" --post; fi
@@ -247,6 +254,7 @@ runs:
         if [ -n "$MAX_CHANGED_LINES_INPUT" ]; then set -- "$@" --max-changed-lines "$MAX_CHANGED_LINES_INPUT"; fi
         if [ -n "$MAX_CHANGED_FILES_INPUT" ]; then set -- "$@" --max-changed-files "$MAX_CHANGED_FILES_INPUT"; fi
         if [ -n "$BUDGET_USD_INPUT" ]; then set -- "$@" --budget-usd "$BUDGET_USD_INPUT"; fi
+        if [ -n "$MODE_INPUT" ]; then set -- "$@" --ci-mode "$MODE_INPUT"; fi
         if [ "$TRIGGER_FORCE" = "true" ]; then set -- "$@" --force; fi
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
 

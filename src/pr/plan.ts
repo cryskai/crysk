@@ -29,7 +29,13 @@ import {
   settleCiGateSkip,
 } from "#pr/admission";
 import { ghRepoWebUrl } from "#pr/pr";
-import { commitStatusRequest, type PrTarget, prHtmlUrl } from "#pr/preflight";
+import {
+  type CiMode,
+  type CommitStatusContext,
+  commitStatusRequest,
+  type PrTarget,
+  prHtmlUrl,
+} from "#pr/preflight";
 import { holdCommitStatusLock, tryPublishCommitStatus } from "#pr/status";
 import type { buildPhaseBQueue, PreparedDiscovery } from "#rereview/prepare";
 import {
@@ -96,6 +102,12 @@ export async function resolvePrPlanAndConfirm(params: {
   summary: LoadedRunConfig["summary"];
   loaded: LoadedRunConfig["loaded"];
   isCi: boolean;
+  // The one resolution of the run's CI mode (resolveCiPosture, reviewPr). Passed
+  // down, never re-resolved here.
+  ciMode: CiMode;
+  // The context this run's statuses post on: pr-hero only for an explicit --ci
+  // run, pr-hero/local otherwise (resolveCiPosture). Passed down, never re-derived.
+  statusContext: CommitStatusContext;
   ciBudgetCeiling: { budgetUsd: number | undefined };
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
@@ -149,6 +161,7 @@ export async function resolvePrPlanAndConfirm(params: {
       budgetUsd: params.ciBudgetCeiling.budgetUsd,
       prNumber: params.prNumber,
       force: params.options.force,
+      ciMode: params.ciMode,
     });
     if (budgetPlan !== null) {
       await settleCiGateSkip(
@@ -164,6 +177,8 @@ export async function resolvePrPlanAndConfirm(params: {
         plan: budgetPlan,
         noticeMessage:
           "pr-hero review skipped — estimated cost exceeds the configured CI budget ceiling",
+        ciMode: params.ciMode,
+        headSha: params.headSha,
       });
       return { exitCode };
     }
@@ -278,6 +293,7 @@ export async function resolvePrPlanAndConfirm(params: {
       phase: "pending",
       posted: false,
       targetUrl: statusTargetUrl,
+      context: params.statusContext,
     }),
   );
   // From here the lock is HELD, and the only two ways out both clear it:
@@ -289,6 +305,7 @@ export async function resolvePrPlanAndConfirm(params: {
     operatorRoot: params.operatorRoot,
     sha: params.headSha,
     targetUrl: statusTargetUrl,
+    context: params.statusContext,
   });
 
   return {

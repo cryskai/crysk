@@ -72,7 +72,7 @@ import {
 } from "./inline";
 import {
   buildComparisonJson,
-  COMMIT_STATUS_CONTEXT,
+  type CiMode,
   COMMIT_STATUS_TIMEOUT_MS,
   type CommitStatusFact,
   type CommitStatusRequest,
@@ -358,8 +358,10 @@ export async function ghRepoWebUrl(
 
 // In-flight / completed signal on the head SHA. Fail-loud here: the CLI
 // catches and warns, because a missing `repo:status` scope must not abort a
-// review that already cost hunter money. Context is COMMIT_STATUS_CONTEXT
-// so the watcher can find this row among CI statuses.
+// review that already cost hunter money. The context is the request's own
+// (T3 S7): the gate's `pr-hero` only from a `--ci` run's request, and
+// `pr-hero/local` from every other run, so the POST can never pick a context
+// the caller did not choose.
 export async function postCommitStatus(
   operatorRoot: string,
   sha: string,
@@ -383,7 +385,7 @@ export async function postCommitStatus(
     "-f",
     `state=${status.state}`,
     "-f",
-    `context=${COMMIT_STATUS_CONTEXT}`,
+    `context=${status.context}`,
     "-f",
     `description=${status.description}`,
   ];
@@ -2546,6 +2548,9 @@ export async function postInlineFindings(input: {
   // Watchdog for the collapse loop's gh calls. A seam, like `spawnFn`: no
   // production caller sets it, the tests drive the timeout path with it.
   ghTimeoutMs?: number;
+  // S4: the CI mode the summary comment's disclaimer follows. Omitted is
+  // advisory: the local `post` command, and every caller that never sets it.
+  ciMode?: CiMode;
   // Set ONLY by `post --from` (`runPostCommand`). A PR that already carries a
   // pr-hero summary is by definition a re-review, so publishing it without a
   // `rereview` block renders the absence-matcher delta ("N resolved") and no
@@ -2679,6 +2684,7 @@ export async function postInlineFindings(input: {
       outside,
       moved,
       urls,
+      input.ciMode,
     );
     if (framing === undefined) {
       const counts = tierCountsFromFindings(
@@ -3052,6 +3058,9 @@ export async function postInlineIfEligible(input: {
     claim: string;
     locs: readonly string[];
   }[];
+  // S4: the CI mode the summary's footer names. Omitted is advisory, which is
+  // what the local `post` command gets.
+  ciMode?: CiMode;
 }): Promise<InlinePostOutcome | null> {
   if (input.sessionFailed) {
     log(input.skippedReason);

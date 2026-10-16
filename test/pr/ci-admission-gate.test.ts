@@ -40,7 +40,12 @@ import {
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
 import { CommentsTruncatedError, upsertAdmissionCheckRun } from "#pr/pr";
-import { COMMIT_STATUS_CONTEXT, PR_COMMENT_MARKER_PREFIX } from "#pr/preflight";
+import {
+  COMMIT_STATUS_CONTEXT,
+  type CommitStatusContext,
+  LOCAL_COMMIT_STATUS_CONTEXT,
+  PR_COMMENT_MARKER_PREFIX,
+} from "#pr/preflight";
 import {
   type CliOptions,
   EMPTY_LOCAL_CONFIG,
@@ -219,6 +224,7 @@ describe("evaluateCiAdmissionGate — early no-op guards", () => {
   test("a dry run touches no gh call and resolves the default policy", async () => {
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -249,6 +255,7 @@ describe("evaluateCiAdmissionGate — early no-op guards", () => {
   test("outside CI, the gate is a pure pass-through", async () => {
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -292,6 +299,7 @@ describe("evaluateCiAdmissionGate — early no-op guards", () => {
     const recordCalls: unknown[] = [];
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -323,6 +331,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -357,6 +366,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -401,6 +411,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -447,6 +458,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -474,6 +486,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
     const recordCalls: unknown[] = [];
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -560,6 +573,7 @@ describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an atte
       },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_C,
@@ -659,6 +673,7 @@ describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an atte
       },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_C,
@@ -773,6 +788,7 @@ describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an atte
       },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_C,
@@ -912,13 +928,16 @@ describe("yieldToInFlightReview", () => {
     "warning: a pr-hero review is already in-flight on this head; continuing";
   const LEDGER_CHECK_RUN_ID = 11;
 
-  function commitStatus(state: "pending" | "success"): ScriptEntry {
+  function commitStatus(
+    state: "pending" | "success",
+    context: CommitStatusContext = COMMIT_STATUS_CONTEXT,
+  ): ScriptEntry {
     return {
       match: [`commits/${HEAD_B}/status`],
       response: {
         stdout: `${JSON.stringify({
           state,
-          context: COMMIT_STATUS_CONTEXT,
+          context,
           created_at: PENDING_AT,
         })}\n`,
       },
@@ -978,6 +997,7 @@ describe("yieldToInFlightReview", () => {
         operatorRoot: "/repo",
         headSha: HEAD_B,
         options: { yes: true, force: false },
+        statusContext: COMMIT_STATUS_CONTEXT,
         ciAdmissionLedger: ledger,
         spawnFn,
         nowMs: NOW_MS,
@@ -1005,6 +1025,7 @@ describe("yieldToInFlightReview", () => {
             operatorRoot: "/repo",
             headSha: HEAD_B,
             options: { yes: true, force: false },
+            statusContext: COMMIT_STATUS_CONTEXT,
             ciAdmissionLedger: reservedLedger(),
             spawnFn: makeFakeGh([commitStatus("pending"), CHECK_RUN_PATCH], []),
             nowMs: NOW_MS,
@@ -1040,6 +1061,7 @@ describe("yieldToInFlightReview", () => {
         operatorRoot: "/repo",
         headSha: HEAD_B,
         options: { yes: true, force: false },
+        statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
         ciAdmissionLedger: null,
         spawnFn,
         nowMs: NOW_MS,
@@ -1064,6 +1086,7 @@ describe("yieldToInFlightReview", () => {
         operatorRoot: "/repo",
         headSha: HEAD_B,
         options: { yes: true, force: false },
+        statusContext: COMMIT_STATUS_CONTEXT,
         ciAdmissionLedger: ledger,
         spawnFn,
         nowMs: NOW_MS,
@@ -1077,11 +1100,19 @@ describe("yieldToInFlightReview", () => {
   });
 
   test.each([
-    ["--force (the CI comment override)", { yes: true, force: true }],
-    ["an interactive run (no --yes)", { yes: false, force: false }],
+    [
+      "--force (the CI comment override)",
+      { yes: true, force: true },
+      COMMIT_STATUS_CONTEXT,
+    ],
+    [
+      "an interactive run (no --yes)",
+      { yes: false, force: false },
+      LOCAL_COMMIT_STATUS_CONTEXT,
+    ],
   ] as const)(
     "%s warns and continues over an in-flight review, leaving the reservation to the run",
-    async (_name, options) => {
+    async (_name, options, statusContext) => {
       const calls: string[][] = [];
       const spawnFn = makeFakeGh(
         [commitStatus("pending"), CHECK_RUN_PATCH],
@@ -1094,6 +1125,7 @@ describe("yieldToInFlightReview", () => {
           operatorRoot: "/repo",
           headSha: HEAD_B,
           options,
+          statusContext,
           ciAdmissionLedger: ledger,
           spawnFn,
           nowMs: NOW_MS,
@@ -1106,4 +1138,63 @@ describe("yieldToInFlightReview", () => {
       expect(checkRunCalls(calls)).toEqual([]);
     },
   );
+
+  // Fix D: a watcher child (--yes, no --ci) reads both run contexts, because the
+  // watcher and local runs post their pending on pr-hero/local. The fixture is the
+  // watcher child's own posture, so a local review already in flight stops the
+  // second paid review on the same head.
+  test("a watcher child stands down for a fresh pr-hero/local pending on the head", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [commitStatus("pending", LOCAL_COMMIT_STATUS_CONTEXT)],
+      calls,
+    );
+
+    const { result, logged } = await capturingStderr(() =>
+      yieldToInFlightReview({
+        operatorRoot: "/repo",
+        headSha: HEAD_B,
+        options: { yes: true, force: false },
+        statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
+        ciAdmissionLedger: null,
+        spawnFn,
+        nowMs: NOW_MS,
+      }),
+    );
+
+    expect(result).toBe(0);
+    expect(logged).toBe(`${SKIP_LINE}\n`);
+    expect(checkRunCalls(calls)).toEqual([]);
+  });
+
+  // The contested line, deliberately preserved: a --ci run must not stand down for
+  // a local pending. Its yield would leave the pr-hero gate unwritten, because only
+  // a --ci run writes that context and the local run never will. Review-pr.ts:388
+  // runs this check before the plan step and its pending post, so a pending the
+  // run itself posts can never reach this check.
+  test("a --ci run does not stand down for a pr-hero/local pending: the gate status stays its to write", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [commitStatus("pending", LOCAL_COMMIT_STATUS_CONTEXT), CHECK_RUN_PATCH],
+      calls,
+    );
+    const ledger = reservedLedger();
+
+    const { result, logged } = await capturingStderr(() =>
+      yieldToInFlightReview({
+        operatorRoot: "/repo",
+        headSha: HEAD_B,
+        options: { yes: true, force: false },
+        statusContext: COMMIT_STATUS_CONTEXT,
+        ciAdmissionLedger: ledger,
+        spawnFn,
+        nowMs: NOW_MS,
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(logged).toBe("");
+    expect(ledger.record.status).toBe("reserved");
+    expect(checkRunCalls(calls)).toEqual([]);
+  });
 });

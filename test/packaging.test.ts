@@ -398,6 +398,19 @@ describe("Packaging & distribution configuration", () => {
       expect(typeof parsed).toBe("object");
     });
 
+    // S4: the gate is the action's default, and the run step hands it to the
+    // CLI as --ci-mode. Asserted on the text of the run script: the
+    // expression and the flag are one line each, and a wrong env name or a
+    // dropped `if` would otherwise pass every other check here.
+    test("declares a mode input that defaults to gate and hands it to the CLI", () => {
+      expect(parsedAction().inputs.mode?.default).toBe("gate");
+      const source = readFileSync(actionPath, "utf-8");
+      expect(source).toContain(`MODE_INPUT: \${{ inputs.mode }}`);
+      expect(source).toContain(
+        'if [ -n "$MODE_INPUT" ]; then set -- "$@" --ci-mode "$MODE_INPUT"; fi',
+      );
+    });
+
     test("declares the four-member status enum spec 1.1 actually emits", () => {
       // Not five: skipped-clean was never wired (a clean review already
       // reports status=reviewed, findings_count=0) and was dropped from

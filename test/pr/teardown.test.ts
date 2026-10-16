@@ -17,7 +17,7 @@
 // already the observable.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -27,16 +27,29 @@ import {
   admissionRecordFingerprint,
   settleAdmissionAttempt,
 } from "#ci/admission-ledger";
+import {
+  recordReviewDelivered,
+  recordReviewing,
+  writeCliRecord,
+} from "#ci/cli-record";
+import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
-import { COMMIT_STATUS_CONTEXT } from "#pr/preflight";
+import {
+  COMMIT_STATUS_CONTEXT,
+  LOCAL_COMMIT_STATUS_CONTEXT,
+  resolveCiPosture,
+} from "#pr/preflight";
 import {
   heldCommitStatusLock,
   holdCommitStatusLock,
   releaseCommitStatusLock,
+  settleHeldCommitStatusOnSignal,
 } from "#pr/status";
 import { finalizePrReviewRun, settleCommitStatusAndLedger } from "#pr/teardown";
+import { unresolvedBlockingCount } from "#rereview/state";
 import type { PipelineResult } from "#review/pipeline";
+import { CliError } from "../../src/errors";
 
 const HEAD = "a".repeat(40);
 const POLICY_HASH = "abc123def4567890";
@@ -210,6 +223,9 @@ describe("settleCommitStatusAndLedger — commit status matrix", () => {
       statusTargetUrl: "https://runs.example/1",
       ciAdmissionLedger: null,
       spawnFn,
+      ciMode: "advisory",
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: null,
     });
     expect(calls).toHaveLength(1);
     const flags = parseStatusFlags(calls[0] as string[]);
@@ -243,6 +259,9 @@ describe("settleCommitStatusAndLedger — commit status lock lifecycle", () => {
       statusTargetUrl: undefined,
       ciAdmissionLedger: null,
       spawnFn,
+      ciMode: "advisory",
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: null,
     });
     expect(lockDuringPost).not.toBeNull();
     expect(heldCommitStatusLock()).toBeNull();
@@ -265,12 +284,107 @@ describe("settleCommitStatusAndLedger — commit status lock lifecycle", () => {
       ciAdmissionLedger: ledger,
       spawnFn,
       settle: fakeSettle,
+      ciMode: "advisory",
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: null,
     });
     // gh was really attempted (and really failed) — this is not a no-op.
     expect(calls.length).toBeGreaterThan(0);
     expect(heldCommitStatusLock()).toBeNull();
     expect(ledger.record.status).toBe("failed");
     expect(ledger.record.decisionReason).toBe(SETTLED_REASON);
+  });
+});
+
+describe("settleCommitStatusAndLedger — gate mode (S4)", () => {
+  const BLOCKING_DESCRIPTION =
+    "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override";
+
+  test.each([
+    [
+      "blocking findings are failure, with the count and the unlock",
+      pipelineResult(false),
+      2,
+      { state: "failure", description: BLOCKING_DESCRIPTION },
+    ],
+    [
+      "clean is success",
+      pipelineResult(false),
+      0,
+      { state: "success", description: "review complete" },
+    ],
+    [
+      "a crash is error even with blocking findings",
+      pipelineResult(true),
+      2,
+      { state: "error", description: "review did not finish" },
+    ],
+    [
+      "an unknown count is error, never a clean success",
+      pipelineResult(false),
+      null,
+      { state: "error", description: "review did not finish" },
+    ],
+  ] as const)("%s", async (_name, result, blockingCount, expected) => {
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result,
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: "https://runs.example/1",
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "gate",
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount,
+    });
+    expect(calls).toHaveLength(1);
+    expect(parseStatusFlags(calls[0] as string[])).toEqual({
+      state: expected.state,
+      context: COMMIT_STATUS_CONTEXT,
+      description: expected.description,
+      target_url: "https://runs.example/1",
+    });
+  });
+
+  test("a failed final write throws a CliError, still releases the lock, and leaves the ledger for the outer finally", async () => {
+    holdCommitStatusLock({
+      operatorRoot: "/repo",
+      sha: HEAD,
+      targetUrl: undefined,
+    });
+    const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+    const ledger = ledgerState("reserved");
+    let thrown: unknown;
+    try {
+      await settleCommitStatusAndLedger({
+        result: pipelineResult(false),
+        posted: null,
+        operatorRoot: "/repo",
+        headSha: HEAD,
+        statusTargetUrl: undefined,
+        ciAdmissionLedger: ledger,
+        spawnFn,
+        settle: fakeSettle,
+        ciMode: "gate",
+        statusContext: COMMIT_STATUS_CONTEXT,
+        blockingCount: 0,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    // gh was really attempted and really failed: the write did not land.
+    expect(calls.length).toBeGreaterThan(0);
+    // CliError is what the CLI turns into exit 1 and the `::error::` annotation.
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as Error).message).toContain(
+      "commit status (success) was not written",
+    );
+    expect(heldCommitStatusLock()).toBeNull();
+    // The inner finally throws before its ledger settle; finalizePrReviewRun
+    // (the outer finally) is the one that settles a pending reservation.
+    expect(ledger.record.status).toBe("reserved");
   });
 });
 
@@ -304,6 +418,9 @@ describe("settleCommitStatusAndLedger — ledger settlement guard", () => {
         ciAdmissionLedger: ledger,
         spawnFn,
         settle: fakeSettle,
+        ciMode: "advisory",
+        statusContext: COMMIT_STATUS_CONTEXT,
+        blockingCount: null,
       });
       expect(ledger.record.status).toBe(expectedStatus);
       expect(ledger.record.decisionReason).toBe(expectedReason);
@@ -324,8 +441,109 @@ describe("settleCommitStatusAndLedger — ledger settlement guard", () => {
       settle: async () => {
         calls.push(1);
       },
+      ciMode: "advisory",
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: null,
     });
     expect(calls).toEqual([]);
+  });
+});
+
+// Fix C: when the review body already threw, a failed final status write must not
+// replace that error. The write is still attempted, its failure is logged, and the
+// lock is released; the body's own error is what the run exits with.
+describe("settleCommitStatusAndLedger — a failed status write after the body threw", () => {
+  const ORIGINAL = new Error("ORIGINAL");
+
+  // Same shape as ci-admission-gate.test.ts's capturingStderr (log writes stderr).
+  async function capturingStderr<T>(
+    fn: () => Promise<T>,
+  ): Promise<{ result: T; logged: string }> {
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      return { result: await fn(), logged: chunks.join("") };
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  }
+
+  test("the body's own error escapes, the status failure is logged, and the lock is released", async () => {
+    holdCommitStatusLock({
+      operatorRoot: "/repo",
+      sha: HEAD,
+      targetUrl: undefined,
+    });
+    const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+    const ledger = ledgerState("reserved");
+    let escaped: unknown = "nothing escaped";
+    const { logged } = await capturingStderr(async () => {
+      try {
+        try {
+          throw ORIGINAL;
+        } finally {
+          await settleCommitStatusAndLedger({
+            result: undefined,
+            posted: null,
+            operatorRoot: "/repo",
+            headSha: HEAD,
+            statusTargetUrl: undefined,
+            ciAdmissionLedger: ledger,
+            spawnFn,
+            settle: fakeSettle,
+            ciMode: "gate",
+            statusContext: COMMIT_STATUS_CONTEXT,
+            blockingCount: null,
+            bodyFailed: true,
+          });
+        }
+      } catch (error) {
+        escaped = error;
+      }
+    });
+    // gh was really attempted and really failed: the write did not land.
+    expect(calls.length).toBeGreaterThan(0);
+    expect(escaped).toBe(ORIGINAL);
+    expect(logged).toContain("warning: commit status (error): ");
+    expect(heldCommitStatusLock()).toBeNull();
+    // The write no longer throws, so the inner finally settles the ledger itself.
+    expect(ledger.record.status).toBe("failed");
+    expect(ledger.record.decisionReason).toBe(SETTLED_REASON);
+  });
+
+  test("a body that succeeds still fails the run with a CliError when its status write fails", async () => {
+    holdCommitStatusLock({
+      operatorRoot: "/repo",
+      sha: HEAD,
+      targetUrl: undefined,
+    });
+    const { spawnFn } = makeStatusSpawn({ fail: true });
+    let thrown: unknown;
+    try {
+      await settleCommitStatusAndLedger({
+        result: pipelineResult(false),
+        posted: null,
+        operatorRoot: "/repo",
+        headSha: HEAD,
+        statusTargetUrl: undefined,
+        ciAdmissionLedger: null,
+        spawnFn,
+        ciMode: "gate",
+        statusContext: COMMIT_STATUS_CONTEXT,
+        blockingCount: 0,
+        bodyFailed: false,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(CliError);
+    expect(heldCommitStatusLock()).toBeNull();
   });
 });
 
@@ -415,4 +633,407 @@ describe("finalizePrReviewRun — cleanup ordering", () => {
       expect(ledger.record.decisionReason).toBe(expectedReason);
     },
   );
+});
+
+// T3 S7 (the verifier's BLOCKER): `pr-hero` is the CI gate. A run that is not
+// an explicit `--ci` run never writes it: local `review --pr`, the watcher's
+// child, and CI=1 without --ci all post on `pr-hero/local`, advisory. The
+// posture comes from the one resolver reviewPr uses, so these cases drive the
+// production decision, not a hand-picked context.
+describe("S7: only an explicit --ci run writes the pr-hero context", () => {
+  test("a local advisory run with blocking findings posts success on pr-hero/local, never on pr-hero", async () => {
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "advisory",
+      statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
+      blockingCount: 2,
+    });
+    expect(calls).toHaveLength(1);
+    expect(parseStatusFlags(calls[0] as string[])).toEqual({
+      state: "success",
+      context: LOCAL_COMMIT_STATUS_CONTEXT,
+      description: "review complete",
+    });
+  });
+
+  test("a --ci gate run with blocking findings posts failure on pr-hero", async () => {
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ...resolveCiPosture({ ci: true }),
+      blockingCount: 2,
+    });
+    expect(calls).toHaveLength(1);
+    const flags = parseStatusFlags(calls[0] as string[]);
+    expect(flags.context).toBe(COMMIT_STATUS_CONTEXT);
+    expect(flags.state).toBe("failure");
+  });
+
+  // The count the publish step hands over, computed by the same function, so
+  // these pin the chain from the gate's rows to the posted status.
+  test("a same-head forced re-review with a live blocking prior posts failure through the gate count", async () => {
+    const count = unresolvedBlockingCount(
+      [],
+      [
+        {
+          id: "R001",
+          tier: "blocking",
+          locs: ["src/app.ts:10"],
+          status: "carried",
+        },
+      ],
+    );
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ...resolveCiPosture({ ci: true }),
+      blockingCount: count,
+    });
+    expect(calls).toHaveLength(1);
+    const flags = parseStatusFlags(calls[0] as string[]);
+    expect(flags.state).toBe("failure");
+    expect(flags.description).toBe(
+      "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+    );
+  });
+
+  test("a fix the verifier refuted posts success through the gate count", async () => {
+    const count = unresolvedBlockingCount(
+      [],
+      [
+        {
+          id: "R001",
+          tier: "blocking",
+          locs: ["src/app.ts:10"],
+          status: "verified-gone",
+        },
+      ],
+    );
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ...resolveCiPosture({ ci: true }),
+      blockingCount: count,
+    });
+    expect(calls).toHaveLength(1);
+    expect(parseStatusFlags(calls[0] as string[]).state).toBe("success");
+  });
+
+  test("a local run asked for gate still grades nothing: the mixed input posts advisory on pr-hero/local", async () => {
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "gate",
+      statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
+      blockingCount: 2,
+    });
+    expect(calls).toHaveLength(1);
+    const flags = parseStatusFlags(calls[0] as string[]);
+    expect(flags.context).toBe(LOCAL_COMMIT_STATUS_CONTEXT);
+    expect(flags.state).toBe("success");
+  });
+
+  test("S7 pin: every non-ci posture, every outcome, never writes the pr-hero context", async () => {
+    const outcomes: Array<[PipelineResult | undefined, number | null]> = [
+      [undefined, null],
+      [pipelineResult(false), null],
+      [pipelineResult(false), 0],
+      [pipelineResult(false), 2],
+      [pipelineResult(true), 2],
+    ];
+    let posts = 0;
+    for (const ciMode of [undefined, "gate", "advisory"] as const) {
+      const posture = resolveCiPosture({ ci: false, ciMode });
+      for (const [result, blockingCount] of outcomes) {
+        const { spawnFn, calls } = makeStatusSpawn();
+        await settleCommitStatusAndLedger({
+          result,
+          posted: null,
+          operatorRoot: "/repo",
+          headSha: HEAD,
+          statusTargetUrl: undefined,
+          ciAdmissionLedger: null,
+          spawnFn,
+          ...posture,
+          blockingCount,
+        });
+        for (const argv of calls) {
+          posts += 1;
+          expect(parseStatusFlags(argv).context).toBe(
+            LOCAL_COMMIT_STATUS_CONTEXT,
+          );
+        }
+      }
+    }
+    expect(posts).toBeGreaterThan(0);
+  });
+
+  test("a cancelled local run settles its own pending on pr-hero/local, never pr-hero", async () => {
+    holdCommitStatusLock({
+      operatorRoot: "/repo",
+      sha: HEAD,
+      targetUrl: undefined,
+      context: LOCAL_COMMIT_STATUS_CONTEXT,
+    });
+    const contexts: string[] = [];
+    await settleHeldCommitStatusOnSignal(async (_root, _sha, request) => {
+      contexts.push(request.context);
+    });
+    expect(contexts).toEqual([LOCAL_COMMIT_STATUS_CONTEXT]);
+  });
+});
+
+// WHY these tests: a gate review can finish and be delivered, and then its final status
+// write fail. The required check then stays pending, and the publisher step later in the
+// same job can post that status only if the CLI recorded it. The record is written here,
+// and the CliError still fails the run.
+describe("settleCommitStatusAndLedger — the unsettled final status", () => {
+  async function outcomeEnv(): Promise<{
+    env: Record<string, string>;
+    recordPath: string;
+  }> {
+    const root = await mkdtemp(path.join(tmpdir(), "pr-hero-teardown-cli-"));
+    const dir = path.join(root, "outcome");
+    return {
+      env: { PRHERO_OUTCOME_DIR: dir },
+      recordPath: path.join(dir, CLI_RECORD_FILE),
+    };
+  }
+
+  function settleInput(
+    env: Record<string, string>,
+    overrides: {
+      spawnFn?: typeof Bun.spawn;
+      blockingCount?: number;
+      bodyFailed?: boolean;
+    } = {},
+  ): Parameters<typeof settleCommitStatusAndLedger>[0] {
+    return {
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      env,
+      ciMode: "gate" as const,
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: 0,
+      ...overrides,
+    };
+  }
+
+  test.each([
+    ["a clean review", 0, { state: "success", description: "review complete" }],
+    [
+      "a review with blocking findings",
+      2,
+      {
+        state: "failure",
+        description:
+          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+    ],
+  ] as const)(
+    "%s: the delivered record keeps the status that did not land, and the run still fails",
+    async (_label, blockingCount, expected) => {
+      const { env, recordPath } = await outcomeEnv();
+      recordReviewDelivered(HEAD, env);
+      const { spawnFn } = makeStatusSpawn({ fail: true });
+      let thrown: unknown;
+      try {
+        await settleCommitStatusAndLedger(
+          settleInput(env, { spawnFn, blockingCount }),
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(CliError);
+      expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+        v: 1,
+        outcome: "reviewed",
+        head_sha: HEAD,
+        unsettled_status: expected,
+      });
+      expect(heldCommitStatusLock()).toBeNull();
+    },
+  );
+
+  // Runs the body's throw and the settle in its finally, the shape reviewPr's
+  // catch and finally create, and returns the error that escaped. The
+  // best-effort write logs its own warning, so stderr is discarded here.
+  async function throwThenSettle(
+    body: Error,
+    input: Parameters<typeof settleCommitStatusAndLedger>[0],
+  ): Promise<unknown> {
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    let escaped: unknown = "nothing escaped";
+    try {
+      try {
+        throw body;
+      } finally {
+        await settleCommitStatusAndLedger(input);
+      }
+    } catch (error) {
+      escaped = error;
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    return escaped;
+  }
+
+  // WHY: the body can throw after the review was delivered (cli.json is
+  // reviewed). Then the gate's pending status has no other writer, so the
+  // record keeps the status that did not land for the publisher to repost.
+  test.each([
+    ["a clean review", 0, { state: "success", description: "review complete" }],
+    [
+      "a review with blocking findings",
+      2,
+      {
+        state: "failure",
+        description:
+          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+    ],
+  ] as const)(
+    "%s: a body that failed after delivery records the status that did not land, and its own error still escapes",
+    async (_label, blockingCount, expected) => {
+      const { env, recordPath } = await outcomeEnv();
+      recordReviewDelivered(HEAD, env);
+      const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+      const body = new Error("body failed after delivery");
+      const escaped = await throwThenSettle(
+        body,
+        settleInput(env, { spawnFn, blockingCount, bodyFailed: true }),
+      );
+      expect(calls.length).toBeGreaterThan(0);
+      expect(escaped).toBe(body);
+      expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+        v: 1,
+        outcome: "reviewed",
+        head_sha: HEAD,
+        unsettled_status: expected,
+      });
+      expect(heldCommitStatusLock()).toBeNull();
+    },
+  );
+
+  test("a body that failed after delivery records nothing when its final write lands", async () => {
+    const { env, recordPath } = await outcomeEnv();
+    recordReviewDelivered(HEAD, env);
+    const { spawnFn, calls } = makeStatusSpawn();
+    const body = new Error("body failed after delivery");
+    const escaped = await throwThenSettle(
+      body,
+      settleInput(env, { spawnFn, bodyFailed: true }),
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    expect(escaped).toBe(body);
+    expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+      v: 1,
+      outcome: "reviewed",
+      head_sha: HEAD,
+    });
+  });
+
+  test("a body that failed before delivery records nothing: the record still says reviewing", async () => {
+    const { env, recordPath } = await outcomeEnv();
+    recordReviewing(HEAD, env);
+    const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+    const body = new Error("body failed before delivery");
+    const escaped = await throwThenSettle(
+      body,
+      settleInput(env, { spawnFn, bodyFailed: true }),
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    expect(escaped).toBe(body);
+    expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+      v: 1,
+      outcome: "reviewing",
+      head_sha: HEAD,
+    });
+  });
+
+  // Advisory never grades, so its failed write records nothing. A gate run on
+  // the local context is demoted to advisory the same way (effectiveMode).
+  test.each([
+    [
+      "advisory mode",
+      { ciMode: "advisory", statusContext: COMMIT_STATUS_CONTEXT },
+    ],
+    [
+      "a gate run on the local context",
+      { ciMode: "gate", statusContext: LOCAL_COMMIT_STATUS_CONTEXT },
+    ],
+  ] as const)(
+    "%s: a body that failed after delivery records nothing when its write fails",
+    async (_label, posture) => {
+      const { env, recordPath } = await outcomeEnv();
+      recordReviewDelivered(HEAD, env);
+      const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+      const body = new Error("body failed after delivery");
+      const escaped = await throwThenSettle(body, {
+        ...settleInput(env, { spawnFn, bodyFailed: true }),
+        ...posture,
+      });
+      expect(calls.length).toBeGreaterThan(0);
+      expect(escaped).toBe(body);
+      expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+        v: 1,
+        outcome: "reviewed",
+        head_sha: HEAD,
+      });
+    },
+  );
+
+  test("an earlier error record is left alone, and the run still fails", async () => {
+    const { env, recordPath } = await outcomeEnv();
+    writeCliRecord({ v: 1, outcome: "error", cls: { kind: "unknown" } }, env);
+    const { spawnFn } = makeStatusSpawn({ fail: true });
+    let thrown: unknown;
+    try {
+      await settleCommitStatusAndLedger(settleInput(env, { spawnFn }));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(CliError);
+    expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+      v: 1,
+      outcome: "error",
+      cls: { kind: "unknown" },
+    });
+  });
 });

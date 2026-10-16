@@ -120,9 +120,162 @@ describe("classifyComment", () => {
   });
 });
 
+describe("classifyComment: the blocking tier of a finding (S4)", () => {
+  test("a finding whose header reads 🔴 blocking is blocking", () => {
+    expect(
+      classifyComment(
+        `${FINDING}\n\n🔴 blocking · BLOCKER · introduced · reliability`,
+        "inline",
+      ),
+    ).toEqual({ source: "inline", kind: "finding", blocking: true });
+  });
+
+  test("an advisory finding is not blocking", () => {
+    expect(
+      classifyComment(
+        `${FINDING}\n\n🟡 advisory · WARNING · introduced · reliability`,
+        "inline",
+      ),
+    ).toEqual({ source: "inline", kind: "finding" });
+  });
+});
+
+// Fix A: the status check counts blocking findings the PR shows on the observed
+// head, so a finding comment names its head and a report counts its blocking
+// entries in the outside-diff section (the findings that have no inline anchor).
+describe("classifyComment: where a blocking finding is shown (Fix A)", () => {
+  const OUTSIDE_BLOCKING =
+    "🔴 blocking · BLOCKER · introduced · reliability\n`src/app.ts:10` — run()\n\nThe claim.";
+  const OUTSIDE_ADVISORY =
+    "🟡 advisory · WARNING · introduced · reliability\n`src/app.ts:20` — run()\n\nA note.";
+
+  function reportWith(entries: readonly string[], after: string): string {
+    return `<!-- pr-hero-report head=${SHA} -->\n\n# pr-hero review\n\n### Comments Outside Diff (${entries.length})\n\n${entries.join("\n\n")}${after}`;
+  }
+  const FOOTER = "\n\n---\n\n<sub>run completed</sub>";
+
+  test("an inline blocking finding names the head its marker carries", () => {
+    expect(
+      classifyComment(
+        `<!-- pr-hero-finding path=src/a.ts line=3 head=${SHA} c=x -->\n\n🔴 blocking · BLOCKER · introduced · reliability`,
+        "inline",
+      ),
+    ).toEqual({
+      source: "inline",
+      kind: "finding",
+      blocking: true,
+      head: SHA,
+    });
+  });
+
+  test("a report counts its blocking entries in the outside-diff section and carries no count for advisory ones", () => {
+    expect(
+      classifyComment(
+        reportWith(
+          [OUTSIDE_BLOCKING, OUTSIDE_ADVISORY, OUTSIDE_BLOCKING],
+          FOOTER,
+        ),
+        "issue",
+      ),
+    ).toEqual({
+      source: "issue",
+      kind: "report",
+      head: SHA,
+      outsideDiffBlocking: 2,
+    });
+    expect(
+      classifyComment(reportWith([OUTSIDE_ADVISORY], FOOTER), "issue"),
+    ).toEqual({ source: "issue", kind: "report", head: SHA });
+  });
+
+  test("a blocking-looking line after the section ends, at a rule or a heading, is not an entry", () => {
+    expect(
+      classifyComment(
+        reportWith(
+          [OUTSIDE_ADVISORY],
+          "\n\n---\n\n🔴 blocking · quoted in the footer",
+        ),
+        "issue",
+      ),
+    ).toEqual({ source: "issue", kind: "report", head: SHA });
+    expect(
+      classifyComment(
+        reportWith(
+          [OUTSIDE_ADVISORY],
+          "\n\n### Next\n\n🔴 blocking · quoted under a heading",
+        ),
+        "issue",
+      ),
+    ).toEqual({ source: "issue", kind: "report", head: SHA });
+  });
+});
+
 describe("classifyPath", () => {
   test("reviewed: a summary posted and the status success", () => {
     expect(classifyPath(observation())).toBe("reviewed");
+  });
+
+  // S4: a gate verdict is a finished review too. A failure next to the summary
+  // of its own head is that review's verdict, not an absent one.
+  test("reviewed: a summary posted and the gate's failure status, which names the blocking findings", () => {
+    const obs = observation({
+      status: {
+        state: "failure",
+        description:
+          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+    });
+    expect(classifyPath(obs)).toBe("reviewed");
+  });
+
+  // The skip notice has no head and survives a later forced review of the same
+  // head, so on a comment-triggered phase only a notice this run posted counts.
+  test("reviewed: a size notice an earlier run left behind does not decide this forced review", () => {
+    const triggeredAt = Date.parse("2026-10-16T12:10:00Z");
+    const obs = observation({
+      triggeredAt,
+      comments: [
+        {
+          source: "issue",
+          kind: "skip",
+          skip: "size",
+          createdAt: "2026-10-16T12:00:00Z",
+        },
+        { source: "issue", kind: "report", head: SHA },
+      ],
+    });
+    expect(classifyPath(obs)).toBe("reviewed");
+  });
+
+  test("skipped:size: a notice this run posted after its trigger beats an earlier report on the head", () => {
+    const triggeredAt = Date.parse("2026-10-16T12:10:00Z");
+    const obs = observation({
+      triggeredAt,
+      artifacts: [],
+      comments: [
+        { source: "issue", kind: "report", head: SHA },
+        {
+          source: "issue",
+          kind: "skip",
+          skip: "size",
+          createdAt: "2026-10-16T12:10:30Z",
+        },
+      ],
+    });
+    expect(classifyPath(obs)).toBe("skipped:size");
+  });
+
+  test("skipped:size: a size skip's failure status is a skip, never a review", () => {
+    const obs = observation({
+      comments: [{ source: "issue", kind: "skip", skip: "size" }],
+      artifacts: [],
+      status: {
+        state: "failure",
+        description:
+          "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway",
+      },
+    });
+    expect(classifyPath(obs)).toBe("skipped:size");
   });
 
   test("a summary for an earlier head is not this head's review", () => {

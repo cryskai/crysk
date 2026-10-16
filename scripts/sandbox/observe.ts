@@ -40,13 +40,21 @@ export interface CommentFact {
   // An outcome's owner lead, when its summary names one (OWNER_LEAD).
   lead?: string;
   skip?: SkipReason;
-  // A report or an outcome names the head it was written for. Only a report for
-  // the head under test counts as this run's review, and only an outcome for it
-  // decides this run's path: an earlier head's comment on the same PR is not.
+  // A report, an outcome or a finding names the head it was written for (a finding
+  // in its marker). Only a report for the head under test counts as this run's
+  // review, and only an outcome for it decides this run's path: an earlier head's
+  // comment on the same PR is not.
   head?: string;
   // When GitHub stored the comment. Set for the comments of a phase that waits on a
   // comment run, so a skip marker can be tied to that run and not to an earlier one.
   createdAt?: string;
+  // S4: set only on a finding whose header reads `🔴 blocking`. Absent otherwise,
+  // so an advisory finding's fact is the same shape it always was.
+  blocking?: true;
+  // Fix A: a report's blocking entries in its `### Comments Outside Diff` section,
+  // the findings the PR shows with no inline anchor. Set only when there is at
+  // least one, so a report without one keeps the shape it always had.
+  outsideDiffBlocking?: number;
 }
 
 export interface RunFact {
@@ -89,6 +97,27 @@ export function outcomeCodeOf(body: string): string | undefined {
   return PRH_CODE.exec(body)?.[0];
 }
 
+// The blocking entries in a report's `### Comments Outside Diff` section
+// (report.ts outsideDiffSection): one entry per finding, each opening with its
+// header line. The section ends at the next heading or at the `---` rule that
+// precedes the footer, so a blocking-looking line after either is not an entry.
+const OUTSIDE_DIFF_HEADING = "### Comments Outside Diff";
+const BLOCKING_ENTRY_HEADER = "🔴 blocking · ";
+
+export function outsideDiffBlockingCount(body: string): number {
+  let inSection = false;
+  let count = 0;
+  for (const line of body.split("\n")) {
+    if (!inSection) {
+      if (line.startsWith(OUTSIDE_DIFF_HEADING)) inSection = true;
+      continue;
+    }
+    if (/^#{1,3} /.test(line) || line === "---") break;
+    if (line.startsWith(BLOCKING_ENTRY_HEADER)) count += 1;
+  }
+  return count;
+}
+
 export function classifyComment(
   body: string,
   source: "issue" | "inline",
@@ -96,12 +125,27 @@ export function classifyComment(
   const first = (body.split("\n", 1)[0] ?? "").trim();
   if (first.startsWith(REPORT_MARKER_PREFIX)) {
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
-    return head === undefined
-      ? { source, kind: "report" }
-      : { source, kind: "report", head };
+    const outside = outsideDiffBlockingCount(body);
+    return {
+      source,
+      kind: "report",
+      ...(head === undefined ? {} : { head }),
+      ...(outside === 0 ? {} : { outsideDiffBlocking: outside }),
+    };
   }
-  if (first.startsWith(FINDING_MARKER_PREFIX))
-    return { source, kind: "finding" };
+  if (first.startsWith(FINDING_MARKER_PREFIX)) {
+    // The tier is in the finding's header line (report.ts findingHeaderLine),
+    // and it is the only tier evidence a reader of the PR sees. Its marker names
+    // the head, so the check can tell this head's finding from an older one.
+    const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
+    const blocking = body.includes("🔴 blocking");
+    return {
+      source,
+      kind: "finding",
+      ...(head === undefined ? {} : { head }),
+      ...(blocking ? { blocking: true as const } : {}),
+    };
+  }
   if (first.startsWith(OUTCOME_MARKER_PREFIX)) {
     // The head is "unknown" when the publisher had no sha; such an outcome has no head.
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
@@ -122,6 +166,21 @@ export function classifyComment(
   return { source, kind: "other" };
 }
 
+// A skip notice names no head, and the product reposts it without removing it.
+// So on a comment-triggered phase it counts only when this run posted it: a
+// notice is created at or after the trigger (the same window the own-evidence
+// check uses). A notice an earlier run left behind is not this run's skip, and a
+// forced review of the same head (/pr-hero review after a size skip) decides
+// the path from its own report. A phase with no trigger has no window to test,
+// so every notice counts there, as it always has.
+function skipIsThisRunsOwn(comment: CommentFact, obs: Observation): boolean {
+  if (obs.triggeredAt === undefined) return true;
+  if (comment.createdAt === undefined) return false;
+  return (
+    Date.parse(comment.createdAt) >= obs.triggeredAt - COMMENT_RUN_CLOCK_SKEW_MS
+  );
+}
+
 export function classifyPath(obs: Observation): SmokePath {
   // An outcome of an earlier head is that head's failure, not this one's. It still
   // counts for S7 (invariantViolations reads every outcome on the PR).
@@ -133,13 +192,23 @@ export function classifyPath(obs: Observation): SmokePath {
     if (outcome.code === HUNTERS_FAILED_CODE) return "hunters-failed";
     return `error:${outcome.code ?? "no-code"}`;
   }
-  const skip = obs.comments.find((c) => c.kind === "skip");
+  const skip = obs.comments.find(
+    (c) => c.kind === "skip" && skipIsThisRunsOwn(c, obs),
+  );
   if (skip?.skip !== undefined) return `skipped:${skip.skip}`;
 
+  // S4: a gate failure is a finished review's verdict too, so with this head's
+  // report it is `reviewed`. A size or budget skip never leaves a report, so a
+  // failure here is never one.
   const hasReport = obs.comments.some(
     (c) => c.kind === "report" && c.head === obs.headSha,
   );
-  if (hasReport && obs.status?.state === "success") return "reviewed";
+  if (
+    hasReport &&
+    (obs.status?.state === "success" || obs.status?.state === "failure")
+  ) {
+    return "reviewed";
+  }
 
   // The status is written apart from the outcome comment, so a read can see it
   // alone. Its code is the same failure the comment names, so it classifies the

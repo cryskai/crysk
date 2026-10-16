@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Gate mode for CI**: the action's `mode` input (`gate` or `advisory`, default `gate`) decides what the
+  `pr-hero` commit status says. `gate` sets `failure` on unresolved blocking findings, on a size or budget
+  skip, and on a crash, and `success` otherwise. `advisory` keeps the previous posture: a finished review is
+  always `success`. Local runs and the watcher post their status on `pr-hero/local`, which the required check
+  never reads, so a local run cannot overwrite a red gate. A watcher run also stands down for a local review
+  already in flight on the same head, while a `--ci` run still stands down only for a pending on `pr-hero`. When
+  the review itself failed before delivery, a failed final status write is logged and never replaces that failure.
+  When a delivered review's final status write fails, including when a step after the delivery failed, the publisher
+  step of the same job posts that status once more, so the required check does not stay pending; the job still fails.
+
+### Fixed
+- **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left
+  open stays counted through a re-review that carries it, through a same-head `/pr-hero review` that runs no
+  hunters, through a triage reply on its own, and through later pushes after a rejected dismissal or a
+  `misclassified` reply. Before this, each of those read green. A finding leaves the
+  count only when the re-review verifies it gone or its files were deleted. Known gap: a blocking finding first
+  raised by a re-review, rather than by the first review, is not yet carried to the reviews after it. An advisory
+  finding from this run never clears a blocking one at the same spot.
+
 ## [0.2.3] - 2026-10-16
 
 ### Added
