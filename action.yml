@@ -135,6 +135,14 @@ runs:
         HAS_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key != '' }}
         HAS_CLAUDE_TOKEN: ${{ inputs.claude-token != '' }}
         HAS_OPENCODE_AUTH: ${{ inputs.opencode-auth != '' }}
+        # The trigger writes its decision to trigger.json here; the publish
+        # step reads it. The run step writes the cli-started marker here too.
+        # One path, bound the same way in all three steps (T2b).
+        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        # Presence only, never the routing text: whether the routing names
+        # OpenCode, the same test the OpenCode install step makes. It names the
+        # backend of a no-credential outcome.
+        HAS_OPENCODE_ROUTING: ${{ contains(inputs.routing, 'opencode') }}
       run: bun "${{ github.action_path }}/src/ci/trigger.ts"
 
     - name: Install dependencies
@@ -183,6 +191,7 @@ runs:
         # on a `pull_request_target`-triggered workflow; splicing it
         # straight into the script would be a command-injection hole.
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
         GITHUB_ACTIONS: 'true'
@@ -202,6 +211,12 @@ runs:
         POST_INPUT: ${{ inputs.post }}
         STEP_SUMMARY_INPUT: ${{ inputs.step-summary }}
       run: |
+        : > "$PRHERO_OUTCOME_DIR/cli-started"
+        # The line above is the first thing this step does, before anything
+        # else can fail. WHY: the publish step must tell "an earlier step failed"
+        # (no marker) from "the CLI ran and owns its own output" (marker). It
+        # reads the marker and nothing else, so it needs no steps.<id>.outcome.
+        #
         # NEVER redirect stderr away in this step: pr-hero's log() writes to
         # process.stderr unconditionally, and GitHub Actions scans BOTH
         # stdout and stderr for workflow commands (::group::, ::warning::,
@@ -229,6 +244,37 @@ runs:
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
 
         bun "${{ github.action_path }}/bin/pr-hero.js" "$@"
+
+    # Speaks for the outcomes that happen BEFORE the CLI starts (T2b, S3): no
+    # credential, a pull request that cannot be resolved, a commenter permission
+    # that could not be verified, and a failed install step. It reads the record
+    # the trigger wrote and posts ONE annotation, ONE step summary, ONE commit
+    # status and ONE sticky comment on the pull request.
+    #
+    # WHY always(): the outcome this step reports is exactly the one where an
+    # earlier step failed, and a failed step skips every later one. Without
+    # always() a failed install would be silent again, which is the bug.
+    #
+    # WHY gated on `publish`, not on `run`: `run` is false for every outcome
+    # this step reports.
+    #
+    # WHY builtins only: it runs before any install, like the trigger. The one
+    # relative import is a builtins-only sibling (src/ci/outcome.ts), which needs
+    # no node_modules.
+    #
+    # IN THIS RELEASE it speaks only for pre-CLI outcomes. When the cli-started
+    # marker exists the CLI ran and owns its own status and comment, and this
+    # step publishes nothing. T2c moves those outcomes here.
+    - name: Publish pr-hero outcome
+      id: publish
+      if: always() && steps.trigger.outputs.publish == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+      run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
     # Without this step the triage half of the review loop has no input.
     # `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N` is the

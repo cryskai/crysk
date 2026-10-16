@@ -10,7 +10,8 @@
 // live here, on the action side, where every consumer gets the same rules.
 //
 // decideCiTrigger is PURE. runCiTrigger is the thin shell: it reads env, asks
-// `gh` only the questions the decision needs, and writes $GITHUB_OUTPUT.
+// `gh` only the questions the decision needs, writes $GITHUB_OUTPUT, and writes
+// trigger.json for the publish step (src/ci/publish.ts) for EVERY decision.
 // Both I/O seams (`gh`, the writers) are injected so the shell's ordering,
 // not just its answers, is testable offline.
 //
@@ -20,7 +21,14 @@
 // better: it resolves to a src module whose own imports reach packages. Keep
 // every import here `node:` or `bun`.
 
-import { appendFileSync, existsSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 export const REVIEW_COMMAND = "/pr-hero review";
@@ -51,8 +59,14 @@ export type CommenterPermission =
   // The lookup itself failed: a 5xx, a 403 rate limit, a timeout, no
   // network, no gh. That says nothing about the commenter, only about the
   // API. Retried once; if it reaches the decision, it is neither a review
-  // nor a quiet denial.
-  | { kind: "indeterminate"; detail: string };
+  // nor a quiet denial. `status` is the HTTP status gh printed, when it
+  // printed one; `rateLimited` is set only when gh says so in its own words.
+  | {
+      kind: "indeterminate";
+      detail: string;
+      status?: number;
+      rateLimited?: boolean;
+    };
 
 // Presence only. The action passes `inputs.<credential> != ''`, never the
 // value, so nothing in this module can print a secret it never received.
@@ -121,7 +135,12 @@ export type CiTriggerDecision =
   | { kind: "review"; force: boolean; full: boolean }
   | { kind: "ignore"; reason: string }
   | { kind: "denied"; reason: string }
-  | { kind: "unverifiable"; reason: string }
+  | {
+      kind: "unverifiable";
+      reason: string;
+      status?: number;
+      rateLimited?: boolean;
+    }
   | { kind: "no-credentials"; inputs: readonly string[] };
 
 // Exact match after trimming, and nothing else: no case folding, no inner
@@ -223,6 +242,8 @@ function commenterVerdict(
         `${input.repository}, because the GitHub API call failed ` +
         `(${permission.detail}), so no review was started. Comment ` +
         `\`${command}\` again to retry.`,
+      status: permission.status,
+      rateLimited: permission.rateLimited,
     };
   }
   const rule =
@@ -350,60 +371,15 @@ function workflowCommand(
   return `::${command} title=pr-hero::${escapeCommandData(message)}\n`;
 }
 
-export function renderNoCredentialsError(): string {
-  return workflowCommand(
-    "error",
-    "No model credential reached pr-hero, so this pull request was not " +
-      "reviewed. Set CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, or " +
-      "OPENCODE_AUTH_JSON plus PRHERO_ROUTING. The job summary has the " +
-      "exact commands.",
-  );
-}
-
-// The fix commands are ported from the old `credentials` job's notice in
-// src/ci/setup.ts. That job only warned, and a skipped review reported green
-// — exactly what a clean review looks like — which cost this project five
-// unreviewed PRs. Now the run is red, and the summary carries the fix.
-export function renderNoCredentialsSummary(context: {
-  runId?: string;
-}): string {
-  const runId =
-    context.runId !== undefined && /^[0-9]+$/.test(context.runId)
-      ? context.runId
-      : "<run-id>";
-  const inputs = CREDENTIAL_INPUTS.map((name) => `\`${name}\``).join(", ");
-  return [
-    "### :x: pr-hero could not review this pull request",
-    "",
-    `**What is wrong:** no model credential reached the action. Its ${inputs} inputs were all empty, and the runner holds no Claude session file or OpenCode auth store.`,
-    "",
-    "**Why this run is red:** pr-hero reviews with a model it can authenticate to. A run that skipped quietly would report green, and that looks exactly like a clean review.",
-    "",
-    "**Fix:** wire a Claude secret, or OpenCode (secret plus routing variable):",
-    "",
-    "```bash",
-    "claude setup-token   # prints a long-lived token; paste it below",
-    "gh secret set CLAUDE_CODE_OAUTH_TOKEN",
-    "# ...or, for pay-as-you-go billing:",
-    "gh secret set ANTHROPIC_API_KEY",
-    "# ...or, for OpenCode (needs both):",
-    "gh secret set OPENCODE_AUTH_JSON",
-    "gh variable set PRHERO_ROUTING --body '<routing-object-json>'",
-    "```",
-    "",
-    `If the secret is already set, check that the workflow hands it to the action (for example \`claude-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\`): a secret the workflow does not pass never reaches pr-hero. Runs started by Dependabot read Dependabot secrets (\`gh secret set --app dependabot <NAME>\`), not Actions secrets.`,
-    "",
-    `**Re-run:** adding a secret does not re-run past workflows. Re-run this one with \`gh run rerun ${runId}\`, or comment \`${REVIEW_COMMAND}\` on the pull request.`,
-    "",
-  ].join("\n");
-}
-
 export interface CiTriggerOutputs {
   run: boolean;
   force: boolean;
   full: boolean;
   pr: string;
   head_sha: string;
+  // Whether the publish step speaks for this run: a review, a missing
+  // credential, or an unverifiable permission (odd/tasks/agent-first-ci.md, T2b).
+  publish: boolean;
 }
 
 const NO_RUN: CiTriggerOutputs = {
@@ -412,6 +388,7 @@ const NO_RUN: CiTriggerOutputs = {
   full: false,
   pr: "",
   head_sha: "",
+  publish: false,
 };
 
 export function formatTriggerOutputs(outputs: CiTriggerOutputs): string {
@@ -421,6 +398,7 @@ export function formatTriggerOutputs(outputs: CiTriggerOutputs): string {
     `full=${outputs.full}`,
     `pr=${outputs.pr}`,
     `head_sha=${outputs.head_sha}`,
+    `publish=${outputs.publish}`,
     "",
   ].join("\n");
 }
@@ -448,6 +426,158 @@ export interface CiTriggerDeps {
   stdout: (text: string) => void;
   appendOutput: (text: string) => void;
   appendSummary: (text: string) => void;
+  // The record's file writes. The default is node:fs; a test injects a failing
+  // one to prove the write is atomic.
+  fs?: OutcomeFs;
+}
+
+// The file the publisher reads back (src/ci/outcome.ts's TriggerRecord). This
+// module imports nothing from outcome.ts, so the name is written out here.
+const OUTCOME_RECORD = "trigger.json";
+
+export interface OutcomeFs {
+  mkdir(dir: string): void;
+  writeFile(filePath: string, text: string): void;
+  rename(from: string, to: string): void;
+  remove(filePath: string): void;
+}
+
+const NODE_FS: OutcomeFs = {
+  mkdir: (dir) => {
+    mkdirSync(dir, { recursive: true });
+  },
+  writeFile: (filePath, text) => {
+    writeFileSync(filePath, text);
+  },
+  rename: (from, to) => {
+    renameSync(from, to);
+  },
+  remove: (filePath) => {
+    rmSync(filePath, { force: true });
+  },
+};
+
+// WHY tmp then rename: the publish step reads the record in a later step, and
+// it must never see a half-written file. A failed write removes its temp file,
+// so nothing partial is left for the publisher to misread.
+function writeRecordAtomically(dir: string, text: string, fs: OutcomeFs): void {
+  const finalPath = path.join(dir, OUTCOME_RECORD);
+  const tempPath = `${finalPath}.tmp`;
+  fs.mkdir(dir);
+  try {
+    fs.writeFile(tempPath, text);
+    fs.rename(tempPath, finalPath);
+  } catch (error) {
+    try {
+      fs.remove(tempPath);
+    } catch {
+      // Best effort: the write error is the one worth reporting.
+    }
+    throw error;
+  }
+}
+
+// The class a publisher renders from. The trigger writes only what it can
+// know without the catalog: an HTTP status from a failed lookup, and an
+// unresolved PR on a review.
+type RecordClass =
+  | { kind: "github"; status: number; rateLimited?: true }
+  | { kind: "trigger"; check: "pr-unresolved" };
+
+interface RunIdentity {
+  repository: string;
+  run_id: string;
+  run_url: string;
+}
+
+interface RecordFields {
+  decision: CiTriggerDecision["kind"];
+  params: { backend?: string };
+  cls?: RecordClass;
+  pr?: string;
+  headSha?: string;
+}
+
+function runIdentity(deps: CiTriggerDeps): RunIdentity {
+  const repository = deps.env.GITHUB_REPOSITORY ?? "";
+  const runId = deps.env.GITHUB_RUN_ID ?? "";
+  const server = deps.env.GITHUB_SERVER_URL || "https://github.com";
+  return {
+    repository,
+    run_id: runId,
+    run_url: `${server}/${repository}/actions/runs/${runId}`,
+  };
+}
+
+// Writes one record for every decision. Unset PRHERO_OUTCOME_DIR (a local run
+// outside Actions) writes nothing. A failed write is reported, and the
+// decision's own exit code stands: the review is not the record's to block.
+function writeRecord(
+  deps: CiTriggerDeps,
+  run: RunIdentity,
+  fields: RecordFields,
+): void {
+  const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
+  if (dir === "") return;
+  const record = {
+    v: 1,
+    decision: fields.decision,
+    params: fields.params,
+    ...(fields.cls === undefined ? {} : { cls: fields.cls }),
+    ...(fields.pr === undefined ? {} : { pr: Number(fields.pr) }),
+    ...(fields.headSha === undefined ? {} : { head_sha: fields.headSha }),
+    repository: run.repository,
+    run_id: run.run_id,
+    run_url: run.run_url,
+  };
+  try {
+    writeRecordAtomically(
+      dir,
+      `${JSON.stringify(record)}\n`,
+      deps.fs ?? NODE_FS,
+    );
+  } catch {
+    deps.stdout(
+      workflowCommand(
+        "error",
+        "pr-hero could not write its outcome record, so this run's result may not reach the pull request.",
+      ),
+    );
+  }
+}
+
+// The lookup's class: only when gh printed an HTTP status. A 403 is a rate
+// limit only when gh said so; otherwise the catalog keeps its permission reading.
+function lookupClass(decision: {
+  status?: number;
+  rateLimited?: boolean;
+}): RecordClass | undefined {
+  if (decision.status === undefined) return undefined;
+  return decision.rateLimited === true
+    ? { kind: "github", status: decision.status, rateLimited: true }
+    : { kind: "github", status: decision.status };
+}
+
+// The route the run would have used. The trigger has no routing text, only
+// whether it names OpenCode (action.yml's own test for the OpenCode install).
+function backendOf(deps: CiTriggerDeps): string {
+  return deps.env.HAS_OPENCODE_ROUTING === "true" ? "opencode" : "claude";
+}
+
+function resolvedPrNumber(deps: CiTriggerDeps): string | undefined {
+  const resolved = resolvePrNumber({
+    prNumberInput: deps.env.PR_NUMBER_INPUT ?? "",
+    eventName: deps.env.EVENT_NAME ?? "",
+    eventPrNumber: deps.env.EVENT_PR_NUMBER ?? "",
+    eventIssueNumber: deps.env.EVENT_ISSUE_NUMBER ?? "",
+  });
+  return resolved.ok ? resolved.pr : undefined;
+}
+
+const VALID_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+function validSha(value: string): string | undefined {
+  return VALID_SHA.test(value) ? value : undefined;
 }
 
 // Every name below is bound by the trigger step's `env:` in action.yml,
@@ -515,13 +645,26 @@ function askCommenterPermission(
     if (result.stderr.includes("HTTP 404")) {
       return { kind: "resolved", permission: "none" };
     }
-    return { kind: "indeterminate", detail: ghFailureDetail(result) };
+    return indeterminateLookup(result);
   }
   const permission = result.stdout.trim();
   if (permission === "") {
     return { kind: "unavailable", detail: "gh returned no permission" };
   }
   return { kind: "resolved", permission };
+}
+
+// The failed lookup, with the HTTP status gh printed. gh's own text is only
+// read here, never recorded: the record carries the number and a flag.
+function indeterminateLookup(result: GhResult): CommenterPermission {
+  const match = /HTTP (\d{3})\b/.exec(result.stderr);
+  const status = match === null ? undefined : Number(match[1]);
+  return {
+    kind: "indeterminate",
+    detail: ghFailureDetail(result),
+    status,
+    rateLimited: status === 403 && /rate limit/i.test(result.stderr),
+  };
 }
 
 // Short and fixed: long enough for a transient 5xx to clear, short enough
@@ -561,6 +704,9 @@ function resolveHeadSha(
   eventName: string,
   repository: string,
   pr: string,
+  // A run that will not review says nothing about its head: the publisher
+  // carries the outcome, so no second warning is printed for the same gap.
+  quiet: boolean,
 ): string {
   const fromEvent = (deps.env.EVENT_PR_HEAD_SHA ?? "").trim();
   if (
@@ -582,13 +728,15 @@ function resolveHeadSha(
   ]);
   const sha = result.stdout.trim();
   if (result.exitCode === 0 && SHA_RE.test(sha)) return sha;
-  deps.stdout(
-    workflowCommand(
-      "warning",
-      `Could not resolve the head of pull request #${pr}; the run-directory ` +
-        `artifact is named with "${UNKNOWN_HEAD_SHA}" instead of its sha.`,
-    ),
-  );
+  if (!quiet) {
+    deps.stdout(
+      workflowCommand(
+        "warning",
+        `Could not resolve the head of pull request #${pr}; the run-directory ` +
+          `artifact is named with "${UNKNOWN_HEAD_SHA}" instead of its sha.`,
+      ),
+    );
+  }
   return UNKNOWN_HEAD_SHA;
 }
 
@@ -605,45 +753,82 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
       }
     : base;
   const decision = decideCiTrigger(input);
+  const run = runIdentity(deps);
+  // Resolved before the decision branches, so every record names the PR the
+  // publisher would post on, whatever the decision.
+  const pr = resolvedPrNumber(deps);
 
   if (decision.kind === "ignore" || decision.kind === "denied") {
+    writeRecord(deps, run, { decision: decision.kind, params: {} });
     deps.appendOutput(formatTriggerOutputs(NO_RUN));
     deps.stdout(workflowCommand("notice", decision.reason));
     return 0;
   }
+
   if (decision.kind === "unverifiable") {
-    deps.appendOutput(formatTriggerOutputs(NO_RUN));
-    deps.stdout(workflowCommand("error", decision.reason));
-    return 1;
-  }
-  if (decision.kind === "no-credentials") {
-    deps.appendOutput(formatTriggerOutputs(NO_RUN));
-    deps.stdout(renderNoCredentialsError());
-    deps.appendSummary(
-      renderNoCredentialsSummary({ runId: deps.env.GITHUB_RUN_ID }),
+    // gh is already failing for this lookup, so asking it for the head would
+    // only add another failing call: the publisher degrades to its summary.
+    writeRecord(deps, run, {
+      decision: "unverifiable",
+      params: {},
+      cls: lookupClass(decision),
+      pr,
+    });
+    deps.appendOutput(
+      formatTriggerOutputs({ ...NO_RUN, pr: pr ?? "", publish: true }),
     );
     return 1;
   }
 
-  const pr = resolvePrNumber({
-    prNumberInput: deps.env.PR_NUMBER_INPUT ?? "",
-    eventName: base.eventName,
-    eventPrNumber: deps.env.EVENT_PR_NUMBER ?? "",
-    eventIssueNumber: deps.env.EVENT_ISSUE_NUMBER ?? "",
-  });
-  if (!pr.ok) {
-    deps.appendOutput(formatTriggerOutputs(NO_RUN));
-    deps.stdout(workflowCommand("error", pr.error));
+  if (decision.kind === "no-credentials") {
+    const head =
+      pr === undefined
+        ? UNKNOWN_HEAD_SHA
+        : resolveHeadSha(deps, base.eventName, base.repository, pr, true);
+    writeRecord(deps, run, {
+      decision: "no-credentials",
+      params: { backend: backendOf(deps) },
+      pr,
+      headSha: validSha(head),
+    });
+    deps.appendOutput(
+      formatTriggerOutputs({
+        ...NO_RUN,
+        pr: pr ?? "",
+        head_sha: validSha(head) ?? "",
+        publish: true,
+      }),
+    );
     return 1;
   }
 
+  if (pr === undefined) {
+    // The publisher renders the class (PRH-PR-UNRESOLVED). The review never
+    // started, so the install step's marker is absent by design.
+    writeRecord(deps, run, {
+      decision: "review",
+      params: {},
+      cls: { kind: "trigger", check: "pr-unresolved" },
+    });
+    deps.appendOutput(formatTriggerOutputs({ ...NO_RUN, publish: true }));
+    return 1;
+  }
+
+  const head = resolveHeadSha(deps, base.eventName, base.repository, pr, false);
+  writeRecord(deps, run, {
+    decision: "review",
+    params: {},
+    pr,
+    headSha: validSha(head),
+  });
   deps.appendOutput(
     formatTriggerOutputs({
       run: true,
       force: decision.force,
       full: decision.full,
-      pr: pr.pr,
-      head_sha: resolveHeadSha(deps, base.eventName, base.repository, pr.pr),
+      pr,
+      head_sha: head,
+      publish: true,
     }),
   );
   return 0;

@@ -102,7 +102,8 @@ interface CatalogVariant {
   readonly owner?: OwnerRule;
   readonly why: string;
   // A list of fix lines, or a function of the params when the steps depend on
-  // them (the backend, for missing_subscription_record).
+  // them (the backend: missing_subscription_record, and PRH-CRED-MISSING's
+  // routing variable).
   readonly fixes:
     | readonly string[]
     | ((params: ErrorParams) => readonly string[]);
@@ -147,8 +148,147 @@ export interface ErrorParams {
 export interface RenderedError {
   code: ErrorCode;
   owner: Owner;
+  // The one sentence the owner lead introduces, filled and without the lead.
+  // The publisher uses it for the commit status description.
+  what: string;
   annotation: string;
   summary: string[];
+}
+
+// The record the trigger step writes to `trigger.json` in the outcome
+// directory, and the publisher reads back (odd/tasks/agent-first-ci.md, T2b).
+// It carries the decision, never a secret, a comment body or gh's own text.
+export interface TriggerRecord {
+  v: 1;
+  decision: "review" | "ignore" | "denied" | "unverifiable" | "no-credentials";
+  cls?: ErrorClass;
+  params: ErrorParams;
+  pr?: number;
+  head_sha?: string;
+  repository: string;
+  run_id: string;
+  run_url: string;
+}
+
+const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
+  "review",
+  "ignore",
+  "denied",
+  "unverifiable",
+  "no-credentials",
+];
+const TRIGGER_CHECKS = ["no-credential", "routing-missing", "pr-unresolved"];
+const RECORD_PARAM_KEYS: readonly string[] = [
+  "backend",
+  "provider",
+  "step",
+  "secret",
+  "scope",
+  "runId",
+  "runUrl",
+  "detail",
+];
+const SHA_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+function isRecordObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function parseRecordParams(value: unknown): ErrorParams | undefined {
+  if (!isRecordObject(value)) return undefined;
+  const params: Record<string, string | number> = {};
+  for (const [key, field] of Object.entries(value)) {
+    if (key === "pr") {
+      if (!isPositiveInteger(field)) return undefined;
+      params.pr = field;
+    } else if (RECORD_PARAM_KEYS.includes(key) && typeof field === "string") {
+      params[key] = field;
+    } else {
+      return undefined;
+    }
+  }
+  return params as ErrorParams;
+}
+
+// The classes the trigger writes. Any other kind is refused: the record is a
+// contract between two modules, and a wider reader would hide a writer's bug.
+function parseRecordClass(value: unknown): ErrorClass | undefined {
+  if (!isRecordObject(value)) return undefined;
+  if (value.kind === "unknown") return { kind: "unknown" };
+  if (value.kind === "trigger") {
+    return typeof value.check === "string" &&
+      TRIGGER_CHECKS.includes(value.check)
+      ? { kind: "trigger", check: value.check as "pr-unresolved" }
+      : undefined;
+  }
+  if (value.kind === "github") {
+    if (!Number.isInteger(value.status)) return undefined;
+    const status = value.status as number;
+    if (value.rateLimited === undefined) return { kind: "github", status };
+    return value.rateLimited === true
+      ? { kind: "github", status, rateLimited: true }
+      : undefined;
+  }
+  return undefined;
+}
+
+// Returns undefined for anything the publisher must not act on. A file that
+// exists but fails here is an error for the publisher to report, never a
+// silent skip: see runPublish in src/ci/publish.ts.
+export function parseTriggerRecord(text: string): TriggerRecord | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecordObject(value) || value.v !== 1) return undefined;
+  const decision = TRIGGER_DECISIONS.find(
+    (candidate) => candidate === value.decision,
+  );
+  const params = parseRecordParams(value.params);
+  if (decision === undefined || params === undefined) return undefined;
+  if (
+    typeof value.repository !== "string" ||
+    !/^[^\s/]+\/[^\s/]+$/.test(value.repository) ||
+    typeof value.run_id !== "string" ||
+    !/^[0-9]+$/.test(value.run_id) ||
+    typeof value.run_url !== "string" ||
+    !/^\S+$/.test(value.run_url)
+  ) {
+    return undefined;
+  }
+  const record: TriggerRecord = {
+    v: 1,
+    decision,
+    params,
+    repository: value.repository,
+    run_id: value.run_id,
+    run_url: value.run_url,
+  };
+  if (value.pr !== undefined) {
+    if (!isPositiveInteger(value.pr)) return undefined;
+    record.pr = value.pr;
+  }
+  if (value.head_sha !== undefined) {
+    if (
+      typeof value.head_sha !== "string" ||
+      !SHA_PATTERN.test(value.head_sha)
+    ) {
+      return undefined;
+    }
+    record.head_sha = value.head_sha;
+  }
+  if (value.cls !== undefined) {
+    const cls = parseRecordClass(value.cls);
+    if (cls === undefined) return undefined;
+    record.cls = cls;
+  }
+  return record;
 }
 
 // A switch over a closed union ends in `unmapped(value, fallback)`. A new
@@ -537,10 +677,16 @@ const UNCLASSIFIED_FIX =
 // The GitHub Actions expression is spliced in from two literals so the source
 // never holds a `${` pair that reads as a template placeholder here.
 const GITHUB_TOKEN_INPUT = "github-token: $" + "{{ secrets.GITHUB_TOKEN }}";
+// The `with:` line that hands the Claude secret to the action, spliced the same way.
+const CLAUDE_TOKEN_INPUT =
+  "claude-token: $" + "{{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}";
+// The `with:` line that hands the OpenCode auth store to the action, spliced the same way.
+const OPENCODE_AUTH_INPUT =
+  "opencode-auth: $" + "{{ secrets.OPENCODE_AUTH_JSON }}";
 
 function single(
   why: string,
-  fixes: readonly string[],
+  fixes: CatalogVariant["fixes"],
   annotationFix: CatalogVariant["annotationFix"],
 ): Readonly<Record<string, CatalogVariant>> {
   return { default: { why, fixes, annotationFix } };
@@ -582,11 +728,18 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "No credential for the {backend} route reached the action",
     variants: single(
       "pr-hero cannot authenticate, so it cannot review this PR",
-      [
+      (params) => [
         "Set one credential for the route you use:",
         "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
         "$ gh secret set ANTHROPIC_API_KEY",
         "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
+        `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${isOpencodeRoute(params) ? OPENCODE_AUTH_INPUT : CLAUDE_TOKEN_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
+        ...(isOpencodeRoute(params)
+          ? [
+              "An OpenCode route also needs the routing variable:",
+              "$ gh variable set PRHERO_ROUTING --body '<routing-object-json>'",
+            ]
+          : []),
         "Dependabot PRs read Dependabot secrets, so set this one too:",
         "$ gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN",
         "Then re-run the workflow:",
@@ -992,14 +1145,16 @@ export function renderCode(
   const lead = entry.lead ?? ownerLead(owner, providerName);
   const link = `${DOCS_BASE}${code.toLowerCase()}`;
   const what = picked.what ?? whatOf(entry, params);
+  const sentence = capitalized(fill(what, params, "annotation"));
   const message =
-    `${lead} ${capitalized(fill(what, params, "annotation"))}. ` +
+    `${lead} ${sentence}. ` +
     `Why: ${fill(picked.why, params, "annotation")}. ` +
     `Fix: ${annotationFixOf(picked, params)}. ` +
     `Docs: ${link}`;
   return {
     code,
     owner,
+    what: sentence,
     annotation: `::${entry.level} title=pr-hero ${code}::${escapeCommandData(message)}`,
     summary: summaryLines(code, entry, lead, what, picked, params, link),
   };

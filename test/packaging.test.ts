@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { generateCiWorkflowTemplate, OWN_CI_WORKFLOW_OPTIONS } from "#ci/setup";
 import { ENGINE_VERSION } from "../src/index";
@@ -466,6 +473,7 @@ describe("Packaging & distribution configuration", () => {
       env?: Record<string, string>;
       with?: Record<string, string | number | boolean>;
       run?: string;
+      shell?: string;
     };
     const steps = () => parsedAction().runs.steps as ActionStep[];
     const triggerStep = () => steps().find((step) => step.id === "trigger");
@@ -477,6 +485,7 @@ describe("Packaging & distribution configuration", () => {
       inputs: Record<string, string>;
       github: Record<string, string>;
       trigger: Record<string, string>;
+      runner: Record<string, string>;
     }
     function resolveEnv(
       env: Record<string, string>,
@@ -485,19 +494,30 @@ describe("Packaging & distribution configuration", () => {
       const action = parsedAction();
       const input = (name: string): string =>
         ctx.inputs[name] ?? action.inputs[name]?.default ?? "";
-      const resolve = (value: string): string => {
-        const expr = /^\$\{\{\s*(.+?)\s*\}\}$/.exec(value)?.[1];
-        if (expr === undefined) return value;
+      const resolveExpr = (expr: string): string => {
         const ref = /^inputs\.([\w-]+)$/.exec(expr)?.[1];
         if (ref !== undefined) return input(ref);
         const presence = /^inputs\.([\w-]+) != ''$/.exec(expr)?.[1];
         if (presence !== undefined) return String(input(presence) !== "");
+        const contains = /^contains\(inputs\.([\w-]+), '([^']*)'\)$/.exec(expr);
+        if (contains !== null) {
+          return String(input(contains[1] ?? "").includes(contains[2] ?? ""));
+        }
         const github = /^github\.([\w.]+)$/.exec(expr)?.[1];
         if (github !== undefined) return ctx.github[github] ?? "";
+        const runner = /^runner\.([\w.]+)$/.exec(expr)?.[1];
+        if (runner !== undefined) return ctx.runner[runner] ?? "";
         const output = /^steps\.trigger\.outputs\.(\w+)$/.exec(expr)?.[1];
         if (output !== undefined) return ctx.trigger[output] ?? "";
         throw new Error(`unsupported expression in an action.yml env: ${expr}`);
       };
+      // A value may hold one expression or several, mixed with literal text
+      // (`${{ runner.temp }}/pr-hero-outcome`).
+      const resolve = (value: string): string =>
+        value.replace(
+          /\$\{\{\s*(.+?)\s*\}\}/g,
+          (_match: string, expr: string) => resolveExpr(expr),
+        );
       return Object.fromEntries(
         Object.entries(env).map(([name, value]) => [name, resolve(value)]),
       );
@@ -531,61 +551,102 @@ describe("Packaging & distribution configuration", () => {
       exitCode: number;
       trigger: Record<string, string>;
       args: string[] | undefined;
+      // What the run leaves in the outcome directory: the marker the run step
+      // writes first, and the record the trigger wrote.
+      cliStarted: boolean;
+      record: string | undefined;
     }> {
       const { runCiTrigger } = await import("#ci/trigger");
-      let output = "";
-      const exitCode = runCiTrigger({
-        env: {
-          ...resolveEnv(triggerStep()?.env ?? {}, {
-            inputs,
-            github,
-            trigger: {},
-          }),
-          // A runner default every step inherits, not an `env:` binding.
-          GITHUB_REPOSITORY: github.repository ?? "",
-        },
-        gh,
-        stdout: () => {},
-        appendOutput: (text) => {
-          output += text;
-        },
-        appendSummary: () => {},
-      });
-      const trigger = Object.fromEntries(
-        output
-          .split("\n")
-          .filter((line) => line.includes("="))
-          .map((line) => [
-            line.slice(0, line.indexOf("=")),
-            line.slice(line.indexOf("=") + 1),
-          ]),
-      );
-      if (trigger.run !== "true") return { exitCode, trigger, args: undefined };
+      // The runner's temp directory, with the outcome directory the action
+      // binds under it. A real directory, so the marker and the record are
+      // checked on disk, not in a string.
+      const runnerTemp = mkdtempSync(path.join(os.tmpdir(), "prhero-action-"));
+      const outcomeDir = path.join(runnerTemp, "pr-hero-outcome");
+      mkdirSync(outcomeDir);
+      const runner = { temp: runnerTemp };
+      try {
+        let output = "";
+        const exitCode = runCiTrigger({
+          env: {
+            ...resolveEnv(triggerStep()?.env ?? {}, {
+              inputs,
+              github,
+              trigger: {},
+              runner,
+            }),
+            // Runner defaults every step inherits, not `env:` bindings.
+            GITHUB_REPOSITORY: github.repository ?? "",
+            GITHUB_RUN_ID: "4242",
+            GITHUB_SERVER_URL: "https://github.com",
+          },
+          gh,
+          stdout: () => {},
+          appendOutput: (text) => {
+            output += text;
+          },
+          appendSummary: () => {},
+        });
+        const trigger = Object.fromEntries(
+          output
+            .split("\n")
+            .filter((line) => line.includes("="))
+            .map((line) => [
+              line.slice(0, line.indexOf("=")),
+              line.slice(line.indexOf("=") + 1),
+            ]),
+        );
+        const recordPath = path.join(outcomeDir, "trigger.json");
+        const record = existsSync(recordPath)
+          ? readFileSync(recordPath, "utf8")
+          : undefined;
+        if (trigger.run !== "true") {
+          return {
+            exitCode,
+            trigger,
+            args: undefined,
+            cliStarted: existsSync(path.join(outcomeDir, "cli-started")),
+            record,
+          };
+        }
 
-      const runStep = steps().find((step) => step.id === "run-pr-hero");
-      const env = resolveEnv(runStep?.env ?? {}, { inputs, github, trigger });
-      const script = (runStep?.run ?? "").replaceAll(
-        `\${{ github.action_path }}`,
-        "/action",
-      );
-      const fakeBun = `bun() { shift; printf '%s\\n' "$@"; }`;
-      const result = Bun.spawnSync(
-        [
-          "bash",
-          "--noprofile",
-          "--norc",
-          "-eo",
-          "pipefail",
-          "-c",
-          `${fakeBun}\n${script}`,
-        ],
-        { env: { ...env, PATH: process.env.PATH ?? "" } },
-      );
-      const args = result.stdout
-        .toString()
-        .split("\n")
-        .filter((line) => line !== "");
-      return { exitCode, trigger, args };
+        const runStep = steps().find((step) => step.id === "run-pr-hero");
+        const env = resolveEnv(runStep?.env ?? {}, {
+          inputs,
+          github,
+          trigger,
+          runner,
+        });
+        const script = (runStep?.run ?? "").replaceAll(
+          `\${{ github.action_path }}`,
+          "/action",
+        );
+        const fakeBun = `bun() { shift; printf '%s\\n' "$@"; }`;
+        const result = Bun.spawnSync(
+          [
+            "bash",
+            "--noprofile",
+            "--norc",
+            "-eo",
+            "pipefail",
+            "-c",
+            `${fakeBun}\n${script}`,
+          ],
+          { env: { ...env, PATH: process.env.PATH ?? "" } },
+        );
+        const args = result.stdout
+          .toString()
+          .split("\n")
+          .filter((line) => line !== "");
+        return {
+          exitCode,
+          trigger,
+          args,
+          cliStarted: existsSync(path.join(outcomeDir, "cli-started")),
+          record,
+        };
+      } finally {
+        rmSync(runnerTemp, { recursive: true, force: true });
+      }
     }
 
     const REPOSITORY = "acme/widgets";
@@ -645,13 +706,16 @@ describe("Packaging & distribution configuration", () => {
       expect(trigger?.run).toContain("src/ci/trigger.ts");
     });
 
-    test("every step after the trigger is gated on its run output", () => {
+    test("every step after the trigger is gated on its run output, except the publisher", () => {
       const all = steps();
       const after = all.slice(
         all.findIndex((step) => step.id === "trigger") + 1,
       );
       expect(after.length).toBeGreaterThan(0);
+      // The publisher is gated on the publish output instead: it must also
+      // run for the outcomes where the run never starts (T2b).
       const ungated = after
+        .filter((step) => step.id !== "publish")
         .filter(
           (step) =>
             !String(step.if ?? "").includes(
@@ -695,6 +759,86 @@ describe("Packaging & distribution configuration", () => {
 
     test("the trigger has a token for its permission and head lookups", () => {
       expect(triggerStep()?.env?.GH_TOKEN).toBe(`\${{ inputs.github-token }}`);
+    });
+
+    // ---------------------------------------------------------------------
+    // The outcome directory and the publish step (odd/tasks/agent-first-ci.md,
+    // T2b / S3). The trigger writes trigger.json there, the run step marks
+    // that the CLI started, and the publisher reads both.
+    // ---------------------------------------------------------------------
+
+    test("the outcome directory is bound the same way in the trigger, run and publish steps", () => {
+      for (const id of ["trigger", "run-pr-hero", "publish"]) {
+        const step = steps().find((candidate) => candidate.id === id);
+        expect(step?.env?.PRHERO_OUTCOME_DIR, id).toBe(
+          `\${{ runner.temp }}/pr-hero-outcome`,
+        );
+      }
+    });
+
+    test("the publish step is always() and publish-gated, between the run step and the upload", () => {
+      const all = steps();
+      const run = all.findIndex((step) => step.id === "run-pr-hero");
+      const publish = all.findIndex((step) => step.id === "publish");
+      const upload = all.findIndex(
+        (step) => step.name === "Upload pr-hero run directory",
+      );
+      expect(publish).toBe(run + 1);
+      expect(upload).toBe(publish + 1);
+      const step = all[publish];
+      expect(step?.if).toContain("always()");
+      expect(step?.if).toContain("steps.trigger.outputs.publish == 'true'");
+    });
+
+    test("the publish step runs the publisher, binds every value through env:, and names no input in its script", () => {
+      const step = steps().find((candidate) => candidate.id === "publish");
+      expect(step?.shell).toBe("bash");
+      expect(step?.run).toContain("src/ci/publish.ts");
+      const expressions = [
+        ...String(step?.run ?? "").matchAll(/\$\{\{[^}]*\}\}/g),
+      ].map((match) => match[0]);
+      expect(expressions).toEqual([`\${{ github.action_path }}`]);
+      expect(step?.env?.GH_TOKEN).toBe(`\${{ inputs.github-token }}`);
+      expect(step?.env?.GITHUB_REPOSITORY).toBe(`\${{ github.repository }}`);
+      expect(step?.env?.GITHUB_RUN_ID).toBe(`\${{ github.run_id }}`);
+    });
+
+    test("the run step writes cli-started as its first command, before anything can fail", () => {
+      const run = steps().find((step) => step.id === "run-pr-hero");
+      const firstCommand = String(run?.run ?? "")
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line !== "" && !line.startsWith("#"));
+      expect(firstCommand).toBe(': > "$PRHERO_OUTCOME_DIR/cli-started"');
+    });
+
+    test("the trigger learns only whether the routing names OpenCode, never the routing text", () => {
+      const env = triggerStep()?.env ?? {};
+      expect(env.HAS_OPENCODE_ROUTING).toBe(
+        `\${{ contains(inputs.routing, 'opencode') }}`,
+      );
+      expect(JSON.stringify(env)).not.toContain("inputs.routing }}");
+    });
+
+    test("a run that reaches the CLI leaves the marker and a review record, and nothing else", async () => {
+      const run = await runAction(
+        { ...CREDENTIAL, "pr-number": "305" },
+        { repository: REPOSITORY, event_name: "workflow_dispatch" },
+      );
+      expect(run.args?.slice(0, 2)).toEqual(["review", "--pr"]);
+      expect(run.cliStarted).toBe(true);
+      expect(JSON.parse(run.record ?? "{}").decision).toBe("review");
+    });
+
+    test("a run with no credential never reaches the CLI: no marker, and a no-credentials record", async () => {
+      const run = await runAction(
+        {},
+        { repository: REPOSITORY, event_name: "workflow_dispatch" },
+      );
+      expect(run.exitCode).toBe(1);
+      expect(run.args).toBeUndefined();
+      expect(run.cliStarted).toBe(false);
+      expect(JSON.parse(run.record ?? "{}").decision).toBe("no-credentials");
     });
 
     test("the legacy force dispatch still passes --pr, --force and --full", async () => {

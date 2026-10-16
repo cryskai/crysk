@@ -20,8 +20,10 @@ import {
   type Owner,
   ownerLead,
   ownerOf,
+  parseTriggerRecord,
   renderCode,
   renderError,
+  type TriggerRecord,
 } from "#ci/outcome";
 import type { TransportFailureCause } from "../../src/execution/contracts";
 import type { CredentialProjectionFailureClass } from "../../src/security/credential-broker";
@@ -964,6 +966,47 @@ describe("renderCode and renderError: the annotation", () => {
     );
   });
 
+  test("the missing-credential summary names the with: input for every route, and PRHERO_ROUTING for OpenCode only", () => {
+    const claude = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { backend: "claude-code", runId: "123" },
+      "action",
+    );
+    const opencode = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { backend: "opencode", runId: "123" },
+      "action",
+    );
+    expect(claude.summary.join("\n")).toContain("with:");
+    expect(opencode.summary.join("\n")).toContain("with:");
+    expect(claude.summary.join("\n")).not.toContain("PRHERO_ROUTING");
+    expect(opencode.summary.join("\n")).toContain("PRHERO_ROUTING");
+  });
+
+  test("the missing-credential with: example follows the backend: opencode-auth on OpenCode, claude-token otherwise", () => {
+    const claude = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { backend: "claude-code", runId: "123" },
+      "action",
+    );
+    const opencode = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { backend: "opencode", runId: "123" },
+      "action",
+    );
+    const missing = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { runId: "123" },
+      "action",
+    );
+    expect(opencode.summary.join("\n")).toContain("opencode-auth:");
+    expect(opencode.summary.join("\n")).not.toContain("claude-token:");
+    expect(claude.summary.join("\n")).toContain("claude-token:");
+    expect(claude.summary.join("\n")).not.toContain("opencode-auth:");
+    expect(missing.summary.join("\n")).toContain("claude-token:");
+    expect(missing.summary.join("\n")).not.toContain("opencode-auth:");
+  });
+
   test("a missing subscription record names the login its backend uses", () => {
     const claude = renderError(
       { kind: "credential", failureClass: "missing_subscription_record" },
@@ -1314,5 +1357,103 @@ describe("builtins-only guard: src/ci/outcome.ts", () => {
       ),
     ).toEqual([]);
     expect(runtimeImportViolations('// import { y } from "../z";')).toEqual([]);
+  });
+});
+
+// T2b (odd/tasks/agent-first-ci.md, S3): the record the trigger writes to
+// trigger.json and the publisher reads back. The parser is the one place the
+// shape is checked, so a malformed file is refused rather than half-read.
+describe("parseTriggerRecord — the trigger.json contract", () => {
+  const SHA = "d".repeat(40);
+  const documented: TriggerRecord = {
+    v: 1,
+    decision: "review",
+    params: {},
+    pr: 7,
+    head_sha: SHA,
+    repository: "acme/widgets",
+    run_id: "4242",
+    run_url: "https://github.com/acme/widgets/actions/runs/4242",
+  };
+  const text = (value: unknown) => JSON.stringify(value);
+
+  test("accepts the documented shape, unchanged", () => {
+    expect(parseTriggerRecord(text(documented))).toEqual(documented);
+  });
+
+  test("accepts every decision, with and without the optional fields", () => {
+    const decisions: TriggerRecord["decision"][] = [
+      "review",
+      "ignore",
+      "denied",
+      "unverifiable",
+      "no-credentials",
+    ];
+    for (const decision of decisions) {
+      const bare = {
+        ...documented,
+        decision,
+        pr: undefined,
+        head_sha: undefined,
+      };
+      expect(parseTriggerRecord(text(bare))?.decision).toBe(decision);
+    }
+  });
+
+  test("accepts a class the trigger writes: a github status, a trigger check, and unknown", () => {
+    const withClass = (cls: unknown) =>
+      parseTriggerRecord(text({ ...documented, cls }));
+    expect(withClass({ kind: "github", status: 503 })?.cls).toEqual({
+      kind: "github",
+      status: 503,
+    });
+    expect(
+      withClass({ kind: "github", status: 403, rateLimited: true })?.cls,
+    ).toEqual({ kind: "github", status: 403, rateLimited: true });
+    expect(withClass({ kind: "trigger", check: "pr-unresolved" })?.cls).toEqual(
+      { kind: "trigger", check: "pr-unresolved" },
+    );
+    expect(withClass({ kind: "unknown" })?.cls).toEqual({ kind: "unknown" });
+  });
+
+  test("accepts params with string values and a numeric pr", () => {
+    const parsed = parseTriggerRecord(
+      text({ ...documented, params: { backend: "opencode", detail: "x" } }),
+    );
+    expect(parsed?.params).toEqual({ backend: "opencode", detail: "x" });
+  });
+
+  test.each<[string, unknown]>([
+    ["not JSON", "{ nope"],
+    ["an array", []],
+    ["a null", null],
+    ["another version", { ...documented, v: 2 }],
+    ["an unknown decision", { ...documented, decision: "maybe" }],
+    ["a string pr", { ...documented, pr: "7" }],
+    ["a zero pr", { ...documented, pr: 0 }],
+    ["a fractional pr", { ...documented, pr: 1.5 }],
+    ["a head that is not a sha", { ...documented, head_sha: "unknown" }],
+    ["a head with a newline", { ...documented, head_sha: `${SHA}\nrun=true` }],
+    ["params that is not an object", { ...documented, params: "x" }],
+    ["a param that is not a string", { ...documented, params: { backend: 1 } }],
+    ["an unknown param", { ...documented, params: { token: "x" } }],
+    ["a missing repository", { ...documented, repository: undefined }],
+    ["a missing run url", { ...documented, run_url: undefined }],
+    ["a missing run id", { ...documented, run_id: undefined }],
+    ["an unknown class kind", { ...documented, cls: { kind: "magic" } }],
+    [
+      "a github class without a status",
+      { ...documented, cls: { kind: "github" } },
+    ],
+  ])("refuses %s", (_label, value) => {
+    expect(
+      parseTriggerRecord(typeof value === "string" ? value : text(value)),
+    ).toBeUndefined();
+  });
+
+  test("ignores a code key an older writer left in the record", () => {
+    expect(
+      parseTriggerRecord(text({ ...documented, code: "PRH-CRED-MISSING" })),
+    ).toEqual(documented);
   });
 });

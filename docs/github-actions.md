@@ -114,6 +114,15 @@ the Action treats as absent. Deleting the line for the credential you *did* set 
 quotes around `vars.PRHERO_ROUTING` are load-bearing — an unset repository variable must become the
 empty string, not broken YAML.
 
+**A run that cannot start the review still says so on the pull request.** When there is no
+model credential, the pull request number or head cannot be resolved, the commenter's permission
+cannot be verified, or an install step fails before pr-hero starts, pr-hero posts one `pr-hero`
+commit status (`error`) and one comment on the pull request. The comment gives the error code, whose
+fix it is (your configuration, a provider, pr-hero, or unclassified) and the command that fixes it.
+A newer comment replaces the older one from the same author. A denied or ignored `/pr-hero review`
+comment posts nothing. Outcomes of a run that did start (review results, size and budget skips) keep
+their own status and comment for now.
+
 ### Why `fetch-depth: 0`
 
 `actions/checkout`'s default is a **shallow** clone. pr-hero computes the pull request's diff range and
@@ -669,6 +678,16 @@ Set one credential for the route you use:
 claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
 gh secret set ANTHROPIC_API_KEY
 opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+If the secret is already set, check that the workflow passes it to the action under `with:`, for example `claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`: a secret the workflow does not pass never reaches pr-hero.
+
+On an OpenCode route the example uses the OpenCode input instead. If the secret is already set, check that the workflow passes it to the action under `with:`, for example `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`: a secret the workflow does not pass never reaches pr-hero.
+
+An OpenCode route also needs the routing variable:
+
+```bash
+gh variable set PRHERO_ROUTING --body '<routing-object-json>'
 ```
 
 Dependabot PRs read Dependabot secrets, so set this one too:
