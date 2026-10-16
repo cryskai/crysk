@@ -56,7 +56,7 @@ jobs:
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review'))
     concurrency:
-      group: ${{ (github.event_name == 'pull_request' || startsWith(github.event.comment.body, '/pr-hero review')) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || startsWith(github.event.comment.body, '/pr-hero review')) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -89,14 +89,17 @@ Three choices in the job are load-bearing:
 
 - **Concurrency is per job and keyed on the pull request number.** A workflow-level group keyed on
   `github.head_ref || github.ref` would put every comment on every pull request into one group, because
-  `head_ref` is empty on `issue_comment`, so any comment could cancel any in-flight review. A comment
-  that does not start with `/pr-hero review` gets a unique group, so its skipped job never replaces a
-  pending review.
+  `head_ref` is empty on `issue_comment`, so any comment could cancel any in-flight review. A fork's
+  push and a comment that does not start with `/pr-hero review` each get a unique group, so their
+  skipped jobs never cancel or replace a review.
 - **Only a new push cancels.** The `if:` filter is a prefix, so a near-miss comment ("/pr-hero review
   please") lands in the pull request's group too; cancelling there would kill a paid review in flight
-  before the action ignores the comment. A comment run queues instead. Known gap: GitHub keeps one
-  *pending* run per group, so a comment run that queues behind a running review replaces a push run
-  already pending there, and a later push replaces a pending comment run.
+  before the action ignores the comment. A comment run queues instead. A push never waits: it cancels
+  whatever is running, a forced review included, because that head is gone; comment again on the new
+  head. Known gap: GitHub keeps one *pending* run per group, so a later comment starting with
+  `/pr-hero review` (a near-miss, a refused one, or a second real one) replaces a comment run already
+  waiting behind a running review, and `--full` followed by a plain `/pr-hero review` loses the
+  `--full`. Comment again to recover.
 - **Fork pushes are skipped.** GitHub gives fork `pull_request` runs no secrets. A maintainer comments
   `/pr-hero review` instead; see [Fork pull requests](#fork-pull-requests).
 
@@ -404,7 +407,8 @@ request:
 ```
 
 The review runs on the GitHub Actions runner, not on the machine of whoever comments. The comment must
-be exactly `/pr-hero review` (surrounding whitespace is ignored); anything else, such as
+start with `/pr-hero review` and be exactly that command (trailing whitespace and newlines are
+ignored; leading whitespace means no job starts at all); anything else, such as
 `/pr-hero review please`, starts a job that ends without reviewing. The commenter needs write access
 to the repository; a comment from anyone else is refused. `gh run rerun` on a skipped run re-evaluates
 the gates and does not force.
@@ -461,14 +465,19 @@ the published `juanmaagd/pr-hero@v0`, where the checkout does not select the eng
   branch; in this repository that means `main`, not `dev`. Until then a comment starts nothing. In a
   consumer repository, the comment handling also needs an action release that has it, reached through
   the `@v0` tag the workflow pins.
+- **Minimum action version.** This workflow listens to comments, and only an action release that ships
+  the comment handling checks the command and the commenter's write access. An older action reviews on
+  ANY comment that starts with `/pr-hero review`, from anyone who can comment, with your secrets. Do
+  not pair this workflow with an action older than the release that adds it: if you pin a tag or a
+  commit sha instead of `@v0`, pin one at or after that release.
 - **Older heads (this repository).** The comment run loads the PR head's own `action.yml`, so on a head
-  from before the comment handling existed the run reviews without reading the comment: no `--force`,
-  no `--full`, and no write-access check. Merge or rebase the PR onto a base that has it first.
-- **Trust (this repository).** A comment run here runs the PR head's code, including its `bun install`,
-  with the workflow's secrets. The commenter's write access is checked by that same head's
-  `action.yml`, so on a head that predates the check (an old bot-authored branch, for example
-  Dependabot's) anyone who can comment can start it with this repository's secrets. Rebase or close
-  such branches.
+  from before the comment handling existed the run reviews without reading the comment: no `--force`
+  and no `--full`. Merge or rebase the PR onto a base that has it first.
+- **Trust (this repository).** A comment run here runs the PR head's code, including its
+  `bun install`, with the workflow's secrets. So the commenter's write access is checked twice: by the
+  workflow's own pre-checkout step, before any of the head's code runs, and again by the head's
+  `action.yml`. The first check fails closed, so an old branch whose `action.yml` predates the check
+  still refuses a commenter without write access.
 
 ### Check Runs ledger
 

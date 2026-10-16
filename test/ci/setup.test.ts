@@ -85,7 +85,7 @@ const own = () => generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
 
 // The exact job-level group and cancel rule. Spelled out in full because
 // every clause is load-bearing; see the template's own comments for why.
-const REVIEW_CONCURRENCY_GROUP = `\${{ (github.event_name == 'pull_request' || startsWith(github.event.comment.body, '/pr-hero review')) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
+const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || startsWith(github.event.comment.body, '/pr-hero review')) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
 const PUSH_ONLY_CANCEL = `\${{ github.event_name == 'pull_request' }}`;
 
 describe("generateCiWorkflowTemplate (pure)", () => {
@@ -723,6 +723,36 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
         true,
       );
     });
+  });
+});
+
+// The scaffold's own closing instructions are the first place a new user
+// learns how to force a review, and GitHub reads a comment-triggered workflow
+// from the DEFAULT branch. Committing the file to a feature branch and
+// commenting there starts nothing, silently, so the next steps must say where
+// the file has to land before `/pr-hero review` works.
+describe("ci init next steps (CLI)", () => {
+  test("say that /pr-hero review works once the workflow is on the default branch", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "prhero-ci-init-"));
+    try {
+      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      const result = Bun.spawnSync(
+        [
+          process.execPath,
+          path.join(import.meta.dir, "../../src/cli.ts"),
+          "ci",
+          "init",
+        ],
+        { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
+      );
+      const output = `${result.stdout}${result.stderr}`;
+      expect(result.exitCode).toBe(0);
+      expect(output).toContain("Next steps:");
+      expect(output).toContain("/pr-hero review");
+      expect(output).toMatch(/default branch/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
