@@ -1,0 +1,1047 @@
+// The pure builder behind `pr-hero status` (src/pr/pr-status.ts). Raw GitHub facts go in,
+// the status object comes out, and no I/O happens here: the shell's fake-gh tests live in
+// test/commands/status.test.ts. This file pins what the skill acts on: every next_action
+// branch, the override read, the join from a posted finding to its state-block row, the
+// triage a finding is owed at its own head, and the two sources of unresolved_blocking.
+
+import { describe, expect, test } from "bun:test";
+import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
+import {
+  buildPrStatus,
+  type PrStatusInput,
+  renderPrStatusLines,
+} from "#pr/pr-status";
+import {
+  COMMIT_STATUS_CONTEXT,
+  type CommitStatusFact,
+  findingMarker,
+} from "#pr/preflight";
+import {
+  renderStateBlock,
+  type StateFinding,
+  stateFinding,
+} from "#rereview/state";
+import {
+  type TriageTag,
+  type TriageVerdict,
+  triageMarker,
+} from "#triage/triage";
+
+const EARLIER = "1".repeat(40);
+const CURRENT = "2".repeat(40);
+const NOW = Date.parse("2026-10-17T12:00:00Z");
+
+// Minutes before NOW, as the ISO timestamp GitHub would return.
+function at(minutesAgo: number): string {
+  return new Date(NOW - minutesAgo * 60_000).toISOString();
+}
+
+function gate(
+  state: string,
+  description: string | null,
+  minutesAgo = 5,
+  targetUrl: string | null = null,
+): CommitStatusFact {
+  return {
+    state,
+    context: COMMIT_STATUS_CONTEXT,
+    created_at: at(minutesAgo),
+    description,
+    target_url: targetUrl,
+  };
+}
+
+const BLOCKING_DESCRIPTION = (n: number) =>
+  `pr-hero: ${n} blocking finding(s) — fix and push, or /pr-hero override`;
+const OVERRIDE_DESCRIPTION = `${OVERRIDE_DESCRIPTION_PREFIX}maintainer — no review on this head`;
+const SKIP_DESCRIPTION =
+  "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway";
+
+// One pr-hero summary comment, its state block carrying `rows` (the live findings).
+function summary(
+  head: string,
+  rows: StateFinding[] = [],
+  options: { complete?: boolean; reviews?: number } = {},
+): string {
+  const partial = options.complete === false ? " coverage=partial" : "";
+  return [
+    `<!-- pr-hero-report head=${head}${partial} -->`,
+    "",
+    "### Summary",
+    "",
+    renderStateBlock(head, rows, options.reviews),
+  ].join("\n");
+}
+
+function stateRow(
+  id: string,
+  claim: string,
+  tier: "blocking" | "advisory" = "blocking",
+): StateFinding {
+  return stateFinding({
+    id,
+    sev: "CRITICAL",
+    tier,
+    channel: "inline",
+    locs: ["src/a.ts:10"],
+    claim,
+  });
+}
+
+// A posted finding comment, as renderInlineComment writes it: marker, header, location, claim.
+function findingBody(options: {
+  head: string;
+  claim: string;
+  tier?: "blocking" | "advisory";
+  path?: string;
+  line?: number;
+  withHeader?: boolean;
+}): string {
+  const path = options.path ?? "src/a.ts";
+  const line = options.line ?? 10;
+  const tier = options.tier ?? "blocking";
+  const marker = findingMarker({
+    path,
+    line,
+    headSha: options.head,
+    claim: options.claim,
+  });
+  const header =
+    options.withHeader === false
+      ? []
+      : [
+          `${tier === "blocking" ? "🔴" : "🔵"} ${tier} · CRITICAL · introduced · reliability`,
+          "",
+        ];
+  return [marker, "", ...header, `\`${path}:${line}\``, "", options.claim].join(
+    "\n",
+  );
+}
+
+function triageReply(options: {
+  id: number;
+  parent: number;
+  head: string;
+  tag: TriageTag;
+  verdict?: TriageVerdict;
+  actor?: "agent" | "human";
+}): { id: number; body: string; in_reply_to_id: number | null } {
+  return {
+    id: options.id,
+    body: `${triageMarker({
+      tag: options.tag,
+      headSha: options.head,
+      actor: options.actor ?? "agent",
+      ...(options.verdict === undefined ? {} : { verdict: options.verdict }),
+    })}\n\nreasoning`,
+    in_reply_to_id: options.parent,
+  };
+}
+
+function input(overrides: Partial<PrStatusInput> = {}): PrStatusInput {
+  return {
+    pr: 12,
+    head: CURRENT,
+    nowMs: NOW,
+    statuses: [],
+    issueComments: [],
+    reviewComments: [],
+    ...overrides,
+  };
+}
+
+const CLAIM = "the value is stored in seconds and read as milliseconds";
+
+describe("buildPrStatus: next_action, first match wins", () => {
+  // Each row is one branch of the table in docs/github-actions.md. The gate and the
+  // comments are the whole input; the expectation is the action and the gate state.
+  const cases: {
+    name: string;
+    input: PrStatusInput;
+    action: string;
+    state: string;
+  }[] = [
+    {
+      name: "a pending gate in flight waits",
+      input: input({ statuses: [gate("pending", "pr-hero reviewing", 5)] }),
+      action: "wait",
+      state: "pending",
+    },
+    {
+      name: "a pending gate past the 90-minute window is not in flight, so review",
+      input: input({ statuses: [gate("pending", "pr-hero reviewing", 120)] }),
+      action: "review",
+      state: "pending",
+    },
+    {
+      name: "no pr-hero status on the head means review",
+      input: input(),
+      action: "review",
+      state: "none",
+    },
+    {
+      name: "an errored gate means review",
+      input: input({ statuses: [gate("error", "review did not finish")] }),
+      action: "review",
+      state: "error",
+    },
+    {
+      name: "a passed gate is done",
+      input: input({ statuses: [gate("success", "review posted")] }),
+      action: "done",
+      state: "success",
+    },
+    {
+      name: "an override that turned the gate green is done",
+      input: input({ statuses: [gate("success", OVERRIDE_DESCRIPTION)] }),
+      action: "done",
+      state: "success",
+    },
+    {
+      name: "a red gate with an untriaged blocking finding on this head needs triage",
+      input: input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+        ],
+      }),
+      action: "triage",
+      state: "failure",
+    },
+    {
+      name: "a red gate whose blocking finding is triaged at its head, none applied, needs override or fix",
+      input: input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+        ],
+      }),
+      action: "override-or-fix",
+      state: "failure",
+    },
+    {
+      name: "a red gate with an applied blocking finding needs a fix",
+      input: input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+        ],
+      }),
+      action: "fix",
+      state: "failure",
+    },
+    {
+      name: "a triage reply at another head does not count as triage at the posted head",
+      input: input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "applied",
+          }),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [stateRow("R001", CLAIM)]),
+          },
+        ],
+      }),
+      action: "triage",
+      state: "failure",
+    },
+    {
+      name: "one untriaged blocking finding outranks an applied one",
+      input: input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(2))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+          {
+            id: 3,
+            body: findingBody({
+              head: CURRENT,
+              claim: "a second claim that nobody has answered",
+              line: 20,
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM),
+              stateRow("R002", "a second claim that nobody has answered"),
+            ]),
+          },
+        ],
+      }),
+      action: "triage",
+      state: "failure",
+    },
+    {
+      name: "a skipped review with no blocking finding is override-or-fix",
+      input: input({ statuses: [gate("failure", SKIP_DESCRIPTION)] }),
+      action: "override-or-fix",
+      state: "failure",
+    },
+  ];
+
+  for (const row of cases) {
+    test(row.name, () => {
+      const status = buildPrStatus(row.input);
+      expect(status.next_action).toBe(row.action as typeof status.next_action);
+      expect(status.gate.state).toBe(row.state as typeof status.gate.state);
+      expect(status.reason.length).toBeGreaterThan(0);
+    });
+  }
+
+  test("the stale-pending reason names the 90-minute window, so an operator sees why review", () => {
+    const status = buildPrStatus(
+      input({ statuses: [gate("pending", "pr-hero reviewing", 120)] }),
+    );
+    expect(status.reason).toMatch(/90-minute/);
+  });
+
+  test("the skip reason names the skip, so the skill is not misled into a fix", () => {
+    const status = buildPrStatus(
+      input({ statuses: [gate("failure", SKIP_DESCRIPTION)] }),
+    );
+    expect(status.reason).toMatch(/skipped/);
+  });
+});
+
+describe("buildPrStatus: gate", () => {
+  test("pending_in_flight is true for a fresh pending and false for a stale one", () => {
+    expect(
+      buildPrStatus(input({ statuses: [gate("pending", "x", 5)] })).gate
+        .pending_in_flight,
+    ).toBe(true);
+    expect(
+      buildPrStatus(input({ statuses: [gate("pending", "x", 120)] })).gate
+        .pending_in_flight,
+    ).toBe(false);
+  });
+
+  test("the override is active only on a newest success with the prefix, and names its login", () => {
+    const override = buildPrStatus(
+      input({ statuses: [gate("success", OVERRIDE_DESCRIPTION)] }),
+    ).gate.override;
+    expect(override).toEqual({ active: true, by: "maintainer" });
+    const plain = buildPrStatus(
+      input({ statuses: [gate("success", "review posted")] }),
+    ).gate.override;
+    expect(plain).toEqual({ active: false, by: null });
+  });
+
+  test("an override that a later review superseded is not the newest, so it is not active", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate("success", OVERRIDE_DESCRIPTION, 30),
+          gate("failure", BLOCKING_DESCRIPTION(1), 5),
+        ],
+      }),
+    );
+    expect(status.gate.state).toBe("failure");
+    expect(status.gate.override).toEqual({ active: false, by: null });
+  });
+
+  test("the gate carries its description, target_url and created_at from the newest row", () => {
+    const url = "https://github.com/MusiveTech/musive/actions/runs/9";
+    const status = buildPrStatus(
+      input({ statuses: [gate("success", "review posted", 5, url)] }),
+    );
+    expect(status.gate.description).toBe("review posted");
+    expect(status.gate.target_url).toBe(url);
+    expect(status.gate.created_at).toBe(at(5));
+  });
+
+  test("with no status, the gate's fields are null, not invented", () => {
+    const status = buildPrStatus(input());
+    expect(status.gate).toEqual({
+      state: "none",
+      description: null,
+      target_url: null,
+      created_at: null,
+      pending_in_flight: false,
+      override: { active: false, by: null },
+    });
+  });
+});
+
+describe("buildPrStatus: report and output shape", () => {
+  test("the envelope names its schema, the PR and the PR's head", () => {
+    const status = buildPrStatus(input());
+    expect(status.schema).toBe("pr-hero.status/v1");
+    expect(status.pr).toBe(12);
+    expect(status.head).toBe(CURRENT);
+  });
+
+  test("the report reads the summary's head, completeness and reviews", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [], { reviews: 3 }) },
+        ],
+      }),
+    );
+    expect(status.report).toEqual({
+      head: CURRENT,
+      complete: true,
+      reviews: 3,
+      outcome_code: null,
+    });
+  });
+
+  test("a partial summary reads as incomplete, not complete", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [], { complete: false }) },
+        ],
+      }),
+    );
+    expect(status.report.complete).toBe(false);
+  });
+
+  test("with no summary the report fields are null, and nothing is invented", () => {
+    expect(buildPrStatus(input()).report).toEqual({
+      head: null,
+      complete: null,
+      reviews: null,
+      outcome_code: null,
+    });
+  });
+
+  test("outcome_code is the newest outcome comment's code", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 200,
+            body: `<!-- pr-hero-outcome v=1 head=${CURRENT} run=1 attempt=1 -->\n\n### PRH-CRED-MISSING\n\nbody`,
+          },
+          {
+            id: 201,
+            body: `<!-- pr-hero-outcome v=1 head=${CURRENT} run=2 attempt=1 -->\n\n### PRH-CANCELLED: not reviewed\n\nbody`,
+          },
+        ],
+      }),
+    );
+    expect(status.report.outcome_code).toBe("PRH-CANCELLED");
+  });
+
+  test("an older outcome's code is not used when the newest outcome has none", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 200,
+            body: `<!-- pr-hero-outcome v=1 head=${CURRENT} run=1 attempt=1 -->\n\n### PRH-CRED-MISSING`,
+          },
+          {
+            id: 201,
+            body: `<!-- pr-hero-outcome v=1 head=${CURRENT} run=2 attempt=1 -->\n\nno heading`,
+          },
+        ],
+      }),
+    );
+    expect(status.report.outcome_code).toBeNull();
+  });
+
+  test("the line renderer names the action and never carries an escape byte", () => {
+    const lines = renderPrStatusLines(
+      buildPrStatus(input({ statuses: [gate("success", "review posted")] })),
+    );
+    expect(lines.join("\n")).toContain("done");
+    for (const line of lines) expect(line).not.toContain("\x1b");
+  });
+});
+
+describe("buildPrStatus: findings", () => {
+  test("a posted finding is reported from its marker, on its own head", () => {
+    const status = buildPrStatus(
+      input({
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({ head: EARLIER, claim: CLAIM, line: 33 }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings).toEqual([
+      {
+        id: null,
+        path: "src/a.ts",
+        line: 33,
+        head: EARLIER,
+        comment_id: 41,
+        channel: "inline",
+        severity: "CRITICAL",
+        tier: "blocking",
+        live_on_head: false,
+        triage: null,
+      },
+    ]);
+  });
+
+  test("an issue-comment finding is the outside channel, and findings come out in comment order", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 60,
+            body: findingBody({ head: CURRENT, claim: "b", path: "src/b.ts" }),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 50,
+            body: findingBody({ head: CURRENT, claim: "a" }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings.map((f) => [f.comment_id, f.channel])).toEqual([
+      [50, "inline"],
+      [60, "outside"],
+    ]);
+  });
+
+  test("a comment without a finding marker is not a finding, and neither is the summary", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+          { id: 101, body: "a human's reply, with no marker at all" },
+        ],
+      }),
+    );
+    expect(status.findings).toEqual([]);
+  });
+
+  test("the state block joins a finding by claim fingerprint and supplies the id", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R002", CLAIM)]) },
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings[0]?.id).toBe("R002");
+    expect(status.findings[0]?.live_on_head).toBe(true);
+  });
+
+  test("the severity and tier come from the header, and the state row supplies them when the header is missing", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [stateRow("R003", CLAIM, "advisory")]),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              withHeader: false,
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings[0]).toMatchObject({
+      id: "R003",
+      severity: "CRITICAL",
+      tier: "advisory",
+    });
+  });
+
+  test("a claim-less state row never joins, because its fingerprint is its own id's", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R004", "")]) },
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings[0]?.id).toBeNull();
+  });
+
+  test("live_on_head is true for a state-block row or a finding posted on this head, and false otherwise", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [stateRow("R005", "carried claim")]),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: "carried claim" }),
+            in_reply_to_id: null,
+          },
+          {
+            id: 2,
+            body: findingBody({
+              head: EARLIER,
+              claim: "a fixed claim",
+              line: 5,
+            }),
+            in_reply_to_id: null,
+          },
+          {
+            id: 3,
+            body: findingBody({ head: CURRENT, claim: "a new claim", line: 6 }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings.map((f) => f.live_on_head)).toEqual([
+      true,
+      false,
+      true,
+    ]);
+  });
+
+  test("triage is the newest reply in the thread, and applied has no verdict", () => {
+    const status = buildPrStatus(
+      input({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "rejected",
+          }),
+          triageReply({ id: 3, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.findings[0]?.triage).toEqual({
+      tag: "applied",
+      verdict: null,
+      actor: "agent",
+      head: CURRENT,
+    });
+  });
+
+  test("a reply to another thread is not this finding's triage", () => {
+    const status = buildPrStatus(
+      input({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 99, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.findings[0]?.triage).toBeNull();
+  });
+});
+
+describe("buildPrStatus: unresolved_blocking", () => {
+  test("a red gate's own count wins when its description carries one", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(3))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+      }),
+    );
+    expect(status.unresolved_blocking).toBe(3);
+  });
+
+  test("with no count in the description, it is the live blocking findings on this head", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", SKIP_DESCRIPTION)],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          {
+            id: 2,
+            body: findingBody({
+              head: EARLIER,
+              claim: "an advisory claim",
+              tier: "advisory",
+              line: 4,
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+      }),
+    );
+    expect(status.unresolved_blocking).toBe(1);
+  });
+
+  test("a finding posted on an older head with no state row is not counted as live", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", SKIP_DESCRIPTION)],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: EARLIER, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.unresolved_blocking).toBe(0);
+  });
+});
+
+// A top-level issue-comment reply (the outside-channel finding's only kind of reply). It
+// binds to its finding by the link triage/reply writes: `In reply to: <url>#issuecomment-<id>`.
+function issueReply(options: {
+  id: number;
+  parent: number;
+  head: string;
+  tag: TriageTag;
+  verdict?: TriageVerdict;
+}): { id: number; body: string } {
+  return {
+    id: options.id,
+    body: [
+      triageMarker({
+        tag: options.tag,
+        headSha: options.head,
+        actor: "agent",
+        ...(options.verdict === undefined ? {} : { verdict: options.verdict }),
+      }),
+      "",
+      "reasoning",
+      "",
+      `In reply to: https://github.com/MusiveTech/musive/pull/12#issuecomment-${options.parent}`,
+    ].join("\n"),
+  };
+}
+
+// A green gate is not the end of the loop while a finding on this head has no reply. The
+// triage skill answers every finding, advisory included, so `done` needs every finding posted
+// on the current head to be answered at that head. An override is a human's unlock, so it stays
+// `done` whatever the findings say.
+describe("buildPrStatus: a green gate still owes a reply on this head", () => {
+  const green = (extra: Partial<PrStatusInput> = {}) =>
+    input({ statuses: [gate("success", "review posted")], ...extra });
+
+  test("green plus one untriaged advisory on this head is triage, and the reason counts it", () => {
+    const status = buildPrStatus(
+      green({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              tier: "advisory",
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+    expect(status.reason).toMatch(
+      /^The gate is green, but 1 finding\(s\) on this head have no reply yet/,
+    );
+    expect(status.unresolved_blocking).toBe(0);
+  });
+
+  test("green with every finding on this head triaged at this head is done", () => {
+    const status = buildPrStatus(
+      green({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              tier: "advisory",
+            }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+          {
+            id: 3,
+            body: findingBody({
+              head: CURRENT,
+              claim: "a second claim",
+              line: 20,
+            }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 4, parent: 3, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+  });
+
+  test("green with an untriaged finding only on an older head is done", () => {
+    const status = buildPrStatus(
+      green({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({
+              head: EARLIER,
+              claim: CLAIM,
+              tier: "advisory",
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+  });
+
+  test("an override with an untriaged finding on this head is done", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", OVERRIDE_DESCRIPTION)],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              tier: "advisory",
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+    expect(status.gate.override.active).toBe(true);
+  });
+
+  test("a reply at another head does not answer a green gate's finding on this head", () => {
+    const status = buildPrStatus(
+      green({
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              tier: "advisory",
+            }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: EARLIER,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("an outside-channel finding on this head with no reply is owed one", () => {
+    const status = buildPrStatus(
+      green({
+        issueComments: [
+          {
+            id: 60,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              tier: "advisory",
+            }),
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("an outside-channel finding answered by a reply that links it, at this head, is done", () => {
+    const status = buildPrStatus(
+      green({
+        issueComments: [
+          {
+            id: 60,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              tier: "advisory",
+            }),
+          },
+          issueReply({
+            id: 61,
+            parent: 60,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+    expect(status.findings[0]?.triage).toEqual({
+      tag: "dismissed",
+      verdict: "upheld",
+      actor: "agent",
+      head: CURRENT,
+    });
+  });
+
+  test("an issue reply that links a different comment does not answer this finding", () => {
+    const status = buildPrStatus(
+      green({
+        issueComments: [
+          {
+            id: 60,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              tier: "advisory",
+            }),
+          },
+          issueReply({
+            id: 61,
+            parent: 6,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("a red gate whose blocking outside-channel finding is answered at this head is override-or-fix, not triage", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        issueComments: [
+          {
+            id: 60,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+          },
+          issueReply({
+            id: 61,
+            parent: 60,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("override-or-fix");
+  });
+});

@@ -177,14 +177,14 @@ export const PR_VIEW_JSON_FIELDS =
 export async function ghPrView(
   operatorRoot: string,
   pr: number,
+  options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<string> {
-  const result = await gh(operatorRoot, [
-    "pr",
-    "view",
-    String(pr),
-    "--json",
-    PR_VIEW_JSON_FIELDS,
-  ]);
+  const result = await gh(
+    operatorRoot,
+    ["pr", "view", String(pr), "--json", PR_VIEW_JSON_FIELDS],
+    undefined,
+    options?.spawnFn,
+  );
   if (!result.ok) {
     throw new CliError(`gh pr view ${pr} failed: ${result.stderr.trim()}`);
   }
@@ -420,16 +420,27 @@ export async function postCommitStatus(
 // only add contexts they would otherwise miss.
 //
 // The description rides along for the override check (src/pr/teardown.ts), which tells
-// an override from a review's own status by it. The in-flight readers ignore it.
+// an override from a review's own status by it. The in-flight readers ignore it. The
+// target_url rides along for `pr-hero status`, which names the run that wrote the gate.
 //
-// Never throws: a 403, a hung gh (timeout), or garbage jq must not take
+// Never throws by default: a 403, a hung gh (timeout), or garbage jq must not take
 // the watch tick down. Unreadable reads as not in-flight.
+//
+// WHY failClosed exists: `pr-hero status` is the skill's only reading of the gate, and
+// an empty list reads as "no pr-hero status on this head", which sends a review out
+// blind. So the status command asks for a throw on any unreadable row or failed read,
+// and the default keeps the empty answer every watch and admission caller relies on.
 export async function fetchCommitStatuses(
   operatorRoot: string,
   sha: string,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; failClosed?: boolean },
 ): Promise<CommitStatusFact[]> {
-  if (!isFullCommitId(sha)) return [];
+  if (!isFullCommitId(sha)) {
+    if (options?.failClosed) {
+      throw new CliError(`commit status needs a full commit sha, got: ${sha}`);
+    }
+    return [];
+  }
   try {
     const result = await gh(
       operatorRoot,
@@ -437,32 +448,47 @@ export async function fetchCommitStatuses(
         "api",
         `repos/{owner}/{repo}/commits/${sha}/status?per_page=100`,
         "--jq",
-        ".statuses[]? | {state: .state, context: .context, created_at: .created_at, description: .description}",
+        ".statuses[]? | {state: .state, context: .context, created_at: .created_at, description: .description, target_url: .target_url}",
       ],
       undefined,
       options?.spawnFn,
       COMMIT_STATUS_TIMEOUT_MS,
     );
-    if (!result.ok) return [];
+    if (!result.ok) {
+      if (options?.failClosed) {
+        throw new CliError(
+          `gh api commit statuses for ${sha} failed: ${result.stderr.trim()}`,
+        );
+      }
+      return [];
+    }
     const statuses: CommitStatusFact[] = [];
     for (const line of result.stdout.split("\n")) {
       if (line.trim() === "") continue;
+      let parsed: CommitStatusFact;
       try {
-        const parsed = JSON.parse(line) as CommitStatusFact;
-        if (
-          typeof parsed.state === "string" &&
-          typeof parsed.context === "string" &&
-          typeof parsed.created_at === "string"
-        ) {
-          statuses.push(parsed);
-        }
+        parsed = JSON.parse(line) as CommitStatusFact;
       } catch {
+        if (options?.failClosed) {
+          throw new CliError(
+            `unparseable commit status line from gh api: ${line.slice(0, 120)}`,
+          );
+        }
         // Drop the bad line; keep whatever parsed. One garbage object must
         // not hide a real pending on the next line.
+        continue;
+      }
+      if (
+        typeof parsed.state === "string" &&
+        typeof parsed.context === "string" &&
+        typeof parsed.created_at === "string"
+      ) {
+        statuses.push(parsed);
       }
     }
     return statuses;
-  } catch {
+  } catch (error) {
+    if (options?.failClosed) throw error;
     return [];
   }
 }

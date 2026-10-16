@@ -742,6 +742,52 @@ Three properties of the action's upload step are load-bearing:
 > `always()` still earns its place for a review that ran but could not post, and for a later step in the
 > job failing.
 
+## Reading a PR with `pr-hero status`
+
+`pr-hero status --pr <n> [--json]` reads one PR's state through `gh`. It is read-only and writes nothing to
+GitHub, so a skill can drive review, reply, fix and wait from it instead of reading comments by hand. Without
+`--json` it prints a few lines on stderr. With `--json` it prints one object on stdout, and nothing else:
+
+```json
+{
+  "schema": "pr-hero.status/v1",
+  "pr": 12,
+  "head": "<40-hex headRefOid>",
+  "gate": { "state": "failure", "description": "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override", "target_url": "<run url>", "created_at": "<ISO time>", "pending_in_flight": false, "override": { "active": false, "by": null } },
+  "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null },
+  "findings": [
+    { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
+      "severity": "CRITICAL", "tier": "blocking", "live_on_head": true,
+      "triage": { "tag": "dismissed", "verdict": "upheld", "actor": "agent", "head": "<40-hex>" } }
+  ],
+  "unresolved_blocking": 1,
+  "next_action": "triage",
+  "reason": "1 live blocking finding(s) on this head have no triage reply at the head they were posted on; triage them first."
+}
+```
+
+- `gate` is pr-hero's own commit status on the head. `state: "none"` means no `pr-hero` status is on it.
+- `findings` covers every posted `<!-- pr-hero-finding` comment, on every head. `channel` is `inline` for a review
+  thread and `outside` for a top-level comment. `live_on_head` is true when the summary's state block still carries
+  the finding, or when it was posted on the current head. `triage` is the newest triage reply in its thread only.
+- `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
+  live blocking findings in `findings`.
+- `report.outcome_code` is the `PRH-*` code of the newest outcome comment, when that comment has one.
+
+`next_action` is decided in this order, and the first match wins:
+
+| `next_action` | When |
+| --- | --- |
+| `wait` | The gate is pending and in flight (less than 90 minutes old). |
+| `review` | No `pr-hero` status is on the head, the gate errored, or a pending gate is older than 90 minutes and no run holds it. |
+| `done` | The gate passed and every finding posted on this head has a reply at that head. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. |
+| `triage` | The gate is red and a live blocking finding on this head has no triage reply at the head it was posted on. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
+| `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. |
+| `override-or-fix` | The gate is red, every live blocking finding is answered, and none is `applied`. A skipped review (size or budget) also lands here. Fix and push, or run `/pr-hero override`. |
+
+The command fails closed. A failed `gh` read, a truncated comment list, or a gate status it cannot read exits 1 with
+nothing on stdout, so a partial answer never looks like a clean PR.
+
 ## Optional inputs
 
 | Input | Default | Purpose |

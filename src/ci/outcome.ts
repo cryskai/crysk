@@ -1727,3 +1727,22 @@ function escapeCommandData(text: string): string {
     .replaceAll("\r", "%0D")
     .replaceAll("\n", "%0A");
 }
+
+// The first line of every outcome comment the publisher posts (src/ci/publish.ts writes it).
+// Exported so the status reader and the publisher share one spelling; the trailing space
+// keeps a lookalike marker from matching.
+export const OUTCOME_MARKER_PREFIX = "<!-- pr-hero-outcome ";
+
+// The PRH-* code an outcome comment names, or null. renderError's summary opens with
+// `### <headline>`, and a headline is the bare code or the code then a colon and a sentence
+// (`PRH-CANCELLED: not reviewed`), so the code is the token at the start of that heading. The
+// token must be a catalogued code: a heading that merely looks like one reads as no code.
+export function parseOutcomeCode(body: string): ErrorCode | null {
+  if (!body.startsWith(OUTCOME_MARKER_PREFIX)) return null;
+  const heading = /^### (PRH-[A-Z0-9-]+)(?=[:\s]|$)/m.exec(body);
+  const code = heading?.[1];
+  if (code === undefined) return null;
+  return (ERROR_CODES as readonly string[]).includes(code)
+    ? (code as ErrorCode)
+    : null;
+}

@@ -17,11 +17,13 @@ import {
   type ErrorClass,
   type ErrorCode,
   type ErrorParams,
+  OUTCOME_MARKER_PREFIX,
   type OutcomeContext,
   type Owner,
   ownerLead,
   ownerOf,
   parseCliRecord,
+  parseOutcomeCode,
   parseTriggerRecord,
   renderCode,
   renderError,
@@ -2043,5 +2045,50 @@ describe("parseCliRecord — the override_cutoff_ms field", () => {
         }),
       ),
     ).toBeUndefined();
+  });
+});
+
+// `pr-hero status` reads the newest outcome comment's PRH-* code. The reader and the
+// publisher share the marker prefix, so a comment the publisher writes reads back.
+describe("parseOutcomeCode", () => {
+  test("the marker prefix is the one the publisher writes", () => {
+    const publisherSource = readFileSync(
+      path.resolve(import.meta.dir, "../../src/ci/publish.ts"),
+      "utf8",
+    );
+    expect(publisherSource).toContain("OUTCOME_MARKER_PREFIX");
+    expect(OUTCOME_MARKER_PREFIX).toBe("<!-- pr-hero-outcome ");
+  });
+
+  test("reads the code from a rendered outcome comment, as the publisher writes it", () => {
+    const rendered = renderCode("PRH-CRED-MISSING", {}, "action");
+    const body = [
+      `${OUTCOME_MARKER_PREFIX}v=1 head=${"a".repeat(40)} run=7 attempt=1 -->`,
+      "",
+      ...rendered.summary,
+    ].join("\n");
+    expect(parseOutcomeCode(body)).toBe("PRH-CRED-MISSING");
+  });
+
+  test("a headline that carries a colon still yields the bare code", () => {
+    const body = `${OUTCOME_MARKER_PREFIX}v=1 head=unknown run=7 attempt=1 -->\n\n### PRH-CANCELLED: not reviewed\n\nbody`;
+    expect(parseOutcomeCode(body)).toBe("PRH-CANCELLED");
+  });
+
+  test("null for a comment without the outcome marker, even when it quotes a code", () => {
+    expect(parseOutcomeCode("### PRH-CRED-MISSING\n\nquoted")).toBeNull();
+  });
+
+  test("null for an outcome comment with no code heading, or an unknown one", () => {
+    expect(
+      parseOutcomeCode(
+        `${OUTCOME_MARKER_PREFIX}v=1 head=unknown -->\n\nno heading`,
+      ),
+    ).toBeNull();
+    expect(
+      parseOutcomeCode(
+        `${OUTCOME_MARKER_PREFIX}v=1 head=unknown -->\n\n### PRH-NOT-A-CODE`,
+      ),
+    ).toBeNull();
   });
 });

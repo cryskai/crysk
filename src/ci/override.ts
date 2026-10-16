@@ -79,18 +79,33 @@ export function overrideStandsOverRun(
   cutoffMs: number,
 ): boolean {
   const latest = newestStatusInContext(statuses, OVERRIDE_STATUS_CONTEXT);
-  if (latest === undefined) return false;
-  if (latest.state !== "success") return false;
-  const description = latest.description;
-  if (
-    typeof description !== "string" ||
-    !description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)
-  ) {
-    return false;
-  }
+  if (latest === undefined || !isOverrideStatus(latest)) return false;
   const createdMs = Date.parse(latest.created_at);
   if (Number.isNaN(createdMs)) return false;
   return createdMs >= cutoffMs;
+}
+
+// Whether one status is an override: a success whose description carries the override
+// prefix. This is the single test both writers and the status reader use, so none of them
+// can recognise an override by a different rule. A status without a description is never one.
+export function isOverrideStatus(status: OverrideStatusFact): boolean {
+  return (
+    status.state === "success" &&
+    typeof status.description === "string" &&
+    status.description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)
+  );
+}
+
+// The login an override was written by: the text after the prefix up to the first space. The
+// publisher writes `pr-hero: overridden by @<login> — no review on this head`, and a GitHub
+// login has no space, so this is the login exactly. Null when the description is not an
+// override or names no one.
+export function overrideActorOf(description: string): string | null {
+  if (!description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)) return null;
+  const actor = description
+    .slice(OVERRIDE_DESCRIPTION_PREFIX.length)
+    .split(" ")[0];
+  return actor === undefined || actor === "" ? null : actor;
 }
 
 // The newest status of one context by created_at: a tie goes to the later row, and a row
