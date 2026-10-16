@@ -443,6 +443,104 @@ describe("settleCommitStatusAndLedger — ledger settlement guard", () => {
   });
 });
 
+// Fix C: when the review body already threw, a failed final status write must not
+// replace that error. The write is still attempted, its failure is logged, and the
+// lock is released; the body's own error is what the run exits with.
+describe("settleCommitStatusAndLedger — a failed status write after the body threw", () => {
+  const ORIGINAL = new Error("ORIGINAL");
+
+  // Same shape as ci-admission-gate.test.ts's capturingStderr (log writes stderr).
+  async function capturingStderr<T>(
+    fn: () => Promise<T>,
+  ): Promise<{ result: T; logged: string }> {
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      return { result: await fn(), logged: chunks.join("") };
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  }
+
+  test("the body's own error escapes, the status failure is logged, and the lock is released", async () => {
+    holdCommitStatusLock({
+      operatorRoot: "/repo",
+      sha: HEAD,
+      targetUrl: undefined,
+    });
+    const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+    const ledger = ledgerState("reserved");
+    let escaped: unknown = "nothing escaped";
+    const { logged } = await capturingStderr(async () => {
+      try {
+        try {
+          throw ORIGINAL;
+        } finally {
+          await settleCommitStatusAndLedger({
+            result: undefined,
+            posted: null,
+            operatorRoot: "/repo",
+            headSha: HEAD,
+            statusTargetUrl: undefined,
+            ciAdmissionLedger: ledger,
+            spawnFn,
+            settle: fakeSettle,
+            ciMode: "gate",
+            statusContext: COMMIT_STATUS_CONTEXT,
+            blockingCount: null,
+            bodyFailed: true,
+          });
+        }
+      } catch (error) {
+        escaped = error;
+      }
+    });
+    // gh was really attempted and really failed: the write did not land.
+    expect(calls.length).toBeGreaterThan(0);
+    expect(escaped).toBe(ORIGINAL);
+    expect(logged).toContain("warning: commit status (error): ");
+    expect(heldCommitStatusLock()).toBeNull();
+    // The write no longer throws, so the inner finally settles the ledger itself.
+    expect(ledger.record.status).toBe("failed");
+    expect(ledger.record.decisionReason).toBe(SETTLED_REASON);
+  });
+
+  test("a body that succeeds still fails the run with a CliError when its status write fails", async () => {
+    holdCommitStatusLock({
+      operatorRoot: "/repo",
+      sha: HEAD,
+      targetUrl: undefined,
+    });
+    const { spawnFn } = makeStatusSpawn({ fail: true });
+    let thrown: unknown;
+    try {
+      await settleCommitStatusAndLedger({
+        result: pipelineResult(false),
+        posted: null,
+        operatorRoot: "/repo",
+        headSha: HEAD,
+        statusTargetUrl: undefined,
+        ciAdmissionLedger: null,
+        spawnFn,
+        ciMode: "gate",
+        statusContext: COMMIT_STATUS_CONTEXT,
+        blockingCount: 0,
+        bodyFailed: false,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(CliError);
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+});
+
 describe("finalizePrReviewRun — cleanup ordering", () => {
   test("settles the ledger and releases the pid lock before gc ever looks at it", async () => {
     const lockPath = await tmpLockPath();

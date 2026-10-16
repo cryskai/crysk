@@ -109,3 +109,24 @@ describe("reviewPr's call site for the pipeline record", () => {
     expect(publishAt).toBeGreaterThan(recordAt);
   });
 });
+
+// Fix C: the inner try records that its body threw, and the commit-status settle
+// reads that flag, so a failed status write cannot replace the body's own error.
+// reviewPr itself is not driveable offline (gh and git at its head), so this pins
+// the wiring by source, the same way the call-site test above does.
+describe("reviewPr's commit-status settle knows whether the body threw", () => {
+  test("the inner catch marks the body failed and rethrows it, and the settle call passes the flag", () => {
+    const source = readFileSync(
+      path.join(import.meta.dir, "../../src/pr/review-pr.ts"),
+      "utf8",
+    );
+    expect(source).toMatch(
+      /\} catch \(error\) \{\s*bodyFailed = true;\s*throw error;\s*\} finally \{/,
+    );
+    const settle = /await settleCommitStatusAndLedger\(\{([\s\S]*?)\}\);/.exec(
+      source,
+    );
+    expect(settle).not.toBeNull();
+    expect(settle?.[1]).toMatch(/\bbodyFailed,/);
+  });
+});

@@ -557,12 +557,12 @@ below keep their own status and exit, as they did before the gate.
 
 **What counts as unresolved.** The count behind a blocking `failure` is every blocking finding that is still
 open: this run's blocking findings, plus each blocking finding from an earlier review of the PR that has not
-been cleared. A finding is still open when it is carried forward unchanged, when the verifier could not
+been cleared (subject to the known gap at the end of this paragraph). A finding is still open when it is carried forward unchanged, when the verifier could not
 decide, when a triage reply deferred it, or when a triage reply dismissed it. A dismissal the adjudicator
-upheld counts too. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, when every file it
-names was deleted, or when this run re-tiers it below blocking. Triage replies (`applied`, `dismissed`,
+upheld counts too. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, or when every file it
+names was deleted. Triage replies (`applied`, `dismissed`,
 `deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator that
-would check them does not exist yet. The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none.
+would check them does not exist yet. The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. Known gap: the review after a re-review remembers only the findings of the pull request's first review and the earlier findings still open, not the new findings that re-review raised. A blocking finding first raised by a re-review counts on that re-review, but a later review, including a same-head `/pr-hero review` that runs no hunters, does not count it unless that review finds it again. Until this is fixed, check that re-review's own report, or comment `/pr-hero review` on a new head after pushing a fix.
 
 **Unlocking a gate.** A `failure` for blocking findings clears in one of two ways. A fix pushed to a new head
 clears its own finding once the re-review verifies it gone. `/pr-hero override` from a user with write access
@@ -592,17 +592,21 @@ review is replaced if another comment on the same pull request arrives before it
 override comment appears. Comment `/pr-hero override` again when that happens. If the head cannot be
 resolved, the comment still posts and says that no status could be set.
 
-**A failed final write.** In gate mode the job fails with an `::error::` annotation when the final status
-cannot be written. The commit-status lock is still released. The head then stays `pending`, so the required
-check does not settle, and a re-run of that head yields to the pending for up to 90 minutes unless it is
-forced. `/pr-hero review` forces the review past that yield and writes the status again. The pending status,
-written when a review starts, is best-effort in both modes.
+**A failed final write.** In gate mode, when the review itself finished, the job fails with an `::error::`
+annotation if the final status cannot be written. If the review had already failed, the job exits with that
+failure, and the failed status write is only logged, so it never replaces the review's own error. Either way the
+commit-status lock is still released. The head then stays `pending`, so the required check does not settle. On
+an already-reviewed head, the same-head admission skip runs first and posts no status, so the head stays `pending`
+until a `/pr-hero review` comment forces a review, which writes the status again. The pending status, written
+when a review starts, is best-effort in both modes.
 
 **Local runs and the watcher post on `pr-hero/local`.** Only an explicit `--ci` run writes the `pr-hero`
 status, which is the required check. A `pr-hero review --pr` you run locally, and each review that
 `pr-hero watch` starts, post advisory statuses on `pr-hero/local` instead, so they cannot overwrite a red gate
 on the same head. Only the `--ci` flag makes a run post to the gate; `CI=1` in your shell does not. The watcher yields
-to a review in flight on either context, and it settles only its own leftover pending, on `pr-hero/local`.
+to a review in flight on either context, and it settles only its own leftover pending, on `pr-hero/local`. A `--ci`
+run stands down only for a pending on `pr-hero`, because only it writes that context, so a local pending never
+leaves the required check unsettled.
 
 Local statuses used to share the `pr-hero` name. A status a local run wrote there before this change stays in
 that head's history, and the next `--ci` run on the head is what settles the gate.

@@ -418,8 +418,9 @@ describe("publishRunOutcome", () => {
       expect(await unresolvedCountFor(baseResult({ gatePriors }))).toBe(0);
     });
 
-    test("a blocking prior this run's own survivor re-tiers to advisory does not count", async () => {
-      // The pipeline's own classification is the one tier allowed to lower it.
+    test("a blocking prior at the same spot as an advisory survivor of this run still counts", async () => {
+      // An advisory survivor never clears a blocking prior: identity matching
+      // is a 5-line window, so it can pair with a different issue.
       const gatePriors = gateRowsOf(
         [blockingPrior("R001", ["src/app.ts:10"])],
         caseC,
@@ -436,7 +437,7 @@ describe("publishRunOutcome", () => {
             skillOutput: { ...baseSkillOutput(), findings: [advisorySurvivor] },
           }),
         ),
-      ).toBe(0);
+      ).toBe(1);
     });
   });
 

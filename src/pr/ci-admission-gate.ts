@@ -61,7 +61,10 @@ import {
 } from "#pr/pr";
 import {
   type CiMode,
+  type CommitStatusContext,
   findMarkedCommentId,
+  IN_FLIGHT_TTL_MS,
+  inFlightContextsFor,
   isInFlightCommitStatus,
 } from "#pr/preflight";
 import { parseStateBlock } from "#rereview/state";
@@ -370,6 +373,14 @@ export async function evaluateCiAdmissionGate(input: {
 // before. The check stays where it is, after the reservation, on purpose:
 // moving it earlier would change the CI path's ordering for every other exit.
 //
+// Which pendings stand the run down depends on its posture. A watcher child or a
+// local run (no --ci) reads every run context, because local runs and the watcher
+// post their pending on pr-hero/local and would otherwise double-spend on the
+// same head. A --ci run reads only the gate: it settles pr-hero alone, and a stand-
+// down on a local pending would leave pr-hero unwritten, since no local run writes
+// that context. action.yml runs CI as `review --ci --yes`, so the yield is live
+// there, and this is why the --ci narrowing matters.
+//
 // Returns the exit code when the run must stop here, `undefined` to proceed.
 // `spawnFn` and `nowMs` are test-only seams (defaults: the real Bun.spawn and
 // Date.now()). The one spawnFn reaches both gh calls made here: the
@@ -378,6 +389,8 @@ export async function yieldToInFlightReview(input: {
   operatorRoot: string;
   headSha: string;
   options: Pick<CliOptions, "yes" | "force">;
+  // The run's posture (resolveCiPosture): decides which pending contexts stand it down.
+  statusContext: CommitStatusContext;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   spawnFn?: typeof Bun.spawn;
   nowMs?: number;
@@ -386,7 +399,14 @@ export async function yieldToInFlightReview(input: {
   const statuses = await fetchCommitStatuses(operatorRoot, headSha, {
     spawnFn,
   });
-  if (!isInFlightCommitStatus(statuses, input.nowMs ?? Date.now())) {
+  if (
+    !isInFlightCommitStatus(
+      statuses,
+      input.nowMs ?? Date.now(),
+      IN_FLIGHT_TTL_MS,
+      inFlightContextsFor(input.statusContext),
+    )
+  ) {
     return undefined;
   }
   // `--yes` without `--force` is the watcher child: a second launch
