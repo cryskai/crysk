@@ -349,7 +349,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       },
       comments: [
         { source: "issue", kind: "report", head: NEW },
-        { source: "inline", kind: "finding", blocking: true },
+        { source: "inline", kind: "finding", blocking: true, head: NEW },
       ],
     }),
     // The gate ignored its own blocking finding: the consistency check catches it.
@@ -357,7 +357,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       status: { state: "success", description: "review posted" },
       comments: [
         { source: "issue", kind: "report", head: NEW },
-        { source: "inline", kind: "finding", blocking: true },
+        { source: "inline", kind: "finding", blocking: true, head: NEW },
       ],
     }),
   },
