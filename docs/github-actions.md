@@ -558,10 +558,10 @@ below keep their own status and exit, as they did before the gate.
 open: this run's blocking findings, plus each blocking finding from an earlier review of the PR that has not
 been cleared. A finding is still open when it is carried forward unchanged, when the verifier could not
 decide, when a triage reply deferred it, or when a triage reply dismissed it. A dismissal the adjudicator
-upheld counts too. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, when every file it
-names was deleted, or when this run re-tiers it below blocking. Triage replies (`applied`, `dismissed`,
+upheld counts too. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, or when every file it
+names was deleted. Triage replies (`applied`, `dismissed`,
 `deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator that
-would check them does not exist yet. The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none.
+would check them does not exist yet. The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. Known gap: a blocking finding first raised by a re-review, rather than by the first review of the pull request, is not yet remembered by the review after it, so a later re-review does not count it unless it finds it again.
 
 **Unlocking a gate.** A `failure` for blocking findings clears in one of two ways. A fix pushed to a new head
 clears its own finding once the re-review verifies it gone. `/pr-hero override` from a user with write access

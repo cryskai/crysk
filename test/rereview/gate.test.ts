@@ -148,17 +148,49 @@ describe("unresolvedBlockingCount — what the gate counts", () => {
   });
 });
 
-describe("unresolvedBlockingCount — the pipeline's own re-tier", () => {
-  test("a blocking prior re-found by an advisory survivor at the same location does not count", () => {
+describe("unresolvedBlockingCount — an advisory survivor never clears a blocking prior", () => {
+  test("a blocking prior re-found by an advisory survivor at the same location still counts", () => {
     expect(
       unresolvedBlockingCount(
         [survivor(10, "advisory")],
         [row("R001", { status: "carried" })],
       ),
-    ).toBe(0);
+    ).toBe(1);
   });
 
-  test("a self-asserted misclassified prior still counts when no survivor re-tiers it", () => {
+  test("a blocking prior and an advisory survivor 3 lines apart in the same file still count", () => {
+    // The identity match is a 5-line window, so this unrelated advisory
+    // finding pairs by location alone. It must not clear the blocking prior.
+    expect(
+      unresolvedBlockingCount(
+        [survivor(13, "advisory")],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(1);
+  });
+
+  test("a blocking survivor carries an unrecoverable prior at the same spot: one, not two", () => {
+    expect(
+      unresolvedBlockingCount(
+        [survivor(10, "blocking")],
+        [row("R001", { tier: "unrecoverable", status: "carried" })],
+      ),
+    ).toBe(1);
+  });
+
+  test("an advisory survivor cannot take the second blocking prior at one spot", () => {
+    expect(
+      unresolvedBlockingCount(
+        [survivor(10, "blocking"), survivor(10, "advisory")],
+        [
+          row("R001", { status: "carried" }),
+          row("R002", { status: "carried" }),
+        ],
+      ),
+    ).toBe(2);
+  });
+
+  test("a self-asserted misclassified prior still counts when no survivor of this run carries it", () => {
     // `misclassified` lands as re-tiered (classify.ts:159-161). The triage tag
     // is the author's own claim, so the gate must not take its word for it.
     expect(
@@ -166,13 +198,13 @@ describe("unresolvedBlockingCount — the pipeline's own re-tier", () => {
     ).toBe(1);
   });
 
-  test("a self-asserted misclassified prior is lowered only by the pipeline's own advisory survivor", () => {
+  test("a self-asserted misclassified prior is not lowered by an advisory survivor at its spot", () => {
     expect(
       unresolvedBlockingCount(
         [survivor(10, "advisory")],
         [row("R001", { status: "re-tiered" })],
       ),
-    ).toBe(0);
+    ).toBe(1);
   });
 });
 

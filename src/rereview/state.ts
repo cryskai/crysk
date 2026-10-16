@@ -412,9 +412,12 @@ export function assembleLive(input: {
 //
 // A prior leaves the count only when something outside the author cleared it:
 //   - verified-gone: the verifier refuted the finding, or every file it names
-//     was deleted (classifyPrior settles that as verified-gone);
-//   - re-tiered below blocking by THIS run's own classification: a survivor of
-//     this run matches the prior and carries an advisory tier.
+//     was deleted (classifyPrior settles that as verified-gone).
+// Nothing this run concludes about a prior lowers it. An advisory survivor at a
+// blocking prior's spot does not clear that prior: identity matching is a
+// 5-line window, so a different issue can sit there, and the gate fails closed.
+// A real fix leaves the count when the re-review VERIFIES it gone, and
+// `/pr-hero override` covers a team that accepts the finding.
 // A self-asserted triage tag never leaves the count (S7). `misclassified`
 // lands as `re-tiered` (classifyPrior), and its tier is the author's claim,
 // not the pipeline's, so it is not evidence. A dismissal the adjudicator upheld
@@ -425,21 +428,21 @@ export function assembleLive(input: {
 // Dedupe key. Two rules, both stated so a reader can check them:
 //   - a gate row is one prior, keyed by its id (R###). A duplicate row for the
 //     same id counts once;
-//   - a survivor pairs with at most one gate row, by the identity the worsening
-//     step already uses (identityFromLocs of the prior against
-//     identityFromFinding of the survivor). The pairing prefers a row of the
-//     survivor's own tier, so a blocking survivor claims a blocking prior ahead
-//     of an advisory one at the same spot. A paired row is carried by its
-//     survivor and not counted again; a survivor counts by its own tier.
+//   - only a BLOCKING survivor pairs, and it pairs with at most one gate row, by
+//     the identity the worsening step already uses (identityFromLocs of the
+//     prior against identityFromFinding of the survivor). It takes the first
+//     unpaired match in PAIR_PREFERENCE order: a blocking row, an unrecoverable
+//     row, then an advisory row. A paired row is carried by its survivor and not
+//     counted again; a blocking survivor counts by its own tier. An advisory
+//     survivor never pairs, so it cannot remove a blocking prior from the count.
 // One-to-one is the fail-closed choice: two priors at one spot and one survivor
 // count as two, because the survivor can be only one of them.
 //
 // Unrecoverable tiers ARE counted, as blocking. A prior whose tier could not be
 // read back is unclassified, and the fail-visible rule (classify.ts) and S7 both
 // forbid a green gate on a finding we cannot classify. Only a verifier verdict or
-// a deleted file lowers such a row. An advisory survivor at the same spot still
-// pairs with it below, because that tier is this run's own classification, not
-// the author's claim.
+// a deleted file lowers such a row, and an advisory survivor at the same spot
+// does not pair with it.
 
 export interface GateRow {
   id: string;
@@ -452,6 +455,15 @@ export type GateSurvivor = Pick<
   Finding,
   "path" | "line" | "proof_refs" | "tier"
 >;
+
+// The order a blocking survivor pairs with a prior: its own tier first, then the
+// unclassified tier, then advisory. The advisory row never changes the count,
+// so it is only ever a last resort and never takes a row the count reads.
+const PAIR_PREFERENCE: readonly RecoveredTier[] = [
+  "blocking",
+  TIER_UNRECOVERABLE,
+  "advisory",
+];
 
 export function unresolvedBlockingCount(
   survivors: readonly GateSurvivor[],
@@ -474,22 +486,25 @@ export function unresolvedBlockingCount(
   const identities = open.map((row) => identityFromLocs(row.locs));
   const paired = new Set<number>();
   for (const survivor of survivors) {
+    // An advisory survivor never pairs: it cannot clear a blocking prior.
+    if (survivor.tier !== "blocking") continue;
     const survivorIdentity = identityFromFinding({
       path: survivor.path,
       line: survivor.line,
       proof_refs: survivor.proof_refs,
     });
-    let sameTier = -1;
-    let anyTier = -1;
-    for (let i = 0; i < open.length; i++) {
-      if (paired.has(i)) continue;
-      const identity = identities[i] ?? new Map();
-      if (!identitiesMatch(identity, survivorIdentity)) continue;
-      if (anyTier === -1) anyTier = i;
-      if (sameTier === -1 && open[i]?.tier === survivor.tier) sameTier = i;
+    for (const tier of PAIR_PREFERENCE) {
+      const pick = open.findIndex(
+        (row, i) =>
+          !paired.has(i) &&
+          row.tier === tier &&
+          identitiesMatch(identities[i] ?? new Map(), survivorIdentity),
+      );
+      if (pick !== -1) {
+        paired.add(pick);
+        break;
+      }
     }
-    const pick = sameTier !== -1 ? sameTier : anyTier;
-    if (pick !== -1) paired.add(pick);
   }
 
   // WHY unrecoverable counts: fail closed, see the note above the GateRow type.

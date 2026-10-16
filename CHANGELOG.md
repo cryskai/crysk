@@ -19,8 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open stays counted through a re-review that carries it, through a same-head `/pr-hero review` that runs no
   hunters, through a triage reply on its own, and through later pushes after a rejected dismissal or a
   `misclassified` reply. Before this, each of those read green. A finding leaves the
-  count only when the re-review verifies it gone, its files were deleted, or this run re-tiers it below
-  blocking.
+  count only when the re-review verifies it gone or its files were deleted. An advisory finding from
+  this run never clears a blocking one at the same spot.
 
 ## [0.2.3] - 2026-10-16
 
