@@ -2,7 +2,16 @@
 // clock, a scratch directory under the OS temp dir, and stdout. Nothing in the
 // logic imports this file; the entry point wires it, and tests never do.
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type {
@@ -177,6 +186,54 @@ export function defaultLockPath(): string {
   return path.join(homedir(), ".prhero", "sandbox.lock");
 }
 
+// The file operations the run lock makes. The real ones are node's. A test passes an
+// in-memory set instead, so every operation can be interleaved with another start's.
+export interface LockIo {
+  readFile(file: string): Promise<string>;
+  // Creates the file with `content`, failing with EEXIST when it exists (`wx`).
+  writeExclusive(file: string, content: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
+  // Gives `to` a second name for the file at `from`. It fails with EEXIST when `to`
+  // exists, unlike rename, which would replace it.
+  link(from: string, to: string): Promise<void>;
+  // Removes the file. A file that is already gone is not an error.
+  unlink(file: string): Promise<void>;
+  mkdir(dir: string): Promise<void>;
+  alive(pid: number): boolean;
+}
+
+function hasCode(error: unknown, code: string): boolean {
+  return (error as NodeJS.ErrnoException).code === code;
+}
+
+const nodeLockIo: LockIo = {
+  readFile: (file) => readFile(file, "utf8"),
+  writeExclusive: (file, content) => writeFile(file, content, { flag: "wx" }),
+  rename,
+  link,
+  unlink: (file) => rm(file, { force: true }),
+  mkdir: async (dir) => {
+    await mkdir(dir, { recursive: true });
+  },
+  alive: (target) => {
+    try {
+      process.kill(target, 0);
+      return true;
+    } catch (error) {
+      // EPERM: the process exists and belongs to someone else, so it is alive.
+      return hasCode(error, "EPERM");
+    }
+  },
+};
+
+// What a lock file's text records: a pid, or nothing usable.
+function holderOf(text: string): LockHolder {
+  const value = text.trim();
+  return /^[1-9]\d*$/.test(value)
+    ? { kind: "pid", pid: Number(value) }
+    : { kind: "unreadable" };
+}
+
 // The lock as a file that records a pid. The exclusive create (`wx`) is what makes
 // two racing starts safe: exactly one of them creates it. A file whose content is
 // not a pid reads as unreadable, never as absent, so a start killed between the
@@ -184,51 +241,62 @@ export function defaultLockPath(): string {
 export function realRunLock(
   lockPath: string,
   pid: number = process.pid,
+  io: LockIo = nodeLockIo,
 ): RunLockFile {
   const holder = async (): Promise<LockHolder> => {
     let text: string;
     try {
-      text = await readFile(lockPath, "utf8");
+      text = await io.readFile(lockPath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { kind: "none" };
-      }
+      if (hasCode(error, "ENOENT")) return { kind: "none" };
       throw error;
     }
-    const value = text.trim();
-    return /^[1-9]\d*$/.test(value)
-      ? { kind: "pid", pid: Number(value) }
-      : { kind: "unreadable" };
+    return holderOf(text);
   };
   return {
     path: lockPath,
     pid,
     create: async () => {
-      await mkdir(path.dirname(lockPath), { recursive: true });
+      await io.mkdir(path.dirname(lockPath));
       try {
-        await writeFile(lockPath, `${pid}\n`, { flag: "wx" });
+        await io.writeExclusive(lockPath, `${pid}\n`);
         return true;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+        if (hasCode(error, "EEXIST")) return false;
         throw error;
       }
     },
     holder,
     remove: async (recorded) => {
-      const current = await holder();
-      if (current.kind === "pid" && current.pid === recorded) {
-        await rm(lockPath, { force: true });
-      }
-    },
-    alive: (target) => {
+      // The lock is moved to a name only this call knows, and what moved is read
+      // there. Checking the lock's own name and then deleting it would be two steps,
+      // and a start could take the lock between them, so the delete would remove that
+      // start's live lock.
+      const moved = `${lockPath}.stale-${pid}-${randomBytes(6).toString("hex")}`;
       try {
-        process.kill(target, 0);
-        return true;
+        await io.rename(lockPath, moved);
       } catch (error) {
-        // EPERM: the process exists and belongs to someone else, so it is alive.
-        return (error as NodeJS.ErrnoException).code === "EPERM";
+        if (hasCode(error, "ENOENT")) return;
+        throw error;
       }
+      const found = holderOf(await io.readFile(moved));
+      if (found.kind === "pid" && found.pid === recorded) {
+        await io.unlink(moved);
+        return;
+      }
+      // Not the lock the caller meant: it is a live lock a racing start wrote after
+      // the caller's read. It goes back under the lock's name. A link never replaces
+      // a file, so if another start has created the lock since, the moved file is left
+      // where it is, and the caller's create refuses.
+      try {
+        await io.link(moved, lockPath);
+      } catch (error) {
+        if (hasCode(error, "EEXIST")) return;
+        throw error;
+      }
+      await io.unlink(moved);
     },
+    alive: (target) => io.alive(target),
   };
 }
 

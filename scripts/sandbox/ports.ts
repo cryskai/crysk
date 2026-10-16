@@ -60,7 +60,10 @@ export interface RunLockFile {
   // Creates the file exclusively, recording `pid`. False when a file already exists.
   create(): Promise<boolean>;
   holder(): Promise<LockHolder>;
-  // Removes the file, but only while it still records `pid`.
+  // Removes the file, but only while it still records `pid`. The check and the
+  // removal are one step: the file is moved aside under a name only this call uses,
+  // and what moved is what is checked (real.ts). A stale read cannot delete a lock
+  // another start took meanwhile.
   remove(pid: number): Promise<void>;
   // Whether a process with this pid is running.
   alive(pid: number): boolean;

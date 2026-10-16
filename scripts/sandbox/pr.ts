@@ -14,8 +14,9 @@ import {
 import { ghJson, ghOk } from "./repo";
 import {
   cancelTiming,
-  findOrphanRuns,
+  findLiveRuns,
   pollTiming,
+  type RunScope,
   type RunTiming,
   stopRun,
 } from "./runs";
@@ -26,8 +27,15 @@ export interface ScenarioPr {
   url: string;
 }
 
+// An open scenario PR as the listing reports it: its title and creation time are what
+// the run lookup matches its comment runs by.
+export interface ListedPr extends ScenarioPr {
+  title: string;
+  createdAt: string;
+}
+
 // What gh returns for an open PR: the scenario fields, plus where its head lives.
-interface OpenPr extends ScenarioPr {
+interface OpenPr extends ListedPr {
   isCrossRepository: boolean;
   headRepositoryOwner: { login: string } | null;
 }
@@ -46,14 +54,11 @@ function isScenarioPr(pr: OpenPr): boolean {
 }
 
 // The open scenario PRs. This is also the serialization check: smoke refuses to
-// start while this list is not empty. The search is on the head branch, so the
-// newest unrelated PRs cannot push a scenario PR out of the first page: GitHub's
-// `head:` qualifier is a prefix match, and the owner and fork filter below still
-// decide what counts. The limit is the page cap, not a second filter; a fork can
-// open many sandbox/ heads, so it is well above the usual count.
-export async function listScenarioPrs(
-  deps: SandboxDeps,
-): Promise<ScenarioPr[]> {
+// start while this list is not empty. The list is read whole and filtered here, not
+// searched: GitHub's search index lags the PR list, so a PR opened moments ago can be
+// missing from a search. The page is far above any repository's open PRs, so a scenario
+// PR behind a long run of newer, unrelated PRs is still in it.
+export async function listScenarioPrs(deps: SandboxDeps): Promise<ListedPr[]> {
   const open = await ghJson<OpenPr[]>(deps, [
     "pr",
     "list",
@@ -61,18 +66,20 @@ export async function listScenarioPrs(
     SANDBOX_REPO,
     "--state",
     "open",
-    "--search",
-    `head:${SCENARIO_BRANCH_PREFIX}`,
     "--json",
-    "number,headRefName,url,isCrossRepository,headRepositoryOwner",
+    "number,headRefName,url,title,createdAt,isCrossRepository,headRepositoryOwner",
     "--limit",
     "1000",
   ]);
-  return open.filter(isScenarioPr).map(({ number, headRefName, url }) => ({
-    number,
-    headRefName,
-    url,
-  }));
+  return open
+    .filter(isScenarioPr)
+    .map(({ number, headRefName, url, title, createdAt }) => ({
+      number,
+      headRefName,
+      url,
+      title,
+      createdAt,
+    }));
 }
 
 export async function closeScenarioPr(
@@ -114,7 +121,7 @@ export async function runList(input: SandboxDeps): Promise<number> {
   return 0;
 }
 
-// A PR is closed only after the runs on its head are stopped. Closing it over a
+// A PR is closed only after the runs of the PR are stopped. Closing it over a
 // live run releases the serialization lock while the review keeps running, so
 // clean keeps the order smoke's cleanup keeps: cancel, wait, then close. A run
 // that will not stop keeps its PR open, for the next clean.
@@ -127,7 +134,7 @@ export async function runClean(
   let failed = 0;
   for (const pr of open) {
     try {
-      if (!(await stopHeadRuns(deps, pr.headRefName, options))) {
+      if (!(await stopPrRuns(deps, pr, options))) {
         failed += 1;
         deps.log(
           `left open: ${pr.url} stays open until its run ends (then clean)`,
@@ -147,17 +154,24 @@ export async function runClean(
   return failed === 0 ? 0 : 1;
 }
 
-// Cancels each run of the branch that is still going, and waits for every one to
-// report completed. Returns false when one did not stop within the cancel wait. No
-// stop signal reaches clean, so its waits run to their bounds.
-async function stopHeadRuns(
+// Cancels each run of the PR that is still going, and waits for every one to report
+// completed. Returns false when one did not stop within the cancel wait. No stop
+// signal reaches clean, so its waits run to their bounds.
+async function stopPrRuns(
   deps: SandboxDeps,
-  branch: string,
+  pr: ListedPr,
   options: RunTiming,
 ): Promise<boolean> {
-  const runIds = await findOrphanRuns(
+  const created = Date.parse(pr.createdAt);
+  const scope: RunScope = {
+    branch: pr.headRefName,
+    title: pr.title,
+    prCreatedAtMs: created,
+    startedAtMs: created,
+  };
+  const runIds = await findLiveRuns(
     deps,
-    branch,
+    scope,
     pollTiming(options),
     undefined,
   );

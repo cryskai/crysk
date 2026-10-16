@@ -12,7 +12,7 @@ import {
   workflowFor,
 } from "../../scripts/sandbox/seed";
 import { runSmoke } from "../../scripts/sandbox/smoke";
-import { fail, type Harness, HEAD_SHA, harness, ok } from "./fakes";
+import { fail, type Harness, HEAD_SHA, harness, ok, START_ISO } from "./fakes";
 
 const PR_NUMBER = 7;
 const PR_URL = `https://github.com/${SANDBOX_REPO}/pull/${PR_NUMBER}`;
@@ -53,6 +53,9 @@ interface World {
   artifacts: string[];
   remoteFiles: Map<string, string>;
   statusFails: boolean;
+  // When GitHub reports the scenario PR as created. The harness clock starts at the
+  // same moment, so the PR reads as fresh.
+  prCreatedAt: string;
 }
 
 function world(overrides: Partial<World> = {}): World {
@@ -67,6 +70,7 @@ function world(overrides: Partial<World> = {}): World {
     artifacts: [`pr-hero-run-${PR_NUMBER}-${HEAD_SHA}`],
     remoteFiles: sandboxFiles("v0.2.0"),
     statusFails: false,
+    prCreatedAt: START_ISO,
     ...overrides,
   };
 }
@@ -131,6 +135,9 @@ function ghFor(w: World) {
       }
       if (path.includes("/issues/")) {
         return ok(JSON.stringify(w.issueComments.map((body) => ({ body }))));
+      }
+      if (/\/pulls\/\d+$/.test(path)) {
+        return ok(JSON.stringify({ created_at: w.prCreatedAt }));
       }
       if (path.includes("/pulls/")) {
         return ok(JSON.stringify(w.inlineComments.map((body) => ({ body }))));

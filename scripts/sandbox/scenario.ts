@@ -13,9 +13,8 @@
 
 import { type CheckResult, describeCheck, evaluateChecks } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
-import { STATUS_CONTEXT, WORKFLOW_NAME } from "./markers";
+import { STATUS_CONTEXT } from "./markers";
 import {
-  COMMENT_RUN_CLOCK_SKEW_MS,
   type CommentFact,
   classifyComment,
   classifyPath,
@@ -52,13 +51,15 @@ import {
 } from "./report";
 import {
   cancelTiming,
-  findOrphanRuns,
+  findLiveRuns,
   Interrupted,
+  isPrCommentRun,
   listBranchRuns,
+  listCommentRuns,
   pollTiming,
   pollUntil,
-  RUN_FIELDS,
   type RunListItem,
+  type RunScope,
   type RunTiming,
   type Stop,
   stopRun,
@@ -101,9 +102,17 @@ interface Live {
   // never taken for this phase's run. A wait that is interrupted or times out
   // leaves it set, so cleanup can cancel it.
   inFlight?: { databaseId: number; completed: boolean };
+  // Every comment run an ambiguous wait found, recorded before the wait gives up, so
+  // cleanup cancels each of them whichever one the comment was.
+  candidates?: number[];
   // When the scenario's comment was created, in epoch ms. Its run is created after
   // it, so a run created before it (less a skew) cannot be the comment's run.
   commentCreatedAt?: number;
+  // When the push that starts the scenario was made (epoch ms, this machine's clock),
+  // and when GitHub created the PR (its clock). Cleanup looks the PR's runs up from
+  // these: see runs.ts.
+  pushedAt?: number;
+  prCreatedAt?: number;
 }
 
 // How a scenario's cleanup ended. `kept` is set when --keep left the PR open with no
@@ -519,8 +528,10 @@ async function requirePinnedMain(
 // Plain fast-forward pushes only: the rails refuse anything else (rails.ts).
 async function pushBranch(deps: SandboxDeps, live: Live): Promise<void> {
   // Recorded before the push: a push that fails after the branch was created
-  // still has to be cleaned up.
+  // still has to be cleaned up. The time is taken then too, since no run of the
+  // scenario can predate the push.
   live.pushed = true;
+  live.pushedAt = deps.clock.now().getTime();
   await git(deps, live.dir, ["push", "-u", "origin", live.branch]);
   live.headSha = (await git(deps, live.dir, ["rev-parse", "HEAD"])).trim();
 }
@@ -551,7 +562,18 @@ async function openPr(deps: SandboxDeps, live: Live): Promise<ScenarioPr> {
     url,
   };
   live.pr = pr;
+  live.prCreatedAt = await prCreatedAt(deps, pr.number);
   return pr;
+}
+
+// When GitHub created the PR. Its comment runs are matched against this time, so it
+// is read from GitHub, as commentCreatedAt reads the comment's, not from this clock.
+async function prCreatedAt(deps: SandboxDeps, number: number): Promise<number> {
+  const pr = await ghJson<{ created_at: string }>(deps, [
+    "api",
+    `repos/${SANDBOX_REPO}/pulls/${number}`,
+  ]);
+  return Date.parse(pr.created_at);
 }
 
 // The PR title names the scenario and its stamped branch, so it is unique per run.
@@ -624,33 +646,16 @@ async function findCommentRun(
     throw new Error("waiting for a comment run before any comment was posted");
   }
   const title = scenarioTitle(live);
-  const fresh = (await listCommentRuns(deps)).filter(
-    (r) =>
-      r.workflowName === WORKFLOW_NAME &&
-      r.displayTitle === title &&
-      Date.parse(r.createdAt) >= commentedAt - COMMENT_RUN_CLOCK_SKEW_MS,
+  const fresh = (await listCommentRuns(deps)).filter((r) =>
+    isPrCommentRun(r, title, commentedAt),
   );
   if (fresh.length > 1) {
+    live.candidates = fresh.map((r) => r.databaseId);
     throw new Unrecoverable(
       `${fresh.length} issue_comment runs carry this PR's title after its comment, so the comment run is ambiguous`,
     );
   }
   return fresh[0];
-}
-
-async function listCommentRuns(deps: SandboxDeps): Promise<RunListItem[]> {
-  return ghJson<RunListItem[]>(deps, [
-    "run",
-    "list",
-    "-R",
-    SANDBOX_REPO,
-    "--event",
-    "issue_comment",
-    "--limit",
-    "50",
-    "--json",
-    RUN_FIELDS,
-  ]);
 }
 
 // Reads the observables of the phase. Each source is a separate call, so a failure
@@ -747,13 +752,23 @@ async function finish(
 ): Promise<Cleanup> {
   let runIds: number[] = [];
   try {
-    runIds = await runsToStop(deps, live, options, stop);
-    for (const runId of runIds) {
-      if (!(await stopRun(deps, runId, cancelTiming(options), stop))) {
-        const message = `left open: run ${runId} has not completed after the cancel; its PR stays open until the run ends (then clean)`;
-        deps.log(message);
-        return { outcome: "failed", message };
-      }
+    // The runs the scenario already knows of go first, so a lookup that fails after
+    // them cannot leave one of them running.
+    runIds = knownRuns(live);
+    const known = await cancelRuns(deps, runIds, options, stop);
+    if (known !== undefined) return known;
+    const pushedAt = live.pushedAt;
+    if (pushedAt !== undefined && needsLookup(live)) {
+      const found = await findLiveRuns(
+        deps,
+        runScope(live, pushedAt),
+        pollTiming(options),
+        stop,
+      );
+      const more = found.filter((id) => !runIds.includes(id));
+      runIds = [...runIds, ...more];
+      const stopped = await cancelRuns(deps, more, options, stop);
+      if (stopped !== undefined) return stopped;
     }
     if (options.keep) {
       if (live.pushed) {
@@ -789,6 +804,24 @@ async function finish(
   }
 }
 
+// Cancels each run and waits for it to complete. Returns the failed cleanup when one
+// did not stop within the cancel wait, and undefined when all of them did.
+async function cancelRuns(
+  deps: SandboxDeps,
+  runIds: readonly number[],
+  options: RunOptions,
+  stop: Stop,
+): Promise<Cleanup | undefined> {
+  for (const runId of runIds) {
+    if (!(await stopRun(deps, runId, cancelTiming(options), stop))) {
+      const message = `left open: run ${runId} has not completed after the cancel; its PR stays open until the run ends (then clean)`;
+      deps.log(message);
+      return { outcome: "failed", message };
+    }
+  }
+  return undefined;
+}
+
 // What cleanup may still have open, for the operator to close with `clean`.
 function leftOpen(live: Live, runIds: readonly number[]): string {
   const items: string[] = [];
@@ -805,21 +838,33 @@ function leftOpen(live: Live, runIds: readonly number[]): string {
   return items.join(", ");
 }
 
-// The runs cleanup must stop. The run in flight when the phase ended decides it,
-// and a completed one stops nothing, so a finished scenario makes no extra call.
-// Without a record, a PR or a pushed head may still have a run its `opened` event
-// queued, so the branch is looked up for it. A comment run lives on main, so that
-// lookup cannot find one: a comment run that was never seen is not stopped here.
-async function runsToStop(
-  deps: SandboxDeps,
-  live: Live,
-  options: RunOptions,
-  stop: Stop,
-): Promise<number[]> {
-  const inFlight = live.inFlight;
-  if (inFlight !== undefined) {
-    return inFlight.completed ? [] : [inFlight.databaseId];
-  }
-  if (live.pr === undefined && live.headSha === undefined) return [];
-  return findOrphanRuns(deps, live.branch, pollTiming(options), stop);
+// The runs the scenario already knows of and must stop: the run its phase sighted, if
+// it is still going, and every comment run an ambiguous wait recorded.
+function knownRuns(live: Live): number[] {
+  const sighted = live.inFlight;
+  return [
+    ...(sighted !== undefined && !sighted.completed
+      ? [sighted.databaseId]
+      : []),
+    ...(live.candidates ?? []),
+  ];
+}
+
+// Whether cleanup must look up the PR's runs, beyond the ones it knows of. A phase
+// whose run completed, with no ambiguity left behind, stops nothing more, so a finished
+// scenario makes no extra call. Any other run the poll never sighted (a comment run
+// queued after its comment, say) is found by the lookup.
+function needsLookup(live: Live): boolean {
+  return !(live.inFlight?.completed === true && live.candidates === undefined);
+}
+
+// The scenario's PR as the run lookup sees it. Before the PR exists, only its branch
+// and the push can hold a run.
+function runScope(live: Live, pushedAt: number): RunScope {
+  return {
+    branch: live.branch,
+    title: scenarioTitle(live),
+    prCreatedAtMs: live.prCreatedAt,
+    startedAtMs: pushedAt,
+  };
 }

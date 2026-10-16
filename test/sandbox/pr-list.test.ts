@@ -1,7 +1,9 @@
 // The serialization check lists the open scenario PRs. A scenario PR that is older
-// than a page of newer, unrelated PRs must still be found: GitHub applies --search and
-// --limit before the runner sees anything, so the query has to narrow to sandbox/
-// heads, and a fork PR with a sandbox/ head must still not count.
+// than a page of newer, unrelated PRs must still be found, and a search cannot be
+// trusted for it: GitHub's search index lags behind the PR list, so a PR opened
+// moments ago may not be in a search yet. The list is read whole, under a page far
+// larger than any repository's open PRs, and filtered here. A fork PR with a sandbox/
+// head must still not count.
 
 import { describe, expect, test } from "bun:test";
 import { listScenarioPrs } from "../../scripts/sandbox/pr";
@@ -26,21 +28,18 @@ function pr(number: number, headRefName: string, fork = false): Row {
   };
 }
 
-// What `gh pr list` answers: the open PRs, newest first, narrowed by --search (the
-// head prefix, GitHub's `head:` qualifier) and then cut to --limit.
+// What `gh pr list` answers: the open PRs, newest first, cut to --limit. A --search
+// is answered from an index that has not caught up: it returns nothing, so a query
+// that depends on one misses every PR the index has not seen.
 function githubPrList(all: Row[]): (args: readonly string[]) => string {
   return (args) => {
     const flagValue = (name: string) => {
       const at = args.indexOf(name);
       return at === -1 ? undefined : args[at + 1];
     };
-    const search = flagValue("--search") ?? "";
+    if (args.includes("--search")) return "[]";
     const limit = Number(flagValue("--limit") ?? "30");
-    const prefix = search.startsWith("head:")
-      ? search.slice("head:".length)
-      : "";
-    const matched = all.filter((p) => p.headRefName.startsWith(prefix));
-    return JSON.stringify(matched.slice(0, limit));
+    return JSON.stringify(all.slice(0, limit));
   };
 }
 
@@ -73,12 +72,14 @@ describe("listScenarioPrs: the serialization check sees every scenario PR", () =
     expect(found.map((p) => p.number)).toEqual([7]);
   });
 
-  test("the query names the sandbox head prefix and a page larger than the default", async () => {
+  test("the query has no --search, and reads a page far larger than the default", async () => {
     const h = listing([]);
     await listScenarioPrs(h.deps);
     const call = h.ghCalls.find((c) => c[0] === "pr" && c[1] === "list");
     expect(call).toBeDefined();
-    expect(call?.[call.indexOf("--search") + 1]).toBe("head:sandbox/");
-    expect(Number(call?.[call.indexOf("--limit") + 1])).toBeGreaterThan(100);
+    expect(call?.includes("--search")).toBe(false);
+    expect(Number(call?.[call.indexOf("--limit") + 1])).toBeGreaterThanOrEqual(
+      1000,
+    );
   });
 });

@@ -57,6 +57,7 @@ interface PrRow {
   url: string;
   closed: boolean;
   title: string;
+  createdAt: string;
 }
 
 interface CommentRow {
@@ -145,33 +146,41 @@ export class FakeGithub {
     });
   }
 
-  // A foreign scenario PR, open before the run starts.
-  openForeignPr(number: number, headRefName: string): void {
+  // A foreign scenario PR, open before the run starts. Created long before the fake
+  // clock's start unless a test says otherwise, so it reads as an old PR.
+  openForeignPr(
+    number: number,
+    headRefName: string,
+    createdAt = "2026-10-01T00:00:00.000Z",
+  ): void {
     this.prs.set(number, {
       number,
       headRefName,
       url: `${REPO_URL}/pull/${number}`,
       closed: false,
       title: `pr-hero sandbox foreign ${headRefName}`,
+      createdAt,
     });
     this.comments.set(number, []);
   }
 
   // A run the runner did not start, such as one left by an earlier attempt. It is
-  // in the repository's run list like any other.
+  // in the repository's run list like any other. `status` defaults to completed.
   addRun(run: {
     event: "pull_request" | "issue_comment";
     displayTitle: string;
     createdAt: string;
+    status?: "completed" | "in_progress";
   }): number {
     const id = this.nextId++;
+    const inProgress = run.status === "in_progress";
     this.runs.push({
       databaseId: id,
       headSha: MAIN_SHA,
       headBranch: "main",
       event: run.event,
-      status: "completed",
-      conclusion: "success",
+      status: run.status ?? "completed",
+      conclusion: inProgress ? null : "success",
       workflowName: WORKFLOW_NAME,
       url: `${REPO_URL}/actions/runs/${id}`,
       stepConclusion: "success",
@@ -302,10 +311,12 @@ export class FakeGithub {
       // its head is in the sandbox itself, so the fake must say where it lives.
       const open = [...this.prs.values()]
         .filter((p) => !p.closed)
-        .map(({ number, headRefName, url }) => ({
+        .map(({ number, headRefName, url, title, createdAt }) => ({
           number,
           headRefName,
           url,
+          title,
+          createdAt,
           isCrossRepository: false,
           headRepositoryOwner: { login: "juanmaagd" },
         }));
@@ -320,6 +331,7 @@ export class FakeGithub {
         url: `${REPO_URL}/pull/${number}`,
         closed: false,
         title: flag(args, "--title") ?? "",
+        createdAt: this.stamp(),
       });
       this.comments.set(number, []);
       this.events.push(`pr create ${number}`);
@@ -452,6 +464,12 @@ export class FakeGithub {
       return ok(JSON.stringify({ created_at: found.createdAt }));
     }
     if (/\/pulls\/\d+\/comments/.test(path)) return ok("[]");
+    const pull = /\/pulls\/(\d+)$/.exec(path);
+    if (pull !== null) {
+      const found = this.prs.get(Number(pull[1]));
+      if (found === undefined) return fail("pull request not found");
+      return ok(JSON.stringify({ created_at: found.createdAt }));
+    }
     const artifacts = /\/actions\/runs\/(\d+)\/artifacts$/.exec(path);
     if (artifacts !== null) {
       const run = this.runs.find((r) => r.databaseId === Number(artifacts[1]));

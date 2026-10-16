@@ -80,10 +80,11 @@ The runner can reach one repository, and nothing else.
   orphan are refused.
 - No `repo delete`. `clean` closes PRs and deletes their `sandbox/` branches, nothing else.
 - Runs are serialized. A run refuses to start while any scenario PR is open, and while the
-  run lock is held. The open PRs are listed by their `sandbox/` head, so unrelated PRs cannot
-  hide one. With `--keep`, a PR is exempt from this check only once its run has stopped. A PR
-  that a failed cleanup left open, including one whose run could not be cancelled, blocks the
-  next run until `clean` closes it.
+  run lock is held. The open PRs are read whole (not searched: the search index lags), and
+  filtered to `sandbox/` heads in this repository, so unrelated PRs cannot hide one. With
+  `--keep`, a PR is exempt from this check only once its run has stopped. A PR that a failed
+  cleanup left open, including one whose run could not be cancelled, blocks the next run
+  until `clean` closes it.
 
 ## Ref model
 

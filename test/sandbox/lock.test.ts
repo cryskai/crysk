@@ -12,7 +12,7 @@ import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import { realRunLock } from "../../scripts/sandbox/real";
 import { runScenarios } from "../../scripts/sandbox/scenario";
 import { sandboxFiles } from "../../scripts/sandbox/seed";
-import { FAKE_PID, fail, harness, memoryRunLock, ok } from "./fakes";
+import { FAKE_PID, fail, harness, memoryRunLock, ok, START_ISO } from "./fakes";
 import { FakeGithub } from "./world";
 
 const REF = "v0.2.0";
@@ -145,6 +145,10 @@ describe("the policy, over a memory lock", () => {
         }
         if (args[0] === "pr" && args[1] === "create") return ok(`${PR_URL}\n`);
         if (args[0] === "pr" && args[1] === "close") return ok();
+        // The PR's creation time, which the run lookup starts from.
+        if (args[0] === "api") {
+          return ok(JSON.stringify({ created_at: START_ISO }));
+        }
         if (args[0] === "run" && args[1] === "list") {
           if (!fired) {
             fired = true;

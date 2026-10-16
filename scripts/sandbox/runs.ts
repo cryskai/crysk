@@ -5,6 +5,7 @@
 // own because clean (pr.ts) cannot import scenario.ts, which imports pr.ts.
 
 import { WORKFLOW_NAME } from "./markers";
+import { COMMENT_RUN_CLOCK_SKEW_MS } from "./observe";
 import type { SandboxDeps, Signal } from "./ports";
 import { SANDBOX_REPO } from "./rails";
 import { ghJson } from "./repo";
@@ -81,6 +82,21 @@ export function throwIfStopped(stop: Stop | undefined): void {
   if (signal !== undefined) throw new Interrupted(signal);
 }
 
+// Which runs belong to one scenario PR. Its pull_request runs are on its branch. Its
+// issue_comment runs are on main and name no branch, so they are matched by the PR's
+// title, which is unique to one scenario branch, and by creation time: a run created
+// before the PR, less the skew, cannot be one of its runs.
+export interface RunScope {
+  branch: string;
+  title: string;
+  // When GitHub created the PR. Undefined before a PR is open: no comment run can
+  // exist then, so only the branch is read.
+  prCreatedAtMs?: number;
+  // When the scenario started (its push, or the PR's creation for a PR listed later).
+  // It stands in for the PR's creation while the PR does not exist yet.
+  startedAtMs: number;
+}
+
 // The runs of the workflow on a branch. A scenario branch is created by one run
 // and never reused, so every workflow run on it belongs to that scenario.
 export async function listBranchRuns(
@@ -104,28 +120,85 @@ export async function listBranchRuns(
   return runs.filter((r) => r.workflowName === WORKFLOW_NAME);
 }
 
-// Looks for a run on the branch that is not completed, and returns the ids as soon
-// as one is seen. When none appears within the bound, that is reported and cleanup
-// goes on, so the PR still closes.
-export async function findOrphanRuns(
+// The issue_comment runs of the workflow, newest first. A comment run is on main, so
+// the caller matches it to its PR with isPrCommentRun.
+export async function listCommentRuns(
   deps: SandboxDeps,
-  branch: string,
+): Promise<RunListItem[]> {
+  return ghJson<RunListItem[]>(deps, [
+    "run",
+    "list",
+    "-R",
+    SANDBOX_REPO,
+    "--event",
+    "issue_comment",
+    "--limit",
+    "50",
+    "--json",
+    RUN_FIELDS,
+  ]);
+}
+
+// Whether a comment run belongs to the PR with this title, created at or after
+// `sinceMs` (less the clock skew between this machine and GitHub's run times).
+export function isPrCommentRun(
+  run: RunListItem,
+  title: string,
+  sinceMs: number,
+): boolean {
+  return (
+    run.workflowName === WORKFLOW_NAME &&
+    run.displayTitle === title &&
+    Date.parse(run.createdAt) >= sinceMs - COMMENT_RUN_CLOCK_SKEW_MS
+  );
+}
+
+// Every run of the PR, in any state: its pull_request runs and its matching comment
+// runs. The one lookup both the scenario's cleanup and `clean` use, so a run that
+// only one of them could see is not missed by the other.
+export async function listPrRuns(
+  deps: SandboxDeps,
+  scope: RunScope,
+): Promise<RunListItem[]> {
+  const onBranch = await listBranchRuns(deps, scope.branch);
+  const since = scope.prCreatedAtMs;
+  if (since === undefined) return onBranch;
+  const comments = (await listCommentRuns(deps)).filter((r) =>
+    isPrCommentRun(r, scope.title, since),
+  );
+  return [...onBranch, ...comments];
+}
+
+// The ids of the PR's runs that are not completed, which cleanup must cancel. A run
+// the `opened` event queues can appear a while after the PR exists, so while the PR is
+// fresh (or, before it exists, the scenario's push), this polls until the lookup
+// window closes. An old PR gets one read, and that read's failure is thrown: a cleanup
+// that cannot read the runs must not take their absence for granted.
+export async function findLiveRuns(
+  deps: SandboxDeps,
+  scope: RunScope,
   poll: PollTiming,
   stop: Stop | undefined,
 ): Promise<number[]> {
+  const read = async () =>
+    (await listPrRuns(deps, scope))
+      .filter((r) => r.status !== "completed")
+      .map((r) => r.databaseId);
+  const ageMs =
+    deps.clock.now().getTime() - (scope.prCreatedAtMs ?? scope.startedAtMs);
+  const windowMs = ORPHAN_LOOKUP_MS - ageMs;
+  // A NaN age (a creation time GitHub did not report) is not fresh either.
+  if (!(windowMs > 0)) return read();
   const found = await pollUntil(
     deps,
     stop,
-    { ...poll, timeoutMs: ORPHAN_LOOKUP_MS },
-    async () =>
-      (await listBranchRuns(deps, branch))
-        .filter((r) => r.status !== "completed")
-        .map((r) => r.databaseId),
+    { ...poll, timeoutMs: windowMs },
+    read,
     (ids) => ids.length > 0,
   );
   if (found.done) return found.last ?? [];
   deps.log(
-    `no run on ${branch} appeared within ${ORPHAN_LOOKUP_MS / 1000}s; nothing to cancel`,
+    `no run on ${scope.branch} appeared within ${Math.round(windowMs / 1000)}s; nothing to cancel`,
   );
   return [];
 }

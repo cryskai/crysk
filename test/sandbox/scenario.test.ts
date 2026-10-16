@@ -528,3 +528,82 @@ describe("run: a phase that outlives its poll", () => {
     expect(closeAt).toBeGreaterThan(cancelAt);
   });
 });
+
+// Cleanup stops every run of the PR that is still going, including one the poll never
+// sighted. The comment run of a phase is the one a signal can outrun: the comment is
+// posted, its run starts, and the signal lands before the poll reads that run.
+describe("cleanup: a comment run the poll never sighted is still cancelled", () => {
+  test("a lookup that fails after an ambiguity still cancels both recorded candidates, and the PR stays open", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const candidates = [0, 1].map(() =>
+      world.addRun({
+        event: "issue_comment",
+        displayTitle: COMMENT_TITLE,
+        createdAt: "2099-01-01T00:00:00Z",
+        status: "in_progress",
+      }),
+    );
+    const h = world.harness();
+    // The poll's read is the only comment listing that succeeds: cleanup's own lookup fails.
+    let commentListings = 0;
+    const post = h.deps.gh;
+    h.deps.gh = async (args) => {
+      if (
+        args[0] === "run" &&
+        args[1] === "list" &&
+        args.includes("issue_comment")
+      ) {
+        commentListings += 1;
+        if (commentListings > 1) return fail("HTTP 502: Bad Gateway");
+      }
+      return post(args);
+    };
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    for (const id of candidates) {
+      expect(world.events.indexOf(`run cancel ${id}`)).toBeGreaterThanOrEqual(
+        0,
+      );
+    }
+    expect(world.events.some((e) => e.startsWith("pr close"))).toBe(false);
+  });
+
+  test("a signal that lands as the comment is posted cancels the comment run before the PR closes", async () => {
+    const world = new FakeGithub({ ref: REF, stuckCommentRuns: true });
+    const h = world.harness();
+    const post = h.deps.gh;
+    h.deps.gh = async (args) => {
+      const result = await post(args);
+      if (args[0] === "pr" && args[1] === "comment") h.signals.fire("SIGINT");
+      return result;
+    };
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(130);
+    const cancelAt = world.events.findIndex((e) => e.startsWith("run cancel"));
+    const closeAt = world.events.findIndex((e) => e.startsWith("pr close"));
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(closeAt).toBeGreaterThan(cancelAt);
+  });
+
+  test("two ambiguous comment runs are both recorded and both cancelled before the PR closes", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const candidates = [0, 1].map(() =>
+      world.addRun({
+        event: "issue_comment",
+        displayTitle: COMMENT_TITLE,
+        createdAt: "2099-01-01T00:00:00Z",
+        status: "in_progress",
+      }),
+    );
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.includes("the comment run is ambiguous"))).toBe(
+      true,
+    );
+    const closeAt = world.events.findIndex((e) => e.startsWith("pr close"));
+    expect(closeAt).toBeGreaterThanOrEqual(0);
+    for (const id of candidates) {
+      const cancelAt = world.events.indexOf(`run cancel ${id}`);
+      expect(cancelAt).toBeGreaterThanOrEqual(0);
+      expect(closeAt).toBeGreaterThan(cancelAt);
+    }
+  });
+});
