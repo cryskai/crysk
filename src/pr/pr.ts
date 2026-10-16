@@ -2159,18 +2159,28 @@ function parseAdmissionCheckRunRow(line: string): AdmissionRecord | null {
 // a missing `checks: read` scope must not abort a review that already passed
 // the pure admission gate — an empty read underestimates attempts (more spend,
 // never silent skip).
+//
+// `includeHistory` adds `filter=all`. GitHub's check-runs endpoint defaults to
+// `filter=latest`, which returns only the newest check run per name. Every
+// admission attempt on a head is its own check run with the same name, so the
+// default hides all earlier attempts on that head. A per-head read that decides
+// whether a workflow run spent (countableWorkflowHeads) needs that history: a head
+// with `[completed, gate-skipped]` would otherwise look like `[gate-skipped]` and
+// be dropped. Leave it off for a read that wants current state. The request stays
+// paginated (`--paginate`), so every page of history is read.
 export async function listAdmissionCheckRuns(
   operatorRoot: string,
   ref: string,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; includeHistory?: boolean },
 ): Promise<AdmissionRecord[]> {
   if (!isFullCommitId(ref) && ref.trim().length === 0) return [];
+  const historyQuery = options?.includeHistory === true ? "?filter=all" : "";
   try {
     const result = await gh(
       operatorRoot,
       [
         "api",
-        `repos/{owner}/{repo}/commits/${ref}/check-runs`,
+        `repos/{owner}/{repo}/commits/${ref}/check-runs${historyQuery}`,
         "--paginate",
         "--jq",
         `.check_runs[] | select(.name == "${ADMISSION_CHECK_RUN_NAME}") | {id: .id, name: .name, status: .status, output: {text: .output.text}}`,

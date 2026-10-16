@@ -199,10 +199,15 @@ export function resolveReviewAttemptCount(input: {
 // pr-hero run could have spent. The run list cannot tell them apart, because a
 // gate skip exits 0 and concludes `success`. So each head's ledger rows decide:
 // a head is dropped only when it has ledger rows and EVERY row is provably
-// unspent (PROVABLY_UNSPENT_STATUSES: gate-skipped, cancelled, yielded). A
-// `reserved` row is not proof, because its provider-started settle is
-// best-effort and the run may have spent anyway, so that head stays counted,
-// and so does any row with a status this engine does not know. A head with no
+// unspent (PROVABLY_UNSPENT_STATUSES: gate-skipped, yielded). A `cancelled` row
+// is not proof: a cancel signal can land after the provider started, and a
+// `timeout-minutes` kill concludes the run `failure`, which this list does
+// include, so that head stays counted. (A run GitHub concludes `cancelled`
+// never reaches this function, because ghPrHeroWorkflowRunHeads keeps only
+// success and failure, COMPLETED_WORKFLOW_CONCLUSIONS.) A `reserved` row is not
+// proof either, because its provider-started settle is best-effort and the run
+// may have spent anyway, so that head stays counted, and so does any row with a
+// status this engine does not know. A head with no
 // ledger row at all stays counted, because it is a run older than the ledger
 // and the run list is the only evidence it spent. An unreadable ledger reads as
 // no rows (listAdmissionCheckRuns fails open to []), which keeps the head

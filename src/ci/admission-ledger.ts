@@ -69,15 +69,30 @@ const TERMINAL_BUDGET_STATUSES: ReadonlySet<AdmissionAttemptStatus> = new Set([
 ]);
 
 // #326, workflow-run leg: a head leaves the attempt count only when EVERY
-// ledger row on it is in this allowlist, because each status proves the run
-// spent nothing. `"reserved"` is deliberately absent. The `"provider-started"`
-// settle runs before runPipeline and is best-effort (tryPersistCiAdmissionLedger
-// swallows a write error), so a run killed after that write failed still sits
-// at `"reserved"` although it may have spent provider tokens. The run list
-// counted that head before #326 and must keep counting it. Any unknown status
-// also stays out, so the rule fails closed.
+// ledger row on it is in this allowlist, because each listed status is written
+// BEFORE any provider spend, so it proves the run spent nothing:
+// - `"gate-skipped"`: settleCiGateSkip (pr/admission.ts:152) runs from the size
+//   gate (pr/review-pr.ts:312) and the budget gate (pr/plan.ts:153, reached from
+//   pr/review-pr.ts:401). Both come before the `"provider-started"` settle at
+//   pr/review-pr.ts:516.
+// - `"yielded"`: written only by yieldToInFlightReview (pr/ci-admission-gate.ts:380),
+//   whose sole caller is pr/review-pr.ts:359, again before the `"provider-started"`
+//   settle at pr/review-pr.ts:516.
+// `"cancelled"` is excluded on purpose, because it can be written AFTER spend:
+// settleHeldAdmissionLedgerOnSignal (pr/admission.ts:123) writes it over a
+// `"provider-started"` row when cli.ts:287 or cli.ts:299 handles a SIGTERM or
+// SIGINT, and by then hunters may already have run. A job killed by
+// `timeout-minutes` concludes `failure`, so its head stays counted. The
+// ledger-row count still ignores `"cancelled"` (see TERMINAL_BUDGET_STATUSES,
+// #164). That decision stands. This list does not widen it.
+// `"reserved"` is deliberately absent. The `"provider-started"` settle runs
+// before runPipeline and is best-effort (tryPersistCiAdmissionLedger swallows a
+// write error), so a run killed after that write failed still sits at
+// `"reserved"` although it may have spent provider tokens. The run list counted
+// that head before #326 and must keep counting it. Any unknown status also stays
+// out, so the rule fails closed.
 export const PROVABLY_UNSPENT_STATUSES: ReadonlySet<AdmissionAttemptStatus> =
-  new Set(["gate-skipped", "cancelled", "yielded"]);
+  new Set(["gate-skipped", "yielded"]);
 
 const ACTIVE_RESERVATION_STATUSES: ReadonlySet<AdmissionAttemptStatus> =
   new Set(["reserved", "provider-started"]);

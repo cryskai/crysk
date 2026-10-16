@@ -503,10 +503,12 @@ reserve attempts before provider spend and record outcomes. PR comments remain p
 Check Run ledger is authoritative.
 
 An attempt counts toward `ci_max_attempts` when its run reached the provider (completed, failed, or
-still in progress) or when admission itself skipped it. Three outcomes spend nothing and do not count:
-a cancelled run, a run that stood down for a review already in flight on the same head, and a run the
-size gate or the budget ceiling skipped before any agent started. A skipped run still shows as a
-skipped check on the commit.
+still in progress) or when admission itself skipped it. Two outcomes spend nothing and do not count: a
+run that stood down for a review already in flight on the same head, and a run the size gate or the
+budget ceiling skipped before any agent started. A cancelled row does not count either, but it is not
+proof that nothing was spent: a cancel signal can arrive after the provider started, so a run that
+GitHub concludes as `failure` (for example one killed by `timeout-minutes`) still counts. A skipped run
+still shows as a skipped check on the commit.
 
 Skipped and manual-required outcomes include admission metadata in the step summary: decision, reason,
 current head, reviewed head, risk class, score, attempt count, remaining budget, policy mode, and a

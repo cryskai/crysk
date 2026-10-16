@@ -583,6 +583,117 @@ describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an atte
     expect(readsOf(HEAD_B)).toBe(1);
     expect(readsOf(HEAD_C)).toBe(1);
   });
+
+  // F002: GitHub's check-runs endpoint defaults to filter=latest, which hides
+  // every earlier admission attempt on a head. The fake below answers with the
+  // newest row only unless the request carries filter=all, so this goes red
+  // unless the per-head read asks for history through the real shell.
+  test("keeps a head whose history has a completed attempt even though its latest row is gate-skipped", async () => {
+    const completed = admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-a-completed",
+      status: "completed",
+      attemptNumber: 1,
+    });
+    const gateSkipped = admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-a-gate-skip",
+      status: "gate-skipped",
+      attemptNumber: 2,
+      decisionReason: "estimated cost exceeds the configured CI budget ceiling",
+    });
+    const checkRunLine = (record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name: "pr-hero/ci-admission",
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: {
+            stdout: JSON.stringify([
+              { headSha: HEAD_A, conclusion: "success" },
+              { headSha: HEAD_B, conclusion: "success" },
+            ]),
+          },
+        },
+        {
+          // Listed before the plain entry below, which also matches this URL.
+          match: [`commits/${HEAD_A}/check-runs`, "filter=all"],
+          response: {
+            stdout: checkRunLine(completed) + checkRunLine(gateSkipped),
+          },
+        },
+        {
+          match: [`commits/${HEAD_A}/check-runs`],
+          response: { stdout: checkRunLine(gateSkipped) },
+        },
+        {
+          match: [`commits/${HEAD_B}/check-runs`],
+          response: { stdout: checkRunLine(admissionCheckRunRecord()) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: `${JSON.stringify(summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1))}\n`,
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const recordCalls: { reason: string }[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/gate-skip",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_C,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions({ head: HEAD_C }),
+          spawnFn,
+          recordSkip: async (recorded) => {
+            recordCalls.push({ reason: recorded.reason });
+          },
+        }),
+    );
+
+    // HEAD_A and HEAD_B both spent an attempt, so maxAttempts (2) is exhausted
+    // and the gate records a manual-required skip. A dropped HEAD_A would leave
+    // one attempt and let the run through.
+    expect(recordCalls).toHaveLength(1);
+    expect(recordCalls[0]?.reason).toBe(
+      "automatic review budget exhausted (2/2 attempts on this PR).",
+    );
+    expect(result.exitCode).toBe(0);
+
+    const checkRunReads = (head: string) =>
+      calls
+        .map((argv) => argv.join(" "))
+        .filter((line) => line.includes(`commits/${head}/check-runs`));
+    // The per-head reads ask for history; the current-head read keeps the
+    // default (latest), a separate decision that this change does not make.
+    expect(checkRunReads(HEAD_A)).toHaveLength(1);
+    expect(checkRunReads(HEAD_A)[0]).toContain("filter=all");
+    expect(checkRunReads(HEAD_B)).toHaveLength(1);
+    expect(checkRunReads(HEAD_B)[0]).toContain("filter=all");
+    expect(checkRunReads(HEAD_C)).toHaveLength(1);
+    expect(checkRunReads(HEAD_C)[0]).not.toContain("filter=all");
+  });
 });
 
 // #326: the SIZE gate and the BUDGET gate settle through settleCiGateSkip. The

@@ -50,7 +50,7 @@ Skipped and manual-required posts include admission metadata in the step summary
 - Check Runs named `pr-hero/ci-admission` on the reviewed commit.
 - Requires workflow permission **`checks: write`** (template includes it).
 - Requires **`actions: read`** too: the gate lists this workflow's past runs, which a private repo refuses without it (HTTP 403).
-- PR comments are presentation. The ledger counts a run that reached the provider (completed, failed, or still provider-started) and an admission skip. It does not count a cancelled run, a run that yielded to an in-flight review, or a size or budget gate skip, since none of those spend anything. A workflow run whose ledger rows are all of those is dropped from the count; a run whose row is still `reserved` stays counted, because the provider-started write is best-effort and the run may have spent anyway.
+- PR comments are presentation. The ledger counts a run that reached the provider (completed, failed, or still provider-started) and an admission skip. It does not count a run that yielded to an in-flight review, a size or budget gate skip, or a cancelled row (#164). A workflow run that concluded success or failure is dropped from the attempt count only when every ledger row on its head is a gate skip or a yield, because both are written before any provider spend. A cancelled row is not that proof: the signal handler that writes it can run after the provider started, so a run killed by `timeout-minutes` (concluded `failure`) still counts. A run whose row is still `reserved` stays counted too, because the provider-started write is best-effort and the run may have spent anyway.
 
 ## Rollout (recommended)
 

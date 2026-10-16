@@ -862,7 +862,7 @@ describe("countableWorkflowHeads", () => {
   // `reserved` is deliberately absent: a reserved row does not prove the run
   // spent nothing, so it is kept below (the provider-started settle is
   // best-effort and the run may have reached the provider anyway).
-  test.each(["cancelled", "yielded"] as const)(
+  test.each(["yielded"] as const)(
     "drops a head whose only ledger row is %s (spent nothing, like the gate skip)",
     (status) => {
       const countable = countableWorkflowHeads(
@@ -872,6 +872,18 @@ describe("countableWorkflowHeads", () => {
       expect(countable.has(HEAD_A)).toBe(false);
     },
   );
+
+  // F001: `cancelled` is written over a `provider-started` row by the SIGTERM
+  // and SIGINT handlers (admission.ts settleHeldAdmissionLedgerOnSignal), after
+  // hunters may already have run. A `timeout-minutes` kill concludes the run
+  // `failure`, so this head is in the workflow-run list and must stay counted.
+  test("keeps a head whose only ledger row is cancelled (a signal can land after provider spend)", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [ledgerRow(HEAD_A, "cancelled")]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
 
   test("keeps a head whose only ledger row is reserved (provider-started write may have failed)", () => {
     const countable = countableWorkflowHeads(

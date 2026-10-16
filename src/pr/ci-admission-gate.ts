@@ -176,7 +176,9 @@ export async function evaluateCiAdmissionGate(input: {
     // returns at most 20 runs by default, so that is at most 20 extra reads per
     // gate evaluation. The current head reuses ledgerRecords. Each read fails
     // open to [], which keeps that head counted (the pre-fix behavior), so a
-    // failed read can only over-count, never under-count.
+    // failed read can only over-count, never under-count. Each read asks for the
+    // head's full attempt history (`includeHistory`): the default returns only
+    // the newest row, which would hide a spent attempt behind a later skip.
     const ledgerByHead = new Map<string, readonly AdmissionRecord[]>([
       [headSha, ledgerRecords],
     ]);
@@ -186,7 +188,10 @@ export async function evaluateCiAdmissionGate(input: {
         .map(async (head) => {
           ledgerByHead.set(
             head,
-            await listAdmissionCheckRuns(operatorRoot, head, { spawnFn }),
+            await listAdmissionCheckRuns(operatorRoot, head, {
+              spawnFn,
+              includeHistory: true,
+            }),
           );
         }),
     );
