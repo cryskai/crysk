@@ -31,5 +31,12 @@ export async function ciSetupCommand(options: CliOptions): Promise<number> {
     "  2. Add a repository secret: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)",
   );
   log("  3. Open a pull request to trigger the workflow");
+  // GitHub reads a comment-triggered workflow from the DEFAULT branch, so a
+  // `/pr-hero review` on a pull request that only ADDS this file starts
+  // nothing, with no error anywhere. Said here because this is where a new
+  // user first reads how to force a review.
+  log(
+    "  4. Comment /pr-hero review on a pull request to force a review; it works once this file is on the default branch",
+  );
   return 0;
 }

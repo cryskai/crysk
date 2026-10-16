@@ -66,7 +66,7 @@ import type { PrCommentDelta } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
 import { CliUsageError } from "../errors";
 import { envBillsMetered } from "../execution/usage-normalized";
-import { ciForceReviewDispatchLine } from "./force-comment";
+import { ciForceReviewHintLine } from "./force-comment";
 import {
   type CiOutputs,
   type CiSummaryData,
@@ -187,7 +187,7 @@ function buildSizeSkipComment(data: SkipSizeSummary): string {
       "PR or raise `max-changed-lines` / `max-changed-files` to change the " +
       "limit for later pushes.",
     "",
-    ciForceReviewDispatchLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -203,7 +203,7 @@ function buildBudgetSkipComment(data: SkipBudgetSummary): string {
     "pr-hero did not run to stay within the configured `--budget-usd` " +
       "ceiling.",
     "",
-    ciForceReviewDispatchLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -550,7 +550,7 @@ function buildCoverageSkipComment(data: SkipCoverageSummary): string {
     "The existing review comment still describes the last head pr-hero " +
       "reviewed.",
     "",
-    ciForceReviewDispatchLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -569,7 +569,7 @@ function buildManualRequiredComment(data: ManualRequiredSummary): string {
     "The existing review comment still describes the last head pr-hero " +
       "reviewed.",
     "",
-    ciForceReviewDispatchLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber),
   ];
   return `${lines.join("\n")}\n`;
 }

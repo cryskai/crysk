@@ -9,17 +9,20 @@ merge on its own findings.
 1. **Add one auth secret** (Settings → Secrets and variables → Actions → New repository secret):
    `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. Pick one — never both blank. Leave OpenCode unset:
    that is today's Claude CI.
-2. **Add the workflow files.** Run `pr-hero setup --ci` (or `pr-hero ci init`) in a clone of your repo.
-   That writes two consumer templates (`uses: juanmaagd/pr-hero@v0`): `.github/workflows/pr-hero.yml`
-   (automatic, on each push) and `.github/workflows/pr-hero-force.yml` (manual dispatch, always
-   `--force`). Do **not** copy this repository's
-   own `.github/workflows/pr-hero.yml`: that file is generated with `OWN_CI_WORKFLOW_OPTIONS` so this
-   repo can dogfood the checkout (`uses: ./` and `max-changed-lines: 5000`). `test/packaging.test.ts`
-   asserts each file against its own generator options; it does **not** assert the two files are
-   byte-identical. The consumer template already wires a credentials job plus quoted `routing` /
-   `opencode-auth` inputs; empty values are absent, so Claude-only repos keep those lines.
+2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
+   to `.github/workflows/pr-hero.yml`, or run `pr-hero setup --ci` (or `pr-hero ci init`) in a clone of
+   your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need pr-hero
+   installed locally: the file is the whole install. It reviews every push to a pull request and
+   answers a `/pr-hero review` comment (see [Manual override](#manual-override)). Do **not** copy this
+   repository's own `.github/workflows/pr-hero.yml`: that file is generated with
+   `OWN_CI_WORKFLOW_OPTIONS` so this repo can dogfood the checkout (`uses: ./`,
+   `max-changed-lines: 5000`, and a step that pins the pull request head on a comment run).
+   `test/packaging.test.ts` asserts each file against its own generator options; it does **not** assert
+   the two are byte-identical. The template wires quoted `routing` / `opencode-auth` inputs; empty
+   values are absent, so Claude-only repos keep those lines.
 3. **Open a pull request** from a branch in this repository (not a fork). pr-hero comments inline, posts
-   a summary review, and writes a `$GITHUB_STEP_SUMMARY` block within a few minutes.
+   a summary review, and writes a `$GITHUB_STEP_SUMMARY` block within a few minutes. If no credential
+   secret is set, the run fails red and its step summary lists the commands that set one.
 4. **Verify readiness any time** with `pr-hero doctor` — it checks for the required secrets when run
    inside Actions, and for the workflow file's presence locally.
 
@@ -30,13 +33,13 @@ Action.
 ## What the workflow does
 
 ```yaml
+name: pr-hero Review
+
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-
-concurrency:
-  group: pr-hero-${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  issue_comment: # `/pr-hero review` — read from the default branch's copy of this file
+    types: [created]
 
 permissions:
   actions: read # admission gate lists this workflow's past runs
@@ -47,24 +50,16 @@ permissions:
   checks: write # admission attempt ledger
 
 jobs:
-  credentials:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      has_creds: ${{ steps.detect.outputs.has_creds }}
-    steps:
-      - id: detect
-        env:
-          # Secrets are legal in job env, never in a job-level `if`.
-          HAS_CREDS: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.OPENCODE_AUTH_JSON != '' }}
-        run: echo "has_creds=${HAS_CREDS}" >> "$GITHUB_OUTPUT"
-
   review:
-    needs: credentials
+    # Same-repo pushes, and comments that start with `/pr-hero review`. Never reads secrets.
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      needs.credentials.outputs.has_creds == 'true'
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review'))
+    concurrency:
+      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,25 +73,46 @@ jobs:
           claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           routing: "${{ vars.PRHERO_ROUTING }}"
           opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
-      - name: Upload pr-hero run directory # see "Triaging a CI review" below
-        if: always() && steps.pr-hero.outputs.run-dir != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr-hero-run-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-          path: ${{ steps.pr-hero.outputs.run-dir }}
-          include-hidden-files: true
-          if-no-files-found: warn
-          overwrite: true
-          retention-days: 7
 ```
 
-`pr-hero setup --ci` generates this operator-facing surface (credentials union, quoted routing var,
-OpenCode auth secret) plus skip-notice copy and comments — see `src/ci-setup.ts`'s
-`generateCiWorkflowTemplate`. It refuses to overwrite a customized workflow already at that path
-unless you pass `--force`. Keep every `with:` line even when you only use Claude: an unset secret or
-var expands to empty, which the Action treats as absent. Deleting the line for the credential you *did*
-set is what breaks. The quotes around `vars.PRHERO_ROUTING` are load-bearing — an unset repository
-variable must become the empty string, not broken YAML.
+`pr-hero setup --ci` generates this file, with comments explaining each piece — see
+`generateCiWorkflowTemplate` in `src/ci/setup.ts`. It refuses to overwrite a customized workflow already
+at that path unless you pass `--force`, and it never touches a `pr-hero-force.yml` scaffolded by an
+older version (that file keeps working; you can delete it once this one is on your default branch).
+
+The action does the rest: it checks that a credential is set (and fails the run red, with the commands
+that fix it, when none is), parses a `/pr-hero review` comment and checks that its author has write
+access, resolves the pull request and its head commit from the event, and uploads the run directory
+(see [Triaging a CI review](#triaging-a-ci-review)).
+
+Three choices in the job are load-bearing:
+
+- **Concurrency is per job and keyed on the pull request number.** A workflow-level group keyed on
+  `github.head_ref || github.ref` would put every comment on every pull request into one group, because
+  `head_ref` is empty on `issue_comment`, so any comment could cancel any in-flight review. A fork's
+  push, a comment that does not start with `/pr-hero review`, and a comment whose author GitHub does not
+  associate with the repository as `OWNER`, `MEMBER` or `COLLABORATOR` each get a unique group, so
+  those jobs never cancel or replace a review.
+- **Only a new push cancels.** The `if:` filter is a prefix, so a near-miss comment ("/pr-hero review
+  please") from an associated author lands in the pull request's group too; cancelling there would kill
+  a paid review in flight before the action ignores the comment. A comment run queues instead. A push
+  never waits: it cancels whatever is running, a forced review included, because that head is gone;
+  comment again on the new head. GitHub keeps one *pending* run per group and a newer run replaces it,
+  which is why a stranger's comment never enters the group: it could otherwise replace a maintainer's
+  queued review with a run the action then refuses. Known gap: an associated author's later comment (a
+  writer's near-miss or second real command, or a read-only member's or collaborator's refused one)
+  still replaces a comment run already waiting behind a running review, and `--full` followed by a plain
+  `/pr-hero review` loses the `--full`. Comment again to recover. The job `if:` does not check the
+  association, so a writer GitHub reports under another one (a private org member shown as
+  `CONTRIBUTOR`) still gets a review, because the action checks the real permission, but in its own
+  group, unserialized beside a review already running.
+- **Fork pushes are skipped.** GitHub gives fork `pull_request` runs no secrets. A maintainer comments
+  `/pr-hero review` instead; see [Fork pull requests](#fork-pull-requests).
+
+Keep every `with:` line even when you only use Claude: an unset secret or var expands to empty, which
+the Action treats as absent. Deleting the line for the credential you *did* set is what breaks. The
+quotes around `vars.PRHERO_ROUTING` are load-bearing — an unset repository variable must become the
+empty string, not broken YAML.
 
 ### Why `fetch-depth: 0`
 
@@ -115,7 +131,8 @@ trim it.
 | `OPENCODE_AUTH_JSON` | secret | One of the three credential secrets | Whole OpenCode `auth.json` blob (not a single key field). Cap **48 KB**. Never echo, log, or paste it into the workflow. The Action writes it `0600` at the OpenCode auth path. Leave unset for Claude-only CI. |
 | `PRHERO_ROUTING` | repository **variable** | OpenCode path (with the secret above) | JSON object with the same shape as `config.routing` — the routing object, not the whole `~/.prhero/config.json`. Quoted in workflow `with.routing`. Unset = empty string. Cap **48 KB**. Written to the person-layer `$HOME/.prhero/config.json` on the runner. Repo `.prhero/config.json` **rejects** `routing`. |
 
-The credentials job treats Anthropic key **or** Claude OAuth **or** `OPENCODE_AUTH_JSON` as present.
+The action treats Anthropic key **or** Claude OAuth **or** `OPENCODE_AUTH_JSON` as present. With none of
+the three set, the run fails red before any spend, and its step summary lists the commands that set one.
 Reference every secret **by name** (`${{ secrets.ANTHROPIC_API_KEY }}`, `${{ secrets.OPENCODE_AUTH_JSON }}`)
 — never paste a literal key into the workflow file, a log line, or a PR comment. The action itself
 follows the same rule: it never echoes, logs, or truncates a secret value anywhere in its output.
@@ -246,11 +263,13 @@ install and still starts.
 
 ### Edges
 
-- **Fork PRs** still skip: GitHub does not give forks repository secrets. The review job `if` never
-  reads `secrets` — see [Fork pull requests](#fork-pull-requests).
-- **OpenCode-only** (only `OPENCODE_AUTH_JSON` set, no Claude secret) **does** start the review job.
+- **Fork pushes** skip: GitHub does not give fork `pull_request` runs repository secrets. The review
+  job `if` never reads `secrets`. A maintainer's `/pr-hero review` comment reviews a fork — see
+  [Fork pull requests](#fork-pull-requests).
+- **OpenCode-only** (only `OPENCODE_AUTH_JSON` set, no Claude secret) counts as a credential and
+  reviews.
 - **Mismatch fails closed:** Claude credentials plus OpenCode routing but no `OPENCODE_AUTH_JSON`
-  starts the job (the skip union is already satisfied) and then **fails**, rather than skipping as a
+  passes the credential check (a Claude secret is set) and then **fails**, rather than skipping as a
   clean review.
 - **48 KB** is the GitHub secret/variable size cap for both `OPENCODE_AUTH_JSON` and `PRHERO_ROUTING`.
 
@@ -276,22 +295,30 @@ security boundary to prevent untrusted pull requests from exfiltrating credentia
 budget. Repository **variables** (`PRHERO_ROUTING`) are visible; that is why routing must not contain
 credentials.
 
-The generated workflow still skips forks, then uses a credentials job so the review job `if` never
-reads `secrets`:
+So the generated workflow skips a fork's `pull_request` runs: they could never authenticate. To review
+a fork pull request, a user with write access comments `/pr-hero review` on it. That run is an
+`issue_comment` run in the base repository's context, with its secrets: the action fetches the fork's
+head commit and reviews it, while config and gotchas still come from the base checkout. A comment from
+a user without write access is refused, so nobody outside the repository can spend its credentials.
+If GitHub's API fails while checking that access (a 5xx, a rate limit, a timeout), the action retries
+once and then fails the run red, asking for the comment again: it never reviews unchecked, and never
+refuses silently.
+No `pull_request_target` is involved. If you wire `pull_request_target` yourself, the action reviews
+fork heads there too: that event runs in the base repository's context, with its secrets, so choosing
+it is choosing base-context reviews of forks. pr-hero reads the head as text and never runs its code.
 
-```yaml
-# credentials job — secrets are legal in this job's env, not in a job-level `if`
-HAS_CREDS: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.OPENCODE_AUTH_JSON != '' }}
+The job `if` never reads `secrets` (GitHub does not allow it there). Credential presence is checked
+inside the action instead: a same-repo pull request with none of the three credential secrets fails
+red, with the commands that fix it, rather than skipping green and reading as a clean review. A
+credential already on the runner counts too: a Claude session file in `$HOME` or the OpenCode
+`auth.json` store. A self-hosted runner with none of these is left to the engine's own credential
+check, which can also see a macOS keychain entry. `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` set
+in the job's own `env:` does not count: the action's run step binds both from its inputs, so wire the
+secret as an input.
 
-# review job — github + needs only
-if: >-
-  github.event.pull_request.head.repo.full_name == github.repository &&
-  needs.credentials.outputs.has_creds == 'true'
-```
-
-Same-repo PRs with none of the three credential secrets skip (with a notice that names all three)
-instead of failing. Fork PRs skip without that notice — they never receive secrets, so warning on
-every fork would be noise.
+In this repository only, a comment run checks out the pull request's head and runs that engine
+(`uses: ./`), so it refuses fork pull requests outright: there the fork would supply the engine and run
+it with this repository's secrets. See [Manual override](#manual-override).
 
 ### Action version pinning
 The default workflow targets the floating major tag `uses: juanmaagd/pr-hero@v0`, which moves to every new 0.x release. While the major version is 0, a minor release may include breaking changes to the Action contract (see the pre-1.0 semantics in `docs/release-runbook.md`), so `@v0` is not a compatibility guarantee: read `CHANGELOG.md` before a new 0.x minor lands, or pin an exact tag or SHA. If your organization enforces strict immutable SHA pinning, you can pin the full commit SHA directly:
@@ -314,10 +341,10 @@ nothing:
 | Budget | `budget-usd` | route-derived (see below) | any value `<= 0` |
 
 Both gates exit 0 and leave a courteous PR comment plus step-summary note when they trip — they are cost
-gates, not quality gates, and never fail the job. The comment names the one-shot override:
-`gh workflow run pr-hero-force.yml -f pr=<n>`. That dispatches [the force workflow](#manual-override)
-on GitHub Actions. It does not change the ceilings for later pushes, and it does not review on the
-machine that sends the command.
+gates, not quality gates, and never fail the job. The comment names the one-shot override: comment
+`/pr-hero review` on the pull request (see [Manual override](#manual-override)). That runs the review on
+GitHub Actions. It does not change the ceilings for later pushes, and it does not review on the machine
+of whoever comments.
 
 **Leaving `budget-usd` unset resolves the ceiling from how the run is billed.** A Claude
 subscription route (`CLAUDE_CODE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its
@@ -388,53 +415,85 @@ Example:
 
 ### Manual override
 
-When CI skips a pull request — size gate, admission policy, or budget ceiling — dispatch the
-force workflow. The review runs on the GitHub Actions runner. The command does not review on
-the machine where you type it:
+When CI skips a pull request — size gate, admission policy, or budget ceiling — comment on the pull
+request:
 
-```bash
-gh workflow run pr-hero-force.yml -f pr=<number>
+```text
+/pr-hero review
 ```
 
-Write access on the repository is required (`workflow_dispatch`). A fork pull request is refused.
-`gh run rerun` on the automatic workflow re-evaluates the gates and does not force.
+The review runs on the GitHub Actions runner, not on the machine of whoever comments. The comment must
+start with `/pr-hero review` and be exactly that command (trailing whitespace and newlines are
+ignored; leading whitespace means no job starts at all); anything else, such as
+`/pr-hero review please`, starts a job that ends without reviewing. The commenter needs write access
+to the repository; a comment from anyone else is refused. `gh run rerun` on a skipped run re-evaluates
+the gates and does not force.
 
-A local agent (Claude Code) uses that same `gh workflow run`. It must not run
-`pr-hero review --pr <n> --force` when the goal is a CI review.
+A local agent (Claude Code) posts the same comment:
 
-The dispatched run passes `--force`. That bypasses the size gate, admission, and the budget
-ceiling for that run only. It does not reset the durable ledger. An empty effective diff
-(everything excluded) still does not review.
+```bash
+gh pr comment <number> --body "/pr-hero review"
+```
+
+It must not run `pr-hero review --pr <n> --force` when the goal is a CI review.
+
+The comment run passes `--force`. That bypasses the size gate, admission, and the budget ceiling for
+that run only. It does not reset the durable ledger. An empty effective diff (everything excluded)
+still does not review.
 
 `--force` never widens discovery. A re-review only hunts the commits since the last completed review,
 and that review is identified by the summary marker it posted for its head commit. So when a prior
 review of the **same head** was hollow or wrong (for example, its hunters returned nothing), every
-later run on that head reports "No changes to discover" and runs no hunter. Recover with the `full`
-dispatch input, which passes `--full` and re-discovers the whole pull request range:
+later run on that head reports "No changes to discover" and runs no hunter. Recover with `--full`,
+which re-discovers the whole pull request range:
 
-```bash
-gh workflow run pr-hero-force.yml -f pr=<number> -f full=true
+```text
+/pr-hero review --full
 ```
 
 Prior findings are still verified and triaged as usual; only discovery widens.
 
-In this repository, `pr-hero-force.yml` runs the pull request's own engine: it is generated with
-`OWN_CI_WORKFLOW_OPTIONS`, so its gate resolves the PR head commit first and checkout pins that commit
-before `uses: ./`. A dispatch starts on the default branch, so without the pin a forced review would
-run the default branch's engine instead of the one under review. Consumer workflows run the published
-`juanmaagd/pr-hero@v0`, where the checkout does not select the engine.
+**Fork pull requests** are reviewed only this way: their own pushes are skipped, and a maintainer's
+comment runs the review in the base repository's context (see
+[Fork pull requests](#fork-pull-requests)).
 
-- **When it takes effect.** `workflow_dispatch` reads the workflow file from the default branch, so in
-  this repository the engine pin and the `full` dispatch input work only once that YAML is on `main`;
-  in a consumer repository, `full` needs an action release that declares it, reached through the
-  `@v0` tag the workflow pins.
-- **`full` on older heads.** In this repository the forced review loads the PR head's own `action.yml`,
-  so on a head from before the `full` input existed `full=true` does nothing: merge or rebase the PR
-  onto a base that has it first.
-- **Trust.** In this repository a forced review runs the PR head's code, including its `bun install`,
-  with the workflow's secrets, so dispatch it only for heads you trust: on a bot-authored same-repo
-  branch (for example Dependabot's) it skips the secret withholding GitHub applies to that bot's
-  `pull_request` runs.
+**Workflows scaffolded before the comment trigger** have no `issue_comment` listener, so a comment does
+nothing there. They have a dispatch-only `.github/workflows/pr-hero-force.yml` instead, which still
+works because the action keeps the `pr-number`, `force`, and `full` inputs it sets:
+
+```bash
+gh workflow run pr-hero-force.yml -f pr=<number>              # force
+gh workflow run pr-hero-force.yml -f pr=<number> -f full=true # force and re-discover
+```
+
+Re-scaffold with `pr-hero ci init --force` to switch to the comment trigger. It rewrites
+`pr-hero.yml` only and leaves `pr-hero-force.yml` in place; delete that file yourself once the new
+`pr-hero.yml` is on the default branch.
+
+In this repository, a comment run reviews with the pull request's own engine: `pr-hero.yml` is
+generated with `OWN_CI_WORKFLOW_OPTIONS`, so on a comment a first step resolves the PR head commit and
+checkout pins that commit before `uses: ./`. A comment run starts on the default branch, so without the
+pin it would run the default branch's engine instead of the one under review. Consumer workflows run
+the published `juanmaagd/pr-hero@v0`, where the checkout does not select the engine.
+
+- **When it takes effect.** GitHub reads a comment-triggered workflow from the default branch, so the
+  comment trigger works only once `pr-hero.yml` with its `issue_comment` trigger is on the default
+  branch; in this repository that means `main`, not `dev`. Until then a comment starts nothing. In a
+  consumer repository, the comment handling also needs an action release that has it, reached through
+  the `@v0` tag the workflow pins.
+- **Minimum action version.** This workflow listens to comments, and only an action release that ships
+  the comment handling checks the command and the commenter's write access. An older action reviews on
+  ANY comment that starts with `/pr-hero review`, from anyone who can comment, with your secrets. Do
+  not pair this workflow with an action older than the release that adds it: if you pin a tag or a
+  commit sha instead of `@v0`, pin one at or after that release.
+- **Older heads (this repository).** The comment run loads the PR head's own `action.yml`, so on a head
+  from before the comment handling existed the run reviews without reading the comment: no `--force`
+  and no `--full`. Merge or rebase the PR onto a base that has it first.
+- **Trust (this repository).** A comment run here runs the PR head's code, including its
+  `bun install`, with the workflow's secrets. So the commenter's write access is checked twice: by the
+  workflow's own pre-checkout step, before any of the head's code runs, and again by the head's
+  `action.yml`. The first check fails closed, so an old branch whose `action.yml` predates the check
+  still refuses a commenter without write access.
 
 ### Check Runs ledger
 
@@ -517,13 +576,15 @@ pr-hero triage reply --pr <n> --from <run-dir> --finding F001 \
 `comparison.json` there and reads `findings.json` to map `F001` onto the posted
 `<!-- pr-hero-finding` marker. Locally that directory is still on your disk. In Actions it lives on the
 runner at `~/.prhero/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` and **dies with the job**, so the
-workflow uploads it as an artifact.
+action uploads it as an artifact in its last step.
 
 ### Downloading the run directory
 
 ```bash
 # Find the review run for the PR (or read the run id off the checks tab)
 gh run list --workflow "pr-hero Review" --branch <head-branch> --limit 5
+# A `/pr-hero review` comment run is listed under the default branch instead
+gh run list --workflow "pr-hero Review" --event issue_comment --limit 5
 
 # Download the artifact into ./pr-hero-run/
 gh run download <run-id> \
@@ -535,9 +596,9 @@ pr-hero triage reply --pr <n> --from pr-hero-run --finding F001 \
   --tag applied --body-file reasoning.md
 ```
 
-The artifact name carries **both** the PR number and the full head sha (`<head-sha>` is
-`github.event.pull_request.head.sha`, not the 8-character prefix in the directory name), so a PR reviewed
-across several pushes has one unambiguous artifact per reviewed head. `gh run download` unpacks the run
+The artifact name carries **both** the PR number and the full head sha (`<head-sha>` is the pull
+request head the action resolved for the run, on a comment run too, not the 8-character prefix in the
+directory name), so a PR reviewed across several pushes has one unambiguous artifact per reviewed head. `gh run download` unpacks the run
 directory's *contents*, not the directory itself — point `--from` at whatever directory you downloaded
 into (`-D`), not at a `pr-<n>-<sha>-1` path inside it.
 
@@ -548,7 +609,7 @@ The run directory holds the reviewed diff (`diff.patch`), the rendered agent pro
 workflow artifacts are downloadable by anyone** — which is why `retention-days: 7` is deliberately short:
 long enough to triage, short enough to bound exposure. Lengthen it only if you have weighed that.
 
-Three properties of the upload step are load-bearing:
+Three properties of the action's upload step are load-bearing:
 
 - **`if: always()`** — a *failed* review is when this directory matters most. When every hunter dies
   (e.g. bad credentials), the per-attempt logs under `steps/logs/` are the only record naming the cause.
@@ -557,8 +618,8 @@ Three properties of the upload step are load-bearing:
 - **`overwrite: true`** — artifact names are unique per workflow *run*, and `gh run rerun` reuses the run
   id, so a re-run's upload would otherwise conflict.
 
-> **Known gap.** Four outcomes publish no usable `run-dir`, so the `steps.pr-hero.outputs.run-dir != ''`
-> condition suppresses the upload for all of them:
+> **Known gap.** Four outcomes publish no usable `run-dir`, so the upload's empty-`run-dir` condition
+> suppresses it for all of them:
 >
 > - a **concurrent review** and a run where **every hunter died** — the two cases that leave `status`
 >   empty (see above), because no output is written at all;
@@ -576,9 +637,9 @@ Three properties of the upload step are load-bearing:
 
 | Input | Default | Purpose |
 |---|---|---|
-| `pr-number` | resolved from the triggering event | Override when triggering from a non-`pull_request` event. `pr-hero-force.yml` sets this from the dispatch input. |
-| `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. `pr-hero-force.yml` sets it to `true`. |
-| `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
+| `pr-number` | resolved from the triggering event | Override when triggering from an event that carries no pull request. Only a legacy `pr-hero-force.yml` sets it, from its dispatch input; the current workflow passes nothing. |
+| `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. A `/pr-hero review` comment from a user with write access sets it on its own; a legacy `pr-hero-force.yml` sets it to `true`. |
+| `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). A `/pr-hero review --full` comment sets it on its own; a legacy `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
 | `model` | engine default | Override every agent's model. |
 | `scout` | `false` | Experimental diff-only pre-hunt stage; off by default. |
 | `post` | `true` | Set `false` to run the review and write outputs/summary without posting to the PR. |
@@ -590,18 +651,26 @@ Three properties of the upload step are load-bearing:
 
 - **`pr-hero doctor`** locally reports whether `.github/workflows/pr-hero.yml` exists; inside Actions it
   reports whether the required secrets (or OpenCode auth file) are present (never their values).
-- **The review was skipped** (size, budget, or admission) — dispatch
-  `gh workflow run pr-hero-force.yml -f pr=<n>`. `gh run rerun` on `pr-hero.yml` re-evaluates the
-  gates and skips again. The force workflow has to be on the default branch before `workflow_dispatch`
-  can see it.
+- **The review was skipped** (size, budget, or admission) — comment `/pr-hero review` on the pull
+  request. `gh run rerun` on `pr-hero.yml` re-evaluates the gates and skips again. On a workflow
+  scaffolded before the comment trigger, run `gh workflow run pr-hero-force.yml -f pr=<n>` instead.
+- **A `/pr-hero review` comment did nothing** — the comment trigger reads `pr-hero.yml` from the
+  default branch, so it works only once that file (with its `issue_comment` trigger) is merged there.
+  The comment must be exactly `/pr-hero review` or `/pr-hero review --full`, and its author needs
+  write access to the repository. An older `pr-hero.yml` has no comment trigger at all: re-scaffold
+  with `pr-hero ci init --force`.
+- **The run is red and names a missing credential** — none of `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, or `OPENCODE_AUTH_JSON` is set. The step summary lists the `gh secret set`
+  commands; adding a secret does not re-run past workflows, so re-run that run afterwards.
 - **Every re-run says "No changes to discover" after a hollow review** — a prior review of the same
   head completed without really reviewing (for example, every hunter returned nothing within
   seconds), and its summary marker now scopes discovery to nothing. On a head that was genuinely
-  reviewed this message is expected and needs no action. Otherwise, dispatch `gh workflow run pr-hero-force.yml -f pr=<n> -f full=true` to re-discover the whole pull
-  request; see [Manual override](#manual-override).
+  reviewed this message is expected and needs no action. Otherwise, comment `/pr-hero review --full`
+  to re-discover the whole pull request; see [Manual override](#manual-override).
 - **No comment appears on the PR** — check `permissions: pull-requests: write` is present, and that at
   least one of the three credential secrets is set (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or
-  `OPENCODE_AUTH_JSON`). Fork PRs never receive those secrets. OpenCode also needs `PRHERO_ROUTING`.
+  `OPENCODE_AUTH_JSON`). Fork pushes never receive those secrets; a maintainer's `/pr-hero review`
+  comment reviews them. OpenCode also needs `PRHERO_ROUTING`.
 - **The review job is red** — never because of findings. Read `status` to tell the three causes apart:
   `error` is a fatal failure and the `::error::` annotation in the log names it; an **empty** `status`
   means every hunter died (the log shows their failures); `reviewed` means the review itself succeeded

@@ -46,7 +46,6 @@ describe("resolveEngineAssets", () => {
         "SKILL.md",
         "assets/admission-config.example.json",
         "assets/workflow.yml",
-        "assets/workflow-force.yml",
         "references/ci-admission.md",
         "references/opencode-ci.md",
       ].sort(),
