@@ -127,8 +127,10 @@ export type Publication =
   // Annotation and step summary only: no PR can be written to.
   | { kind: "local"; rendered: RenderedError }
   // A human's override (odd/tasks/agent-first-ci.md, S8): a success status on the
-  // head it names, then an audit comment. Nothing ran, so nothing is rendered as an
-  // outcome and nothing is cleaned up.
+  // head it names, then, only when that status was written, the cleanup of older
+  // outcome comments (the same cleanup a completed review runs, since both settle the
+  // head), then an audit comment. Nothing ran, so nothing is rendered as an outcome.
+  // The override's audit comments and the report summary are never cleaned up.
   | {
       kind: "override";
       repository: string;
@@ -240,9 +242,10 @@ function decideOverride(record: TriggerRecord): Publication {
 // WHY the CLI's record decides: the CLI posts its own status and comment for a
 // completed review and for a skip, so those need nothing here. It posts neither
 // for a crash, a class it could not map, or all hunters failing, so the publisher
-// speaks for those with the code the record names. Cleanup needs a completed
-// review: a stale outcome comment contradicts it, and nothing else removes that
-// comment. A run with no record took no lock the publisher can see, so it gets the
+// speaks for those with the code the record names. Cleanup needs a settled head:
+// a completed review, or an override that set its status (publishOverride), makes
+// a stale outcome comment contradict the PR, and nothing else removes that comment.
+// A run with no record took no lock the publisher can see, so it gets the
 // comment alone (see the no-record branch below). A reviewing record decides its status
 // by the head it names (see that case), never by the trigger's head.
 function decideCliOutcome(
@@ -783,10 +786,12 @@ function deleteOlderOutcomes(
   );
 }
 
-// WHY cleanup runs once the CLI's review completed: an older outcome comment says
-// a run could not start the review. A later run's review has now completed, so
-// that comment contradicts the PR, and nothing else removes it. Only older runs'
-// and earlier attempts' comments go (see isOlderRunComment).
+// WHY cleanup runs once a head settles: a completed review (runPublish's cleanup
+// branch), or an override whose success status was written (publishOverride). An
+// older outcome comment says a run could not start the review. A later run has now
+// settled the head, so that comment contradicts the PR, and nothing else removes it.
+// Only older runs' and earlier attempts' comments go (see isOlderRunComment), and
+// the override's audit comments and the report summary never match isOutcomeComment.
 //
 // WHY the identity chain: the older comments were written with the workflow's
 // token, which cannot read /user. GraphQL `viewer` names the login that wrote
@@ -993,7 +998,9 @@ function overrideCommentBody(
 }
 
 // WHY the status goes first and the comment's wording follows it: the audit
-// comment must never claim an override that the status did not receive.
+// comment must never claim an override that the status did not receive. The
+// cleanup of older outcome comments runs only after a written status (below), the
+// same settle a completed review does; a failed status leaves them in place.
 function publishOverride(
   deps: PublishDeps,
   plan: Extract<Publication, { kind: "override" }>,
@@ -1009,6 +1016,10 @@ function publishOverride(
     });
     if (status.ok) {
       statusSet = true;
+      // WHY here, right after the success and before the audit comment: the head is green
+      // now, so an earlier run's outcome comment contradicts it. The audit comment does not
+      // gate this cleanup, and its warnings never change the exit code (as for a review).
+      cleanupOlderOutcomes(deps, plan);
     } else {
       reportStatusWriteFailure(
         deps,

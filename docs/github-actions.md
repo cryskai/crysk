@@ -579,7 +579,7 @@ review and spends nothing, and it needs no credential, so a repository without o
 
 Every override is recorded. The status names who acted, and a pr-hero comment on the pull request names who,
 on which head, and when (UTC). It starts with `<!-- pr-hero-override`, and no later cleanup removes it, so the
-history of overrides stays on the pull request.
+history of overrides stays on the pull request. The override also removes earlier outcome comments from the pull request, as a completed review does, and keeps every override record.
 
 An override is valid only for the head it names. The newest status on a head wins, so the override stands
 until one of two things happens: a new push creates a new head, which is reviewed on its own, or a later

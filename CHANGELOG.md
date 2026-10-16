@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the review itself failed before delivery, a failed final status write is logged and never replaces that failure.
   When a delivered review's final status write fails, including when a step after the delivery failed, the publisher
   step of the same job posts that status once more, so the required check does not stay pending; the job still fails.
-  `/pr-hero override` unlocks a red gate for the head it names, and is refused on a pull request from a fork.
+  `/pr-hero override` unlocks a red gate for the head it names, and is refused on a pull request from a fork. When the
+  override's status is written, it also removes earlier outcome comments from the pull request, as a completed review
+  does, and keeps every override record.
 
 ### Fixed
 - **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left

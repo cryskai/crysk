@@ -2209,9 +2209,72 @@ describe("runPublish — the override (S8)", () => {
       "repos/acme/widgets/issues/comments/502",
     ]);
   });
+
+  // WHY the override settles the head the way a completed review does, so it removes the
+  // same older outcome comments. The list also holds an older override audit comment, a
+  // newer run's outcome comment and the pr-hero-report summary: only the older outcome goes.
+  test("an override whose status write succeeds deletes an older run's outcome comment, and keeps the override audit, the newer outcome and the report summary", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      viewer: ok("github-actions"),
+      list: listing(
+        [501, "github-actions[bot]", "Bot", OVERRIDE_OLDER_MARKER],
+        [502, "github-actions[bot]", "Bot", OLDER_MARKER],
+        [503, "github-actions[bot]", "Bot", NEWER_MARKER],
+        [504, "github-actions[bot]", "Bot", REPORT_SUMMARY_MARKER],
+      ),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(deletions(run.calls)).toEqual([
+      "repos/acme/widgets/issues/comments/502",
+    ]);
+  });
+
+  // WHY nothing is cleaned up when the status write fails: the head is not green, so the
+  // outcome comments stay beside the red status. The graphql call is the viewer lookup
+  // that starts the cleanup, so its absence proves the cleanup never began.
+  test("an override whose status write fails deletes nothing, and never starts the cleanup", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      status: [fail("gh: HTTP 500"), fail("gh: HTTP 500")],
+      viewer: ok("github-actions"),
+      list: listing([502, "github-actions[bot]", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(1);
+    expect(deletions(run.calls)).toEqual([]);
+    expect(run.calls.some((call) => call.args.includes("graphql"))).toBe(false);
+  });
+
+  test("an override with no head sets no status, so it cleans up nothing", () => {
+    const run = runPublishIn({
+      record: overrideRecord({ head_sha: undefined }),
+      viewer: ok("github-actions"),
+      list: listing([502, "github-actions[bot]", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(deletions(run.calls)).toEqual([]);
+  });
+
+  // WHY a warning, not a failure: the override's exit code follows the status write alone,
+  // as a completed review's does. The status is set, so the exit stays 0.
+  test("a failed delete of an older outcome comment is a warning, and the override still exits 0", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      viewer: ok("github-actions"),
+      list: listing([502, "github-actions[bot]", "Bot", OLDER_MARKER]),
+      remove: fail("gh: Server Error (HTTP 500)"),
+    });
+    expect(deletions(run.calls)).toEqual([
+      "repos/acme/widgets/issues/comments/502",
+    ]);
+    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("could not delete an older outcome comment");
+    expect(run.exitCode).toBe(0);
+  });
 });
 
 const OVERRIDE_OLDER_MARKER = `<!-- pr-hero-override head=${SHA} run=4000 attempt=1 -->`;
+const REPORT_SUMMARY_MARKER = `<!-- pr-hero-report head=${SHA} -->`;
 
 describe("publish.ts runs before `bun install`", () => {
   // The real entry point, spawned with an empty PATH and HOME: it must start
