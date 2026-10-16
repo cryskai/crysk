@@ -571,10 +571,10 @@ turns the status green for that head with no new review. The re-review does not 
 
 **A failed final write.** In gate mode, when the review itself finished, the job fails with an `::error::`
 annotation if the final status cannot be written. When the review was also delivered, the CLI records the status
-it could not write, and the publisher step later in the same job posts that status once more, so the required
+it could not write, even if a step after delivery then failed, and the publisher step later in the same job posts that status once more, so the required
 check can settle without a new run. The job still fails with its `::error::` annotation. If that second write
 fails too, the publisher adds its own `::error::` annotation, and the head stays `pending` until a
-`/pr-hero review` comment forces a review. If the review had already failed, the job exits with that failure,
+`/pr-hero review` comment forces a review. If the review had already failed before delivery, the job exits with that failure,
 and the failed status write is only logged, so it never replaces the review's own error. Either way the
 commit-status lock is still released. On an already-reviewed head, the same-head admission skip runs first and
 posts no status, so the head stays `pending` until a `/pr-hero review` comment forces a review, which writes the

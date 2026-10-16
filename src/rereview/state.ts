@@ -365,31 +365,40 @@ export function assembleLive(input: {
     // misclassified tag, or a dismissal the adjudicator rejected. A worsening
     // return stays out, because this run's own stronger survivor carries it.
     let persisted: LiveStatus | undefined;
-    if (status === "returned") {
-      returned++;
-      if (
-        gatePrior?.triage?.tag === "dismissed" &&
-        gatePrior.triage.verdict === "rejected"
-      ) {
-        persisted = "carried";
-      }
+    if (
+      status === "returned" &&
+      gatePrior?.triage?.tag === "dismissed" &&
+      gatePrior.triage.verdict === "rejected"
+    ) {
+      persisted = "carried";
     } else if (status === "re-tiered") {
-      reTiered++;
       persisted = "carried";
     } else if (isLiveStatus(status)) {
       persisted = status;
     }
-    if (persisted === undefined || gatePrior === undefined) continue;
-    live.push({
-      id: gatePrior.id,
-      sev: gatePrior.sev,
-      tier: gatePrior.tier,
-      channel: gatePrior.channel,
-      locs: row.locs,
-      c: liveFingerprint(gatePrior.id, gatePrior.claim),
-      claim: gatePrior.claim,
-      status: persisted,
-    });
+    // WHY a persisted row counts only as carried: the delta line draws carried,
+    // re-tiered and returned as disjoint buckets, so a prior also counted here
+    // rendered as "1 carried · 1 re-tiered". Only a return or re-tier that stays
+    // out of live keeps its own count, which is a worsening return. So
+    // `reTiered` is zero for every settlement that has a prior: a re-tier always
+    // persists. The field stays because fillRereviewProvenance writes
+    // re_tiered to pipeline.json and reads it back when phaseB is absent.
+    if (persisted !== undefined && gatePrior !== undefined) {
+      live.push({
+        id: gatePrior.id,
+        sev: gatePrior.sev,
+        tier: gatePrior.tier,
+        channel: gatePrior.channel,
+        locs: row.locs,
+        c: liveFingerprint(gatePrior.id, gatePrior.claim),
+        claim: gatePrior.claim,
+        status: persisted,
+      });
+    } else if (status === "returned") {
+      returned++;
+    } else if (status === "re-tiered") {
+      reTiered++;
+    }
   }
   return {
     live,

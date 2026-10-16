@@ -27,7 +27,11 @@ import {
   admissionRecordFingerprint,
   settleAdmissionAttempt,
 } from "#ci/admission-ledger";
-import { recordReviewDelivered, writeCliRecord } from "#ci/cli-record";
+import {
+  recordReviewDelivered,
+  recordReviewing,
+  writeCliRecord,
+} from "#ci/cli-record";
 import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
@@ -886,31 +890,134 @@ describe("settleCommitStatusAndLedger — the unsettled final status", () => {
     },
   );
 
-  test("a body that already failed records nothing: its own error is the run's failure", async () => {
-    const { env, recordPath } = await outcomeEnv();
-    recordReviewDelivered(HEAD, env);
-    const { spawnFn } = makeStatusSpawn({ fail: true });
-    const chunks: string[] = [];
+  // Runs the body's throw and the settle in its finally, the shape reviewPr's
+  // catch and finally create, and returns the error that escaped. The
+  // best-effort write logs its own warning, so stderr is discarded here.
+  async function throwThenSettle(
+    body: Error,
+    input: Parameters<typeof settleCommitStatusAndLedger>[0],
+  ): Promise<unknown> {
     const origWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      chunks.push(
-        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
-      );
-      return true;
-    }) as typeof process.stderr.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    let escaped: unknown = "nothing escaped";
     try {
-      await settleCommitStatusAndLedger(
-        settleInput(env, { spawnFn, bodyFailed: true }),
-      );
+      try {
+        throw body;
+      } finally {
+        await settleCommitStatusAndLedger(input);
+      }
+    } catch (error) {
+      escaped = error;
     } finally {
       process.stderr.write = origWrite;
     }
+    return escaped;
+  }
+
+  // WHY: the body can throw after the review was delivered (cli.json is
+  // reviewed). Then the gate's pending status has no other writer, so the
+  // record keeps the status that did not land for the publisher to repost.
+  test.each([
+    ["a clean review", 0, { state: "success", description: "review complete" }],
+    [
+      "a review with blocking findings",
+      2,
+      {
+        state: "failure",
+        description:
+          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+    ],
+  ] as const)(
+    "%s: a body that failed after delivery records the status that did not land, and its own error still escapes",
+    async (_label, blockingCount, expected) => {
+      const { env, recordPath } = await outcomeEnv();
+      recordReviewDelivered(HEAD, env);
+      const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+      const body = new Error("body failed after delivery");
+      const escaped = await throwThenSettle(
+        body,
+        settleInput(env, { spawnFn, blockingCount, bodyFailed: true }),
+      );
+      expect(calls.length).toBeGreaterThan(0);
+      expect(escaped).toBe(body);
+      expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+        v: 1,
+        outcome: "reviewed",
+        head_sha: HEAD,
+        unsettled_status: expected,
+      });
+      expect(heldCommitStatusLock()).toBeNull();
+    },
+  );
+
+  test("a body that failed after delivery records nothing when its final write lands", async () => {
+    const { env, recordPath } = await outcomeEnv();
+    recordReviewDelivered(HEAD, env);
+    const { spawnFn, calls } = makeStatusSpawn();
+    const body = new Error("body failed after delivery");
+    const escaped = await throwThenSettle(
+      body,
+      settleInput(env, { spawnFn, bodyFailed: true }),
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    expect(escaped).toBe(body);
     expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
       v: 1,
       outcome: "reviewed",
       head_sha: HEAD,
     });
   });
+
+  test("a body that failed before delivery records nothing: the record still says reviewing", async () => {
+    const { env, recordPath } = await outcomeEnv();
+    recordReviewing(HEAD, env);
+    const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+    const body = new Error("body failed before delivery");
+    const escaped = await throwThenSettle(
+      body,
+      settleInput(env, { spawnFn, bodyFailed: true }),
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    expect(escaped).toBe(body);
+    expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+      v: 1,
+      outcome: "reviewing",
+      head_sha: HEAD,
+    });
+  });
+
+  // Advisory never grades, so its failed write records nothing. A gate run on
+  // the local context is demoted to advisory the same way (effectiveMode).
+  test.each([
+    [
+      "advisory mode",
+      { ciMode: "advisory", statusContext: COMMIT_STATUS_CONTEXT },
+    ],
+    [
+      "a gate run on the local context",
+      { ciMode: "gate", statusContext: LOCAL_COMMIT_STATUS_CONTEXT },
+    ],
+  ] as const)(
+    "%s: a body that failed after delivery records nothing when its write fails",
+    async (_label, posture) => {
+      const { env, recordPath } = await outcomeEnv();
+      recordReviewDelivered(HEAD, env);
+      const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+      const body = new Error("body failed after delivery");
+      const escaped = await throwThenSettle(body, {
+        ...settleInput(env, { spawnFn, bodyFailed: true }),
+        ...posture,
+      });
+      expect(calls.length).toBeGreaterThan(0);
+      expect(escaped).toBe(body);
+      expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+        v: 1,
+        outcome: "reviewed",
+        head_sha: HEAD,
+      });
+    },
+  );
 
   test("an earlier error record is left alone, and the run still fails", async () => {
     const { env, recordPath } = await outcomeEnv();

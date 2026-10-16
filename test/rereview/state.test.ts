@@ -416,7 +416,10 @@ describe("assembleLive", () => {
     };
   }
 
-  test("a misclassified blocking prior stays in live as carried, with its own tier, and still counts as re-tiered", () => {
+  // A persisted prior counts once, as carried. The delta line draws carried,
+  // re-tiered and returned as disjoint buckets, so counting it again as
+  // re-tiered rendered one finding as "1 carried · 1 re-tiered".
+  test("a misclassified blocking prior stays in live as carried, with its own tier, and does not count as re-tiered", () => {
     const prior = blockingPrior({
       tag: "misclassified",
       verdict: null,
@@ -427,13 +430,13 @@ describe("assembleLive", () => {
       priors: [prior],
       verifyVerdicts: new Map(),
     });
-    expect(assembled.reTiered).toBe(1);
+    expect(assembled.reTiered).toBe(0);
     expect(
       assembled.live.map((row) => `${row.id}:${row.status}:${row.tier}`),
     ).toEqual(["R001:carried:blocking"]);
   });
 
-  test("a blocking prior whose rejected dismissal reopened it stays in live as carried, and still counts as returned", () => {
+  test("a blocking prior whose rejected dismissal reopened it stays in live as carried, and does not count as returned", () => {
     const prior = blockingPrior({
       tag: "dismissed",
       verdict: "rejected",
@@ -444,7 +447,7 @@ describe("assembleLive", () => {
       priors: [prior],
       verifyVerdicts: new Map(),
     });
-    expect(assembled.returned).toBe(1);
+    expect(assembled.returned).toBe(0);
     expect(
       assembled.live.map((row) => `${row.id}:${row.status}:${row.tier}`),
     ).toEqual(["R001:carried:blocking"]);

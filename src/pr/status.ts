@@ -77,18 +77,25 @@ export async function settleHeldCommitStatusOnSignal(
 // a failed `gh` call caught here and logged, never rethrown — instead of
 // replacing the whole function with a fake that can only assert it was
 // called, not what it really does when gh fails.
+//
+// Resolves true when the status landed and false when it did not. The swallow is
+// unchanged: a caller that ignores the result gets the same posture as before. The
+// result exists for the one caller that must act on a failed write, the body-failed
+// path in settleCommitStatusAndLedger (src/pr/teardown.ts).
 export async function tryPublishCommitStatus(
   operatorRoot: string,
   sha: string,
   request: ReturnType<typeof commitStatusRequest>,
   spawnFn?: typeof Bun.spawn,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await postCommitStatus(operatorRoot, sha, request, spawnFn);
+    return true;
   } catch (error) {
     log(
       `warning: commit status (${request.state}): ${(error as Error).message}`,
     );
+    return false;
   }
 }
 
