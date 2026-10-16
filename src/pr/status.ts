@@ -6,6 +6,7 @@ import {
   settleRequestForCancellation,
 } from "#pr/preflight";
 import { log } from "#ui/primitives";
+import { CliError } from "../errors";
 
 // WHY this module-level state exists (paid for on PR #162, 2026-09-01): a run
 // cancelled by the workflow's `cancel-in-progress` concurrency group posted its
@@ -87,6 +88,26 @@ export async function tryPublishCommitStatus(
   } catch (error) {
     log(
       `warning: commit status (${request.state}): ${(error as Error).message}`,
+    );
+  }
+}
+
+// S4, gate mode: the FINAL write does not swallow. In gate the status is the
+// required check, so a write that never landed must fail the run (exit 1 and
+// an `::error::` annotation, via the CLI's catch) rather than log a warning
+// over a head GitHub still shows as pending. The pending write stays
+// best-effort in both modes, and advisory keeps tryPublishCommitStatus.
+export async function publishFinalCommitStatus(
+  operatorRoot: string,
+  sha: string,
+  request: ReturnType<typeof commitStatusRequest>,
+  spawnFn?: typeof Bun.spawn,
+): Promise<void> {
+  try {
+    await postCommitStatus(operatorRoot, sha, request, spawnFn);
+  } catch (error) {
+    throw new CliError(
+      `commit status (${request.state}) was not written, so the required check on this head is not settled: ${(error as Error).message}`,
     );
   }
 }

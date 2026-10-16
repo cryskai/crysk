@@ -21,6 +21,7 @@ import {
   notionalCostInput,
 } from "#config/config";
 import type { ResolvedRoutePlan, RoutingConfig } from "#model/routing";
+import type { CiMode } from "#pr/preflight";
 import {
   type FindingsDocument,
   mergeRunEnvelope,
@@ -337,6 +338,9 @@ export async function writeRunReport(params: {
   droppedPaths: string[];
   result: PipelineResult;
   wallMs: number;
+  // S4: the mode the commit status was set under. A PR run passes the mode it
+  // resolved; the local review leaves it out, and the closing note is advisory.
+  ciMode?: CiMode;
 }): Promise<string> {
   const reportPath = path.join(params.runDir, "report.md");
   await Bun.write(
@@ -350,6 +354,7 @@ export async function writeRunReport(params: {
       costUsd: params.result.usage.cost_usd_est,
       ...notionalCostInput(params.result),
       wallMs: params.wallMs,
+      ...(params.ciMode === undefined ? {} : { ciMode: params.ciMode }),
     }),
   );
   return reportPath;

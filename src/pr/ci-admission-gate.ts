@@ -59,7 +59,11 @@ import {
   ghPrHeroWorkflowRunHeads,
   listAdmissionCheckRuns,
 } from "#pr/pr";
-import { findMarkedCommentId, isInFlightCommitStatus } from "#pr/preflight";
+import {
+  type CiMode,
+  findMarkedCommentId,
+  isInFlightCommitStatus,
+} from "#pr/preflight";
 import { parseStateBlock } from "#rereview/state";
 import type { CliOptions, LocalConfig } from "#review/preflight";
 import { log } from "#ui/primitives";
@@ -85,6 +89,9 @@ export async function evaluateCiAdmissionGate(input: {
   headSha: string;
   config: LocalConfig;
   isCi: boolean;
+  // The run's one resolved CI mode (resolveCiMode, reviewPr): the footer of the
+  // admission skip's summary follows it.
+  ciMode: CiMode;
   options: CliOptions;
   // Test-only seams (defaults: the real Bun.spawn / recordCiAdmissionGateSkip).
   // Every gh() caller below already threads an invisible-to-production
@@ -291,10 +298,12 @@ export async function evaluateCiAdmissionGate(input: {
         blockingCount: admissionVerdict.prior.blocking,
         advisoryCount: admissionVerdict.prior.advisory,
       });
+      // S4: an admission skip posts no commit status in either mode (open decision).
       const plan = planCiReviewSkip({
         prNumber,
         verdict: admissionVerdict,
         admission: admissionContext,
+        ciMode: input.ciMode,
       });
       const exitCode = await publishCiSkip({
         operatorRoot,
@@ -321,10 +330,12 @@ export async function evaluateCiAdmissionGate(input: {
         blockingCount: admissionVerdict.prior.blocking,
         advisoryCount: admissionVerdict.prior.advisory,
       });
+      // S4: manual-required posts no commit status in either mode (open decision).
       const plan = planCiReviewManualRequired({
         prNumber,
         verdict: admissionVerdict,
         admission: admissionContext,
+        ciMode: input.ciMode,
       });
       const exitCode = await publishCiSkip({
         operatorRoot,

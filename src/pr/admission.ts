@@ -22,6 +22,8 @@ import {
 } from "#ci/reporter";
 import type { CiReviewPolicy } from "#ci/review-admission";
 import { repostMarkedPrComment, upsertAdmissionCheckRun } from "#pr/pr";
+import { type CiMode, skipCommitStatusRequest } from "#pr/preflight";
+import { publishFinalCommitStatus } from "#pr/status";
 import { log } from "#ui/primitives";
 
 // ROADMAP Pillar 3 (GitHub Actions CI). The mechanical glue behind a gate
@@ -249,8 +251,14 @@ export async function publishCiSkip(input: {
   stepSummaryFlag: boolean | undefined;
   plan: CiGateSkipPlan;
   noticeMessage: string;
-  // Test-only seam (default: the real repostMarkedPrComment).
+  // S4. In gate mode with a known head, a size or budget skip posts a failure
+  // status. Absent means no status, which is every caller but the two gates.
+  ciMode?: CiMode;
+  headSha?: string;
+  // Test-only seams (defaults: the real repostMarkedPrComment and
+  // publishFinalCommitStatus).
   repost?: typeof repostMarkedPrComment;
+  postStatus?: typeof publishFinalCommitStatus;
 }): Promise<number> {
   log(formatWorkflowCommand("notice", input.noticeMessage));
   // The record names the skip kind only. The plan carries no head, so none is
@@ -277,6 +285,22 @@ export async function publishCiSkip(input: {
       });
       throw error;
     }
+  }
+  // S4: the head's status is part of "this skip reached the PR", so it is
+  // written before the record. A failed write rethrows, leaving no skipped
+  // record behind. Admission skips (coverage, same-head, low-risk,
+  // below-threshold) and manual-required post no status in either mode: an
+  // open decision, not a verdict on the diff.
+  if (
+    input.ciMode === "gate" &&
+    input.headSha !== undefined &&
+    (skip === "size" || skip === "budget")
+  ) {
+    await (input.postStatus ?? publishFinalCommitStatus)(
+      input.operatorRoot,
+      input.headSha,
+      skipCommitStatusRequest({ kind: skip, targetUrl: undefined }),
+    );
   }
   // Written only once the notice is on the PR, or once the log line is out when
   // posting is off: the record is what the publisher reads as "this skip was

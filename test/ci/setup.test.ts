@@ -1329,3 +1329,44 @@ describe("CLI wiring: setup --ci and ci init (parseArgs)", () => {
     );
   });
 });
+
+// S4: the scaffold names its gate mode in the file itself, so a reader sees
+// what turns the status red without consulting the action's defaults.
+describe("scaffold writes the gate mode explicitly (S4)", () => {
+  // The pr-hero step's own `with:`, found by its `uses:` line: the checkout
+  // step above it has a `with:` block of its own.
+  function withBlock(template: string): string[] {
+    const lines = template.split("\n");
+    const uses = lines.findIndex(
+      (line) => line.trim().startsWith("uses:") && /pr-hero|\.\//.test(line),
+    );
+    expect(uses).toBeGreaterThan(-1);
+    const start = lines.findIndex(
+      (line, index) => index > uses && line.trim() === "with:",
+    );
+    expect(start).toBeGreaterThan(-1);
+    const block: string[] = [];
+    for (let i = start + 1; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (line.trim() !== "" && !line.startsWith("          ")) break;
+      block.push(line);
+    }
+    return block;
+  }
+
+  test("the default scaffold writes mode: gate inside the pr-hero with: block", () => {
+    const block = withBlock(generateCiWorkflowTemplate());
+    expect(block).toContain("          mode: gate");
+    expect(block.filter((line) => line.includes("mode:"))).toHaveLength(1);
+  });
+
+  test("the mode it is given is the one written", () => {
+    const block = withBlock(generateCiWorkflowTemplate({ mode: "advisory" }));
+    expect(block).toContain("          mode: advisory");
+    expect(block.some((line) => line.includes("mode: gate"))).toBe(false);
+  });
+
+  test("this repo's own options name gate explicitly", () => {
+    expect(OWN_CI_WORKFLOW_OPTIONS.mode).toBe("gate");
+  });
+});

@@ -18,9 +18,11 @@ import {
 import type { ComparisonResult, PrHeroFindingRef } from "#compare/compare";
 import type { GreptileFinding } from "#compare/greptile";
 import {
+  blockingCommitStatusRequest,
   buildComparisonJson,
   CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
   COMMIT_STATUS_CONTEXT,
+  COMMIT_STATUS_DESCRIPTION_MAX,
   COMMIT_STATUS_TIMEOUT_MS,
   commitStatusCompletion,
   commitStatusRequest,
@@ -37,9 +39,11 @@ import {
   prCommentMarker,
   prHtmlUrl,
   prRunDirCandidate,
+  resolveCiMode,
   resolveCurrentPrNumber,
   resolvePrTarget,
   settleRequestForCancellation,
+  skipCommitStatusRequest,
   worktreeDirty,
 } from "#pr/preflight";
 import { PR_STATE_MARKER_PREFIX } from "#rereview/state";
@@ -1141,7 +1145,7 @@ describe("commitStatusRequest", () => {
     });
   });
 
-  test("sessionFailed / crash is error, never failure", () => {
+  test("sessionFailed / crash is error in either mode, never failure", () => {
     const request = commitStatusRequest({
       phase: "error",
       posted: false,
@@ -1149,7 +1153,16 @@ describe("commitStatusRequest", () => {
     });
     expect(request.state).toBe("error");
     expect(request.description).toBe("review did not finish");
-    expect(request.state).not.toBe("failure");
+    // Blocking findings alone never make a crashed run red as `failure`:
+    // gate mode turns findings into `failure` only on a finished review.
+    expect(
+      commitStatusCompletion({
+        pipelineFinished: true,
+        sessionFailed: true,
+        ciMode: "gate",
+        blockingCount: 2,
+      }),
+    ).toEqual({ phase: "error" });
   });
 });
 
@@ -1204,14 +1217,82 @@ describe("CANCELLATION_COMMIT_STATUS_TIMEOUT_MS", () => {
   });
 });
 
-describe("commitStatusCompletion", () => {
-  test("a finished non-failed pipeline is success", () => {
+const gateTargetUrl = "https://github.com/org/repo/pull/7";
+
+describe("commitStatusCompletion — gate mode (S4)", () => {
+  test("a finished review with blocking findings is failure, carrying the count", () => {
     expect(
       commitStatusCompletion({
         pipelineFinished: true,
         sessionFailed: false,
+        ciMode: "gate",
+        blockingCount: 2,
       }),
-    ).toBe("success");
+    ).toEqual({ phase: "failure", blockingCount: 2 });
+  });
+
+  test("clean and advisory-only reviews are success (blockingCount 0)", () => {
+    expect(
+      commitStatusCompletion({
+        pipelineFinished: true,
+        sessionFailed: false,
+        ciMode: "gate",
+        blockingCount: 0,
+      }),
+    ).toEqual({ phase: "success" });
+  });
+
+  test("a crash, a session failure, or a findings count it never built is error, never failure", () => {
+    expect(
+      commitStatusCompletion({
+        pipelineFinished: false,
+        sessionFailed: false,
+        ciMode: "gate",
+        blockingCount: 2,
+      }),
+    ).toEqual({ phase: "error" });
+    expect(
+      commitStatusCompletion({
+        pipelineFinished: true,
+        sessionFailed: true,
+        ciMode: "gate",
+        blockingCount: 2,
+      }),
+    ).toEqual({ phase: "error" });
+    // publishRunOutcome threw before the findings doc existed: the count is
+    // unknown, and a gate cannot call an unknown count clean.
+    expect(
+      commitStatusCompletion({
+        pipelineFinished: true,
+        sessionFailed: false,
+        ciMode: "gate",
+        blockingCount: null,
+      }),
+    ).toEqual({ phase: "error" });
+  });
+});
+
+describe("commitStatusCompletion — advisory mode keeps today's states", () => {
+  test("blocking findings still succeed in advisory", () => {
+    expect(
+      commitStatusCompletion({
+        pipelineFinished: true,
+        sessionFailed: false,
+        ciMode: "advisory",
+        blockingCount: 2,
+      }),
+    ).toEqual({ phase: "success" });
+  });
+
+  test("a finished non-failed pipeline is success, with an unknown count too", () => {
+    expect(
+      commitStatusCompletion({
+        pipelineFinished: true,
+        sessionFailed: false,
+        ciMode: "advisory",
+        blockingCount: null,
+      }),
+    ).toEqual({ phase: "success" });
   });
 
   test("sessionFailed and a crash before pipeline return are error", () => {
@@ -1219,14 +1300,87 @@ describe("commitStatusCompletion", () => {
       commitStatusCompletion({
         pipelineFinished: true,
         sessionFailed: true,
+        ciMode: "advisory",
+        blockingCount: 0,
       }),
-    ).toBe("error");
+    ).toEqual({ phase: "error" });
     expect(
       commitStatusCompletion({
         pipelineFinished: false,
         sessionFailed: false,
+        ciMode: "advisory",
+        blockingCount: null,
       }),
-    ).toBe("error");
+    ).toEqual({ phase: "error" });
+  });
+});
+
+describe("blockingCommitStatusRequest", () => {
+  test("is failure, names the count and the unlock, and fits GitHub's description", () => {
+    const request = blockingCommitStatusRequest({
+      blockingCount: 2,
+      targetUrl: gateTargetUrl,
+    });
+    expect(request).toEqual({
+      state: "failure",
+      context: COMMIT_STATUS_CONTEXT,
+      description:
+        "pr-hero: 2 blocking finding(s) — fix and push; /pr-hero review re-runs this head",
+      targetUrl: gateTargetUrl,
+    });
+    expect(request.description.length).toBeLessThanOrEqual(
+      COMMIT_STATUS_DESCRIPTION_MAX,
+    );
+  });
+});
+
+describe("skipCommitStatusRequest (S4 size and budget skips)", () => {
+  test("a size skip is failure and says the review was skipped and /pr-hero review reviews it anyway", () => {
+    const request = skipCommitStatusRequest({
+      kind: "size",
+      targetUrl: gateTargetUrl,
+    });
+    expect(request.state).toBe("failure");
+    expect(request.context).toBe(COMMIT_STATUS_CONTEXT);
+    expect(request.description).toContain("skipped");
+    expect(request.description).toContain("size gate");
+    expect(request.description).toContain("/pr-hero review reviews it anyway");
+    expect(request.description.length).toBeLessThanOrEqual(
+      COMMIT_STATUS_DESCRIPTION_MAX,
+    );
+  });
+
+  test("a budget skip is failure with the same unlock", () => {
+    const request = skipCommitStatusRequest({
+      kind: "budget",
+      targetUrl: gateTargetUrl,
+    });
+    expect(request.state).toBe("failure");
+    expect(request.description).toContain("skipped");
+    expect(request.description).toContain("CI budget");
+    expect(request.description).toContain("/pr-hero review reviews it anyway");
+    expect(request.description.length).toBeLessThanOrEqual(
+      COMMIT_STATUS_DESCRIPTION_MAX,
+    );
+  });
+});
+
+describe("resolveCiMode", () => {
+  test("a CI run with no explicit mode is gate", () => {
+    expect(resolveCiMode(undefined, true)).toBe("gate");
+  });
+
+  test("an explicit advisory stays advisory", () => {
+    expect(resolveCiMode("advisory", true)).toBe("advisory");
+  });
+
+  test("an explicit gate stays gate", () => {
+    expect(resolveCiMode("gate", true)).toBe("gate");
+  });
+
+  test("a local run is advisory whatever the flag says: today's posture", () => {
+    expect(resolveCiMode(undefined, false)).toBe("advisory");
+    expect(resolveCiMode("gate", false)).toBe("advisory");
   });
 });
 

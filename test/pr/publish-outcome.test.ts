@@ -55,7 +55,7 @@ import {
   type PublishRunOutcomeInput,
   publishRunOutcome,
 } from "#pr/publish-outcome";
-import type { SkillOutput } from "#review/findings";
+import type { Finding, SkillOutput } from "#review/findings";
 import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
 import { estimateCost } from "#review/report";
@@ -95,6 +95,29 @@ function baseSkillOutput(): SkillOutput {
     parity_hunter_fired: false,
     run_status: "complete",
   };
+}
+
+// Only `id`, `tier` and the render-facing scalars matter to the code under
+// test; the enum-valued fields are filled with the first legal-looking value
+// the renderer never branches on for these tests.
+function findingFixture(id: string, tier: "blocking" | "advisory"): Finding {
+  return {
+    id,
+    category: 1,
+    path: "src/a.ts",
+    line: 3,
+    severity: "WARNING",
+    evidence_class: "deterministic",
+    refuter_verdict: "corroborated",
+    causal_disposition: "introduced",
+    claim: `claim ${id}`,
+    proof_refs: [],
+    hunter: "reliability",
+    tier,
+    hops_used: 0,
+    hop_trail: [],
+    dedupe_key: `key-${id}`,
+  } as unknown as Finding;
 }
 
 function baseResult(
@@ -202,6 +225,8 @@ describe("publishRunOutcome", () => {
       estimate: estimateCost({ files: 1, insertions: 1, deletions: 0 }, 1),
       ciAdmissionLedger: null,
       onPosted,
+      onBlockingCount: () => {},
+      ciMode: "advisory",
       ...over,
     };
   }
@@ -255,6 +280,61 @@ describe("publishRunOutcome", () => {
   // Task item 3: the happy path's artifacts and return value are exactly
   // what reviewPr() reads afterwards (findings.json / report.md on disk,
   // exit code 0 with nothing posted and no CI ledger to settle).
+  // S4: the gate reads the blocking count from the same findings document the
+  // CI publish reads, so the sink must carry the tier:"blocking" count only.
+  test("onBlockingCount carries the blocking-tier count of the findings doc, not the advisory one", async () => {
+    const blockingCounts: number[] = [];
+    const exitCode = await publishRunOutcome(
+      baseInput({
+        result: baseResult({
+          skillOutput: {
+            ...baseSkillOutput(),
+            findings: [
+              findingFixture("F001", "blocking"),
+              findingFixture("F002", "blocking"),
+              findingFixture("F003", "advisory"),
+            ],
+          },
+        }),
+        onBlockingCount: (count) => {
+          blockingCounts.push(count);
+        },
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(blockingCounts).toEqual([2]);
+  });
+
+  // S4, report artifact chain: publishRunOutcome -> writeRunReport -> report.md.
+  // The mode this run resolved is the mode its report.md closing note names.
+  test("a CI gate run's report.md closing note backs the required status, and never disclaims a merge gate", async () => {
+    await publishRunOutcome(baseInput({ isCi: true, ciMode: "gate" }));
+    const report = readFileSync(path.join(runDir, "report.md"), "utf8");
+    expect(report).toContain(
+      "This report backs the pr-hero commit status, the required check in gate mode",
+    );
+    expect(report).not.toContain("not a merge gate");
+  });
+
+  test("an advisory CI run's report.md keeps today's closing note", async () => {
+    await publishRunOutcome(baseInput({ isCi: true, ciMode: "advisory" }));
+    const report = readFileSync(path.join(runDir, "report.md"), "utf8");
+    expect(report).toContain(
+      "This is an assistant report, not a merge gate: every line above is a claim to verify",
+    );
+  });
+
+  // S4, step summary chain: publishRunOutcome -> publishCiReviewIfEligible ->
+  // planCiReview -> renderStepSummary -> $GITHUB_STEP_SUMMARY.
+  test("a CI gate run's step summary carries the gate footer", async () => {
+    const summaryPath = path.join(runDir, "step-summary.md");
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    await publishRunOutcome(baseInput({ isCi: true, ciMode: "gate" }));
+    expect(readFileSync(summaryPath, "utf8")).toContain(
+      "Assistant report backing the pr-hero commit status, the required check in gate mode.</sub>",
+    );
+  });
+
   test("happy path: writes findings.json and report.md, returns postingExitCode(null)", async () => {
     const exitCode = await publishRunOutcome(baseInput());
     expect(exitCode).toBe(0);

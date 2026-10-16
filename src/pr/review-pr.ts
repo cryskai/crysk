@@ -53,7 +53,7 @@ import {
   fetchPrReviewComments,
   ghPrFiles,
 } from "#pr/pr";
-import { createPrRunDir } from "#pr/preflight";
+import { createPrRunDir, resolveCiMode } from "#pr/preflight";
 import { publishRunOutcome } from "#pr/publish-outcome";
 import { resolveEagerLocalIgnore, resolvePrFetchAndRange } from "#pr/range";
 import {
@@ -120,6 +120,9 @@ export async function reviewPr(
   const step1 = await resolvePrRunOptions(options, prArg);
   options = step1.options;
   const { operatorRoot, prNumber, home, isCi, loaded, config, summary } = step1;
+  // S4: the run's one CI-mode resolution. Every gate, skip, status, comment
+  // and summary below takes this value; nothing re-resolves it.
+  const ciMode = resolveCiMode(options.ciMode, isCi);
   // The eager, non-CI-only `.prheroignore` read (O-8). See
   // resolveEagerLocalIgnore (src/pr/range.ts) for the full rationale — under
   // CI this stays `undefined` on purpose; the CI read instead needs the
@@ -162,6 +165,7 @@ export async function reviewPr(
     headSha: target.headSha,
     config,
     isCi,
+    ciMode,
     options,
   });
   if (ciAdmissionGate.exitCode !== undefined) return ciAdmissionGate.exitCode;
@@ -327,6 +331,7 @@ export async function reviewPr(
         prNumber,
         maxChangedLines: gateConfig.maxChangedLines,
         maxChangedFiles: gateConfig.maxChangedFiles,
+        ciMode,
       });
       if (sizePlan !== null) {
         await settleCiGateSkip(
@@ -342,6 +347,8 @@ export async function reviewPr(
           plan: sizePlan,
           noticeMessage:
             "pr-hero review skipped — diff exceeds the configured size gate",
+          ciMode,
+          headSha,
         });
       }
     }
@@ -441,6 +448,7 @@ export async function reviewPr(
       summary,
       loaded,
       isCi,
+      ciMode,
       ciBudgetCeiling,
       ciAdmissionLedger,
       skipDiscovery,
@@ -462,6 +470,9 @@ export async function reviewPr(
 
     let result: PipelineResult | undefined;
     let posted: InlinePostOutcome | null = null;
+    // S4: written by publishRunOutcome's onBlockingCount sink, read by the
+    // commit-status finally. Null until the findings doc exists.
+    let blockingCount: number | null = null;
     try {
       // 8-10 — the review root, its own codegraph index, and the MCP
       // registry the hunters read. See setupPrWorktree
@@ -637,10 +648,14 @@ export async function reviewPr(
         gitDirOwner,
         worktreePath,
         isCi,
+        ciMode,
         estimate,
         ciAdmissionLedger,
         onPosted: (outcome) => {
           posted = outcome;
+        },
+        onBlockingCount: (count) => {
+          blockingCount = count;
         },
       });
     } finally {
@@ -655,6 +670,8 @@ export async function reviewPr(
         headSha,
         statusTargetUrl,
         ciAdmissionLedger,
+        ciMode,
+        blockingCount,
       });
     }
   } finally {

@@ -8,8 +8,17 @@
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import { settleCiAdmissionLedger } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
-import { commitStatusCompletion, commitStatusRequest } from "#pr/preflight";
-import { releaseCommitStatusLock, tryPublishCommitStatus } from "#pr/status";
+import {
+  blockingCommitStatusRequest,
+  type CiMode,
+  commitStatusCompletion,
+  commitStatusRequest,
+} from "#pr/preflight";
+import {
+  publishFinalCommitStatus,
+  releaseCommitStatusLock,
+  tryPublishCommitStatus,
+} from "#pr/status";
 import type { PipelineResult } from "#review/pipeline";
 import { runGc } from "#store/gc";
 import { releasePidLock } from "../home";
@@ -43,20 +52,25 @@ async function settleLedgerIfPending(
 }
 
 // The inner `finally`: the commit status must settle BEFORE the lock is
-// released, and the release must happen no matter which path — throw, early
-// return, or normal exit — got here. Do not wrap
-// tryPublishCommitStatus/releaseCommitStatusLock in their own try/finally
-// "for safety": today a throw from tryPublishCommitStatus skips the release,
-// and preserving that (not "fixing" it) is this function's job.
+// released, and the lock must be released on every path — throw, early
+// return, or normal exit. The release sits in a try/finally around the
+// write, so a gate-mode throw (S4, below) still releases it.
 //
-// `spawnFn` threads into tryPublishCommitStatus (status.ts's own seam,
-// invisible to production): this doubles the real `gh` boundary instead of
-// replacing tryPublishCommitStatus's swallow-errors behavior with a fake,
-// so a test can prove that behavior for real — a failed gh post still lets
-// this function release the lock and settle the ledger, exactly as a
-// successful one does. `settle` stays a whole-function seam (default: the
-// real settleCiAdmissionLedger): admission.ts is out of scope for this
-// slice and its ledger persist call has no spawnFn of its own.
+// Two write paths, one per mode. Advisory uses tryPublishCommitStatus, which
+// swallows a failed gh post: that is today's posture, and a failed write
+// there only logs. Gate uses publishFinalCommitStatus, which rethrows. The
+// status is the required check in gate, so a write that never landed must
+// fail the run, and the throw reaches the CLI's catch as exit 1 with an
+// `::error::` annotation. The throw skips the ledger settle below, and
+// finalizePrReviewRun (the outer finally) settles that reservation instead.
+//
+// `spawnFn` threads into the write (status.ts's own seam, invisible to
+// production), so a test can prove the real `gh` boundary: a failed gh post
+// still lets this function release the lock and settle the ledger in
+// advisory, and a gate write that really fails throws only after the release.
+// `settle` stays a whole-function seam (default: the real
+// settleCiAdmissionLedger): admission.ts is out of scope for this slice and
+// its ledger persist call has no spawnFn of its own.
 export async function settleCommitStatusAndLedger(input: {
   result: PipelineResult | undefined;
   posted: InlinePostOutcome | null;
@@ -64,28 +78,52 @@ export async function settleCommitStatusAndLedger(input: {
   headSha: string;
   statusTargetUrl: string | undefined;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
+  ciMode: CiMode;
+  // The blocking-tier count of the findings doc, or null when publishing never
+  // built one. Gate reads it; advisory ignores it.
+  blockingCount: number | null;
   spawnFn?: typeof Bun.spawn;
   settle?: typeof settleCiAdmissionLedger;
 }): Promise<void> {
-  const phase = commitStatusCompletion({
+  const completion = commitStatusCompletion({
     pipelineFinished: input.result !== undefined,
     sessionFailed: input.result?.sessionFailed === true,
+    ciMode: input.ciMode,
+    blockingCount: input.blockingCount,
   });
-  await tryPublishCommitStatus(
-    input.operatorRoot,
-    input.headSha,
-    commitStatusRequest({
-      phase,
-      posted: input.posted !== null,
-      targetUrl: input.statusTargetUrl,
-    }),
-    input.spawnFn,
-  );
-  // Settled, so nothing is held: the signal handlers must never post a
-  // second, contradicting status over the one just written. Released
-  // immediately after the settle so no path through this finally — throw,
-  // early return, or normal exit — can leave the lock standing.
-  releaseCommitStatusLock();
+  const request =
+    completion.phase === "failure"
+      ? blockingCommitStatusRequest({
+          blockingCount: completion.blockingCount,
+          targetUrl: input.statusTargetUrl,
+        })
+      : commitStatusRequest({
+          phase: completion.phase,
+          posted: input.posted !== null,
+          targetUrl: input.statusTargetUrl,
+        });
+  try {
+    if (input.ciMode === "gate") {
+      await publishFinalCommitStatus(
+        input.operatorRoot,
+        input.headSha,
+        request,
+        input.spawnFn,
+      );
+    } else {
+      await tryPublishCommitStatus(
+        input.operatorRoot,
+        input.headSha,
+        request,
+        input.spawnFn,
+      );
+    }
+  } finally {
+    // Settled, so nothing is held: the signal handlers must never post a
+    // second, contradicting status over the one just written. Released on
+    // every path, including a gate-mode throw above.
+    releaseCommitStatusLock();
+  }
   await settleLedgerIfPending(input.ciAdmissionLedger, input.settle);
 }
 

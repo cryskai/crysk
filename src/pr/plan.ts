@@ -29,7 +29,12 @@ import {
   settleCiGateSkip,
 } from "#pr/admission";
 import { ghRepoWebUrl } from "#pr/pr";
-import { commitStatusRequest, type PrTarget, prHtmlUrl } from "#pr/preflight";
+import {
+  type CiMode,
+  commitStatusRequest,
+  type PrTarget,
+  prHtmlUrl,
+} from "#pr/preflight";
 import { holdCommitStatusLock, tryPublishCommitStatus } from "#pr/status";
 import type { buildPhaseBQueue, PreparedDiscovery } from "#rereview/prepare";
 import {
@@ -96,6 +101,9 @@ export async function resolvePrPlanAndConfirm(params: {
   summary: LoadedRunConfig["summary"];
   loaded: LoadedRunConfig["loaded"];
   isCi: boolean;
+  // The one resolution of the run's CI mode (resolveCiMode, reviewPr). Passed
+  // down, never re-resolved here.
+  ciMode: CiMode;
   ciBudgetCeiling: { budgetUsd: number | undefined };
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
@@ -149,6 +157,7 @@ export async function resolvePrPlanAndConfirm(params: {
       budgetUsd: params.ciBudgetCeiling.budgetUsd,
       prNumber: params.prNumber,
       force: params.options.force,
+      ciMode: params.ciMode,
     });
     if (budgetPlan !== null) {
       await settleCiGateSkip(
@@ -164,6 +173,8 @@ export async function resolvePrPlanAndConfirm(params: {
         plan: budgetPlan,
         noticeMessage:
           "pr-hero review skipped — estimated cost exceeds the configured CI budget ceiling",
+        ciMode: params.ciMode,
+        headSha: params.headSha,
       });
       return { exitCode };
     }

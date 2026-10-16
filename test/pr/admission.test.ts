@@ -24,6 +24,7 @@ import {
   settleHeldAdmissionLedgerOnSignal,
 } from "#pr/admission";
 import type { repostMarkedPrComment } from "#pr/pr";
+import type { publishFinalCommitStatus } from "#pr/status";
 import { CliError } from "../../src/errors";
 
 const HEAD = "b".repeat(40);
@@ -260,6 +261,133 @@ describe("publishCiSkip: the outcome record", () => {
       }
     },
   );
+
+  // S4: in gate mode a size or budget skip is a red head, so the skip posts a
+  // failure status. Admission skips and manual-required post none in either
+  // mode: they are an open decision, not a verdict on the diff.
+  describe("commit status in gate mode (S4)", () => {
+    const STATUS_HEAD = "d".repeat(40);
+    let dir: string;
+    let saved: string | undefined;
+
+    beforeEach(() => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-status-"));
+      saved = process.env.PRHERO_OUTCOME_DIR;
+      process.env.PRHERO_OUTCOME_DIR = dir;
+    });
+
+    afterEach(() => {
+      restoreOutcomeDir(saved);
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    type StatusCall = { sha: string; state: string; description: string };
+
+    function recordingStatus(
+      calls: StatusCall[],
+      failWith?: Error,
+    ): typeof publishFinalCommitStatus {
+      return async (_root, sha, request) => {
+        calls.push({
+          sha,
+          state: request.state,
+          description: request.description,
+        });
+        if (failWith) throw failWith;
+      };
+    }
+
+    function gateInput(
+      status: Parameters<typeof ciGateSkipOutputs>[0],
+      postStatus: typeof publishFinalCommitStatus,
+      over: { ciMode?: "gate" | "advisory"; headSha?: string } = {},
+    ) {
+      return {
+        operatorRoot: "/unused",
+        prNumber: PR,
+        post: false,
+        isCi: true,
+        stepSummaryFlag: false,
+        plan: planFor(status),
+        noticeMessage: "pr-hero review skipped — fixture",
+        ciMode: "gate" as const,
+        headSha: STATUS_HEAD,
+        postStatus,
+        ...over,
+      };
+    }
+
+    test("a size skip in gate mode posts one failure status on the head, naming the unlock", async () => {
+      const calls: StatusCall[] = [];
+      const code = await publishCiSkip(
+        gateInput("skipped-size", recordingStatus(calls)),
+      );
+      expect(code).toBe(0);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.sha).toBe(STATUS_HEAD);
+      expect(calls[0]?.state).toBe("failure");
+      expect(calls[0]?.description).toContain("size gate");
+      expect(calls[0]?.description).toContain(
+        "/pr-hero review reviews it anyway",
+      );
+    });
+
+    test("a budget skip in gate mode posts failure too", async () => {
+      const calls: StatusCall[] = [];
+      await publishCiSkip(gateInput("skipped-budget", recordingStatus(calls)));
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.state).toBe("failure");
+      expect(calls[0]?.description).toContain("CI budget");
+    });
+
+    test("advisory mode posts no skip status, as today", async () => {
+      const calls: StatusCall[] = [];
+      await publishCiSkip(
+        gateInput("skipped-size", recordingStatus(calls), {
+          ciMode: "advisory",
+        }),
+      );
+      expect(calls).toEqual([]);
+    });
+
+    test("an admission skip (coverage) in gate mode posts no status: an open decision", async () => {
+      const calls: StatusCall[] = [];
+      await publishCiSkip(
+        gateInput("skipped-coverage", recordingStatus(calls)),
+      );
+      expect(calls).toEqual([]);
+    });
+
+    test("manual-required in gate mode posts no status", async () => {
+      const calls: StatusCall[] = [];
+      await publishCiSkip(gateInput("manual-required", recordingStatus(calls)));
+      expect(calls).toEqual([]);
+    });
+
+    test("a size skip with no known head posts no status, even in gate mode", async () => {
+      const calls: StatusCall[] = [];
+      await publishCiSkip(
+        gateInput("skipped-size", recordingStatus(calls), {
+          headSha: undefined,
+        }),
+      );
+      expect(calls).toEqual([]);
+    });
+
+    test("a failed status write in gate mode fails loud and leaves no skipped record", async () => {
+      const calls: StatusCall[] = [];
+      const failure = new CliError("commit status write failed");
+      await expect(
+        publishCiSkip(
+          gateInput("skipped-size", recordingStatus(calls, failure)),
+        ),
+      ).rejects.toBe(failure);
+      expect(calls).toHaveLength(1);
+      // The record claims the skip reached the PR. The status is part of that
+      // claim, so a status that did not land must not leave one behind.
+      expect(existsSync(path.join(dir, CLI_RECORD_FILE))).toBe(false);
+    });
+  });
 
   // WHY the order: the skipped record tells the publisher the skip reached the
   // PR. Written before the repost, a notice that then failed would still read

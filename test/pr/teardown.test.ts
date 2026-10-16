@@ -37,6 +37,7 @@ import {
 } from "#pr/status";
 import { finalizePrReviewRun, settleCommitStatusAndLedger } from "#pr/teardown";
 import type { PipelineResult } from "#review/pipeline";
+import { CliError } from "../../src/errors";
 
 const HEAD = "a".repeat(40);
 const POLICY_HASH = "abc123def4567890";
@@ -210,6 +211,8 @@ describe("settleCommitStatusAndLedger — commit status matrix", () => {
       statusTargetUrl: "https://runs.example/1",
       ciAdmissionLedger: null,
       spawnFn,
+      ciMode: "advisory",
+      blockingCount: null,
     });
     expect(calls).toHaveLength(1);
     const flags = parseStatusFlags(calls[0] as string[]);
@@ -243,6 +246,8 @@ describe("settleCommitStatusAndLedger — commit status lock lifecycle", () => {
       statusTargetUrl: undefined,
       ciAdmissionLedger: null,
       spawnFn,
+      ciMode: "advisory",
+      blockingCount: null,
     });
     expect(lockDuringPost).not.toBeNull();
     expect(heldCommitStatusLock()).toBeNull();
@@ -265,12 +270,104 @@ describe("settleCommitStatusAndLedger — commit status lock lifecycle", () => {
       ciAdmissionLedger: ledger,
       spawnFn,
       settle: fakeSettle,
+      ciMode: "advisory",
+      blockingCount: null,
     });
     // gh was really attempted (and really failed) — this is not a no-op.
     expect(calls.length).toBeGreaterThan(0);
     expect(heldCommitStatusLock()).toBeNull();
     expect(ledger.record.status).toBe("failed");
     expect(ledger.record.decisionReason).toBe(SETTLED_REASON);
+  });
+});
+
+describe("settleCommitStatusAndLedger — gate mode (S4)", () => {
+  const BLOCKING_DESCRIPTION =
+    "pr-hero: 2 blocking finding(s) — fix and push; /pr-hero review re-runs this head";
+
+  test.each([
+    [
+      "blocking findings are failure, with the count and the unlock",
+      pipelineResult(false),
+      2,
+      { state: "failure", description: BLOCKING_DESCRIPTION },
+    ],
+    [
+      "clean is success",
+      pipelineResult(false),
+      0,
+      { state: "success", description: "review complete" },
+    ],
+    [
+      "a crash is error even with blocking findings",
+      pipelineResult(true),
+      2,
+      { state: "error", description: "review did not finish" },
+    ],
+    [
+      "an unknown count is error, never a clean success",
+      pipelineResult(false),
+      null,
+      { state: "error", description: "review did not finish" },
+    ],
+  ] as const)("%s", async (_name, result, blockingCount, expected) => {
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result,
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: "https://runs.example/1",
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "gate",
+      blockingCount,
+    });
+    expect(calls).toHaveLength(1);
+    expect(parseStatusFlags(calls[0] as string[])).toEqual({
+      state: expected.state,
+      context: COMMIT_STATUS_CONTEXT,
+      description: expected.description,
+      target_url: "https://runs.example/1",
+    });
+  });
+
+  test("a failed final write throws a CliError, still releases the lock, and leaves the ledger for the outer finally", async () => {
+    holdCommitStatusLock({
+      operatorRoot: "/repo",
+      sha: HEAD,
+      targetUrl: undefined,
+    });
+    const { spawnFn, calls } = makeStatusSpawn({ fail: true });
+    const ledger = ledgerState("reserved");
+    let thrown: unknown;
+    try {
+      await settleCommitStatusAndLedger({
+        result: pipelineResult(false),
+        posted: null,
+        operatorRoot: "/repo",
+        headSha: HEAD,
+        statusTargetUrl: undefined,
+        ciAdmissionLedger: ledger,
+        spawnFn,
+        settle: fakeSettle,
+        ciMode: "gate",
+        blockingCount: 0,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    // gh was really attempted and really failed: the write did not land.
+    expect(calls.length).toBeGreaterThan(0);
+    // CliError is what the CLI turns into exit 1 and the `::error::` annotation.
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as Error).message).toContain(
+      "commit status (success) was not written",
+    );
+    expect(heldCommitStatusLock()).toBeNull();
+    // The inner finally throws before its ledger settle; finalizePrReviewRun
+    // (the outer finally) is the one that settles a pending reservation.
+    expect(ledger.record.status).toBe("reserved");
   });
 });
 
@@ -304,6 +401,8 @@ describe("settleCommitStatusAndLedger — ledger settlement guard", () => {
         ciAdmissionLedger: ledger,
         spawnFn,
         settle: fakeSettle,
+        ciMode: "advisory",
+        blockingCount: null,
       });
       expect(ledger.record.status).toBe(expectedStatus);
       expect(ledger.record.decisionReason).toBe(expectedReason);
@@ -324,6 +423,8 @@ describe("settleCommitStatusAndLedger — ledger settlement guard", () => {
       settle: async () => {
         calls.push(1);
       },
+      ciMode: "advisory",
+      blockingCount: null,
     });
     expect(calls).toEqual([]);
   });

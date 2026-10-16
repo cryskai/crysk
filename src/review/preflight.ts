@@ -241,6 +241,11 @@ export interface CliOptions {
   // (on)", so `--step-summary` and `--no-step-summary` stay distinguishable
   // from "nobody said".
   stepSummary?: boolean;
+  // S4: the commit-status gate for a `review --ci` run, required at parse time
+  // like budgetUsd. `gate` (the CI default) turns the pr-hero commit status red
+  // on blocking findings, a size or budget skip, and a crash; `advisory` keeps
+  // today's posture. Unset means the run resolves it (resolveCiMode, pr/preflight).
+  ciMode?: "gate" | "advisory";
 }
 
 // design.md 3.1's literal formula: Boolean(GITHUB_ACTIONS || CI || --ci).
@@ -512,6 +517,12 @@ Options:
   --max-changed-files <n>
                       Size gate: same, on the effective changed-FILE count.
                       Default ${DEFAULT_SIZE_GATE.maxChangedFiles}; 0 disables the limit
+  --ci-mode <gate|advisory>
+                      With review --ci only. gate (the default): the
+                      pr-hero commit status is failure on blocking findings
+                      and on a size or budget skip, and error on a crash.
+                      advisory: the status stays success whatever the
+                      findings, as before
   --force             Review even when CI would skip: the size gate, the
                       review-policy admission rules, and the budget ceiling.
                       On GitHub, comment /pr-hero review on the PR to pass
@@ -555,6 +566,7 @@ const VALUE_FLAGS = new Set([
   "--max-changed-lines",
   "--max-changed-files",
   "--budget-usd",
+  "--ci-mode",
   "--finding",
   "--tag",
   "--body-file",
@@ -956,6 +968,11 @@ export function parseArgs(argv: string[]): ParsedCli {
   ) {
     throw new CliUsageError("--budget-usd only applies with review --ci");
   }
+  // S4: the gate mode is a review reading of --ci, like budgetUsd. Without
+  // it the flag would name a mode that never runs.
+  if (options.ciMode !== undefined && !(options.ci && command === "review")) {
+    throw new CliUsageError("--ci-mode only applies with review --ci");
+  }
   if (
     options.stepSummary !== undefined &&
     !(options.ci && command === "review")
@@ -1268,6 +1285,15 @@ function applyValueFlag(
         throw new CliUsageError(`--budget-usd must be a number, got: ${value}`);
       }
       options.budgetUsd = parsed;
+      return;
+    }
+    case "--ci-mode": {
+      if (value !== "gate" && value !== "advisory") {
+        throw new CliUsageError(
+          `--ci-mode must be gate or advisory, got: ${value}`,
+        );
+      }
+      options.ciMode = value;
       return;
     }
     case "--finding":

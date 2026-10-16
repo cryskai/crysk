@@ -756,7 +756,26 @@ export const CANCELLATION_COMMIT_STATUS_TIMEOUT_MS = 5_000;
 // GitHub's commit-status description is a short field (historically 140).
 export const COMMIT_STATUS_DESCRIPTION_MAX = 140;
 
-export type CommitStatusState = "pending" | "success" | "error";
+export type CommitStatusState = "pending" | "success" | "failure" | "error";
+
+// S4. `gate` (the CI default): the pr-hero commit status, which is the
+// required check, goes red on blocking findings, a size or budget skip, and a
+// crash. `advisory`: today's posture, a finished review is always green. Only
+// CI runs have a mode; a local run is always advisory (see resolveCiMode).
+export type CiMode = "gate" | "advisory";
+
+// The mode a run actually uses. Local runs are advisory whatever the flag
+// says: the gate is the CI surface, and a local `review --pr` that posted
+// `failure` would turn a required check red for a reason its operator did not
+// ask for. `ciMode` is undefined when --ci-mode was not given; gate is the
+// default for CI.
+export function resolveCiMode(
+  ciMode: CiMode | undefined,
+  isCi: boolean,
+): CiMode {
+  if (!isCi) return "advisory";
+  return ciMode ?? "gate";
+}
 
 export interface CommitStatusFact {
   state: string;
@@ -778,8 +797,9 @@ function clipStatusDescription(text: string): string {
 
 // `posted` only changes the success description: "review posted" when this
 // run published a comment, "review complete" when it did not (--post off,
-// or posting never ran). Never `failure`: a blocking finding is a claim in
-// the report, not a red CI check, and this engine is not a merge gate.
+// or posting never ran). This is the advisory vocabulary and the crash/pending
+// vocabulary: it never builds `failure`. A blocking finding turns red only
+// through blockingCommitStatusRequest, and only in gate mode.
 export function commitStatusRequest(input: {
   phase: "pending" | "success" | "error";
   posted: boolean;
@@ -797,6 +817,45 @@ export function commitStatusRequest(input: {
     state: input.phase === "pending" ? "pending" : input.phase,
     context: COMMIT_STATUS_CONTEXT,
     description: clipStatusDescription(description),
+    targetUrl: input.targetUrl,
+  };
+}
+
+// S4, gate mode: a finished review with blocking findings. The description
+// names the unlock, but `/pr-hero review` alone re-reviews this same head: a
+// head whose blocking findings are still there stays red. The honest unlock is
+// a fix and a push, which runs a new review on the new head.
+export function blockingCommitStatusRequest(input: {
+  blockingCount: number;
+  targetUrl: string | undefined;
+}): CommitStatusRequest {
+  return {
+    state: "failure",
+    context: COMMIT_STATUS_CONTEXT,
+    description: clipStatusDescription(
+      `pr-hero: ${input.blockingCount} blocking finding(s) — fix and push; /pr-hero review re-runs this head`,
+    ),
+    targetUrl: input.targetUrl,
+  };
+}
+
+// S4, gate mode: a size or budget skip is red, so an unreviewed head cannot
+// read as a clean one. `/pr-hero review` force-runs the review past both
+// gates, which is the unlock the description names.
+export function skipCommitStatusRequest(input: {
+  kind: "size" | "budget";
+  targetUrl: string | undefined;
+}): CommitStatusRequest {
+  const reason =
+    input.kind === "size"
+      ? "diff over the size gate"
+      : "estimated cost over the CI budget";
+  return {
+    state: "failure",
+    context: COMMIT_STATUS_CONTEXT,
+    description: clipStatusDescription(
+      `pr-hero skipped the review: ${reason}. /pr-hero review reviews it anyway`,
+    ),
     targetUrl: input.targetUrl,
   };
 }
@@ -834,15 +893,33 @@ export function settleRequestForCancellation(
   };
 }
 
-// The finally-block matrix: a finished pipeline that is not sessionFailed
-// is success even if --post threw (the review ran; the comment is a
-// separate write). Anything else — crash before pipeline return, or every
-// hunter dead — is error. Never inferred from findings.
+// The finally-block matrix. A finished pipeline that is not sessionFailed is
+// success even if --post threw (the review ran; the comment is a separate
+// write). Anything else — crash before pipeline return, or every hunter dead —
+// is error in both modes.
+//
+// S4 adds one red verdict on top, gate only: a finished review with blocking
+// findings is failure, and the count rides along for the description. Advisory
+// never reads the count, so it keeps the two-state matrix exactly. An unknown
+// count (publishRunOutcome threw before the findings doc existed) is error in
+// gate: a gate cannot call a review it never read clean.
+export type CommitStatusCompletion =
+  | { phase: "success" | "error" }
+  | { phase: "failure"; blockingCount: number };
+
 export function commitStatusCompletion(input: {
   pipelineFinished: boolean;
   sessionFailed: boolean;
-}): "success" | "error" {
-  return input.pipelineFinished && !input.sessionFailed ? "success" : "error";
+  ciMode: CiMode;
+  blockingCount: number | null;
+}): CommitStatusCompletion {
+  if (!input.pipelineFinished || input.sessionFailed) return { phase: "error" };
+  if (input.ciMode === "advisory") return { phase: "success" };
+  if (input.blockingCount === null) return { phase: "error" };
+  if (input.blockingCount > 0) {
+    return { phase: "failure", blockingCount: input.blockingCount };
+  }
+  return { phase: "success" };
 }
 
 export function prHtmlUrl(

@@ -22,6 +22,7 @@ import {
   appendStepSummary,
   formatWorkflowCommand,
 } from "#ci/reporter";
+import type { CiMode } from "#pr/preflight";
 import type { Finding } from "#review/findings";
 import type { PrCommentDelta } from "#review/report";
 import { log } from "#ui/primitives";
@@ -39,6 +40,9 @@ export async function publishCiReviewIfEligible(input: {
   delta: PrCommentDelta | undefined;
   runDir: string;
   stepSummaryFlag: boolean | undefined;
+  // S4: the mode this run resolved (resolveCiMode, reviewPr). It names the
+  // step summary's footer, and nothing else in this function reads it.
+  ciMode: CiMode;
 }): Promise<void> {
   if (!shouldPublishCiReview(input.isCi, input.sessionFailed)) return;
 
@@ -52,6 +56,7 @@ export async function publishCiReviewIfEligible(input: {
     ...(input.webUrl === undefined ? {} : { repoWebUrl: input.webUrl }),
     ...(input.delta === undefined ? {} : { delta: input.delta }),
     runDir: input.runDir,
+    ciMode: input.ciMode,
   });
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (shouldWriteStepSummary(input.isCi, input.stepSummaryFlag, summaryPath)) {

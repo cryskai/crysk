@@ -219,6 +219,7 @@ describe("evaluateCiAdmissionGate — early no-op guards", () => {
   test("a dry run touches no gh call and resolves the default policy", async () => {
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -249,6 +250,7 @@ describe("evaluateCiAdmissionGate — early no-op guards", () => {
   test("outside CI, the gate is a pure pass-through", async () => {
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -292,6 +294,7 @@ describe("evaluateCiAdmissionGate — early no-op guards", () => {
     const recordCalls: unknown[] = [];
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -323,6 +326,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -357,6 +361,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -401,6 +406,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -447,6 +453,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -474,6 +481,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
     const recordCalls: unknown[] = [];
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -560,6 +568,7 @@ describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an atte
       },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_C,
@@ -659,6 +668,7 @@ describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an atte
       },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_C,
@@ -773,6 +783,7 @@ describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an atte
       },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_C,

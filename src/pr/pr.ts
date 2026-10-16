@@ -72,6 +72,7 @@ import {
 } from "./inline";
 import {
   buildComparisonJson,
+  type CiMode,
   COMMIT_STATUS_CONTEXT,
   COMMIT_STATUS_TIMEOUT_MS,
   type CommitStatusFact,
@@ -2546,6 +2547,9 @@ export async function postInlineFindings(input: {
   // Watchdog for the collapse loop's gh calls. A seam, like `spawnFn`: no
   // production caller sets it, the tests drive the timeout path with it.
   ghTimeoutMs?: number;
+  // S4: the CI mode the summary comment's disclaimer follows. Omitted is
+  // advisory: the local `post` command, and every caller that never sets it.
+  ciMode?: CiMode;
   // Set ONLY by `post --from` (`runPostCommand`). A PR that already carries a
   // pr-hero summary is by definition a re-review, so publishing it without a
   // `rereview` block renders the absence-matcher delta ("N resolved") and no
@@ -2679,6 +2683,7 @@ export async function postInlineFindings(input: {
       outside,
       moved,
       urls,
+      input.ciMode,
     );
     if (framing === undefined) {
       const counts = tierCountsFromFindings(
@@ -3052,6 +3057,9 @@ export async function postInlineIfEligible(input: {
     claim: string;
     locs: readonly string[];
   }[];
+  // S4: the CI mode the summary's footer names. Omitted is advisory, which is
+  // what the local `post` command gets.
+  ciMode?: CiMode;
 }): Promise<InlinePostOutcome | null> {
   if (input.sessionFailed) {
     log(input.skippedReason);
