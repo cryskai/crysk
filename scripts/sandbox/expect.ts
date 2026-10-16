@@ -17,6 +17,9 @@ export type Check =
   // `lead` (optional) names the owner the outcome's comment must open with.
   | { kind: "outcome"; code: string; lead?: string }
   | { kind: "no-outcome" }
+  // T2e: this run posted no outcome comment. Unlike no-outcome it reads the outcomes
+  // this run created (postedByThisRun), so an outcome an earlier run left stays out of it.
+  | { kind: "no-own-outcome" }
   | { kind: "status"; state: string; descriptionStartsWith?: string }
   // S4: the head's status is failure when the PR shows a blocking finding
   // comment, and success when it shows none. For a review whose findings vary.
@@ -37,9 +40,12 @@ export type Check =
   // T2e: the triggering comment carries this reaction. A refused or near-miss comment
   // gets its reaction and no text reply, so the reaction is the only trace it leaves.
   | { kind: "reaction"; content: string }
-  // T2e: the run's review step did not run: it is skipped, or absent. A near-miss
-  // comment's run reviews nothing, so its step is skipped, and no review is new.
-  | { kind: "no-review-step" };
+  // T2e: this run left no review evidence of its own: no `pr-hero-run-*` artifact on
+  // this run, and no skip marker it posted after its trigger. A near miss runs nothing,
+  // so it leaves neither. WHY not the review step: the composite `Run pr-hero` step has
+  // no `if:` and always concludes, so a near miss's step reads success and its
+  // conclusion cannot show that no review ran. This is the inverse of own-evidence.
+  | { kind: "no-run-evidence" };
 
 export interface CheckResult {
   label: string;
@@ -65,6 +71,8 @@ export function describeCheck(check: Check): string {
         : `outcome comment with code ${check.code}, owner lead ${check.lead}`;
     case "no-outcome":
       return "no outcome comment";
+    case "no-own-outcome":
+      return "this run posted no outcome comment";
     case "status":
       return check.descriptionStartsWith === undefined
         ? `status is ${check.state}`
@@ -85,8 +93,8 @@ export function describeCheck(check: Check): string {
       return "an override comment this run posted on this head";
     case "reaction":
       return `the triggering comment has the ${check.content} reaction`;
-    case "no-review-step":
-      return "the run's review step did not run";
+    case "no-run-evidence":
+      return "the run left no review evidence of its own";
   }
 }
 
@@ -141,6 +149,15 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         .filter((c) => c.kind === "outcome")
         .map((c) => c.code ?? "no-code");
       return pass(codes.length === 0, `got ${codes.join(", ")}`);
+    }
+    case "no-own-outcome": {
+      // Outcome comments are issue comments, which collect() stamps with created_at, so
+      // postedByThisRun can read each one. A phase with no trigger has no window: every
+      // outcome counts there, as no-outcome counts it.
+      const own = obs.comments
+        .filter((c) => c.kind === "outcome" && postedByThisRun(c, obs))
+        .map((c) => c.code ?? "no-code");
+      return pass(own.length === 0, `this run posted ${own.join(", ")}`);
     }
     case "status": {
       const status = obs.status;
@@ -277,17 +294,22 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         `got ${seen.join(", ") || "no reaction"}`,
       );
     }
-    case "no-review-step": {
-      // A run that reviewed has its review step succeed, so a skipped one (or none)
-      // is a run that reviewed nothing. A missing run is not a pass.
+    case "no-run-evidence": {
+      // A missing run is not a pass: collect() reports no artifacts for it, so an
+      // unread run would otherwise look like one that reviewed nothing.
       if (obs.run === undefined) return pass(false, "no run was found");
-      const step = obs.run.steps.find((s) => s.name === RUN_STEP_NAME);
-      const conclusion =
-        step === undefined ? "no step" : String(step.conclusion);
-      return pass(
-        step === undefined || step.conclusion === "skipped",
-        `got ${conclusion} for ${RUN_STEP_NAME}`,
+      // Artifacts are read per run id, so a `pr-hero-run-` artifact here is this run's.
+      const uploaded = obs.artifacts.filter((a) =>
+        a.startsWith("pr-hero-run-"),
       );
+      if (uploaded.length > 0) {
+        return pass(false, `this run uploaded ${uploaded.join(", ")}`);
+      }
+      // postedByThisRun is the same window own-evidence reads a skip marker through.
+      const skipped = obs.comments.some(
+        (c) => c.kind === "skip" && postedByThisRun(c, obs),
+      );
+      return pass(!skipped, "this run posted a skip marker");
     }
   }
 }

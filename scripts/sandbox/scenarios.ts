@@ -297,7 +297,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "near-miss",
     description:
-      "a /pr-hero review comment that is not the exact command runs no review: it gets the confused reaction, no new review step and no outcome comment (T2e)",
+      "a /pr-hero review comment that is not the exact command runs no review: it gets the confused reaction, no review evidence of its own and no outcome comment of its own (T2e)",
     phases: [
       {
         action: { kind: "open", variant: "normal" },
@@ -311,9 +311,10 @@ export const SCENARIOS: readonly Scenario[] = [
         checks: [
           { kind: "run-completed", event: "issue_comment" },
           { kind: "reaction", content: "confused" },
-          // The comment's own run: its review step is skipped, so no review is new.
-          { kind: "no-review-step" },
-          { kind: "no-outcome" },
+          // The comment's own run: it left no review evidence of its own. Phase 1's
+          // outcome, when it hunters-failed, stays on the PR: only this run's count.
+          { kind: "no-run-evidence" },
+          { kind: "no-own-outcome" },
         ],
       },
     ],

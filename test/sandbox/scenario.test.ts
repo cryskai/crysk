@@ -788,28 +788,47 @@ describe("same-head-rereview: the status check after a re-run depends on phase 1
 // T2e: the reaction on a command, read live through the rails, and the near miss that
 // runs nothing. The fake trigger answers each comment as src/ci/trigger.ts does.
 describe("T2e: the reactions and the near miss, end to end", () => {
-  test("near-miss exits 0: its comment run is confused, its review step is skipped, and the PR gets no outcome", async () => {
+  test("near-miss exits 0: its comment run is confused, its step concludes success with no review evidence, and the PR gets no outcome", async () => {
     const world = new FakeGithub({ ref: REF });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["near-miss"], OPTIONS)).toBe(0);
     for (const label of [
       "[2] issue_comment run completed",
       "[2] the triggering comment has the confused reaction",
-      "[2] the run's review step did not run",
-      "[2] no outcome comment",
+      "[2] the run left no review evidence of its own",
+      "[2] this run posted no outcome comment",
     ]) {
       expect(h.logs.some((l) => l.includes(`PASS  near-miss: ${label}`))).toBe(
         true,
       );
     }
-    // One comment run, and it reviewed nothing: no review artifact and no outcome.
+    // One comment run, and it reviewed nothing: its composite step still concludes
+    // success, as GitHub reports it, and it uploaded no review artifact and no outcome.
     const commentRuns = world.runs.filter((r) => r.event === "issue_comment");
     expect(commentRuns).toHaveLength(1);
-    expect(commentRuns[0]?.stepConclusion).toBe("skipped");
+    expect(commentRuns[0]?.stepConclusion).toBe("success");
     const prComments = [...world.comments.values()].flat().map((c) => c.body);
     expect(
       prComments.filter((b) => b.startsWith("<!-- pr-hero-outcome")),
     ).toEqual([]);
+  });
+
+  test("near-miss accepts a phase 1 that hunters-failed: the outcome it left is not this near miss's", async () => {
+    // Phase 1 is the only run the queue feeds: a near miss's outcome is forced to
+    // near-miss, so this run posts no outcome and the one phase 1 left stays on the PR.
+    const world = new FakeGithub({ ref: REF, runOutcomes: ["hunters-failed"] });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["near-miss"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        l.includes("PASS  near-miss: [2] this run posted no outcome comment"),
+      ),
+    ).toBe(true);
+    const pr = [...world.prs.values()][0];
+    const left = (world.comments.get(pr?.number ?? -1) ?? []).filter((c) =>
+      c.body.startsWith("<!-- pr-hero-outcome"),
+    );
+    expect(left).toHaveLength(1);
   });
 
   test("the comment's reactions are read once, as a GET through the rails, and only on the comment phase", async () => {

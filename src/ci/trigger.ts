@@ -821,11 +821,17 @@ type CommentReaction = "eyes" | "-1" | "confused";
 
 function react(
   deps: CiTriggerDeps,
-  input: Pick<CiTriggerInput, "eventName" | "repository" | "commentId">,
+  input: Pick<
+    CiTriggerInput,
+    "eventName" | "repository" | "commentId" | "runAttempt"
+  >,
   content: CommentReaction,
 ): void {
   if (input.eventName !== "issue_comment" || input.commentId === undefined)
     return;
+  // WHY only attempt 1 reacts: a re-run replays the comment event, so its reaction would
+  // stack on the one its first attempt left (👀 then 👎). The decision is unchanged.
+  if (input.runAttempt !== undefined && input.runAttempt > 1) return;
   const result = callGh(deps, [
     "api",
     "-X",

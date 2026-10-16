@@ -2184,15 +2184,15 @@ describe("the reaction on the triggering comment (T2e)", () => {
       routed(ok("write\n"), ok(HEAD_SHA)),
     ],
     [
-      "-1",
-      "an override on a re-run",
-      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "2" }),
-      routed(ok("write\n"), overrideHead(HEAD_SHA, false)),
-    ],
-    [
       "confused",
       "a near miss",
       commentEnv("/pr-hero review please"),
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "eyes",
+      "an accepted review on run attempt 1",
+      commentEnv("/pr-hero review", { GITHUB_RUN_ATTEMPT: "1" }),
       routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
     ],
   ])(
@@ -2202,6 +2202,56 @@ describe("the reaction on the triggering comment (T2e)", () => {
       expect(reactionCalls(run)).toEqual([reactionArgv(content)]);
     },
   );
+
+  // WHY only attempt 1 reacts: GitHub replays the comment event on a re-run, so a re-run
+  // would stack its own reaction on the comment its first attempt already answered (👀 and
+  // then 👎). The re-run's decision, notices and exit code are the same as attempt 1's.
+  test.each<[string, string, Record<string, string>, Answer]>([
+    [
+      "an accepted review",
+      "/pr-hero review",
+      { GITHUB_RUN_ATTEMPT: "2" },
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "a refused review",
+      "/pr-hero review",
+      { GITHUB_RUN_ATTEMPT: "2" },
+      routed(ok("read\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "a near miss",
+      "/pr-hero review please",
+      { GITHUB_RUN_ATTEMPT: "2" },
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+  ])(
+    "a re-run (attempt 2) of %s makes no reaction call, and keeps the decision of attempt 1",
+    (_label, body, attempt, answer) => {
+      const rerun = runShell(commentEnv(body, attempt), answer);
+      const first = runShell(
+        commentEnv(body, { GITHUB_RUN_ATTEMPT: "1" }),
+        answer,
+      );
+      expect(reactionCalls(rerun)).toEqual([]);
+      expect(rerun.exitCode).toBe(first.exitCode);
+      expect(rerun.outputs).toEqual(first.outputs);
+      expect(rerun.stdout).toBe(first.stdout);
+    },
+  );
+
+  test("an override re-run (attempt 2) is refused with its notice, and makes no reaction call", () => {
+    const run = runShell(
+      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "2" }),
+      routed(ok("write\n"), overrideHead(HEAD_SHA, false)),
+    );
+    expect(reactionCalls(run)).toEqual([]);
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs.run).toBe("false");
+    expect(run.stdout).toContain(
+      "an override applies to the head at the time of the comment; comment `/pr-hero override` again",
+    );
+  });
 
   test.each<[string, string]>([
     ["an empty id", ""],

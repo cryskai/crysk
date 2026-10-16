@@ -68,6 +68,9 @@ interface RunRow {
   // comment run started on that PR (checked against GitHub, pr-hero-sandbox).
   displayTitle: string;
   createdAt: string;
+  // A near miss's trigger decided it runs nothing, so its run uploads no artifact.
+  // Its step conclusion is success, as GitHub reports the composite step.
+  nearMiss?: true;
 }
 
 interface PrRow {
@@ -93,7 +96,8 @@ interface CommentRow {
 // `override` is a `/pr-hero override` comment run: the audit comment and a success
 // status naming the actor, and no report and no outcome (S8). `near-miss` is a
 // comment that starts like a command but is not one: its run's review step is
-// skipped, and it leaves nothing on the PR (T2e).
+// skipped inside a step that still concludes success, and it leaves nothing on the PR
+// (T2e).
 type Outcome =
   | "credential"
   | "routing"
@@ -374,12 +378,13 @@ export class FakeGithub {
       conclusion: stuck ? null : failed ? "failure" : "success",
       workflowName: WORKFLOW_NAME,
       url: `${REPO_URL}/actions/runs/${id}`,
-      // A near miss's review step is skipped, as the workflow's `if:` skips it: the
-      // trigger decided the comment runs nothing (T2e).
-      stepConclusion:
-        outcome === "near-miss" ? "skipped" : stepFails ? "failure" : "success",
+      // The composite `Run pr-hero` step is one step with no `if:`, so it concludes
+      // success even on a near miss, whose trigger skipped the steps inside it. GitHub
+      // reports it that way (T2e), so the fake must too.
+      stepConclusion: stepFails ? "failure" : "success",
       prNumber,
       reviewSha,
+      ...(outcome === "near-miss" ? { nearMiss: true as const } : {}),
     });
     if (stuck) {
       this.events.push(`run ${id} ${event} in_progress`);
@@ -683,7 +688,7 @@ export class FakeGithub {
       // A near miss reviewed nothing, so its run uploads no review artifact.
       const names =
         run === undefined ||
-        run.stepConclusion === "skipped" ||
+        run.nearMiss === true ||
         (run.event === "issue_comment" &&
           this.options.commentRunsLeaveNoArtifact)
           ? []
