@@ -52,6 +52,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "admission-ledger",
       "force-comment",
       "gates",
+      "outcome",
       "reporter",
       "review-admission",
       "review-policy",

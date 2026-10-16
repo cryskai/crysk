@@ -649,6 +649,566 @@ Three properties of the action's upload step are load-bearing:
 | `routing` | empty | Person-layer routing JSON (`config.routing` object). Wire from `vars.PRHERO_ROUTING` (quoted). See [OpenCode in CI](#opencode-in-ci). |
 | `opencode-auth` | empty | Whole OpenCode `auth.json` blob. Wire from `secrets.OPENCODE_AUTH_JSON`. Never echo. |
 
+## Error codes
+
+When the action stops with an error, the annotation and the job summary start with the owner, then say what is wrong, why, and the command that fixes it. The owner tells you whose fix it is: **Your configuration:** means a secret, a variable, a workflow permission or a repository file needs a change; **Provider `<name>`:** means the provider rejected, limited or failed the request; **pr-hero defect:** means pr-hero itself failed, and the fix reports it with the run URL; **Unclassified:** means pr-hero could not attribute the failure and says so instead of guessing. **Not reviewed:** is a notice for a run that a newer push superseded, not an error.
+
+### PRH-CRED-MISSING
+
+**Owner:** your configuration
+
+**What:** No credential for the {backend} route reached the action
+
+**Why:** pr-hero cannot authenticate, so it cannot review this PR
+
+**Fix:**
+
+Set one credential for the route you use:
+
+```bash
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+gh secret set ANTHROPIC_API_KEY
+opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+Dependabot PRs read Dependabot secrets, so set this one too:
+
+```bash
+gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+### PRH-CRED-UNUSABLE
+
+**Owner:** your configuration
+
+**What:** The {backend}/{provider} route for {step} has no usable credential ({detail})
+
+**Why:** the credential store does not hold what this route needs
+
+**Fix**, by failure class:
+
+#### `missing_provider_record`
+
+Add {provider} to the OpenCode store, then re-set the secret:
+
+```bash
+opencode auth login
+gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+#### `missing_subscription_record`
+
+On the Claude route (`backend` is `claude-code`, or no OpenCode backend):
+
+Log in again with `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`:
+
+```bash
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+```
+
+On the OpenCode route (`backend` is `opencode`):
+
+Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then re-set the secret:
+
+```bash
+opencode auth login
+gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+Or rename the provider in PRHERO_ROUTING.
+
+#### `malformed_payload`
+
+Check that the store is a JSON object:
+
+```bash
+jq -e 'type=="object"' ~/.local/share/opencode/auth.json
+```
+
+Then re-set the secret:
+
+```bash
+gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+#### `source_read_failed`
+
+Set the secret again:
+
+```bash
+gh secret set {secret}
+```
+
+#### `env-absent`
+
+Set the secret again:
+
+```bash
+gh secret set {secret}
+```
+
+### PRH-CRED-REJECTED
+
+**Owner:** your configuration
+
+**What:** provider {provider} rejected the credential in {secret}
+
+**Why:** it is expired, revoked, or a short-lived /login session token
+
+**Fix:**
+
+```bash
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Or, for OpenCode, re-export the auth store and re-set the secret:
+
+```bash
+gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/pr-hero review"
+```
+
+### PRH-ROUTING-MISSING
+
+**Owner:** your configuration
+
+**What:** OpenCode auth is set but PRHERO_ROUTING is empty, so the default Claude route is used
+
+**Why:** the run would fail later at the Claude credential check
+
+**Fix:**
+
+```bash
+gh variable set PRHERO_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"
+```
+
+### PRH-ROUTING-INVALID
+
+**Owner:** your configuration
+
+**What:** PRHERO_ROUTING is invalid: {detail}
+
+**Why:** pr-hero cannot tell which backend and model each agent should use
+
+**Fix:**
+
+Edit the JSON, then set it again:
+
+```bash
+gh variable set PRHERO_ROUTING --body "$(jq -c . routing.json)"
+```
+
+### PRH-ROUTE-UNRESOLVABLE
+
+**Owner:** your configuration
+
+**What:** Model routing for {step} has no usable route: {detail}
+
+**Why:** every agent needs exactly one backend, provider and model
+
+**Fix**, by reason:
+
+#### `unmapped`
+
+Add a `modelSnapshot` for this route to PRHERO_ROUTING.
+
+#### `ambiguous`
+
+Remove the duplicate mapping for this route from PRHERO_ROUTING.
+
+#### `spend-disabled`
+
+Enable spend for this route in PRHERO_ROUTING.
+
+#### `multiple-opencode-providers`
+
+Keep one OpenCode provider per review in PRHERO_ROUTING.
+
+### PRH-MODEL-UNAVAILABLE
+
+**Owner:** your configuration
+
+**What:** Provider {provider} does not serve the model configured for {step}
+
+**Why:** the routing names a model this provider does not offer
+
+**Fix:**
+
+Fix the `modelSnapshot` for this step in PRHERO_ROUTING.
+
+List the models this provider serves:
+
+```bash
+opencode models {provider}
+```
+
+### PRH-PROMPTSET-INVALID
+
+**Owner:** your configuration
+
+**What:** The prompt set is invalid: {detail}
+
+**Why:** an agent file or PRHERO_EXTRA_HUNTERS entry cannot be loaded
+
+**Fix:**
+
+Fix the file or `agents_dir`, then check for free:
+
+```bash
+pr-hero review --pr {pr} --dry-run
+```
+
+### PRH-GOTCHAS-MISSING
+
+**Owner:** your configuration
+
+**What:** .prhero/gotchas.md is missing or still the scaffold
+
+**Why:** reviews need real repository facts to be accurate
+
+**Fix:**
+
+Write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).
+
+### PRH-CONFIG-INVALID
+
+**Owner:** your configuration
+
+**What:** .prhero/config.json is invalid: {detail}
+
+**Why:** pr-hero refuses to guess repository settings
+
+**Fix:**
+
+Fix the file, then check it:
+
+```bash
+pr-hero review --pr {pr} --dry-run
+```
+
+### PRH-TOKEN-PERMISSION
+
+**Owner:** your configuration
+
+**What:** The workflow token lacks `{scope}: write`
+
+**Why:** pr-hero cannot post its result on the PR
+
+**Fix:**
+
+Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:
+
+```bash
+pr-hero ci init --force
+```
+
+### PRH-GITHUB-TOKEN-INVALID
+
+**Owner:** your configuration
+
+**What:** The github-token input is invalid
+
+**Why:** every GitHub API call is rejected
+
+**Fix:**
+
+Set `github-token: ${{ secrets.GITHUB_TOKEN }}` on the action step.
+
+### PRH-GITHUB-UNAVAILABLE
+
+**Owner:** provider
+
+**What:** the GitHub API failed (HTTP {detail})
+
+**Why** and **Fix**, by cause:
+
+#### `rate_limit`
+
+**What:** the GitHub API rate limit was reached
+
+**Why:** GitHub has throttled this token, so an immediate retry would fail the same way
+
+**Fix:**
+
+Wait for the limit to reset, then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+#### `server`
+
+**Why:** the failure happened on GitHub's side, and a retry may succeed
+
+**Fix:**
+
+Re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+### PRH-PR-UNRESOLVED
+
+**Owner:** your configuration
+
+**What:** pr-hero could not determine the pull request number or head
+
+**Why:** nothing can be posted on a PR it cannot identify
+
+**Fix:**
+
+Run from a pull_request or issue_comment event, or pass the `pr-number` input.
+
+### PRH-STATUS-WRITE-FAILED
+
+**Owner:** unclassified
+
+**What:** pr-hero could not write its commit status ({detail})
+
+**Why:** the required check has no result for this head without it
+
+**Fix:**
+
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, report it.
+
+#### `permission`
+
+**Owner:** your configuration
+
+**Why:** the required check has no result for this head without it
+
+**Fix:**
+
+Add `statuses: write` to the job's `permissions:`, or re-scaffold the workflow:
+
+```bash
+pr-hero ci init --force
+```
+
+#### `server`
+
+**Owner:** provider
+
+**Why:** the required check has no result for this head without it
+
+**Fix:**
+
+Re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+### PRH-RUNTIME-UNAVAILABLE
+
+**Owner:** pr-hero in the action, your configuration locally
+
+**What:** a runtime pr-hero depends on is unusable: {detail}
+
+#### `action`
+
+**Why:** the action installs this runtime itself, so this is a pr-hero defect
+
+**Fix:**
+
+Report it with this run:
+
+```bash
+gh issue create -R juanmaagd/pr-hero --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"
+```
+
+#### `local`
+
+**Why:** a required tool is missing from your environment
+
+**Fix:**
+
+Reconcile the pr-hero install:
+
+```bash
+pr-hero upgrade --reconcile
+```
+
+### PRH-INSTALL-FAILED
+
+**Owner:** unclassified
+
+**What:** The {step} step failed
+
+**Why:** a download or install step failed, and pr-hero cannot tell which external cause it was
+
+**Fix:**
+
+Re-run only the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, report it.
+
+### PRH-PROVIDER-LIMITED
+
+**Owner:** provider
+
+**What:** rate limit or quota reached
+
+**Why:** the provider has throttled this account or key, so an immediate retry would fail the same way
+
+**Fix:**
+
+Wait, or raise the quota, then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/pr-hero review"
+```
+
+### PRH-PROVIDER-UNAVAILABLE
+
+**Owner:** provider
+
+**What:** unreachable
+
+**Why:** the request did not complete, and the provider's outcome cannot be confirmed from here
+
+**Fix:**
+
+Re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+### PRH-PROVIDER-REFUSED
+
+**Owner:** provider
+
+**What:** the request was refused
+
+**Why:** the provider's safety system declined this input
+
+**Fix:**
+
+Ask for a new review once:
+
+```bash
+gh pr comment {pr} --body "/pr-hero review"
+```
+
+If it repeats, report it.
+
+### PRH-ENGINE-DEFECT
+
+**Owner:** pr-hero
+
+**What:** pr-hero hit an internal error ({detail}) in {step}
+
+**Why:** this is a defect in pr-hero, not in your configuration
+
+**Fix:**
+
+Report it, with this run:
+
+```bash
+gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"
+```
+
+### PRH-HUNTERS-FAILED
+
+**Owner:** unclassified
+
+**What:** Every review hunter failed in {step}: {detail}
+
+**Why:** no hunter returned a result, so there is no finding to report
+
+**Fix:**
+
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, report it.
+
+### PRH-UNCLASSIFIED
+
+**Owner:** unclassified
+
+**What:** pr-hero stopped at {step} and could not tell why
+
+**Why:** rather than guess, it reports this honestly
+
+**Fix:**
+
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, read the log and report it:
+
+```bash
+gh run view {runId} --log-failed
+```
+
+#### `github`
+
+**What:** GitHub returned {detail} at {step}, and pr-hero cannot tell whose fix it is
+
+**Why:** pr-hero does not map this GitHub status to an owner, so it does not guess
+
+**Fix:**
+
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, read the log and report it:
+
+```bash
+gh run view {runId} --log-failed
+```
+
+### PRH-CANCELLED
+
+**Owner:** unclassified
+
+**Shown as:** `Not reviewed:`, as a notice rather than an error
+
+**What:** The review was cancelled or superseded by a newer push
+
+**Why:** a newer run replaces this one, so this result would describe an outdated head
+
+**Fix:**
+
+Ask for a review of the current head:
+
+```bash
+gh pr comment {pr} --body "/pr-hero review"
+```
+
 ## Troubleshooting
 
 - **`pr-hero doctor`** locally reports whether `.github/workflows/pr-hero.yml` exists; inside Actions it
