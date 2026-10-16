@@ -859,7 +859,10 @@ describe("countableWorkflowHeads", () => {
     expect(countable.has(HEAD_A)).toBe(false);
   });
 
-  test.each(["cancelled", "yielded", "reserved"] as const)(
+  // `reserved` is deliberately absent: a reserved row does not prove the run
+  // spent nothing, so it is kept below (the provider-started settle is
+  // best-effort and the run may have reached the provider anyway).
+  test.each(["cancelled", "yielded"] as const)(
     "drops a head whose only ledger row is %s (spent nothing, like the gate skip)",
     (status) => {
       const countable = countableWorkflowHeads(
@@ -869,6 +872,38 @@ describe("countableWorkflowHeads", () => {
       expect(countable.has(HEAD_A)).toBe(false);
     },
   );
+
+  test("keeps a head whose only ledger row is reserved (provider-started write may have failed)", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [ledgerRow(HEAD_A, "reserved")]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
+
+  test("keeps a head with a reserved row next to a gate skip", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([
+        [
+          HEAD_A,
+          [ledgerRow(HEAD_A, "gate-skipped"), ledgerRow(HEAD_A, "reserved")],
+        ],
+      ]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
+
+  test("keeps a head whose only ledger row has a status this engine does not know", () => {
+    // Simulates a row written by a newer engine: the parser casts the status
+    // string through unchecked, so the allowlist must fail closed on it.
+    const unknownStatus = "some-future-status" as AdmissionRecord["status"];
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [ledgerRow(HEAD_A, unknownStatus)]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
 
   test("keeps a head that has no ledger row at all", () => {
     const countable = countableWorkflowHeads(new Set([HEAD_B]), new Map());

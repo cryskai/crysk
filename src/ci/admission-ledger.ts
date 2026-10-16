@@ -68,6 +68,17 @@ const TERMINAL_BUDGET_STATUSES: ReadonlySet<AdmissionAttemptStatus> = new Set([
   "skipped",
 ]);
 
+// #326, workflow-run leg: a head leaves the attempt count only when EVERY
+// ledger row on it is in this allowlist, because each status proves the run
+// spent nothing. `"reserved"` is deliberately absent. The `"provider-started"`
+// settle runs before runPipeline and is best-effort (tryPersistCiAdmissionLedger
+// swallows a write error), so a run killed after that write failed still sits
+// at `"reserved"` although it may have spent provider tokens. The run list
+// counted that head before #326 and must keep counting it. Any unknown status
+// also stays out, so the rule fails closed.
+export const PROVABLY_UNSPENT_STATUSES: ReadonlySet<AdmissionAttemptStatus> =
+  new Set(["gate-skipped", "cancelled", "yielded"]);
+
 const ACTIVE_RESERVATION_STATUSES: ReadonlySet<AdmissionAttemptStatus> =
   new Set(["reserved", "provider-started"]);
 
