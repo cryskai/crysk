@@ -167,6 +167,11 @@ export interface TriggerRecord {
   head_sha?: string;
   repository: string;
   run_id: string;
+  // The attempt of this run. gh run rerun keeps run_id for every attempt, so
+  // the attempt is what tells a re-run from the run it repeats. A record with
+  // no attempt was written before attempts were recorded: parseTriggerRecord
+  // reads it as attempt 1.
+  run_attempt: number;
   run_url: string;
 }
 
@@ -308,12 +313,18 @@ export function parseTriggerRecord(text: string): TriggerRecord | undefined {
   ) {
     return undefined;
   }
+  let runAttempt = 1;
+  if (value.run_attempt !== undefined) {
+    if (!isPositiveInteger(value.run_attempt)) return undefined;
+    runAttempt = value.run_attempt;
+  }
   const record: TriggerRecord = {
     v: 1,
     decision,
     params,
     repository: value.repository,
     run_id: value.run_id,
+    run_attempt: runAttempt,
     run_url: value.run_url,
   };
   if (value.pr !== undefined) {

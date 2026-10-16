@@ -490,6 +490,9 @@ type RecordClass =
 interface RunIdentity {
   repository: string;
   run_id: string;
+  // Omitted when the runner reports no positive attempt: the publisher reads
+  // a record without one as attempt 1.
+  run_attempt?: number;
   run_url: string;
 }
 
@@ -501,29 +504,38 @@ interface RecordFields {
   headSha?: string;
 }
 
+// A positive integer read from runner text, or undefined. Trigger imports only
+// builtins, so this is its own copy of the publisher's check.
+function positiveInteger(text: string): number | undefined {
+  if (!/^[0-9]+$/.test(text)) return undefined;
+  const value = Number(text);
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 function runIdentity(deps: CiTriggerDeps): RunIdentity {
   const repository = deps.env.GITHUB_REPOSITORY ?? "";
   const runId = deps.env.GITHUB_RUN_ID ?? "";
   const server = deps.env.GITHUB_SERVER_URL || "https://github.com";
+  const attempt = positiveInteger(deps.env.GITHUB_RUN_ATTEMPT ?? "");
   return {
     repository,
     run_id: runId,
+    ...(attempt === undefined ? {} : { run_attempt: attempt }),
     run_url: `${server}/${repository}/actions/runs/${runId}`,
   };
 }
 
 // The markers an earlier job may have left in a reused outcome directory: a
 // self-hosted runner keeps runner.temp. The setup step writes SETUP_RECORD, and
-// the run step writes CLI_STARTED_MARKER before the CLI runs and
-// CLI_SUCCEEDED_MARKER only when it exits 0. All are cleared before this run's
-// record, so a stale marker cannot make an install failure look like the CLI ran,
-// or a failed CLI look like a completed review.
+// the run step writes CLI_STARTED_MARKER before the CLI runs. Both are cleared
+// before this run's record, so a stale marker cannot make an install failure
+// look like the CLI ran. No marker records the CLI's completion either: the
+// publisher reads the CLI's commit status for that.
 const CLI_STARTED_MARKER = "cli-started";
-const CLI_SUCCEEDED_MARKER = "cli-succeeded";
 const SETUP_RECORD = "setup.json";
 
 function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
-  for (const name of [CLI_STARTED_MARKER, CLI_SUCCEEDED_MARKER, SETUP_RECORD]) {
+  for (const name of [CLI_STARTED_MARKER, SETUP_RECORD]) {
     fs.remove(path.join(dir, name));
   }
 }
@@ -549,6 +561,7 @@ function writeRecord(
     ...(fields.headSha === undefined ? {} : { head_sha: fields.headSha }),
     repository: run.repository,
     run_id: run.run_id,
+    ...(run.run_attempt === undefined ? {} : { run_attempt: run.run_attempt }),
     run_url: run.run_url,
   };
   try {

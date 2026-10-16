@@ -1457,12 +1457,27 @@ describe("parseTriggerRecord — the trigger.json contract", () => {
     head_sha: SHA,
     repository: "acme/widgets",
     run_id: "4242",
+    run_attempt: 1,
     run_url: "https://github.com/acme/widgets/actions/runs/4242",
   };
   const text = (value: unknown) => JSON.stringify(value);
 
   test("accepts the documented shape, unchanged", () => {
     expect(parseTriggerRecord(text(documented))).toEqual(documented);
+  });
+
+  test("accepts the attempt of a re-run", () => {
+    expect(
+      parseTriggerRecord(text({ ...documented, run_attempt: 3 }))?.run_attempt,
+    ).toBe(3);
+  });
+
+  test("a record without run_attempt, written before attempts were recorded, parses as attempt 1", () => {
+    // WHY: undefined is dropped by JSON.stringify, so this is the absent key.
+    expect(
+      parseTriggerRecord(text({ ...documented, run_attempt: undefined }))
+        ?.run_attempt,
+    ).toBe(1);
   });
 
   test("accepts every decision, with and without the optional fields", () => {
@@ -1524,6 +1539,9 @@ describe("parseTriggerRecord — the trigger.json contract", () => {
     ["a missing repository", { ...documented, repository: undefined }],
     ["a missing run url", { ...documented, run_url: undefined }],
     ["a missing run id", { ...documented, run_id: undefined }],
+    ["a zero run attempt", { ...documented, run_attempt: 0 }],
+    ["a string run attempt", { ...documented, run_attempt: "2" }],
+    ["a fractional run attempt", { ...documented, run_attempt: 1.5 }],
     ["an unknown class kind", { ...documented, cls: { kind: "magic" } }],
     // The trigger writes only pr-unresolved. A no-credential check on a review
     // would render PRH-CRED-MISSING for a record the trigger never wrote.

@@ -14,13 +14,13 @@
 // outcomes this step reports.
 //
 // It speaks for pre-CLI outcomes. `cli-started` is the marker the run step writes
-// before anything else, and `cli-succeeded` is written only when the CLI exits 0.
-// The CLI owns this run's status and comment (T2c moves those here later), so once
-// the CLI has started this step posts neither. When both markers exist it does one
-// thing only, `cleanup`: after a later run's review succeeds, it deletes the PR's
-// older outcome comments that pr-hero wrote, because an earlier run's outcome
-// would contradict that review. Only comments of an older run go. A CLI that
-// started and failed keeps its comments: it left no outcome of its own, so the
+// before anything else. The CLI owns this run's status and comment (T2c moves
+// those here later), so once the CLI has started this step posts neither. What
+// is left is one thing, `cleanup`: when the CLI's own commit status on the head
+// says its review completed, it deletes the PR's older outcome comments that
+// pr-hero wrote, because an earlier run's outcome would contradict that review.
+// Only comments of an older run, or of an earlier attempt of this run, go. A CLI
+// that did not complete keeps its comments: it left no outcome of its own, so the
 // earlier comment is the only explanation on the PR. This path never posts a
 // status or a comment, and it always exits 0.
 //
@@ -55,9 +55,17 @@ import {
 const STATUS_CONTEXT = "pr-hero";
 // GitHub's limit on a commit status description.
 const STATUS_DESCRIPTION_MAX = 140;
+// The success descriptions the CLI posts when its review completed
+// (src/pr/preflight.ts, commitStatusRequest: "review posted" when it published a
+// comment, "review complete" when it did not). This module is builtins-only and
+// cannot import that file, so the test suite builds the CLI's own statuses and
+// fails here if their wording drifts.
+const CLI_REVIEW_COMPLETED_DESCRIPTIONS: readonly string[] = [
+  "review posted",
+  "review complete",
+];
 const MARKER_PREFIX = "<!-- pr-hero-outcome";
 const CLI_STARTED_FILE = "cli-started";
-const CLI_SUCCEEDED_FILE = "cli-succeeded";
 const RECORD_FILE = "trigger.json";
 const SETUP_RECORD_FILE = "setup.json";
 // The step an unverifiable lookup stopped at. The trigger writes the same text
@@ -81,20 +89,35 @@ interface StatusPost {
   targetUrl: string;
 }
 
+// The CLI's own commit status on the head: the latest `pr-hero` status.
+interface CliStatus {
+  state: string;
+  description: string;
+}
+
 export type Publication =
   | { kind: "none" }
   // Annotation and step summary only: no PR can be written to.
   | { kind: "local"; rendered: RenderedError }
-  // The CLI succeeded and a PR is known: only older runs' outcome comments on
-  // this PR go. runId is this run's id, the bound those comments are compared to.
-  | { kind: "cleanup"; repository: string; pr: number; runId: string }
+  // The CLI's review completed and a PR is known: only older runs' (or earlier
+  // attempts') outcome comments on this PR go. runId and runAttempt are this
+  // run's place, the bound those comments are compared to.
+  | {
+      kind: "cleanup";
+      repository: string;
+      pr: number;
+      runId: string;
+      runAttempt: number;
+    }
   | {
       kind: "remote";
       rendered: RenderedError;
       repository: string;
       pr: number;
-      // This run's id. The cleanup after the post deletes only older runs' comments.
+      // This run's id and attempt. The cleanup after the post deletes only
+      // comments of an older run, or of an earlier attempt of this run.
       runId: string;
+      runAttempt: number;
       // Undefined when the record has no valid head: the comment still posts.
       headSha: string | undefined;
       // Undefined exactly when headSha is: a commit status needs a sha.
@@ -102,15 +125,29 @@ export type Publication =
       commentBody: string;
     };
 
+// WHY the status and not an exit code: the CLI exits 0 on a size-gate skip, an
+// admission skip, manual-required and a yield to an in-flight review, and a
+// completed review can exit 1 when findings were dropped. Only the CLI's
+// teardown posts a success status, and only when its pipeline finished, so this
+// status alone says that a review completed.
+function cliReviewCompleted(status: CliStatus | undefined): boolean {
+  return (
+    status !== undefined &&
+    status.state === "success" &&
+    CLI_REVIEW_COMPLETED_DESCRIPTIONS.includes(status.description)
+  );
+}
+
 // The pure table. Which outcome this run has is the record's decision and class
 // (renderError / renderCode say what it means); whether anything can be posted
 // on a PR is the record's pr alone: the head only decides the status.
 export function decidePublication(input: {
   record: TriggerRecord | undefined;
   cliStarted: boolean;
-  // Written only when the CLI exits 0. Absent counts as not succeeded, so a
-  // caller that forgets it deletes nothing.
-  cliSucceeded?: boolean;
+  // The head's latest pr-hero status. Read only for a review the CLI started on
+  // a known PR and head, so it is undefined everywhere else, and when the read
+  // failed or no such status exists. Undefined deletes nothing.
+  cliStatus?: CliStatus;
   setup?: SetupRecord;
 }): Publication {
   const record = input.record;
@@ -121,13 +158,17 @@ export function decidePublication(input: {
   }
   // WHY: the CLI owns this run's status and comment, so a second outcome here
   // would be a duplicate on the same PR. T2c hands those outcomes over. What is
-  // left is the cleanup, and only once the CLI succeeded: a stale outcome comment
-  // from an earlier run contradicts a review that completed. cli-started alone
-  // does not prove that, and a failed CLI leaves no outcome of its own, so its
-  // run is left alone. T2c moves that case here. Without a PR there is nothing
-  // to clean.
+  // left is the cleanup, and only once the CLI's own status says its review
+  // completed: a stale outcome comment from an earlier run contradicts a review
+  // that completed. cli-started alone does not prove that, and a CLI that did
+  // not complete leaves no outcome of its own, so its run is left alone. T2c
+  // moves that case here. Without a PR or a head there is nothing to clean.
   if (record.decision === "review" && input.cliStarted) {
-    if (input.cliSucceeded !== true || record.pr === undefined) {
+    if (
+      !cliReviewCompleted(input.cliStatus) ||
+      record.pr === undefined ||
+      record.head_sha === undefined
+    ) {
       return { kind: "none" };
     }
     return {
@@ -135,6 +176,7 @@ export function decidePublication(input: {
       repository: record.repository,
       pr: record.pr,
       runId: record.run_id,
+      runAttempt: record.run_attempt,
     };
   }
 
@@ -153,6 +195,7 @@ export function decidePublication(input: {
     repository: record.repository,
     pr: record.pr,
     runId: record.run_id,
+    runAttempt: record.run_attempt,
     headSha,
     status:
       headSha === undefined
@@ -164,7 +207,7 @@ export function decidePublication(input: {
             targetUrl: record.run_url,
           },
     commentBody: [
-      `${MARKER_PREFIX} v=1 head=${headSha ?? "unknown"} run=${record.run_id} -->`,
+      `${MARKER_PREFIX} v=1 head=${headSha ?? "unknown"} run=${record.run_id} attempt=${record.run_attempt} -->`,
       "",
       ...rendered.summary,
     ].join("\n"),
@@ -315,7 +358,14 @@ function postComment(
     // a test this step can pass, so an old comment is never removed on a guess.
     return { ok: true };
   }
-  deleteOlderOutcomes(deps, repo, plan.pr, newId, author, plan.runId);
+  deleteOlderOutcomes(
+    deps,
+    repo,
+    plan.pr,
+    newId,
+    author,
+    currentRunOrder(plan.runId, plan.runAttempt),
+  );
   return { ok: true };
 }
 
@@ -418,16 +468,45 @@ function positiveInteger(text: string): number | undefined {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-// WHY the run bound: run ids increase within a repository. A comment from a run
-// that is not older than this one was posted by a run still going, or by a newer
-// one, and neither is this run's to remove. A marker with no positive run id has
-// no order to compare, so it is kept too. Comment ids alone are not enough: a
-// later run can post before this one, and its comment then has the lower id.
-function isOlderRunComment(row: ListedComment, runId: string): boolean {
-  const current = positiveInteger(runId);
-  const match = /\brun=(\S+) -->/.exec(row.firstLine);
-  const theirs = positiveInteger(match?.[1] ?? "");
-  return current !== undefined && theirs !== undefined && theirs < current;
+// A run's place in the order: its run id, then its attempt within that run.
+interface RunOrder {
+  runId: number;
+  attempt: number;
+}
+
+// WHY the guard: run ids increase within a repository, so this run's place is
+// its id. A run id that is not a safe positive integer has no place, and then no
+// comment can be proven older than this run, so the caller keeps them all.
+function currentRunOrder(runId: string, attempt: number): RunOrder | undefined {
+  const id = positiveInteger(runId);
+  return id === undefined ? undefined : { runId: id, attempt };
+}
+
+// The place a marker names. A marker with no positive run id has no place, so
+// it is never deleted. A marker with no parseable attempt is attempt 1: every
+// marker written before attempts were recorded is the first attempt of its run.
+function markerRunOrder(firstLine: string): RunOrder | undefined {
+  const runId = positiveInteger(/\brun=(\S+)/.exec(firstLine)?.[1] ?? "");
+  if (runId === undefined) return undefined;
+  const attempt =
+    positiveInteger(/\battempt=(\S+)/.exec(firstLine)?.[1] ?? "") ?? 1;
+  return { runId, attempt };
+}
+
+// WHY the order: a comment from a run that is not older than this one was
+// posted by a run still going, or by a newer one, and neither is this run's to
+// remove. A re-run keeps the run id, so within one run the attempt decides:
+// only an earlier attempt is older. Comment ids alone are not enough: a later
+// run can post before this one, and its comment then has the lower id.
+function isOlderRunComment(
+  row: ListedComment,
+  current: RunOrder | undefined,
+): boolean {
+  if (current === undefined) return false;
+  const theirs = markerRunOrder(row.firstLine);
+  if (theirs === undefined) return false;
+  if (theirs.runId !== current.runId) return theirs.runId < current.runId;
+  return theirs.attempt < current.attempt;
 }
 
 function deleteOlderOutcomes(
@@ -436,7 +515,7 @@ function deleteOlderOutcomes(
   pr: number,
   newId: number,
   author: string,
-  runId: string,
+  current: RunOrder | undefined,
 ): void {
   const rows = listComments(deps, repo, pr);
   if (rows === undefined) {
@@ -458,16 +537,16 @@ function deleteOlderOutcomes(
           row.id < newId &&
           row.login === author &&
           isOutcomeComment(row) &&
-          isOlderRunComment(row, runId),
+          isOlderRunComment(row, current),
       )
       .map((row) => row.id),
   );
 }
 
-// WHY cleanup runs once the CLI succeeded: an older outcome comment says a run
-// could not start the review. A later run's review has now completed, so that
-// comment contradicts the PR, and nothing else removes it. Only older runs'
-// comments go (see isOlderRunComment).
+// WHY cleanup runs once the CLI's review completed: an older outcome comment says
+// a run could not start the review. A later run's review has now completed, so
+// that comment contradicts the PR, and nothing else removes it. Only older runs'
+// and earlier attempts' comments go (see isOlderRunComment).
 //
 // WHY the identity chain: the older comments were written with the workflow's
 // token, which cannot read /user. GraphQL `viewer` names the login that wrote
@@ -479,8 +558,9 @@ function deleteOlderOutcomes(
 // never deleted on a guess: with no login, only a Bot is deleted.
 function cleanupOlderOutcomes(
   deps: PublishDeps,
-  plan: { repository: string; pr: number; runId: string },
+  plan: { repository: string; pr: number; runId: string; runAttempt: number },
 ): void {
+  const current = currentRunOrder(plan.runId, plan.runAttempt);
   const viewer = deps.gh([
     "api",
     "graphql",
@@ -513,7 +593,7 @@ function cleanupOlderOutcomes(
         (row) =>
           isOutcomeComment(row) &&
           isMine(row) &&
-          isOlderRunComment(row, plan.runId),
+          isOlderRunComment(row, current),
       )
       .map((row) => row.id),
   );
@@ -523,13 +603,92 @@ function readIfExists(filePath: string): string | undefined {
   return existsSync(filePath) ? readFileSync(filePath, "utf8") : undefined;
 }
 
+// One row of the head's status list, as the read's --jq filter prints it.
+interface StatusRow {
+  context: string;
+  state: string;
+  description: string;
+  createdAt: string;
+}
+
+// The newest `pr-hero` row. The read keeps the latest status of each context,
+// but the newest is still picked by time, as the CLI's own reader does
+// (src/pr/preflight.ts, latestPrHeroStatus). A row with no readable time is out.
+function latestCliStatus(rows: readonly StatusRow[]): CliStatus | undefined {
+  let latest: StatusRow | undefined;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const row of rows) {
+    if (row.context !== STATUS_CONTEXT) continue;
+    const createdMs = Date.parse(row.createdAt);
+    if (Number.isNaN(createdMs) || createdMs < latestMs) continue;
+    latest = row;
+    latestMs = createdMs;
+  }
+  return latest === undefined
+    ? undefined
+    : { state: latest.state, description: latest.description };
+}
+
+// The head's pr-hero status as the CLI left it. WHY the combined endpoint: it
+// returns the latest status of each context, so the newest pr-hero status is
+// never paged out of reach. src/pr/pr.ts reads the same endpoint. A failed read
+// is undefined, which cleans up nothing and prints nothing.
+function readCliStatus(
+  deps: PublishDeps,
+  repo: string,
+  sha: string,
+): CliStatus | undefined {
+  const read = deps.gh([
+    "api",
+    `repos/${repo}/commits/${sha}/status`,
+    "--jq",
+    ".statuses[]? | [.context, .state, .description, .created_at] | @json",
+  ]);
+  if (read.exitCode !== 0) return undefined;
+  const rows: StatusRow[] = [];
+  for (const line of read.stdout.split("\n")) {
+    if (line.trim() === "") continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(value)) continue;
+    const [context, state, description, createdAt] = value;
+    if (
+      typeof context !== "string" ||
+      typeof state !== "string" ||
+      typeof description !== "string" ||
+      typeof createdAt !== "string"
+    ) {
+      continue;
+    }
+    rows.push({ context, state, description, createdAt });
+  }
+  return latestCliStatus(rows);
+}
+
+// The status is read only where it can decide: a review the CLI started on a
+// known PR and head. Everywhere else no gh call is made.
+function readCliStatusFor(
+  deps: PublishDeps,
+  record: TriggerRecord,
+  cliStarted: boolean,
+): CliStatus | undefined {
+  if (record.decision !== "review" || !cliStarted) return undefined;
+  if (record.pr === undefined || record.head_sha === undefined) {
+    return undefined;
+  }
+  return readCliStatus(deps, record.repository, record.head_sha);
+}
+
 export function runPublish(deps: PublishDeps): number {
   const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
   if (dir === "") return 0;
   const recordText = readIfExists(path.join(dir, RECORD_FILE));
   if (recordText === undefined) return 0;
   const cliStarted = existsSync(path.join(dir, CLI_STARTED_FILE));
-  const cliSucceeded = existsSync(path.join(dir, CLI_SUCCEEDED_FILE));
 
   const record = parseTriggerRecord(recordText);
   // Read with the record, so both files are judged in one place. The decision
@@ -572,7 +731,8 @@ export function runPublish(deps: PublishDeps): number {
       ),
     );
   }
-  const plan = decidePublication({ record, cliStarted, cliSucceeded, setup });
+  const cliStatus = readCliStatusFor(deps, record, cliStarted);
+  const plan = decidePublication({ record, cliStarted, cliStatus, setup });
   if (plan.kind === "none") return 0;
   if (plan.kind === "cleanup") {
     cleanupOlderOutcomes(deps, plan);

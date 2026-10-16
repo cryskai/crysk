@@ -555,10 +555,9 @@ describe("Packaging & distribution configuration", () => {
       trigger: Record<string, string>;
       args: string[] | undefined;
       // What the run leaves in the outcome directory: the marker the run step
-      // writes first, the marker it writes only after a CLI exit 0, and the
-      // record the trigger wrote. runStepExitCode is the run step's own exit.
+      // writes first, and the record the trigger wrote. runStepExitCode is the
+      // run step's own exit.
       cliStarted: boolean;
-      cliSucceeded: boolean;
       runStepExitCode: number | undefined;
       record: string | undefined;
     }> {
@@ -611,7 +610,6 @@ describe("Packaging & distribution configuration", () => {
             trigger,
             args: undefined,
             cliStarted: existsSync(path.join(outcomeDir, "cli-started")),
-            cliSucceeded: existsSync(path.join(outcomeDir, "cli-succeeded")),
             runStepExitCode: undefined,
             record,
           };
@@ -650,7 +648,6 @@ describe("Packaging & distribution configuration", () => {
           trigger,
           args,
           cliStarted: existsSync(path.join(outcomeDir, "cli-started")),
-          cliSucceeded: existsSync(path.join(outcomeDir, "cli-succeeded")),
           runStepExitCode: result.exitCode,
           record,
         };
@@ -841,21 +838,20 @@ describe("Packaging & distribution configuration", () => {
       expect(JSON.stringify(env)).not.toContain("inputs.routing }}");
     });
 
-    test("a run that reaches the CLI leaves both markers and a review record, and nothing else", async () => {
+    test("a run that reaches the CLI leaves the started marker and a review record, and nothing else", async () => {
       const run = await runAction(
         { ...CREDENTIAL, "pr-number": "305" },
         { repository: REPOSITORY, event_name: "workflow_dispatch" },
       );
       expect(run.args?.slice(0, 2)).toEqual(["review", "--pr"]);
       expect(run.cliStarted).toBe(true);
-      expect(run.cliSucceeded).toBe(true);
       expect(JSON.parse(run.record ?? "{}").decision).toBe("review");
     });
 
-    // WHY: cli-succeeded is what lets the publish step clean up. A failed CLI
-    // must leave it out, and must still fail the step with its own exit code,
-    // or the job would report success for a review that never ran.
-    test("the run step writes cli-succeeded only when the CLI exits 0, and exits with the CLI's code", async () => {
+    // WHY: the job's result must be the CLI's own. The publish step judges a
+    // completed review by the CLI's commit status, not by a marker, so the run
+    // step adds nothing after the CLI: a failed CLI fails the step with its code.
+    test("the run step exits with the CLI's code, whether the CLI succeeded or failed", async () => {
       const succeeded = await runAction(
         { ...CREDENTIAL, "pr-number": "305" },
         { repository: REPOSITORY, event_name: "workflow_dispatch" },
@@ -864,7 +860,6 @@ describe("Packaging & distribution configuration", () => {
       );
       expect(succeeded.runStepExitCode).toBe(0);
       expect(succeeded.cliStarted).toBe(true);
-      expect(succeeded.cliSucceeded).toBe(true);
 
       const failed = await runAction(
         { ...CREDENTIAL, "pr-number": "305" },
@@ -874,7 +869,18 @@ describe("Packaging & distribution configuration", () => {
       );
       expect(failed.runStepExitCode).toBe(7);
       expect(failed.cliStarted).toBe(true);
-      expect(failed.cliSucceeded).toBe(false);
+    });
+
+    test("the run step's last command is the CLI itself, so the job's result is the CLI's", () => {
+      const run = steps().find((step) => step.id === "run-pr-hero");
+      const lastCommand = String(run?.run ?? "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== "" && !line.startsWith("#"))
+        .at(-1);
+      expect(lastCommand).toBe(
+        `bun "\${{ github.action_path }}/bin/pr-hero.js" "$@"`,
+      );
     });
 
     test("a run with no credential never reaches the CLI: no marker, and a no-credentials record", async () => {

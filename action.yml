@@ -143,6 +143,9 @@ runs:
         # OpenCode, the same test the OpenCode install step makes. It names the
         # backend of a no-credential outcome.
         HAS_OPENCODE_ROUTING: ${{ contains(inputs.routing, 'opencode') }}
+        # The attempt of this run. A re-run keeps the run id, so the record names
+        # the attempt, and the publisher orders a re-run's comments by it.
+        GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
       run: bun "${{ github.action_path }}/src/ci/trigger.ts"
 
     - name: Install dependencies
@@ -247,14 +250,10 @@ runs:
         if [ "$TRIGGER_FORCE" = "true" ]; then set -- "$@" --force; fi
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
 
-        # WHY: cli-succeeded is the marker the publish step's cleanup trusts, so
-        # it is written on exit 0 alone. `|| rc=$?` keeps a failed CLI from
-        # ending the step before the marker check, and `exit "$rc"` hands the
-        # CLI's own code back, so the job's result is exactly the CLI's.
-        rc=0
-        bun "${{ github.action_path }}/bin/pr-hero.js" "$@" || rc=$?
-        if [ "$rc" -eq 0 ]; then : > "$PRHERO_OUTCOME_DIR/cli-succeeded"; fi
-        exit "$rc"
+        # The CLI is the last command, so the job's result is exactly the CLI's.
+        # Nothing here writes a marker after it: the publish step judges a
+        # completed review by the CLI's own commit status on the head.
+        bun "${{ github.action_path }}/bin/pr-hero.js" "$@"
 
     # Speaks for the outcomes that happen BEFORE the CLI starts (T2b, S3): no
     # credential, a pull request that cannot be resolved, a commenter permission
@@ -282,10 +281,11 @@ runs:
     # IN THIS RELEASE it speaks only for pre-CLI outcomes. When the cli-started
     # marker exists the CLI ran and owns its own status and comment, so this
     # step posts nothing. It deletes pr-hero's own older outcome comments only
-    # when the cli-succeeded marker exists too: after a later run's review
-    # succeeds, those comments would contradict it. Only an older run's comments
-    # go. A CLI that started and failed keeps its comments, since they are the
-    # only explanation on the PR. T2c moves the CLI's outcomes here.
+    # when the CLI's own commit status on the head says its review completed:
+    # a later completed review would contradict them. An older run's comments
+    # go, and so does an earlier attempt of the same run. A CLI that did not
+    # complete keeps its comments, since they are the only explanation on the
+    # PR. T2c moves the CLI's outcomes here.
     - name: Publish pr-hero outcome
       id: publish
       # Wrapped in ${{ }}: a bare `!cancelled()` is a YAML tag, not an expression.

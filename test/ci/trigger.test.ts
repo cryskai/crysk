@@ -1132,17 +1132,28 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     });
   });
 
+  test("the record carries the run attempt the runner reports, so a re-run is told apart from its first attempt", () => {
+    // WHY: gh run rerun reuses the run id. Without the attempt, a re-run's
+    // record is indistinguishable from the first attempt's.
+    const run = outcomeRun(baseEnv({ GITHUB_RUN_ATTEMPT: "2" }));
+    expect(run.record?.run_attempt).toBe(2);
+  });
+
+  test("a run attempt the runner does not report as a positive integer is left out of the record", () => {
+    const run = outcomeRun(baseEnv({ GITHUB_RUN_ATTEMPT: "0" }));
+    expect(run.recordText).not.toContain("run_attempt");
+    expect(run.record?.run_attempt).toBe(1);
+  });
+
   test("a marker left by an earlier run in the same outcome directory is cleared before this run writes its record", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-stale-"));
     try {
       const dir = path.join(root, "pr-hero-outcome");
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, "cli-started"), "");
-      writeFileSync(path.join(dir, "cli-succeeded"), "");
       writeFileSync(path.join(dir, "setup.json"), "{}");
       runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
       expect(existsSync(path.join(dir, "cli-started"))).toBe(false);
-      expect(existsSync(path.join(dir, "cli-succeeded"))).toBe(false);
       expect(existsSync(path.join(dir, "setup.json"))).toBe(false);
       expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
     } finally {
