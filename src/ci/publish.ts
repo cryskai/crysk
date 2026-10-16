@@ -20,7 +20,9 @@
 // WHY the CLI's record decides once the CLI started: `cli-started` is the marker
 // the run step writes before the CLI runs, and cli.json says what the run did.
 // A `reviewed` record cleans up: a completed review contradicts an older run's
-// outcome comment, so pr-hero's own older outcome comments on the PR go. An
+// outcome comment, so pr-hero's own older outcome comments on the PR go. When that
+// record also carries the status its CLI could not write, the status is posted first,
+// once, on the record's head (see the cleanup branch of runPublish). An
 // `error`, a `hunters-failed`, or a `reviewing` record is published here with its
 // code, because the CLI posts no comment for those. A `skipped` or `yielded` run
 // is left alone: the CLI posted its own notice. A record that is absent,
@@ -62,13 +64,12 @@ import {
   parseTriggerRecord,
   renderCode,
   renderError,
+  STATUS_DESCRIPTION_MAX,
 } from "./outcome";
 
 // The commit status context. The required check reads this name, so it must
 // equal COMMIT_STATUS_CONTEXT in src/pr/preflight.ts (a test pins the two).
 const STATUS_CONTEXT = "pr-hero";
-// GitHub's limit on a commit status description.
-const STATUS_DESCRIPTION_MAX = 140;
 const MARKER_PREFIX = "<!-- pr-hero-outcome";
 const CLI_STARTED_FILE = "cli-started";
 const RECORD_FILE = "trigger.json";
@@ -100,8 +101,9 @@ export interface GhResult {
 }
 
 interface StatusPost {
-  // `success` is written only by an override (odd/tasks/agent-first-ci.md, S8).
-  state: "error" | "success";
+  // `success` comes from an override (odd/tasks/agent-first-ci.md, S8) or from the
+  // final status a CLI could not write; `failure` only from the latter.
+  state: "error" | "success" | "failure";
   context: "pr-hero";
   description: string;
   targetUrl: string;
@@ -132,15 +134,21 @@ export type Publication =
       // that no status could be set.
       headSha: string | undefined;
     }
-  // The CLI's review completed and a PR is known: only older runs' (or earlier
-  // attempts') outcome comments on this PR go. runId and runAttempt are this
-  // run's place, the bound those comments are compared to.
+  // The CLI's review completed. Its record may carry the status the CLI could not
+  // write, which is posted first, on the record's head. Then only older runs' (or
+  // earlier attempts') outcome comments on this PR go, when the PR is known. runId
+  // and runAttempt are this run's place, the bound those comments are compared to.
   | {
       kind: "cleanup";
       repository: string;
-      pr: number;
+      // Undefined when the PR is unknown: then only the unsettled status is written.
+      pr: number | undefined;
       runId: string;
       runAttempt: number;
+      // The unsettled status and the head it is for, when the record carries both.
+      // Undefined otherwise, which is every reviewed record without the field.
+      headSha?: string;
+      status?: StatusPost;
     }
   | {
       kind: "remote";
@@ -272,18 +280,24 @@ function decideCliOutcome(
         replacesLock ? cliRecord.head_sha : undefined,
       );
     }
-    case "reviewed":
+    case "reviewed": {
       // WHY the cleanup needs a PR and no head: the older comments are on the
       // PR, and the completed review is the proof, whatever head the trigger saw.
-      return record.pr === undefined
-        ? { kind: "none" }
-        : {
-            kind: "cleanup",
-            repository: record.repository,
-            pr: record.pr,
-            runId: record.run_id,
-            runAttempt: record.run_attempt,
-          };
+      // WHY the status needs neither: it sits on the record's head, so it is posted
+      // even when no PR is known, and then nothing is cleaned.
+      const unsettled = unsettledStatusOf(record, cliRecord);
+      if (record.pr === undefined && unsettled === undefined) {
+        return { kind: "none" };
+      }
+      return {
+        kind: "cleanup",
+        repository: record.repository,
+        pr: record.pr,
+        runId: record.run_id,
+        runAttempt: record.run_attempt,
+        ...unsettled,
+      };
+    }
     case "skipped":
     case "yielded":
       return { kind: "none" };
@@ -312,6 +326,28 @@ function decideCliOutcome(
         cliRecord.head_sha ?? record.head_sha,
       );
   }
+}
+
+// The status a reviewed record's CLI could not write, on the head that record names, in
+// the shape postStatus takes. Undefined when the record carries no status, or names no
+// head: a status needs a sha, and the publisher does not guess one from the trigger.
+function unsettledStatusOf(
+  record: TriggerRecord,
+  cliRecord: CliRecord,
+): { headSha: string; status: StatusPost } | undefined {
+  const unsettled = cliRecord.unsettled_status;
+  if (unsettled === undefined || cliRecord.head_sha === undefined) {
+    return undefined;
+  }
+  return {
+    headSha: cliRecord.head_sha,
+    status: {
+      state: unsettled.state,
+      context: STATUS_CONTEXT,
+      description: unsettled.description,
+      targetUrl: record.run_url,
+    },
+  };
 }
 
 // The one place an outcome becomes a plan: the annotation and summary always, and
@@ -432,13 +468,15 @@ function workflowCommand(
   return `::${command} title=pr-hero::${escaped}\n`;
 }
 
-// The status write, retried once. Returns the failure's HTTP status when gh
-// printed one, so the renderer can pick the permission or the server wording.
+// The status write, retried once unless `attempts` is 1. Returns the failure's HTTP
+// status when gh printed one, so the renderer can pick the permission or the server
+// wording.
 function postStatus(
   deps: PublishDeps,
   repository: string,
   headSha: string,
   status: StatusPost,
+  attempts = 2,
 ): { ok: true } | { ok: false; httpStatus: number | undefined } {
   const args = [
     "api",
@@ -453,12 +491,40 @@ function postStatus(
     `target_url=${status.targetUrl}`,
   ];
   let result = deps.gh(args);
-  if (result.exitCode !== 0) {
+  if (result.exitCode !== 0 && attempts > 1) {
     (deps.sleep ?? ((ms: number) => Bun.sleepSync(ms)))(STATUS_RETRY_DELAY_MS);
     result = deps.gh(args);
   }
   if (result.exitCode === 0) return { ok: true };
   return { ok: false, httpStatus: httpStatusOf(result) };
+}
+
+// The one rendering of a failed status write, for the outcome's status and for the
+// unsettled one alike. The detail names the HTTP status when gh printed one.
+function statusWriteFailure(
+  httpStatus: number | undefined,
+  runId: string,
+  runUrl: string,
+): RenderedError {
+  const variant =
+    httpStatus === 403
+      ? "permission"
+      : httpStatus !== undefined && httpStatus >= 500
+        ? "server"
+        : undefined;
+  return renderCode(
+    "PRH-STATUS-WRITE-FAILED",
+    {
+      detail:
+        httpStatus === undefined
+          ? "the request did not complete"
+          : `HTTP ${httpStatus}`,
+      runId,
+      runUrl,
+    },
+    "action",
+    variant,
+  );
 }
 
 // Posts the comment, then deletes the older outcome comments of the same author.
@@ -826,36 +892,14 @@ function readLatestCliStatusState(
   return SETTLED_STATES.has(latestState) ? "settled" : "unknown";
 }
 
-// The one wording for a failed status write, shared by a review's outcome and an
-// override. The variant names the permission or the server cause when GitHub said.
+// The override's reporter: the shared rendering (statusWriteFailure), reported.
 function reportStatusWriteFailure(
   deps: PublishDeps,
   httpStatus: number | undefined,
   runId: string,
   runUrl: string,
 ): void {
-  const variant =
-    httpStatus === 403
-      ? "permission"
-      : httpStatus !== undefined && httpStatus >= 500
-        ? "server"
-        : undefined;
-  report(
-    deps,
-    renderCode(
-      "PRH-STATUS-WRITE-FAILED",
-      {
-        detail:
-          httpStatus === undefined
-            ? "the request did not complete"
-            : `HTTP ${httpStatus}`,
-        runId,
-        runUrl,
-      },
-      "action",
-      variant,
-    ),
-  );
+  report(deps, statusWriteFailure(httpStatus, runId, runUrl));
 }
 
 // The one status an override writes. Its description names the actor, so the
@@ -1024,8 +1068,36 @@ export function runPublish(deps: PublishDeps): number {
   });
   if (plan.kind === "none") return 0;
   if (plan.kind === "cleanup") {
-    cleanupOlderOutcomes(deps, plan);
-    return 0;
+    // WHY the status goes first, and once: the CLI's final write failed after its review
+    // was delivered, so the head's required check is still pending. This step is the
+    // publisher's one more chance to settle it. One attempt, because the CLI already
+    // tried twice. A failure is reported on one annotation line and the step exits 1,
+    // but the cleanup still runs, since the review did complete.
+    let exitCode = 0;
+    if (plan.headSha !== undefined && plan.status !== undefined) {
+      const status = postStatus(
+        deps,
+        plan.repository,
+        plan.headSha,
+        plan.status,
+        1,
+      );
+      if (!status.ok) {
+        report(
+          deps,
+          statusWriteFailure(
+            status.httpStatus,
+            plan.runId,
+            plan.status.targetUrl,
+          ),
+        );
+        exitCode = 1;
+      }
+    }
+    if (plan.pr !== undefined) {
+      cleanupOlderOutcomes(deps, { ...plan, pr: plan.pr });
+    }
+    return exitCode;
   }
   if (plan.kind === "override") return publishOverride(deps, plan);
   report(deps, plan.rendered);
@@ -1036,11 +1108,9 @@ export function runPublish(deps: PublishDeps): number {
   if (plan.status !== undefined && plan.headSha !== undefined) {
     const status = postStatus(deps, plan.repository, plan.headSha, plan.status);
     if (!status.ok) {
-      reportStatusWriteFailure(
+      report(
         deps,
-        status.httpStatus,
-        record.run_id,
-        record.run_url,
+        statusWriteFailure(status.httpStatus, record.run_id, record.run_url),
       );
       exitCode = 1;
     }

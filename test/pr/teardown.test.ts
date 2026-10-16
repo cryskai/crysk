@@ -17,7 +17,7 @@
 // already the observable.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -27,6 +27,8 @@ import {
   admissionRecordFingerprint,
   settleAdmissionAttempt,
 } from "#ci/admission-ledger";
+import { recordReviewDelivered, writeCliRecord } from "#ci/cli-record";
+import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
 import {
@@ -805,5 +807,126 @@ describe("S7: only an explicit --ci run writes the pr-hero context", () => {
       contexts.push(request.context);
     });
     expect(contexts).toEqual([LOCAL_COMMIT_STATUS_CONTEXT]);
+  });
+});
+
+// WHY these tests: a gate review can finish and be delivered, and then its final status
+// write fail. The required check then stays pending, and the publisher step later in the
+// same job can post that status only if the CLI recorded it. The record is written here,
+// and the CliError still fails the run.
+describe("settleCommitStatusAndLedger — the unsettled final status", () => {
+  async function outcomeEnv(): Promise<{
+    env: Record<string, string>;
+    recordPath: string;
+  }> {
+    const root = await mkdtemp(path.join(tmpdir(), "pr-hero-teardown-cli-"));
+    const dir = path.join(root, "outcome");
+    return {
+      env: { PRHERO_OUTCOME_DIR: dir },
+      recordPath: path.join(dir, CLI_RECORD_FILE),
+    };
+  }
+
+  function settleInput(
+    env: Record<string, string>,
+    overrides: {
+      spawnFn?: typeof Bun.spawn;
+      blockingCount?: number;
+      bodyFailed?: boolean;
+    } = {},
+  ): Parameters<typeof settleCommitStatusAndLedger>[0] {
+    return {
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      env,
+      ciMode: "gate" as const,
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: 0,
+      ...overrides,
+    };
+  }
+
+  test.each([
+    ["a clean review", 0, { state: "success", description: "review complete" }],
+    [
+      "a review with blocking findings",
+      2,
+      {
+        state: "failure",
+        description:
+          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+    ],
+  ] as const)(
+    "%s: the delivered record keeps the status that did not land, and the run still fails",
+    async (_label, blockingCount, expected) => {
+      const { env, recordPath } = await outcomeEnv();
+      recordReviewDelivered(HEAD, env);
+      const { spawnFn } = makeStatusSpawn({ fail: true });
+      let thrown: unknown;
+      try {
+        await settleCommitStatusAndLedger(
+          settleInput(env, { spawnFn, blockingCount }),
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(CliError);
+      expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+        v: 1,
+        outcome: "reviewed",
+        head_sha: HEAD,
+        unsettled_status: expected,
+      });
+      expect(heldCommitStatusLock()).toBeNull();
+    },
+  );
+
+  test("a body that already failed records nothing: its own error is the run's failure", async () => {
+    const { env, recordPath } = await outcomeEnv();
+    recordReviewDelivered(HEAD, env);
+    const { spawnFn } = makeStatusSpawn({ fail: true });
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await settleCommitStatusAndLedger(
+        settleInput(env, { spawnFn, bodyFailed: true }),
+      );
+    } finally {
+      process.stderr.write = origWrite;
+    }
+    expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+      v: 1,
+      outcome: "reviewed",
+      head_sha: HEAD,
+    });
+  });
+
+  test("an earlier error record is left alone, and the run still fails", async () => {
+    const { env, recordPath } = await outcomeEnv();
+    writeCliRecord({ v: 1, outcome: "error", cls: { kind: "unknown" } }, env);
+    const { spawnFn } = makeStatusSpawn({ fail: true });
+    let thrown: unknown;
+    try {
+      await settleCommitStatusAndLedger(settleInput(env, { spawnFn }));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(CliError);
+    expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toEqual({
+      v: 1,
+      outcome: "error",
+      cls: { kind: "unknown" },
+    });
   });
 });
