@@ -20,8 +20,10 @@ import {
   type Owner,
   ownerLead,
   ownerOf,
+  parseTriggerRecord,
   renderCode,
   renderError,
+  type TriggerRecord,
 } from "#ci/outcome";
 import type { TransportFailureCause } from "../../src/execution/contracts";
 import type { CredentialProjectionFailureClass } from "../../src/security/credential-broker";
@@ -525,6 +527,60 @@ describe("the code list and its catalog", () => {
   });
 });
 
+describe("wording: no invented scope, and the credential text names the route the run uses", () => {
+  test("no rendered annotation or summary carries a <scope> placeholder, for any code, variant or context", () => {
+    for (const code of ERROR_CODES) {
+      const entry = entryOf(code);
+      for (const variant of [undefined, ...Object.keys(entry.variants)]) {
+        for (const ctx of CONTEXTS) {
+          const rendered = renderCode(code, {}, ctx, variant);
+          const label = `${code} ${ctx} ${variant ?? "default"}`;
+          expect(rendered.annotation, label).not.toContain("<scope>");
+          expect(rendered.summary.join("\n"), label).not.toContain("<scope>");
+        }
+      }
+    }
+  });
+
+  test("the opencode route's fix leads with the OpenCode secret, and no Claude secret command is offered as its fix", () => {
+    const rendered = renderCode(
+      "PRH-CRED-MISSING",
+      { ...FULL, backend: "opencode" },
+      "action",
+    );
+    const commands: string[] = [];
+    let inFence = false;
+    for (const line of rendered.summary) {
+      if (line === "```bash") {
+        inFence = true;
+        continue;
+      }
+      if (line === "```") {
+        inFence = false;
+        continue;
+      }
+      if (inFence) commands.push(line);
+    }
+    expect(commands[0]).toContain("OPENCODE_AUTH_JSON");
+    for (const command of commands) {
+      expect(command, command).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    }
+  });
+
+  test("the claude route's with: example names the API key as the alternative to the OAuth token", () => {
+    const rendered = renderCode(
+      "PRH-CRED-MISSING",
+      { ...FULL, backend: "claude-code" },
+      "action",
+    );
+    // The Actions expression is spliced, as in src/ci/outcome.ts, so the source
+    // never holds a `${` pair that reads as a template placeholder.
+    expect(rendered.summary.join("\n")).toContain(
+      "anthropic-api-key: $" + "{{ secrets.ANTHROPIC_API_KEY }}",
+    );
+  });
+});
+
 describe("docs parity: ## Error codes in docs/github-actions.md", () => {
   const docs = readFileSync(DOCS, "utf8");
   const sectionStart = docs.indexOf("\n## Error codes\n");
@@ -964,6 +1020,47 @@ describe("renderCode and renderError: the annotation", () => {
     );
   });
 
+  test("the missing-credential summary names the with: input for every route, and PRHERO_ROUTING for OpenCode only", () => {
+    const claude = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { backend: "claude-code", runId: "123" },
+      "action",
+    );
+    const opencode = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { backend: "opencode", runId: "123" },
+      "action",
+    );
+    expect(claude.summary.join("\n")).toContain("with:");
+    expect(opencode.summary.join("\n")).toContain("with:");
+    expect(claude.summary.join("\n")).not.toContain("PRHERO_ROUTING");
+    expect(opencode.summary.join("\n")).toContain("PRHERO_ROUTING");
+  });
+
+  test("the missing-credential with: example follows the backend: opencode-auth on OpenCode, claude-token otherwise", () => {
+    const claude = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { backend: "claude-code", runId: "123" },
+      "action",
+    );
+    const opencode = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { backend: "opencode", runId: "123" },
+      "action",
+    );
+    const missing = renderError(
+      { kind: "trigger", check: "no-credential" },
+      { runId: "123" },
+      "action",
+    );
+    expect(opencode.summary.join("\n")).toContain("opencode-auth:");
+    expect(opencode.summary.join("\n")).not.toContain("claude-token:");
+    expect(claude.summary.join("\n")).toContain("claude-token:");
+    expect(claude.summary.join("\n")).not.toContain("opencode-auth:");
+    expect(missing.summary.join("\n")).toContain("claude-token:");
+    expect(missing.summary.join("\n")).not.toContain("opencode-auth:");
+  });
+
   test("a missing subscription record names the login its backend uses", () => {
     const claude = renderError(
       { kind: "credential", failureClass: "missing_subscription_record" },
@@ -1062,7 +1159,8 @@ describe("renderCode and renderError: the annotation", () => {
       "action",
     ).annotation;
     expect(fixOf(scopeless)).toBe(
-      "add the missing scope under the job's `permissions:` (see docs)",
+      "check that the workflow passes `github-token: $" +
+        "{{ secrets.GITHUB_TOKEN }}` and keeps the `permissions:` block that `pr-hero ci init` scaffolds",
     );
   });
 
@@ -1268,6 +1366,35 @@ describe("renderCode and renderError: the annotation", () => {
   });
 });
 
+describe("PRH-PR-UNRESOLVED: the malformed pr-number variant", () => {
+  const DETAIL = "the pr-number input is not a positive integer";
+
+  test("a malformed pr-number says to pass a positive integer, and names the cause", () => {
+    for (const ctx of CONTEXTS) {
+      const rendered = renderError(
+        { kind: "trigger", check: "pr-unresolved" },
+        { detail: DETAIL },
+        ctx,
+      );
+      expect(rendered.annotation, ctx).toContain(
+        "Fix: pass a positive integer as the `pr-number` input.",
+      );
+      expect(rendered.annotation, ctx).toContain(`(${DETAIL})`);
+      expect(rendered.what, ctx).toContain(DETAIL);
+    }
+  });
+
+  test("a missing pr-number keeps the default fix, which names no positive integer", () => {
+    const rendered = renderError(
+      { kind: "trigger", check: "pr-unresolved" },
+      {},
+      "action",
+    );
+    expect(rendered.annotation).toContain("or pass the `pr-number` input.");
+    expect(rendered.annotation).not.toContain("positive integer");
+  });
+});
+
 describe("ownerLead", () => {
   test("names each owner in the contract's words", () => {
     expect(ownerLead("config")).toBe("Your configuration:");
@@ -1314,5 +1441,131 @@ describe("builtins-only guard: src/ci/outcome.ts", () => {
       ),
     ).toEqual([]);
     expect(runtimeImportViolations('// import { y } from "../z";')).toEqual([]);
+  });
+});
+
+// T2b (odd/tasks/agent-first-ci.md, S3): the record the trigger writes to
+// trigger.json and the publisher reads back. The parser is the one place the
+// shape is checked, so a malformed file is refused rather than half-read.
+describe("parseTriggerRecord — the trigger.json contract", () => {
+  const SHA = "d".repeat(40);
+  const documented: TriggerRecord = {
+    v: 1,
+    decision: "review",
+    params: {},
+    pr: 7,
+    head_sha: SHA,
+    repository: "acme/widgets",
+    run_id: "4242",
+    run_attempt: 1,
+    run_url: "https://github.com/acme/widgets/actions/runs/4242",
+  };
+  const text = (value: unknown) => JSON.stringify(value);
+
+  test("accepts the documented shape, unchanged", () => {
+    expect(parseTriggerRecord(text(documented))).toEqual(documented);
+  });
+
+  test("accepts the attempt of a re-run", () => {
+    expect(
+      parseTriggerRecord(text({ ...documented, run_attempt: 3 }))?.run_attempt,
+    ).toBe(3);
+  });
+
+  test("a record without run_attempt, written before attempts were recorded, parses as attempt 1", () => {
+    // WHY: undefined is dropped by JSON.stringify, so this is the absent key.
+    expect(
+      parseTriggerRecord(text({ ...documented, run_attempt: undefined }))
+        ?.run_attempt,
+    ).toBe(1);
+  });
+
+  test("accepts every decision, with and without the optional fields", () => {
+    const decisions: TriggerRecord["decision"][] = [
+      "review",
+      "ignore",
+      "denied",
+      "unverifiable",
+      "no-credentials",
+    ];
+    for (const decision of decisions) {
+      const bare = {
+        ...documented,
+        decision,
+        pr: undefined,
+        head_sha: undefined,
+      };
+      expect(parseTriggerRecord(text(bare))?.decision).toBe(decision);
+    }
+  });
+
+  test("accepts a class the trigger writes: a github status, a trigger check, and unknown", () => {
+    const withClass = (cls: unknown) =>
+      parseTriggerRecord(text({ ...documented, cls }));
+    expect(withClass({ kind: "github", status: 503 })?.cls).toEqual({
+      kind: "github",
+      status: 503,
+    });
+    expect(
+      withClass({ kind: "github", status: 403, rateLimited: true })?.cls,
+    ).toEqual({ kind: "github", status: 403, rateLimited: true });
+    expect(withClass({ kind: "trigger", check: "pr-unresolved" })?.cls).toEqual(
+      { kind: "trigger", check: "pr-unresolved" },
+    );
+    expect(withClass({ kind: "unknown" })?.cls).toEqual({ kind: "unknown" });
+  });
+
+  test("accepts params with string values and a numeric pr", () => {
+    const parsed = parseTriggerRecord(
+      text({ ...documented, params: { backend: "opencode", detail: "x" } }),
+    );
+    expect(parsed?.params).toEqual({ backend: "opencode", detail: "x" });
+  });
+
+  test.each<[string, unknown]>([
+    ["not JSON", "{ nope"],
+    ["an array", []],
+    ["a null", null],
+    ["another version", { ...documented, v: 2 }],
+    ["an unknown decision", { ...documented, decision: "maybe" }],
+    ["a string pr", { ...documented, pr: "7" }],
+    ["a zero pr", { ...documented, pr: 0 }],
+    ["a fractional pr", { ...documented, pr: 1.5 }],
+    ["a head that is not a sha", { ...documented, head_sha: "unknown" }],
+    ["a head with a newline", { ...documented, head_sha: `${SHA}\nrun=true` }],
+    ["params that is not an object", { ...documented, params: "x" }],
+    ["a param that is not a string", { ...documented, params: { backend: 1 } }],
+    ["an unknown param", { ...documented, params: { token: "x" } }],
+    ["a missing repository", { ...documented, repository: undefined }],
+    ["a missing run url", { ...documented, run_url: undefined }],
+    ["a missing run id", { ...documented, run_id: undefined }],
+    ["a zero run attempt", { ...documented, run_attempt: 0 }],
+    ["a string run attempt", { ...documented, run_attempt: "2" }],
+    ["a fractional run attempt", { ...documented, run_attempt: 1.5 }],
+    ["an unknown class kind", { ...documented, cls: { kind: "magic" } }],
+    // The trigger writes only pr-unresolved. A no-credential check on a review
+    // would render PRH-CRED-MISSING for a record the trigger never wrote.
+    [
+      "a no-credential trigger class on a review",
+      { ...documented, cls: { kind: "trigger", check: "no-credential" } },
+    ],
+    [
+      "a routing-missing trigger class on a review",
+      { ...documented, cls: { kind: "trigger", check: "routing-missing" } },
+    ],
+    [
+      "a github class without a status",
+      { ...documented, cls: { kind: "github" } },
+    ],
+  ])("refuses %s", (_label, value) => {
+    expect(
+      parseTriggerRecord(typeof value === "string" ? value : text(value)),
+    ).toBeUndefined();
+  });
+
+  test("ignores a code key an older writer left in the record", () => {
+    expect(
+      parseTriggerRecord(text({ ...documented, code: "PRH-CRED-MISSING" })),
+    ).toEqual(documented);
   });
 });

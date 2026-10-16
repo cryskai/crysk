@@ -114,6 +114,15 @@ the Action treats as absent. Deleting the line for the credential you *did* set 
 quotes around `vars.PRHERO_ROUTING` are load-bearing — an unset repository variable must become the
 empty string, not broken YAML.
 
+**A run that cannot start the review still says so on the pull request.** When there is no
+model credential, the pull request number or head cannot be resolved, the commenter's permission
+cannot be verified, or an install step fails before pr-hero starts, pr-hero posts one `pr-hero`
+commit status (`error`) and one comment on the pull request. The comment gives the error code, whose
+fix it is (your configuration, a provider, pr-hero, or unclassified) and the command that fixes it.
+A newer comment replaces the older one from the same author. pr-hero removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/pr-hero review`
+comment posts nothing. Outcomes of a run that did start (review results, size and budget skips) keep
+their own status and comment for now.
+
 ### Why `fetch-depth: 0`
 
 `actions/checkout`'s default is a **shallow** clone. pr-hero computes the pull request's diff range and
@@ -661,7 +670,7 @@ When the action stops with an error, the annotation and the job summary start wi
 
 **Why:** pr-hero cannot authenticate, so it cannot review this PR
 
-**Fix:**
+**Fix**, on a Claude route:
 
 Set one credential for the route you use:
 
@@ -671,11 +680,43 @@ gh secret set ANTHROPIC_API_KEY
 opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 ```
 
+If the secret is already set, check that the workflow passes it to the action under `with:`, for example `claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` or `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`: a secret the workflow does not pass never reaches pr-hero.
+
 Dependabot PRs read Dependabot secrets, so set this one too:
 
 ```bash
 gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN
 ```
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+**Fix**, on an OpenCode route:
+
+Set the OpenCode credential for the route you use:
+
+```bash
+opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+If the secret is already set, check that the workflow passes it to the action under `with:`, for example `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`: a secret the workflow does not pass never reaches pr-hero.
+
+An OpenCode route also needs the routing variable:
+
+```bash
+gh variable set PRHERO_ROUTING --body '<routing-object-json>'
+```
+
+Dependabot PRs read Dependabot secrets, so set this one too:
+
+```bash
+gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.
 
 Then re-run the workflow:
 
@@ -724,6 +765,8 @@ gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 Or rename the provider in PRHERO_ROUTING.
 
 #### `malformed_payload`
+
+**What:** The credential store is not usable: {detail}
 
 Check that the store is a JSON object:
 
@@ -913,6 +956,22 @@ Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:
 pr-hero ci init --force
 ```
 
+#### `no-scope`
+
+When the scope is not known, pr-hero names the refusal and not a scope it cannot know.
+
+**What:** GitHub refused the workflow token (HTTP 403) during {step}
+
+**Why:** pr-hero cannot post its result on the PR
+
+**Fix:**
+
+Check that the workflow passes `github-token: ${{ secrets.GITHUB_TOKEN }}` on the action step, and keeps the `permissions:` block that `pr-hero ci init` scaffolds:
+
+```bash
+pr-hero ci init --force
+```
+
 ### PRH-GITHUB-TOKEN-INVALID
 
 **Owner:** your configuration
@@ -970,6 +1029,18 @@ gh run rerun {runId}
 **Fix:**
 
 Run from a pull_request or issue_comment event, or pass the `pr-number` input.
+
+#### `malformed-input`
+
+The `pr-number` input was given but is not a positive integer. pr-hero names the input and never echoes its value.
+
+**What:** pr-hero could not determine the pull request number or head ({detail})
+
+**Why:** nothing can be posted on a PR it cannot identify
+
+**Fix:**
+
+Pass a positive integer as the `pr-number` input.
 
 ### PRH-STATUS-WRITE-FAILED
 

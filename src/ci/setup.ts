@@ -27,8 +27,9 @@
 // keeps the inputs it sets.
 
 import { existsSync } from "node:fs";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { ErrorClass, SetupRecord } from "#ci/outcome";
 import { parseRoutingConfig } from "#review/preflight";
 import { prheroLayout } from "../home-preflight";
 import { resolveOpenCodeAuthPath } from "../security/credential-broker";
@@ -436,6 +437,39 @@ export interface MaterializeCiOpenCodeDataOptions {
   env?: Readonly<Record<string, string | undefined>>;
 }
 
+// The file the publisher reads when this step fails on a malformed input, and
+// the outcome directory the workflow binds for it (odd/tasks/agent-first-ci.md, A1).
+const SETUP_RECORD_FILE = "setup.json";
+const ROUTING_CLASS: ErrorClass = { kind: "config-parse", source: "routing" };
+const AUTH_CLASS: ErrorClass = {
+  kind: "credential",
+  failureClass: "malformed_payload",
+};
+// The details the record carries. Each names the input that is wrong and never
+// its content, so a secret or a routing value cannot reach the PR.
+const ROUTING_NOT_JSON = "the routing input is not valid JSON";
+const ROUTING_NOT_OBJECT = "the routing input is not a valid routing object";
+const AUTH_NOT_JSON = "the opencode-auth input is not valid JSON";
+const AUTH_NOT_OBJECT = "the opencode-auth input must be a JSON object";
+
+// A routing or OpenCode auth input the user configured wrongly. `message` is the
+// line stderr has always printed; `cls` and `detail` are what the record carries.
+class SetupInputError extends Error {
+  readonly cls: ErrorClass;
+  readonly detail: string;
+
+  constructor(cls: ErrorClass, detail: string, message: string) {
+    super(message);
+    this.name = "SetupInputError";
+    this.cls = cls;
+    this.detail = detail;
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown error";
+}
+
 // CI data plane: person-layer routing + 0600 auth.json. HOME must be a real
 // directory — empty/unset fails loud with no cwd fallback, because falling
 // back would write routing into the checkout (.prhero/config.json), which
@@ -460,13 +494,29 @@ export async function materializeCiOpenCodeData(
     try {
       parsed = JSON.parse(routingRaw);
     } catch (error) {
-      throw new Error(
-        `CI routing input is not valid JSON: ${(error as Error).message}`,
+      throw new SetupInputError(
+        ROUTING_CLASS,
+        ROUTING_NOT_JSON,
+        `CI routing input is not valid JSON: ${messageOf(error)}`,
       );
     }
-    routingConfig = parseRoutingConfig(parsed, "~/.prhero/config.json");
+    try {
+      routingConfig = parseRoutingConfig(parsed, "~/.prhero/config.json");
+    } catch (error) {
+      // parseRoutingConfig names the offending key in its message: that message
+      // stays on stderr, and the record carries only the fixed detail.
+      throw new SetupInputError(
+        ROUTING_CLASS,
+        ROUTING_NOT_OBJECT,
+        messageOf(error),
+      );
+    }
     if (routingConfig === undefined) {
-      throw new Error("CI routing input must be a JSON object");
+      throw new SetupInputError(
+        ROUTING_CLASS,
+        ROUTING_NOT_OBJECT,
+        "CI routing input must be a JSON object",
+      );
     }
   }
 
@@ -476,14 +526,22 @@ export async function materializeCiOpenCodeData(
     try {
       parsed = JSON.parse(authRaw);
     } catch {
-      throw new Error("CI opencode-auth is not valid JSON");
+      throw new SetupInputError(
+        AUTH_CLASS,
+        AUTH_NOT_JSON,
+        "CI opencode-auth is not valid JSON",
+      );
     }
     if (
       typeof parsed !== "object" ||
       parsed === null ||
       Array.isArray(parsed)
     ) {
-      throw new Error("CI opencode-auth must be a JSON object");
+      throw new SetupInputError(
+        AUTH_CLASS,
+        AUTH_NOT_OBJECT,
+        "CI opencode-auth must be a JSON object",
+      );
     }
     authBody = authRaw;
   }
@@ -505,14 +563,65 @@ export async function materializeCiOpenCodeData(
   }
 }
 
-if (import.meta.main) {
+interface CiOpenCodeSetupDeps {
+  env: Readonly<Record<string, string | undefined>>;
+  stderr: (text: string) => void;
+}
+
+// WHY tmp then rename, the same as the trigger's record: the publisher reads the
+// file in a later step and must never see a half-written one.
+async function writeSetupRecord(
+  dir: string,
+  record: SetupRecord,
+): Promise<void> {
+  const finalPath = path.join(dir, SETUP_RECORD_FILE);
+  const tempPath = `${finalPath}.tmp`;
+  await mkdir(dir, { recursive: true });
   try {
-    await materializeCiOpenCodeData();
+    await writeFile(tempPath, `${JSON.stringify(record)}\n`);
+    await rename(tempPath, finalPath);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown error";
-    process.stderr.write(
-      `pr-hero: failed to materialize OpenCode CI data: ${message}\n`,
-    );
-    process.exit(1);
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
   }
+}
+
+// The step's whole job. Returns the exit code. A malformed routing or auth input
+// is the user's configuration, so it also leaves setup.json for the publisher;
+// any other failure (HOME, a write) stays unclassified, with no record.
+async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
+  try {
+    await materializeCiOpenCodeData({ env: deps.env });
+    return 0;
+  } catch (error) {
+    deps.stderr(
+      `pr-hero: failed to materialize OpenCode CI data: ${messageOf(error)}\n`,
+    );
+    const outcomeDir = deps.env.PRHERO_OUTCOME_DIR ?? "";
+    if (error instanceof SetupInputError && outcomeDir !== "") {
+      try {
+        await writeSetupRecord(outcomeDir, {
+          v: 1,
+          cls: error.cls,
+          detail: error.detail,
+        });
+      } catch {
+        deps.stderr(
+          "pr-hero: could not write its setup outcome record, so the publisher reports this as an install failure.\n",
+        );
+      }
+    }
+    return 1;
+  }
+}
+
+if (import.meta.main) {
+  process.exit(
+    await runCiOpenCodeSetup({
+      env: process.env,
+      stderr: (text) => {
+        process.stderr.write(text);
+      },
+    }),
+  );
 }

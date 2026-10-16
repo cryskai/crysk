@@ -135,6 +135,17 @@ runs:
         HAS_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key != '' }}
         HAS_CLAUDE_TOKEN: ${{ inputs.claude-token != '' }}
         HAS_OPENCODE_AUTH: ${{ inputs.opencode-auth != '' }}
+        # The trigger writes its decision to trigger.json here; the publish
+        # step reads it. The run step writes the cli-started marker here too.
+        # One path, bound the same way in all three steps (T2b).
+        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        # Presence only, never the routing text: whether the routing names
+        # OpenCode, the same test the OpenCode install step makes. It names the
+        # backend of a no-credential outcome.
+        HAS_OPENCODE_ROUTING: ${{ contains(inputs.routing, 'opencode') }}
+        # The attempt of this run. A re-run keeps the run id, so the record names
+        # the attempt, and the publisher orders a re-run's comments by it.
+        GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
       run: bun "${{ github.action_path }}/src/ci/trigger.ts"
 
     - name: Install dependencies
@@ -154,11 +165,15 @@ runs:
         fi
 
     - name: Materialize OpenCode CI data
+      id: materialize
       if: steps.trigger.outputs.run == 'true'
       shell: bash
       env:
         ROUTING_INPUT: ${{ inputs.routing }}
         OPENCODE_AUTH_INPUT: ${{ inputs.opencode-auth }}
+        # A malformed routing or auth input leaves setup.json here, so the publish
+        # step names that input instead of reporting "an install step failed".
+        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
       run: bun "${{ github.action_path }}/src/ci/setup.ts"
 
     # Pin 1.18.30 as its own step so GITHUB_PATH updates later steps only
@@ -183,6 +198,7 @@ runs:
         # on a `pull_request_target`-triggered workflow; splicing it
         # straight into the script would be a command-injection hole.
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
         GITHUB_ACTIONS: 'true'
@@ -202,6 +218,12 @@ runs:
         POST_INPUT: ${{ inputs.post }}
         STEP_SUMMARY_INPUT: ${{ inputs.step-summary }}
       run: |
+        : > "$PRHERO_OUTCOME_DIR/cli-started"
+        # The line above is the first thing this step does, before anything
+        # else can fail. WHY: the publish step must tell "an earlier step failed"
+        # (no marker) from "the CLI ran and owns its own output" (marker). It
+        # reads these markers and nothing else, so it needs no steps.<id>.outcome.
+        #
         # NEVER redirect stderr away in this step: pr-hero's log() writes to
         # process.stderr unconditionally, and GitHub Actions scans BOTH
         # stdout and stderr for workflow commands (::group::, ::warning::,
@@ -228,7 +250,59 @@ runs:
         if [ "$TRIGGER_FORCE" = "true" ]; then set -- "$@" --force; fi
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
 
+        # The CLI is the last command, so the job's result is exactly the CLI's.
+        # Nothing here writes a marker after it: the publish step judges a
+        # completed review by the CLI's own commit status on the head.
         bun "${{ github.action_path }}/bin/pr-hero.js" "$@"
+
+    # Speaks for the outcomes that happen BEFORE the CLI starts (T2b, S3): no
+    # credential, a pull request that cannot be resolved, a commenter permission
+    # that could not be verified, and a failed install step. It reads the record
+    # the trigger wrote and posts ONE annotation, ONE step summary, ONE commit
+    # status and ONE sticky comment on the pull request.
+    #
+    # WHY !cancelled(), not always(): the outcome this step reports is the one
+    # where an earlier step FAILED, and a failed step skips every later one, so
+    # this step must run after a failure (a failed install is a failure, not a
+    # cancellation). It must NOT run after a cancellation: the scaffolded
+    # workflow cancels a superseded run (`cancel-in-progress`), and a cancelled
+    # job still reaches its always() steps, as the Upload step's comment below
+    # says. Under always(), a run cancelled before its Run step writes
+    # `cli-started` would publish a false PRH-INSTALL-FAILED on the superseded
+    # head.
+    #
+    # WHY gated on `publish`, not on `run`: `run` is false for every outcome
+    # this step reports.
+    #
+    # WHY builtins only: it runs before any install, like the trigger. The one
+    # relative import is a builtins-only sibling (src/ci/outcome.ts), which needs
+    # no node_modules.
+    #
+    # IN THIS RELEASE it speaks only for pre-CLI outcomes. When the cli-started
+    # marker exists the CLI ran and owns its own status and comment, so this
+    # step posts nothing. It deletes pr-hero's own older outcome comments only
+    # when the CLI's own commit status on the head says its review completed:
+    # a later completed review would contradict them. An older run's comments
+    # go, and so does an earlier attempt of the same run. A CLI that did not
+    # complete keeps its comments, since they are the only explanation on the
+    # PR. T2c moves the CLI's outcomes here.
+    - name: Publish pr-hero outcome
+      id: publish
+      # Wrapped in ${{ }}: a bare `!cancelled()` is a YAML tag, not an expression.
+      if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        # Bound like the run id: a record of another attempt of this run is
+        # refused, since gh run rerun keeps the run id.
+        GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        # The head the CLI reviewed is in its run directory's findings.json. The
+        # trigger's head can be absent or stale, so cleanup reads it from there.
+        PRHERO_RUN_DIR: ${{ steps.run-pr-hero.outputs.run_dir }}
+      run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
     # Without this step the triage half of the review loop has no input.
     # `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N` is the

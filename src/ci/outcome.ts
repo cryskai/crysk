@@ -102,7 +102,8 @@ interface CatalogVariant {
   readonly owner?: OwnerRule;
   readonly why: string;
   // A list of fix lines, or a function of the params when the steps depend on
-  // them (the backend, for missing_subscription_record).
+  // them (the backend: missing_subscription_record, and PRH-CRED-MISSING's
+  // routing variable).
   readonly fixes:
     | readonly string[]
     | ((params: ErrorParams) => readonly string[]);
@@ -147,8 +148,204 @@ export interface ErrorParams {
 export interface RenderedError {
   code: ErrorCode;
   owner: Owner;
+  // The one sentence the owner lead introduces, filled and without the lead.
+  // The publisher uses it for the commit status description.
+  what: string;
   annotation: string;
   summary: string[];
+}
+
+// The record the trigger step writes to `trigger.json` in the outcome
+// directory, and the publisher reads back (odd/tasks/agent-first-ci.md, T2b).
+// It carries the decision, never a secret, a comment body or gh's own text.
+export interface TriggerRecord {
+  v: 1;
+  decision: "review" | "ignore" | "denied" | "unverifiable" | "no-credentials";
+  cls?: ErrorClass;
+  params: ErrorParams;
+  pr?: number;
+  head_sha?: string;
+  repository: string;
+  run_id: string;
+  // The attempt of this run. gh run rerun keeps run_id for every attempt, so
+  // the attempt is what tells a re-run from the run it repeats. A record with
+  // no attempt was written before attempts were recorded: parseTriggerRecord
+  // reads it as attempt 1.
+  run_attempt: number;
+  run_url: string;
+}
+
+// The record the setup step writes to `setup.json` in the outcome directory when a
+// routing or OpenCode auth input is malformed (odd/tasks/agent-first-ci.md, A1).
+// The publisher reads it back, so the failure is named instead of reported as a
+// generic install failure. `detail` is a fixed phrase per failure site that names
+// the input which is wrong; it never carries that input's content.
+export interface SetupRecord {
+  v: 1;
+  cls: ErrorClass;
+  detail: string;
+}
+
+const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
+  "review",
+  "ignore",
+  "denied",
+  "unverifiable",
+  "no-credentials",
+];
+const RECORD_PARAM_KEYS: readonly string[] = [
+  "backend",
+  "provider",
+  "step",
+  "secret",
+  "scope",
+  "runId",
+  "runUrl",
+  "detail",
+];
+const SHA_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+function isRecordObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function parseRecordParams(value: unknown): ErrorParams | undefined {
+  if (!isRecordObject(value)) return undefined;
+  const params: Record<string, string | number> = {};
+  for (const [key, field] of Object.entries(value)) {
+    if (key === "pr") {
+      if (!isPositiveInteger(field)) return undefined;
+      params.pr = field;
+    } else if (RECORD_PARAM_KEYS.includes(key) && typeof field === "string") {
+      params[key] = field;
+    } else {
+      return undefined;
+    }
+  }
+  return params as ErrorParams;
+}
+
+// The two classes the setup step writes, and no others: a wider reader would hide
+// a writer's bug, the same rule as parseRecordClass below.
+function parseSetupClass(value: unknown): ErrorClass | undefined {
+  if (!isRecordObject(value)) return undefined;
+  if (value.kind === "config-parse" && value.source === "routing") {
+    return { kind: "config-parse", source: "routing" };
+  }
+  if (
+    value.kind === "credential" &&
+    value.failureClass === "malformed_payload"
+  ) {
+    return { kind: "credential", failureClass: "malformed_payload" };
+  }
+  return undefined;
+}
+
+// Returns undefined for anything the publisher must not act on. The publisher
+// then reports the generic install failure, with a warning that says why.
+export function parseSetupRecord(text: string): SetupRecord | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecordObject(value) || value.v !== 1) return undefined;
+  const cls = parseSetupClass(value.cls);
+  if (cls === undefined) return undefined;
+  if (typeof value.detail !== "string" || value.detail.trim() === "") {
+    return undefined;
+  }
+  return { v: 1, cls, detail: value.detail };
+}
+
+// The classes the trigger writes. Any other kind is refused: the record is a
+// contract between two modules, and a wider reader would hide a writer's bug.
+// The trigger's writer type (RecordClass in src/ci/trigger.ts) allows exactly
+// one trigger check, pr-unresolved. The other trigger checks are classes the
+// publisher builds itself, so a record that names one is refused too.
+function parseRecordClass(value: unknown): ErrorClass | undefined {
+  if (!isRecordObject(value)) return undefined;
+  if (value.kind === "unknown") return { kind: "unknown" };
+  if (value.kind === "trigger") {
+    return value.check === "pr-unresolved"
+      ? { kind: "trigger", check: "pr-unresolved" }
+      : undefined;
+  }
+  if (value.kind === "github") {
+    if (!Number.isInteger(value.status)) return undefined;
+    const status = value.status as number;
+    if (value.rateLimited === undefined) return { kind: "github", status };
+    return value.rateLimited === true
+      ? { kind: "github", status, rateLimited: true }
+      : undefined;
+  }
+  return undefined;
+}
+
+// Returns undefined for anything the publisher must not act on. A file that
+// exists but fails here is an error for the publisher to report, never a
+// silent skip: see runPublish in src/ci/publish.ts.
+export function parseTriggerRecord(text: string): TriggerRecord | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecordObject(value) || value.v !== 1) return undefined;
+  const decision = TRIGGER_DECISIONS.find(
+    (candidate) => candidate === value.decision,
+  );
+  const params = parseRecordParams(value.params);
+  if (decision === undefined || params === undefined) return undefined;
+  if (
+    typeof value.repository !== "string" ||
+    !/^[^\s/]+\/[^\s/]+$/.test(value.repository) ||
+    typeof value.run_id !== "string" ||
+    !/^[0-9]+$/.test(value.run_id) ||
+    typeof value.run_url !== "string" ||
+    !/^\S+$/.test(value.run_url)
+  ) {
+    return undefined;
+  }
+  let runAttempt = 1;
+  if (value.run_attempt !== undefined) {
+    if (!isPositiveInteger(value.run_attempt)) return undefined;
+    runAttempt = value.run_attempt;
+  }
+  const record: TriggerRecord = {
+    v: 1,
+    decision,
+    params,
+    repository: value.repository,
+    run_id: value.run_id,
+    run_attempt: runAttempt,
+    run_url: value.run_url,
+  };
+  if (value.pr !== undefined) {
+    if (!isPositiveInteger(value.pr)) return undefined;
+    record.pr = value.pr;
+  }
+  if (value.head_sha !== undefined) {
+    if (
+      typeof value.head_sha !== "string" ||
+      !SHA_PATTERN.test(value.head_sha)
+    ) {
+      return undefined;
+    }
+    record.head_sha = value.head_sha;
+  }
+  if (value.cls !== undefined) {
+    const cls = parseRecordClass(value.cls);
+    if (cls === undefined) return undefined;
+    record.cls = cls;
+  }
+  return record;
 }
 
 // A switch over a closed union ends in `unmapped(value, fallback)`. A new
@@ -537,10 +734,45 @@ const UNCLASSIFIED_FIX =
 // The GitHub Actions expression is spliced in from two literals so the source
 // never holds a `${` pair that reads as a template placeholder here.
 const GITHUB_TOKEN_INPUT = "github-token: $" + "{{ secrets.GITHUB_TOKEN }}";
+// The `with:` line that hands the Claude secret to the action, spliced the same way.
+const CLAUDE_TOKEN_INPUT =
+  "claude-token: $" + "{{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}";
+// The `with:` line that hands the OpenCode auth store to the action, spliced the same way.
+const OPENCODE_AUTH_INPUT =
+  "opencode-auth: $" + "{{ secrets.OPENCODE_AUTH_JSON }}";
+// The `with:` line for the Claude API key, the alternative to the OAuth token.
+const ANTHROPIC_API_KEY_INPUT =
+  "anthropic-api-key: $" + "{{ secrets.ANTHROPIC_API_KEY }}";
+// The fix for a missing credential, by route. A Claude route names only the Claude
+// secrets. An OpenCode route leads with the OpenCode secret, and names the Claude
+// token only as the route it does not use (odd/tasks/agent-first-ci.md, A5).
+const CLAUDE_CREDENTIAL_FIXES = [
+  "Set one credential for the route you use:",
+  "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+  "$ gh secret set ANTHROPIC_API_KEY",
+  "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
+  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${CLAUDE_TOKEN_INPUT}\` or \`${ANTHROPIC_API_KEY_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
+  "Dependabot PRs read Dependabot secrets, so set this one too:",
+  "$ gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN",
+  "Then re-run the workflow:",
+  "$ gh run rerun {runId}",
+] as const;
+const OPENCODE_CREDENTIAL_FIXES = [
+  "Set the OpenCode credential for the route you use:",
+  "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
+  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${OPENCODE_AUTH_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
+  "An OpenCode route also needs the routing variable:",
+  "$ gh variable set PRHERO_ROUTING --body '<routing-object-json>'",
+  "Dependabot PRs read Dependabot secrets, so set this one too:",
+  "$ gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
+  "A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.",
+  "Then re-run the workflow:",
+  "$ gh run rerun {runId}",
+] as const;
 
 function single(
   why: string,
-  fixes: readonly string[],
+  fixes: CatalogVariant["fixes"],
   annotationFix: CatalogVariant["annotationFix"],
 ): Readonly<Record<string, CatalogVariant>> {
   return { default: { why, fixes, annotationFix } };
@@ -582,16 +814,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "No credential for the {backend} route reached the action",
     variants: single(
       "pr-hero cannot authenticate, so it cannot review this PR",
-      [
-        "Set one credential for the route you use:",
-        "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
-        "$ gh secret set ANTHROPIC_API_KEY",
-        "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-        "Dependabot PRs read Dependabot secrets, so set this one too:",
-        "$ gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN",
-        "Then re-run the workflow:",
-        "$ gh run rerun {runId}",
-      ],
+      (params) =>
+        isOpencodeRoute(params)
+          ? OPENCODE_CREDENTIAL_FIXES
+          : CLAUDE_CREDENTIAL_FIXES,
       (params) =>
         params.backend?.trim() === "opencode"
           ? "set the OPENCODE_AUTH_JSON secret: `gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json`"
@@ -625,6 +851,9 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
             : "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
       },
       malformed_payload: {
+        // WHY no route in the sentence: this class is raised for the OpenCode auth
+        // store and for a Claude keychain payload alike, and {detail} names which.
+        what: "The credential store is not usable: {detail}",
         why: CRED_STORE_WHY,
         fixes: [
           "Check that the store is a JSON object:",
@@ -762,17 +991,27 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "config",
     what: "The workflow token lacks `{scope}: write`",
-    variants: single(
-      "pr-hero cannot post its result on the PR",
-      [
-        "Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:",
-        "$ pr-hero ci init --force",
-      ],
-      (params) =>
-        isBlank(params.scope)
-          ? "add the missing scope under the job's `permissions:` (see docs)"
-          : "add `{scope}: write` under the job's `permissions:` in the workflow",
-    ),
+    variants: {
+      ...single(
+        "pr-hero cannot post its result on the PR",
+        [
+          "Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:",
+          "$ pr-hero ci init --force",
+        ],
+        "add `{scope}: write` under the job's `permissions:` in the workflow",
+      ),
+      // WHY a separate variant: a 403 whose scope is not known names no scope.
+      // renderCode picks it for every caller when the scope is blank.
+      "no-scope": {
+        what: "GitHub refused the workflow token (HTTP 403) during {step}",
+        why: "pr-hero cannot post its result on the PR",
+        fixes: [
+          `Check that the workflow passes \`${GITHUB_TOKEN_INPUT}\` on the action step, and keeps the \`permissions:\` block that \`pr-hero ci init\` scaffolds:`,
+          "$ pr-hero ci init --force",
+        ],
+        annotationFix: `check that the workflow passes \`${GITHUB_TOKEN_INPUT}\` and keeps the \`permissions:\` block that \`pr-hero ci init\` scaffolds`,
+      },
+    },
   },
   "PRH-GITHUB-TOKEN-INVALID": {
     level: "error",
@@ -808,13 +1047,23 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "config",
     what: "pr-hero could not determine the pull request number or head",
-    variants: single(
-      "nothing can be posted on a PR it cannot identify",
-      [
-        "Run from a pull_request or issue_comment event, or pass the `pr-number` input.",
-      ],
-      "run from a pull_request or issue_comment event, or pass the `pr-number` input",
-    ),
+    variants: {
+      ...single(
+        "nothing can be posted on a PR it cannot identify",
+        [
+          "Run from a pull_request or issue_comment event, or pass the `pr-number` input.",
+        ],
+        "run from a pull_request or issue_comment event, or pass the `pr-number` input",
+      ),
+      // The pr-number input was given but is not a positive integer. The record's
+      // detail names the input, so the fix tells the reader to correct it.
+      "malformed-input": {
+        what: "pr-hero could not determine the pull request number or head ({detail})",
+        why: "nothing can be posted on a PR it cannot identify",
+        fixes: ["Pass a positive integer as the `pr-number` input."],
+        annotationFix: "pass a positive integer as the `pr-number` input",
+      },
+    },
   },
   "PRH-STATUS-WRITE-FAILED": {
     level: "error",
@@ -986,20 +1235,22 @@ export function renderCode(
   variant?: string,
 ): RenderedError {
   const entry = ERROR_CATALOG[code];
-  const picked = pickVariant(entry, ctx, variant);
+  const picked = pickVariant(entry, ctx, paramVariant(code, params, variant));
   const owner = ownerFor(picked.owner ?? entry.owner, ctx);
   const providerName = entry.providerName ?? cleanName(params.provider);
   const lead = entry.lead ?? ownerLead(owner, providerName);
   const link = `${DOCS_BASE}${code.toLowerCase()}`;
   const what = picked.what ?? whatOf(entry, params);
+  const sentence = capitalized(fill(what, params, "annotation"));
   const message =
-    `${lead} ${capitalized(fill(what, params, "annotation"))}. ` +
+    `${lead} ${sentence}. ` +
     `Why: ${fill(picked.why, params, "annotation")}. ` +
     `Fix: ${annotationFixOf(picked, params)}. ` +
     `Docs: ${link}`;
   return {
     code,
     owner,
+    what: sentence,
     annotation: `::${entry.level} title=pr-hero ${code}::${escapeCommandData(message)}`,
     summary: summaryLines(code, entry, lead, what, picked, params, link),
   };
@@ -1020,6 +1271,31 @@ function capitalized(text: string): string {
   if (text.startsWith("pr-hero")) return text;
   const first = text.slice(0, 1);
   return first.toUpperCase() + text.slice(first.length);
+}
+
+// WHY the catalog picks the variant from the params, not the caller: a permission
+// 403 with no scope names no scope, so every caller (a class or a direct
+// renderCode) gets the same text and no placeholder reaches the PR. The same
+// holds for an unresolved PR: a detail means the pr-number input was given and
+// is malformed, so the fix must name that input, not ask for one that was passed.
+function paramVariant(
+  code: ErrorCode,
+  params: ErrorParams,
+  variant: string | undefined,
+): string | undefined {
+  if (code === "PRH-TOKEN-PERMISSION" && isBlank(params.scope)) {
+    return "no-scope";
+  }
+  // A caller that names a variant keeps it, so the default wording stays
+  // reachable with a detail present.
+  if (
+    variant === undefined &&
+    code === "PRH-PR-UNRESOLVED" &&
+    !isBlank(params.detail)
+  ) {
+    return "malformed-input";
+  }
+  return variant;
 }
 
 function pickVariant(

@@ -829,6 +829,123 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
 // from the DEFAULT branch. Committing the file to a feature branch and
 // commenting there starts nothing, silently, so the next steps must say where
 // the file has to land before `/pr-hero review` works.
+// The setup step's own exit path (odd/tasks/agent-first-ci.md, T2b / A1): a
+// malformed routing or auth input is the user's configuration, so the step
+// leaves setup.json for the publisher. Spawned, like the empty-HOME test
+// above, so the test exercises the real entry point and its real exit code.
+describe("setup.ts records a malformed input for the outcome publisher", () => {
+  const SETUP_SCRIPT = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "src",
+    "ci",
+    "setup.ts",
+  );
+
+  async function runSetup(env: Record<string, string>) {
+    const root = await mkdtemp(path.join(tmpdir(), "pr-hero-setup-record-"));
+    const home = path.join(root, "home");
+    const outDir = path.join(root, "outcome");
+    await mkdir(home, { recursive: true });
+    try {
+      const proc = Bun.spawn(["bun", SETUP_SCRIPT], {
+        cwd: root,
+        env: {
+          ...process.env,
+          HOME: home,
+          ROUTING_INPUT: "",
+          OPENCODE_AUTH_INPUT: "",
+          PRHERO_OUTCOME_DIR: outDir,
+          ...env,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stderr, exitCode] = await Promise.all([
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      const recordPath = path.join(outDir, "setup.json");
+      const recordText = existsSync(recordPath)
+        ? await readFile(recordPath, "utf8")
+        : undefined;
+      return { exitCode, stderr, recordText };
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  test("a routing input that is not JSON records config-parse routing, with a fixed detail and no content", async () => {
+    const result = await runSetup({
+      ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("CI routing input is not valid JSON");
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "config-parse", source: "routing" },
+      detail: "the routing input is not valid JSON",
+    });
+    expect(result.recordText).not.toContain("SENTINEL");
+  });
+
+  test("a routing input of the wrong shape records config-parse routing too, without the key it names", async () => {
+    const result = await runSetup({
+      ROUTING_INPUT: '{"SENTINEL-KEY-7f3a": 1}',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "config-parse", source: "routing" },
+      detail: "the routing input is not a valid routing object",
+    });
+    expect(result.recordText).not.toContain("SENTINEL");
+  });
+
+  test("an OpenCode auth input that is not JSON records a credential malformed_payload, with a fixed detail", async () => {
+    const result = await runSetup({
+      OPENCODE_AUTH_INPUT: '{"SENTINEL-AUTH-7f3a": ',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("CI opencode-auth is not valid JSON");
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "credential", failureClass: "malformed_payload" },
+      detail: "the opencode-auth input is not valid JSON",
+    });
+    expect(result.recordText).not.toContain("SENTINEL");
+  });
+
+  test("an OpenCode auth input that is JSON but not an object is the same class, with its own detail", async () => {
+    const result = await runSetup({
+      OPENCODE_AUTH_INPUT: '"SENTINEL-AUTH-7f3a"',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "credential", failureClass: "malformed_payload" },
+      detail: "the opencode-auth input must be a JSON object",
+    });
+    expect(result.recordText).not.toContain("SENTINEL");
+  });
+
+  test("a valid setup writes no record", async () => {
+    const result = await runSetup({});
+    expect(result.exitCode).toBe(0);
+    expect(result.recordText).toBeUndefined();
+  });
+
+  test("an environment failure writes no record, so the publisher cannot blame the configuration for it", async () => {
+    const result = await runSetup({
+      HOME: "",
+      ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.recordText).toBeUndefined();
+  });
+});
+
 describe("ci init next steps (CLI)", () => {
   test("say that /pr-hero review works once the workflow is on the default branch", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "prhero-ci-init-"));

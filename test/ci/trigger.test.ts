@@ -5,10 +5,18 @@
 // action's own module rather than on the caller's YAML.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CI_REVIEW_COMMENT, CI_REVIEW_FULL_COMMENT } from "#ci/force-comment";
+import { parseTriggerRecord, type TriggerRecord } from "#ci/outcome";
 import {
   type CiTriggerDecision,
   type CiTriggerInput,
@@ -16,8 +24,8 @@ import {
   commenterPermissionNeeded,
   decideCiTrigger,
   type GhResult,
+  type OutcomeFs,
   parseReviewCommand,
-  renderNoCredentialsSummary,
   resolvePrNumber,
   runCiTrigger,
   runnerCredentialPaths,
@@ -506,6 +514,20 @@ function commentEnv(body: string, overrides: Record<string, string> = {}) {
 // `exists` answers for the on-runner credential files and defaults to
 // "nothing on disk", so no test reads the developer's own home. `sleep` is
 // recorded, never real, so the permission retry costs no wall time.
+// The record's file writes fail, as a full disk would. Nothing is left behind.
+const failingFs: OutcomeFs = {
+  mkdir: (dir) => {
+    mkdirSync(dir, { recursive: true });
+  },
+  writeFile: () => {
+    throw new Error("ENOSPC: no space left on device");
+  },
+  rename: () => {
+    throw new Error("rename must not run after a failed write");
+  },
+  remove: (filePath) => rmSync(filePath, { force: true }),
+};
+
 function runShell(
   env: Record<string, string>,
   answer: (args: readonly string[]) => GhResult = () => ({
@@ -514,6 +536,7 @@ function runShell(
     stderr: "gh: not scripted",
   }),
   exists: (filePath: string) => boolean = () => false,
+  fs?: OutcomeFs,
 ) {
   const ghCalls: string[][] = [];
   const sleeps: number[] = [];
@@ -539,6 +562,7 @@ function runShell(
     appendSummary: (text) => {
       summary += text;
     },
+    ...(fs === undefined ? {} : { fs }),
   });
   const outputs = Object.fromEntries(
     output
@@ -553,6 +577,32 @@ function runShell(
 }
 
 const ok = (stdout: string): GhResult => ({ exitCode: 0, stdout, stderr: "" });
+
+// Runs the shell with PRHERO_OUTCOME_DIR pointed at a fresh directory that does
+// not exist yet (the trigger must create it), then reads trigger.json back.
+function outcomeRun(
+  env: Record<string, string>,
+  answer?: (args: readonly string[]) => GhResult,
+) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-record-"));
+  try {
+    const dir = path.join(root, "pr-hero-outcome");
+    const run = runShell({ ...env, PRHERO_OUTCOME_DIR: dir }, answer);
+    const file = path.join(dir, "trigger.json");
+    const recordText = existsSync(file)
+      ? readFileSync(file, "utf8")
+      : undefined;
+    return {
+      ...run,
+      recordText,
+      record:
+        recordText === undefined ? undefined : parseTriggerRecord(recordText),
+      dir,
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 function scriptedGh(permission: GhResult, headSha: GhResult) {
   return (args: readonly string[]): GhResult =>
@@ -569,6 +619,7 @@ describe("runCiTrigger — the shell", () => {
       full: "false",
       pr: "7",
       head_sha: HEAD_SHA,
+      publish: "true",
     });
     expect(run.ghCalls).toEqual([]);
   });
@@ -585,6 +636,7 @@ describe("runCiTrigger — the shell", () => {
       full: "true",
       pr: "21",
       head_sha: OTHER_SHA,
+      publish: "true",
     });
     expect(run.ghCalls).toEqual([
       [
@@ -661,9 +713,15 @@ describe("runCiTrigger — the shell", () => {
       );
       expect(run.exitCode).toBe(1);
       expect(run.outputs.run).toBe("false");
-      expect(run.stdout).toStartWith("::error title=pr-hero::");
-      expect(run.stdout).toContain("@maintainer");
-      expect(run.stdout).toContain("`/pr-hero review` again");
+      // No outcome dir means no record for the publisher, so the trigger names
+      // the cause itself: one line, the commenter and the failed lookup.
+      expect(run.outputs.publish).toBe("true");
+      expect(run.stdout).toStartWith(
+        "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+      );
+      expect(run.stdout.split("\n").filter((line) => line !== "")).toHaveLength(
+        1,
+      );
       expect(run.ghCalls.filter((call) => call[0] === "api")).toHaveLength(2);
       expect(run.ghCalls.filter((call) => call[0] === "pr")).toHaveLength(0);
       // One short fixed pause between the two attempts, never more.
@@ -689,6 +747,7 @@ describe("runCiTrigger — the shell", () => {
       full: "false",
       pr: "21",
       head_sha: OTHER_SHA,
+      publish: "true",
     });
     expect(run.ghCalls.map((call) => call[0])).toEqual(["api", "api", "pr"]);
     expect(run.sleeps).toHaveLength(1);
@@ -700,71 +759,143 @@ describe("runCiTrigger — the shell", () => {
     });
     expect(run.exitCode).toBe(1);
     expect(run.outputs.run).toBe("false");
-    expect(run.stdout).toStartWith("::error title=pr-hero::");
+    expect(run.outputs.publish).toBe("true");
+    // No outcome dir, so no record: the trigger names the cause itself.
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+    );
+    expect(run.stdout).toContain("spawn gh ENOENT");
+    // The retry is the whole lookup: an unverifiable run asks for no head.
     expect(run.ghCalls).toHaveLength(2);
   });
 
-  test("the unverifiable error is one workflow command, whatever the login or gh says", () => {
-    const run = runShell(
-      commentEnv("/pr-hero review", {
-        COMMENTER_LOGIN: "evil\n::warning::HOSTILE-LOGIN",
-      }),
-      () => ({
-        exitCode: 1,
-        stdout: "",
-        stderr: "gh: Server Error (HTTP 500)\n::error::HOSTILE-STDERR",
-      }),
-    );
-    expect(run.exitCode).toBe(1);
-    expect(run.stdout.match(/^::/gm)).toEqual(["::"]);
-    expect(run.stdout).not.toContain("HOSTILE-STDERR");
+  test("an unverifiable lookup prints nothing, and its record holds neither the login nor gh's text", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-hostile-"));
+    try {
+      const run = runShell(
+        commentEnv("/pr-hero review", {
+          COMMENTER_LOGIN: "evil\n::warning::HOSTILE-LOGIN",
+          PRHERO_OUTCOME_DIR: path.join(dir, "outcome"),
+        }),
+        () => ({
+          exitCode: 1,
+          stdout: "",
+          stderr: "gh: Server Error (HTTP 500)\n::error::HOSTILE-STDERR",
+        }),
+      );
+      expect(run.exitCode).toBe(1);
+      expect(run.stdout).toBe("");
+      const text = readFileSync(
+        path.join(dir, "outcome", "trigger.json"),
+        "utf8",
+      );
+      expect(text).not.toContain("HOSTILE");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
-  test("no credential is an error, a summary with the fix, run=false and exit 1", () => {
+  test("no credential is red with run=false and publish=true; with no record the trigger names the cause", () => {
     const run = runShell(baseEnv({ HAS_CLAUDE_TOKEN: "false" }));
     expect(run.exitCode).toBe(1);
     expect(run.outputs.run).toBe("false");
-    expect(run.stdout).toStartWith("::error title=pr-hero::");
-    expect(run.summary).toBe(renderNoCredentialsSummary({ runId: "4242" }));
+    expect(run.outputs.publish).toBe("true");
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::pr-hero has no credential for this review",
+    );
+    expect(run.summary).toBe("");
   });
 
-  test("the no-credentials summary names every fix command and both ways to re-run", () => {
-    const summary = renderNoCredentialsSummary({ runId: "4242" });
-    for (const command of [
-      "claude setup-token",
-      "gh secret set CLAUDE_CODE_OAUTH_TOKEN",
-      "gh secret set ANTHROPIC_API_KEY",
-      "gh secret set OPENCODE_AUTH_JSON",
-      "gh variable set PRHERO_ROUTING --body '<routing-object-json>'",
-      "gh run rerun 4242",
-      "/pr-hero review",
-    ]) {
-      expect(summary).toContain(command);
-    }
-    // What is wrong names the three inputs that were all empty.
-    for (const input of [
-      "anthropic-api-key",
-      "claude-token",
-      "opencode-auth",
-    ]) {
-      expect(summary).toContain(input);
-    }
+  test("a dispatch with no pr-number is red, publishes, and records the class instead of printing it", () => {
+    const { exitCode, outputs, stdout, record } = outcomeRun(
+      baseEnv({ EVENT_NAME: "workflow_dispatch", EVENT_PR_NUMBER: "" }),
+    );
+    expect(exitCode).toBe(1);
+    expect(outputs.run).toBe("false");
+    expect(outputs.publish).toBe("true");
+    expect(stdout).toBe("");
+    expect(record?.decision).toBe("review");
+    expect(record?.cls).toEqual({ kind: "trigger", check: "pr-unresolved" });
+    expect(record?.pr).toBeUndefined();
   });
 
-  test("without a run id the re-run command keeps a placeholder", () => {
-    expect(renderNoCredentialsSummary({})).toContain("gh run rerun <run-id>");
-  });
-
-  test("a dispatch with no pr-number is the old error and exit 1", () => {
+  test("with no outcome dir, an unresolved PR names its cause on one error line", () => {
     const run = runShell(
       baseEnv({ EVENT_NAME: "workflow_dispatch", EVENT_PR_NUMBER: "" }),
     );
     expect(run.exitCode).toBe(1);
-    expect(run.outputs.run).toBe("false");
-    expect(run.stdout).toContain(
-      "Could not determine the pull request number from the workflow context. Set the 'pr-number' input explicitly.",
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::Could not determine the pull request number",
     );
-    expect(run.stdout).toStartWith("::error");
+    expect(run.stdout.split("\n").filter((line) => line !== "")).toHaveLength(
+      1,
+    );
+  });
+
+  test("with no outcome dir, a missing credential names its cause on one error line", () => {
+    const run = runShell(baseEnv({ HAS_CLAUDE_TOKEN: "false" }));
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::pr-hero has no credential for this review",
+    );
+    expect(run.stdout).toContain("anthropic-api-key");
+  });
+
+  test("with no outcome dir, an unverifiable lookup names its cause and the gh detail", () => {
+    const run = runShell(
+      commentEnv("/pr-hero review"),
+      scriptedGh(
+        { exitCode: 1, stdout: "", stderr: "gh: Server Error (HTTP 500)" },
+        ok(HEAD_SHA),
+      ),
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+    );
+    expect(run.stdout).toContain("gh: Server Error (HTTP 500)");
+  });
+
+  test("a record that cannot be written names the cause after the write error, on its own line", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-cause-"));
+    try {
+      const dir = path.join(root, "outcome");
+      const run = runShell(
+        baseEnv({ HAS_CLAUDE_TOKEN: "false", PRHERO_OUTCOME_DIR: dir }),
+        undefined,
+        undefined,
+        failingFs,
+      );
+      expect(run.exitCode).toBe(1);
+      const lines = run.stdout.split("\n").filter((line) => line !== "");
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toStartWith(
+        "::error title=pr-hero::pr-hero could not write",
+      );
+      expect(lines[1]).toStartWith(
+        "::error title=pr-hero::pr-hero has no credential for this review",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed pr-number is recorded with its fixed detail, and the record never echoes the value", () => {
+    const { exitCode, outputs, stdout, recordText, record } = outcomeRun(
+      baseEnv({
+        EVENT_NAME: "workflow_dispatch",
+        EVENT_PR_NUMBER: "",
+        PR_NUMBER_INPUT: "12\nrun=true",
+      }),
+    );
+    expect(exitCode).toBe(1);
+    expect(outputs.publish).toBe("true");
+    expect(stdout).toBe("");
+    expect(record?.cls).toEqual({ kind: "trigger", check: "pr-unresolved" });
+    expect(record?.params).toEqual({
+      detail: "the pr-number input is not a positive integer",
+    });
+    expect(recordText).not.toContain("run=true");
   });
 
   test("the legacy force dispatch flows pr-number, force and full straight through", () => {
@@ -786,6 +917,7 @@ describe("runCiTrigger — the shell", () => {
       full: "true",
       pr: "305",
       head_sha: OTHER_SHA,
+      publish: "true",
     });
   });
 
@@ -811,6 +943,27 @@ describe("runCiTrigger — the shell", () => {
     );
     expect(run.outputs.head_sha).toBe("unknown");
     expect(run.output.match(/^run=/gm)).toEqual(["run="]);
+  });
+
+  test("trigger.json never holds a secret value, the comment body or gh's text", () => {
+    const hostile = "/pr-hero review ::error::HOSTILE-BODY";
+    const runs = [
+      outcomeRun(baseEnv({ HAS_CLAUDE_TOKEN: "false" })),
+      outcomeRun(baseEnv()),
+      outcomeRun(commentEnv(hostile)),
+      outcomeRun(commentEnv("/pr-hero review"), () => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: "gh: Server Error (HTTP 502) HOSTILE-GH",
+      })),
+    ];
+    for (const run of runs) {
+      expect(run.recordText).toBeDefined();
+      for (const secret of Object.values(SECRETS)) {
+        expect(run.recordText ?? "").not.toContain(secret);
+      }
+      expect(run.recordText ?? "").not.toContain("HOSTILE");
+    }
   });
 
   test("no outcome ever prints a secret value or the comment body", () => {
@@ -843,6 +996,283 @@ describe("runCiTrigger — the shell", () => {
   });
 });
 
+describe("runCiTrigger — the outcome record and the publish output (T2b)", () => {
+  test("every decision writes trigger.json with the documented fields", () => {
+    const cases: Array<
+      [string, Record<string, string>, TriggerRecord["decision"]]
+    > = [
+      ["review", baseEnv(), "review"],
+      [
+        "no-credentials",
+        baseEnv({ HAS_CLAUDE_TOKEN: "false" }),
+        "no-credentials",
+      ],
+      ["ignore", commentEnv("/pr-hero review please"), "ignore"],
+    ];
+    for (const [, env, decision] of cases) {
+      const run = outcomeRun(env);
+      expect(run.record?.decision).toBe(decision);
+      expect(run.record?.v).toBe(1);
+      expect(run.record?.repository).toBe(REPO);
+      expect(run.record?.run_id).toBe("4242");
+      expect(run.record?.run_url).toBe(
+        `https://github.com/${REPO}/actions/runs/4242`,
+      );
+      expect(run.record?.params).toEqual(expect.any(Object));
+    }
+  });
+
+  test("a denied commenter's record is written too", () => {
+    const run = outcomeRun(
+      commentEnv("/pr-hero review"),
+      scriptedGh(ok("read"), ok(HEAD_SHA)),
+    );
+    expect(run.record?.decision).toBe("denied");
+    expect(run.outputs.publish).toBe("false");
+  });
+
+  test("the record of a review carries the PR number and the head it reviewed", () => {
+    const run = outcomeRun(baseEnv());
+    expect(run.record?.pr).toBe(7);
+    expect(run.record?.head_sha).toBe(HEAD_SHA);
+    expect(run.outputs.publish).toBe("true");
+  });
+
+  test("no-credentials carries the PR and the head, so the publisher can post on the PR", () => {
+    const run = outcomeRun(baseEnv({ HAS_CLAUDE_TOKEN: "false" }));
+    expect(run.record?.pr).toBe(7);
+    expect(run.record?.head_sha).toBe(HEAD_SHA);
+    expect(run.outputs.pr).toBe("7");
+    expect(run.outputs.head_sha).toBe(HEAD_SHA);
+    expect(run.outputs.run).toBe("false");
+  });
+
+  test("no-credentials names the route from the routing input, so the fix matches it", () => {
+    expect(
+      outcomeRun(baseEnv({ HAS_CLAUDE_TOKEN: "false" })).record?.params,
+    ).toEqual({ backend: "claude" });
+    expect(
+      outcomeRun(
+        baseEnv({ HAS_CLAUDE_TOKEN: "false", HAS_OPENCODE_ROUTING: "true" }),
+      ).record?.params,
+    ).toEqual({ backend: "opencode" });
+  });
+
+  test("publish is true for review, no-credentials and unverifiable, and false otherwise", () => {
+    const publish = (
+      env: Record<string, string>,
+      answer?: Parameters<typeof runShell>[1],
+    ) => runShell(env, answer).outputs.publish;
+    expect(publish(baseEnv())).toBe("true");
+    expect(publish(baseEnv({ HAS_CLAUDE_TOKEN: "false" }))).toBe("true");
+    expect(
+      publish(commentEnv("/pr-hero review"), () => {
+        throw new Error("spawn gh ENOENT");
+      }),
+    ).toBe("true");
+    expect(publish(commentEnv("/pr-hero review please"))).toBe("false");
+    expect(
+      publish(
+        commentEnv("/pr-hero review"),
+        scriptedGh(ok("read"), ok(HEAD_SHA)),
+      ),
+    ).toBe("false");
+  });
+
+  test("an unverifiable lookup records the HTTP status gh printed, as a github class", () => {
+    const run = outcomeRun(commentEnv("/pr-hero review"), () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "gh: Server Error (HTTP 503)",
+    }));
+    expect(run.record?.decision).toBe("unverifiable");
+    expect(run.record?.cls).toEqual({ kind: "github", status: 503 });
+    expect(run.record?.head_sha).toBeUndefined();
+  });
+
+  test("a 403 is a rate limit only when gh says so; otherwise it stays a permission reading", () => {
+    const limited = outcomeRun(commentEnv("/pr-hero review"), () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "gh: API rate limit exceeded (HTTP 403)",
+    }));
+    expect(limited.record?.cls).toEqual({
+      kind: "github",
+      status: 403,
+      rateLimited: true,
+    });
+    const refused = outcomeRun(commentEnv("/pr-hero review"), () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "gh: Resource not accessible (HTTP 403)",
+    }));
+    expect(refused.record?.cls).toEqual({ kind: "github", status: 403 });
+    expect(refused.record?.cls).not.toHaveProperty("rateLimited");
+  });
+
+  test("an unverifiable lookup with no HTTP status records no class", () => {
+    const run = outcomeRun(commentEnv("/pr-hero review"), () => ({
+      exitCode: -1,
+      stdout: "",
+      stderr: "spawn gh ENOENT",
+    }));
+    expect(run.record?.decision).toBe("unverifiable");
+    expect(run.record?.cls).toBeUndefined();
+  });
+
+  test("an unverifiable lookup's record names the step that failed, so the publisher can say which one", () => {
+    const run = outcomeRun(commentEnv("/pr-hero review"), () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "gh: Resource not accessible (HTTP 403)",
+    }));
+    expect(run.record?.decision).toBe("unverifiable");
+    expect(run.record?.params).toEqual({
+      step: "the commenter permission check",
+    });
+  });
+
+  test("the record carries the run attempt the runner reports, so a re-run is told apart from its first attempt", () => {
+    // WHY: gh run rerun reuses the run id. Without the attempt, a re-run's
+    // record is indistinguishable from the first attempt's.
+    const run = outcomeRun(baseEnv({ GITHUB_RUN_ATTEMPT: "2" }));
+    expect(run.record?.run_attempt).toBe(2);
+  });
+
+  test("a run attempt the runner does not report as a positive integer is left out of the record", () => {
+    const run = outcomeRun(baseEnv({ GITHUB_RUN_ATTEMPT: "0" }));
+    expect(run.recordText).not.toContain("run_attempt");
+    expect(run.record?.run_attempt).toBe(1);
+  });
+
+  test("a marker left by an earlier run in the same outcome directory is cleared before this run writes its record", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-stale-"));
+    try {
+      const dir = path.join(root, "pr-hero-outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "cli-started"), "");
+      writeFileSync(path.join(dir, "setup.json"), "{}");
+      runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      expect(existsSync(path.join(dir, "cli-started"))).toBe(false);
+      expect(existsSync(path.join(dir, "setup.json"))).toBe(false);
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a review whose PR resolves records no class and no error", () => {
+    const run = outcomeRun(baseEnv());
+    expect(run.record?.cls).toBeUndefined();
+    expect(run.exitCode).toBe(0);
+  });
+
+  test("a record that cannot be written leaves no partial file and keeps the decision's exit code", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-atomic-"));
+    try {
+      const dir = path.join(root, "outcome");
+      let stdout = "";
+      const exitCode = runCiTrigger({
+        env: { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        gh: () => ({ exitCode: 1, stdout: "", stderr: "unused" }),
+        sleep: () => {},
+        exists: () => false,
+        stdout: (text) => {
+          stdout += text;
+        },
+        appendOutput: () => {},
+        appendSummary: () => {},
+        fs: {
+          mkdir: (target) => {
+            mkdirSync(target, { recursive: true });
+          },
+          writeFile: (filePath) => {
+            writeFileSync(filePath, '{"v":1,"deci');
+            throw new Error("ENOSPC: no space left on device");
+          },
+          rename: () => {
+            throw new Error("rename must not run after a failed write");
+          },
+          remove: (filePath) => rmSync(filePath, { force: true }),
+        },
+      });
+      expect(exitCode).toBe(0);
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(false);
+      expect(existsSync(path.join(dir, "trigger.json.tmp"))).toBe(false);
+      expect(stdout).toContain("::error title=pr-hero::");
+      expect(stdout).toContain("outcome record");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // WHY: the publish step reads whatever trigger.json is on disk. When this
+  // run's write failed, the file there is an earlier attempt's, so publish must
+  // be off. A decision that is the only speaker (no credential, an unresolved
+  // PR, an unverifiable permission) names its own cause on the failed write.
+  test.each([
+    ["a review", baseEnv(), undefined, 0, undefined],
+    [
+      "no credentials",
+      baseEnv({ HAS_CLAUDE_TOKEN: "false" }),
+      undefined,
+      1,
+      "pr-hero has no credential",
+    ],
+    [
+      "an unresolved PR",
+      baseEnv({ EVENT_NAME: "workflow_dispatch", EVENT_PR_NUMBER: "" }),
+      undefined,
+      1,
+      "Could not determine the pull request number",
+    ],
+    [
+      "an unverifiable permission",
+      commentEnv("/pr-hero review"),
+      (): GhResult => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: "gh: Server Error (HTTP 503)",
+      }),
+      1,
+      "could not verify",
+    ],
+  ])(
+    "a failed record write on %s turns publish off",
+    (_label, env, answer, exitCode, cause) => {
+      const root = mkdtempSync(
+        path.join(os.tmpdir(), "prhero-trigger-publish-off-"),
+      );
+      try {
+        const run = runShell(
+          { ...env, PRHERO_OUTCOME_DIR: path.join(root, "outcome") },
+          answer,
+          () => false,
+          failingFs,
+        );
+        expect(run.exitCode).toBe(exitCode);
+        expect(run.outputs.publish).toBe("false");
+        if (cause === undefined) {
+          expect(run.outputs.run).toBe("true");
+        } else {
+          expect(run.stdout).toContain(cause);
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("with no PRHERO_OUTCOME_DIR nothing is written and the outputs are unchanged", () => {
+    const run = runShell(baseEnv());
+    expect(run.outputs.run).toBe("true");
+    expect(run.outputs.publish).toBe("true");
+    expect(Object.keys(run.outputs).sort()).toEqual(
+      ["force", "full", "head_sha", "pr", "publish", "run"].sort(),
+    );
+  });
+});
+
 describe("runCiTrigger — a fork's pull_request_target", () => {
   test("reviews the fork head from the event, with no gh call", () => {
     const run = runShell(
@@ -858,6 +1288,7 @@ describe("runCiTrigger — a fork's pull_request_target", () => {
       full: "false",
       pr: "7",
       head_sha: HEAD_SHA,
+      publish: "true",
     });
     expect(run.ghCalls).toEqual([]);
   });
@@ -916,8 +1347,8 @@ describe("runCiTrigger — credentials already on the runner", () => {
   test("a GitHub-hosted runner with no input and no file is still no-credentials", () => {
     const run = runShell(noInput({ RUNNER_ENVIRONMENT: "github-hosted" }));
     expect(run.exitCode).toBe(1);
-    expect(run.stdout).toStartWith("::error title=pr-hero::");
-    expect(run.summary).toBe(renderNoCredentialsSummary({ runId: "4242" }));
+    expect(run.outputs.publish).toBe("true");
+    expect(run.summary).toBe("");
   });
 
   // action.yml's Run pr-hero step binds ANTHROPIC_API_KEY and
@@ -1050,12 +1481,26 @@ describe("trigger.ts runs before `bun install`", () => {
     expect(run.output).toContain(`head_sha=${HEAD_SHA}\n`);
   });
 
-  test("as a process, no credential exits 1 with the summary written", () => {
-    const run = spawnTrigger(baseEnv({ HAS_CLAUDE_TOKEN: "false" }));
-    expect(run.exitCode).toBe(1);
-    expect(run.output).toContain("run=false\n");
-    expect(run.stdout).toContain("::error title=pr-hero::");
-    expect(run.summary).toContain("gh secret set CLAUDE_CODE_OAUTH_TOKEN");
+  test("as a process, no credential exits 1, publishes, and leaves its record", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-proc-"));
+    try {
+      const run = spawnTrigger({
+        ...baseEnv({ HAS_CLAUDE_TOKEN: "false" }),
+        PRHERO_OUTCOME_DIR: path.join(dir, "outcome"),
+      });
+      expect(run.exitCode).toBe(1);
+      expect(run.output).toContain("run=false\n");
+      expect(run.output).toContain("publish=true\n");
+      expect(run.stdout).toBe("");
+      expect(run.summary).toBe("");
+      expect(
+        parseTriggerRecord(
+          readFileSync(path.join(dir, "outcome", "trigger.json"), "utf8"),
+        )?.decision,
+      ).toBe("no-credentials");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
