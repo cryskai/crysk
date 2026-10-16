@@ -26,6 +26,10 @@ const SHA = "c".repeat(40);
 const RUN_URL = `https://github.com/${REPO}/actions/runs/4242`;
 const MODULE_PATH = path.resolve(import.meta.dir, "../../src/ci/publish.ts");
 const MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=4242 -->`;
+// The run this file's record belongs to is 4242, so a marker from an older run
+// is 4000 and one from a newer run is 5000. Cleanup deletes only the older one.
+const OLDER_MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=4000 -->`;
+const NEWER_MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=5000 -->`;
 
 function record(overrides: Partial<TriggerRecord> = {}): TriggerRecord {
   return {
@@ -48,21 +52,42 @@ describe("decidePublication — the pure table", () => {
     );
   });
 
-  test("a review whose CLI started cleans up its PR, and posts neither status nor comment", () => {
+  test("a review whose CLI succeeded cleans up its PR, and posts neither status nor comment", () => {
     // WHY: an outcome comment from an earlier run contradicts the review this
-    // run started, and the CLI owns this run's status and comment. So the plan
-    // names only the PR to clean.
-    expect(decidePublication({ record: record(), cliStarted: true })).toEqual({
+    // run completed, and the CLI owns this run's status and comment. So the plan
+    // names only the PR to clean, and the run whose comments may be removed.
+    expect(
+      decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliSucceeded: true,
+      }),
+    ).toEqual({
       kind: "cleanup",
       repository: REPO,
       pr: 7,
+      runId: "4242",
     });
+  });
+
+  test("a review whose CLI started but did not succeed is left alone, so the CLI's own output stays the explanation", () => {
+    // WHY: cli-started is written before the CLI runs, so an early CLI failure
+    // leaves no outcome of its own. Cleaning up here would delete the only
+    // explanation on the PR. T2c moves the CLI's outcomes into this step.
+    expect(
+      decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliSucceeded: false,
+      }),
+    ).toEqual({ kind: "none" });
   });
 
   test("a review whose CLI started without a known PR has nothing to clean up", () => {
     const input = {
       record: record({ pr: undefined, head_sha: undefined }),
       cliStarted: true,
+      cliSucceeded: true,
     };
     expect(decidePublication(input)).toEqual({ kind: "none" });
   });
@@ -399,6 +424,7 @@ function listing(...rows: Array<[number, string, string, string]>): GhResult {
 function runPublishIn(options: {
   record?: TriggerRecord | string;
   cliStarted?: boolean;
+  cliSucceeded?: boolean;
   setup?: object | string;
   status?: GhResult[];
   create?: GhResult;
@@ -419,6 +445,9 @@ function runPublishIn(options: {
     }
     if (options.cliStarted === true) {
       writeFileSync(path.join(dir, "cli-started"), "");
+    }
+    if (options.cliSucceeded === true) {
+      writeFileSync(path.join(dir, "cli-succeeded"), "");
     }
     if (options.setup !== undefined) {
       writeFileSync(
@@ -510,6 +539,7 @@ describe("runPublish — the shell", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
+      cliSucceeded: true,
       viewer: ok("pr-hero-bot"),
       list: listing(),
     });
@@ -517,6 +547,19 @@ describe("runPublish — the shell", () => {
     expect(statusCalls(run.calls)).toEqual([]);
     expect(run.calls.filter((call) => call.args.includes("POST"))).toEqual([]);
     expect(run.summary).toBe("");
+  });
+
+  test("a CLI that started and did not succeed deletes nothing and makes no gh call", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      cliSucceeded: false,
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.calls).toEqual([]);
+    expect(run.stdout).toBe("");
   });
 
   test("an install failure writes the annotation and the summary, then posts", () => {
@@ -560,19 +603,65 @@ describe("runPublish — the shell", () => {
     const run = runPublishIn({
       record: record(),
       list: listing(
-        [10, "bot-a", "User", MARKER],
-        [11, "someone-else", "User", MARKER],
+        [10, "bot-a", "User", OLDER_MARKER],
+        [11, "someone-else", "User", OLDER_MARKER],
         [12, "bot-a", "User", "Quoting it here: <!-- pr-hero-outcome"],
-        [13, "bot-a", "User", MARKER],
-        [25, "bot-a", "User", MARKER],
+        [13, "bot-a", "User", OLDER_MARKER],
+        [25, "bot-a", "User", NEWER_MARKER],
       ),
     });
-    // The new comment is id 20 by bot-a. 25 is newer than it (a concurrent
-    // run), so it stays; 11 belongs to another author; 12 is not an outcome.
+    // The new comment is id 20 by bot-a. 25 is newer in both id and run (a
+    // concurrent run), so it stays; 11 belongs to another author; 12 is not an
+    // outcome.
     expect(deletions(run.calls)).toEqual([
       `repos/${REPO}/issues/comments/10`,
       `repos/${REPO}/issues/comments/13`,
     ]);
+  });
+
+  test("the post-path cleanup keeps a newer run's comment even when that comment was posted first", () => {
+    // WHY: run ids order the runs, not comment ids. A run that started later can
+    // post before this one, so its comment has a LOWER id than the new comment
+    // (20) and only the run bound keeps it.
+    const run = runPublishIn({
+      record: record(),
+      list: listing(
+        [10, "bot-a", "User", OLDER_MARKER],
+        [15, "bot-a", "User", NEWER_MARKER],
+      ),
+    });
+    expect(deletions(run.calls)).toEqual([`repos/${REPO}/issues/comments/10`]);
+  });
+
+  test("when this run's own id is not a positive integer, no older comment can be ordered, so none is deleted", () => {
+    // WHY: with no run order, an older comment cannot be proven older, so the
+    // safe default is to delete nothing. GITHUB_RUN_ID is blanked so the
+    // record's id is the only one the step has.
+    const run = runPublishIn({
+      record: record({ run_id: "abc" }),
+      list: listing([10, "bot-a", "User", OLDER_MARKER]),
+      env: { GITHUB_RUN_ID: "" },
+    });
+    expect(deletions(run.calls)).toEqual([]);
+  });
+
+  test("an outcome comment whose marker names no positive run id is kept on the post path", () => {
+    // WHY: with no run id there is no order, so the comment is not this step's
+    // to remove. Covers a missing run=, run=0 and a non-numeric run=.
+    const run = runPublishIn({
+      record: record(),
+      list: listing(
+        [10, "bot-a", "User", `<!-- pr-hero-outcome v=1 head=${SHA} -->`],
+        [11, "bot-a", "User", `<!-- pr-hero-outcome v=1 head=${SHA} run=0 -->`],
+        [
+          12,
+          "bot-a",
+          "User",
+          `<!-- pr-hero-outcome v=1 head=${SHA} run=abc -->`,
+        ],
+      ),
+    });
+    expect(deletions(run.calls)).toEqual([]);
   });
 
   test("an unknown author deletes nothing", () => {
@@ -747,18 +836,19 @@ describe("runPublish — cleanup once the CLI started", () => {
   const removedIds = (run: { calls: Call[] }) =>
     deletions(run.calls).map((url) => url.split("/").pop());
 
-  test("with a viewer login, deletes only that login's marker comments", () => {
+  test("with a viewer login, deletes only that login's older marker comments", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
+      cliSucceeded: true,
       viewer: ok("pr-hero-bot\n"),
       list: listing(
-        [10, "pr-hero-bot", "Bot", MARKER],
-        [11, "alice", "User", MARKER],
+        [10, "pr-hero-bot", "Bot", OLDER_MARKER],
+        [11, "alice", "User", OLDER_MARKER],
         [12, "pr-hero-bot", "Bot", "Thanks for the review"],
-        [13, "pr-hero-bot", "Bot", MARKER],
+        [13, "pr-hero-bot", "Bot", OLDER_MARKER],
         // A Bot-typed marker by another login: the viewer chain keeps it.
-        [14, BOT_AUTHOR, "Bot", MARKER],
+        [14, BOT_AUTHOR, "Bot", OLDER_MARKER],
       ),
     });
     expect(deletions(run.calls)).toEqual([
@@ -772,6 +862,57 @@ describe("runPublish — cleanup once the CLI started", () => {
     expect(run.calls.filter((call) => call.args.includes("POST"))).toEqual([]);
   });
 
+  test("the cleanup never deletes this run's own marker or a newer run's", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      cliSucceeded: true,
+      viewer: ok("pr-hero-bot"),
+      list: listing(
+        [10, "pr-hero-bot", "Bot", OLDER_MARKER],
+        [11, "pr-hero-bot", "Bot", MARKER],
+        [12, "pr-hero-bot", "Bot", NEWER_MARKER],
+      ),
+    });
+    expect(removedIds(run)).toEqual(["10"]);
+  });
+
+  test("the cleanup keeps an outcome comment whose marker names no positive run id", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      cliSucceeded: true,
+      viewer: ok("pr-hero-bot"),
+      list: listing(
+        [10, "pr-hero-bot", "Bot", `<!-- pr-hero-outcome v=1 head=${SHA} -->`],
+        [
+          11,
+          "pr-hero-bot",
+          "Bot",
+          `<!-- pr-hero-outcome v=1 head=${SHA} run=0 -->`,
+        ],
+      ),
+    });
+    expect(deletions(run.calls)).toEqual([]);
+  });
+
+  test("a viewer login matches the REST bot login, which carries a [bot] suffix", () => {
+    // WHY: GraphQL names the workflow token's login `github-actions`, while REST
+    // lists the same account as `github-actions[bot]`. Without this match a
+    // successful viewer lookup would delete nothing at all.
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      cliSucceeded: true,
+      viewer: ok("github-actions\n"),
+      list: listing(
+        [10, BOT_AUTHOR, "Bot", OLDER_MARKER],
+        [11, "alice", "User", OLDER_MARKER],
+      ),
+    });
+    expect(removedIds(run)).toEqual(["10"]);
+  });
+
   test.each([
     ["fails", fail("gh: Bad credentials (HTTP 401)")],
     ["answers empty", ok("")],
@@ -781,11 +922,12 @@ describe("runPublish — cleanup once the CLI started", () => {
       const run = runPublishIn({
         record: record(),
         cliStarted: true,
+        cliSucceeded: true,
         viewer,
         list: listing(
-          [10, "pr-hero-bot", "Bot", MARKER],
-          [11, "alice", "User", MARKER],
-          [12, BOT_AUTHOR, "Bot", MARKER],
+          [10, "pr-hero-bot", "Bot", OLDER_MARKER],
+          [11, "alice", "User", OLDER_MARKER],
+          [12, BOT_AUTHOR, "Bot", OLDER_MARKER],
           [13, "bob", "User", "Thanks for the review"],
         ),
       });
@@ -802,6 +944,7 @@ describe("runPublish — cleanup once the CLI started", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
+      cliSucceeded: true,
       viewer: ok("pr-hero-bot"),
       list: fail("gh: Server Error (HTTP 502)"),
     });
@@ -821,10 +964,11 @@ describe("runPublish — cleanup once the CLI started", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
+      cliSucceeded: true,
       viewer: ok("pr-hero-bot"),
       list: listing(
-        [10, "pr-hero-bot", "Bot", MARKER],
-        [11, "pr-hero-bot", "Bot", MARKER],
+        [10, "pr-hero-bot", "Bot", OLDER_MARKER],
+        [11, "pr-hero-bot", "Bot", OLDER_MARKER],
       ),
       remove: fail("gh: Server Error (HTTP 500)"),
     });
@@ -838,6 +982,7 @@ describe("runPublish — cleanup once the CLI started", () => {
     const run = runPublishIn({
       record: record({ pr: undefined, head_sha: undefined }),
       cliStarted: true,
+      cliSucceeded: true,
     });
     expect(run.exitCode).toBe(0);
     expect(run.calls).toEqual([]);
@@ -850,8 +995,8 @@ describe("runPublish — cleanup once the CLI started", () => {
     const run = runPublishIn({
       record: record(),
       list: listing(
-        [10, "bot-a", "User", MARKER],
-        [11, "someone-else", "User", MARKER],
+        [10, "bot-a", "User", OLDER_MARKER],
+        [11, "someone-else", "User", OLDER_MARKER],
       ),
     });
     expect(run.exitCode).toBe(0);
@@ -900,6 +1045,7 @@ describe("publish.ts runs before `bun install`", () => {
     try {
       writeFileSync(path.join(dir, "trigger.json"), JSON.stringify(record()));
       writeFileSync(path.join(dir, "cli-started"), "");
+      writeFileSync(path.join(dir, "cli-succeeded"), "");
       const result = Bun.spawnSync([process.execPath, MODULE_PATH], {
         cwd: dir,
         env: {

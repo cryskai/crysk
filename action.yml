@@ -219,7 +219,7 @@ runs:
         # The line above is the first thing this step does, before anything
         # else can fail. WHY: the publish step must tell "an earlier step failed"
         # (no marker) from "the CLI ran and owns its own output" (marker). It
-        # reads the marker and nothing else, so it needs no steps.<id>.outcome.
+        # reads these markers and nothing else, so it needs no steps.<id>.outcome.
         #
         # NEVER redirect stderr away in this step: pr-hero's log() writes to
         # process.stderr unconditionally, and GitHub Actions scans BOTH
@@ -247,7 +247,14 @@ runs:
         if [ "$TRIGGER_FORCE" = "true" ]; then set -- "$@" --force; fi
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
 
-        bun "${{ github.action_path }}/bin/pr-hero.js" "$@"
+        # WHY: cli-succeeded is the marker the publish step's cleanup trusts, so
+        # it is written on exit 0 alone. `|| rc=$?` keeps a failed CLI from
+        # ending the step before the marker check, and `exit "$rc"` hands the
+        # CLI's own code back, so the job's result is exactly the CLI's.
+        rc=0
+        bun "${{ github.action_path }}/bin/pr-hero.js" "$@" || rc=$?
+        if [ "$rc" -eq 0 ]; then : > "$PRHERO_OUTCOME_DIR/cli-succeeded"; fi
+        exit "$rc"
 
     # Speaks for the outcomes that happen BEFORE the CLI starts (T2b, S3): no
     # credential, a pull request that cannot be resolved, a commenter permission
@@ -274,9 +281,11 @@ runs:
     #
     # IN THIS RELEASE it speaks only for pre-CLI outcomes. When the cli-started
     # marker exists the CLI ran and owns its own status and comment, so this
-    # step posts nothing; it only deletes pr-hero's own older outcome comments,
-    # which a successful review would otherwise contradict. T2c moves the CLI's
-    # outcomes here.
+    # step posts nothing. It deletes pr-hero's own older outcome comments only
+    # when the cli-succeeded marker exists too: after a later run's review
+    # succeeds, those comments would contradict it. Only an older run's comments
+    # go. A CLI that started and failed keeps its comments, since they are the
+    # only explanation on the PR. T2c moves the CLI's outcomes here.
     - name: Publish pr-hero outcome
       id: publish
       # Wrapped in ${{ }}: a bare `!cancelled()` is a YAML tag, not an expression.

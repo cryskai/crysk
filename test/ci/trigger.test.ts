@@ -1138,9 +1138,11 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       const dir = path.join(root, "pr-hero-outcome");
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, "cli-started"), "");
+      writeFileSync(path.join(dir, "cli-succeeded"), "");
       writeFileSync(path.join(dir, "setup.json"), "{}");
       runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
       expect(existsSync(path.join(dir, "cli-started"))).toBe(false);
+      expect(existsSync(path.join(dir, "cli-succeeded"))).toBe(false);
       expect(existsSync(path.join(dir, "setup.json"))).toBe(false);
       expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
     } finally {

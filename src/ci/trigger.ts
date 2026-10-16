@@ -514,13 +514,16 @@ function runIdentity(deps: CiTriggerDeps): RunIdentity {
 
 // The markers an earlier job may have left in a reused outcome directory: a
 // self-hosted runner keeps runner.temp. The setup step writes SETUP_RECORD, and
-// the run step writes CLI_STARTED_MARKER. Both are cleared before this run's
-// record, so a stale marker cannot make an install failure look like the CLI ran.
+// the run step writes CLI_STARTED_MARKER before the CLI runs and
+// CLI_SUCCEEDED_MARKER only when it exits 0. All are cleared before this run's
+// record, so a stale marker cannot make an install failure look like the CLI ran,
+// or a failed CLI look like a completed review.
 const CLI_STARTED_MARKER = "cli-started";
+const CLI_SUCCEEDED_MARKER = "cli-succeeded";
 const SETUP_RECORD = "setup.json";
 
 function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
-  for (const name of [CLI_STARTED_MARKER, SETUP_RECORD]) {
+  for (const name of [CLI_STARTED_MARKER, CLI_SUCCEEDED_MARKER, SETUP_RECORD]) {
     fs.remove(path.join(dir, name));
   }
 }

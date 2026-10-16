@@ -547,13 +547,19 @@ describe("Packaging & distribution configuration", () => {
       inputs: Record<string, string>,
       github: Record<string, string>,
       gh: FakeGh = offlineGh,
+      // The exit code the fake CLI returns, so the run step's handling of a
+      // failed CLI can be observed. Zero unless a test says otherwise.
+      cliExit = 0,
     ): Promise<{
       exitCode: number;
       trigger: Record<string, string>;
       args: string[] | undefined;
       // What the run leaves in the outcome directory: the marker the run step
-      // writes first, and the record the trigger wrote.
+      // writes first, the marker it writes only after a CLI exit 0, and the
+      // record the trigger wrote. runStepExitCode is the run step's own exit.
       cliStarted: boolean;
+      cliSucceeded: boolean;
+      runStepExitCode: number | undefined;
       record: string | undefined;
     }> {
       const { runCiTrigger } = await import("#ci/trigger");
@@ -605,6 +611,8 @@ describe("Packaging & distribution configuration", () => {
             trigger,
             args: undefined,
             cliStarted: existsSync(path.join(outcomeDir, "cli-started")),
+            cliSucceeded: existsSync(path.join(outcomeDir, "cli-succeeded")),
+            runStepExitCode: undefined,
             record,
           };
         }
@@ -620,7 +628,7 @@ describe("Packaging & distribution configuration", () => {
           `\${{ github.action_path }}`,
           "/action",
         );
-        const fakeBun = `bun() { shift; printf '%s\\n' "$@"; }`;
+        const fakeBun = `bun() { shift; printf '%s\\n' "$@"; return ${cliExit}; }`;
         const result = Bun.spawnSync(
           [
             "bash",
@@ -642,6 +650,8 @@ describe("Packaging & distribution configuration", () => {
           trigger,
           args,
           cliStarted: existsSync(path.join(outcomeDir, "cli-started")),
+          cliSucceeded: existsSync(path.join(outcomeDir, "cli-succeeded")),
+          runStepExitCode: result.exitCode,
           record,
         };
       } finally {
@@ -831,14 +841,40 @@ describe("Packaging & distribution configuration", () => {
       expect(JSON.stringify(env)).not.toContain("inputs.routing }}");
     });
 
-    test("a run that reaches the CLI leaves the marker and a review record, and nothing else", async () => {
+    test("a run that reaches the CLI leaves both markers and a review record, and nothing else", async () => {
       const run = await runAction(
         { ...CREDENTIAL, "pr-number": "305" },
         { repository: REPOSITORY, event_name: "workflow_dispatch" },
       );
       expect(run.args?.slice(0, 2)).toEqual(["review", "--pr"]);
       expect(run.cliStarted).toBe(true);
+      expect(run.cliSucceeded).toBe(true);
       expect(JSON.parse(run.record ?? "{}").decision).toBe("review");
+    });
+
+    // WHY: cli-succeeded is what lets the publish step clean up. A failed CLI
+    // must leave it out, and must still fail the step with its own exit code,
+    // or the job would report success for a review that never ran.
+    test("the run step writes cli-succeeded only when the CLI exits 0, and exits with the CLI's code", async () => {
+      const succeeded = await runAction(
+        { ...CREDENTIAL, "pr-number": "305" },
+        { repository: REPOSITORY, event_name: "workflow_dispatch" },
+        offlineGh,
+        0,
+      );
+      expect(succeeded.runStepExitCode).toBe(0);
+      expect(succeeded.cliStarted).toBe(true);
+      expect(succeeded.cliSucceeded).toBe(true);
+
+      const failed = await runAction(
+        { ...CREDENTIAL, "pr-number": "305" },
+        { repository: REPOSITORY, event_name: "workflow_dispatch" },
+        offlineGh,
+        7,
+      );
+      expect(failed.runStepExitCode).toBe(7);
+      expect(failed.cliStarted).toBe(true);
+      expect(failed.cliSucceeded).toBe(false);
     });
 
     test("a run with no credential never reaches the CLI: no marker, and a no-credentials record", async () => {
