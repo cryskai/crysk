@@ -1161,6 +1161,25 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     }
   });
 
+  test("a cli.json left by an earlier job in the same outcome directory is removed at trigger start", () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-trigger-cli-stale-"),
+    );
+    try {
+      const dir = path.join(root, "pr-hero-outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "cli.json"),
+        '{"v":1,"outcome":"reviewed"}\n',
+      );
+      runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      expect(existsSync(path.join(dir, "cli.json"))).toBe(false);
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a review whose PR resolves records no class and no error", () => {
     const run = outcomeRun(baseEnv());
     expect(run.record?.cls).toBeUndefined();

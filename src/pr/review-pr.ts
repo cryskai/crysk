@@ -19,6 +19,7 @@
 //     stay outside of.
 
 import path from "node:path";
+import { writeCliRecord } from "#ci/cli-record";
 import { planCiSizeSkip } from "#ci/gates";
 import { withCiWorkflowGroup } from "#ci/reporter";
 import { pipelineConfigInput } from "#config/config";
@@ -52,7 +53,7 @@ import {
   fetchPrReviewComments,
   ghPrFiles,
 } from "#pr/pr";
-import { createPrRunDir } from "#pr/preflight";
+import { commitStatusCompletion, createPrRunDir } from "#pr/preflight";
 import { publishRunOutcome } from "#pr/publish-outcome";
 import { resolveEagerLocalIgnore, resolvePrFetchAndRange } from "#pr/range";
 import {
@@ -87,6 +88,30 @@ import { acquirePidLock } from "../home";
 import { worktreeLockPath } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
 import type { ProductionRuntime } from "../production-runtime";
+
+// The CLI's verdict on its own pipeline, for cli.json (odd/tasks/agent-first-ci.md,
+// T2c). reviewPr writes it right after runPipeline returns and before
+// publishRunOutcome, so a throw while publishing still leaves the review's own
+// result on disk. It reads the same completion predicate as the commit status,
+// so the record and the status cannot disagree about success. A pipeline that
+// never returned writes nothing: its throw reaches the fatal record instead.
+export function recordPipelineOutcome(
+  result: { readonly sessionFailed: boolean } | undefined,
+  headSha: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  const head = /^[0-9a-f]{40}$/.test(headSha) ? headSha : undefined;
+  const headField = head === undefined ? {} : { head_sha: head };
+  const completion = commitStatusCompletion({
+    pipelineFinished: result !== undefined,
+    sessionFailed: result?.sessionFailed === true,
+  });
+  if (completion === "success") {
+    writeCliRecord({ v: 1, outcome: "reviewed", ...headField }, env);
+  } else if (result?.sessionFailed === true) {
+    writeCliRecord({ v: 1, outcome: "hunters-failed", ...headField }, env);
+  }
+}
 
 export async function reviewPr(
   options: CliOptions,
@@ -576,6 +601,7 @@ export async function reviewPr(
           }
         }
       });
+      recordPipelineOutcome(result, headSha);
       // 12-16 — everything from the artifact write through CI publishing and
       // the ledger's terminal settlement. See publishRunOutcome
       // (src/pr/publish-outcome.ts) for the full rationale, including the

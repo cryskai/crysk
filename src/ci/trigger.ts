@@ -445,7 +445,7 @@ export interface OutcomeFs {
   remove(filePath: string): void;
 }
 
-const NODE_FS: OutcomeFs = {
+export const NODE_FS: OutcomeFs = {
   mkdir: (dir) => {
     mkdirSync(dir, { recursive: true });
   },
@@ -462,9 +462,15 @@ const NODE_FS: OutcomeFs = {
 
 // WHY tmp then rename: the publish step reads the record in a later step, and
 // it must never see a half-written file. A failed write removes its temp file,
-// so nothing partial is left for the publisher to misread.
-function writeRecordAtomically(dir: string, text: string, fs: OutcomeFs): void {
-  const finalPath = path.join(dir, OUTCOME_RECORD);
+// so nothing partial is left for the publisher to misread. The CLI's cli.json
+// (src/ci/cli-record.ts) goes through this same writer under its own name.
+export function writeRecordAtomically(
+  dir: string,
+  name: string,
+  text: string,
+  fs: OutcomeFs,
+): void {
+  const finalPath = path.join(dir, name);
   const tempPath = `${finalPath}.tmp`;
   fs.mkdir(dir);
   try {
@@ -527,15 +533,19 @@ function runIdentity(deps: CiTriggerDeps): RunIdentity {
 
 // The markers an earlier job may have left in a reused outcome directory: a
 // self-hosted runner keeps runner.temp. The setup step writes SETUP_RECORD, and
-// the run step writes CLI_STARTED_MARKER before the CLI runs. Both are cleared
-// before this run's record, so a stale marker cannot make an install failure
-// look like the CLI ran. No marker records the CLI's completion either: the
-// publisher reads the CLI's commit status for that.
+// the run step writes CLI_STARTED_MARKER before the CLI runs. CLI_RECORD is the
+// CLI's own outcome (src/ci/outcome.ts's CLI_RECORD_FILE, named out here because
+// this module imports nothing from outcome.ts). All are cleared before this
+// run's record, so a stale marker cannot make an install failure look like the
+// CLI ran, and a stale CLI record cannot stand in for this run's. No marker
+// records the CLI's completion either: the publisher reads the CLI's commit
+// status for that.
 const CLI_STARTED_MARKER = "cli-started";
 const SETUP_RECORD = "setup.json";
+const CLI_RECORD = "cli.json";
 
 function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
-  for (const name of [CLI_STARTED_MARKER, SETUP_RECORD]) {
+  for (const name of [CLI_STARTED_MARKER, SETUP_RECORD, CLI_RECORD]) {
     fs.remove(path.join(dir, name));
   }
 }
@@ -572,7 +582,12 @@ function writeRecord(
     const fs = deps.fs ?? NODE_FS;
     fs.mkdir(dir);
     clearStaleMarkers(dir, fs);
-    writeRecordAtomically(dir, `${JSON.stringify(record)}\n`, fs);
+    writeRecordAtomically(
+      dir,
+      OUTCOME_RECORD,
+      `${JSON.stringify(record)}\n`,
+      fs,
+    );
     return "written";
   } catch {
     deps.stdout(

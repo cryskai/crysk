@@ -7,11 +7,13 @@ import {
   reserveAdmissionAttempt,
   settleAdmissionAttempt,
 } from "#ci/admission-ledger";
+import { writeCliRecord } from "#ci/cli-record";
 import {
   type CiGateSkipPlan,
   shouldWriteCiOutputs,
   shouldWriteStepSummary,
 } from "#ci/gates";
+import type { CliRecord } from "#ci/outcome";
 import {
   appendCiOutputs,
   appendStepSummary,
@@ -220,6 +222,24 @@ export async function recordCiAdmissionGateSkip(input: {
   }
 }
 
+// The skip kind a plan stands for, read from the status its outputs carry. The
+// status is a plain string in CiOutputs, so an unknown one yields no kind and no
+// record: a skip the publisher cannot name is not a skip it may report.
+function cliSkipKindOf(plan: CiGateSkipPlan): CliRecord["skip"] {
+  switch (plan.outputs.status) {
+    case "skipped-size":
+      return "size";
+    case "skipped-budget":
+      return "budget";
+    case "skipped-coverage":
+      return "coverage";
+    case "manual-required":
+      return "manual-required";
+    default:
+      return undefined;
+  }
+}
+
 export async function publishCiSkip(input: {
   operatorRoot: string;
   prNumber: number;
@@ -230,6 +250,12 @@ export async function publishCiSkip(input: {
   noticeMessage: string;
 }): Promise<number> {
   log(formatWorkflowCommand("notice", input.noticeMessage));
+  // The record names the skip kind only. The plan carries no head, so none is
+  // written: the publisher takes the head from the trigger's record.
+  const skip = cliSkipKindOf(input.plan);
+  if (skip !== undefined) {
+    writeCliRecord({ v: 1, outcome: "skipped", skip });
+  }
   if (input.post) {
     // Repost, never edit in place: an edited notice is invisible on GitHub,
     // so a later push that was skipped again looked like nothing happened.

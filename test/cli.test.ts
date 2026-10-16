@@ -862,3 +862,86 @@ describe("settleHeldCommitStatusOnSignal", () => {
     await expect(settleHeldCommitStatusOnSignal(post)).resolves.toBeUndefined();
   });
 });
+
+// T2c unit A (odd/tasks/agent-first-ci.md, S3): the fatal exits of main() leave
+// cli.json in action mode. An early validation (a malformed argument) writes
+// nothing: it is a pre-review exit the publisher reads as stopped-before-reporting.
+describe("main — the outcome record in action mode", () => {
+  let savedOutcome: string | undefined;
+  let savedStderrWrite: typeof process.stderr.write;
+
+  beforeEach(() => {
+    savedOutcome = process.env.PRHERO_OUTCOME_DIR;
+    savedStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+  });
+
+  afterEach(() => {
+    process.stderr.write = savedStderrWrite;
+    if (savedOutcome === undefined) {
+      delete process.env.PRHERO_OUTCOME_DIR;
+    } else {
+      process.env.PRHERO_OUTCOME_DIR = savedOutcome;
+    }
+  });
+
+  test("a CliError from a command body records error, unclassified, and still exits 1", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-main-record-"));
+    const outcome = path.join(dir, "outcome");
+    const notARepo = path.join(dir, "not-a-repo");
+    await mkdir(notARepo, { recursive: true });
+    process.env.PRHERO_OUTCOME_DIR = outcome;
+    try {
+      const code = await main([
+        "post",
+        "--pr",
+        "5",
+        "--from",
+        dir,
+        "--repo",
+        notARepo,
+      ]);
+      expect(code).toBe(1);
+      const record = JSON.parse(
+        await Bun.file(path.join(outcome, "cli.json")).text(),
+      );
+      expect(record).toEqual({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "unknown" },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed argument writes no record and still exits 2", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-main-noparse-"));
+    const outcome = path.join(dir, "outcome");
+    await mkdir(outcome, { recursive: true });
+    process.env.PRHERO_OUTCOME_DIR = outcome;
+    try {
+      expect(await main(["review", "--no-such-flag"])).toBe(2);
+      expect(await Bun.file(path.join(outcome, "cli.json")).exists()).toBe(
+        false,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // runCli's catch calls process.exit, so no test can reach it. This pins the
+  // write's place instead: the record is written inside that catch, before the
+  // rethrow that a local run takes when $GITHUB_OUTPUT is unset.
+  test("runCli's catch writes the fatal record before any rethrow", async () => {
+    const source = await Bun.file(
+      path.join(import.meta.dir, "../src/cli.ts"),
+    ).text();
+    const runCliAt = source.indexOf("export async function runCli(");
+    const writeAt = source.indexOf("writeCliRecord({", runCliAt);
+    const rethrowAt = source.indexOf("throw error;", runCliAt);
+    expect(runCliAt).toBeGreaterThan(-1);
+    expect(writeAt).toBeGreaterThan(runCliAt);
+    expect(rethrowAt).toBeGreaterThan(writeAt);
+  });
+});

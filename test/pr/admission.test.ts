@@ -5,14 +5,20 @@
 // observables.
 
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   type AdmissionAttemptStatus,
   type AdmissionRecord,
   admissionRecordFingerprint,
 } from "#ci/admission-ledger";
+import { ciGateSkipOutputs } from "#ci/gates";
+import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
 import {
   type CiAdmissionLedgerState,
   holdCiAdmissionLedger,
+  publishCiSkip,
   releaseCiAdmissionLedger,
   settleCiAdmissionLedger,
   settleHeldAdmissionLedgerOnSignal,
@@ -179,3 +185,103 @@ describe("settleHeldAdmissionLedgerOnSignal", () => {
     releaseCiAdmissionLedger();
   });
 });
+
+// T2c unit A (odd/tasks/agent-first-ci.md, S3): publishCiSkip is the single path
+// for the size, budget, coverage and manual-required notices. In action mode it
+// also leaves the skip kind in cli.json; the notice itself is unchanged.
+describe("publishCiSkip: the outcome record", () => {
+  const SKIP_CASES: ReadonlyArray<
+    [
+      Parameters<typeof ciGateSkipOutputs>[0],
+      "size" | "budget" | "coverage" | "manual-required",
+    ]
+  > = [
+    ["skipped-size", "size"],
+    ["skipped-budget", "budget"],
+    ["skipped-coverage", "coverage"],
+    ["manual-required", "manual-required"],
+  ];
+
+  function planFor(status: Parameters<typeof ciGateSkipOutputs>[0]) {
+    return {
+      comment: "skip comment",
+      markerPrefix: "<!-- pr-hero-skip-test -->",
+      summaryMarkdown: "skip summary\n",
+      outputs: ciGateSkipOutputs(status, 0),
+    };
+  }
+
+  async function publish(
+    status: Parameters<typeof ciGateSkipOutputs>[0],
+  ): Promise<{ code: number; stderr: string }> {
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const code = await publishCiSkip({
+        operatorRoot: "/unused",
+        prNumber: PR,
+        post: false,
+        isCi: false,
+        stepSummaryFlag: false,
+        plan: planFor(status),
+        noticeMessage: "pr-hero review skipped — fixture",
+      });
+      return { code, stderr: chunks.join("") };
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  }
+
+  test.each(SKIP_CASES)(
+    "%s is recorded as skipped for %s, with no head (the plan carries none)",
+    async (status, skip) => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-record-"));
+      const saved = process.env.PRHERO_OUTCOME_DIR;
+      process.env.PRHERO_OUTCOME_DIR = dir;
+      try {
+        expect((await publish(status)).code).toBe(0);
+        const written = readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
+        expect(parseCliRecord(written)).toEqual({
+          v: 1,
+          outcome: "skipped",
+          skip,
+        });
+      } finally {
+        restoreOutcomeDir(saved);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("the notice and the exit code are identical with and without the outcome directory", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-same-"));
+    const saved = process.env.PRHERO_OUTCOME_DIR;
+    try {
+      delete process.env.PRHERO_OUTCOME_DIR;
+      const without = await publish("skipped-size");
+      expect(existsSync(path.join(dir, CLI_RECORD_FILE))).toBe(false);
+
+      process.env.PRHERO_OUTCOME_DIR = dir;
+      const withDir = await publish("skipped-size");
+      expect(withDir).toEqual(without);
+      expect(without.stderr).toContain("pr-hero review skipped — fixture");
+    } finally {
+      restoreOutcomeDir(saved);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+function restoreOutcomeDir(saved: string | undefined): void {
+  if (saved === undefined) {
+    delete process.env.PRHERO_OUTCOME_DIR;
+  } else {
+    process.env.PRHERO_OUTCOME_DIR = saved;
+  }
+}
