@@ -36,7 +36,10 @@ export type Check =
   | { kind: "override-comment" }
   // T2e: the triggering comment carries this reaction. A refused or near-miss comment
   // gets its reaction and no text reply, so the reaction is the only trace it leaves.
-  | { kind: "reaction"; content: string };
+  | { kind: "reaction"; content: string }
+  // T2e: the run's review step did not run: it is skipped, or absent. A near-miss
+  // comment's run reviews nothing, so its step is skipped, and no review is new.
+  | { kind: "no-review-step" };
 
 export interface CheckResult {
   label: string;
@@ -82,6 +85,8 @@ export function describeCheck(check: Check): string {
       return "an override comment this run posted on this head";
     case "reaction":
       return `the triggering comment has the ${check.content} reaction`;
+    case "no-review-step":
+      return "the run's review step did not run";
   }
 }
 
@@ -261,15 +266,27 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       return pass(ok, `no override comment on ${obs.headSha} from this run`);
     }
     case "reaction": {
-      // Without a trigger comment there is nothing to read: that is a failure of
-      // the observation, not of the reaction, so the detail says which it is.
+      // Unset when the phase has no triggering comment or its read failed. That is
+      // a failure of the observation, not a missing reaction, so it never passes.
       const seen = obs.reactions;
       if (seen === undefined) {
-        return pass(false, "no triggering comment observed");
+        return pass(false, "the triggering comment's reactions were not read");
       }
       return pass(
         seen.includes(check.content),
         `got ${seen.join(", ") || "no reaction"}`,
+      );
+    }
+    case "no-review-step": {
+      // A run that reviewed has its review step succeed, so a skipped one (or none)
+      // is a run that reviewed nothing. A missing run is not a pass.
+      if (obs.run === undefined) return pass(false, "no run was found");
+      const step = obs.run.steps.find((s) => s.name === RUN_STEP_NAME);
+      const conclusion =
+        step === undefined ? "no step" : String(step.conclusion);
+      return pass(
+        step === undefined || step.conclusion === "skipped",
+        `got ${conclusion} for ${RUN_STEP_NAME}`,
       );
     }
   }

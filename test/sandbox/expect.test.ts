@@ -390,6 +390,8 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
         conclusion: "success",
         steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
       },
+      // The accepted command's reaction, read from the comment (T2e).
+      reactions: ["eyes"],
     }),
     // The pull_request run was read again instead of the comment run: the check must catch it.
     fail: obs({
@@ -400,6 +402,43 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
         conclusion: "success",
         steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
       },
+    }),
+  },
+  // A near miss: the review's own phase, then a comment that is not the exact command.
+  "near-miss/0": {
+    pass: obs(),
+    fail: obs({
+      status: {
+        state: "error",
+        description: "PRH-CRED-MISSING: no credential",
+      },
+      comments: [outcome("PRH-CRED-MISSING")],
+    }),
+  },
+  "near-miss/1": {
+    pass: obs({
+      run: {
+        id: 10,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        // The near miss's review step is skipped: it reviewed nothing.
+        steps: [{ name: RUN_STEP_NAME, conclusion: "skipped" }],
+      },
+      reactions: ["confused"],
+    }),
+    // A comment run that reviewed and answered eyes: the near miss must not review,
+    // and its comment must not read as accepted.
+    fail: obs({
+      run: {
+        id: 10,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      reactions: ["eyes"],
+      comments: [outcome("PRH-CRED-MISSING")],
     }),
   },
   // S8: a red gate on a reviewed head, then the override that turns it green.
@@ -832,15 +871,60 @@ describe("reaction: the triggering comment carries the reaction (T2e)", () => {
     expect(result.detail).toBe("got no reaction");
   });
 
-  test("no observed trigger comment fails as not observed, never as a missing reaction", () => {
+  test("unread reactions (no comment phase, or a failed read) fail as not read, never as a missing reaction", () => {
     const result = evaluateCheck(check, obs());
     expect(result.pass).toBe(false);
-    expect(result.detail).toBe("no triggering comment observed");
+    expect(result.detail).toBe(
+      "the triggering comment's reactions were not read",
+    );
   });
 
   test("its label names the reaction", () => {
     expect(evaluateCheck(check, obs()).label).toBe(
       "the triggering comment has the eyes reaction",
+    );
+  });
+});
+
+// T2e: a near miss's comment run reviews nothing. The check reads that run's own review
+// step: skipped (or absent) passes, a step that ran fails, and no run is not a pass.
+describe("no-review-step: the comment's run did not review (T2e)", () => {
+  const check = { kind: "no-review-step" } as const;
+  const runWith = (conclusion: string | null) => ({
+    id: 10,
+    event: "issue_comment",
+    status: "completed",
+    conclusion: "success",
+    steps: [{ name: RUN_STEP_NAME, conclusion }],
+  });
+
+  test("a recorded pass: the review step was skipped; a recorded fail: it succeeded", () => {
+    const pass = obs({ run: runWith("skipped") });
+    const fail = obs({ run: runWith("success") });
+    expect(evaluateCheck(check, pass).pass).toBe(true);
+    expect(evaluateCheck(check, fail).pass).toBe(false);
+    expect(evaluateCheck(check, fail).detail).toBe(
+      `got success for ${RUN_STEP_NAME}`,
+    );
+  });
+
+  test("a run with no review step at all passes, and a step still in progress fails", () => {
+    const noStep = obs({
+      run: { ...runWith("skipped"), steps: [] },
+    });
+    expect(evaluateCheck(check, noStep).pass).toBe(true);
+    expect(evaluateCheck(check, obs({ run: runWith(null) })).pass).toBe(false);
+  });
+
+  test("no run was found fails, and never passes as an unreviewed run", () => {
+    const result = evaluateCheck(check, obs({ run: undefined }));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("no run was found");
+  });
+
+  test("its label says the review step did not run", () => {
+    expect(evaluateCheck(check, obs()).label).toBe(
+      "the run's review step did not run",
     );
   });
 });

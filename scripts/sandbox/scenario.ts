@@ -40,6 +40,7 @@ import {
   assertScenarioBranch,
   guardedGh,
   guardedGit,
+  RailViolation,
   SANDBOX_REPO,
   SCENARIO_BRANCH_PREFIX,
 } from "./rails";
@@ -108,6 +109,8 @@ interface Live {
   // When the scenario's comment was created, in epoch ms. Its run is created after
   // it, so a run created before it (less a skew) cannot be the comment's run.
   commentCreatedAt?: number;
+  // The id of that comment, from the URL gh printed. Its reactions are read by it.
+  commentId?: string;
   // When the push that starts the scenario was made (epoch ms, this machine's clock),
   // and when GitHub created the PR (its clock). Cleanup looks the PR's runs up from
   // these: see runs.ts.
@@ -324,7 +327,15 @@ async function runOne(
           `timed out after ${Math.round(pollTiming(options).timeoutMs / 1000)}s waiting for the run; collecting what is visible`,
         );
       }
-      const obs = await collect(work, live);
+      const collected = await collect(work, live);
+      // Only a comment phase has a triggering comment whose reactions a check can read.
+      const obs: Observation =
+        phase.action.kind === "comment"
+          ? {
+              ...collected,
+              reactions: await triggerReactions(work, live),
+            }
+          : collected;
       // A run that did not complete has no path to read. It is reported as
       // timed-out and fails the scenario, whatever its partial evidence says.
       const observed: SmokePath = polled.completed
@@ -488,24 +499,58 @@ async function perform(
     action.body,
   ]);
   deps.log(`comment: ${url.trim()}`);
-  live.commentCreatedAt = await commentCreatedAt(deps, url);
+  live.commentId = commentIdOf(url);
+  live.commentCreatedAt = await commentCreatedAt(deps, live.commentId);
 }
 
-// When GitHub stored the comment whose URL gh printed. The comment's run is matched
-// against this time, so it is read from the comment itself, not from this clock.
-async function commentCreatedAt(
-  deps: SandboxDeps,
-  url: string,
-): Promise<number> {
+// The id GitHub gave the comment whose URL gh printed. The comment's run and its
+// reactions are read by this id.
+function commentIdOf(url: string): string {
   const id = /#issuecomment-(\d+)$/.exec(url.trim())?.[1];
   if (id === undefined) {
     throw new Error(`gh pr comment printed no comment URL: ${url.trim()}`);
   }
+  return id;
+}
+
+// When GitHub stored the comment. The comment's run is matched against this time, so
+// it is read from the comment itself, not from this clock.
+async function commentCreatedAt(
+  deps: SandboxDeps,
+  id: string,
+): Promise<number> {
   const comment = await ghJson<{ created_at: string }>(deps, [
     "api",
     `repos/${SANDBOX_REPO}/issues/comments/${id}`,
   ]);
   return Date.parse(comment.created_at);
+}
+
+// The reactions on the triggering comment, read through the rails. A read that fails
+// leaves the field unset, so the reaction check fails on what it could not read and
+// never passes on it. An interrupt and a rail refusal are not read failures: they
+// still throw, so a signal stops the scenario and a bug in the rails is not hidden.
+async function triggerReactions(
+  deps: SandboxDeps,
+  live: Live,
+): Promise<string[] | undefined> {
+  if (live.commentId === undefined) return undefined;
+  try {
+    const reactions = await ghJson<{ content: string }[]>(deps, [
+      "api",
+      `repos/${SANDBOX_REPO}/issues/comments/${live.commentId}/reactions?per_page=100`,
+    ]);
+    return reactions.map((reaction) => reaction.content);
+  } catch (error) {
+    if (error instanceof Interrupted || error instanceof RailViolation) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    deps.log(
+      `could not read the reactions on the triggering comment: ${message}`,
+    );
+    return undefined;
+  }
 }
 
 // Writes the variant's workflow onto the branch when it differs, and commits it.

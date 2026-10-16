@@ -91,7 +91,9 @@ interface CommentRow {
 // success status whatever it finds. `size-skip` is a pull_request run over the
 // size gate: the skip marker and a failure status, and no report.
 // `override` is a `/pr-hero override` comment run: the audit comment and a success
-// status naming the actor, and no report and no outcome (S8).
+// status naming the actor, and no report and no outcome (S8). `near-miss` is a
+// comment that starts like a command but is not one: its run's review step is
+// skipped, and it leaves nothing on the PR (T2e).
 type Outcome =
   | "credential"
   | "routing"
@@ -100,13 +102,38 @@ type Outcome =
   | "review-advisory"
   | "size-skip"
   | "override"
+  | "near-miss"
   | "hunters-failed";
 
 // The actor the fake gives an override: the sandbox owner's login.
 const FAKE_ACTOR = "juanmaagd";
 
+// The reaction the trigger gives a comment (src/ci/trigger.ts). An exact command is
+// accepted, so it gets eyes. A comment the workflow's own `startsWith` filter starts
+// but that is not an exact command is a near miss, so it gets confused. Any other
+// comment starts no run and gets no reaction.
+function triggerReaction(body: string): "eyes" | "confused" | undefined {
+  if (
+    body === "/pr-hero review" ||
+    body === "/pr-hero review --full" ||
+    body === "/pr-hero override"
+  ) {
+    return "eyes";
+  }
+  if (
+    body.startsWith("/pr-hero review") ||
+    body.startsWith("/pr-hero override")
+  ) {
+    return "confused";
+  }
+  return undefined;
+}
+
 const OUTCOME_CODE: Record<
-  Exclude<Outcome, "review" | "review-advisory" | "size-skip" | "override">,
+  Exclude<
+    Outcome,
+    "review" | "review-advisory" | "size-skip" | "override" | "near-miss"
+  >,
   string
 > = {
   credential: "PRH-CRED-MISSING",
@@ -137,6 +164,9 @@ export interface WorldOptions {
   keepOutcomeComments?: boolean;
   // A PR comment fails at the transport, so the scenario ends early.
   failComment?: boolean;
+  // The reactions read of a comment fails, as a 5xx would: the reaction check must
+  // then fail on what it could not read, never pass.
+  reactionsUnreadable?: boolean;
   // A comment run reports success and reviews, but uploads no artifact: the
   // evidence a trigger that ignored the command would lack.
   commentRunsLeaveNoArtifact?: boolean;
@@ -197,6 +227,8 @@ export class FakeGithub {
   private readonly pushedWorkflow = new Map<string, string>();
   // The gotchas file each pushed head carries, for the CLI's gate (decide).
   private readonly pushedGotchas = new Map<string, string>();
+  // The reactions on each comment, by comment id: what the trigger gave it.
+  private readonly reactions = new Map<number, string[]>();
   private readonly queued: Outcome[];
 
   constructor(options: WorldOptions) {
@@ -342,7 +374,10 @@ export class FakeGithub {
       conclusion: stuck ? null : failed ? "failure" : "success",
       workflowName: WORKFLOW_NAME,
       url: `${REPO_URL}/actions/runs/${id}`,
-      stepConclusion: stepFails ? "failure" : "success",
+      // A near miss's review step is skipped, as the workflow's `if:` skips it: the
+      // trigger decided the comment runs nothing (T2e).
+      stepConclusion:
+        outcome === "near-miss" ? "skipped" : stepFails ? "failure" : "success",
       prNumber,
       reviewSha,
     });
@@ -373,6 +408,8 @@ export class FakeGithub {
 
   // What the publisher leaves on the PR for one run's outcome.
   private post(outcome: Outcome, prNumber: number, sha: string, runId: number) {
+    // A near miss runs nothing, so it leaves no report, outcome or status (T2e).
+    if (outcome === "near-miss") return;
     const list = this.comments.get(prNumber) ?? [];
     if (outcome === "review" || outcome === "review-advisory") {
       const report = `${REPORT_PREFIX} head=${sha} -->\n\n# pr-hero review`;
@@ -495,29 +532,42 @@ export class FakeGithub {
       const posted = this.comment(body);
       const id = posted.id;
       (this.comments.get(number) ?? []).push(posted);
-      if (body === "/pr-hero review") {
-        const pr = this.prs.get(number);
-        const head = this.branches.get(pr?.headRefName ?? "") ?? MAIN_SHA;
-        this.startRun(
-          "issue_comment",
-          number,
-          "main",
-          MAIN_SHA,
-          head,
-          this.mainFiles.get(WORKFLOW_PATH) ?? "",
-        );
-      }
+      // The trigger's answer to this comment, if it starts a run at all.
+      const reaction = triggerReaction(body);
+      if (reaction !== undefined) this.reactions.set(id, [reaction]);
+      const pr = this.prs.get(number);
+      const head = this.branches.get(pr?.headRefName ?? "") ?? MAIN_SHA;
+      const workflow = this.mainFiles.get(WORKFLOW_PATH) ?? "";
+      // An accepted review runs a review; an override runs its own audit; a near miss
+      // runs the workflow with its review step skipped.
       if (body === "/pr-hero override") {
-        const pr = this.prs.get(number);
-        const head = this.branches.get(pr?.headRefName ?? "") ?? MAIN_SHA;
         this.startRun(
           "issue_comment",
           number,
           "main",
           MAIN_SHA,
           head,
-          this.mainFiles.get(WORKFLOW_PATH) ?? "",
+          workflow,
           "override",
+        );
+      } else if (reaction === "eyes") {
+        this.startRun(
+          "issue_comment",
+          number,
+          "main",
+          MAIN_SHA,
+          head,
+          workflow,
+        );
+      } else if (reaction === "confused") {
+        this.startRun(
+          "issue_comment",
+          number,
+          "main",
+          MAIN_SHA,
+          head,
+          workflow,
+          "near-miss",
         );
       }
       return ok(`${REPO_URL}/pull/${number}#issuecomment-${id}\n`);
@@ -610,6 +660,16 @@ export class FakeGithub {
       if (found === undefined) return fail("comment not found");
       return ok(JSON.stringify({ created_at: found.createdAt }));
     }
+    // The reactions on a comment: what the trigger gave it (T2e). The read answers
+    // with GitHub's shape, one object per reaction with its content.
+    const reacted = /\/issues\/comments\/(\d+)\/reactions(?:\?|$)/.exec(path);
+    if (reacted !== null) {
+      if (this.options.reactionsUnreadable === true) {
+        return fail("HTTP 500: Internal Server Error");
+      }
+      const contents = this.reactions.get(Number(reacted[1])) ?? [];
+      return ok(JSON.stringify(contents.map((content) => ({ content }))));
+    }
     if (/\/pulls\/\d+\/comments/.test(path)) return ok("[]");
     const pull = /\/pulls\/(\d+)$/.exec(path);
     if (pull !== null) {
@@ -620,8 +680,10 @@ export class FakeGithub {
     const artifacts = /\/actions\/runs\/(\d+)\/artifacts$/.exec(path);
     if (artifacts !== null) {
       const run = this.runs.find((r) => r.databaseId === Number(artifacts[1]));
+      // A near miss reviewed nothing, so its run uploads no review artifact.
       const names =
         run === undefined ||
+        run.stepConclusion === "skipped" ||
         (run.event === "issue_comment" &&
           this.options.commentRunsLeaveNoArtifact)
           ? []
