@@ -1,7 +1,8 @@
-// Waiting on the workflow runs of a scenario branch: list them, cancel the ones
-// still going, and wait for each to report completed. Smoke's cleanup and `clean`
-// both stop runs this way, so the logic lives here once. It is a module of its own
-// because clean (pr.ts) cannot import smoke.ts, which imports pr.ts.
+// Waiting on the workflow runs of a scenario: the polls that read them, the cancel
+// that stops one still going, and the lookup for a run the poll never saw. The
+// scenario runner and `clean` both stop runs this way, so the logic lives here once,
+// together with the poll and the interrupt types they share. It is a module of its
+// own because clean (pr.ts) cannot import scenario.ts, which imports pr.ts.
 
 import { WORKFLOW_NAME } from "./markers";
 import type { SandboxDeps, Signal } from "./ports";
@@ -37,11 +38,47 @@ export interface RunListItem {
   conclusion: string | null;
   workflowName: string;
   url: string;
+  event?: string;
+  // The run's title, which for a PR-triggered run is the PR's title. A comment run
+  // shows the title of the PR it was started on.
+  displayTitle: string;
+  createdAt: string;
 }
+
+export const RUN_FIELDS =
+  "databaseId,headSha,status,conclusion,workflowName,url,event,displayTitle,createdAt";
 
 export interface PollTiming {
   intervalMs: number;
   timeoutMs: number;
+}
+
+// The error a poll must not retry: the read found something it cannot decide,
+// such as an ambiguous run, and another identical read would not decide it.
+export class Unrecoverable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "Unrecoverable";
+  }
+}
+
+export class Interrupted extends Error {
+  constructor(readonly signal: Signal) {
+    super(`interrupted by ${signal}`);
+    this.name = "Interrupted";
+  }
+}
+
+// What a wait listens to: the signal that ends it, and the promise that wakes a
+// sleep in progress at that same moment.
+export interface Stop {
+  signal(): Signal | undefined;
+  readonly wake: Promise<never>;
+}
+
+export function throwIfStopped(stop: Stop | undefined): void {
+  const signal = stop?.signal();
+  if (signal !== undefined) throw new Interrupted(signal);
 }
 
 // The runs of the workflow on a branch. A scenario branch is created by one run
@@ -62,7 +99,7 @@ export async function listBranchRuns(
     "--limit",
     "20",
     "--json",
-    "databaseId,headSha,status,conclusion,workflowName,url",
+    RUN_FIELDS,
   ]);
   return runs.filter((r) => r.workflowName === WORKFLOW_NAME);
 }
@@ -170,7 +207,8 @@ export function cancelTiming(options: RunTiming): PollTiming {
 // read is one miss: only MAX_CONSECUTIVE_POLL_FAILURES in a row end the poll, and
 // the last error is thrown then. A read that finds nothing does not reset the
 // last value seen, so the caller still learns about a run seen earlier. A stop
-// that fires ends the wait at once, whether it is asleep or about to read.
+// that fires ends the wait at once, whether it is asleep or about to read, and an
+// Unrecoverable read is not retried: another identical read would decide nothing.
 export async function pollUntil<T>(
   deps: SandboxDeps,
   stop: Stop | undefined,
@@ -191,7 +229,9 @@ export async function pollUntil<T>(
         if (done(value)) return { done: true, last };
       }
     } catch (error) {
-      if (error instanceof Interrupted) throw error;
+      if (error instanceof Interrupted || error instanceof Unrecoverable) {
+        throw error;
+      }
       failures += 1;
       if (failures >= MAX_CONSECUTIVE_POLL_FAILURES) throw error;
       deps.log(
@@ -201,25 +241,6 @@ export async function pollUntil<T>(
     if (deps.clock.now().getTime() >= deadline) return { done: false, last };
     await sleepUnlessStopped(deps.clock, timing.intervalMs, stop);
   }
-}
-
-export class Interrupted extends Error {
-  constructor(readonly signal: Signal) {
-    super(`interrupted by ${signal}`);
-    this.name = "Interrupted";
-  }
-}
-
-// What a wait listens to: the signal that ends it, and the promise that wakes a
-// sleep in progress at that same moment.
-export interface Stop {
-  signal(): Signal | undefined;
-  readonly wake: Promise<never>;
-}
-
-export function throwIfStopped(stop: Stop | undefined): void {
-  const signal = stop?.signal();
-  if (signal !== undefined) throw new Interrupted(signal);
 }
 
 function sleepUnlessStopped(

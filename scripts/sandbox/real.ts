@@ -3,7 +3,7 @@
 // logic imports this file; the entry point wires it, and tests never do.
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type {
   Clock,
@@ -11,6 +11,8 @@ import type {
   GhResult,
   Git,
   GitResult,
+  LockHolder,
+  RunLockFile,
   SandboxDeps,
   Signal,
   SignalSource,
@@ -170,13 +172,74 @@ export const realWorkspace: Workspace = {
   },
 };
 
-export function realDeps(): SandboxDeps {
+// The run lock's file: ~/.prhero/sandbox.lock, unless a test points it elsewhere.
+export function defaultLockPath(): string {
+  return path.join(homedir(), ".prhero", "sandbox.lock");
+}
+
+// The lock as a file that records a pid. The exclusive create (`wx`) is what makes
+// two racing starts safe: exactly one of them creates it. A file whose content is
+// not a pid reads as unreadable, never as absent, so a start killed between the
+// create and the write refuses rather than letting a second run in.
+export function realRunLock(
+  lockPath: string,
+  pid: number = process.pid,
+): RunLockFile {
+  const holder = async (): Promise<LockHolder> => {
+    let text: string;
+    try {
+      text = await readFile(lockPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { kind: "none" };
+      }
+      throw error;
+    }
+    const value = text.trim();
+    return /^[1-9]\d*$/.test(value)
+      ? { kind: "pid", pid: Number(value) }
+      : { kind: "unreadable" };
+  };
+  return {
+    path: lockPath,
+    pid,
+    create: async () => {
+      await mkdir(path.dirname(lockPath), { recursive: true });
+      try {
+        await writeFile(lockPath, `${pid}\n`, { flag: "wx" });
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+        throw error;
+      }
+    },
+    holder,
+    remove: async (recorded) => {
+      const current = await holder();
+      if (current.kind === "pid" && current.pid === recorded) {
+        await rm(lockPath, { force: true });
+      }
+    },
+    alive: (target) => {
+      try {
+        process.kill(target, 0);
+        return true;
+      } catch (error) {
+        // EPERM: the process exists and belongs to someone else, so it is alive.
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+    },
+  };
+}
+
+export function realDeps(options: { lockPath?: string } = {}): SandboxDeps {
   return {
     gh: realGh,
     git: realGit,
     clock: realClock,
     workspace: realWorkspace,
     signals: realSignals,
+    lock: realRunLock(options.lockPath ?? defaultLockPath()),
     log: (line) => console.log(line),
   };
 }

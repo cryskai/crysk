@@ -46,7 +46,11 @@ function isScenarioPr(pr: OpenPr): boolean {
 }
 
 // The open scenario PRs. This is also the serialization check: smoke refuses to
-// start while this list is not empty.
+// start while this list is not empty. The search is on the head branch, so the
+// newest unrelated PRs cannot push a scenario PR out of the first page: GitHub's
+// `head:` qualifier is a prefix match, and the owner and fork filter below still
+// decide what counts. The limit is the page cap, not a second filter; a fork can
+// open many sandbox/ heads, so it is well above the usual count.
 export async function listScenarioPrs(
   deps: SandboxDeps,
 ): Promise<ScenarioPr[]> {
@@ -57,10 +61,12 @@ export async function listScenarioPrs(
     SANDBOX_REPO,
     "--state",
     "open",
+    "--search",
+    `head:${SCENARIO_BRANCH_PREFIX}`,
     "--json",
     "number,headRefName,url,isCrossRepository,headRepositoryOwner",
     "--limit",
-    "100",
+    "1000",
   ]);
   return open.filter(isScenarioPr).map(({ number, headRefName, url }) => ({
     number,

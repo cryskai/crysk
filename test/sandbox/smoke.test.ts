@@ -444,8 +444,9 @@ describe("smoke: transient poll failures", () => {
     });
     const code = await runSmoke(h.deps, { ...SMOKE, timeoutMs: 10 * 60_000 });
     expect(code).toBe(1);
+    // Adapted: smoke is the review-free scenario, so the runner names it as such.
     const stoppedAt = h.events.findIndex((e) =>
-      e.startsWith("log smoke stopped early"),
+      e.startsWith("log scenario review-free stopped early"),
     );
     expect(stoppedAt).toBeGreaterThan(0);
     expect(
@@ -746,7 +747,8 @@ describe("smoke: a run the opened event queued", () => {
     expect(await runSmoke(h.deps, CLEANUP_SMOKE)).toBe(130);
     expect(
       h.logs.some((l) =>
-        /^no run on sandbox\/smoke-\S+ appeared within 60s/.test(l),
+        // Adapted: the branch is named for its scenario, review-free.
+        /^no run on sandbox\/review-free-\S+ appeared within 60s/.test(l),
       ),
     ).toBe(true);
     expect(h.ghCalls.some((c) => c[0] === "run" && c[1] === "cancel")).toBe(

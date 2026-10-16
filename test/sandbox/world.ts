@@ -11,11 +11,22 @@
 // outcome comments of earlier runs. Live runs are the proof of the product; this
 // fake is the proof of the runner's sequencing and its reads.
 
-import { RUN_STEP_NAME, WORKFLOW_NAME } from "../../scripts/sandbox/markers";
+import {
+  RUN_STEP_NAME,
+  SKIP_MARKERS,
+  WORKFLOW_NAME,
+} from "../../scripts/sandbox/markers";
 import type { GhResult, GitResult } from "../../scripts/sandbox/ports";
 import { SANDBOX_REMOTE_URL, SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import { sandboxFiles, WORKFLOW_PATH } from "../../scripts/sandbox/seed";
-import { fail, gitOk, type Harness, harness, ok } from "./fakes";
+import {
+  fail,
+  gitOk,
+  type Harness,
+  harness,
+  type MemoryRunLock,
+  ok,
+} from "./fakes";
 
 const MAIN_SHA = "f".repeat(40);
 const REPO_URL = `https://github.com/${SANDBOX_REPO}`;
@@ -86,6 +97,14 @@ export interface WorldOptions {
   // An issue_comment run stays in progress, and posts nothing, until it is
   // cancelled: a run that outlives the poll.
   stuckCommentRuns?: boolean;
+  // A cancel is accepted but the run keeps going: a run that outlives the cancel too.
+  ignoreCancel?: boolean;
+  // An issue_comment run that skips on size: it posts the skip marker, and nothing
+  // else (no report, no outcome, no artifact).
+  commentRunsSkipSize?: boolean;
+  // A review run whose review step fails, though the head still reads as reviewed
+  // from the status and report it left behind.
+  stepFailsOnReview?: boolean;
 }
 
 export class FakeGithub {
@@ -117,10 +136,12 @@ export class FakeGithub {
     }
   }
 
-  harness(): Harness {
+  // A test that models a second invocation on the same machine passes the lock it shares.
+  harness(lock?: MemoryRunLock): Harness {
     return harness({
       gh: (args, h) => this.gh(args, h),
       git: (args, cwd, h) => this.git(args, cwd, h),
+      lock,
     });
   }
 
@@ -194,6 +215,9 @@ export class FakeGithub {
     const outcome = this.queued.shift() ?? this.decide(workflow);
     // A run whose hunters all failed fails its review step, as the engine exits non-zero.
     const failed = outcome === "hunters-failed";
+    const stepFails =
+      failed ||
+      (outcome === "review" && this.options.stepFailsOnReview === true);
     const displayTitle = this.prs.get(prNumber)?.title ?? "";
     const stuck =
       event === "issue_comment" && this.options.stuckCommentRuns === true;
@@ -208,7 +232,7 @@ export class FakeGithub {
       conclusion: stuck ? null : failed ? "failure" : "success",
       workflowName: WORKFLOW_NAME,
       url: `${REPO_URL}/actions/runs/${id}`,
-      stepConclusion: failed ? "failure" : "success",
+      stepConclusion: stepFails ? "failure" : "success",
       prNumber,
       reviewSha,
     });
@@ -217,6 +241,15 @@ export class FakeGithub {
       return;
     }
     this.events.push(`run ${id} ${event} completed`);
+    if (
+      event === "issue_comment" &&
+      this.options.commentRunsSkipSize === true
+    ) {
+      const list = this.comments.get(prNumber) ?? [];
+      list.push(this.comment(SKIP_MARKERS.size));
+      this.comments.set(prNumber, list);
+      return;
+    }
     this.post(outcome, prNumber, reviewSha, id);
   }
 
@@ -357,9 +390,10 @@ export class FakeGithub {
       // A cancelled run completes without posting anything.
       const run = this.runs.find((r) => r.databaseId === Number(args[2]));
       if (run === undefined) return fail("run not found");
+      this.events.push(`run cancel ${run.databaseId}`);
+      if (this.options.ignoreCancel === true) return ok();
       run.status = "completed";
       run.conclusion = "cancelled";
-      this.events.push(`run cancel ${run.databaseId}`);
       return ok();
     }
     if (verb === "run" && sub === "view") {

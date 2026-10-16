@@ -268,6 +268,29 @@ describe("git rail: no force, no deletes, no rewritten main", () => {
   });
 });
 
+describe("gh rail: the end-of-options marker", () => {
+  // `gh repo clone <sandbox> dir -- <git flags>` passed the -R check, and gh handed
+  // the flags after `--` to git. No gh call the runner makes uses `--`, so it is
+  // refused on every verb.
+  test("refuses -- on every gh call, however the call is otherwise sandbox-only", () => {
+    const refused: string[][] = [
+      [
+        "repo",
+        "clone",
+        SANDBOX_REPO,
+        "/scratch/x",
+        "--",
+        "--upload-pack=touch /tmp/p",
+      ],
+      ["pr", "list", "-R", SANDBOX_REPO, "--", "--state"],
+      ["api", `repos/${SANDBOX_REPO}/issues`, "--"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
 describe("scenario branches", () => {
   test("only sandbox/<name> is a scenario branch", () => {
     expect(() =>

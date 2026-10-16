@@ -44,12 +44,35 @@ export interface SignalSource {
   off(signal: Signal, handler: () => void): void;
 }
 
+// What the run lock's file records. A file that exists but names no pid is
+// `unreadable`: a start that was killed between creating the file and writing it,
+// or a file someone else wrote. It is never taken for stale.
+export type LockHolder =
+  | { kind: "none" }
+  | { kind: "pid"; pid: number }
+  | { kind: "unreadable" };
+
+// The lock that keeps two invocations on this machine from both starting scenarios
+// (lock.ts holds the policy). `pid` is this process, the one a lock it takes records.
+export interface RunLockFile {
+  readonly path: string;
+  readonly pid: number;
+  // Creates the file exclusively, recording `pid`. False when a file already exists.
+  create(): Promise<boolean>;
+  holder(): Promise<LockHolder>;
+  // Removes the file, but only while it still records `pid`.
+  remove(pid: number): Promise<void>;
+  // Whether a process with this pid is running.
+  alive(pid: number): boolean;
+}
+
 export interface SandboxDeps {
   gh: Gh;
   git: Git;
   clock: Clock;
   workspace: Workspace;
   signals: SignalSource;
+  lock: RunLockFile;
   log: (line: string) => void;
 }
 

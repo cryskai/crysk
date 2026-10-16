@@ -443,7 +443,9 @@ const STAMP = START_ISO.replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 const COMMENT_TITLE = `pr-hero sandbox comment-trigger sandbox/comment-trigger-${STAMP}`;
 
 describe("run: the comment run is its own run, with its own evidence", () => {
-  test("a comment run that uploads no artifact fails phase 2, though its step, the report and the status all pass", async () => {
+  // Adapted: phase 2 no longer asserts the head's status or report, so only the step
+  // and the run's own artifact are named here.
+  test("a comment run that uploads no artifact fails phase 2, though its review step passes", async () => {
     const world = new FakeGithub({
       ref: REF,
       commentRunsLeaveNoArtifact: true,

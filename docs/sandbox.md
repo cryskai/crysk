@@ -28,7 +28,13 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   writes nothing. A present secret is left alone, because GitHub never returns its value.
 - `run` exits 1 on any failed expectation, any S7 violation, or a refused run. The table
   at the end names each scenario's path and prints every expectation as PASS or FAIL.
-- `--keep` leaves each scenario PR open and prints where it is. `clean` closes them.
+- `--keep` leaves each scenario PR open and prints where it is. `clean` closes them. A run
+  still going when a phase ends (a timeout, or a signal) is cancelled first, with or without
+  `--keep`; the PR is kept only once that run has stopped.
+- One invocation runs at a time on this machine. It takes `~/.prhero/sandbox.lock` exclusively
+  and records its pid there. A second invocation is refused while the lock's process is alive;
+  a lock whose process is gone is taken over. A lock that names no pid is refused, and is
+  removed by hand once no run is in progress. The lock is released on exit, failure, or signal.
 
 ## Cost
 
@@ -51,9 +57,9 @@ one observation of the PR. S7 invariants are checked on every observation.
 |---|---|---|---|
 | `no-credential` | With no model credential input, the action stops before any model. | Outcome comment `PRH-CRED-MISSING`; status `error` with that code; no report on the head. | $0 |
 | `bad-routing` | A malformed routing input is refused before any model runs. | Outcome comment `PRH-ROUTING-INVALID`; status `error` with that code; no report on the head. | $0 |
-| `review-free` | The normal workflow on the free route reviews the planted bug end to end. | Path `reviewed`; status `success`; at least one report on the head; no outcome comment. | $0 (free route) |
-| `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; status `success`; a report; no outcome comment. | $0 (phase 2 on the free route) |
-| `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own evidence (its `pr-hero-run-<pr>-<sha>` artifact for `reviewed`, or a skip marker posted after the trigger for `skipped`); path `reviewed` or `skipped`; status `success`; a report. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (free route) |
+| `review-free` | The normal workflow on the free route reviews the planted bug end to end. | Path `reviewed`; the run's review step succeeded; status `success`; at least one report on the head; no outcome comment. | $0 (free route) |
+| `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; the run's review step succeeded; status `success`; a report; no outcome comment. | $0 (phase 2 on the free route) |
+| `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own artifact (`pr-hero-run-<pr>-<sha>`); path `reviewed`. Only the run's own review passes: a skip is a failure, because a forced run bypasses admission and budget. Status and report are not asserted here, since phase 1 left them on the same head. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (free route) |
 
 The S7 invariants, checked on every observation, are: an `error` status without a `PRH-`
 code; an outcome comment on a head whose status is `success`; a status still `pending`
@@ -73,9 +79,11 @@ The runner can reach one repository, and nothing else.
   and never forced. Force flags, `+` refspecs, `:` deletes, mirror, delete, amend and
   orphan are refused.
 - No `repo delete`. `clean` closes PRs and deletes their `sandbox/` branches, nothing else.
-- Runs are serialized. A run refuses to start while any scenario PR is open. With `--keep`,
-  the PRs opened by the same run are exempt. A PR that a failed cleanup left open blocks
-  the next run until `clean` closes it.
+- Runs are serialized. A run refuses to start while any scenario PR is open, and while the
+  run lock is held. The open PRs are listed by their `sandbox/` head, so unrelated PRs cannot
+  hide one. With `--keep`, a PR is exempt from this check only once its run has stopped. A PR
+  that a failed cleanup left open, including one whose run could not be cancelled, blocks the
+  next run until `clean` closes it.
 
 ## Ref model
 

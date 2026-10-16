@@ -36,6 +36,9 @@ export interface Scenario {
 }
 
 const REVIEWED: Check = { kind: "path", accept: ["reviewed"] };
+// The review step of the observed run itself, not an earlier run's report on the
+// same head. A run that did not succeed cannot pass a phase on what it left behind.
+const STEP_SUCCEEDED: Check = { kind: "step-succeeded" };
 const POSTED_STATUS: Check = { kind: "status", state: "success" };
 const ONE_REPORT: Check = { kind: "report-min", min: 1 };
 
@@ -88,7 +91,13 @@ export const SCENARIOS: readonly Scenario[] = [
       {
         action: { kind: "open", variant: "normal" },
         wait: "pull_request",
-        checks: [REVIEWED, POSTED_STATUS, ONE_REPORT, { kind: "no-outcome" }],
+        checks: [
+          REVIEWED,
+          STEP_SUCCEEDED,
+          POSTED_STATUS,
+          ONE_REPORT,
+          { kind: "no-outcome" },
+        ],
       },
     ],
   },
@@ -107,6 +116,7 @@ export const SCENARIOS: readonly Scenario[] = [
         wait: "pull_request",
         checks: [
           REVIEWED,
+          STEP_SUCCEEDED,
           POSTED_STATUS,
           ONE_REPORT,
           // The publisher's cleanup is the only thing that removes this comment.
@@ -134,19 +144,16 @@ export const SCENARIOS: readonly Scenario[] = [
       {
         action: { kind: "comment", body: "/pr-hero review" },
         wait: "issue_comment",
+        // Only what this run did is asserted. Phase 1's report and status still read
+        // as reviewed on this head, so a head-level check would pass a trigger that
+        // ignored the command, and a skip marker from this run must not pass either:
+        // a forced run bypasses admission and budget, and the diff is tiny, so the
+        // only accepted result is a review with this run's own artifact.
         checks: [
           { kind: "run-completed", event: "issue_comment" },
-          // The comment's own review step, not the first run's report on the same head.
-          { kind: "step-succeeded" },
-          // The comment run's own evidence. Phase 1's report and status still read
-          // as reviewed here, so without this a trigger that ignored the command
-          // would pass.
+          STEP_SUCCEEDED,
           { kind: "own-evidence" },
-          // A forced run may review again or skip with a recorded reason; the
-          // source says force bypasses every skip gate, so a skip here is a signal.
-          { kind: "path", accept: ["reviewed", "skipped"] },
-          POSTED_STATUS,
-          ONE_REPORT,
+          REVIEWED,
         ],
         // The cleanup of phase 1's outcome comment. Only meaningful when phase 1
         // left one, so it is not asserted otherwise.

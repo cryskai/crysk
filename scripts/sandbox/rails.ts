@@ -95,6 +95,14 @@ function assertCommonGhArgs(args: readonly string[]): void {
         `gh ${arg} widens the call beyond ${SANDBOX_REPO}`,
       );
     }
+    // The end-of-options marker hands what follows to gh's own positional or
+    // pass-through handling (`repo clone <sandbox> dir -- <git flags>` runs git flags),
+    // so the -R check cannot see it. None of the runner's calls use it.
+    if (arg === "--") {
+      throw new RailViolation(
+        "gh -- passes what follows as positionals or git flags, which the runner never sends",
+      );
+    }
   }
 }
 
