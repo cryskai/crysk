@@ -412,6 +412,9 @@ export async function postCommitStatus(
 // `pr-hero` past page 1 and the watcher would miss an in-flight pending.
 // Combined returns the latest row per context in one shot.
 //
+// The description rides along for the override check (src/pr/teardown.ts), which tells
+// an override from a review's own status by it. The in-flight readers ignore it.
+//
 // Never throws: a 403, a hung gh (timeout), or garbage jq must not take
 // the watch tick down. Unreadable reads as not in-flight.
 export async function fetchCommitStatuses(
@@ -427,7 +430,7 @@ export async function fetchCommitStatuses(
         "api",
         `repos/{owner}/{repo}/commits/${sha}/status`,
         "--jq",
-        ".statuses[]? | {state: .state, context: .context, created_at: .created_at}",
+        ".statuses[]? | {state: .state, context: .context, created_at: .created_at, description: .description}",
       ],
       undefined,
       options?.spawnFn,

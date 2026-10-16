@@ -1925,6 +1925,25 @@ describe("runPublish — the override (S8)", () => {
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
   });
 
+  // The longest login the trigger accepts (91 characters) makes the description
+  // exactly GitHub's 140-character limit. The whole sentence is posted, unclipped.
+  test("a 91-character login's override description is posted whole, within 140 characters", () => {
+    const login = "a".repeat(91);
+    const run = runPublishIn({
+      record: overrideRecord({ actor: login }),
+    });
+    const statuses = statusCalls(run.calls);
+    expect(statuses).toHaveLength(1);
+    const descriptionArg = statuses[0]?.args.find((arg) =>
+      arg.startsWith("description="),
+    );
+    const description = descriptionArg?.slice("description=".length) ?? "";
+    expect(description.length).toBeLessThanOrEqual(140);
+    expect(description).toBe(
+      `pr-hero: overridden by @${login} — no review on this head`,
+    );
+  });
+
   test("no head posts the comment alone, and says that no status could be set", () => {
     const run = runPublishIn({
       record: overrideRecord({ head_sha: undefined }),

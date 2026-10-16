@@ -902,10 +902,15 @@ function reportStatusWriteFailure(
   report(deps, statusWriteFailure(httpStatus, runId, runUrl));
 }
 
+// The start of an override's status description. The CLI's gate reads it to tell an
+// override from a review's own status (src/pr/teardown.ts), so the CLI imports this
+// constant rather than repeating the text. Exported, not private, for that reason.
+export const OVERRIDE_DESCRIPTION_PREFIX = "pr-hero: overridden by @";
+
 // The one status an override writes. Its description names the actor, so the
 // status alone says who unlocked the gate.
 function overrideDescription(actor: string): string {
-  return `pr-hero: overridden by @${actor} — no review on this head`;
+  return `${OVERRIDE_DESCRIPTION_PREFIX}${actor} — no review on this head`;
 }
 
 // The audit comment. Its first line is the marker, which is not an outcome marker,

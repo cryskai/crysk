@@ -38,9 +38,13 @@ export const REVIEW_FULL_COMMAND = "/pr-hero review --full";
 // command: a loose match would let a quoted reply unlock a gate.
 export const OVERRIDE_COMMAND = "/pr-hero override";
 
-// A GitHub login: letters, digits and hyphens, plus the `[bot]` suffix an app
-// posts under. The override records the login, so it must be one.
-const GITHUB_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$/;
+// A GitHub login: letters, digits, hyphens and underscores (an Enterprise Managed
+// User login is `handle_shortcode`), plus the `[bot]` suffix an app posts under. The
+// override records the login, so it must be one. The bound is 91 characters in all,
+// `[bot]` included: the override status's description is 49 characters around the
+// login, and GitHub refuses a description over 140. A copy lives in src/ci/outcome.ts
+// (LOGIN_PATTERN); test/ci/outcome.test.ts fails if the two texts differ.
+const GITHUB_LOGIN = /^(?=.{1,91}$)[A-Za-z0-9][A-Za-z0-9_-]{0,90}(\[bot\])?$/;
 
 // The only answers of the collaborator-permission endpoint that may spend
 // money. `maintain` already reports as `write` there and `triage` as `read`,
@@ -137,6 +141,9 @@ export interface CiTriggerInput {
   selfHostedRunner: boolean;
   forceInput: boolean;
   fullInput: boolean;
+  // GITHUB_RUN_ATTEMPT when it is a positive integer. Absent outside Actions.
+  // Above 1 the run is a re-run, which replays the original comment event.
+  runAttempt?: number;
 }
 
 export type CiTriggerDecision =
@@ -311,6 +318,17 @@ function commenterVerdict(
 // it in a status and a comment. GitHub's own logins always match, so this refuses
 // only a value that was never one, and the refusal never echoes it.
 function overrideDecision(input: CiTriggerInput): CiTriggerDecision {
+  // WHY refused on a re-run: GitHub replays the comment event, and this run then
+  // resolves the head as it is NOW. The override would name a head the commenter
+  // never saw, so the commenter comments again to act on the current head.
+  if (input.runAttempt !== undefined && input.runAttempt > 1) {
+    return {
+      kind: "denied",
+      reason:
+        "pr-hero did not override the gate: an override applies to the head at " +
+        "the time of the comment; comment `/pr-hero override` again.",
+    };
+  }
   if (!GITHUB_LOGIN.test(input.commenterLogin)) {
     return {
       kind: "denied",
@@ -746,8 +764,8 @@ function validSha(value: string): string | undefined {
 }
 
 // Every name below is bound by the trigger step's `env:` in action.yml,
-// except GITHUB_REPOSITORY, GITHUB_RUN_ID, RUNNER_ENVIRONMENT, HOME and
-// XDG_DATA_HOME, which every step inherits from the runner.
+// except GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, RUNNER_ENVIRONMENT,
+// HOME and XDG_DATA_HOME, which every step inherits from the runner.
 function readTriggerInput(
   deps: CiTriggerDeps,
 ): Omit<CiTriggerInput, "commenterPermission"> {
@@ -755,6 +773,7 @@ function readTriggerInput(
   const text = (name: string): string => env[name] ?? "";
   const flag = (name: string): boolean => text(name) === "true";
   const exists = deps.exists ?? existsSync;
+  const runAttempt = positiveInteger(text("GITHUB_RUN_ATTEMPT"));
   return {
     eventName: text("EVENT_NAME"),
     repository: text("GITHUB_REPOSITORY"),
@@ -771,6 +790,7 @@ function readTriggerInput(
     selfHostedRunner: text("RUNNER_ENVIRONMENT") === "self-hosted",
     forceInput: flag("FORCE_INPUT"),
     fullInput: flag("FULL_INPUT"),
+    ...(runAttempt === undefined ? {} : { runAttempt }),
   };
 }
 
@@ -905,6 +925,27 @@ function resolveHeadSha(
   return UNKNOWN_HEAD_SHA;
 }
 
+// Short, like the permission retry: long enough for a transient gh failure to
+// clear, short enough that a real outage costs the comment run seconds.
+const OVERRIDE_HEAD_RETRY_DELAY_MS = 2_000;
+
+// WHY one retry, for an override only: the head is the whole target of an
+// override's status, so one failed lookup would leave the gate unchanged with
+// no status. A review only names its artifact with the head, so a review keeps
+// its single lookup.
+function resolveOverrideHeadSha(
+  deps: CiTriggerDeps,
+  eventName: string,
+  repository: string,
+  pr: string,
+): string {
+  const first = resolveHeadSha(deps, eventName, repository, pr, true);
+  if (first !== UNKNOWN_HEAD_SHA) return first;
+  const sleep = deps.sleep ?? ((ms: number) => Bun.sleepSync(ms));
+  sleep(OVERRIDE_HEAD_RETRY_DELAY_MS);
+  return resolveHeadSha(deps, eventName, repository, pr, true);
+}
+
 export function runCiTrigger(deps: CiTriggerDeps): number {
   const base = readTriggerInput(deps);
   const input: CiTriggerInput = commenterPermissionNeeded(base)
@@ -997,12 +1038,11 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
   if (decision.kind === "override") {
     // WHY quiet: the publisher says in its comment when no head is known, so no
     // second warning is printed for the same gap (as for no-credentials).
-    const head = resolveHeadSha(
+    const head = resolveOverrideHeadSha(
       deps,
       base.eventName,
       base.repository,
       prNumber,
-      true,
     );
     const write = writeRecord(deps, run, {
       decision: "override",

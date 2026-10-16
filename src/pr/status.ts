@@ -30,13 +30,27 @@ import { CliError } from "../errors";
 // a signal handler installed in runCli cannot see reviewPr's scope, so what it
 // needs has to be parked where both can reach it.
 let heldLock: HeldCommitStatusLock | null = null;
+// When the lock was taken, in ms. plan.ts takes it right after the pending post, so
+// this is the run's own start for the override check (teardown.ts). It is taken
+// on the runner's clock; GitHub's status times are server time, so the two differ
+// by whatever the runner's clock skew is.
+let heldSinceMs: number | null = null;
 
-export function holdCommitStatusLock(lock: HeldCommitStatusLock): void {
+export function holdCommitStatusLock(
+  lock: HeldCommitStatusLock,
+  nowMs: number = Date.now(),
+): void {
   heldLock = lock;
+  heldSinceMs = nowMs;
 }
 
 export function releaseCommitStatusLock(): void {
   heldLock = null;
+  heldSinceMs = null;
+}
+
+export function heldCommitStatusSince(): number | null {
+  return heldSinceMs;
 }
 
 export function heldCommitStatusLock(): HeldCommitStatusLock | null {

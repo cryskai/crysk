@@ -405,6 +405,12 @@ function escapeRules(source: string): string[] {
   ].map((match) => `${match[1] ?? ""} -> ${match[2] ?? ""}`);
 }
 
+// The regex literal a module declares for a constant, as written. Both copies of the
+// login pattern are compared as text: neither module may import the other at runtime.
+function loginPatternLiteral(source: string, name: string): string | undefined {
+  return source.match(new RegExp(`^const ${name} = (\\/.+\\/);$`, "m"))?.[1];
+}
+
 describe("codeOf and ownerOf: every class variant", () => {
   test("every sample maps to its expected code", () => {
     for (const sample of SAMPLES) {
@@ -823,6 +829,21 @@ describe("renderCode and renderError: the annotation", () => {
     const theirs = escapeRules(readFileSync(TRIGGER_SRC, "utf8"));
     expect(theirs).toHaveLength(3);
     expect(ours).toEqual(theirs);
+  });
+
+  test("the override login pattern is the one src/ci/trigger.ts uses (drift guard on source text)", () => {
+    const ours = loginPatternLiteral(
+      readFileSync(OUTCOME_SRC, "utf8"),
+      "LOGIN_PATTERN",
+    );
+    const theirs = loginPatternLiteral(
+      readFileSync(TRIGGER_SRC, "utf8"),
+      "GITHUB_LOGIN",
+    );
+    expect(theirs, "trigger.ts declares GITHUB_LOGIN").toBeDefined();
+    expect(ours, "outcome.ts declares LOGIN_PATTERN").toBeDefined();
+    expect(ours).toBe(theirs);
+    expect(ours).toContain("{0,90}");
   });
 
   test("the cancelled code renders as a notice under the Not reviewed lead, and its summary says so", () => {
@@ -1596,6 +1617,19 @@ describe("parseTriggerRecord — the override record (S8)", () => {
     expect(parseTriggerRecord(text(override))).toEqual(override);
   });
 
+  // An Enterprise Managed User login (`handle_shortcode`) parses, up to the same 91
+  // characters the trigger accepts, so the publisher can post what the trigger allowed.
+  test.each([
+    ["an underscore login", "octo_corp"],
+    ["a 91-character login, the bound", "a".repeat(91)],
+    ["a bot login of 91 characters in all", `${"a".repeat(86)}[bot]`],
+  ])("an override with %s parses and keeps its actor", (_label, actor) => {
+    expect(parseTriggerRecord(text({ ...override, actor }))).toEqual({
+      ...override,
+      actor,
+    });
+  });
+
   test("an override with no head still parses, because the comment posts without a status", () => {
     const { head_sha: _headSha, ...headless } = override;
     expect(parseTriggerRecord(text(headless))?.decision).toBe("override");
@@ -1606,6 +1640,8 @@ describe("parseTriggerRecord — the override record (S8)", () => {
     ["an empty actor", { actor: "" }],
     ["a newline in the actor", { actor: "evil\n::warning::x" }],
     ["an actor that is not a string", { actor: 7 }],
+    ["a 92-character actor", { actor: "a".repeat(92) }],
+    ["a 96-character bot actor", { actor: `${"a".repeat(91)}[bot]` }],
     ["no PR", { pr: undefined }],
   ])("an override with %s is refused", (_label, change) => {
     expect(

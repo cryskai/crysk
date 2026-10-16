@@ -257,10 +257,12 @@ const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
   "no-credentials",
   "override",
 ];
-// A GitHub login: letters, digits and hyphens, plus the `[bot]` suffix an app
-// posts under. A copy of the trigger's check, because trigger.ts and this file
-// may import builtins only (see the header of src/ci/trigger.ts).
-const LOGIN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$/;
+// A GitHub login, with the bound and characters of the trigger's check (GITHUB_LOGIN in
+// src/ci/trigger.ts), including the 91-character limit that keeps the override's status
+// description within GitHub's 140. A copy, not an import: this file and trigger.ts may
+// import builtins only at runtime (see the header of src/ci/trigger.ts), and
+// test/ci/outcome.test.ts fails if the two texts differ.
+const LOGIN_PATTERN = /^(?=.{1,91}$)[A-Za-z0-9][A-Za-z0-9_-]{0,90}(\[bot\])?$/;
 const RECORD_PARAM_KEYS: readonly string[] = [
   "backend",
   "provider",

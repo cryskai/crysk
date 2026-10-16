@@ -53,10 +53,11 @@ permissions:
 
 jobs:
   review:
-    # Same-repo pushes, and comments that start with `/pr-hero review`. Never reads secrets.
+    # Same-repo pushes, and comments that start with `/pr-hero review` or `/pr-hero override`. Never reads secrets.
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review'))
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))
     concurrency:
       group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -585,12 +586,21 @@ until one of two things happens: a new push creates a new head, which is reviewe
 `/pr-hero review` on that same head posts a newer status. A `failure` from that review then replaces the
 override.
 
+**An override stands against a review that was already running when it was posted; a review started after it replaces it.**
+The gate's final status write checks the head's newest `pr-hero` status before it writes. When that status is an
+override created after the review started, the review writes nothing over it and logs one line that the override
+stands. The review's findings and comments are unchanged. This does not cover a review that is cancelled, or that
+crashes after the override was posted: such a run can still replace the override with its own `error` status, and
+then comment `/pr-hero override` again.
+
 Two limits. First, the override works on pull requests from this repository only: the gate never checks out
-a fork's head, so a fork pull request cannot be overridden here. Second,
-GitHub keeps one pending run per concurrency group. A `/pr-hero override` that is queued behind a running
-review is replaced if another comment on the same pull request arrives before it starts, and then no
-override comment appears. Comment `/pr-hero override` again when that happens. If the head cannot be
-resolved, the comment still posts and says that no status could be set.
+a fork's head, so a fork pull request cannot be overridden here. Second, GitHub keeps one pending run per
+concurrency group, and that applies to an override from an `OWNER`, `MEMBER` or `COLLABORATOR`: such an
+override that is queued behind a running review is replaced if another comment on the same pull request
+arrives before it starts, and then no override comment appears. Comment `/pr-hero override` again when that
+happens. If the head cannot be resolved, the comment still posts and says that no status could be set. A
+re-run of the comment's job (run attempt 2 or later) is refused with a notice, because it would apply the
+override to the head as it is at the re-run; comment `/pr-hero override` again.
 
 **A failed final write.** In gate mode, when the review itself finished, the job fails with an `::error::`
 annotation if the final status cannot be written. When the review was also delivered, the CLI records the status

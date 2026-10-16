@@ -6,24 +6,30 @@
 // comments below move with the code they explain.
 
 import { recordUnsettledStatus } from "#ci/cli-record";
+import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/publish";
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import { settleCiAdmissionLedger } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
+import { fetchCommitStatuses } from "#pr/pr";
 import {
   blockingCommitStatusRequest,
   type CiMode,
   COMMIT_STATUS_CONTEXT,
   type CommitStatusContext,
+  type CommitStatusFact,
   commitStatusCompletion,
   commitStatusRequest,
+  latestStatusInContext,
 } from "#pr/preflight";
 import {
+  heldCommitStatusSince,
   publishFinalCommitStatus,
   releaseCommitStatusLock,
   tryPublishCommitStatus,
 } from "#pr/status";
 import type { PipelineResult } from "#review/pipeline";
 import { runGc } from "#store/gc";
+import { log } from "#ui/primitives";
 import { releasePidLock } from "../home";
 
 // The ledger has no equivalent hand-off to the SIGTERM/SIGINT handlers (which
@@ -52,6 +58,57 @@ async function settleLedgerIfPending(
       "review path exited without terminal settlement",
     );
   }
+}
+
+// The rule (docs/github-actions.md, "Overriding a red gate"): an override stands
+// against a review that was already running when it was posted, and a review started
+// after it replaces it. So the override stands when the newest `pr-hero` status is an
+// override and was created after this run started. A later review has posted its own
+// status since, which is then the newest, so this check is false and its write goes
+// ahead as before.
+//
+// WHY the floor to the second: GitHub's created_at has one-second precision. An
+// override in the run's own second is taken as posted during the run, the side that
+// keeps a human's unlock.
+//
+// The description comes from the statuses reader, fetchCommitStatuses (pr.ts), which
+// requests it. A status without one is never taken as an override.
+export function overrideStandsOverRun(
+  statuses: readonly CommitStatusFact[],
+  runStartedMs: number,
+): boolean {
+  const latest = latestStatusInContext(statuses, COMMIT_STATUS_CONTEXT);
+  if (latest === null) return false;
+  const description = latest.description;
+  if (
+    typeof description !== "string" ||
+    !description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)
+  ) {
+    return false;
+  }
+  const createdMs = Date.parse(latest.created_at);
+  if (Number.isNaN(createdMs)) return false;
+  return createdMs >= Math.floor(runStartedMs / 1000) * 1000;
+}
+
+// Whether an override posted during this run stands over its final write. Only a run
+// that took the lock has a start to compare with. A failed read is no evidence of an
+// override, so the write goes ahead, as before (fail open to the review's verdict).
+async function overrideStandsOverThisRun(
+  operatorRoot: string,
+  headSha: string,
+  spawnFn: typeof Bun.spawn | undefined,
+  readStatuses: typeof fetchCommitStatuses,
+): Promise<boolean> {
+  const startedMs = heldCommitStatusSince();
+  if (startedMs === null) return false;
+  let statuses: readonly CommitStatusFact[];
+  try {
+    statuses = await readStatuses(operatorRoot, headSha, { spawnFn });
+  } catch {
+    return false;
+  }
+  return overrideStandsOverRun(statuses, startedMs);
 }
 
 // The inner `finally`: the commit status must settle BEFORE the lock is
@@ -101,6 +158,10 @@ export async function settleCommitStatusAndLedger(input: {
   bodyFailed?: boolean;
   spawnFn?: typeof Bun.spawn;
   settle?: typeof settleCiAdmissionLedger;
+  // The head's statuses, read before a gate's final write to see whether an override
+  // posted during this run stands (overrideStandsOverRun). Production omits it and
+  // gets the real reader; a test injects one.
+  readStatuses?: typeof fetchCommitStatuses;
   // Where the CLI's outcome record is written (PRHERO_OUTCOME_DIR). Production omits
   // it, and the record writer then reads process.env, as every other writer does.
   env?: Readonly<Record<string, string | undefined>>;
@@ -131,7 +192,27 @@ export async function settleCommitStatusAndLedger(input: {
           context: input.statusContext,
         });
   try {
-    if (effectiveMode === "gate" && input.bodyFailed !== true) {
+    // WHY only the gate's own final write: a body that threw is written best-effort,
+    // and that error status is not the review's verdict. It is not checked here, and
+    // the publisher's own error branch posts an `error` status for that CLI record
+    // without reading the head (src/ci/publish.ts, remoteOrLocal), so it can still
+    // replace an override. Advisory is left as it was: this rule is the gate's.
+    const overrideStands =
+      effectiveMode === "gate" &&
+      input.bodyFailed !== true &&
+      (await overrideStandsOverThisRun(
+        input.operatorRoot,
+        input.headSha,
+        input.spawnFn,
+        input.readStatuses ?? fetchCommitStatuses,
+      ));
+    if (overrideStands) {
+      // WHY one line and no status: the override stays the head's status. This run's
+      // findings and PR comments are not affected by this write.
+      log(
+        "pr-hero: an override on this head stands, so this review's verdict is not written over it.",
+      );
+    } else if (effectiveMode === "gate" && input.bodyFailed !== true) {
       try {
         await publishFinalCommitStatus(
           input.operatorRoot,

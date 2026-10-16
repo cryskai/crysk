@@ -830,6 +830,10 @@ export interface CommitStatusFact {
   state: string;
   context: string;
   created_at: string;
+  // The status's description, read only where an override must be told apart from
+  // a review's own status (teardown.ts overrideStandsOverRun). Absent when the
+  // reader did not return it, which is never taken as an override.
+  description?: string | null;
 }
 
 export interface CommitStatusRequest {

@@ -1846,6 +1846,44 @@ describe("fetchCommitStatuses", () => {
     ]);
   });
 
+  // The override check (src/pr/teardown.ts) tells an override from a review's own
+  // status by its description, so the request must ask for it. The jq is asserted
+  // because a fake that echoed the field would pass against a filter that drops it.
+  test("the request asks for each status's description, and a row carries it, null when GitHub sends none", async () => {
+    const override =
+      "pr-hero: overridden by @maintainer — no review on this head";
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: ndjson([
+            {
+              state: "success",
+              context: COMMIT_STATUS_CONTEXT,
+              created_at: "2026-08-18T16:30:00Z",
+              description: override,
+            },
+            {
+              state: "pending",
+              context: "ci",
+              created_at: "2026-08-18T16:00:00Z",
+              description: null,
+            },
+          ]),
+        },
+      },
+    ]);
+    const statuses = await fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    const argv = calls[0]?.argv ?? [];
+    const jq = argv[argv.indexOf("--jq") + 1] ?? "";
+    expect(jq).toContain(".statuses[]?");
+    expect(jq).toContain("description: .description");
+    expect(statuses[0]?.description).toBe(override);
+    expect(statuses[1]?.description).toBeNull();
+  });
+
   test("a failed fetch is empty, not a throw", async () => {
     const { spawnFn } = makeFakeGh([
       {

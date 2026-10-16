@@ -199,6 +199,30 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     expect(docs).toContain(`\n      group: ${REVIEW_CONCURRENCY_GROUP}\n`);
   });
 
+  // A copy-pasted docs workflow must admit the same comments the generator does. The
+  // job `if:` is compared as parsed YAML, so the folded scalar's layout cannot hide a
+  // missing `/pr-hero override` clause.
+  test("the docs' workflow snippet admits the same comments as the generator's job", () => {
+    const docs = readFileSync(
+      path.resolve(import.meta.dir, "../../docs/github-actions.md"),
+      "utf-8",
+    );
+    const workflowSection = docs.slice(
+      docs.indexOf("## What the workflow does"),
+    );
+    const snippet = /```yaml\n([\s\S]*?)\n```/.exec(workflowSection)?.[1] ?? "";
+    expect(snippet).toContain("name: pr-hero Review");
+    const generatedIf = String(
+      parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
+    );
+    expect(generatedIf).toContain(
+      "startsWith(github.event.comment.body, '/pr-hero override')",
+    );
+    expect(String(parseWorkflow(snippet).jobs.review?.if ?? "")).toBe(
+      generatedIf,
+    );
+  });
+
   test("there is exactly one job, so its bound is the whole workflow's bound", () => {
     // The old `credentials` gate job needed its own bound: it ran FIRST and
     // gated `review` through `needs:`, so a runner hung there inherited

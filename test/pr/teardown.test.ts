@@ -42,7 +42,11 @@ import {
   releaseCommitStatusLock,
   settleHeldCommitStatusOnSignal,
 } from "#pr/status";
-import { finalizePrReviewRun, settleCommitStatusAndLedger } from "#pr/teardown";
+import {
+  finalizePrReviewRun,
+  overrideStandsOverRun,
+  settleCommitStatusAndLedger,
+} from "#pr/teardown";
 import { unresolvedBlockingCount } from "#rereview/state";
 import type { PipelineResult } from "#review/pipeline";
 import { CliError } from "../../src/errors";
@@ -928,5 +932,243 @@ describe("settleCommitStatusAndLedger — the unsettled final status", () => {
       outcome: "error",
       cls: { kind: "unknown" },
     });
+  });
+});
+
+// An override stands against a review that was already running when it was posted:
+// the review's own final write must not replace it. A review started after the
+// override replaces it, which is the ordinary write. The settle tests inject the
+// reader (readStatuses); the production reader requests `description` too (pr.test.ts
+// pins the request), so these statuses carry the field as GitHub sends it.
+describe("overrideStandsOverRun — which override stands", () => {
+  const OVERRIDE =
+    "pr-hero: overridden by @maintainer — no review on this head";
+  const RUN_START = Date.parse("2026-10-17T12:00:00Z");
+  const status = (
+    description: string | undefined,
+    createdMs: number,
+    context: string = COMMIT_STATUS_CONTEXT,
+    state = "success",
+  ) => ({
+    state,
+    context,
+    created_at: new Date(createdMs).toISOString(),
+    ...(description === undefined ? {} : { description }),
+  });
+
+  test("an override created after the run started stands", () => {
+    expect(
+      overrideStandsOverRun([status(OVERRIDE, RUN_START + 60_000)], RUN_START),
+    ).toBe(true);
+  });
+
+  test("an override created before the run started does not stand", () => {
+    expect(
+      overrideStandsOverRun([status(OVERRIDE, RUN_START - 60_000)], RUN_START),
+    ).toBe(false);
+  });
+
+  test("the newest pr-hero status decides: a review's status after the override means no override stands", () => {
+    expect(
+      overrideStandsOverRun(
+        [
+          status(OVERRIDE, RUN_START + 60_000),
+          status(
+            "pr-hero reviewing",
+            RUN_START + 120_000,
+            COMMIT_STATUS_CONTEXT,
+            "pending",
+          ),
+        ],
+        RUN_START,
+      ),
+    ).toBe(false);
+  });
+
+  test("an override on the local context never stands over a gate review", () => {
+    expect(
+      overrideStandsOverRun(
+        [status(OVERRIDE, RUN_START + 60_000, LOCAL_COMMIT_STATUS_CONTEXT)],
+        RUN_START,
+      ),
+    ).toBe(false);
+  });
+
+  test("a status without a description, or with another one, is not an override", () => {
+    expect(
+      overrideStandsOverRun([status(undefined, RUN_START + 60_000)], RUN_START),
+    ).toBe(false);
+    expect(
+      overrideStandsOverRun(
+        [
+          status(
+            "pr-hero: 2 blocking finding(s)",
+            RUN_START + 60_000,
+            COMMIT_STATUS_CONTEXT,
+            "failure",
+          ),
+        ],
+        RUN_START,
+      ),
+    ).toBe(false);
+  });
+
+  test("no statuses, the read's fail-open answer, means no override stands", () => {
+    expect(overrideStandsOverRun([], RUN_START)).toBe(false);
+  });
+});
+
+describe("settleCommitStatusAndLedger — an override posted during this run", () => {
+  const OVERRIDE =
+    "pr-hero: overridden by @maintainer — no review on this head";
+  const LOCK: Parameters<typeof holdCommitStatusLock>[0] = {
+    operatorRoot: "/repo",
+    sha: HEAD,
+    targetUrl: undefined,
+    context: COMMIT_STATUS_CONTEXT,
+  };
+  const overrideAt = (createdMs: number) => ({
+    state: "success",
+    context: COMMIT_STATUS_CONTEXT,
+    created_at: new Date(createdMs).toISOString(),
+    description: OVERRIDE,
+  });
+  // The statuses of a gate run: the POSTs are the only calls that carry a `state=` flag.
+  const postCount = (calls: string[][]) =>
+    calls.filter((argv) => parseStatusFlags(argv).state !== undefined).length;
+
+  afterEach(() => {
+    releaseCommitStatusLock();
+  });
+
+  function gateInput(
+    spawnFn: typeof Bun.spawn,
+    overrides: Partial<Parameters<typeof settleCommitStatusAndLedger>[0]> = {},
+  ): Parameters<typeof settleCommitStatusAndLedger>[0] {
+    return {
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "gate",
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: 0,
+      ...overrides,
+    };
+  }
+
+  test("an override posted after the review started stands: no final write, the lock is released, and one log line", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    // log() writes to stderr, so that is the stream a test reads.
+    const logged: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      logged.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await settleCommitStatusAndLedger(
+        gateInput(spawnFn, {
+          readStatuses: async () => [overrideAt(Date.now() + 120_000)],
+        }),
+      );
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    expect(postCount(calls)).toBe(0);
+    expect(heldCommitStatusLock()).toBeNull();
+    expect(logged.join("\n")).toContain("override");
+  });
+
+  test("an override posted before the review started does not stand: the final write happens", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        readStatuses: async () => [overrideAt(Date.now() - 120_000)],
+      }),
+    );
+    expect(postCount(calls)).toBe(1);
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
+  test("a failed statuses read writes the final status, as before", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        readStatuses: async () => {
+          throw new Error("gh api timed out");
+        },
+      }),
+    );
+    expect(postCount(calls)).toBe(1);
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
+  test("the failed read's empty answer also writes the final status", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, { readStatuses: async () => [] }),
+    );
+    expect(postCount(calls)).toBe(1);
+  });
+
+  test("a gate run that never held the lock reads nothing and writes as before", async () => {
+    const { spawnFn, calls } = makeStatusSpawn();
+    let reads = 0;
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        readStatuses: async () => {
+          reads += 1;
+          return [overrideAt(Date.now() + 120_000)];
+        },
+      }),
+    );
+    expect(reads).toBe(0);
+    expect(postCount(calls)).toBe(1);
+  });
+
+  // The body's best-effort error status is not the gate's verdict, so the check does
+  // not guard it. The publisher's own error branch is the remaining gap (see the comment
+  // in settleCommitStatusAndLedger).
+  test("a body that threw still writes its best-effort status: the check covers the gate's verdict only", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    let reads = 0;
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        bodyFailed: true,
+        result: pipelineResult(true),
+        readStatuses: async () => {
+          reads += 1;
+          return [overrideAt(Date.now() + 120_000)];
+        },
+      }),
+    );
+    expect(reads).toBe(0);
+    expect(postCount(calls)).toBe(1);
+  });
+
+  test("advisory mode is unaffected: the final status is written and nothing is read", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    let reads = 0;
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        ciMode: "advisory",
+        readStatuses: async () => {
+          reads += 1;
+          return [overrideAt(Date.now() + 120_000)];
+        },
+      }),
+    );
+    expect(reads).toBe(0);
+    expect(postCount(calls)).toBe(1);
   });
 });

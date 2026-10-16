@@ -248,6 +248,75 @@ describe("decideCiTrigger — the override command (S8)", () => {
     expect(JSON.stringify(verdict)).not.toContain("HOSTILE");
   });
 
+  // An Enterprise Managed User login is `handle_shortcode` and can be longer than
+  // 39 characters, so the guard must accept both (the maintainer could not override).
+  // The bound is 91 characters, the longest login whose override description
+  // (49 characters around it) still fits GitHub's 140-character status limit.
+  test.each([
+    ["an EMU login with an underscore", "octo_corp"],
+    ["a 45-character EMU-style login", `${"a".repeat(40)}_corp`],
+    ["a 91-character login, the bound", "a".repeat(91)],
+    ["a bot login", "dependabot[bot]"],
+    ["a bot login of 91 characters in all", `${"a".repeat(86)}[bot]`],
+  ])("%s is accepted as the override actor", (_label, login) => {
+    expect(
+      decideCiTrigger(comment("/pr-hero override", { commenterLogin: login })),
+    ).toEqual({ kind: "override", actor: login });
+  });
+
+  // One past the bound is refused, for a plain login and for a bot login whose
+  // `[bot]` suffix counts toward the same 91.
+  test.each([
+    ["a 92-character login", "a".repeat(92)],
+    ["a 96-character bot login", `${"a".repeat(91)}[bot]`],
+  ])(
+    "%s is refused, so its override description cannot overflow",
+    (_label, login) => {
+      const verdict = decideCiTrigger(
+        comment("/pr-hero override", { commenterLogin: login }),
+      );
+      expect(verdict.kind).toBe("denied");
+      expect(JSON.stringify(verdict)).not.toContain(login);
+    },
+  );
+
+  // Whatever could break the status text or the markdown comment stays refused.
+  test.each([
+    ["a space", "octo corp"],
+    ["a backtick", "octo`corp"],
+    ["an opening angle bracket", "octo<corp"],
+    ["a closing angle bracket", "octo>corp"],
+    ["an @ sign", "@octo"],
+    ["a newline", "octo\ncorp"],
+    ["a trailing newline", "octo\n"],
+  ])("a login with %s is refused", (_label, login) => {
+    const verdict = decideCiTrigger(
+      comment("/pr-hero override", { commenterLogin: login }),
+    );
+    expect(verdict.kind).toBe("denied");
+    expect(JSON.stringify(verdict)).not.toContain(login);
+  });
+
+  // A re-run replays the original comment event, but resolves the head at re-run
+  // time. The override would then land on a head its commenter never saw.
+  test("an override on a re-run attempt is refused, and the first attempt proceeds", () => {
+    expect(
+      decideCiTrigger(comment("/pr-hero override", { runAttempt: 2 })),
+    ).toMatchObject({
+      kind: "denied",
+      reason: expect.stringContaining(
+        "an override applies to the head at the time of the comment",
+      ),
+    });
+    expect(
+      decideCiTrigger(comment("/pr-hero override", { runAttempt: 1 })),
+    ).toEqual({ kind: "override", actor: "maintainer" });
+    expect(decideCiTrigger(comment("/pr-hero override"))).toEqual({
+      kind: "override",
+      actor: "maintainer",
+    });
+  });
+
   test("the override record names its actor, and a review record never does", () => {
     const override = outcomeRun(
       commentEnv("/pr-hero override"),
@@ -315,6 +384,79 @@ describe("decideCiTrigger — the override command (S8)", () => {
     );
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toContain("could not write its outcome record");
+  });
+
+  test("an override re-run (attempt 2) sets nothing and looks up no head; attempt 1 records the override", () => {
+    const rerun = outcomeRun(
+      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "2" }),
+      scriptedGh(ok("write"), ok(HEAD_SHA)),
+    );
+    expect(rerun.exitCode).toBe(0);
+    expect(rerun.outputs).toMatchObject({ run: "false", head_sha: "" });
+    expect(rerun.record).toMatchObject({ decision: "denied", run_attempt: 2 });
+    expect(rerun.record).not.toHaveProperty("actor");
+    expect(rerun.ghCalls.filter((args) => args[0] === "pr")).toEqual([]);
+    expect(rerun.stdout).toContain(
+      "an override applies to the head at the time of the comment; comment `/pr-hero override` again",
+    );
+
+    const first = outcomeRun(
+      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "1" }),
+      scriptedGh(ok("write"), ok(HEAD_SHA)),
+    );
+    expect(first.exitCode).toBe(0);
+    expect(first.record).toMatchObject({
+      decision: "override",
+      actor: "maintainer",
+    });
+  });
+
+  // The head is the whole target of an override's status, so its one lookup is
+  // retried once. A review only names an artifact with its head, so it is not.
+  test("an override retries its head lookup once: a second answer is used", () => {
+    let headCalls = 0;
+    const run = outcomeRun(commentEnv("/pr-hero override"), (args) => {
+      if (args[0] === "api") return ok("write");
+      headCalls += 1;
+      return headCalls === 1
+        ? { exitCode: 1, stdout: "", stderr: "gh: transient failure" }
+        : ok(HEAD_SHA);
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.record).toMatchObject({
+      decision: "override",
+      head_sha: HEAD_SHA,
+    });
+    expect(run.outputs).toMatchObject({ head_sha: HEAD_SHA });
+    expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(2);
+    expect(run.sleeps).toHaveLength(1);
+  });
+
+  test("an override whose head lookup fails twice takes the no-head path", () => {
+    const run = outcomeRun(commentEnv("/pr-hero override"), (args) =>
+      args[0] === "api"
+        ? ok("write")
+        : { exitCode: 1, stdout: "", stderr: "gh: still failing" },
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(2);
+    expect(run.record).toMatchObject({
+      decision: "override",
+      actor: "maintainer",
+    });
+    expect(run.record?.head_sha).toBeUndefined();
+    // The existing no-head output: the publisher's comment says no status was set.
+    expect(run.outputs).toMatchObject({ head_sha: "unknown" });
+  });
+
+  test("a review does not retry its head lookup", () => {
+    const run = outcomeRun(commentEnv("/pr-hero review"), (args) =>
+      args[0] === "api"
+        ? ok("write")
+        : { exitCode: 1, stdout: "", stderr: "gh: failing" },
+    );
+    expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(1);
+    expect(run.sleeps).toEqual([]);
   });
 });
 
