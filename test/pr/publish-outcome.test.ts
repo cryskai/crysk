@@ -310,6 +310,13 @@ describe("publishRunOutcome", () => {
       posted: null,
       postedWebUrl: undefined,
     });
+    // A post that resolves: it reaches the delivery point first, as the real
+    // stage does. This fake passes posted null, since the outcome's shape is
+    // large here; the non-null guarantee is pinned in test/pr/posting.test.ts.
+    const postsAndDelivers = async (stage: { onDelivered?: () => void }) => {
+      stage.onDelivered?.();
+      return postsNothing();
+    };
 
     beforeEach(() => {
       outcome = path.join(home, "outcome");
@@ -364,17 +371,39 @@ describe("publishRunOutcome", () => {
       expect(existsSync(path.join(outcome, CLI_RECORD_FILE))).toBe(false);
     });
 
-    test("reviewed is written after the post resolves: the post itself saw no record yet", async () => {
+    // CHANGED (F002 on #330): reviewed is written at the delivery point inside
+    // the posting stage, through onDelivered, not after the stage returns.
+    test("reviewed is written at the delivery point: the post itself saw no record yet, and the record exists once it fires", async () => {
       let recordAtPost: boolean | undefined;
+      let recordAtDelivery: boolean | undefined;
       const input = baseInput({
         postEnabled: true,
-        postFindings: async () => {
+        postFindings: async (stage) => {
           recordAtPost = existsSync(path.join(outcome, CLI_RECORD_FILE));
+          stage.onDelivered?.();
+          recordAtDelivery = existsSync(path.join(outcome, CLI_RECORD_FILE));
           return postsNothing();
         },
       });
       expect(await publishRunOutcome(input)).toBe(0);
       expect(recordAtPost).toBe(false);
+      expect(recordAtDelivery).toBe(true);
+      expect(readCli()).toEqual(REVIEWED);
+    });
+
+    // WHY this test (F002 on #330): the receipt write runs after the delivery
+    // point. A throw there is a failure after the review was delivered, so the
+    // record keeps reviewed, and the posting error record is not written over it.
+    test("a receipt-write throw after delivery keeps reviewed: the error propagates and no posting error replaces it", async () => {
+      const receiptError = new Error("EACCES: receipt");
+      const input = baseInput({
+        postEnabled: true,
+        postFindings: async (stage) => {
+          stage.onDelivered?.();
+          throw receiptError;
+        },
+      });
+      await expect(publishRunOutcome(input)).rejects.toBe(receiptError);
       expect(readCli()).toEqual(REVIEWED);
     });
 
@@ -387,7 +416,7 @@ describe("publishRunOutcome", () => {
       const input = baseInput({
         isCi: true,
         postEnabled: true,
-        postFindings: postsNothing,
+        postFindings: postsAndDelivers,
       });
       await expect(publishRunOutcome(input)).rejects.toMatchObject({
         code: "ENOENT",

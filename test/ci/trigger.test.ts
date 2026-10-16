@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -527,6 +528,32 @@ const failingFs: OutcomeFs = {
   },
   remove: (filePath) => rmSync(filePath, { force: true }),
 };
+
+// A fake fs whose removals of the matching files fail with EPERM, the way a stale
+// file another user owns fails. Every other operation is the real one.
+function fsWhereRemovalFails(
+  failing: (filePath: string) => boolean,
+): OutcomeFs {
+  return {
+    mkdir: (target) => {
+      mkdirSync(target, { recursive: true });
+    },
+    writeFile: (filePath, text) => {
+      writeFileSync(filePath, text);
+    },
+    rename: (from, to) => {
+      renameSync(from, to);
+    },
+    remove: (filePath) => {
+      if (failing(filePath)) {
+        throw Object.assign(new Error("EPERM: operation not permitted"), {
+          code: "EPERM",
+        });
+      }
+      rmSync(filePath, { force: true });
+    },
+  };
+}
 
 function runShell(
   env: Record<string, string>,
@@ -1202,6 +1229,52 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     const run = outcomeRun(baseEnv());
     expect(run.record?.cls).toBeUndefined();
     expect(run.exitCode).toBe(0);
+  });
+
+  // WHY these two (F003 on #330): the stale cli.json.tmp only affects the optional
+  // CLI record, so its removal is best effort. A stale cli-started or cli.json is
+  // what the publisher reads, so those removals stay strict.
+  test("a stale cli.json.tmp that cannot be removed does not block the trigger record", () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-trigger-tmp-eperm-"),
+    );
+    try {
+      const dir = path.join(root, "outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "cli.json.tmp"), "stale\n");
+      const run = runShell(
+        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        undefined,
+        undefined,
+        fsWhereRemovalFails((filePath) => filePath.endsWith("cli.json.tmp")),
+      );
+      expect(run.exitCode).toBe(0);
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
+      expect(run.stdout).not.toContain("could not write its outcome record");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a stale cli-started that cannot be removed still fails the record write, as before", () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-trigger-start-eperm-"),
+    );
+    try {
+      const dir = path.join(root, "outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "cli-started"), "");
+      const run = runShell(
+        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        undefined,
+        undefined,
+        fsWhereRemovalFails((filePath) => filePath.endsWith("cli-started")),
+      );
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(false);
+      expect(run.stdout).toContain("could not write its outcome record");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("a record that cannot be written leaves no partial file and keeps the decision's exit code", () => {

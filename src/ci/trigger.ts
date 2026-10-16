@@ -554,13 +554,16 @@ const CLI_RECORD = "cli.json";
 const CLI_RECORD_TEMP = `${CLI_RECORD}${RECORD_TEMP_SUFFIX}`;
 
 function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
-  for (const name of [
-    CLI_STARTED_MARKER,
-    SETUP_RECORD,
-    CLI_RECORD,
-    CLI_RECORD_TEMP,
-  ]) {
+  // The markers the publisher reads stay strict: a stale one would mislead it.
+  for (const name of [CLI_STARTED_MARKER, SETUP_RECORD, CLI_RECORD]) {
     fs.remove(path.join(dir, name));
+  }
+  // WHY best effort (F003 on #330): the temp file only affects the optional CLI
+  // record, and a stale one that cannot be removed must not stop the trigger record.
+  try {
+    fs.remove(path.join(dir, CLI_RECORD_TEMP));
+  } catch {
+    // Ignored on purpose; see the WHY above.
   }
 }
 

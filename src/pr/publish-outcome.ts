@@ -185,10 +185,13 @@ export async function publishRunOutcome(
   // links must be built from the SAME web url the comments were
   // published against. See postFindingsIfEnabled (src/pr/posting.ts) for
   // the full rationale.
-  // Only the posting call is wrapped. A throw here is the posting's own failure, so its
-  // record names the step and the publisher can say the review stopped while posting.
+  // Only the posting call is wrapped. A throw before the delivery point is the
+  // posting's own failure, so its record names the step and the publisher can say
+  // the review stopped while posting. A throw after it keeps reviewed (see
+  // onDelivered below), so no posting record replaces it.
   // The error is rethrown unchanged, and no stage around this call is wrapped.
   let postingResult: PostingStageResult;
+  let delivered = false;
   try {
     postingResult = await (input.postFindings ?? postFindingsIfEnabled)({
       postEnabled: input.postEnabled,
@@ -201,14 +204,24 @@ export async function publishRunOutcome(
       runDir: input.runDir,
       rereview: input.rereview,
       rereviewPriors: input.phaseB?.priors,
+      // THE delivery point when posting is on: the findings POST has resolved, so
+      // the review is delivered. It fires before the local receipt is written, so a
+      // receipt write that throws is a failure after delivery. A failed session never
+      // reaches it.
+      onDelivered: () => {
+        recordReviewDelivered(input.headSha);
+        delivered = true;
+      },
     });
   } catch (error) {
-    writeCliRecord({
-      v: 1,
-      outcome: "error",
-      cls: classifyCliError(error),
-      params: { step: "posting the review" },
-    });
+    if (!delivered) {
+      writeCliRecord({
+        v: 1,
+        outcome: "error",
+        cls: classifyCliError(error),
+        params: { step: "posting the review" },
+      });
+    }
     throw error;
   }
   // The hazard this whole module exists for: fire the sink IMMEDIATELY, at
@@ -219,13 +232,6 @@ export async function publishRunOutcome(
   // correct for its finally block.
   const posted = postingResult.posted;
   input.onPosted(posted);
-  // THE delivery point when posting is on: the findings post has completed, so the
-  // review is delivered. Written before the summary and the CI tail, so a throw in that
-  // tail keeps reviewed (writeFatalCliRecord keeps it). A failed session does not reach
-  // a delivery: its record is hunters-failed.
-  if (input.postEnabled && !result.sessionFailed) {
-    recordReviewDelivered(input.headSha);
-  }
   const postedWebUrl = postingResult.postedWebUrl;
 
   // 15 — the summary. One shared renderer with local mode; the mode-specific parts (comparison,

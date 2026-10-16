@@ -2,9 +2,10 @@
 // outcome of a run becomes ONE annotation, ONE step summary and, when the PR is
 // known, ONE sticky comment on that PR. The commit status is posted only when a
 // valid head sha is known: a status needs a sha, a comment does not. The
-// comment's marker says head=unknown when no head is known. One case posts a
-// comment with no status even when a head is known: a CLI-started run with no
-// cli.json (see decideCliOutcome). The trigger writes
+// comment's marker says head=unknown when no head is known. One case decides on
+// the head's own status: a CLI-started run with no cli.json. Its status is posted
+// only when that head's pr-hero status is pending or unreadable, and the comment
+// alone when it settled (see decideCliOutcome). The trigger writes
 // the decision to trigger.json, the setup step may leave setup.json, and the CLI
 // leaves cli.json for each terminal outcome of a review it started. This step
 // reads them and speaks.
@@ -23,7 +24,9 @@
 // code, because the CLI posts no comment for those. A `skipped` or `yielded` run
 // is left alone: the CLI posted its own notice. A record that is absent,
 // unreadable or malformed reads as no record, so the run stopped before it
-// reported an outcome. Cleanup needs a PR, and it never posts a status.
+// reported an outcome. Its status is posted only when the head's pr-hero status is
+// still pending or cannot be read (see decideCliOutcome). Cleanup needs a PR, and
+// it never posts a status.
 //
 // WHY the CLI's head comes first: cli.json names the head the CLI reviewed or
 // resolved, when it knows one, and that is the head its outcome belongs to. The
@@ -101,6 +104,12 @@ interface StatusPost {
   targetUrl: string;
 }
 
+// The head's newest pr-hero status, as the no-record branch needs it: a pending
+// status is a CLI that never settled, a settled one is a finished CLI, and anything
+// else (an unreadable answer, no pr-hero row, a state this table does not name) is
+// unknown.
+type LatestStatusState = "pending" | "settled" | "unknown";
+
 export type Publication =
   | { kind: "none" }
   // Annotation and step summary only: no PR can be written to.
@@ -142,6 +151,10 @@ export function decidePublication(input: {
   // the file is absent, unreadable or malformed: the same as no record.
   cliRecord?: CliRecord;
   setup?: SetupRecord;
+  // The head's pr-hero status. runPublish reads it only for a review the CLI started
+  // with no CLI record on a known head; undefined elsewhere, and treated as unknown
+  // in that one case.
+  latestStatusState?: LatestStatusState;
 }): Publication {
   const record = input.record;
   if (record === undefined) return { kind: "none" };
@@ -150,7 +163,7 @@ export function decidePublication(input: {
     return { kind: "none" };
   }
   if (record.decision === "review" && input.cliStarted) {
-    return decideCliOutcome(record, input.cliRecord);
+    return decideCliOutcome(record, input.cliRecord, input.latestStatusState);
   }
 
   const params: ErrorParams = {
@@ -172,11 +185,12 @@ export function decidePublication(input: {
 // speaks for those with the code the record names. Cleanup needs a completed
 // review: a stale outcome comment contradicts it, and nothing else removes that
 // comment. A run with no record stopped before it reported, so it is the code for
-// that, never silence, but only as a comment: the status stays the CLI's (see the
+// that, never silence. Its status follows the head's own pr-hero status (see the
 // no-record branch below).
 function decideCliOutcome(
   record: TriggerRecord,
   cliRecord: CliRecord | undefined,
+  latestStatusState: LatestStatusState | undefined,
 ): Publication {
   const runParams: ErrorParams = {
     pr: record.pr,
@@ -184,16 +198,18 @@ function decideCliOutcome(
     runUrl: record.run_url,
   };
   if (cliRecord === undefined) {
-    // WHY no status (F004 on #330): without a record the publisher cannot tell a
-    // killed CLI from one whose record write failed (ENOSPC, or EACCES on a stale
-    // cli.json.tmp). The CLI's own commit status already says how far it got:
-    // success once the pipeline finished, error when its own teardown settled a
-    // failure, pending when a kill left it in flight, or none when it died before
-    // posting pending. A pending or missing required check still blocks a merge,
-    // so the publisher explains in a comment and never overrides that status. An
-    // error status here turned a completed review red. Passing no head is what
-    // keeps the status out, since a status needs a sha. The marker then says
-    // head=unknown even when the trigger knew one; nothing reads that field.
+    // WHY the head's status decides (F001 and F004 on #330). Without a record the
+    // publisher cannot tell a killed CLI from one whose record write failed. A kill
+    // leaves the CLI's `pending` status on the head, and the admission gate yields
+    // to a pending status for 90 minutes (yieldToInFlightReview), so every re-run
+    // on that head would silently do nothing. The error status here replaces that
+    // lock. A settled status (success, error, failure) means the CLI finished, so
+    // the publisher never overrides it, and the comment alone explains the run.
+    // An unreadable status, or no pr-hero status at all, takes the error status
+    // too: a visible red is recoverable with a re-run, a stuck lock is not. No
+    // head means no status and no read, since a status needs a sha. The marker
+    // says head=unknown whenever no status is posted; nothing reads that field.
+    const replacesLock = latestStatusState !== "settled";
     return remoteOrLocal(
       record,
       renderError(
@@ -201,7 +217,7 @@ function decideCliOutcome(
         { ...runParams, step: STOPPED_STEP },
         "action",
       ),
-      undefined,
+      replacesLock ? record.head_sha : undefined,
     );
   }
   switch (cliRecord.outcome) {
@@ -682,6 +698,58 @@ function readCliRecord(dir: string): CliRecord | undefined {
   }
 }
 
+const SETTLED_STATES: ReadonlySet<string> = new Set([
+  "success",
+  "error",
+  "failure",
+]);
+
+// The head's newest pr-hero status, as the three states the table needs. WHY
+// per_page=100: the combined endpoint pages at 30 contexts by default, and a busy
+// head's pr-hero row can sit past the first page. The newest row is picked by its
+// time, not by its place in the answer. A failed read, no pr-hero row, or a state
+// the table does not name is unknown, which the table answers with the status.
+function readLatestCliStatusState(
+  deps: PublishDeps,
+  repo: string,
+  sha: string,
+): LatestStatusState {
+  const read = deps.gh([
+    "api",
+    `repos/${repo}/commits/${sha}/status?per_page=100`,
+    "--jq",
+    ".statuses[]? | [.context, .state, .created_at] | @json",
+  ]);
+  if (read.exitCode !== 0) return "unknown";
+  let latestState: string | undefined;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const line of read.stdout.split("\n")) {
+    if (line.trim() === "") continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(value)) continue;
+    const [context, state, createdAt] = value;
+    if (
+      context !== STATUS_CONTEXT ||
+      typeof state !== "string" ||
+      typeof createdAt !== "string"
+    ) {
+      continue;
+    }
+    const createdMs = Date.parse(createdAt);
+    if (Number.isNaN(createdMs) || createdMs < latestMs) continue;
+    latestState = state;
+    latestMs = createdMs;
+  }
+  if (latestState === undefined) return "unknown";
+  if (latestState === "pending") return "pending";
+  return SETTLED_STATES.has(latestState) ? "settled" : "unknown";
+}
+
 export function runPublish(deps: PublishDeps): number {
   const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
   if (dir === "") return 0;
@@ -739,7 +807,24 @@ export function runPublish(deps: PublishDeps): number {
   // CLI's record.
   const cliRecord =
     record.decision === "review" && cliStarted ? readCliRecord(dir) : undefined;
-  const plan = decidePublication({ record, cliStarted, cliRecord, setup });
+  // WHY the read is here, and only here (F001 on #330): the head's status decides
+  // only for a review the CLI started that left no record, on a PR with a known
+  // head. Every other outcome decides without it, so it makes no call.
+  const latestStatusState =
+    record.decision === "review" &&
+    cliStarted &&
+    cliRecord === undefined &&
+    record.pr !== undefined &&
+    record.head_sha !== undefined
+      ? readLatestCliStatusState(deps, record.repository, record.head_sha)
+      : undefined;
+  const plan = decidePublication({
+    record,
+    cliStarted,
+    cliRecord,
+    setup,
+    latestStatusState,
+  });
   if (plan.kind === "none") return 0;
   if (plan.kind === "cleanup") {
     cleanupOlderOutcomes(deps, plan);
