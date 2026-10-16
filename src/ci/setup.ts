@@ -112,18 +112,21 @@ export const DEFAULT_CI_ACTION_REF = "juanmaagd/pr-hero@v0";
 // leave the committed workflow and the tests disagreeing about what "ours"
 // means. Nothing a scaffolded repo receives passes through here.
 //
-// `budgetUsd` is deliberately absent (issue #156). It used to be "15.00", set
-// because a self-review's diff grows against the base every time a finding is
-// answered, so an iterating PR walked toward the ceiling exactly when the
-// check mattered most. The route's billing mode now solves that: this repo
-// reviews itself on a Claude subscription, where `resolveCiBudgetCeiling`
-// applies no ceiling at all. Restoring the line would not restore a safety
-// net — it would IMPOSE a ceiling the policy would otherwise not apply, on an
-// `estimate.high` that is not this route's cash cost. `maxChangedLines` stays:
-// that gate is real on any route.
+// `budgetUsd` is "0": the explicit, loud DISABLE, not a ceiling. History:
+// it used to be "15.00", because a self-review's diff grows against the base
+// every time a finding is answered, so an iterating PR walked toward the
+// ceiling exactly when the check mattered most. Issue #156 dropped it on the
+// promise that the route's billing mode would apply no ceiling on this repo's
+// Claude subscription. That promise did not hold here: the route resolved as
+// metered, and #326 (and earlier PRs) skipped at the $10 metered default on
+// an `estimate.high` that is not this route's cash cost. A subscription has
+// no dollar cost to cap, so this repo opts out explicitly; fixing the
+// billing-mode resolution itself is a separate issue. `maxChangedLines`
+// stays: that gate is real on any route.
 export const OWN_CI_WORKFLOW_OPTIONS: CiWorkflowTemplateOptions = {
   actionRef: "./",
   maxChangedLines: "5000",
+  budgetUsd: "0",
   forceEngineFromPr: true,
 };
 

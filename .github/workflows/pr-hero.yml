@@ -195,3 +195,4 @@ jobs:
           routing: "${{ vars.PRHERO_ROUTING }}"
           opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
           max-changed-lines: 5000
+          budget-usd: 0

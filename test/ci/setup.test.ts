@@ -332,15 +332,17 @@ describe("generateCiWorkflowTemplate (pure)", () => {
   // repo chose for itself. `budget-usd` is a real money cap on someone else's
   // account; raising it from a template they did not read is not ours to do.
   //
-  // Since issue #156 NO side sets it, this repo included: action.yml's
-  // `budget-usd` default is empty and the CLI resolves the ceiling from the
-  // route's billing mode, so writing `budget-usd: 15.00` here would IMPOSE a
-  // ceiling on a subscription route that would otherwise carry none — the
-  // opposite of what the override was for.
-  test("neither the scaffolded template nor this repo's own sets budget-usd", () => {
+  // This repo DISABLES the ceiling instead (`budget-usd: 0`). It reviews
+  // itself on a Claude subscription, where a dollar ceiling means nothing,
+  // and the billing-mode policy that was supposed to apply no ceiling there
+  // (#156) resolved this repo's route as metered and skipped #326 and its
+  // predecessors at the $10 default. 0 is the operator's explicit, loud
+  // disable; it never imposes a ceiling, so #156's objection to a fixed
+  // value does not apply. The scaffolded template still says nothing.
+  test("the scaffolded template sets no budget-usd, and this repo's own disables it", () => {
     expect(generateCiWorkflowTemplate()).not.toContain("budget-usd:");
-    expect(generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS)).not.toContain(
-      "budget-usd:",
+    expect(generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS)).toContain(
+      "budget-usd: 0\n",
     );
   });
 

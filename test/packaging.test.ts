@@ -1068,9 +1068,10 @@ describe("Packaging & distribution configuration", () => {
   // impose a ceiling the policy would not otherwise apply — on a subscription
   // route that ceiling gates a token-derived estimate against $0.00 of real
   // spend, and a skipped review reads exactly like a clean one.
-  test("this repo's own workflow overrides only the size ceiling", () => {
+  test("this repo's own workflow raises the size ceiling and disables the budget ceiling", () => {
     const own = generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
-    expect(own).not.toContain("budget-usd:");
+    // 0, not a number: a subscription route has no dollar cost to cap.
+    expect(own).toContain("budget-usd: 0\n");
     // 5000, not action.yml's 4000: large refactoring slices (like cli-decomposition)
     // exceed 2000 lines, so dogfooding requires an expanded ceiling.
     expect(own).toContain("max-changed-lines: 5000");
