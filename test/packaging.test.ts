@@ -828,6 +828,16 @@ describe("Packaging & distribution configuration", () => {
       expect(step?.env?.GITHUB_RUN_ATTEMPT).toBe(`\${{ github.run_attempt }}`);
     });
 
+    // WHY: the cleanup gate reads the CLI's status on the head the CLI reviewed,
+    // which only the run directory's findings.json names. Without this binding
+    // the publisher finds no reviewed head and never cleans up.
+    test("the publish step binds the CLI's run directory, so cleanup reads the reviewed head", () => {
+      const step = steps().find((candidate) => candidate.id === "publish");
+      expect(step?.env?.PRHERO_RUN_DIR).toBe(
+        `\${{ steps.run-pr-hero.outputs.run_dir }}`,
+      );
+    });
+
     test("the run step writes cli-started as its first command, before anything can fail", () => {
       const run = steps().find((step) => step.id === "run-pr-hero");
       const firstCommand = String(run?.run ?? "")

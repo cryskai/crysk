@@ -68,6 +68,11 @@ const MARKER_PREFIX = "<!-- pr-hero-outcome";
 const CLI_STARTED_FILE = "cli-started";
 const RECORD_FILE = "trigger.json";
 const SETUP_RECORD_FILE = "setup.json";
+// The CLI's findings artifact, in its run directory. Its top-level head_sha is
+// the head the CLI reviewed (src/review/findings.ts, mergeRunEnvelope).
+const FINDINGS_FILE = "findings.json";
+// A full lowercase commit id, the only shape a head can take in a status path.
+const FULL_HEAD_SHA = /^[0-9a-f]{40}$/;
 // The step an unverifiable lookup stopped at. The trigger writes the same text
 // into its record; the publisher names it itself, so the message never depends
 // on what a record carries.
@@ -138,15 +143,38 @@ function cliReviewCompleted(status: CliStatus | undefined): boolean {
   );
 }
 
+// The head the CLI reviewed, from the text of its findings.json. Only a full
+// lowercase hex sha passes, because the sha is spliced into the status read's
+// path. Never throws: anything unreadable names no head.
+export function reviewedHeadOf(findingsJson: string): string | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(findingsJson);
+  } catch {
+    return undefined;
+  }
+  if (typeof value !== "object" || value === null || !("head_sha" in value)) {
+    return undefined;
+  }
+  const head = value.head_sha;
+  return typeof head === "string" && FULL_HEAD_SHA.test(head)
+    ? head
+    : undefined;
+}
+
 // The pure table. Which outcome this run has is the record's decision and class
 // (renderError / renderCode say what it means); whether anything can be posted
 // on a PR is the record's pr alone: the head only decides the status.
 export function decidePublication(input: {
   record: TriggerRecord | undefined;
   cliStarted: boolean;
-  // The head's latest pr-hero status. Read only for a review the CLI started on
-  // a known PR and head, so it is undefined everywhere else, and when the read
-  // failed or no such status exists. Undefined deletes nothing.
+  // The head the CLI reviewed (see reviewedHeadOf). The cleanup gate reads the
+  // CLI's status on it, not on the trigger's head. Undefined when no run
+  // directory names one, which cleans nothing.
+  reviewedHead?: string;
+  // The reviewed head's latest pr-hero status. Read only for a review the CLI
+  // started on a known PR and reviewed head, so it is undefined everywhere else,
+  // and when the read failed or no such status exists. Undefined deletes nothing.
   cliStatus?: CliStatus;
   setup?: SetupRecord;
 }): Publication {
@@ -162,27 +190,24 @@ export function decidePublication(input: {
   // completed: a stale outcome comment from an earlier run contradicts a review
   // that completed. cli-started alone does not prove that, and a CLI that did
   // not complete leaves no outcome of its own, so its run is left alone. T2c
-  // moves that case here. Without a PR or a head there is nothing to clean.
+  // moves that case here. Without a PR or a reviewed head there is nothing to
+  // clean.
   //
-  // KNOWN GAPS of this gate, left as they are until T2c. The gate reads the
-  // `pr-hero` status on the head the TRIGGER recorded, not on the head the CLI
-  // reviewed (the CLI posts its status on its own head, src/pr/plan.ts).
-  // (a) The trigger recorded no head (a failed `gh pr view` on a comment or
-  //     dispatch run): there is no head to read, so cleanup does not run.
-  // (b) The PR head moved between the trigger and the CLI: the read lands on the
-  //     trigger's head, not the reviewed one. Its latest pr-hero status may be a
-  //     completed review left by an earlier run on that head. Cleanup then runs
-  //     on a status this run did not write, and can delete an older run's
-  //     outcome comment while this run's review is incomplete. This case is NOT
-  //     fail-safe.
-  // T2c replaces this gate with the CLI's own outcome record, which carries the
-  // head the CLI actually reviewed, so cleanup no longer depends on the
-  // trigger's head or on reading a commit status.
+  // WHY the reviewed head: the CLI posts its status on the head it reviewed
+  // (src/pr/plan.ts posts the pending one, src/pr/teardown.ts the final one) and
+  // writes that same head into its run directory's findings.json, which is where
+  // this gate reads it. The trigger's head is not used: it can be absent (a
+  // failed `gh pr view` at trigger time) or stale (the PR head moved after the
+  // trigger), and a read there can judge a status an earlier run left on that
+  // head. Without a run directory the gate cannot locate a reviewed head, so it
+  // cleans nothing. The run step publishes one only after a finished pipeline
+  // wrote findings.json (src/pr/ci-publish.ts), so a run that completed but
+  // failed after that write keeps its older comments: the safe side.
   if (record.decision === "review" && input.cliStarted) {
     if (
       !cliReviewCompleted(input.cliStatus) ||
       record.pr === undefined ||
-      record.head_sha === undefined
+      input.reviewedHead === undefined
     ) {
       return { kind: "none" };
     }
@@ -686,18 +711,32 @@ function readCliStatus(
   return latestCliStatus(rows);
 }
 
+// The head the CLI reviewed, read from this job's run directory. Undefined when
+// the CLI published no run directory, or its findings.json is absent, unreadable
+// or names no valid head: then no completed review can be located. No gh call.
+function readReviewedHead(deps: PublishDeps): string | undefined {
+  const runDir = deps.env.PRHERO_RUN_DIR ?? "";
+  if (runDir === "") return undefined;
+  try {
+    return reviewedHeadOf(
+      readFileSync(path.join(runDir, FINDINGS_FILE), "utf8"),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 // The status is read only where it can decide: a review the CLI started on a
-// known PR and head. Everywhere else no gh call is made.
+// known PR and reviewed head. Everywhere else no gh call is made.
 function readCliStatusFor(
   deps: PublishDeps,
   record: TriggerRecord,
   cliStarted: boolean,
+  reviewedHead: string | undefined,
 ): CliStatus | undefined {
   if (record.decision !== "review" || !cliStarted) return undefined;
-  if (record.pr === undefined || record.head_sha === undefined) {
-    return undefined;
-  }
-  return readCliStatus(deps, record.repository, record.head_sha);
+  if (record.pr === undefined || reviewedHead === undefined) return undefined;
+  return readCliStatus(deps, record.repository, reviewedHead);
 }
 
 export function runPublish(deps: PublishDeps): number {
@@ -753,8 +792,20 @@ export function runPublish(deps: PublishDeps): number {
       ),
     );
   }
-  const cliStatus = readCliStatusFor(deps, record, cliStarted);
-  const plan = decidePublication({ record, cliStarted, cliStatus, setup });
+  // WHY read only for a review the CLI started: no other outcome cleans up, so
+  // no run directory is opened for it.
+  const reviewedHead =
+    record.decision === "review" && cliStarted
+      ? readReviewedHead(deps)
+      : undefined;
+  const cliStatus = readCliStatusFor(deps, record, cliStarted, reviewedHead);
+  const plan = decidePublication({
+    record,
+    cliStarted,
+    reviewedHead,
+    cliStatus,
+    setup,
+  });
   if (plan.kind === "none") return 0;
   if (plan.kind === "cleanup") {
     cleanupOlderOutcomes(deps, plan);

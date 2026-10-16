@@ -11,6 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -19,11 +20,15 @@ import {
 import os from "node:os";
 import path from "node:path";
 import type { TriggerRecord } from "#ci/outcome";
-import { decidePublication, runPublish } from "#ci/publish";
+import { decidePublication, reviewedHeadOf, runPublish } from "#ci/publish";
 import { commitStatusRequest } from "#pr/preflight";
 
 const REPO = "acme/widgets";
 const SHA = "c".repeat(40);
+// The head the trigger recorded, and a head the PR moved to before the CLI
+// reviewed it. The CLI's run directory names REVIEWED; cleanup must read there.
+const TRIGGER_HEAD = "e".repeat(40);
+const REVIEWED_HEAD = "d".repeat(40);
 const RUN_URL = `https://github.com/${REPO}/actions/runs/4242`;
 const MODULE_PATH = path.resolve(import.meta.dir, "../../src/ci/publish.ts");
 const MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=4242 attempt=1 -->`;
@@ -69,6 +74,7 @@ describe("decidePublication — the pure table", () => {
       decidePublication({
         record: record(),
         cliStarted: true,
+        reviewedHead: SHA,
         cliStatus: CLI_COMPLETED,
       }),
     ).toEqual({
@@ -88,6 +94,7 @@ describe("decidePublication — the pure table", () => {
       decidePublication({
         record: record(),
         cliStarted: true,
+        reviewedHead: SHA,
         cliStatus: { state: "error", description: "review did not finish" },
       }),
     ).toEqual({ kind: "none" });
@@ -97,6 +104,7 @@ describe("decidePublication — the pure table", () => {
     const input = {
       record: record({ pr: undefined, head_sha: undefined }),
       cliStarted: true,
+      reviewedHead: SHA,
       cliStatus: CLI_COMPLETED,
     };
     expect(decidePublication(input)).toEqual({ kind: "none" });
@@ -128,11 +136,25 @@ describe("decidePublication — the pure table", () => {
           decidePublication({
             record: record(),
             cliStarted: true,
+            reviewedHead: SHA,
             cliStatus: cliStatus("success", posted),
           }),
         ).toMatchObject({ kind: "cleanup", pr: 7 });
       },
     );
+
+    // F002: a failed `gh pr view` at trigger time records no head. The CLI still
+    // reviewed a head, and its status on that head is the proof.
+    test("a trigger that recorded no head cleans up when the CLI's review completed on the reviewed head", () => {
+      expect(
+        decidePublication({
+          record: record({ head_sha: undefined }),
+          cliStarted: true,
+          reviewedHead: REVIEWED_HEAD,
+          cliStatus: CLI_COMPLETED,
+        }),
+      ).toMatchObject({ kind: "cleanup", pr: 7 });
+    });
 
     test.each([
       ["no pr-hero status exists", undefined],
@@ -154,16 +176,20 @@ describe("decidePublication — the pure table", () => {
         decidePublication({
           record: record(),
           cliStarted: true,
+          reviewedHead: SHA,
           cliStatus: status,
         }),
       ).toEqual({ kind: "none" });
     });
 
-    test("a review with no head sha has no status to read, so nothing is cleaned", () => {
+    // Rewritten from the trigger-head version: the reviewed head, not the
+    // trigger's, is what the status is read on, so its absence is the gap.
+    test("a review with no reviewed head has no status to read, so nothing is cleaned", () => {
       expect(
         decidePublication({
-          record: record({ head_sha: undefined }),
+          record: record(),
           cliStarted: true,
+          reviewedHead: undefined,
           cliStatus: CLI_COMPLETED,
         }),
       ).toEqual({ kind: "none" });
@@ -512,6 +538,15 @@ function runPublishIn(options: {
   record?: TriggerRecord | string;
   cliStarted?: boolean;
   reviewStatus?: GhResult;
+  // The status answer for one head, keyed by sha. It wins over reviewStatus
+  // for that head, so a test can say which head holds a completed review.
+  reviewStatusBySha?: Record<string, GhResult>;
+  // The CLI's run directory and its findings.json, which names the head the CLI
+  // reviewed. Unset, a CLI-started run gets one naming SHA (the record fixture's
+  // head), so the shell tests that predate the reviewed head keep their meaning.
+  // A string is the file's text, an object is stringified, and null publishes no
+  // run directory at all.
+  findings?: object | string | null;
   setup?: object | string;
   status?: GhResult[];
   create?: GhResult;
@@ -541,6 +576,21 @@ function runPublishIn(options: {
           : JSON.stringify(options.setup),
       );
     }
+    const runDir = path.join(dir, "run");
+    const findings =
+      options.findings === undefined
+        ? options.cliStarted === true
+          ? { head_sha: SHA }
+          : undefined
+        : options.findings;
+    const publishesRunDir = findings !== undefined && findings !== null;
+    if (publishesRunDir) {
+      mkdirSync(runDir);
+      writeFileSync(
+        path.join(runDir, "findings.json"),
+        typeof findings === "string" ? findings : JSON.stringify(findings),
+      );
+    }
     const statusAnswers = [...(options.status ?? [ok()])];
     const calls: Call[] = [];
     let stdout = "";
@@ -548,6 +598,7 @@ function runPublishIn(options: {
     const exitCode = runPublish({
       env: {
         PRHERO_OUTCOME_DIR: dir,
+        ...(publishesRunDir ? { PRHERO_RUN_DIR: runDir } : {}),
         GITHUB_REPOSITORY: REPO,
         GITHUB_RUN_ID: "4242",
         GITHUB_SERVER_URL: "https://github.com",
@@ -563,6 +614,9 @@ function runPublishIn(options: {
         const endpoint = args.find((arg) => arg.startsWith("repos/")) ?? "";
         // The combined-status read routes here, never to the listing below.
         if (endpoint.includes("/commits/")) {
+          const sha = /\/commits\/([^/]+)\//.exec(endpoint)?.[1] ?? "";
+          const perSha = options.reviewStatusBySha?.[sha];
+          if (perSha !== undefined) return perSha;
           return options.reviewStatus ?? fail("gh: status read not answered");
         }
         if (endpoint.includes("/statuses/")) {
@@ -603,6 +657,14 @@ function statusCalls(calls: Call[]): Call[] {
   );
 }
 
+// The endpoint of every combined-status read, in call order: each names the
+// head the read was made on, so a test can see which head was read.
+function statusReadEndpoints(calls: Call[]): string[] {
+  return calls
+    .flatMap((call) => call.args)
+    .filter((arg) => /\/commits\/[^/]+\/status/.test(arg));
+}
+
 function commentPost(calls: Call[]): Call | undefined {
   return calls.find(
     (call) => call.args.includes("POST") && call.stdin !== undefined,
@@ -614,6 +676,35 @@ function deletions(calls: Call[]): string[] {
     .filter((call) => call.args.includes("DELETE"))
     .map((call) => call.args.find((arg) => arg.includes("/comments/")) ?? "");
 }
+
+describe("reviewedHeadOf — the head the CLI reviewed", () => {
+  test("a findings.json with a full lowercase sha at the top level names that head", () => {
+    expect(
+      reviewedHeadOf(JSON.stringify({ head_sha: REVIEWED_HEAD, pr: 7 })),
+    ).toBe(REVIEWED_HEAD);
+  });
+
+  test.each([
+    ["malformed JSON", "{ not json"],
+    ["an empty file", ""],
+    ["a JSON null", "null"],
+    ["a JSON array", JSON.stringify([REVIEWED_HEAD])],
+    ["no head_sha", JSON.stringify({ pr: 7 })],
+    ["a head_sha that is not a string", JSON.stringify({ head_sha: 40 })],
+    ["a short sha", JSON.stringify({ head_sha: "d".repeat(39) })],
+    [
+      "a sha with a non-hex character",
+      JSON.stringify({ head_sha: "g".repeat(40) }),
+    ],
+    ["an uppercase sha", JSON.stringify({ head_sha: "D".repeat(40) })],
+    [
+      "a head_sha below the top level",
+      JSON.stringify({ run: { head_sha: REVIEWED_HEAD } }),
+    ],
+  ])("%s names no head", (_label, text) => {
+    expect(reviewedHeadOf(text)).toBeUndefined();
+  });
+});
 
 describe("runPublish — the shell", () => {
   test("nothing is written when no trigger record exists", () => {
@@ -1046,6 +1137,113 @@ describe("runPublish — cleanup once the CLI started", () => {
       `repos/${REPO}/commits/${SHA}/status?per_page=100`,
     );
   });
+
+  // F002: the trigger recorded no head (a failed `gh pr view`), so the status
+  // must be read on the head the CLI reviewed, from its run directory.
+  test("a trigger that recorded no head still cleans up, reading the status on the reviewed head", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: undefined }),
+      cliStarted: true,
+      findings: { head_sha: REVIEWED_HEAD },
+      reviewStatusBySha: {
+        [REVIEWED_HEAD]: cliStatusRow(
+          CLI_COMPLETED.state,
+          CLI_COMPLETED.description,
+        ),
+      },
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusReadEndpoints(run.calls)).toEqual([
+      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
+    ]);
+    expect(removedIds(run)).toEqual(["10"]);
+  });
+
+  // F004: the PR head moved between the trigger and the CLI. The status is read
+  // on the reviewed head only, never on the trigger's.
+  test("when the PR head moved after the trigger, a completed review on the reviewed head cleans up", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      findings: { head_sha: REVIEWED_HEAD },
+      reviewStatusBySha: {
+        [REVIEWED_HEAD]: cliStatusRow(
+          CLI_COMPLETED.state,
+          CLI_COMPLETED.description,
+        ),
+      },
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusReadEndpoints(run.calls)).toEqual([
+      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
+    ]);
+    expect(removedIds(run)).toEqual(["10"]);
+  });
+
+  // F004, the other side: the only completed review is on the trigger's head,
+  // which this run never reviewed. It must not clean up.
+  test("a completed review that exists only on the trigger's head does not clean up", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      findings: { head_sha: REVIEWED_HEAD },
+      reviewStatusBySha: {
+        [TRIGGER_HEAD]: cliStatusRow(
+          CLI_COMPLETED.state,
+          CLI_COMPLETED.description,
+        ),
+        [REVIEWED_HEAD]: ok(""),
+      },
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusReadEndpoints(run.calls)).toEqual([
+      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
+    ]);
+    expect(removedIds(run)).toEqual([]);
+  });
+
+  // Without a readable reviewed head there is no completed review to locate:
+  // nothing is cleaned, and no status is read on any head.
+  test.each<[string, Partial<Parameters<typeof runPublishIn>[0]>]>([
+    ["PRHERO_RUN_DIR is unset", { findings: null }],
+    [
+      "PRHERO_RUN_DIR is empty",
+      { findings: null, env: { PRHERO_RUN_DIR: "" } },
+    ],
+    [
+      "the run directory does not exist",
+      {
+        findings: null,
+        env: { PRHERO_RUN_DIR: "/pr-hero-test/no-such-run-dir" },
+      },
+    ],
+    ["findings.json is not JSON", { findings: "{ not json" }],
+    ["findings.json names no valid head", { findings: { head_sha: "abc123" } }],
+  ])(
+    "with no reviewed head (%s), nothing is cleaned and no status is read",
+    (_label, options) => {
+      const run = runPublishIn({
+        record: record(),
+        cliStarted: true,
+        reviewStatus: cliStatusRow(
+          CLI_COMPLETED.state,
+          CLI_COMPLETED.description,
+        ),
+        viewer: ok("pr-hero-bot"),
+        list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+        ...options,
+      });
+      expect(run.exitCode).toBe(0);
+      expect(run.calls).toEqual([]);
+      expect(run.stdout).toBe("");
+    },
+  );
 
   test("with a viewer login, deletes only that login's older marker comments", () => {
     const run = runPublishIn({

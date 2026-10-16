@@ -299,6 +299,9 @@ runs:
         # Bound like the run id: a record of another attempt of this run is
         # refused, since gh run rerun keeps the run id.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        # The head the CLI reviewed is in its run directory's findings.json. The
+        # trigger's head can be absent or stale, so cleanup reads it from there.
+        PRHERO_RUN_DIR: ${{ steps.run-pr-hero.outputs.run_dir }}
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
     # Without this step the triage half of the review loop has no input.
