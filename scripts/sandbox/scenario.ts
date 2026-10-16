@@ -17,6 +17,16 @@ import {
   type RunFact,
   type SmokePath,
 } from "./observe";
+import {
+  Interrupted,
+  type Interrupts,
+  pollUntil,
+  type PollTiming,
+  SIGNAL_EXIT_CODES,
+  stopAfterInterrupt,
+  Unrecoverable,
+  watchInterrupts,
+} from "./poll";
 import type { SandboxDeps } from "./ports";
 import {
   closeScenarioPr,
@@ -55,12 +65,17 @@ import { type VariantName, workflowVariant } from "./variants";
 
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_TIMEOUT_MS = 25 * 60_000;
+// How long cleanup waits for a cancelled run to report completed. The workflow's
+// own ceiling is 90 minutes, so a run still going past this is left to finish on
+// its own, and its PR stays open until it does.
+export const DEFAULT_CANCEL_WAIT_MS = 10 * 60_000;
 
 export interface RunOptions {
   ref: string;
   keep: boolean;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  cancelWaitMs?: number;
 }
 
 interface RunListItem {
@@ -87,6 +102,9 @@ interface Live {
   headSha?: string;
   // The run the latest wait returned, observed by the next observe.
   run?: RunListItem;
+  // The run of the current wait as last seen, recorded as each poll reads it. A
+  // wait that is interrupted or times out leaves it set, so cleanup can cancel it.
+  inFlight?: { databaseId: number; completed: boolean };
   // The issue_comment runs that existed before this scenario's comment. The
   // comment's own run is the one that appears after it.
   commentRunsBefore?: Set<number>;
@@ -100,7 +118,9 @@ function utcStamp(date: Date): string {
 }
 
 // Runs the named scenarios in order. Returns 0 when every expectation and every
-// S7 check passed, and 1 otherwise, including a refused or failed scenario.
+// S7 check passed, and 1 otherwise, including a refused or failed scenario. A
+// SIGINT or SIGTERM stops the invocation after the cleanup and returns the
+// signal's exit code, so the scenarios that did not start are not run at all.
 export async function runScenarios(
   input: SandboxDeps,
   names: readonly string[],
@@ -123,25 +143,41 @@ export async function runScenarios(
   // scenario of the same run may pass the serialization check past them. Without
   // --keep they are closed, and any that stay open (a failed cleanup) still block.
   const opened: number[] = [];
-  for (const [index, scenario] of scenarios.entries()) {
-    const blocked = await serializationBlock(deps, options.keep ? opened : []);
-    if (blocked !== undefined) {
-      results.push({
-        name: scenario.name,
-        path: "not run",
-        checks: [],
-        s7: [],
-        error: blocked,
-        refused: true,
-        exitCode: 1,
-      });
-      const rest = scenarios.slice(index + 1).map((s) => s.name);
-      if (rest.length > 0) deps.log(`not run: ${rest.join(", ")}`);
-      break;
+  // Installed for the whole invocation, so a signal between scenarios stops it too.
+  const interrupts = watchInterrupts(input.signals, deps.log);
+  try {
+    for (const [index, scenario] of scenarios.entries()) {
+      const blocked = await serializationBlock(
+        deps,
+        options.keep ? opened : [],
+      );
+      if (blocked !== undefined) {
+        results.push({
+          name: scenario.name,
+          path: "not run",
+          checks: [],
+          s7: [],
+          error: blocked,
+          refused: true,
+          exitCode: 1,
+        });
+        const rest = scenarios.slice(index + 1).map((s) => s.name);
+        if (rest.length > 0) deps.log(`not run: ${rest.join(", ")}`);
+        break;
+      }
+      results.push(await runOne(deps, scenario, options, opened, interrupts));
+      if (interrupts.received() !== undefined) {
+        const rest = scenarios.slice(index + 1).map((s) => s.name);
+        if (rest.length > 0) deps.log(`not run: ${rest.join(", ")}`);
+        break;
+      }
     }
-    results.push(await runOne(deps, scenario, options, opened));
+  } finally {
+    interrupts.dispose();
   }
   for (const line of renderScenarioTable(results)) deps.log(line);
+  const signal = interrupts.received();
+  if (signal !== undefined) return SIGNAL_EXIT_CODES[signal];
   return results.every((r) => r.exitCode === 0) ? 0 : 1;
 }
 
@@ -169,6 +205,7 @@ async function runOne(
   scenario: Scenario,
   options: RunOptions,
   opened: number[],
+  interrupts: Interrupts,
 ): Promise<ScenarioResult> {
   const branch = `${SCENARIO_BRANCH_PREFIX}${scenario.name}-${utcStamp(deps.clock.now())}`;
   assertScenarioBranch(branch);
@@ -182,17 +219,29 @@ async function runOne(
   const s7: string[] = [];
   let path = "no observation";
   let error: string | undefined;
+  // The work stops making calls once a signal lands; cleanup below uses deps.
+  const work = stopAfterInterrupt(deps, interrupts);
   try {
-    await cloneSandbox(deps, live.dir);
+    await cloneSandbox(work, live.dir);
     if (scenario.phases.some((p) => p.action.kind === "comment")) {
-      await requirePinnedMain(deps, live.dir, options.ref);
+      await requirePinnedMain(work, live.dir, options.ref);
     }
     let previous: Observation | undefined;
     for (const [index, phase] of scenario.phases.entries()) {
-      await perform(deps, live, phase.action, options.ref, opened);
-      live.run = await waitForRun(deps, live, phase, options);
-      const obs = await collect(deps, live);
-      const observed: SmokePath = classifyPath(obs);
+      await perform(work, live, phase.action, options.ref, opened);
+      const polled = await waitForRun(work, live, phase, options, interrupts);
+      live.run = polled.run;
+      if (!polled.completed) {
+        deps.log(
+          `timed out after ${Math.round(pollTiming(options).timeoutMs / 1000)}s waiting for the run; collecting what is visible`,
+        );
+      }
+      const obs = await collect(work, live);
+      // A run that did not complete has no path to read. It is reported as
+      // timed-out and fails the scenario, whatever its partial evidence says.
+      const observed: SmokePath = polled.completed
+        ? classifyPath(obs)
+        : "timed-out";
       path = observed;
       const violations = invariantViolations(obs);
       const tag = scenario.phases.length > 1 ? `[${index + 1}] ` : "";
@@ -225,7 +274,9 @@ async function runOne(
       checks.push(...phaseChecks.map((r) => ({ ...r, label: tag + r.label })));
       s7.push(...violations);
       const passed =
-        violations.length === 0 && phaseChecks.every((r) => r.pass);
+        polled.completed &&
+        violations.length === 0 &&
+        phaseChecks.every((r) => r.pass);
       for (const line of renderReport(
         obs,
         observed,
@@ -234,13 +285,20 @@ async function runOne(
       )) {
         deps.log(line);
       }
+      if (!polled.completed) {
+        error = `timed out after ${Math.round(pollTiming(options).timeoutMs / 1000)}s waiting for the run`;
+        break;
+      }
       previous = obs;
     }
   } catch (caught) {
+    // An interrupt is logged by its handler; anything else is a failed step.
     error = caught instanceof Error ? caught.message : String(caught);
-    deps.log(`scenario ${scenario.name} stopped early: ${error}`);
+    if (!(caught instanceof Interrupted)) {
+      deps.log(`scenario ${scenario.name} stopped early: ${error}`);
+    }
   }
-  const cleanupError = await finish(deps, live, options.keep);
+  const cleanupError = await finish(deps, live, options);
   await deps.workspace.remove(live.dir).catch(() => undefined);
   const failure = error ?? cleanupError;
   return {
@@ -392,32 +450,52 @@ function requirePr(live: Live): ScenarioPr {
   return live.pr;
 }
 
-// Polls for the run the phase waits for. Returns the run as soon as it completes,
-// or the last one seen at the timeout, so the report still says what the PR looked
+function pollTiming(options: RunOptions): PollTiming {
+  return {
+    intervalMs: options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  };
+}
+
+function cancelTiming(options: RunOptions): PollTiming {
+  return {
+    intervalMs: options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+    timeoutMs: options.cancelWaitMs ?? DEFAULT_CANCEL_WAIT_MS,
+  };
+}
+
+// Polls for the run the phase waits for, until it completes or the deadline
+// passes. The run is recorded on the scenario as each poll sees it, so cleanup can
+// stop it even when the wait is interrupted. The run last seen comes back with
+// `completed` false on the deadline, so the report still shows what the PR looked
 // like when the runner gave up.
 async function waitForRun(
   deps: SandboxDeps,
   live: Live,
   phase: Phase,
   options: RunOptions,
-): Promise<RunListItem | undefined> {
-  const interval = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const deadline = deps.clock.now().getTime() + timeout;
-  for (;;) {
-    const run =
-      phase.wait === "pull_request"
-        ? await findPullRequestRun(deps, live)
-        : await findCommentRun(deps, live);
-    if (run?.status === "completed") return run;
-    if (deps.clock.now().getTime() >= deadline) {
-      deps.log(
-        `timed out after ${Math.round(timeout / 1000)}s waiting for the run; collecting what is visible`,
-      );
+  interrupts: Interrupts,
+): Promise<{ completed: boolean; run?: RunListItem }> {
+  const polled = await pollUntil(
+    deps,
+    interrupts,
+    pollTiming(options),
+    async () => {
+      const run =
+        phase.wait === "pull_request"
+          ? await findPullRequestRun(deps, live)
+          : await findCommentRun(deps, live);
+      if (run !== undefined) {
+        live.inFlight = {
+          databaseId: run.databaseId,
+          completed: run.status === "completed",
+        };
+      }
       return run;
-    }
-    await deps.clock.sleep(interval);
-  }
+    },
+    (run) => run.status === "completed",
+  );
+  return { completed: polled.done, run: polled.last };
 }
 
 // The pull_request run of this head. Matched by head sha, so a stale run on an
@@ -460,7 +538,7 @@ async function findCommentRun(
     (r) => !before.has(r.databaseId) && r.workflowName === WORKFLOW_NAME,
   );
   if (fresh.length > 1) {
-    throw new Error(
+    throw new Unrecoverable(
       `${fresh.length} new issue_comment runs appeared, so the comment run is ambiguous`,
     );
   }
@@ -555,15 +633,16 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Observation> {
   };
 }
 
-// Cleanup. --keep leaves the PR in place and says where it is. Otherwise the PR is
-// closed with its branch, or a branch with no PR is deleted. A failure here is
-// returned, so the scenario exits 1: a PR left open breaks serialization.
+// Cleanup. --keep leaves the PR in place and says where it is. Otherwise a run
+// still in flight is cancelled and waited on first, and only then is the PR closed
+// with its branch, or a branch with no PR is deleted. A failure here is returned,
+// so the scenario exits 1: a PR left open breaks serialization.
 async function finish(
   deps: SandboxDeps,
   live: Live,
-  keep: boolean,
+  options: RunOptions,
 ): Promise<string | undefined> {
-  if (keep) {
+  if (options.keep) {
     if (live.pushed) {
       deps.log(
         `kept: ${live.pr?.url ?? "no PR"} on ${live.branch} (clean with \`bun scripts/sandbox.ts clean\`)`,
@@ -572,6 +651,19 @@ async function finish(
     return undefined;
   }
   try {
+    const inFlight = live.inFlight;
+    if (inFlight !== undefined && !inFlight.completed) {
+      const stopped = await stopRun(
+        deps,
+        inFlight.databaseId,
+        cancelTiming(options),
+      );
+      if (!stopped) {
+        const message = `left open: run ${inFlight.databaseId} has not completed after the cancel; its PR stays open until the run ends (then clean)`;
+        deps.log(message);
+        return message;
+      }
+    }
     if (live.pr !== undefined) {
       deps.log(`closing ${live.pr.url} and deleting ${live.branch}`);
       await closeScenarioPr(deps, live.pr);
@@ -585,4 +677,39 @@ async function finish(
     deps.log(message);
     return message;
   }
+}
+
+// Cancels a run that is not known to be completed, then waits for it to report
+// completed within the cancel deadline. Returns whether it completed. A run that
+// already completed is left alone, so nothing is cancelled for nothing.
+async function stopRun(
+  deps: SandboxDeps,
+  runId: number,
+  timing: PollTiming,
+): Promise<boolean> {
+  if ((await runStatus(deps, runId)) === "completed") return true;
+  deps.log(`cancelling run ${runId}`);
+  await ghOk(deps, ["run", "cancel", String(runId), "-R", SANDBOX_REPO]);
+  // No interrupts here: a second signal must not cut the cancel short.
+  const after = await pollUntil(
+    deps,
+    undefined,
+    timing,
+    () => runStatus(deps, runId),
+    (status) => status === "completed",
+  );
+  return after.done;
+}
+
+async function runStatus(deps: SandboxDeps, runId: number): Promise<string> {
+  const view = await ghJson<{ status: string }>(deps, [
+    "run",
+    "view",
+    String(runId),
+    "-R",
+    SANDBOX_REPO,
+    "--json",
+    "status",
+  ]);
+  return view.status;
 }

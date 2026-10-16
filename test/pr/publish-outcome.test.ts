@@ -36,14 +36,20 @@
 //     system-boundary failure instead: `GITHUB_STEP_SUMMARY` pointed at a
 //     path inside a directory that does not exist, so `publishCiReviewIfEligible`'s
 //     real `node:fs/promises` `appendFile` call rejects with ENOENT.
+//   - The outcome-record tests drive the posting stage through the postFindings
+//     seam on PublishRunOutcomeInput, so a rejecting post and a resolved post are
+//     both deterministic. The seam is test-only; production leaves it unset.
 // The result still proves the exact hazard: `onPosted`'s value is captured
 // before that later throw, and reverts to "never called" the instant the
 // call is moved past it (mutation-checked below).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { writeFatalCliRecord } from "#ci/cli-record";
+import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
 import type { InlinePostOutcome } from "#pr/inline";
 import {
   type PublishRunOutcomeInput,
@@ -130,7 +136,12 @@ function captureOnPosted(): {
 // — `GH_REPO` is the one that would otherwise silently upgrade the suite's
 // "gh fails offline against a non-git dir" assumption into a live,
 // possibly-authenticated API call whenever the ambient environment sets it.
-const ISOLATED_ENV_VARS = ["GITHUB_STEP_SUMMARY", "GITHUB_OUTPUT", "GH_REPO"];
+const ISOLATED_ENV_VARS = [
+  "GITHUB_STEP_SUMMARY",
+  "GITHUB_OUTPUT",
+  "GH_REPO",
+  "PRHERO_OUTCOME_DIR",
+];
 
 describe("publishRunOutcome", () => {
   let operatorRoot: string;
@@ -280,5 +291,179 @@ describe("publishRunOutcome", () => {
     await expect(publishRunOutcome(input)).rejects.toThrow();
     expect(value()).not.toBe(NOT_CALLED);
     expect(value()).toBeNull();
+  });
+
+  // The outcome record at the delivery point. The posting stage is injected
+  // through the postFindings seam: the real one reaches gh with no offline seam
+  // of its own, so a rejecting or resolving fake is the only way to drive it.
+  describe("the outcome record", () => {
+    let outcome: string;
+
+    const REVIEWED = { v: 1, outcome: "reviewed", head_sha: HEAD_SHA };
+    const POSTING_FAILED = {
+      v: 1,
+      outcome: "error",
+      cls: { kind: "unknown" },
+      params: { step: "posting the review" },
+    };
+    const postsNothing = async () => ({
+      posted: null,
+      postedWebUrl: undefined,
+    });
+    // A post that resolves: it reaches the delivery point first, as the real
+    // stage does. This fake passes posted null, since the outcome's shape is
+    // large here; the non-null guarantee is pinned in test/pr/posting.test.ts.
+    const postsAndDelivers = async (stage: { onDelivered?: () => void }) => {
+      stage.onDelivered?.();
+      return postsNothing();
+    };
+
+    beforeEach(() => {
+      outcome = path.join(home, "outcome");
+      process.env.PRHERO_OUTCOME_DIR = outcome;
+    });
+
+    function readCli(): unknown {
+      return parseCliRecord(
+        readFileSync(path.join(outcome, CLI_RECORD_FILE), "utf8"),
+      );
+    }
+
+    function captureStderr(fn: () => void): string[] {
+      const chunks: string[] = [];
+      const origWrite = process.stderr.write.bind(process.stderr);
+      process.stderr.write = ((chunk: string | Uint8Array) => {
+        chunks.push(
+          typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+        );
+        return true;
+      }) as typeof process.stderr.write;
+      try {
+        fn();
+      } finally {
+        process.stderr.write = origWrite;
+      }
+      return chunks;
+    }
+
+    test("a posting that throws records error at the posting step, never reviewed, and rethrows the same error", async () => {
+      const postError = new Error("gh went away");
+      const input = baseInput({
+        postEnabled: true,
+        postFindings: async () => {
+          throw postError;
+        },
+      });
+      await expect(publishRunOutcome(input)).rejects.toBe(postError);
+      expect(readCli()).toEqual(POSTING_FAILED);
+    });
+
+    test("a posting that throws with no outcome directory writes nothing and still rethrows", async () => {
+      delete process.env.PRHERO_OUTCOME_DIR;
+      const postError = new Error("gh went away");
+      const input = baseInput({
+        postEnabled: true,
+        postFindings: async () => {
+          throw postError;
+        },
+      });
+      await expect(publishRunOutcome(input)).rejects.toBe(postError);
+      expect(existsSync(path.join(outcome, CLI_RECORD_FILE))).toBe(false);
+    });
+
+    // CHANGED (F002 on #330): reviewed is written at the delivery point inside
+    // the posting stage, through onDelivered, not after the stage returns.
+    test("reviewed is written at the delivery point: the post itself saw no record yet, and the record exists once it fires", async () => {
+      let recordAtPost: boolean | undefined;
+      let recordAtDelivery: boolean | undefined;
+      const input = baseInput({
+        postEnabled: true,
+        postFindings: async (stage) => {
+          recordAtPost = existsSync(path.join(outcome, CLI_RECORD_FILE));
+          stage.onDelivered?.();
+          recordAtDelivery = existsSync(path.join(outcome, CLI_RECORD_FILE));
+          return postsNothing();
+        },
+      });
+      expect(await publishRunOutcome(input)).toBe(0);
+      expect(recordAtPost).toBe(false);
+      expect(recordAtDelivery).toBe(true);
+      expect(readCli()).toEqual(REVIEWED);
+    });
+
+    // WHY this test (F002 on #330): the receipt write runs after the delivery
+    // point. A throw there is a failure after the review was delivered, so the
+    // record keeps reviewed, and the posting error record is not written over it.
+    test("a receipt-write throw after delivery keeps reviewed: the error propagates and no posting error replaces it", async () => {
+      const receiptError = new Error("EACCES: receipt");
+      const input = baseInput({
+        postEnabled: true,
+        postFindings: async (stage) => {
+          stage.onDelivered?.();
+          throw receiptError;
+        },
+      });
+      await expect(publishRunOutcome(input)).rejects.toBe(receiptError);
+      expect(readCli()).toEqual(REVIEWED);
+    });
+
+    test("a later step throws after posting: reviewed is kept, and the fatal path keeps it with one line", async () => {
+      process.env.GITHUB_STEP_SUMMARY = path.join(
+        operatorRoot,
+        "no-such-dir",
+        "summary.md",
+      );
+      const input = baseInput({
+        isCi: true,
+        postEnabled: true,
+        postFindings: postsAndDelivers,
+      });
+      await expect(publishRunOutcome(input)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(readCli()).toEqual(REVIEWED);
+      const chunks = captureStderr(() =>
+        writeFatalCliRecord({ kind: "unknown" }),
+      );
+      expect(readCli()).toEqual(REVIEWED);
+      expect(chunks).toEqual([
+        "pr-hero: kept the recorded reviewed outcome; a later step failed\n",
+      ]);
+    });
+
+    test("posting disabled: reviewed is written once the artifacts exist", async () => {
+      expect(await publishRunOutcome(baseInput({ postEnabled: false }))).toBe(
+        0,
+      );
+      const findings = path.join(runDir, "findings.json");
+      expect(await Bun.file(findings).exists()).toBe(true);
+      expect(readCli()).toEqual(REVIEWED);
+    });
+
+    test("posting disabled: when the artifacts cannot be written, no reviewed record is left", async () => {
+      // A regular file where the run directory should be: the artifact writes
+      // fail before the record would be written.
+      const blocker = path.join(home, "blocker");
+      writeFileSync(blocker, "");
+      await expect(
+        publishRunOutcome(
+          baseInput({
+            postEnabled: false,
+            runDir: path.join(blocker, "run"),
+          }),
+        ),
+      ).rejects.toThrow();
+      expect(existsSync(path.join(outcome, CLI_RECORD_FILE))).toBe(false);
+    });
+
+    test("a failed session writes no reviewed record here: hunters-failed is the pipeline's", async () => {
+      await publishRunOutcome(
+        baseInput({
+          result: baseResult({ sessionFailed: true }),
+          postEnabled: false,
+        }),
+      );
+      expect(existsSync(path.join(outcome, CLI_RECORD_FILE))).toBe(false);
+    });
   });
 });

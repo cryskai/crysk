@@ -312,14 +312,17 @@ export async function ghPrFiles(
 export async function ghPrHeadSha(
   operatorRoot: string,
   pr: number,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<string | undefined> {
   try {
+    // Bounded by default (F004): its only caller is the findings POST's
+    // pre-review re-read, and an unanswered read there would park the POST.
     const result = await gh(
       operatorRoot,
       ["pr", "view", String(pr), "--json", "headRefOid", "-q", ".headRefOid"],
       undefined,
       options?.spawnFn,
+      options?.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
     );
     if (!result.ok) return undefined;
     const sha = result.stdout.trim();
@@ -331,14 +334,19 @@ export async function ghPrHeadSha(
 
 export async function ghRepoWebUrl(
   operatorRoot: string,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<string | undefined> {
   try {
+    // Bounded by default (F004): posting.ts calls this with no options, and an
+    // unanswered `gh repo view` there would park the findings POST before its
+    // first write. Every caller already treats undefined as "unknown", so a
+    // timeout here degrades exactly like a failed call.
     const result = await gh(
       operatorRoot,
       ["repo", "view", "--json", "url", "-q", ".url"],
       undefined,
       options?.spawnFn,
+      options?.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
     );
     if (!result.ok) return undefined;
     const url = result.stdout.trim();
@@ -674,6 +682,9 @@ export async function writeComparison(input: {
 // ci/gates.ts's SKIP_SIZE_COMMENT_MARKER / SKIP_BUDGET_COMMENT_MARKER so a
 // repeat CI run finds and updates its own prior skip comment instead of
 // stacking a new one.
+// `timeoutMs` bounds the lookup and the write alike (F004). Its default is the
+// findings POST's bound, and both production callers are on that path; the
+// parameter exists so a test can prove a hang fails inside a few ms.
 export async function postPrComment(
   operatorRoot: string,
   pr: number,
@@ -681,11 +692,12 @@ export async function postPrComment(
   spawnFn?: typeof Bun.spawn,
   knownCommentId?: number,
   markerPrefix?: string,
+  timeoutMs: number = POSTING_GH_TIMEOUT_MS,
 ): Promise<{ action: "created" | "updated"; commentId: number }> {
   const existingId =
     knownCommentId ??
     findMarkedCommentId(
-      await fetchPrComments(operatorRoot, pr, { spawnFn }),
+      await fetchPrComments(operatorRoot, pr, { spawnFn, timeoutMs }),
       markerPrefix,
     );
   const action = existingId === null ? "created" : "updated";
@@ -705,6 +717,7 @@ export async function postPrComment(
           ],
           body,
           spawnFn,
+          timeoutMs,
         )
       : await gh(
           operatorRoot,
@@ -718,6 +731,7 @@ export async function postPrComment(
           ],
           body,
           spawnFn,
+          timeoutMs,
         );
   if (!result.ok) {
     throw new CliError(
@@ -910,7 +924,12 @@ export async function fetchPrComments(
     // both succeed — posting dies at the pre-flight fetch with no review
     // published. Fall back to GraphQL so listing tracks the write path.
     if (is404(result.stderr)) {
-      return fetchPrCommentsGraphql(operatorRoot, pr, options?.spawnFn);
+      return fetchPrCommentsGraphql(
+        operatorRoot,
+        pr,
+        options?.spawnFn,
+        options?.timeoutMs,
+      );
     }
     throw new CliError(
       `gh api issues/${pr}/comments failed: ${result.stderr.trim()}`,
@@ -983,7 +1002,7 @@ export interface PrReviewComment {
 export async function fetchPrReviewComments(
   operatorRoot: string,
   pr: number,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<PrReviewComment[]> {
   const result = await gh(
     operatorRoot,
@@ -998,10 +1017,16 @@ export async function fetchPrReviewComments(
     ],
     undefined,
     options?.spawnFn,
+    options?.timeoutMs,
   );
   if (!result.ok) {
     if (is404(result.stderr)) {
-      return fetchPrReviewCommentsGraphql(operatorRoot, pr, options?.spawnFn);
+      return fetchPrReviewCommentsGraphql(
+        operatorRoot,
+        pr,
+        options?.spawnFn,
+        options?.timeoutMs,
+      );
     }
     throw new CliError(
       `gh api pulls/${pr}/comments failed: ${result.stderr.trim()}`,
@@ -1029,7 +1054,7 @@ export async function fetchPrReviewComments(
 export async function fetchPostedFindingComments(
   operatorRoot: string,
   pr: number,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<PostedFindingComment[]> {
   const [reviewComments, issueComments] = await Promise.all([
     fetchPrReviewComments(operatorRoot, pr, options),
@@ -1265,6 +1290,7 @@ async function ghGraphql(
   variables: Record<string, string | number>,
   what: string,
   spawnFn?: typeof Bun.spawn,
+  timeoutMs?: number,
 ): Promise<string> {
   assertBalancedGraphql(query, what);
   const args = ["api", "graphql", "-f", `query=${query}`];
@@ -1272,7 +1298,7 @@ async function ghGraphql(
     const flag = typeof value === "number" ? "-F" : "-f";
     args.push(flag, `${key}=${value}`);
   }
-  const result = await gh(operatorRoot, args, undefined, spawnFn);
+  const result = await gh(operatorRoot, args, undefined, spawnFn, timeoutMs);
   if (!result.ok) {
     throw new CliError(
       `gh api graphql (${what}) failed: ${result.stderr.trim()}`,
@@ -1389,6 +1415,7 @@ async function fetchPrCommentsGraphql(
   operatorRoot: string,
   pr: number,
   spawnFn?: typeof Bun.spawn,
+  timeoutMs?: number,
 ): Promise<
   {
     id: number;
@@ -1399,7 +1426,7 @@ async function fetchPrCommentsGraphql(
   }[]
 > {
   assertBalancedGraphql(PR_ISSUE_COMMENTS_QUERY, "issueComments");
-  const repo = await ghRepoOwnerName(operatorRoot, spawnFn);
+  const repo = await ghRepoOwnerName(operatorRoot, spawnFn, timeoutMs);
   const comments: {
     id: number;
     user: string;
@@ -1426,6 +1453,7 @@ async function fetchPrCommentsGraphql(
       variables,
       "issueComments",
       spawnFn,
+      timeoutMs,
     );
     const page = parseIssueCommentsGraphqlPage(stdout);
     comments.push(...issueCommentsFromNodes(page.nodes));
@@ -1552,9 +1580,10 @@ async function fetchPrReviewCommentsGraphql(
   operatorRoot: string,
   pr: number,
   spawnFn?: typeof Bun.spawn,
+  timeoutMs?: number,
 ): Promise<PrReviewComment[]> {
   assertBalancedGraphql(PR_REVIEW_COMMENTS_QUERY, "reviewComments");
-  const repo = await ghRepoOwnerName(operatorRoot, spawnFn);
+  const repo = await ghRepoOwnerName(operatorRoot, spawnFn, timeoutMs);
   const comments: PrReviewComment[] = [];
   let cursor: string | null = null;
   let hasNextPage = true;
@@ -1575,6 +1604,7 @@ async function fetchPrReviewCommentsGraphql(
       variables,
       "reviewComments",
       spawnFn,
+      timeoutMs,
     );
     const page = parseReviewCommentsGraphqlPage(stdout);
     comments.push(...reviewCommentsFromThreadNodes(page.nodes));
@@ -1656,6 +1686,10 @@ export async function postPrReview(input: {
   allFindings: PrHeroFindingRef[];
   webUrl?: string;
   spawnFn?: typeof Bun.spawn;
+  // Bounds the submission and its 422 recovery reads (F004). Defaults to the
+  // posting bound; a timeout is NOT retried, because the submission may already
+  // have landed and a second POST would duplicate the review.
+  timeoutMs?: number;
 }): Promise<ReviewSubmissionOutcome> {
   if (input.findings.length === 0) {
     return { outcome: "posted", findings: [] };
@@ -1706,6 +1740,7 @@ export async function postPrReview(input: {
     ],
     JSON.stringify(body),
     input.spawnFn,
+    input.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
   );
   if (result.ok) {
     return { outcome: "posted", findings: input.findings };
@@ -1718,7 +1753,10 @@ export async function postPrReview(input: {
   const posted = await fetchPostedFindingComments(
     input.operatorRoot,
     input.pr,
-    { spawnFn: input.spawnFn },
+    {
+      spawnFn: input.spawnFn,
+      timeoutMs: input.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
+    },
   );
   const match = matchPostedFindings({
     findings: input.allFindings,
@@ -2317,6 +2355,7 @@ export async function resolveInlinePostPlan(input: {
 }> {
   const issueComments = await fetchPrComments(input.operatorRoot, input.pr, {
     spawnFn: input.spawnFn,
+    timeoutMs: POSTING_GH_TIMEOUT_MS,
   });
   const existingSummaryId = findMarkedCommentId(issueComments);
   const summaryBody = summaryBodyForId(issueComments, existingSummaryId);
@@ -2327,7 +2366,7 @@ export async function resolveInlinePostPlan(input: {
   const posted = await fetchPostedFindingComments(
     input.operatorRoot,
     input.pr,
-    { spawnFn: input.spawnFn },
+    { spawnFn: input.spawnFn, timeoutMs: POSTING_GH_TIMEOUT_MS },
   );
   const anchors = parseHunkAnchors(input.diffPatch);
   const findingRefs: PrHeroFindingRef[] = input.doc.findings.map((f) => {
@@ -2398,6 +2437,19 @@ function findingCommentUrl(
 // single REST/graphql round trip and still finite; the failure it converts is
 // "hangs until someone kills it" → "one logged line, thread left open".
 const COLLAPSE_GH_TIMEOUT_MS = 120_000;
+
+// The bound on every gh call the findings POST makes: the summary create and
+// PATCH, the review submission and its 422 recovery reads, the pre-POST head
+// re-read, and the reads around them. WHY 120 s: the POST runs after the review
+// has already finished, so a slow GitHub answer for a large review still lands
+// well inside it. WHY a bound at all (F004, PR #330): an accepted-but-unanswered
+// call parked publishRunOutcome forever, and the pending commit status with it.
+// A timeout fails exactly like a non-zero gh exit, so the posting catch records
+// the step error and the publisher reports it. WHY no retry: a timed-out POST
+// may already have landed, and a retry would duplicate the review. A local
+// `pr-hero review --pr N --post` runs this same code, so it now also fails after
+// 120 s instead of hanging. That is intended.
+export const POSTING_GH_TIMEOUT_MS = 120_000;
 
 // The actual post sequence (design D6, reordered per Juanma's PR #2
 // feedback item 2; W2 issues #16/#17 retire the issue-comment loop):
@@ -2952,6 +3004,7 @@ async function buildCommentUrlMap(input: {
   if (input.freshlyPostedReview.length > 0) {
     const freshReview = await fetchPrReviewComments(operatorRoot, pr, {
       spawnFn,
+      timeoutMs: POSTING_GH_TIMEOUT_MS,
     });
     for (const finding of input.freshlyPostedReview) {
       const fingerprint = claimFingerprint(finding.claim);

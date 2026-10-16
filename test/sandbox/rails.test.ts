@@ -104,6 +104,62 @@ describe("gh rail: the sandbox repo is the only target", () => {
   });
 });
 
+describe("gh rail: attached flags and repeated flags", () => {
+  test("refuses an attached method or field value, even on a scenario ref", () => {
+    const refused: string[][] = [
+      ["api", sandboxApi("git/refs/heads/main"), "-XDELETE"],
+      ["api", sandboxApi("git/refs/heads/sandbox/x"), "-XDELETE"],
+      ["api", sandboxApi("issues/1/comments"), "-fbody=x"],
+      ["api", sandboxApi("issues/1/comments"), "-Fk=v"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+
+  test("refuses a second method flag, because gh keeps the last one", () => {
+    expect(() =>
+      assertGhArgs([
+        "api",
+        sandboxApi("git/refs/heads/main"),
+        "-X",
+        "GET",
+        "-X",
+        "DELETE",
+      ]),
+    ).toThrow(RailViolation);
+  });
+
+  test("every -R or --repo occurrence must be the sandbox, because gh keeps the last one", () => {
+    const refused: string[][] = [
+      ["pr", "list", "-R", SANDBOX_REPO, "-R", "juanmaagd/pr-hero"],
+      ["pr", "list", "-R", SANDBOX_REPO, "--repo=juanmaagd/pr-hero"],
+      ["pr", "list", "-Rjuanmaagd/pr-hero"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
+describe("gh rail: run cancel", () => {
+  test("accepts a cancel of a run in the sandbox", () => {
+    expect(() =>
+      assertGhArgs(["run", "cancel", "42", "-R", SANDBOX_REPO]),
+    ).not.toThrow();
+  });
+
+  test("refuses a cancel without the sandbox target, or aimed at another repo", () => {
+    const refused: string[][] = [
+      ["run", "cancel", "42"],
+      ["run", "cancel", "42", "-R", "juanmaagd/pr-hero"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
 describe("git rail: no force, no deletes, no rewritten main", () => {
   test("accepts the pushes the runner makes", () => {
     const allowed: string[][] = [
@@ -118,6 +174,28 @@ describe("git rail: no force, no deletes, no rewritten main", () => {
     ];
     for (const args of allowed) {
       expect(() => assertGitArgs(args)).not.toThrow();
+    }
+  });
+
+  test("a push takes exactly one remote and one refspec", () => {
+    const refused: string[][] = [
+      ["push", "origin", "main", "+dev:dev"],
+      ["push", "origin", "main", ":dev"],
+      ["push", "origin", "sandbox/x", "main"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGitArgs(args)).toThrow(RailViolation);
+    }
+  });
+
+  test("refuses a force or delete refspec even as the only refspec", () => {
+    const refused: string[][] = [
+      ["push", "origin", "+sandbox/x"],
+      ["push", "origin", ":sandbox/x"],
+      ["push", "origin", "sandbox/x:sandbox/y"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGitArgs(args)).toThrow(RailViolation);
     }
   });
 

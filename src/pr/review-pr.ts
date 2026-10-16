@@ -19,6 +19,7 @@
 //     stay outside of.
 
 import path from "node:path";
+import { cliHeadField, writeCliRecord } from "#ci/cli-record";
 import { planCiSizeSkip } from "#ci/gates";
 import { withCiWorkflowGroup } from "#ci/reporter";
 import { pipelineConfigInput } from "#config/config";
@@ -87,6 +88,25 @@ import { acquirePidLock } from "../home";
 import { worktreeLockPath } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
 import type { ProductionRuntime } from "../production-runtime";
+
+// The CLI's record for a pipeline whose every hunter failed (cli.json,
+// odd/tasks/agent-first-ci.md, T2c). reviewPr writes it right after the pipeline's
+// group closes, before publishRunOutcome. A completed pipeline writes NOTHING here:
+// the pipeline finishing is not the review being delivered, so reviewed is written by
+// publishRunOutcome at the delivery point (recordReviewDelivered). A failure while
+// posting therefore never leaves reviewed behind. A pipeline that never returned
+// writes nothing either: its throw reaches the fatal record instead.
+export function recordPipelineOutcome(
+  result: { readonly sessionFailed: boolean } | undefined,
+  headSha: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  if (result?.sessionFailed !== true) return;
+  writeCliRecord(
+    { v: 1, outcome: "hunters-failed", ...cliHeadField(headSha) },
+    env,
+  );
+}
 
 export async function reviewPr(
   options: CliOptions,
@@ -576,6 +596,7 @@ export async function reviewPr(
           }
         }
       });
+      recordPipelineOutcome(result, headSha);
       // 12-16 — everything from the artifact write through CI publishing and
       // the ledger's terminal settlement. See publishRunOutcome
       // (src/pr/publish-outcome.ts) for the full rationale, including the

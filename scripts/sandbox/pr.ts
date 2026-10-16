@@ -7,6 +7,7 @@ import {
   assertScenarioBranch,
   guardedGh,
   guardedGit,
+  SANDBOX_OWNER,
   SANDBOX_REPO,
   SCENARIO_BRANCH_PREFIX,
 } from "./rails";
@@ -18,12 +19,31 @@ export interface ScenarioPr {
   url: string;
 }
 
-// The open PRs whose head is a scenario branch. This is also the serialization
-// check: smoke refuses to start while this list is not empty.
+// What gh returns for an open PR: the scenario fields, plus where its head lives.
+interface OpenPr extends ScenarioPr {
+  isCrossRepository: boolean;
+  headRepositoryOwner: { login: string } | null;
+}
+
+// A scenario PR is a same-repo PR from a sandbox/ branch owned by the sandbox
+// owner. A branch name alone decides nothing: anyone can open a fork PR with a
+// sandbox/ head on this public repo, and such a PR is neither a lock nor
+// something clean may close. An owner that gh cannot name (a deleted fork)
+// fails the same test.
+function isScenarioPr(pr: OpenPr): boolean {
+  return (
+    pr.isCrossRepository === false &&
+    pr.headRepositoryOwner?.login === SANDBOX_OWNER &&
+    pr.headRefName.startsWith(SCENARIO_BRANCH_PREFIX)
+  );
+}
+
+// The open scenario PRs. This is also the serialization check: smoke refuses to
+// start while this list is not empty.
 export async function listScenarioPrs(
   deps: SandboxDeps,
 ): Promise<ScenarioPr[]> {
-  const open = await ghJson<ScenarioPr[]>(deps, [
+  const open = await ghJson<OpenPr[]>(deps, [
     "pr",
     "list",
     "-R",
@@ -31,11 +51,15 @@ export async function listScenarioPrs(
     "--state",
     "open",
     "--json",
-    "number,headRefName,url",
+    "number,headRefName,url,isCrossRepository,headRepositoryOwner",
     "--limit",
     "100",
   ]);
-  return open.filter((pr) => pr.headRefName.startsWith(SCENARIO_BRANCH_PREFIX));
+  return open.filter(isScenarioPr).map(({ number, headRefName, url }) => ({
+    number,
+    headRefName,
+    url,
+  }));
 }
 
 export async function closeScenarioPr(

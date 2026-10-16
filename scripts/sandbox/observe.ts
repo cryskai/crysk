@@ -13,7 +13,6 @@ import {
   OUTCOME_MARKER_PREFIX,
   PRH_CODE,
   REPORT_MARKER_PREFIX,
-  RUN_STEP_NAME,
   SKIP_MARKERS,
   type SkipReason,
 } from "./markers";
@@ -65,6 +64,7 @@ export type SmokePath =
   | "hunters-failed"
   | `error:${string}`
   | `skipped:${string}`
+  | "timed-out"
   | "no-outcome";
 
 export function outcomeCodeOf(body: string): string | undefined {
@@ -99,10 +99,6 @@ export function classifyComment(
   return { source, kind: "other" };
 }
 
-function stepConclusion(obs: Observation): string | null | undefined {
-  return obs.run?.steps.find((s) => s.name === RUN_STEP_NAME)?.conclusion;
-}
-
 export function classifyPath(obs: Observation): SmokePath {
   // An outcome of an earlier head is that head's failure, not this one's. It still
   // counts for S7 (invariantViolations reads every outcome on the PR).
@@ -128,18 +124,15 @@ export function classifyPath(obs: Observation): SmokePath {
   const statusCode = /^PRH-[A-Z]+(?:-[A-Z]+)*/.exec(
     obs.status?.description ?? "",
   )?.[0];
-  if (obs.status?.state === "error" && statusCode !== undefined) {
-    return statusCode === HUNTERS_FAILED_CODE
-      ? "hunters-failed"
-      : `error:${statusCode}`;
-  }
-
-  // The step failed, nothing was posted, and the run directory was uploaded:
-  // the engine started and produced no review. The dev-era CLI posts no PRH
-  // code here ("review did not finish", which S7 flags), so only the run tells.
-  const uploaded = obs.artifacts.some((a) => a.startsWith("pr-hero-run-"));
-  if (!hasReport && stepConclusion(obs) === "failure" && uploaded)
+  // The publisher writes this code on an error status as well as in the outcome
+  // comment (#330). Only that positive evidence decides hunters-failed: a failed
+  // step plus an uploaded run directory also fits a finished pipeline whose post
+  // threw, and a real all-hunters-dead run uploads nothing (review #332, F007).
+  // Without either, a failed step is no-outcome.
+  if (obs.status?.state === "error" && statusCode === HUNTERS_FAILED_CODE)
     return "hunters-failed";
+  if (obs.status?.state === "error" && statusCode !== undefined)
+    return `error:${statusCode}`;
   return "no-outcome";
 }
 

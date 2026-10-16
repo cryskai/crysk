@@ -199,9 +199,17 @@ export class FakeGithub {
       return ok();
     }
     if (verb === "pr" && sub === "list") {
+      // The fields gh returns for a same-repo PR. A scenario PR is one only when
+      // its head is in the sandbox itself, so the fake must say where it lives.
       const open = [...this.prs.values()]
         .filter((p) => !p.closed)
-        .map(({ number, headRefName, url }) => ({ number, headRefName, url }));
+        .map(({ number, headRefName, url }) => ({
+          number,
+          headRefName,
+          url,
+          isCrossRepository: false,
+          headRepositoryOwner: { login: "juanmaagd" },
+        }));
       return ok(JSON.stringify(open));
     }
     if (verb === "pr" && sub === "create") {

@@ -30,6 +30,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ErrorClass, SetupRecord } from "#ci/outcome";
+import { recordTempPath } from "#ci/trigger";
 import { parseRoutingConfig } from "#review/preflight";
 import { prheroLayout } from "../home-preflight";
 import { resolveOpenCodeAuthPath } from "../security/credential-broker";
@@ -575,7 +576,9 @@ async function writeSetupRecord(
   record: SetupRecord,
 ): Promise<void> {
   const finalPath = path.join(dir, SETUP_RECORD_FILE);
-  const tempPath = `${finalPath}.tmp`;
+  // The temp name is unique per write (recordTempPath), so a stale file an earlier job
+  // left at the fixed name cannot make this record's write fail (F003 on #330).
+  const tempPath = recordTempPath(finalPath);
   await mkdir(dir, { recursive: true });
   try {
     await writeFile(tempPath, `${JSON.stringify(record)}\n`);

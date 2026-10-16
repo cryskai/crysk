@@ -21,7 +21,7 @@
 // would permanently erase Actions' own values for the rest of that run.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -993,6 +993,42 @@ describe("yieldToInFlightReview", () => {
     expect(upserts[0]).toContain("status=completed");
     expect(upserts[0]).toContain("conclusion=skipped");
     expect(upserts[0]).toContain("output[summary]=yielded (attempt 1)");
+  });
+
+  test("standing down writes a yielded outcome record in action mode, and nothing without the outcome directory", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-yield-record-"));
+    const saved = process.env.PRHERO_OUTCOME_DIR;
+    try {
+      const yieldOnce = () =>
+        capturingStderr(() =>
+          yieldToInFlightReview({
+            operatorRoot: "/repo",
+            headSha: HEAD_B,
+            options: { yes: true, force: false },
+            ciAdmissionLedger: reservedLedger(),
+            spawnFn: makeFakeGh([commitStatus("pending"), CHECK_RUN_PATCH], []),
+            nowMs: NOW_MS,
+          }),
+        );
+
+      process.env.PRHERO_OUTCOME_DIR = dir;
+      const withDir = await yieldOnce();
+      expect(withDir.result).toBe(0);
+      const written = await readFile(path.join(dir, "cli.json"), "utf8");
+      expect(JSON.parse(written)).toEqual({ v: 1, outcome: "yielded" });
+
+      delete process.env.PRHERO_OUTCOME_DIR;
+      const without = await yieldOnce();
+      expect(without).toEqual(withDir);
+      expect(await readFile(path.join(dir, "cli.json"), "utf8")).toBe(written);
+    } finally {
+      if (saved === undefined) {
+        delete process.env.PRHERO_OUTCOME_DIR;
+      } else {
+        process.env.PRHERO_OUTCOME_DIR = saved;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("outside CI there is no ledger: the watcher child still stands down and writes no check run", async () => {

@@ -14,13 +14,25 @@ import { realDeps } from "../../scripts/sandbox/real";
 import "../../scripts/sandbox";
 import { fail, harness, ok } from "./fakes";
 
+// The fields gh returns for each PR: a same-repo PR owned by the sandbox owner
+// is the only kind that counts as a scenario PR.
+const SAME_REPO = {
+  isCrossRepository: false,
+  headRepositoryOwner: { login: "juanmaagd" },
+};
 const OPEN = [
   {
     number: 3,
     headRefName: "sandbox/smoke-20261015T100000Z",
     url: "https://x/3",
+    ...SAME_REPO,
   },
-  { number: 4, headRefName: "feat/unrelated", url: "https://x/4" },
+  {
+    number: 4,
+    headRefName: "feat/unrelated",
+    url: "https://x/4",
+    ...SAME_REPO,
+  },
 ];
 
 describe("list", () => {
@@ -71,6 +83,73 @@ describe("clean", () => {
         args[1] === "list" ? ok(JSON.stringify(OPEN)) : fail("boom"),
     });
     expect(await runClean(h.deps)).toBe(1);
+  });
+});
+
+describe("scenario PRs: only same-repo PRs owned by juanmaagd count", () => {
+  test("a fork PR on a sandbox/ branch is neither listed nor closed", async () => {
+    const fork = [
+      {
+        number: 9,
+        headRefName: "sandbox/x",
+        url: "https://x/9",
+        isCrossRepository: true,
+        headRepositoryOwner: { login: "stranger" },
+      },
+      {
+        // The owner matches, so only the same-repo condition excludes it.
+        number: 12,
+        headRefName: "sandbox/w",
+        url: "https://x/12",
+        isCrossRepository: true,
+        headRepositoryOwner: { login: "juanmaagd" },
+      },
+    ];
+    const h = harness({
+      gh: (args) => (args[1] === "list" ? ok(JSON.stringify(fork)) : ok()),
+    });
+    expect(await runList(h.deps)).toBe(0);
+    expect(h.logs.some((l) => l.includes("https://x/9"))).toBe(false);
+    expect(h.logs.some((l) => l.includes("https://x/12"))).toBe(false);
+    expect(await runClean(h.deps)).toBe(0);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(
+      false,
+    );
+  });
+
+  test("a same-repo PR whose owner is not the sandbox owner, or is unknown, is not a scenario PR", async () => {
+    const others = [
+      {
+        number: 10,
+        headRefName: "sandbox/y",
+        url: "https://x/10",
+        isCrossRepository: false,
+        headRepositoryOwner: { login: "someone-else" },
+      },
+      {
+        number: 11,
+        headRefName: "sandbox/z",
+        url: "https://x/11",
+        isCrossRepository: false,
+        headRepositoryOwner: null,
+      },
+    ];
+    const h = harness({
+      gh: (args) => (args[1] === "list" ? ok(JSON.stringify(others)) : ok()),
+    });
+    expect(await runList(h.deps)).toBe(0);
+    expect(h.logs.some((l) => l.includes("https://x/10"))).toBe(false);
+    expect(h.logs.some((l) => l.includes("https://x/11"))).toBe(false);
+  });
+
+  test("a same-repo PR owned by the sandbox owner is listed and closed", async () => {
+    const h = harness({
+      gh: (args) => (args[1] === "list" ? ok(JSON.stringify(OPEN)) : ok()),
+    });
+    expect(await runClean(h.deps)).toBe(0);
+    expect(
+      h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close" && c[2] === "3"),
+    ).toBe(true);
   });
 });
 

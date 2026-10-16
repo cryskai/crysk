@@ -3,6 +3,7 @@
 // product's own publisher, so a drift in the comment format fails here first.
 
 import { describe, expect, test } from "bun:test";
+import { evaluateCheck } from "../../scripts/sandbox/expect";
 import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
 import {
   classifyComment,
@@ -154,9 +155,21 @@ describe("classifyPath", () => {
     expect(classifyPath(obs)).toBe("hunters-failed");
   });
 
-  test("hunters-failed from the run itself: the step failed, nothing posted, the run directory uploaded", () => {
-    // This is the shape the product produces today: the CLI publishes its
-    // "review did not finish" error status and no comment (see the S7 test).
+  test("hunters-failed from a status description that starts with the code, with no comment", () => {
+    const obs = observation({
+      comments: [],
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed",
+      },
+    });
+    expect(classifyPath(obs)).toBe("hunters-failed");
+  });
+
+  test("a failed step and an uploaded run directory are not positive evidence of hunters-failed", () => {
+    // The run directory is uploaded only when a hunter ran, and a finished
+    // pipeline whose post threw looks the same from here. Without a PRH code
+    // on the PR the path is no-outcome.
     const obs = observation({
       run: {
         id: 42,
@@ -167,7 +180,31 @@ describe("classifyPath", () => {
       comments: [],
       status: { state: "error", description: "review did not finish" },
     });
-    expect(classifyPath(obs)).toBe("hunters-failed");
+    expect(classifyPath(obs)).toBe("no-outcome");
+  });
+
+  test("a failed step with a success status, no report and an artifact never exits 0", () => {
+    // The false pass: the pipeline finished, its post threw, the status says
+    // success, and the run directory was uploaded. None of that is a
+    // hunters-failed outcome, so the run must exit 1.
+    const obs = observation({
+      run: {
+        id: 42,
+        status: "completed",
+        conclusion: "failure",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "failure" }],
+      },
+      comments: [],
+      status: { state: "success", description: "review posted" },
+      artifacts: [`pr-hero-run-7-${SHA}`],
+    });
+    const path = classifyPath(obs);
+    expect(path).toBe("no-outcome");
+    // ADAPTED (was exitCodeFor, removed with the smoke-only exit rule): the runner
+    // decides the exit, and review-free requires the reviewed path, so this fails.
+    expect(evaluateCheck({ kind: "path", accept: ["reviewed"] }, obs).pass).toBe(
+      false,
+    );
   });
 
   test("hunters-failed from the status alone: the error status names the code and no comment is visible yet", () => {
@@ -257,7 +294,7 @@ describe("S7 invariants", () => {
     expect(running).toEqual([]);
   });
 
-  test("the hunters-failed collision: the product's own error status trips S7 on a path that exits 0 otherwise", () => {
+  test("an error status without a PRH code trips S7 and, with no other evidence, exits 1", () => {
     const obs = observation({
       run: {
         id: 42,
@@ -268,7 +305,7 @@ describe("S7 invariants", () => {
       comments: [],
       status: { state: "error", description: "review did not finish" },
     });
-    expect(classifyPath(obs)).toBe("hunters-failed");
+    expect(classifyPath(obs)).toBe("no-outcome");
     expect(invariantViolations(obs).length).toBe(1);
   });
 });
@@ -313,5 +350,83 @@ describe("report", () => {
     expect(lines.some((l) => /path\s+reviewed/.test(l))).toBe(true);
     expect(lines.some((l) => /S7\s+ok/.test(l))).toBe(true);
     expect(lines.some((l) => /exit\s+0/.test(l))).toBe(true);
+  });
+});
+
+// ADAPTED from the "exit code" table, which pinned the removed exitCodeFor. The
+// review-free check and the S7 invariants now decide the exit, the same way for
+// every path. hunters-failed no longer exits 0 here: review-free requires a
+// reviewed head, and a hunters-failed run is a labelled flake (scenario.test.ts).
+describe("exit code (adapted from exitCodeFor)", () => {
+  const REVIEWED = { kind: "path", accept: ["reviewed"] } as const;
+  const exitOf = (obs: Observation): 0 | 1 =>
+    evaluateCheck(REVIEWED, obs).pass && invariantViolations(obs).length === 0
+      ? 0
+      : 1;
+
+  test("0 only for a reviewed head without a violation; 1 for every other path and for an S7 violation", () => {
+    expect(exitOf(observation())).toBe(0);
+    // hunters-failed: positive evidence on the status, no report.
+    expect(
+      exitOf(
+        observation({
+          comments: [],
+          status: {
+            state: "error",
+            description: "PRH-HUNTERS-FAILED: every hunter failed",
+          },
+        }),
+      ),
+    ).toBe(1);
+    // error:<code>: the outcome of this head names a credential failure.
+    expect(
+      exitOf(
+        observation({
+          comments: [
+            {
+              source: "issue",
+              kind: "outcome",
+              code: "PRH-CRED-MISSING",
+              head: SHA,
+            },
+          ],
+          status: { state: "error", description: "PRH-CRED-MISSING: no key" },
+        }),
+      ),
+    ).toBe(1);
+    // skipped:size: a skip marker, no status.
+    expect(
+      exitOf(
+        observation({
+          comments: [{ source: "issue", kind: "skip", skip: "size" }],
+          status: undefined,
+        }),
+      ),
+    ).toBe(1);
+    // no-outcome: the failed step, no code anywhere.
+    expect(
+      exitOf(
+        observation({
+          comments: [],
+          status: { state: "error", description: "review did not finish" },
+        }),
+      ),
+    ).toBe(1);
+    // reviewed, but an outcome of an earlier head sits on a success status: S7.
+    expect(
+      exitOf(
+        observation({
+          comments: [
+            { source: "issue", kind: "report", head: SHA },
+            {
+              source: "issue",
+              kind: "outcome",
+              code: "PRH-CRED-MISSING",
+              head: "e".repeat(40),
+            },
+          ],
+        }),
+      ),
+    ).toBe(1);
   });
 });

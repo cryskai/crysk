@@ -321,10 +321,18 @@ export class RouteAdmissionError extends Error {}
 export const SUPPORTED_OPENCODE_SDK_VERSION = "1.18.25" as const;
 export const SUPPORTED_OPENCODE_SERVER_VERSION = "1.18.30" as const;
 
+// WHY a reason: this one class covers two refusals with different causes. "version"
+// is a pinned pair the runtime does not match, and it is the default. "identity" is an
+// observed runtime identity that production cannot establish, or one the declared
+// versions contradict. Naming that a version mismatch would point at the wrong cause,
+// so the CLI's classifier reads the reason (src/ci/classify-error.ts).
 export class OpenCodeVersionAdmissionError extends RouteAdmissionError {
-  constructor(message: string) {
+  readonly reason: "version" | "identity";
+
+  constructor(message: string, reason: "version" | "identity" = "version") {
     super(message);
     this.name = "OpenCodeVersionAdmissionError";
+    this.reason = reason;
   }
 }
 
@@ -584,6 +592,7 @@ export class DefaultTransportRegistry implements TransportRegistry {
       if (mode === "production" && observed === undefined) {
         throw new OpenCodeVersionAdmissionError(
           "Observed OpenCode identity is required in production",
+          "identity",
         );
       }
       admitOpenCodeVersionPair(
@@ -601,6 +610,7 @@ export class DefaultTransportRegistry implements TransportRegistry {
       ) {
         throw new OpenCodeVersionAdmissionError(
           "Declared OpenCode versions contradict observed identity",
+          "identity",
         );
       }
 

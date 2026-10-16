@@ -36,7 +36,9 @@ import {
   GRAPHQL_COMMENT_MAX_PAGES,
   ghPrFiles,
   ghPrHeadSha,
+  ghRepoWebUrl,
   listAdmissionCheckRuns,
+  POSTING_GH_TIMEOUT_MS,
   parseCompareChangedFiles,
   parsePrHeroWorkflowRunHeads,
   postCommitStatus,
@@ -2009,6 +2011,229 @@ describe("upsertAdmissionCheckRun", () => {
     const argv = calls[0]?.argv ?? [];
     expect(argv).toContain("status=completed");
     expect(argv).toContain("conclusion=skipped");
+  });
+});
+
+// F004 (PR #330): an accepted-but-unanswered gh call on the findings POST
+// parked publishRunOutcome forever, and the pending commit status with it.
+// Every call on that path now carries a bound. A bound that fires fails like
+// any non-zero gh exit, with no retry: a timed-out POST may already have
+// landed, and a retry would duplicate the review. The hang fakes close their
+// streams on kill(), the same shape repostMarkedPrComment's tests use, because
+// gh() reads both streams before it reports.
+describe("the findings POST bounds every gh call (F004)", () => {
+  function hangOn(
+    base: typeof Bun.spawn,
+    when: (argv: string[]) => boolean,
+  ): typeof Bun.spawn {
+    return ((argv: string[], opts?: unknown) => {
+      if (!when(argv)) {
+        return (base as unknown as (a: string[], o?: unknown) => unknown)(
+          argv,
+          opts,
+        );
+      }
+      const held: ReadableStreamDefaultController<Uint8Array>[] = [];
+      const open = () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            held.push(controller);
+          },
+        });
+      let resolveExit: (code: number) => void = () => {};
+      const exited = new Promise<number>((resolve) => {
+        resolveExit = resolve;
+      });
+      let safety: ReturnType<typeof setTimeout> | undefined;
+      const close = () => {
+        if (safety !== undefined) clearTimeout(safety);
+        for (const controller of held) {
+          try {
+            controller.close();
+          } catch {
+            // already closed by the safety net
+          }
+        }
+        resolveExit(143);
+      };
+      // Safety net only: the bound under test (50 ms) must fire first. Without
+      // this fallback a call that never gets a bound spins the runner forever
+      // instead of failing its one test.
+      safety = setTimeout(close, 2000);
+      return { stdout: open(), stderr: open(), exited, kill: close };
+    }) as unknown as typeof Bun.spawn;
+  }
+
+  // Wraps any fake and records the bound each call carries. The bound travels
+  // as Bun.spawn's `timeout` option, the same lever gh() sets, so a dropped
+  // argument shows up here as `undefined`.
+  function recordTimeouts(base: typeof Bun.spawn): {
+    spawnFn: typeof Bun.spawn;
+    timeouts: { argv: string[]; timeout: number | undefined }[];
+  } {
+    const timeouts: { argv: string[]; timeout: number | undefined }[] = [];
+    const spawnFn = ((argv: string[], opts?: { timeout?: number }) => {
+      timeouts.push({ argv, timeout: opts?.timeout });
+      return (base as unknown as (a: string[], o?: unknown) => unknown)(
+        argv,
+        opts,
+      );
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, timeouts };
+  }
+
+  const oneFinding = finding({ id: "F001", path: "src/a.ts", line: 10 });
+  const reviewInput = (spawnFn: typeof Bun.spawn) => ({
+    operatorRoot: OPERATOR_ROOT,
+    pr: 42,
+    headSha: HEAD,
+    findings: [oneFinding],
+    allFindings: [toRef(oneFinding)],
+    spawnFn,
+  });
+
+  test("a summary create that never answers rejects within its bound", async () => {
+    const base = makeFakeGh([]);
+    await expect(
+      postPrComment(
+        OPERATOR_ROOT,
+        42,
+        "body",
+        hangOn(base.spawnFn, (argv) => argv.includes("POST")),
+        undefined,
+        undefined,
+        50,
+      ),
+    ).rejects.toThrow(/timed out after 50 ms/);
+  });
+
+  test("a summary PATCH that never answers rejects within its bound", async () => {
+    const base = makeFakeGh([]);
+    await expect(
+      postPrComment(
+        OPERATOR_ROOT,
+        42,
+        "body",
+        hangOn(base.spawnFn, (argv) => argv.includes("PATCH")),
+        77,
+        undefined,
+        50,
+      ),
+    ).rejects.toThrow(/timed out after 50 ms/);
+  });
+
+  test("a review POST that never answers rejects within its bound, and is not retried", async () => {
+    const base = makeFakeGh([]);
+    // Match on the joined argv: the endpoint is one element of the array.
+    const isReview = (argv: string[]) =>
+      argv.join(" ").includes("pulls/42/reviews");
+    const rec = recordTimeouts(hangOn(base.spawnFn, isReview));
+    await expect(
+      postPrReview({ ...reviewInput(rec.spawnFn), timeoutMs: 50 }),
+    ).rejects.toThrow(/timed out after 50 ms/);
+    const reviewPosts = rec.timeouts.filter((t) => isReview(t.argv));
+    expect(reviewPosts).toHaveLength(1);
+    // No 422 recovery either: a timeout is not a 422, and its re-reads would
+    // be the wrong answer to a submission that may already have landed.
+    expect(rec.timeouts.some((t) => t.argv.includes("--paginate"))).toBe(false);
+  });
+
+  test("with no timeout passed, every findings-POST primitive sends the posting bound", async () => {
+    const base = makeFakeGh([
+      { match: ["headRefOid"], response: { stdout: `${HEAD}\n` } },
+      {
+        match: ["repo", "view", "--json", "url"],
+        response: { stdout: "https://github.com/musive/pr-hero\n" },
+      },
+      // postPrComment's PATCH must answer with the comment id it reads back.
+      {
+        match: ["PATCH", "issues/comments/77"],
+        response: { stdout: JSON.stringify({ id: 77 }) },
+      },
+    ]);
+    const rec = recordTimeouts(base.spawnFn);
+    await postPrComment(OPERATOR_ROOT, 42, "body", rec.spawnFn, 77);
+    await postPrReview(reviewInput(rec.spawnFn));
+    await ghPrHeadSha(OPERATOR_ROOT, 42, { spawnFn: rec.spawnFn });
+    await ghRepoWebUrl(OPERATOR_ROOT, { spawnFn: rec.spawnFn });
+    expect(rec.timeouts.map((t) => t.timeout)).toEqual([
+      POSTING_GH_TIMEOUT_MS,
+      POSTING_GH_TIMEOUT_MS,
+      POSTING_GH_TIMEOUT_MS,
+      POSTING_GH_TIMEOUT_MS,
+    ]);
+  });
+
+  test("a comment read's GraphQL fallback carries the caller's bound on every call", async () => {
+    const base = makeFakeGh([
+      {
+        match: ["issues/42/comments"],
+        response: { stderr: "gh: Not Found (HTTP 404)", exitCode: 1 },
+      },
+      repoView,
+      {
+        match: ["graphql", "databaseId"],
+        response: {
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [],
+                  },
+                },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const rec = recordTimeouts(base.spawnFn);
+    await fetchPrComments(OPERATOR_ROOT, 42, {
+      spawnFn: rec.spawnFn,
+      timeoutMs: 50,
+    });
+    expect(rec.timeouts.some((t) => t.argv.includes("graphql"))).toBe(true);
+    expect(rec.timeouts.map((t) => t.timeout)).toEqual(
+      rec.timeouts.map(() => 50),
+    );
+  });
+
+  test("a review read's GraphQL fallback carries the caller's bound on every call", async () => {
+    const base = makeFakeGh([
+      {
+        match: ["pulls/42/comments"],
+        response: { stderr: "gh: Not Found (HTTP 404)", exitCode: 1 },
+      },
+      repoView,
+      {
+        match: ["graphql", "reviewThreads"],
+        response: {
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [],
+                  },
+                },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const rec = recordTimeouts(base.spawnFn);
+    await fetchPrReviewComments(OPERATOR_ROOT, 42, {
+      spawnFn: rec.spawnFn,
+      timeoutMs: 50,
+    });
+    expect(rec.timeouts.some((t) => t.argv.includes("graphql"))).toBe(true);
+    expect(rec.timeouts.map((t) => t.timeout)).toEqual(
+      rec.timeouts.map(() => 50),
+    );
   });
 });
 

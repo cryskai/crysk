@@ -27,8 +27,23 @@ interface Run {
   workflowName: string;
 }
 
+// What gh returns for an open PR. Only a same-repo PR owned by the sandbox owner
+// is a scenario PR, so the fixtures say so unless a test is about a fork.
+interface OpenPr {
+  number: number;
+  headRefName: string;
+  url: string;
+  isCrossRepository: boolean;
+  headRepositoryOwner: { login: string } | null;
+}
+
+const SAME_REPO = {
+  isCrossRepository: false,
+  headRepositoryOwner: { login: "juanmaagd" },
+};
+
 interface World {
-  openPrs: { number: number; headRefName: string; url: string }[];
+  openPrs: OpenPr[];
   runPolls: Run[][];
   stepConclusion: string;
   runStatus: string;
@@ -141,7 +156,12 @@ describe("smoke: serialization", () => {
   test("refuses to start while a sandbox/ PR is open, and opens nothing", async () => {
     const w = world({
       openPrs: [
-        { number: 3, headRefName: "sandbox/smoke-20261015T100000Z", url: "u3" },
+        {
+          number: 3,
+          headRefName: "sandbox/smoke-20261015T100000Z",
+          url: "u3",
+          ...SAME_REPO,
+        },
       ],
     });
     const h = harness({ gh: ghFor(w) });
@@ -158,7 +178,23 @@ describe("smoke: serialization", () => {
 
   test("an open PR outside sandbox/ does not block", async () => {
     const w = world({
-      openPrs: [{ number: 4, headRefName: "feat/x", url: "u4" }],
+      openPrs: [{ number: 4, headRefName: "feat/x", url: "u4", ...SAME_REPO }],
+    });
+    const h = harness({ gh: ghFor(w) });
+    expect(await runSmoke(h.deps, SMOKE)).toBe(0);
+  });
+
+  test("a fork PR on a sandbox/ branch does not block the run", async () => {
+    const w = world({
+      openPrs: [
+        {
+          number: 9,
+          headRefName: "sandbox/x",
+          url: "u9",
+          isCrossRepository: true,
+          headRepositoryOwner: { login: "stranger" },
+        },
+      ],
     });
     const h = harness({ gh: ghFor(w) });
     expect(await runSmoke(h.deps, SMOKE)).toBe(0);
@@ -249,7 +285,7 @@ describe("smoke: polling", () => {
     expect(h.clock.sleeps).toEqual([15_000, 15_000]);
   });
 
-  test("a run that never completes times out, still collects, and still closes the PR", async () => {
+  test("a run that never completes is cancelled, and its PR is left open for clean", async () => {
     const inProgress: Run = {
       ...completedRun(),
       status: "in_progress",
@@ -267,10 +303,14 @@ describe("smoke: polling", () => {
       keep: false,
       pollIntervalMs: 15_000,
       timeoutMs: 30_000,
+      cancelWaitMs: 30_000,
     });
     expect(code).toBe(1);
     expect(h.logs.some((l) => l.includes("timed out"))).toBe(true);
-    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(true);
+    expect(h.logs.some((l) => l.includes("left open"))).toBe(true);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(
+      false,
+    );
   });
 
   test("a run on an earlier head is never read as this head's run", async () => {
@@ -295,6 +335,192 @@ describe("smoke: polling", () => {
     expect(h.ghCalls.some((c) => c[0] === "run" && c[1] === "view")).toBe(
       false,
     );
+  });
+});
+
+describe("smoke: a run that outlives the poll", () => {
+  test("a timed-out run is cancelled, its completion awaited, and only then the PR closed", async () => {
+    const inProgress: Run = {
+      ...completedRun(),
+      status: "in_progress",
+      conclusion: null,
+    };
+    const w = world({
+      runPolls: [[inProgress]],
+      runStatus: "in_progress",
+      statusState: undefined,
+      issueComments: [],
+    });
+    const base = ghFor(w);
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "run" && args[1] === "cancel") {
+          w.runStatus = "completed";
+          return ok();
+        }
+        return base(args, hh);
+      },
+    });
+    const code = await runSmoke(h.deps, {
+      ref: "v0.2.0",
+      keep: false,
+      pollIntervalMs: 15_000,
+      timeoutMs: 30_000,
+      cancelWaitMs: 60_000,
+    });
+    expect(code).toBe(1);
+    expect(h.logs.some((l) => /path\s+timed-out/.test(l))).toBe(true);
+    expect(h.ghCalls).toContainEqual([
+      "run",
+      "cancel",
+      "42",
+      "-R",
+      SANDBOX_REPO,
+    ]);
+    const cancelAt = h.events.findIndex((e) => e.startsWith("gh run cancel"));
+    const closeAt = h.events.findIndex((e) => e.startsWith("gh pr close"));
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(closeAt).toBeGreaterThan(cancelAt);
+  });
+
+  test("a timeout with no run in sight has nothing to cancel, and is still timed-out", async () => {
+    const w = world({
+      runPolls: [[]],
+      statusState: undefined,
+      issueComments: [],
+      artifacts: [],
+    });
+    const h = harness({ gh: ghFor(w) });
+    const code = await runSmoke(h.deps, {
+      ref: "v0.2.0",
+      keep: false,
+      pollIntervalMs: 15_000,
+      timeoutMs: 30_000,
+    });
+    expect(code).toBe(1);
+    expect(h.logs.some((l) => /path\s+timed-out/.test(l))).toBe(true);
+    expect(h.ghCalls.some((c) => c[0] === "run" && c[1] === "cancel")).toBe(
+      false,
+    );
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(true);
+  });
+});
+
+describe("smoke: transient poll failures", () => {
+  test("one failed run listing is retried, and the run is still found", async () => {
+    const w = world();
+    const base = ghFor(w);
+    let failures = 1;
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "run" && args[1] === "list" && failures > 0) {
+          failures -= 1;
+          return fail("HTTP 502: Bad Gateway");
+        }
+        return base(args, hh);
+      },
+    });
+    expect(await runSmoke(h.deps, SMOKE)).toBe(0);
+    expect(h.clock.sleeps).toContain(15_000);
+  });
+
+  test("the poll stops only after five consecutive failures, and the PR is still cleaned up", async () => {
+    const w = world();
+    const base = ghFor(w);
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "run" && args[1] === "list") {
+          return fail("HTTP 502: Bad Gateway");
+        }
+        return base(args, hh);
+      },
+    });
+    const code = await runSmoke(h.deps, { ...SMOKE, timeoutMs: 10 * 60_000 });
+    expect(code).toBe(1);
+    expect(
+      h.ghCalls.filter((c) => c[0] === "run" && c[1] === "list").length,
+    ).toBe(5);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(true);
+  });
+});
+
+describe("smoke: signals", () => {
+  // A run that stays in progress until the cancel completes it. The signal
+  // fires on the second run listing, which is inside the poll, after the
+  // scenario has installed its handlers.
+  function interruptDuringPoll(w: World, signal: "SIGINT" | "SIGTERM") {
+    const inProgress: Run = {
+      ...completedRun(),
+      status: "in_progress",
+      conclusion: null,
+    };
+    w.runPolls = [[inProgress]];
+    w.runStatus = "in_progress";
+    w.statusState = undefined;
+    w.issueComments = [];
+    const base = ghFor(w);
+    let polls = 0;
+    return (args: readonly string[], hh: Harness) => {
+      if (args[0] === "run" && args[1] === "list") {
+        polls += 1;
+        if (polls === 2) hh.signals.fire(signal);
+      }
+      if (args[0] === "run" && args[1] === "cancel") {
+        w.runStatus = "completed";
+        return ok();
+      }
+      return base(args, hh);
+    };
+  }
+
+  const LONG_RUN = { ...SMOKE, timeoutMs: 10 * 60_000, cancelWaitMs: 60_000 };
+
+  test("SIGINT during the poll cancels the run, closes the PR, and exits 130", async () => {
+    const h = harness({
+      gh: interruptDuringPoll(world(), "SIGINT"),
+    });
+    const code = await runSmoke(h.deps, LONG_RUN);
+    expect(code).toBe(130);
+    expect(h.logs.some((l) => l.includes("SIGINT"))).toBe(true);
+    expect(h.ghCalls).toContainEqual([
+      "run",
+      "cancel",
+      "42",
+      "-R",
+      SANDBOX_REPO,
+    ]);
+    expect(
+      h.ghCalls.filter((c) => c[0] === "pr" && c[1] === "close").length,
+    ).toBe(1);
+    expect(h.signals.listeners()).toBe(0);
+  });
+
+  test("SIGTERM during the poll runs the same cleanup and exits 143", async () => {
+    const h = harness({
+      gh: interruptDuringPoll(world(), "SIGTERM"),
+    });
+    const code = await runSmoke(h.deps, LONG_RUN);
+    expect(code).toBe(143);
+    expect(h.logs.some((l) => l.includes("SIGTERM"))).toBe(true);
+    expect(
+      h.ghCalls.filter((c) => c[0] === "pr" && c[1] === "close").length,
+    ).toBe(1);
+  });
+
+  test("the handlers are installed while the scenario runs and removed afterwards", async () => {
+    let during = -1;
+    const base = ghFor(world());
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "pr" && args[1] === "create") {
+          during = hh.signals.listeners();
+        }
+        return base(args, hh);
+      },
+    });
+    expect(await runSmoke(h.deps, SMOKE)).toBe(0);
+    expect(during).toBe(2);
+    expect(h.signals.listeners()).toBe(0);
   });
 });
 
