@@ -607,3 +607,64 @@ describe("cleanup: a comment run the poll never sighted is still cancelled", () 
     }
   });
 });
+
+// S4: the gate's verdicts, end to end under the fake. The fake encodes the
+// product's gate matrix (the minimum the scenarios rely on), so these prove the
+// runner's expectations and sequencing; the live scenarios prove the product.
+describe("run: the S4 gate verdicts against the fake repository", () => {
+  test("size-skip exits 0: an over-size PR is skipped with a failure status, and /pr-hero review reviews it", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["size-skip"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}size-skip: \[1\] path is skipped:size/.test(l),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}size-skip: \[1\] status is failure, description starts with pr-hero skipped the review/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) => /PASS {2}size-skip: \[2\] path is reviewed/.test(l)),
+    ).toBe(true);
+  });
+
+  test("review-advisory exits 0 with success even when the review finds a blocking issue", async () => {
+    const world = new FakeGithub({ ref: REF, blockingFindings: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-advisory"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) => /PASS {2}review-advisory: status is success/.test(l)),
+    ).toBe(true);
+  });
+
+  test("review-free exits 0 when the gate reads a blocking finding as failure", async () => {
+    const world = new FakeGithub({ ref: REF, blockingFindings: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}review-free: status matches the blocking findings/.test(l),
+      ),
+    ).toBe(true);
+  });
+
+  test("review-free exits 1 when the status ignores a blocking finding: the consistency check catches it", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      blockingFindings: true,
+      statusIgnoresFindings: true,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        /FAIL {2}review-free: status matches the blocking findings/.test(l),
+      ),
+    ).toBe(true);
+  });
+});

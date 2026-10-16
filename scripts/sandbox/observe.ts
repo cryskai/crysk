@@ -40,6 +40,9 @@ export interface CommentFact {
   // When GitHub stored the comment. Set for the comments of a phase that waits on a
   // comment run, so a skip marker can be tied to that run and not to an earlier one.
   createdAt?: string;
+  // S4: set only on a finding whose header reads `🔴 blocking`. Absent otherwise,
+  // so an advisory finding's fact is the same shape it always was.
+  blocking?: true;
 }
 
 export interface RunFact {
@@ -93,8 +96,13 @@ export function classifyComment(
       ? { source, kind: "report" }
       : { source, kind: "report", head };
   }
-  if (first.startsWith(FINDING_MARKER_PREFIX))
-    return { source, kind: "finding" };
+  if (first.startsWith(FINDING_MARKER_PREFIX)) {
+    // The tier is in the finding's header line (report.ts findingHeaderLine),
+    // and it is the only tier evidence a reader of the PR sees.
+    return body.includes("🔴 blocking")
+      ? { source, kind: "finding", blocking: true }
+      : { source, kind: "finding" };
+  }
   if (first.startsWith(OUTCOME_MARKER_PREFIX)) {
     // The head is "unknown" when the publisher had no sha; such an outcome has no head.
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
@@ -110,6 +118,21 @@ export function classifyComment(
   return { source, kind: "other" };
 }
 
+// A skip notice names no head, and the product reposts it without removing it.
+// So on a comment-triggered phase it counts only when this run posted it: a
+// notice is created at or after the trigger (the same window the own-evidence
+// check uses). A notice an earlier run left behind is not this run's skip, and a
+// forced review of the same head (/pr-hero review after a size skip) decides
+// the path from its own report. A phase with no trigger has no window to test,
+// so every notice counts there, as it always has.
+function skipIsThisRunsOwn(comment: CommentFact, obs: Observation): boolean {
+  if (obs.triggeredAt === undefined) return true;
+  if (comment.createdAt === undefined) return false;
+  return (
+    Date.parse(comment.createdAt) >= obs.triggeredAt - COMMENT_RUN_CLOCK_SKEW_MS
+  );
+}
+
 export function classifyPath(obs: Observation): SmokePath {
   // An outcome of an earlier head is that head's failure, not this one's. It still
   // counts for S7 (invariantViolations reads every outcome on the PR).
@@ -121,13 +144,23 @@ export function classifyPath(obs: Observation): SmokePath {
     if (outcome.code === HUNTERS_FAILED_CODE) return "hunters-failed";
     return `error:${outcome.code ?? "no-code"}`;
   }
-  const skip = obs.comments.find((c) => c.kind === "skip");
+  const skip = obs.comments.find(
+    (c) => c.kind === "skip" && skipIsThisRunsOwn(c, obs),
+  );
   if (skip?.skip !== undefined) return `skipped:${skip.skip}`;
 
+  // S4: a gate failure is a finished review's verdict too, so with this head's
+  // report it is `reviewed`. A size or budget skip never leaves a report, so a
+  // failure here is never one.
   const hasReport = obs.comments.some(
     (c) => c.kind === "report" && c.head === obs.headSha,
   );
-  if (hasReport && obs.status?.state === "success") return "reviewed";
+  if (
+    hasReport &&
+    (obs.status?.state === "success" || obs.status?.state === "failure")
+  ) {
+    return "reviewed";
+  }
 
   // The status is written apart from the outcome comment, so a read can see it
   // alone. Its code is the same failure the comment names, so it classifies the

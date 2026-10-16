@@ -16,6 +16,9 @@ export type Check =
   | { kind: "outcome"; code: string }
   | { kind: "no-outcome" }
   | { kind: "status"; state: string; descriptionStartsWith?: string }
+  // S4: the head's status is failure when the PR shows a blocking finding
+  // comment, and success when it shows none. For a review whose findings vary.
+  | { kind: "status-matches-findings" }
   | { kind: "report-min"; min: number }
   | { kind: "no-report" }
   | { kind: "run-completed"; event: string }
@@ -51,6 +54,8 @@ export function describeCheck(check: Check): string {
       return check.descriptionStartsWith === undefined
         ? `status is ${check.state}`
         : `status is ${check.state}, description starts with ${check.descriptionStartsWith}`;
+    case "status-matches-findings":
+      return "status matches the blocking findings: failure with any, success without";
     case "report-min":
       return `at least ${check.min} report on the head`;
     case "no-report":
@@ -106,6 +111,20 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       return pass(
         status.state === check.state && prefixOk,
         `got ${status.state}: ${status.description}`,
+      );
+    }
+    case "status-matches-findings": {
+      const status = obs.status;
+      if (status === undefined) return pass(false, "no status on the head");
+      // Counted from the posted comments, the only blocking evidence the PR
+      // shows, so the check agrees with what a reader of the PR can see.
+      const blocking = obs.comments.filter(
+        (c) => c.kind === "finding" && c.blocking === true,
+      ).length;
+      const expected = blocking > 0 ? "failure" : "success";
+      return pass(
+        status.state === expected,
+        `got ${status.state} with ${blocking} blocking finding comment(s)`,
       );
     }
     case "report-min": {

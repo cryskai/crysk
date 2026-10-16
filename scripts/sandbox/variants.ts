@@ -14,6 +14,8 @@ export const VARIANT_NAMES = [
   "normal",
   "no-credential",
   "bad-routing",
+  "advisory",
+  "size-skip",
 ] as const;
 
 export type VariantName = (typeof VARIANT_NAMES)[number];
@@ -43,6 +45,18 @@ const ROUTING_LINE = `          routing: "\${{ vars.PRHERO_ROUTING }}"`;
 // A literal that is valid YAML and invalid routing JSON. The setup step rejects
 // it as config-parse/routing, which the publisher renders as PRH-ROUTING-INVALID.
 const BAD_ROUTING_LINE = '          routing: "{not json"';
+
+// The scaffold names its gate mode on its own line (src/ci/setup.ts writes it
+// explicitly), so advisory replaces that line. A second `mode:` beside it would
+// be a duplicate key in the `with:` block.
+const MODE_GATE_LINE = "          mode: gate";
+const MODE_ADVISORY_LINE = "          mode: advisory";
+
+// The size gate is written only when a repo sets it, so size-skip inserts the
+// line after the opencode-auth input it follows in the scaffold (the same
+// anchor no-credential uses). The threshold of 1 makes any real diff a skip.
+const OPENCODE_AUTH_LINE = `          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}`;
+const SIZE_SKIP_LINE = "          max-changed-lines: 1";
 
 // Replaces the one line equal to `line`, or removes it when `replacement` is
 // undefined. Refuses unless exactly one line matches.
@@ -79,6 +93,14 @@ export function applyVariant(name: VariantName, scaffold: string): string {
       );
     case "bad-routing":
       return replaceExactLine(scaffold, ROUTING_LINE, BAD_ROUTING_LINE);
+    case "advisory":
+      return replaceExactLine(scaffold, MODE_GATE_LINE, MODE_ADVISORY_LINE);
+    case "size-skip":
+      return replaceExactLine(
+        scaffold,
+        OPENCODE_AUTH_LINE,
+        `${OPENCODE_AUTH_LINE}\n${SIZE_SKIP_LINE}`,
+      );
   }
 }
 

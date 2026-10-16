@@ -106,9 +106,92 @@ describe("classifyComment", () => {
   });
 });
 
+describe("classifyComment: the blocking tier of a finding (S4)", () => {
+  test("a finding whose header reads 🔴 blocking is blocking", () => {
+    expect(
+      classifyComment(
+        `${FINDING}\n\n🔴 blocking · BLOCKER · introduced · reliability`,
+        "inline",
+      ),
+    ).toEqual({ source: "inline", kind: "finding", blocking: true });
+  });
+
+  test("an advisory finding is not blocking", () => {
+    expect(
+      classifyComment(
+        `${FINDING}\n\n🟡 advisory · WARNING · introduced · reliability`,
+        "inline",
+      ),
+    ).toEqual({ source: "inline", kind: "finding" });
+  });
+});
+
 describe("classifyPath", () => {
   test("reviewed: a summary posted and the status success", () => {
     expect(classifyPath(observation())).toBe("reviewed");
+  });
+
+  // S4: a gate verdict is a finished review too. A failure next to the summary
+  // of its own head is that review's verdict, not an absent one.
+  test("reviewed: a summary posted and the gate's failure status, which names the blocking findings", () => {
+    const obs = observation({
+      status: {
+        state: "failure",
+        description:
+          "pr-hero: 2 blocking finding(s) — fix and push; /pr-hero review re-runs this head",
+      },
+    });
+    expect(classifyPath(obs)).toBe("reviewed");
+  });
+
+  // The skip notice has no head and survives a later forced review of the same
+  // head, so on a comment-triggered phase only a notice this run posted counts.
+  test("reviewed: a size notice an earlier run left behind does not decide this forced review", () => {
+    const triggeredAt = Date.parse("2026-10-16T12:10:00Z");
+    const obs = observation({
+      triggeredAt,
+      comments: [
+        {
+          source: "issue",
+          kind: "skip",
+          skip: "size",
+          createdAt: "2026-10-16T12:00:00Z",
+        },
+        { source: "issue", kind: "report", head: SHA },
+      ],
+    });
+    expect(classifyPath(obs)).toBe("reviewed");
+  });
+
+  test("skipped:size: a notice this run posted after its trigger beats an earlier report on the head", () => {
+    const triggeredAt = Date.parse("2026-10-16T12:10:00Z");
+    const obs = observation({
+      triggeredAt,
+      artifacts: [],
+      comments: [
+        { source: "issue", kind: "report", head: SHA },
+        {
+          source: "issue",
+          kind: "skip",
+          skip: "size",
+          createdAt: "2026-10-16T12:10:30Z",
+        },
+      ],
+    });
+    expect(classifyPath(obs)).toBe("skipped:size");
+  });
+
+  test("skipped:size: a size skip's failure status is a skip, never a review", () => {
+    const obs = observation({
+      comments: [{ source: "issue", kind: "skip", skip: "size" }],
+      artifacts: [],
+      status: {
+        state: "failure",
+        description:
+          "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway",
+      },
+    });
+    expect(classifyPath(obs)).toBe("skipped:size");
   });
 
   test("a summary for an earlier head is not this head's review", () => {

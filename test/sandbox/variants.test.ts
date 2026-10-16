@@ -40,7 +40,13 @@ function actionWith(yaml: string): Record<string, unknown> {
 describe("workflow variants: the real scaffold", () => {
   test("normal is the scaffold as rendered for the ref, unchanged", () => {
     expect(workflowVariant("normal", REF)).toBe(NORMAL);
-    expect(VARIANT_NAMES).toEqual(["normal", "no-credential", "bad-routing"]);
+    expect(VARIANT_NAMES).toEqual([
+      "normal",
+      "no-credential",
+      "bad-routing",
+      "advisory",
+      "size-skip",
+    ]);
   });
 
   test("every variant is still a valid workflow for the action", () => {
@@ -54,9 +60,11 @@ describe("workflow variants: the real scaffold", () => {
     // github-token stays: it is the runner's own GITHUB_TOKEN, which the
     // publisher uses to post the outcome comment and the status. It names no
     // model route, so it is not a credential the variant is testing.
+    // `mode` is the scaffold's explicit gate mode (S4): not a credential, kept.
     expect(Object.keys(inputs).sort()).toEqual([
       "budget-usd",
       "github-token",
+      "mode",
       "routing",
     ]);
     expect(inputs.routing).toBe(`\${{ vars.PRHERO_ROUTING }}`);
@@ -125,6 +133,47 @@ describe("workflow variants: a scaffold that changed", () => {
       `          routing: \${{ vars.PRHERO_ROUTING_V2 }}`,
     );
     expect(() => applyVariant("bad-routing", changed)).toThrow(
+      WorkflowVariantError,
+    );
+  });
+});
+
+// S4: the scaffold names its gate mode, so the advisory variant replaces that
+// one line. Inserting a second `mode:` key beside it would be a duplicate key
+// in the `with:` block, which GitHub rejects.
+describe("workflow variants: the gate mode (S4)", () => {
+  function linesOf(source: string): string[] {
+    return source.split("\n");
+  }
+
+  test("the normal scaffold names its gate mode explicitly", () => {
+    expect(actionWith(NORMAL).mode).toBe("gate");
+  });
+
+  test("advisory changes exactly the mode line and nothing else", () => {
+    const advisory = workflowVariant("advisory", REF);
+    expect(actionWith(advisory).mode).toBe("advisory");
+    const before = linesOf(NORMAL);
+    const after = linesOf(advisory);
+    expect(after).toHaveLength(before.length);
+    expect(
+      after.flatMap((line, i) => (line === before[i] ? [] : [line])),
+    ).toEqual(["          mode: advisory"]);
+  });
+
+  test("size-skip adds max-changed-lines: 1 once and keeps the gate mode", () => {
+    const sized = workflowVariant("size-skip", REF);
+    const inputs = actionWith(sized);
+    expect(inputs["max-changed-lines"]).toBe(1);
+    expect(inputs.mode).toBe("gate");
+    expect(
+      linesOf(sized).filter((line) => line.includes("max-changed-lines")),
+    ).toEqual(["          max-changed-lines: 1"]);
+  });
+
+  test("advisory refuses a scaffold that lost its mode line", () => {
+    const changed = NORMAL.replace("          mode: gate\n", "");
+    expect(() => applyVariant("advisory", changed)).toThrow(
       WorkflowVariantError,
     );
   });
