@@ -62,8 +62,8 @@ async function settleLedgerIfPending(
 
 // The rule (docs/github-actions.md, "Overriding a red gate"): an override stands
 // against a review that was already running when it was posted, and a review started
-// after it replaces it. So the override stands when the newest `pr-hero` status is an
-// override and was created after this run started. A later review has posted its own
+// after it replaces it. So the override stands when the newest `pr-hero` status is a
+// successful override and was created after this run started. A later review has posted its own
 // status since, which is then the newest, so this check is false and its write goes
 // ahead as before.
 //
@@ -79,6 +79,10 @@ export function overrideStandsOverRun(
 ): boolean {
   const latest = latestStatusInContext(statuses, COMMIT_STATUS_CONTEXT);
   if (latest === null) return false;
+  // WHY the state too: an override is a success. A status that merely carries the
+  // description (a failure or a pending one) is not an override, and must not hold
+  // the gate open over a review that finished.
+  if (latest.state !== "success") return false;
   const description = latest.description;
   if (
     typeof description !== "string" ||

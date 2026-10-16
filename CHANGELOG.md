@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already in flight on the same head, while a `--ci` run still stands down only for a pending on `pr-hero`. When
   the review itself failed, a failed final status write is logged and never replaces that failure. When a
   delivered review's final status write fails, the publisher step of the same job posts that status once more, so
-  the required check does not stay pending; the job still fails.
+  the required check does not stay pending; the job still fails. `/pr-hero override` unlocks a red gate for
+  the head it names, and is refused on a pull request from a fork.
 
 ### Fixed
 - **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left

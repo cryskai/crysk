@@ -593,12 +593,13 @@ stands. The review's findings and comments are unchanged. This does not cover a 
 crashes after the override was posted: such a run can still replace the override with its own `error` status, and
 then comment `/pr-hero override` again.
 
-Two limits. First, the override works on pull requests from this repository only: the gate never checks out
-a fork's head, so a fork pull request cannot be overridden here. Second, GitHub keeps one pending run per
+Two limits. First, a fork pull request cannot be overridden: `/pr-hero override` is refused there with a notice,
+because a fork's head can change after the comment, so the override would not be bound to the code you saw. Second, GitHub keeps one pending run per
 concurrency group, and that applies to an override from an `OWNER`, `MEMBER` or `COLLABORATOR`: such an
 override that is queued behind a running review is replaced if another comment on the same pull request
 arrives before it starts, and then no override comment appears. Comment `/pr-hero override` again when that
-happens. If the head cannot be resolved, the comment still posts and says that no status could be set. A
+happens. If the pull request lookup fails twice, the override is refused, since it cannot tell whether the
+pull request comes from a fork; comment again. A
 re-run of the comment's job (run attempt 2 or later) is refused with a notice, because it would apply the
 override to the head as it is at the re-run; comment `/pr-hero override` again.
 

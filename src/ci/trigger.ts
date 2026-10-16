@@ -929,21 +929,75 @@ function resolveHeadSha(
 // clear, short enough that a real outage costs the comment run seconds.
 const OVERRIDE_HEAD_RETRY_DELAY_MS = 2_000;
 
-// WHY one retry, for an override only: the head is the whole target of an
-// override's status, so one failed lookup would leave the gate unchanged with
-// no status. A review only names its artifact with the head, so a review keeps
-// its single lookup.
-function resolveOverrideHeadSha(
+// The notice a refused override prints. docs/github-actions.md ("Overriding a red
+// gate") describes the same refusal in prose, so keep the two in step.
+const OVERRIDE_FORK_REFUSAL =
+  "`/pr-hero override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/pr-hero review` and merge it with your repository's own rules.";
+
+// What the override's one lookup says. `crossRepository` is undefined when the
+// answer does not say (a failed call, output that is not JSON, or a field that is
+// missing or not a boolean). `head` is a validated sha, or undefined.
+interface OverrideHeadAnswer {
+  head: string | undefined;
+  crossRepository: boolean | undefined;
+}
+
+// One `gh pr view --json headRefOid,isCrossRepository`. Only an override asks
+// for the fork flag: a review's lookup stays the bare-sha query it always was.
+function askOverrideHead(
   deps: CiTriggerDeps,
-  eventName: string,
   repository: string,
   pr: string,
-): string {
-  const first = resolveHeadSha(deps, eventName, repository, pr, true);
-  if (first !== UNKNOWN_HEAD_SHA) return first;
+): OverrideHeadAnswer {
+  const unanswered: OverrideHeadAnswer = {
+    head: undefined,
+    crossRepository: undefined,
+  };
+  const result = callGh(deps, [
+    "pr",
+    "view",
+    pr,
+    "--repo",
+    repository,
+    "--json",
+    "headRefOid,isCrossRepository",
+  ]);
+  if (result.exitCode !== 0) return unanswered;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return unanswered;
+  }
+  if (typeof parsed !== "object" || parsed === null) return unanswered;
+  const { headRefOid, isCrossRepository } = parsed as {
+    headRefOid?: unknown;
+    isCrossRepository?: unknown;
+  };
+  const sha = typeof headRefOid === "string" ? headRefOid.trim() : "";
+  return {
+    head: SHA_RE.test(sha) ? sha : undefined,
+    crossRepository:
+      typeof isCrossRepository === "boolean" ? isCrossRepository : undefined,
+  };
+}
+
+// WHY one retry, for an override only: the head is the whole target of an
+// override's status, so one failed lookup would leave the gate unchanged with
+// no status. The same answer also says whether the pull request is a fork, and
+// an unanswered fork question is refused, so the retry covers both. A definite
+// fork answer is final: a fork is refused on the first answer, with no retry.
+function lookupOverrideHead(
+  deps: CiTriggerDeps,
+  repository: string,
+  pr: string,
+): OverrideHeadAnswer {
+  const first = askOverrideHead(deps, repository, pr);
+  if (first.crossRepository === true) return first;
+  if (first.crossRepository === false && first.head !== undefined) return first;
   const sleep = deps.sleep ?? ((ms: number) => Bun.sleepSync(ms));
   sleep(OVERRIDE_HEAD_RETRY_DELAY_MS);
-  return resolveHeadSha(deps, eventName, repository, pr, true);
+  return askOverrideHead(deps, repository, pr);
 }
 
 export function runCiTrigger(deps: CiTriggerDeps): number {
@@ -1036,14 +1090,22 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
   // Past the early return the resolution is the resolved PR, so its number is a string.
   const prNumber = resolution.pr;
   if (decision.kind === "override") {
-    // WHY quiet: the publisher says in its comment when no head is known, so no
-    // second warning is printed for the same gap (as for no-credentials).
-    const head = resolveOverrideHeadSha(
-      deps,
-      base.eventName,
-      base.repository,
-      prNumber,
-    );
+    // WHY refused unless the lookup says "same repository": a fork's head can change
+    // after the comment, and the job binds the override to the head it resolves now.
+    // A fork's author has no write access, so a fork's push after the comment would
+    // turn the gate green on code the maintainer never saw. A same-repository pusher
+    // already has write access. An answer that does not say is refused too, because
+    // the lookup cannot rule the fork out. Refused like the denied path: no status.
+    const answer = lookupOverrideHead(deps, base.repository, prNumber);
+    if (answer.crossRepository !== false) {
+      writeRecord(deps, run, { decision: "denied", params: {} });
+      deps.appendOutput(formatTriggerOutputs(NO_RUN));
+      deps.stdout(workflowCommand("notice", OVERRIDE_FORK_REFUSAL));
+      return 0;
+    }
+    // WHY the no-head path is kept: a same-repository answer with no usable sha
+    // still posts, and the publisher's comment says no status could be set.
+    const head = answer.head ?? UNKNOWN_HEAD_SHA;
     const write = writeRecord(deps, run, {
       decision: "override",
       params: {},

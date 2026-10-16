@@ -1016,6 +1016,22 @@ describe("overrideStandsOverRun — which override stands", () => {
   test("no statuses, the read's fail-open answer, means no override stands", () => {
     expect(overrideStandsOverRun([], RUN_START)).toBe(false);
   });
+
+  test("an override description on a status that is not a success does not stand", () => {
+    expect(
+      overrideStandsOverRun(
+        [
+          status(
+            OVERRIDE,
+            RUN_START + 60_000,
+            COMMIT_STATUS_CONTEXT,
+            "failure",
+          ),
+        ],
+        RUN_START,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("settleCommitStatusAndLedger — an override posted during this run", () => {
