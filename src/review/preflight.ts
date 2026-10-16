@@ -482,7 +482,8 @@ Options:
                       Requires --scout
   --full              review only: on a re-review, widen discovery to the
                       full PR range (B..H). Verification and triage still
-                      run; the recorded case does not change
+                      run; the recorded case does not change. On GitHub,
+                      comment /pr-hero review --full on the PR
   --hop-budget <n>    Hops per hunter (default: ${DEFAULT_HOP_BUDGET}); the biggest
                       per-hunter cost lever there is
   --two-dot           Diff the literal <base>..<head> two-point range instead

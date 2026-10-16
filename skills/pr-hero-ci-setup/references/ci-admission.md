@@ -41,7 +41,7 @@ Read this when configuring `.prhero/config.json` during CI setup. Full operator 
 |---|---|
 | Review runs | Normal pipeline |
 | **Skipped** | Push did not justify spend (same head, low score, docs-only delta, etc.) — **not** “clean” |
-| **Manual required** | Budget exhausted or `manual_only` — `gh workflow run pr-hero-force.yml -f pr=<n>` |
+| **Manual required** | Budget exhausted or `manual_only` — comment `/pr-hero review` on the PR |
 
 Skipped and manual-required posts include admission metadata in the step summary.
 
@@ -75,14 +75,18 @@ Skipped and manual-required posts include admission metadata in the step summary
 
 ## Manual override
 
-Dispatch the force workflow. GitHub Actions runs the review with `--force`. The command itself does not review anything on the machine that sends it:
+Comment `/pr-hero review` on the pull request. GitHub Actions runs the review with `--force`. Posting the comment does not review anything on the machine that sends it:
 
 ```bash
-gh workflow run pr-hero-force.yml -f pr=<n>
+gh pr comment <n> --body "/pr-hero review"
 ```
+
+`/pr-hero review --full` also re-discovers the whole range. The comment must be exactly one of those two, and it works only once `pr-hero.yml` (with its `issue_comment` trigger) is on the default branch.
 
 It bypasses the size gate, the admission rules (same commit, `once_per_pr`, score, low-risk delta, exhausted attempts, `manual_only`), and the budget ceiling. It does not reset the ledger.
 
-Who can dispatch: anyone with write access to the repository. A fork PR is refused. `gh run rerun` on the automatic workflow re-evaluates the gates and does not force.
+Who can force: anyone with write access to the repository; a comment from anyone else is refused. A fork PR is reviewed only this way, since its own pushes are skipped. `gh run rerun` on a skipped run re-evaluates the gates and does not force.
 
-A local agent uses this command. It does not run `pr-hero review --pr <n> --force` when the review should happen in CI.
+A workflow scaffolded before the comment trigger has no `issue_comment` listener. There, use the legacy `gh workflow run pr-hero-force.yml -f pr=<n>`, or re-scaffold with `pr-hero ci init --force`.
+
+A local agent posts the comment. It does not run `pr-hero review --pr <n> --force` when the review should happen in CI.
