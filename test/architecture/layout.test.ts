@@ -50,6 +50,8 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
     domain: "ci",
     files: [
       "admission-ledger",
+      "classify-error",
+      "cli-record",
       "force-comment",
       "gates",
       "outcome",

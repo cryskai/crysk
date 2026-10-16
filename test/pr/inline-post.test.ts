@@ -24,7 +24,11 @@ import {
   type InlinePostOutcome,
   postingExitCode,
 } from "#pr/inline";
-import { postInlineFindings, postInlineIfEligible } from "#pr/pr";
+import {
+  POSTING_GH_TIMEOUT_MS,
+  postInlineFindings,
+  postInlineIfEligible,
+} from "#pr/pr";
 import {
   claimFingerprint,
   findingMarker,
@@ -71,6 +75,9 @@ interface ScriptEntry {
 interface RecordedCall {
   argv: string[];
   stdin: string | undefined;
+  // The bound the call carries (Bun.spawn's `timeout`, set by gh()). Optional
+  // so the hand-built records in older fixtures stay valid.
+  timeout?: number;
 }
 
 function argvContains(argv: string[], tokens: string[]): boolean {
@@ -92,10 +99,13 @@ function makeFakeGh(script: ScriptEntry[]): {
   // Per-entry call counter, only consulted when an entry uses `responses`
   // (sequential) rather than `response` (single, repeats forever).
   const responseIndex = new Map<ScriptEntry, number>();
-  const spawnFn = ((argv: string[], opts?: { stdin?: Uint8Array }) => {
+  const spawnFn = ((
+    argv: string[],
+    opts?: { stdin?: Uint8Array; timeout?: number },
+  ) => {
     const stdin =
       opts?.stdin === undefined ? undefined : decoder.decode(opts.stdin);
-    calls.push({ argv, stdin });
+    calls.push({ argv, stdin, timeout: opts?.timeout });
     const entry = script.find((s) => argvContains(argv, s.match));
     let scripted: ScriptedResponse | undefined;
     if (entry?.responses) {
@@ -1309,6 +1319,67 @@ describe("postInlineFindings — the claim feed reaches the fingerprint tie-brea
     // "persist" side (matched to R2 via the fingerprint tie-break).
     expect(outcome.delta).toEqual({ resolved: 1, new: 0, persist: 1 });
     expect(calls.some((c) => c.argv.join(" ").includes("reviews"))).toBe(false);
+  });
+});
+
+// F004 (PR #330): the findings POST parked forever on an unanswered gh call,
+// and the reads that run before and after the POST were unbounded too. Every
+// call on this path must carry the posting bound, reads included, so a
+// dropped argument on any one of them fails here instead of hanging in
+// production.
+describe("postInlineFindings — every gh call on the findings POST is bounded (F004)", () => {
+  test("a first review: every gh call, reads and writes alike, carries the bound", async () => {
+    const findings = [
+      finding({ id: "F001", path: "src/a.ts", line: 10 }),
+      finding({ id: "F002", path: "src/b.ts", line: 999 }),
+    ];
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(
+      calls.some((c) => c.argv.join(" ").includes("pulls/42/reviews")),
+    ).toBe(true);
+    expect(calls.map((c) => c.timeout)).toEqual(
+      calls.map(() => POSTING_GH_TIMEOUT_MS),
+    );
+  });
+
+  test("a 422 recovery's re-reads carry the bound too", async () => {
+    const findings = [finding({ id: "F001", path: "src/a.ts", line: 10 })];
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      {
+        match: ["pulls/42/reviews"],
+        response: {
+          stderr: "gh: Unprocessable Entity (HTTP 422)",
+          exitCode: 1,
+        },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(outcome.reviewOutcome).toBe("demoted");
+    expect(calls.some((c) => c.argv.includes("--paginate"))).toBe(true);
+    expect(calls.map((c) => c.timeout)).toEqual(
+      calls.map(() => POSTING_GH_TIMEOUT_MS),
+    );
   });
 });
 

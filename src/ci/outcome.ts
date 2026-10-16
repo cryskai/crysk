@@ -186,6 +186,44 @@ export interface SetupRecord {
   detail: string;
 }
 
+// The record the CLI writes to `cli.json` in the outcome directory for its own
+// terminal outcome (odd/tasks/agent-first-ci.md, T2c). The publisher reads it
+// back, and no record at all means the CLI stopped before reporting. It never
+// carries a secret, raw error text, a comment body or gh's output: `cls` names a
+// class, never a message.
+export const CLI_RECORD_FILE = "cli.json";
+
+// The only classes the CLI writes (src/ci/classify-error.ts). A wider reader
+// would hide a writer's bug, the same rule as parseRecordClass below.
+export type CliErrorClass =
+  | { kind: "unknown" }
+  | { kind: "route"; reason: "unmapped" | "ambiguous" | "spend-disabled" }
+  | { kind: "capability"; issue: "sdk_unavailable" | "version_unsupported" };
+
+export interface CliRecord {
+  v: 1;
+  // "reviewing" is progress, not an outcome: the CLI took the pending lock on
+  // head_sha and has not reported one yet. Every outcome overwrites it, and the
+  // publisher reads it as the one case where the lock is this run's own.
+  outcome:
+    | "reviewing"
+    | "reviewed"
+    | "hunters-failed"
+    | "skipped"
+    | "yielded"
+    | "error";
+  // Only for outcome "skipped".
+  skip?: "size" | "budget" | "coverage" | "manual-required";
+  // The head the CLI reviewed or resolved, when it knows one. 40 lowercase hex.
+  // Required for "reviewing": the head the CLI is about to post its pending
+  // status on (the head it holds the review lock for).
+  head_sha?: string;
+  // Only for outcome "error".
+  cls?: CliErrorClass;
+  // Only for outcome "error", and the writer does not set it today.
+  params?: ErrorParams;
+}
+
 const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
   "review",
   "ignore",
@@ -344,6 +382,100 @@ export function parseTriggerRecord(text: string): TriggerRecord | undefined {
     const cls = parseRecordClass(value.cls);
     if (cls === undefined) return undefined;
     record.cls = cls;
+  }
+  return record;
+}
+
+const CLI_OUTCOMES: readonly CliRecord["outcome"][] = [
+  "reviewing",
+  "reviewed",
+  "hunters-failed",
+  "skipped",
+  "yielded",
+  "error",
+];
+const CLI_SKIPS: readonly NonNullable<CliRecord["skip"]>[] = [
+  "size",
+  "budget",
+  "coverage",
+  "manual-required",
+];
+const CLI_HEAD_PATTERN = /^[0-9a-f]{40}$/;
+
+// The CLI's own classes, and only those. A record naming any other class is
+// refused, because the writer can produce no other.
+function parseCliClass(value: unknown): CliErrorClass | undefined {
+  if (!isRecordObject(value)) return undefined;
+  if (value.kind === "unknown") return { kind: "unknown" };
+  if (value.kind === "route") {
+    if (
+      value.reason === "unmapped" ||
+      value.reason === "ambiguous" ||
+      value.reason === "spend-disabled"
+    ) {
+      return { kind: "route", reason: value.reason };
+    }
+    return undefined;
+  }
+  if (value.kind === "capability") {
+    if (
+      value.issue === "sdk_unavailable" ||
+      value.issue === "version_unsupported"
+    ) {
+      return { kind: "capability", issue: value.issue };
+    }
+  }
+  return undefined;
+}
+
+// Returns undefined for anything the publisher must not act on. The rules mirror
+// the writer's: `skip` is present exactly for a skipped outcome, `cls` exactly
+// for an error, `params` only for an error, carrying only the keys a record
+// may name, and `head_sha` is required for a reviewing record, which names the
+// lock's head and nothing else. The publisher reads this shape, so a looser
+// reader would accept a record the writer never produces.
+export function parseCliRecord(text: string): CliRecord | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecordObject(value) || value.v !== 1) return undefined;
+  const outcome = CLI_OUTCOMES.find((candidate) => candidate === value.outcome);
+  if (outcome === undefined) return undefined;
+  const record: CliRecord = { v: 1, outcome };
+  if (outcome === "skipped") {
+    const skip = CLI_SKIPS.find((candidate) => candidate === value.skip);
+    if (skip === undefined) return undefined;
+    record.skip = skip;
+  } else if (value.skip !== undefined) {
+    return undefined;
+  }
+  if (value.head_sha !== undefined) {
+    if (
+      typeof value.head_sha !== "string" ||
+      !CLI_HEAD_PATTERN.test(value.head_sha)
+    ) {
+      return undefined;
+    }
+    record.head_sha = value.head_sha;
+  }
+  if (outcome === "reviewing" && record.head_sha === undefined) {
+    return undefined;
+  }
+  if (outcome === "error") {
+    const cls = parseCliClass(value.cls);
+    if (cls === undefined) return undefined;
+    record.cls = cls;
+  } else if (value.cls !== undefined) {
+    return undefined;
+  }
+  if (value.params !== undefined) {
+    if (outcome !== "error") return undefined;
+    const params = parseRecordParams(value.params);
+    if (params === undefined) return undefined;
+    record.params = params;
   }
   return record;
 }
@@ -784,10 +916,16 @@ const CREDENTIAL_UNUSABLE_ENV: CatalogVariant = {
   annotationFix: "set the {secret} secret with `gh secret set {secret}`",
 };
 
+// Two UnmappedRouteError throw sites (src/model/routing.ts) share this variant: a
+// model with no mapping at all, and a mapping that names no modelSnapshot. "Add or
+// complete" covers both; "add a modelSnapshot" alone was false for the first.
 const ROUTE_UNMAPPED: CatalogVariant = {
   why: ROUTE_WHY,
-  fixes: ["Add a `modelSnapshot` for this route to PRHERO_ROUTING."],
-  annotationFix: "add a `modelSnapshot` for this route to PRHERO_ROUTING",
+  fixes: [
+    "Add or complete this model's route in PRHERO_ROUTING, with an explicit `modelSnapshot`.",
+  ],
+  annotationFix:
+    "add or complete this model's route in PRHERO_ROUTING, with an explicit `modelSnapshot`",
 };
 
 const RUNTIME_LOCAL: CatalogVariant = {

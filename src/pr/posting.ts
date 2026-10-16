@@ -45,6 +45,12 @@ export async function postFindingsIfEnabled(input: {
   // of their own (pr.ts's established seam); this stage just never exposed
   // the option, so offline tests could not reach either without hitting gh.
   spawnFn?: typeof Bun.spawn;
+  // The delivery point (F002 on #330): fired once the findings POST resolves with
+  // an outcome, before the local receipt is written. The caller records the review
+  // as delivered here, so a receipt write that fails afterwards is a failure after
+  // delivery, never a failed delivery. Never fired when posting is off, or when the
+  // session failed and nothing was posted.
+  onDelivered?: () => void;
 }): Promise<PostingStageResult> {
   if (!input.postEnabled) {
     return { posted: null, postedWebUrl: undefined };
@@ -71,6 +77,7 @@ export async function postFindingsIfEnabled(input: {
     rereviewPriors: input.rereviewPriors,
   });
   if (posted) {
+    input.onDelivered?.();
     await writePostReceipt(input.runDir, input.pr, input.headSha, posted);
     log(
       `posted: review ${posted.reviewOutcome} (${posted.reviewFindingCount} ` +

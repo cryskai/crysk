@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   type CatalogEntry,
+  type CliRecord,
   codeOf,
   ERROR_CATALOG,
   ERROR_CODES,
@@ -20,6 +21,7 @@ import {
   type Owner,
   ownerLead,
   ownerOf,
+  parseCliRecord,
   parseTriggerRecord,
   renderCode,
   renderError,
@@ -1567,5 +1569,185 @@ describe("parseTriggerRecord — the trigger.json contract", () => {
     expect(
       parseTriggerRecord(text({ ...documented, code: "PRH-CRED-MISSING" })),
     ).toEqual(documented);
+  });
+});
+
+describe("parseCliRecord — the cli.json contract", () => {
+  const SHA = "c".repeat(40);
+  const text = (value: unknown) => JSON.stringify(value);
+
+  test.each([
+    ["reviewed", { v: 1, outcome: "reviewed", head_sha: SHA }],
+    ["hunters-failed", { v: 1, outcome: "hunters-failed", head_sha: SHA }],
+    ["skipped for size", { v: 1, outcome: "skipped", skip: "size" }],
+    [
+      "skipped for budget, with its head",
+      { v: 1, outcome: "skipped", skip: "budget", head_sha: SHA },
+    ],
+    ["skipped for coverage", { v: 1, outcome: "skipped", skip: "coverage" }],
+    [
+      "skipped for manual-required",
+      { v: 1, outcome: "skipped", skip: "manual-required" },
+    ],
+    ["yielded", { v: 1, outcome: "yielded" }],
+    // The progress record: the CLI took the pending lock and has no outcome yet.
+    [
+      "reviewing, with the head its pending status was posted on",
+      { v: 1, outcome: "reviewing", head_sha: SHA },
+    ],
+    [
+      "error, unclassified",
+      { v: 1, outcome: "error", cls: { kind: "unknown" } },
+    ],
+    [
+      "error, route unmapped",
+      { v: 1, outcome: "error", cls: { kind: "route", reason: "unmapped" } },
+    ],
+    [
+      "error, route ambiguous",
+      { v: 1, outcome: "error", cls: { kind: "route", reason: "ambiguous" } },
+    ],
+    [
+      "error, route spend-disabled",
+      {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "route", reason: "spend-disabled" },
+      },
+    ],
+    [
+      "error, capability version_unsupported",
+      {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "capability", issue: "version_unsupported" },
+      },
+    ],
+    [
+      "error, capability sdk_unavailable",
+      {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "capability", issue: "sdk_unavailable" },
+      },
+    ],
+    [
+      "error with the params it knows",
+      {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "unknown" },
+        params: { backend: "opencode", pr: 7 },
+      },
+    ],
+  ])("accepts a %s record unchanged", (_label, value) => {
+    expect(parseCliRecord(text(value))).toEqual(value as CliRecord);
+  });
+
+  test.each([
+    ["malformed JSON", "{"],
+    ["a wrong version", text({ v: 2, outcome: "yielded" })],
+    ["no version", text({ outcome: "yielded" })],
+    ["an unknown outcome", text({ v: 1, outcome: "crashed" })],
+    [
+      "skip on a non-skip outcome",
+      text({ v: 1, outcome: "reviewed", skip: "size" }),
+    ],
+    ["skipped without a skip kind", text({ v: 1, outcome: "skipped" })],
+    ["an unknown skip kind", text({ v: 1, outcome: "skipped", skip: "magic" })],
+    [
+      "cls on a non-error outcome",
+      text({ v: 1, outcome: "reviewed", cls: { kind: "unknown" } }),
+    ],
+    ["error without a cls", text({ v: 1, outcome: "error" })],
+    [
+      "error with a class the CLI never writes",
+      text({ v: 1, outcome: "error", cls: { kind: "github", status: 403 } }),
+    ],
+    [
+      "error with a route reason outside the CLI's set",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "route", reason: "multiple-opencode-providers" },
+      }),
+    ],
+    [
+      "error with a capability issue outside the CLI's set",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "capability", issue: "binary_unresolved" },
+      }),
+    ],
+    // A progress record names the lock's head and nothing else: the publisher
+    // scopes its status read to that head, so a looser reader would read another.
+    ["reviewing without a head", text({ v: 1, outcome: "reviewing" })],
+    [
+      "reviewing with a head that is not a SHA",
+      text({ v: 1, outcome: "reviewing", head_sha: "C".repeat(40) }),
+    ],
+    [
+      "reviewing that carries a class",
+      text({
+        v: 1,
+        outcome: "reviewing",
+        head_sha: SHA,
+        cls: { kind: "unknown" },
+      }),
+    ],
+    [
+      "reviewing that carries params",
+      text({ v: 1, outcome: "reviewing", head_sha: SHA, params: { pr: 7 } }),
+    ],
+    [
+      "reviewing that names a skip",
+      text({ v: 1, outcome: "reviewing", head_sha: SHA, skip: "size" }),
+    ],
+    [
+      "a head that is uppercase",
+      text({ v: 1, outcome: "yielded", head_sha: "C".repeat(40) }),
+    ],
+    [
+      "a head that is too short",
+      text({ v: 1, outcome: "yielded", head_sha: "c".repeat(12) }),
+    ],
+    [
+      "a 64-character head",
+      text({ v: 1, outcome: "yielded", head_sha: "c".repeat(64) }),
+    ],
+    [
+      "a params key the record does not know",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "unknown" },
+        params: { message: "raw error text" },
+      }),
+    ],
+    [
+      "a params value of the wrong type",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "unknown" },
+        params: { pr: "7" },
+      }),
+    ],
+    [
+      "null params",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "unknown" },
+        params: null,
+      }),
+    ],
+    [
+      "params on a non-error outcome, which carries no params",
+      text({ v: 1, outcome: "reviewed", params: { pr: 7 } }),
+    ],
+  ])("refuses %s", (_label, value) => {
+    expect(parseCliRecord(value)).toBeUndefined();
   });
 });

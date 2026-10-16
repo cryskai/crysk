@@ -20,6 +20,7 @@
 // fabricating values nothing produced. Same intent as
 // CiAdmissionGateResult's `exitCode: number | undefined` sentinel
 // (src/pr/ci-admission-gate.ts), expressed so the type checker enforces it.
+import { recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
 import type { ResolvedRoutePlan } from "#model/routing";
 import {
@@ -260,6 +261,16 @@ export async function resolvePrPlanAndConfirm(params: {
     await ghRepoWebUrl(params.operatorRoot),
     params.prNumber,
   );
+  // WHY the progress record comes BEFORE the pending post (F001 and F002 on #330): the
+  // publisher gives a run with no record no status on any head, so the record is what
+  // says the lock is this run's and on which head. The CLI records that it is about to
+  // hold the lock before it posts the lock, so no kill can leave a landed pending with
+  // no record; such a pending would stay until the admission gate's 90-minute TTL
+  // expires. If the post never lands and the CLI then dies, the publisher reads no
+  // pending status on that head and posts the error status (unless the head's newest
+  // pr-hero status already settled), which is right, because the run died. If the CLI
+  // completes, its terminal record overwrites `reviewing`.
+  recordReviewing(params.headSha);
   await tryPublishCommitStatus(
     params.operatorRoot,
     params.headSha,
