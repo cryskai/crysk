@@ -570,12 +570,15 @@ turns the status green for that head with no new review. The re-review does not 
 `/pr-hero review` clears, because that run passes both gates.
 
 **A failed final write.** In gate mode, when the review itself finished, the job fails with an `::error::`
-annotation if the final status cannot be written. If the review had already failed, the job exits with that
-failure, and the failed status write is only logged, so it never replaces the review's own error. Either way the
-commit-status lock is still released. The head then stays `pending`, so the required check does not settle. On
-an already-reviewed head, the same-head admission skip runs first and posts no status, so the head stays `pending`
-until a `/pr-hero review` comment forces a review, which writes the status again. The pending status, written
-when a review starts, is best-effort in both modes.
+annotation if the final status cannot be written. When the review was also delivered, the CLI records the status
+it could not write, and the publisher step later in the same job posts that status once more, so the required
+check can settle without a new run. The job still fails with its `::error::` annotation. If that second write
+fails too, the publisher adds its own `::error::` annotation, and the head stays `pending` until a
+`/pr-hero review` comment forces a review. If the review had already failed, the job exits with that failure,
+and the failed status write is only logged, so it never replaces the review's own error. Either way the
+commit-status lock is still released. On an already-reviewed head, the same-head admission skip runs first and
+posts no status, so the head stays `pending` until a `/pr-hero review` comment forces a review, which writes the
+status again. The pending status, written when a review starts, is best-effort in both modes.
 
 **Local runs and the watcher post on `pr-hero/local`.** Only an explicit `--ci` run writes the `pr-hero`
 status, which is the required check. A `pr-hero review --pr` you run locally, and each review that

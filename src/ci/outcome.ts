@@ -200,6 +200,17 @@ export type CliErrorClass =
   | { kind: "route"; reason: "unmapped" | "ambiguous" | "spend-disabled" }
   | { kind: "capability"; issue: "sdk_unavailable" | "version_unsupported" };
 
+// The final commit status a gate run could not write after its review was delivered.
+// The publisher posts it once more on the record's head (see CliRecord.unsettled_status).
+export interface UnsettledStatus {
+  state: "success" | "failure";
+  description: string;
+}
+
+// GitHub's limit on a commit status description. The publisher clips to it, and the
+// record refuses a longer description, so the two cannot drift apart.
+export const STATUS_DESCRIPTION_MAX = 140;
+
 export interface CliRecord {
   v: 1;
   // "reviewing" is progress, not an outcome: the CLI took the pending lock on
@@ -222,6 +233,11 @@ export interface CliRecord {
   cls?: CliErrorClass;
   // Only for outcome "error", and the writer does not set it today.
   params?: ErrorParams;
+  // Only for outcome "reviewed". The review was delivered, but the CLI's final status
+  // write on head_sha failed, so the head's required check is still pending. The
+  // publisher posts this status once more (src/ci/publish.ts), exactly as the CLI tried
+  // to write it.
+  unsettled_status?: UnsettledStatus;
 }
 
 const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
@@ -428,12 +444,33 @@ function parseCliClass(value: unknown): CliErrorClass | undefined {
   return undefined;
 }
 
+// The final status a delivered review could not write. A delivered review's status is
+// success or failure, so the state is one of those two. The description is the text the
+// publisher posts, so it must say something and fit GitHub's limit.
+function parseUnsettledStatus(value: unknown): UnsettledStatus | undefined {
+  if (!isRecordObject(value)) return undefined;
+  const state = (["success", "failure"] as const).find(
+    (candidate) => candidate === value.state,
+  );
+  if (state === undefined) return undefined;
+  const description = value.description;
+  if (
+    typeof description !== "string" ||
+    description.trim() === "" ||
+    description.length > STATUS_DESCRIPTION_MAX
+  ) {
+    return undefined;
+  }
+  return { state, description };
+}
+
 // Returns undefined for anything the publisher must not act on. The rules mirror
 // the writer's: `skip` is present exactly for a skipped outcome, `cls` exactly
 // for an error, `params` only for an error, carrying only the keys a record
-// may name, and `head_sha` is required for a reviewing record, which names the
-// lock's head and nothing else. The publisher reads this shape, so a looser
-// reader would accept a record the writer never produces.
+// may name, `unsettled_status` only for a reviewed outcome, and `head_sha` is
+// required for a reviewing record, which names the lock's head and nothing else.
+// The publisher reads this shape, so a looser reader would accept a record the
+// writer never produces.
 export function parseCliRecord(text: string): CliRecord | undefined {
   let value: unknown;
   try {
@@ -476,6 +513,12 @@ export function parseCliRecord(text: string): CliRecord | undefined {
     const params = parseRecordParams(value.params);
     if (params === undefined) return undefined;
     record.params = params;
+  }
+  if (value.unsettled_status !== undefined) {
+    if (outcome !== "reviewed") return undefined;
+    const unsettled = parseUnsettledStatus(value.unsettled_status);
+    if (unsettled === undefined) return undefined;
+    record.unsettled_status = unsettled;
   }
   return record;
 }

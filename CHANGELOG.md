@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   always `success`. Local runs and the watcher post their status on `pr-hero/local`, which the required check
   never reads, so a local run cannot overwrite a red gate. A watcher run also stands down for a local review
   already in flight on the same head, while a `--ci` run still stands down only for a pending on `pr-hero`. When
-  the review itself failed, a failed final status write is logged and never replaces that failure.
+  the review itself failed, a failed final status write is logged and never replaces that failure. When a
+  delivered review's final status write fails, the publisher step of the same job posts that status once more, so
+  the required check does not stay pending; the job still fails.
 
 ### Fixed
 - **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left

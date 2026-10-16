@@ -18,6 +18,8 @@
 //   the log line is printed, when posting is off).
 // - reviewed: recordReviewDelivered, from publishRunOutcome (src/pr/publish-outcome.ts),
 //   once the findings post completes, or once the artifacts exist when posting is off.
+//   recordUnsettledStatus (src/pr/teardown.ts) may then add the final status a gate run
+//   could not write, and it rewrites a reviewed record only.
 // - error: a writer that catches a failure at its own step (a posting, a skip notice),
 //   or writeFatalCliRecord for anything else.
 // The pipeline finishing is not the review being delivered, and the commit status does
@@ -41,6 +43,7 @@ import {
   type CliErrorClass,
   type CliRecord,
   parseCliRecord,
+  type UnsettledStatus,
 } from "./outcome";
 import { NODE_FS, writeRecordAtomically } from "./trigger";
 
@@ -110,6 +113,32 @@ export function recordReviewDelivered(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
   writeCliRecord({ v: 1, outcome: "reviewed", ...cliHeadField(headSha) }, env);
+}
+
+// The unsettled-status writer: src/pr/teardown.ts calls it when a gate run's final status
+// write fails after the review was delivered. The review is delivered, so the record stays
+// reviewed, and it gains the status the CLI could not write, so the publisher step later in
+// the same job can post it. The head is the one that status was written for, since that is
+// the head whose required check is still pending. Only a reviewed record takes it: an error
+// or hunters-failed record keeps its own outcome, and a head that is not a SHA writes nothing.
+// It never throws, like the other writers.
+//
+// WHY the earlier record is read here: the writer must know the outcome it would overwrite,
+// and the write above has no such check of its own.
+export function recordUnsettledStatus(
+  headSha: string,
+  status: UnsettledStatus,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  if (dir === "") return;
+  const head = cliHeadField(headSha);
+  if (head.head_sha === undefined) return;
+  if (readEarlierRecord(dir)?.outcome !== "reviewed") return;
+  writeCliRecord(
+    { v: 1, outcome: "reviewed", ...head, unsettled_status: status },
+    env,
+  );
 }
 
 // The fatal path's writer: the CLI's catches call this, never writeCliRecord. It keeps

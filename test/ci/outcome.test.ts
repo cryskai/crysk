@@ -26,6 +26,7 @@ import {
   renderCode,
   renderError,
   type TriggerRecord,
+  type UnsettledStatus,
 } from "#ci/outcome";
 import type { TransportFailureCause } from "../../src/execution/contracts";
 import type { CredentialProjectionFailureClass } from "../../src/security/credential-broker";
@@ -1750,4 +1751,87 @@ describe("parseCliRecord — the cli.json contract", () => {
   ])("refuses %s", (_label, value) => {
     expect(parseCliRecord(value)).toBeUndefined();
   });
+});
+
+// WHY this field: the CLI's final status write failed after its review was delivered,
+// so the CLI records the status it could not write and the publisher posts it once
+// more (recordUnsettledStatus, then decidePublication). The publisher posts exactly
+// this state and description, so the reader hands them back unchanged.
+describe("parseCliRecord — the unsettled_status field", () => {
+  const SHA = "c".repeat(40);
+  const text = (value: unknown) => JSON.stringify(value);
+  const SUCCESS: UnsettledStatus = {
+    state: "success",
+    description: "review complete",
+  };
+
+  test("a reviewed record that carries a valid unsettled_status parses with it", () => {
+    const value: CliRecord = {
+      v: 1,
+      outcome: "reviewed",
+      head_sha: SHA,
+      unsettled_status: SUCCESS,
+    };
+    expect(parseCliRecord(text(value))).toEqual(value);
+  });
+
+  test("a failure status whose description is exactly 140 characters parses", () => {
+    const value: CliRecord = {
+      v: 1,
+      outcome: "reviewed",
+      head_sha: SHA,
+      unsettled_status: { state: "failure", description: "x".repeat(140) },
+    };
+    expect(parseCliRecord(text(value))).toEqual(value);
+  });
+
+  test("a reviewed record without the field still parses unchanged", () => {
+    const value: CliRecord = { v: 1, outcome: "reviewed", head_sha: SHA };
+    expect(parseCliRecord(text(value))).toEqual(value);
+  });
+
+  test.each([
+    ["state pending", { state: "pending", description: "x" }],
+    ["state error", { state: "error", description: "x" }],
+    ["no state", { description: "x" }],
+    ["an empty description", { state: "success", description: "" }],
+    ["a blank description", { state: "success", description: "   " }],
+    [
+      "a description of 141 characters",
+      { state: "failure", description: "x".repeat(141) },
+    ],
+    [
+      "a description that is not a string",
+      { state: "success", description: 7 },
+    ],
+    ["no description", { state: "success" }],
+    ["null", null],
+    ["a bare string", "success"],
+  ])("refuses an unsettled_status with %s", (_label, unsettled) => {
+    expect(
+      parseCliRecord(
+        text({
+          v: 1,
+          outcome: "reviewed",
+          head_sha: SHA,
+          unsettled_status: unsettled,
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  test.each([
+    ["hunters-failed", { v: 1, outcome: "hunters-failed", head_sha: SHA }],
+    ["skipped", { v: 1, outcome: "skipped", skip: "size" }],
+    ["yielded", { v: 1, outcome: "yielded" }],
+    ["reviewing", { v: 1, outcome: "reviewing", head_sha: SHA }],
+    ["error", { v: 1, outcome: "error", cls: { kind: "unknown" } }],
+  ])(
+    "refuses the field on a %s record, which never delivered a review",
+    (_label, base) => {
+      expect(
+        parseCliRecord(text({ ...base, unsettled_status: SUCCESS })),
+      ).toBeUndefined();
+    },
+  );
 });

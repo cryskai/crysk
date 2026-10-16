@@ -5,6 +5,7 @@
 // onto explicit parameters, control flow otherwise unchanged. The WHY
 // comments below move with the code they explain.
 
+import { recordUnsettledStatus } from "#ci/cli-record";
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import { settleCiAdmissionLedger } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
@@ -100,6 +101,9 @@ export async function settleCommitStatusAndLedger(input: {
   bodyFailed?: boolean;
   spawnFn?: typeof Bun.spawn;
   settle?: typeof settleCiAdmissionLedger;
+  // Where the CLI's outcome record is written (PRHERO_OUTCOME_DIR). Production omits
+  // it, and the record writer then reads process.env, as every other writer does.
+  env?: Readonly<Record<string, string | undefined>>;
 }): Promise<void> {
   // Only the gate's own context is graded (T3 S7): any other context is
   // advisory, so a run asked for gate without a `--ci` context still cannot
@@ -128,12 +132,28 @@ export async function settleCommitStatusAndLedger(input: {
         });
   try {
     if (effectiveMode === "gate" && input.bodyFailed !== true) {
-      await publishFinalCommitStatus(
-        input.operatorRoot,
-        input.headSha,
-        request,
-        input.spawnFn,
-      );
+      try {
+        await publishFinalCommitStatus(
+          input.operatorRoot,
+          input.headSha,
+          request,
+          input.spawnFn,
+        );
+      } catch (error) {
+        // WHY the record: the review was delivered, so the head's required check must not
+        // stay pending after it. The record keeps the status that did not land, and the
+        // publisher step later in this job posts it once more. The rethrow still fails
+        // this run. Only success and failure are recorded: a finished review's status is
+        // one of those two, and the record names no other.
+        if (request.state === "success" || request.state === "failure") {
+          recordUnsettledStatus(
+            input.headSha,
+            { state: request.state, description: request.description },
+            input.env,
+          );
+        }
+        throw error;
+      }
     } else {
       await tryPublishCommitStatus(
         input.operatorRoot,
