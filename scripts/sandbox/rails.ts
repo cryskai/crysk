@@ -50,10 +50,15 @@ const API_WRITE_FLAGS = new Set([
   "--input",
 ]);
 const API_WRITE_FLAG_PREFIXES = ["--field=", "--raw-field=", "--input="];
-// pflag takes an attached value as readily as a separated one: -XDELETE,
-// -fbody=x and -Fk=v all write or change the method. The bare -X is the only
-// form the runner uses, and -f/-F are refused by the list above.
-const ATTACHED_API_FLAG = /^-[XfF]./;
+// pflag reads a cluster of short flags, and an attached value, as one argument:
+// -iXDELETE is -i then -X DELETE, and -ifbody=x is -i then -f. The -i is boolean,
+// so a check on the first letter alone never sees the write inside the cluster.
+// The runner sends only long flags and the bare -X, so no single-dash argument
+// longer than two characters is ever needed. None is allowed, so there is no
+// exemption list to keep honest.
+function isShortFlagCluster(arg: string): boolean {
+  return arg.startsWith("-") && !arg.startsWith("--") && arg.length > 2;
+}
 
 // Every method flag, in either spelling. gh keeps the last one it is given, so
 // a list is returned and the caller refuses more than one.
@@ -101,10 +106,10 @@ function assertApi(args: readonly string[]): void {
   ) {
     throw new RailViolation(`gh api ${endpoint} is outside ${SANDBOX_REPO}`);
   }
-  const attached = args.find((arg) => ATTACHED_API_FLAG.test(arg));
-  if (attached !== undefined) {
+  const cluster = args.find(isShortFlagCluster);
+  if (cluster !== undefined) {
     throw new RailViolation(
-      `gh api ${attached} attaches a method or field value, which the runner never sends`,
+      `gh api ${cluster} is a short-flag cluster or attached value, which the runner never sends`,
     );
   }
   if (

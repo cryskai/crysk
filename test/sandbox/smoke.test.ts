@@ -424,20 +424,32 @@ describe("smoke: transient poll failures", () => {
   });
 
   test("the poll stops only after five consecutive failures, and the PR is still cleaned up", async () => {
+    // Exactly five listings fail and end the poll. The cleanup's lookup for an
+    // unrecorded run then reads an empty list, so the PR still closes.
     const w = world();
     const base = ghFor(w);
+    let failures = 5;
     const h = harness({
       gh: (args, hh) => {
         if (args[0] === "run" && args[1] === "list") {
-          return fail("HTTP 502: Bad Gateway");
+          if (failures > 0) {
+            failures -= 1;
+            return fail("HTTP 502: Bad Gateway");
+          }
+          return ok("[]");
         }
         return base(args, hh);
       },
     });
     const code = await runSmoke(h.deps, { ...SMOKE, timeoutMs: 10 * 60_000 });
     expect(code).toBe(1);
+    const stoppedAt = h.events.findIndex((e) =>
+      e.startsWith("log smoke stopped early"),
+    );
+    expect(stoppedAt).toBeGreaterThan(0);
     expect(
-      h.ghCalls.filter((c) => c[0] === "run" && c[1] === "list").length,
+      h.events.slice(0, stoppedAt).filter((e) => e.startsWith("gh run list"))
+        .length,
     ).toBe(5);
     expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(true);
   });
@@ -506,6 +518,86 @@ describe("smoke: signals", () => {
     ).toBe(1);
   });
 
+  test("a signal with a failed cleanup exits 1, not the signal's code", async () => {
+    const script = interruptDuringPoll(world(), "SIGINT");
+    const h = harness({
+      gh: (args, hh) =>
+        args[0] === "pr" && args[1] === "close"
+          ? fail("HTTP 502: Bad Gateway")
+          : script(args, hh),
+    });
+    expect(await runSmoke(h.deps, LONG_RUN)).toBe(1);
+    expect(h.logs.some((l) => l.startsWith("cleanup failed"))).toBe(true);
+  });
+
+  test("a signal during cleanup after a completed scenario exits 0 and reports when it arrived", async () => {
+    const base = ghFor(world());
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "pr" && args[1] === "close") hh.signals.fire("SIGINT");
+        return base(args, hh);
+      },
+    });
+    expect(await runSmoke(h.deps, SMOKE)).toBe(0);
+    expect(
+      h.logs.some((l) => l.includes("SIGINT received during cleanup")),
+    ).toBe(true);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(true);
+    expect(h.signals.listeners()).toBe(0);
+  });
+
+  test("a second signal during the cancel wait abandons it, names what may be open, and returns at once", async () => {
+    // The first signal interrupts the poll. The cancel is accepted but the run
+    // keeps going, and the second signal lands inside the cancel wait's second read.
+    const inProgress: Run = {
+      ...completedRun(),
+      status: "in_progress",
+      conclusion: null,
+    };
+    const w = world({
+      runPolls: [[inProgress]],
+      runStatus: "in_progress",
+      statusState: undefined,
+      issueComments: [],
+    });
+    const base = ghFor(w);
+    let polls = 0;
+    let views = 0;
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "run" && args[1] === "list") {
+          polls += 1;
+          if (polls === 2) hh.signals.fire("SIGINT");
+        }
+        if (args[0] === "run" && args[1] === "view") {
+          views += 1;
+          if (views === 2) hh.signals.fire("SIGINT");
+        }
+        if (args[0] === "run" && args[1] === "cancel") return ok();
+        return base(args, hh);
+      },
+    });
+    // Once the second signal has landed, the cancel wait's sleep never resolves.
+    // The wait must end on the signal itself, as a sleep cut short, and not on
+    // the next timer or the next read. Without that wake, this test hangs.
+    const sleep = h.clock.sleep;
+    h.clock.sleep = (ms: number) =>
+      views >= 2 ? new Promise<void>(() => undefined) : sleep(ms);
+    expect(await runSmoke(h.deps, LONG_RUN)).toBe(1);
+    // Two reads in all: the wait ended at the second signal, not at its deadline.
+    expect(views).toBe(2);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(
+      false,
+    );
+    const branch = h.gitCalls.find((c) => c.args[0] === "checkout")?.args[2];
+    const line = h.logs.find((l) => l.startsWith("left open"));
+    expect(line).toBeDefined();
+    expect(line).toContain(PR_URL);
+    expect(line).toContain(branch ?? "no branch");
+    expect(line).toContain("run 42");
+    expect(line).toContain("bun scripts/sandbox.ts clean");
+  });
+
   test("the handlers are installed while the scenario runs and removed afterwards", async () => {
     let during = -1;
     const base = ghFor(world());
@@ -550,5 +642,195 @@ describe("smoke: refusals", () => {
       runSmoke(h.deps, { ref: "v0.2.0\nuses: ./", keep: false }),
     ).rejects.toThrow();
     expect(h.ghCalls).toEqual([]);
+  });
+});
+
+// Cleanup's cancel path. A run the poll never recorded is the orphan case: the
+// `opened` event queues it asynchronously, so it can appear after the scenario
+// has already ended.
+const CLEANUP_SMOKE = {
+  ref: "v0.2.0",
+  keep: false,
+  pollIntervalMs: 15_000,
+  timeoutMs: 10 * 60_000,
+  cancelWaitMs: 60_000,
+};
+const QUEUED: Run = { ...completedRun(), status: "queued", conclusion: null };
+const IN_PROGRESS: Run = {
+  ...completedRun(),
+  status: "in_progress",
+  conclusion: null,
+};
+
+describe("smoke: a run the opened event queued", () => {
+  test("a signal before the first sighting still cancels the run before the PR closes", async () => {
+    // The run appears only on the third listing. The signal lands inside
+    // `pr create`, so the scenario's poll never sees it.
+    const w = world({
+      runPolls: [[], [QUEUED]],
+      runStatus: "queued",
+      statusState: undefined,
+      issueComments: [],
+      artifacts: [],
+    });
+    const base = ghFor(w);
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "pr" && args[1] === "create") hh.signals.fire("SIGINT");
+        if (args[0] === "run" && args[1] === "cancel") {
+          w.runStatus = "completed";
+          return ok();
+        }
+        return base(args, hh);
+      },
+    });
+    expect(await runSmoke(h.deps, CLEANUP_SMOKE)).toBe(130);
+    expect(h.ghCalls).toContainEqual([
+      "run",
+      "cancel",
+      "42",
+      "-R",
+      SANDBOX_REPO,
+    ]);
+    const cancelAt = h.events.findIndex((e) => e.startsWith("gh run cancel"));
+    const closeAt = h.events.findIndex((e) => e.startsWith("gh pr close"));
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(closeAt).toBeGreaterThan(cancelAt);
+  });
+
+  test("a failed gh pr create still cancels the run its push queued", async () => {
+    const w = world({
+      runPolls: [[], [QUEUED]],
+      runStatus: "queued",
+      statusState: undefined,
+      issueComments: [],
+      artifacts: [],
+    });
+    const base = ghFor(w);
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "pr" && args[1] === "create") {
+          return fail("HTTP 502: Bad Gateway");
+        }
+        if (args[0] === "run" && args[1] === "cancel") {
+          w.runStatus = "completed";
+          return ok();
+        }
+        return base(args, hh);
+      },
+    });
+    expect(await runSmoke(h.deps, CLEANUP_SMOKE)).toBe(1);
+    const cancelAt = h.events.findIndex((e) => e.startsWith("gh run cancel"));
+    const deleteAt = h.events.findIndex(
+      (e) => e.startsWith("gh api ") && e.endsWith(" -X DELETE"),
+    );
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(deleteAt).toBeGreaterThan(cancelAt);
+  });
+
+  test("no run appearing within the lookup bound is reported, and the PR still closes", async () => {
+    const w = world({
+      runPolls: [[]],
+      statusState: undefined,
+      issueComments: [],
+      artifacts: [],
+    });
+    const base = ghFor(w);
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "pr" && args[1] === "create") hh.signals.fire("SIGINT");
+        return base(args, hh);
+      },
+    });
+    expect(await runSmoke(h.deps, CLEANUP_SMOKE)).toBe(130);
+    expect(
+      h.logs.some((l) =>
+        /^no run on sandbox\/smoke-\S+ appeared within 60s/.test(l),
+      ),
+    ).toBe(true);
+    expect(h.ghCalls.some((c) => c[0] === "run" && c[1] === "cancel")).toBe(
+      false,
+    );
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(true);
+  });
+});
+
+describe("smoke: the cancel path's tolerance", () => {
+  test("a run that completes between the check and the cancel is done, and the PR closes", async () => {
+    // Interrupted in the poll, so the run is on record as in progress. gh then
+    // refuses the cancel because the run has finished in the meantime.
+    const w = world({
+      runPolls: [[IN_PROGRESS]],
+      runStatus: "in_progress",
+      statusState: undefined,
+      issueComments: [],
+    });
+    const base = ghFor(w);
+    let polls = 0;
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "run" && args[1] === "list") {
+          polls += 1;
+          if (polls === 2) hh.signals.fire("SIGINT");
+        }
+        if (args[0] === "run" && args[1] === "cancel") {
+          w.runStatus = "completed";
+          return fail("Cannot cancel a workflow run that is completed");
+        }
+        return base(args, hh);
+      },
+    });
+    expect(await runSmoke(h.deps, CLEANUP_SMOKE)).toBe(130);
+    expect(h.ghCalls.some((c) => c[0] === "run" && c[1] === "cancel")).toBe(
+      true,
+    );
+    expect(
+      h.ghCalls.filter((c) => c[0] === "pr" && c[1] === "close").length,
+    ).toBe(1);
+    expect(h.logs.some((l) => l.startsWith("left open"))).toBe(false);
+    // A refusal because the run already completed is the outcome, not a failed read.
+    expect(h.logs.some((l) => l.startsWith("poll read failed"))).toBe(false);
+  });
+
+  test("a transient failure on the cleanup's first status read is retried", async () => {
+    // The scenario times out, so its collection reads the run first (the first
+    // `run view`). The second read is cleanup's first status check, and it fails once.
+    const w = world({
+      runPolls: [[IN_PROGRESS]],
+      runStatus: "in_progress",
+      statusState: undefined,
+      issueComments: [],
+    });
+    const base = ghFor(w);
+    let views = 0;
+    const h = harness({
+      gh: (args, hh) => {
+        if (args[0] === "run" && args[1] === "view") {
+          views += 1;
+          if (views === 2) return fail("HTTP 502: Bad Gateway");
+        }
+        if (args[0] === "run" && args[1] === "cancel") {
+          w.runStatus = "completed";
+          return ok();
+        }
+        return base(args, hh);
+      },
+    });
+    // The exit is the timed-out one. What is under test is that the cleanup
+    // read survives the failure, cancels the run, and still closes the PR.
+    expect(
+      await runSmoke(h.deps, { ...CLEANUP_SMOKE, timeoutMs: 30_000 }),
+    ).toBe(1);
+    expect(h.logs.some((l) => l.includes("poll read failed (1 of 5)"))).toBe(
+      true,
+    );
+    expect(h.ghCalls).toContainEqual([
+      "run",
+      "cancel",
+      "42",
+      "-R",
+      SANDBOX_REPO,
+    ]);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(true);
   });
 });

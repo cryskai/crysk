@@ -114,6 +114,49 @@ describe("gh rail: attached flags and repeated flags", () => {
   });
 });
 
+describe("gh rail: short-flag clusters", () => {
+  // pflag reads `-iXDELETE` as `-i` then `-X DELETE`, and `-ifbody=x` as `-i`
+  // then `-f`. `-i` is boolean, so the cluster is invisible to a check that looks
+  // only for a leading -X or -f. Any single-dash argument longer than two
+  // characters is refused, so no cluster reaches gh.
+  test("refuses any single-dash argument longer than two characters", () => {
+    const refused: string[][] = [
+      ["api", sandboxApi("git/refs/heads/main"), "-iXDELETE"],
+      ["api", sandboxApi("git/refs/heads/sandbox/x"), "-iXDELETE"],
+      ["api", sandboxApi("issues/1/comments"), "-ifbody=x"],
+      ["api", sandboxApi("issues/1"), "-iF"],
+      ["api", sandboxApi("git/refs/heads/sandbox/x"), "-XDELETE"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+
+  // Every gh api call the runner makes, one vector per call site, so a future
+  // rail tightening that breaks a real call fails here rather than live.
+  test("accepts every gh api call the runner sends", () => {
+    const sent: string[][] = [
+      // smoke.ts, the head's combined status
+      ["api", sandboxApi(`commits/${"b".repeat(40)}/status`)],
+      // smoke.ts, issue comments and inline review comments
+      ["api", sandboxApi("issues/7/comments?per_page=100")],
+      ["api", sandboxApi("pulls/7/comments?per_page=100")],
+      // smoke.ts, the run's artifacts
+      ["api", sandboxApi("actions/runs/42/artifacts")],
+      // pr.ts, the scenario branch ref delete
+      [
+        "api",
+        sandboxApi("git/refs/heads/sandbox/smoke-20261016T143000Z"),
+        "-X",
+        "DELETE",
+      ],
+    ];
+    for (const args of sent) {
+      expect(() => assertGhArgs(args)).not.toThrow();
+    }
+  });
+});
+
 describe("gh rail: run cancel", () => {
   test("accepts a cancel of a run in the sandbox", () => {
     expect(() =>
