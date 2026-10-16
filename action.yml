@@ -251,15 +251,17 @@ runs:
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
 
         # The CLI is the last command, so the job's result is exactly the CLI's.
-        # Nothing here writes a marker after it: the publish step judges a
-        # completed review by the CLI's own commit status on the head.
+        # Nothing here writes a marker after it: the CLI's cli.json is its own
+        # record of the outcome, and the publish step reads it.
         bun "${{ github.action_path }}/bin/pr-hero.js" "$@"
 
-    # Speaks for the outcomes that happen BEFORE the CLI starts (T2b, S3): no
-    # credential, a pull request that cannot be resolved, a commenter permission
-    # that could not be verified, and a failed install step. It reads the record
-    # the trigger wrote and posts ONE annotation, ONE step summary, ONE commit
-    # status and ONE sticky comment on the pull request.
+    # Speaks for every outcome of a run (T2b, S3, T2c): no credential, a pull
+    # request that cannot be resolved, a commenter permission that could not be
+    # verified, a failed install step, and the review the CLI started. It reads
+    # the records the trigger, the setup step and the CLI left, and posts ONE
+    # annotation, ONE step summary, ONE commit status and ONE sticky comment for
+    # an outcome it owns. A completed review posts only the cleanup of older
+    # comments, and a skip or a yield is left to the CLI's own notice.
     #
     # WHY !cancelled(), not always(): the outcome this step reports is the one
     # where an earlier step FAILED, and a failed step skips every later one, so
@@ -278,14 +280,12 @@ runs:
     # relative import is a builtins-only sibling (src/ci/outcome.ts), which needs
     # no node_modules.
     #
-    # IN THIS RELEASE it speaks only for pre-CLI outcomes. When the cli-started
-    # marker exists the CLI ran and owns its own status and comment, so this
-    # step posts nothing. It deletes pr-hero's own older outcome comments only
-    # when the CLI's own commit status on the head says its review completed:
-    # a later completed review would contradict them. An older run's comments
-    # go, and so does an earlier attempt of the same run. A CLI that did not
-    # complete keeps its comments, since they are the only explanation on the
-    # PR. T2c moves the CLI's outcomes here.
+    # Once the cli-started marker exists, the CLI's cli.json decides. A reviewed
+    # run deletes pr-hero's own older outcome comments, since a completed review
+    # contradicts them: an older run's comments go, and so does an earlier
+    # attempt of the same run. An error, a hunters-failed run, or a run that left
+    # no record is published here with its code, because the CLI posts no
+    # comment for those. A run that stopped before it reported is named as such.
     - name: Publish pr-hero outcome
       id: publish
       # Wrapped in ${{ }}: a bare `!cancelled()` is a YAML tag, not an expression.
@@ -299,9 +299,6 @@ runs:
         # Bound like the run id: a record of another attempt of this run is
         # refused, since gh run rerun keeps the run id.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-        # The head the CLI reviewed is in its run directory's findings.json. The
-        # trigger's head can be absent or stale, so cleanup reads it from there.
-        PRHERO_RUN_DIR: ${{ steps.run-pr-hero.outputs.run_dir }}
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
     # Without this step the triage half of the review loop has no input.

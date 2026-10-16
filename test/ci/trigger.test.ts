@@ -9,7 +9,9 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -527,6 +529,32 @@ const failingFs: OutcomeFs = {
   },
   remove: (filePath) => rmSync(filePath, { force: true }),
 };
+
+// A fake fs whose removals of the matching files fail with EPERM, the way a stale
+// file another user owns fails. Every other operation is the real one.
+function fsWhereRemovalFails(
+  failing: (filePath: string) => boolean,
+): OutcomeFs {
+  return {
+    mkdir: (target) => {
+      mkdirSync(target, { recursive: true });
+    },
+    writeFile: (filePath, text) => {
+      writeFileSync(filePath, text);
+    },
+    rename: (from, to) => {
+      renameSync(from, to);
+    },
+    remove: (filePath) => {
+      if (failing(filePath)) {
+        throw Object.assign(new Error("EPERM: operation not permitted"), {
+          code: "EPERM",
+        });
+      }
+      rmSync(filePath, { force: true });
+    },
+  };
+}
 
 function runShell(
   env: Record<string, string>,
@@ -1161,10 +1189,115 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     }
   });
 
+  test("a cli.json left by an earlier job in the same outcome directory is removed at trigger start", () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-trigger-cli-stale-"),
+    );
+    try {
+      const dir = path.join(root, "pr-hero-outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "cli.json"),
+        '{"v":1,"outcome":"reviewed"}\n',
+      );
+      runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      expect(existsSync(path.join(dir, "cli.json"))).toBe(false);
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // WHY a directory (F003 on #330): the temp name is unique per write, so an
+  // earlier job's temp file at the old fixed name cannot stop this run's record.
+  // A directory there fails any write to that path for every user, root included.
+  test("a directory left at the old fixed trigger temp name does not stop the trigger record", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-tmp-dir-"));
+    try {
+      const dir = path.join(root, "pr-hero-outcome");
+      mkdirSync(path.join(dir, "trigger.json.tmp"), { recursive: true });
+      const run = runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
+      expect(run.stdout).not.toContain("could not write its outcome record");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a review whose PR resolves records no class and no error", () => {
     const run = outcomeRun(baseEnv());
     expect(run.record?.cls).toBeUndefined();
     expect(run.exitCode).toBe(0);
+  });
+
+  // WHY strict (F003 on #330): cli-started, setup.json and cli.json are what the
+  // publisher reads, so a stale one that cannot be removed must still fail the
+  // record write. The CLI's temp file is not among them: its name is unique per
+  // write, so no stale one can collide with it.
+  test("a stale cli-started that cannot be removed still fails the record write, as before", () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-trigger-start-eperm-"),
+    );
+    try {
+      const dir = path.join(root, "outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "cli-started"), "");
+      const run = runShell(
+        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        undefined,
+        undefined,
+        fsWhereRemovalFails((filePath) => filePath.endsWith("cli-started")),
+      );
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(false);
+      expect(run.stdout).toContain("could not write its outcome record");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a stale setup.json that cannot be removed still fails the record write, as before", () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-trigger-setup-eperm-"),
+    );
+    try {
+      const dir = path.join(root, "outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "setup.json"), "{}");
+      const run = runShell(
+        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        undefined,
+        undefined,
+        fsWhereRemovalFails((filePath) => filePath.endsWith("setup.json")),
+      );
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(false);
+      expect(run.stdout).toContain("could not write its outcome record");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a stale cli.json that cannot be removed still fails the record write, as before", () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-trigger-cli-eperm-"),
+    );
+    try {
+      const dir = path.join(root, "outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "cli.json"),
+        '{"v":1,"outcome":"reviewed"}\n',
+      );
+      const run = runShell(
+        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        undefined,
+        undefined,
+        fsWhereRemovalFails((filePath) => filePath.endsWith("cli.json")),
+      );
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(false);
+      expect(run.stdout).toContain("could not write its outcome record");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("a record that cannot be written leaves no partial file and keeps the decision's exit code", () => {
@@ -1198,7 +1331,13 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       });
       expect(exitCode).toBe(0);
       expect(existsSync(path.join(dir, "trigger.json"))).toBe(false);
-      expect(existsSync(path.join(dir, "trigger.json.tmp"))).toBe(false);
+      // CHANGED (F003 on #330): the temp name is unique per write, so a fixed
+      // `trigger.json.tmp` check could not see a leftover. Any `.tmp` entry counts.
+      expect(
+        existsSync(dir)
+          ? readdirSync(dir).filter((name) => name.endsWith(".tmp"))
+          : [],
+      ).toEqual([]);
       expect(stdout).toContain("::error title=pr-hero::");
       expect(stdout).toContain("outcome record");
     } finally {

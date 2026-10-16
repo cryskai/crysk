@@ -15,6 +15,7 @@
 // inline in reviewPr() so its ledger settlement is reachable from a test.
 
 import type { AdmissionRecord } from "#ci/admission-ledger";
+import { writeCliRecord } from "#ci/cli-record";
 import {
   type AdmissionContext,
   planCiReviewManualRequired,
@@ -391,6 +392,7 @@ export async function yieldToInFlightReview(input: {
       "another pr-hero review is already in flight on this head",
       { spawnFn },
     );
+    writeCliRecord({ v: 1, outcome: "yielded" });
     return 0;
   }
   log(

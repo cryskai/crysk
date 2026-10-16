@@ -843,12 +843,16 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
     "setup.ts",
   );
 
-  async function runSetup(env: Record<string, string>) {
+  async function runSetup(
+    env: Record<string, string>,
+    prepare?: (outDir: string) => Promise<void>,
+  ) {
     const root = await mkdtemp(path.join(tmpdir(), "pr-hero-setup-record-"));
     const home = path.join(root, "home");
     const outDir = path.join(root, "outcome");
     await mkdir(home, { recursive: true });
     try {
+      if (prepare !== undefined) await prepare(outDir);
       const proc = Bun.spawn(["bun", SETUP_SCRIPT], {
         cwd: root,
         env: {
@@ -888,6 +892,24 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
       detail: "the routing input is not valid JSON",
     });
     expect(result.recordText).not.toContain("SENTINEL");
+  });
+
+  // WHY a directory (F003 on #330): the setup record's temp name is unique per write
+  // now, so a directory left at the old fixed `setup.json.tmp` by an earlier job
+  // cannot stop this step's record. A directory fails any write to that path.
+  test("a directory left at the old fixed setup temp name does not stop the record", async () => {
+    const result = await runSetup(
+      { ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ' },
+      async (outDir) => {
+        await mkdir(path.join(outDir, "setup.json.tmp"), { recursive: true });
+      },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "config-parse", source: "routing" },
+      detail: "the routing input is not valid JSON",
+    });
   });
 
   test("a routing input of the wrong shape records config-parse routing too, without the key it names", async () => {

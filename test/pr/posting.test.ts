@@ -14,7 +14,8 @@
 // convention that a test file's own gh fixture is not a shared module.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { postFindingsIfEnabled } from "#pr/posting";
@@ -249,5 +250,143 @@ describe("postFindingsIfEnabled — real posting writes the post.json receipt", 
     expect(receipt.dropped_finding_ids).toEqual(
       result.posted?.droppedFindingIds,
     );
+  });
+});
+
+// WHY onDelivered (F002 on #330): the delivery point is the POST's resolution,
+// not the receipt write after it. A caller that records "delivered" must learn
+// of the POST the moment it lands, so a failed receipt write cannot be read as
+// a failed delivery.
+describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
+  function cleanRunScripts(): ScriptEntry[] {
+    return [
+      {
+        match: ["repo", "view", "url"],
+        response: { stdout: "https://github.com/acme/widgets\n" },
+      },
+      ...emptyCommentScript(),
+    ];
+  }
+
+  test("a successful POST calls onDelivered once, before the receipt is written", async () => {
+    const runDir = await tmpRunDir();
+    const { spawnFn } = makeFakeGh(cleanRunScripts());
+    let calls = 0;
+    let receiptAtDelivery: boolean | undefined;
+    const result = await postFindingsIfEnabled({
+      postEnabled: true,
+      sessionFailed: false,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/app.ts", 5),
+      runDir,
+      spawnFn,
+      onDelivered: () => {
+        calls += 1;
+        receiptAtDelivery = existsSync(path.join(runDir, "post.json"));
+      },
+    });
+    expect(result.posted).not.toBeNull();
+    expect(calls).toBe(1);
+    expect(receiptAtDelivery).toBe(false);
+    expect(existsSync(path.join(runDir, "post.json"))).toBe(true);
+  });
+
+  test("a receipt write that throws after the POST still reached onDelivered first, and the throw propagates", async () => {
+    const runDir = await tmpRunDir();
+    // A directory where post.json goes: the receipt write itself throws.
+    await mkdir(path.join(runDir, "post.json"));
+    const { spawnFn } = makeFakeGh(cleanRunScripts());
+    let calls = 0;
+    await expect(
+      postFindingsIfEnabled({
+        postEnabled: true,
+        sessionFailed: false,
+        operatorRoot: OPERATOR_ROOT,
+        pr: PR,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/app.ts", 5),
+        runDir,
+        spawnFn,
+        onDelivered: () => {
+          calls += 1;
+        },
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
+
+  test("a POST that rejects never calls onDelivered", async () => {
+    const runDir = await tmpRunDir();
+    const { spawnFn } = makeFakeGh([
+      ...cleanRunScripts(),
+      {
+        match: [`issues/${PR}/comments`, "--method"],
+        response: { stderr: "gh: HTTP 502", exitCode: 1 },
+      },
+    ]);
+    let calls = 0;
+    await expect(
+      postFindingsIfEnabled({
+        postEnabled: true,
+        sessionFailed: false,
+        operatorRoot: OPERATOR_ROOT,
+        pr: PR,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/app.ts", 5),
+        runDir,
+        spawnFn,
+        onDelivered: () => {
+          calls += 1;
+        },
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(0);
+  });
+
+  test("a failed session never calls onDelivered, and posts nothing", async () => {
+    const runDir = await tmpRunDir();
+    const { spawnFn } = makeFakeGh(cleanRunScripts());
+    let calls = 0;
+    const result = await postFindingsIfEnabled({
+      postEnabled: true,
+      sessionFailed: true,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/app.ts", 5),
+      runDir,
+      spawnFn,
+      onDelivered: () => {
+        calls += 1;
+      },
+    });
+    expect(result.posted).toBeNull();
+    expect(calls).toBe(0);
+  });
+
+  test("posting off never calls onDelivered", async () => {
+    const runDir = await tmpRunDir();
+    let calls = 0;
+    const result = await postFindingsIfEnabled({
+      postEnabled: false,
+      sessionFailed: false,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: "",
+      runDir,
+      onDelivered: () => {
+        calls += 1;
+      },
+    });
+    expect(result.posted).toBeNull();
+    expect(calls).toBe(0);
   });
 });
