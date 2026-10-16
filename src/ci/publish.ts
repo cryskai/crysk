@@ -1,9 +1,11 @@
 // The outcome publisher (odd/tasks/agent-first-ci.md, T2b / S3). Every outcome
 // that happens BEFORE the CLI step starts (no credential, an unresolved PR, an
 // unverifiable commenter permission, a failed install step) becomes ONE
-// annotation, ONE step summary and, when the PR is known, ONE commit status
-// plus ONE sticky comment on that PR. The trigger writes the decision to
-// trigger.json; this step reads it and speaks.
+// annotation, ONE step summary and, when the PR is known, ONE sticky comment on
+// that PR. The commit status is posted only when a valid head sha is known: a
+// status needs a sha, a comment does not. The comment's marker says head=unknown
+// when no head is known. The trigger writes the decision to trigger.json, and the
+// setup step may leave setup.json; this step reads them and speaks.
 //
 // It runs `if: always()`: a failed install skips every later step, and this
 // step is the only one that can still say so. It is gated on the trigger's
@@ -27,8 +29,18 @@
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { ErrorParams, RenderedError, TriggerRecord } from "./outcome";
-import { parseTriggerRecord, renderCode, renderError } from "./outcome";
+import type {
+  ErrorParams,
+  RenderedError,
+  SetupRecord,
+  TriggerRecord,
+} from "./outcome";
+import {
+  parseSetupRecord,
+  parseTriggerRecord,
+  renderCode,
+  renderError,
+} from "./outcome";
 
 // The commit status context. The required check reads this name, so it must
 // equal COMMIT_STATUS_CONTEXT in src/pr/preflight.ts (a test pins the two).
@@ -38,6 +50,11 @@ const STATUS_DESCRIPTION_MAX = 140;
 const MARKER_PREFIX = "<!-- pr-hero-outcome";
 const CLI_STARTED_FILE = "cli-started";
 const RECORD_FILE = "trigger.json";
+const SETUP_RECORD_FILE = "setup.json";
+// The step an unverifiable lookup stopped at. The trigger writes the same text
+// into its record; the publisher names it itself, so the message never depends
+// on what a record carries.
+const PERMISSION_STEP = "the commenter permission check";
 // Short and fixed: one pause before the one retry of the status write.
 const STATUS_RETRY_DELAY_MS = 2_000;
 const GH_TIMEOUT_MS = 30_000;
@@ -64,17 +81,20 @@ export type Publication =
       rendered: RenderedError;
       repository: string;
       pr: number;
-      headSha: string;
-      status: StatusPost;
+      // Undefined when the record has no valid head: the comment still posts.
+      headSha: string | undefined;
+      // Undefined exactly when headSha is: a commit status needs a sha.
+      status: StatusPost | undefined;
       commentBody: string;
     };
 
 // The pure table. Which outcome this run has is the record's decision and class
 // (renderError / renderCode say what it means); whether anything can be posted
-// on a PR is the record's pr and head.
+// on a PR is the record's pr alone: the head only decides the status.
 export function decidePublication(input: {
   record: TriggerRecord | undefined;
   cliStarted: boolean;
+  setup?: SetupRecord;
 }): Publication {
   const record = input.record;
   if (record === undefined) return { kind: "none" };
@@ -92,24 +112,26 @@ export function decidePublication(input: {
     runId: record.run_id,
     runUrl: record.run_url,
   };
-  const rendered = renderRecordOutcome(record, params);
-  if (record.pr === undefined || record.head_sha === undefined) {
-    return { kind: "local", rendered };
-  }
+  const rendered = renderRecordOutcome(record, params, input.setup);
+  if (record.pr === undefined) return { kind: "local", rendered };
+  const headSha = record.head_sha;
   return {
     kind: "remote",
     rendered,
     repository: record.repository,
     pr: record.pr,
-    headSha: record.head_sha,
-    status: {
-      state: "error",
-      context: STATUS_CONTEXT,
-      description: statusDescription(rendered),
-      targetUrl: record.run_url,
-    },
+    headSha,
+    status:
+      headSha === undefined
+        ? undefined
+        : {
+            state: "error",
+            context: STATUS_CONTEXT,
+            description: statusDescription(rendered),
+            targetUrl: record.run_url,
+          },
     commentBody: [
-      `${MARKER_PREFIX} v=1 head=${record.head_sha} run=${record.run_id} -->`,
+      `${MARKER_PREFIX} v=1 head=${headSha ?? "unknown"} run=${record.run_id} -->`,
       "",
       ...rendered.summary,
     ].join("\n"),
@@ -119,6 +141,7 @@ export function decidePublication(input: {
 function renderRecordOutcome(
   record: TriggerRecord,
   params: ErrorParams,
+  setup: SetupRecord | undefined,
 ): RenderedError {
   if (record.decision === "no-credentials") {
     return renderError(
@@ -132,14 +155,22 @@ function renderRecordOutcome(
     // render, and "stopped at this step" needs a step to name.
     return renderError(
       record.cls ?? { kind: "unknown" },
-      { ...params, step: "the commenter permission check" },
+      { ...params, step: PERMISSION_STEP },
       "action",
     );
   }
   // A review that never reached the CLI: a recorded class is the cause (the PR
-  // could not be resolved); otherwise the install step failed before the run.
+  // could not be resolved); a setup record names the malformed input the setup
+  // step found; otherwise the install step failed before the run.
   if (record.cls !== undefined) {
     return renderError(record.cls, params, "action");
+  }
+  if (setup !== undefined) {
+    return renderError(
+      setup.cls,
+      { ...params, detail: setup.detail },
+      "action",
+    );
   }
   return renderError({ kind: "install", step: "" }, params, "action");
 }
@@ -192,19 +223,21 @@ function workflowCommand(
 // printed one, so the renderer can pick the permission or the server wording.
 function postStatus(
   deps: PublishDeps,
-  plan: Extract<Publication, { kind: "remote" }>,
+  repository: string,
+  headSha: string,
+  status: StatusPost,
 ): { ok: true } | { ok: false; httpStatus: number | undefined } {
   const args = [
     "api",
-    `repos/${plan.repository}/statuses/${plan.headSha}`,
+    `repos/${repository}/statuses/${headSha}`,
     "-f",
-    `state=${plan.status.state}`,
+    `state=${status.state}`,
     "-f",
-    `context=${plan.status.context}`,
+    `context=${status.context}`,
     "-f",
-    `description=${plan.status.description}`,
+    `description=${status.description}`,
     "-f",
-    `target_url=${plan.status.targetUrl}`,
+    `target_url=${status.targetUrl}`,
   ];
   let result = deps.gh(args);
   if (result.exitCode !== 0) {
@@ -340,6 +373,11 @@ export function runPublish(deps: PublishDeps): number {
   const cliStarted = existsSync(path.join(dir, CLI_STARTED_FILE));
 
   const record = parseTriggerRecord(recordText);
+  // Read with the record, so both files are judged in one place. The decision
+  // uses it only for an install failure.
+  const setupText = readIfExists(path.join(dir, SETUP_RECORD_FILE));
+  const setup =
+    setupText === undefined ? undefined : parseSetupRecord(setupText);
   if (record === undefined) {
     // A record that is present but unreadable is reported, never skipped: a
     // silent skip here is exactly the outcome this step exists to prevent.
@@ -367,35 +405,46 @@ export function runPublish(deps: PublishDeps): number {
     return 1;
   }
 
-  const plan = decidePublication({ record, cliStarted });
+  if (setupText !== undefined && setup === undefined) {
+    deps.stdout(
+      workflowCommand(
+        "warning",
+        "pr-hero could not read its setup outcome record, so this failure is reported as an install failure.",
+      ),
+    );
+  }
+  const plan = decidePublication({ record, cliStarted, setup });
   if (plan.kind === "none") return 0;
   report(deps, plan.rendered);
   if (plan.kind === "local") return 0;
 
-  const status = postStatus(deps, plan);
   let exitCode = 0;
-  if (!status.ok) {
-    const variant =
-      status.httpStatus === 403
-        ? "permission"
-        : status.httpStatus !== undefined && status.httpStatus >= 500
-          ? "server"
-          : undefined;
-    const failure = renderCode(
-      "PRH-STATUS-WRITE-FAILED",
-      {
-        detail:
-          status.httpStatus === undefined
-            ? "the request did not complete"
-            : `HTTP ${status.httpStatus}`,
-        runId: record.run_id,
-        runUrl: record.run_url,
-      },
-      "action",
-      variant,
-    );
-    report(deps, failure);
-    exitCode = 1;
+  // WHY the status is optional: it needs a sha, and the comment below does not.
+  if (plan.status !== undefined && plan.headSha !== undefined) {
+    const status = postStatus(deps, plan.repository, plan.headSha, plan.status);
+    if (!status.ok) {
+      const variant =
+        status.httpStatus === 403
+          ? "permission"
+          : status.httpStatus !== undefined && status.httpStatus >= 500
+            ? "server"
+            : undefined;
+      const failure = renderCode(
+        "PRH-STATUS-WRITE-FAILED",
+        {
+          detail:
+            status.httpStatus === undefined
+              ? "the request did not complete"
+              : `HTTP ${status.httpStatus}`,
+          runId: record.run_id,
+          runUrl: record.run_url,
+        },
+        "action",
+        variant,
+      );
+      report(deps, failure);
+      exitCode = 1;
+    }
   }
 
   const comment = postComment(deps, plan);

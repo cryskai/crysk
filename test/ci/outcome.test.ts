@@ -527,6 +527,60 @@ describe("the code list and its catalog", () => {
   });
 });
 
+describe("wording: no invented scope, and the credential text names the route the run uses", () => {
+  test("no rendered annotation or summary carries a <scope> placeholder, for any code, variant or context", () => {
+    for (const code of ERROR_CODES) {
+      const entry = entryOf(code);
+      for (const variant of [undefined, ...Object.keys(entry.variants)]) {
+        for (const ctx of CONTEXTS) {
+          const rendered = renderCode(code, {}, ctx, variant);
+          const label = `${code} ${ctx} ${variant ?? "default"}`;
+          expect(rendered.annotation, label).not.toContain("<scope>");
+          expect(rendered.summary.join("\n"), label).not.toContain("<scope>");
+        }
+      }
+    }
+  });
+
+  test("the opencode route's fix leads with the OpenCode secret, and no Claude secret command is offered as its fix", () => {
+    const rendered = renderCode(
+      "PRH-CRED-MISSING",
+      { ...FULL, backend: "opencode" },
+      "action",
+    );
+    const commands: string[] = [];
+    let inFence = false;
+    for (const line of rendered.summary) {
+      if (line === "```bash") {
+        inFence = true;
+        continue;
+      }
+      if (line === "```") {
+        inFence = false;
+        continue;
+      }
+      if (inFence) commands.push(line);
+    }
+    expect(commands[0]).toContain("OPENCODE_AUTH_JSON");
+    for (const command of commands) {
+      expect(command, command).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    }
+  });
+
+  test("the claude route's with: example names the API key as the alternative to the OAuth token", () => {
+    const rendered = renderCode(
+      "PRH-CRED-MISSING",
+      { ...FULL, backend: "claude-code" },
+      "action",
+    );
+    // The Actions expression is spliced, as in src/ci/outcome.ts, so the source
+    // never holds a `${` pair that reads as a template placeholder.
+    expect(rendered.summary.join("\n")).toContain(
+      "anthropic-api-key: $" + "{{ secrets.ANTHROPIC_API_KEY }}",
+    );
+  });
+});
+
 describe("docs parity: ## Error codes in docs/github-actions.md", () => {
   const docs = readFileSync(DOCS, "utf8");
   const sectionStart = docs.indexOf("\n## Error codes\n");
@@ -1105,7 +1159,8 @@ describe("renderCode and renderError: the annotation", () => {
       "action",
     ).annotation;
     expect(fixOf(scopeless)).toBe(
-      "add the missing scope under the job's `permissions:` (see docs)",
+      "check that the workflow passes `github-token: $" +
+        "{{ secrets.GITHUB_TOKEN }}` and keeps the `permissions:` block that `pr-hero ci init` scaffolds",
     );
   });
 

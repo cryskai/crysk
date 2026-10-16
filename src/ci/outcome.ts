@@ -170,6 +170,17 @@ export interface TriggerRecord {
   run_url: string;
 }
 
+// The record the setup step writes to `setup.json` in the outcome directory when a
+// routing or OpenCode auth input is malformed (odd/tasks/agent-first-ci.md, A1).
+// The publisher reads it back, so the failure is named instead of reported as a
+// generic install failure. `detail` is a fixed phrase per failure site that names
+// the input which is wrong; it never carries that input's content.
+export interface SetupRecord {
+  v: 1;
+  cls: ErrorClass;
+  detail: string;
+}
+
 const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
   "review",
   "ignore",
@@ -212,6 +223,40 @@ function parseRecordParams(value: unknown): ErrorParams | undefined {
     }
   }
   return params as ErrorParams;
+}
+
+// The two classes the setup step writes, and no others: a wider reader would hide
+// a writer's bug, the same rule as parseRecordClass below.
+function parseSetupClass(value: unknown): ErrorClass | undefined {
+  if (!isRecordObject(value)) return undefined;
+  if (value.kind === "config-parse" && value.source === "routing") {
+    return { kind: "config-parse", source: "routing" };
+  }
+  if (
+    value.kind === "credential" &&
+    value.failureClass === "malformed_payload"
+  ) {
+    return { kind: "credential", failureClass: "malformed_payload" };
+  }
+  return undefined;
+}
+
+// Returns undefined for anything the publisher must not act on. The publisher
+// then reports the generic install failure, with a warning that says why.
+export function parseSetupRecord(text: string): SetupRecord | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecordObject(value) || value.v !== 1) return undefined;
+  const cls = parseSetupClass(value.cls);
+  if (cls === undefined) return undefined;
+  if (typeof value.detail !== "string" || value.detail.trim() === "") {
+    return undefined;
+  }
+  return { v: 1, cls, detail: value.detail };
 }
 
 // The classes the trigger writes. Any other kind is refused: the record is a
@@ -683,6 +728,35 @@ const CLAUDE_TOKEN_INPUT =
 // The `with:` line that hands the OpenCode auth store to the action, spliced the same way.
 const OPENCODE_AUTH_INPUT =
   "opencode-auth: $" + "{{ secrets.OPENCODE_AUTH_JSON }}";
+// The `with:` line for the Claude API key, the alternative to the OAuth token.
+const ANTHROPIC_API_KEY_INPUT =
+  "anthropic-api-key: $" + "{{ secrets.ANTHROPIC_API_KEY }}";
+// The fix for a missing credential, by route. A Claude route names only the Claude
+// secrets. An OpenCode route leads with the OpenCode secret, and names the Claude
+// token only as the route it does not use (odd/tasks/agent-first-ci.md, A5).
+const CLAUDE_CREDENTIAL_FIXES = [
+  "Set one credential for the route you use:",
+  "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+  "$ gh secret set ANTHROPIC_API_KEY",
+  "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
+  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${CLAUDE_TOKEN_INPUT}\` or \`${ANTHROPIC_API_KEY_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
+  "Dependabot PRs read Dependabot secrets, so set this one too:",
+  "$ gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN",
+  "Then re-run the workflow:",
+  "$ gh run rerun {runId}",
+] as const;
+const OPENCODE_CREDENTIAL_FIXES = [
+  "Set the OpenCode credential for the route you use:",
+  "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
+  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${OPENCODE_AUTH_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
+  "An OpenCode route also needs the routing variable:",
+  "$ gh variable set PRHERO_ROUTING --body '<routing-object-json>'",
+  "Dependabot PRs read Dependabot secrets, so set this one too:",
+  "$ gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
+  "A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.",
+  "Then re-run the workflow:",
+  "$ gh run rerun {runId}",
+] as const;
 
 function single(
   why: string,
@@ -728,23 +802,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "No credential for the {backend} route reached the action",
     variants: single(
       "pr-hero cannot authenticate, so it cannot review this PR",
-      (params) => [
-        "Set one credential for the route you use:",
-        "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
-        "$ gh secret set ANTHROPIC_API_KEY",
-        "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-        `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${isOpencodeRoute(params) ? OPENCODE_AUTH_INPUT : CLAUDE_TOKEN_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
-        ...(isOpencodeRoute(params)
-          ? [
-              "An OpenCode route also needs the routing variable:",
-              "$ gh variable set PRHERO_ROUTING --body '<routing-object-json>'",
-            ]
-          : []),
-        "Dependabot PRs read Dependabot secrets, so set this one too:",
-        "$ gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN",
-        "Then re-run the workflow:",
-        "$ gh run rerun {runId}",
-      ],
+      (params) =>
+        isOpencodeRoute(params)
+          ? OPENCODE_CREDENTIAL_FIXES
+          : CLAUDE_CREDENTIAL_FIXES,
       (params) =>
         params.backend?.trim() === "opencode"
           ? "set the OPENCODE_AUTH_JSON secret: `gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json`"
@@ -778,6 +839,9 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
             : "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
       },
       malformed_payload: {
+        // WHY no route in the sentence: this class is raised for the OpenCode auth
+        // store and for a Claude keychain payload alike, and {detail} names which.
+        what: "The credential store is not usable: {detail}",
         why: CRED_STORE_WHY,
         fixes: [
           "Check that the store is a JSON object:",
@@ -915,17 +979,27 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "config",
     what: "The workflow token lacks `{scope}: write`",
-    variants: single(
-      "pr-hero cannot post its result on the PR",
-      [
-        "Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:",
-        "$ pr-hero ci init --force",
-      ],
-      (params) =>
-        isBlank(params.scope)
-          ? "add the missing scope under the job's `permissions:` (see docs)"
-          : "add `{scope}: write` under the job's `permissions:` in the workflow",
-    ),
+    variants: {
+      ...single(
+        "pr-hero cannot post its result on the PR",
+        [
+          "Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:",
+          "$ pr-hero ci init --force",
+        ],
+        "add `{scope}: write` under the job's `permissions:` in the workflow",
+      ),
+      // WHY a separate variant: a 403 whose scope is not known names no scope.
+      // renderCode picks it for every caller when the scope is blank.
+      "no-scope": {
+        what: "GitHub refused the workflow token (HTTP 403) during {step}",
+        why: "pr-hero cannot post its result on the PR",
+        fixes: [
+          `Check that the workflow passes \`${GITHUB_TOKEN_INPUT}\` on the action step, and keeps the \`permissions:\` block that \`pr-hero ci init\` scaffolds:`,
+          "$ pr-hero ci init --force",
+        ],
+        annotationFix: `check that the workflow passes \`${GITHUB_TOKEN_INPUT}\` and keeps the \`permissions:\` block that \`pr-hero ci init\` scaffolds`,
+      },
+    },
   },
   "PRH-GITHUB-TOKEN-INVALID": {
     level: "error",
@@ -1139,7 +1213,7 @@ export function renderCode(
   variant?: string,
 ): RenderedError {
   const entry = ERROR_CATALOG[code];
-  const picked = pickVariant(entry, ctx, variant);
+  const picked = pickVariant(entry, ctx, scopeVariant(code, params, variant));
   const owner = ownerFor(picked.owner ?? entry.owner, ctx);
   const providerName = entry.providerName ?? cleanName(params.provider);
   const lead = entry.lead ?? ownerLead(owner, providerName);
@@ -1175,6 +1249,19 @@ function capitalized(text: string): string {
   if (text.startsWith("pr-hero")) return text;
   const first = text.slice(0, 1);
   return first.toUpperCase() + text.slice(first.length);
+}
+
+// WHY the catalog picks the scope-less wording, not the caller: a permission 403
+// with no scope names no scope, so every caller (a class or a direct renderCode)
+// gets the same text and no placeholder reaches the PR.
+function scopeVariant(
+  code: ErrorCode,
+  params: ErrorParams,
+  variant: string | undefined,
+): string | undefined {
+  return code === "PRH-TOKEN-PERMISSION" && isBlank(params.scope)
+    ? "no-scope"
+    : variant;
 }
 
 function pickVariant(

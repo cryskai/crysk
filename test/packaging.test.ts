@@ -776,6 +776,13 @@ describe("Packaging & distribution configuration", () => {
       }
     });
 
+    test("the materialize step binds the outcome directory, so a malformed input can leave setup.json there", () => {
+      const step = steps().find((candidate) => candidate.id === "materialize");
+      expect(step?.env?.PRHERO_OUTCOME_DIR).toBe(
+        `\${{ runner.temp }}/pr-hero-outcome`,
+      );
+    });
+
     test("the publish step is always() and publish-gated, between the run step and the upload", () => {
       const all = steps();
       const run = all.findIndex((step) => step.id === "run-pr-hero");

@@ -670,7 +670,7 @@ When the action stops with an error, the annotation and the job summary start wi
 
 **Why:** pr-hero cannot authenticate, so it cannot review this PR
 
-**Fix:**
+**Fix**, on a Claude route:
 
 Set one credential for the route you use:
 
@@ -680,9 +680,29 @@ gh secret set ANTHROPIC_API_KEY
 opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 ```
 
-If the secret is already set, check that the workflow passes it to the action under `with:`, for example `claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`: a secret the workflow does not pass never reaches pr-hero.
+If the secret is already set, check that the workflow passes it to the action under `with:`, for example `claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` or `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`: a secret the workflow does not pass never reaches pr-hero.
 
-On an OpenCode route the example uses the OpenCode input instead. If the secret is already set, check that the workflow passes it to the action under `with:`, for example `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`: a secret the workflow does not pass never reaches pr-hero.
+Dependabot PRs read Dependabot secrets, so set this one too:
+
+```bash
+gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+**Fix**, on an OpenCode route:
+
+Set the OpenCode credential for the route you use:
+
+```bash
+opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+If the secret is already set, check that the workflow passes it to the action under `with:`, for example `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`: a secret the workflow does not pass never reaches pr-hero.
 
 An OpenCode route also needs the routing variable:
 
@@ -693,8 +713,10 @@ gh variable set PRHERO_ROUTING --body '<routing-object-json>'
 Dependabot PRs read Dependabot secrets, so set this one too:
 
 ```bash
-gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN
+gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 ```
+
+A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.
 
 Then re-run the workflow:
 
@@ -743,6 +765,8 @@ gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 Or rename the provider in PRHERO_ROUTING.
 
 #### `malformed_payload`
+
+**What:** The credential store is not usable: {detail}
 
 Check that the store is a JSON object:
 
@@ -927,6 +951,22 @@ pr-hero review --pr {pr} --dry-run
 **Fix:**
 
 Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:
+
+```bash
+pr-hero ci init --force
+```
+
+#### `no-scope`
+
+When the scope is not known, pr-hero names the refusal and not a scope it cannot know.
+
+**What:** GitHub refused the workflow token (HTTP 403) during {step}
+
+**Why:** pr-hero cannot post its result on the PR
+
+**Fix:**
+
+Check that the workflow passes `github-token: ${{ secrets.GITHUB_TOKEN }}` on the action step, and keeps the `permissions:` block that `pr-hero ci init` scaffolds:
 
 ```bash
 pr-hero ci init --force

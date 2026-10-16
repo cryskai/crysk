@@ -1013,6 +1013,34 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     expect(run.record?.cls).toBeUndefined();
   });
 
+  test("an unverifiable lookup's record names the step that failed, so the publisher can say which one", () => {
+    const run = outcomeRun(commentEnv("/pr-hero review"), () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "gh: Resource not accessible (HTTP 403)",
+    }));
+    expect(run.record?.decision).toBe("unverifiable");
+    expect(run.record?.params).toEqual({
+      step: "the commenter permission check",
+    });
+  });
+
+  test("a marker left by an earlier run in the same outcome directory is cleared before this run writes its record", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-stale-"));
+    try {
+      const dir = path.join(root, "pr-hero-outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "cli-started"), "");
+      writeFileSync(path.join(dir, "setup.json"), "{}");
+      runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      expect(existsSync(path.join(dir, "cli-started"))).toBe(false);
+      expect(existsSync(path.join(dir, "setup.json"))).toBe(false);
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a review whose PR resolves records no class and no error", () => {
     const run = outcomeRun(baseEnv());
     expect(run.record?.cls).toBeUndefined();

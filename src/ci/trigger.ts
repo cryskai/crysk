@@ -492,7 +492,7 @@ interface RunIdentity {
 
 interface RecordFields {
   decision: CiTriggerDecision["kind"];
-  params: { backend?: string };
+  params: { backend?: string; step?: string };
   cls?: RecordClass;
   pr?: string;
   headSha?: string;
@@ -507,6 +507,19 @@ function runIdentity(deps: CiTriggerDeps): RunIdentity {
     run_id: runId,
     run_url: `${server}/${repository}/actions/runs/${runId}`,
   };
+}
+
+// The markers an earlier job may have left in a reused outcome directory: a
+// self-hosted runner keeps runner.temp. The setup step writes SETUP_RECORD, and
+// the run step writes CLI_STARTED_MARKER. Both are cleared before this run's
+// record, so a stale marker cannot make an install failure look like the CLI ran.
+const CLI_STARTED_MARKER = "cli-started";
+const SETUP_RECORD = "setup.json";
+
+function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
+  for (const name of [CLI_STARTED_MARKER, SETUP_RECORD]) {
+    fs.remove(path.join(dir, name));
+  }
 }
 
 // Writes one record for every decision. Unset PRHERO_OUTCOME_DIR (a local run
@@ -531,11 +544,10 @@ function writeRecord(
     run_url: run.run_url,
   };
   try {
-    writeRecordAtomically(
-      dir,
-      `${JSON.stringify(record)}\n`,
-      deps.fs ?? NODE_FS,
-    );
+    const fs = deps.fs ?? NODE_FS;
+    fs.mkdir(dir);
+    clearStaleMarkers(dir, fs);
+    writeRecordAtomically(dir, `${JSON.stringify(record)}\n`, fs);
   } catch {
     deps.stdout(
       workflowCommand(
@@ -770,7 +782,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
     // only add another failing call: the publisher degrades to its summary.
     writeRecord(deps, run, {
       decision: "unverifiable",
-      params: {},
+      params: { step: "the commenter permission check" },
       cls: lookupClass(decision),
       pr,
     });

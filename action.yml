@@ -162,11 +162,15 @@ runs:
         fi
 
     - name: Materialize OpenCode CI data
+      id: materialize
       if: steps.trigger.outputs.run == 'true'
       shell: bash
       env:
         ROUTING_INPUT: ${{ inputs.routing }}
         OPENCODE_AUTH_INPUT: ${{ inputs.opencode-auth }}
+        # A malformed routing or auth input leaves setup.json here, so the publish
+        # step names that input instead of reporting "an install step failed".
+        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
       run: bun "${{ github.action_path }}/src/ci/setup.ts"
 
     # Pin 1.18.30 as its own step so GITHUB_PATH updates later steps only

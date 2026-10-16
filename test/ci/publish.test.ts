@@ -131,12 +131,18 @@ describe("decidePublication — the pure table", () => {
     expect(plan.rendered.code).toBe("PRH-INSTALL-FAILED");
   });
 
-  test("a PR number without a sha is still annotation only: no status can be posted", () => {
+  test("a PR number without a sha posts its comment, marked head=unknown, and no status", () => {
+    // WHY: a status needs a sha, but the PR still gets its one sticky comment.
     const plan = decidePublication({
       record: record({ head_sha: undefined }),
       cliStarted: false,
     });
-    expect(plan.kind).toBe("local");
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.status).toBeUndefined();
+    expect(plan.commentBody.split("\n")[0]).toBe(
+      "<!-- pr-hero-outcome v=1 head=unknown run=4242 -->",
+    );
   });
 
   test("no credentials on a claude route is PRH-CRED-MISSING with the route named", () => {
@@ -151,7 +157,7 @@ describe("decidePublication — the pure table", () => {
     if (plan.kind !== "remote") return;
     expect(plan.rendered.code).toBe("PRH-CRED-MISSING");
     expect(plan.rendered.owner).toBe("config");
-    expect(plan.status.description).toBe(
+    expect(plan.status?.description).toBe(
       "PRH-CRED-MISSING: No credential for the claude route reached the action",
     );
     expect(plan.rendered.annotation).toContain(
@@ -248,7 +254,9 @@ describe("decidePublication — the pure table", () => {
     expect(plan.rendered.annotation).not.toContain("<step>");
   });
 
-  test("an unverifiable lookup without a head sha is annotation only", () => {
+  test("an unverifiable lookup without a head sha still posts its comment, and no status", () => {
+    // WHY: the trigger omits the head on an unverifiable lookup, and the
+    // PR is known, so the comment is the one place the outcome can be seen.
     const plan = decidePublication({
       record: record({
         decision: "unverifiable",
@@ -257,7 +265,67 @@ describe("decidePublication — the pure table", () => {
       }),
       cliStarted: false,
     });
-    expect(plan.kind).toBe("local");
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.status).toBeUndefined();
+    expect(plan.commentBody.split("\n")[0]).toBe(
+      "<!-- pr-hero-outcome v=1 head=unknown run=4242 -->",
+    );
+  });
+
+  test("a parsed setup record names its own failure instead of the generic install failure", () => {
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "config-parse", source: "routing" },
+        detail: "the routing input is not valid JSON",
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.code).toBe("PRH-ROUTING-INVALID");
+    expect(plan.rendered.owner).toBe("config");
+    expect(plan.rendered.annotation).toContain(
+      "the routing input is not valid JSON",
+    );
+  });
+
+  test("a setup record for a malformed auth input is PRH-CRED-UNUSABLE, owned by configuration, with no route placeholder", () => {
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail: "the opencode-auth input is not valid JSON",
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+    expect(plan.rendered.owner).toBe("config");
+    expect(plan.rendered.annotation).not.toContain("<backend>");
+    expect(plan.rendered.annotation).not.toContain("<provider>");
+  });
+
+  test("an unverifiable 403 with no scope names the refused token, never a scope pr-hero does not know", () => {
+    const plan = decidePublication({
+      record: record({
+        decision: "unverifiable",
+        params: { step: "the commenter permission check" },
+        cls: { kind: "github", status: 403 },
+      }),
+      cliStarted: false,
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.code).toBe("PRH-TOKEN-PERMISSION");
+    expect(plan.rendered.annotation).toContain(
+      "GitHub refused the workflow token (HTTP 403) during the commenter permission check",
+    );
+    expect(plan.rendered.annotation).not.toContain("lacks");
   });
 
   test("the status context is the name the required check reads (COMMIT_STATUS_CONTEXT)", () => {
@@ -274,7 +342,7 @@ describe("decidePublication — the pure table", () => {
     expect(plan.kind).toBe("remote");
     expect(expected).toBeDefined();
     if (plan.kind === "remote") {
-      expect(plan.status.context as string).toBe(expected as string);
+      expect(plan.status?.context as string).toBe(expected as string);
     }
   });
 
@@ -288,9 +356,11 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.status.description.length).toBeLessThanOrEqual(140);
-    expect(plan.status.description).not.toContain("\n");
-    expect(plan.status.description.startsWith("PRH-CRED-MISSING: ")).toBe(true);
+    expect(plan.status?.description.length).toBeLessThanOrEqual(140);
+    expect(plan.status?.description).not.toContain("\n");
+    expect(plan.status?.description.startsWith("PRH-CRED-MISSING: ")).toBe(
+      true,
+    );
   });
 });
 
@@ -318,6 +388,7 @@ function listing(...rows: Array<[number, string, string]>): GhResult {
 function runPublishIn(options: {
   record?: TriggerRecord | string;
   cliStarted?: boolean;
+  setup?: object | string;
   status?: GhResult[];
   create?: GhResult;
   list?: GhResult;
@@ -335,6 +406,14 @@ function runPublishIn(options: {
     }
     if (options.cliStarted === true) {
       writeFileSync(path.join(dir, "cli-started"), "");
+    }
+    if (options.setup !== undefined) {
+      writeFileSync(
+        path.join(dir, "setup.json"),
+        typeof options.setup === "string"
+          ? options.setup
+          : JSON.stringify(options.setup),
+      );
     }
     const statusAnswers = [...(options.status ?? [ok()])];
     const calls: Call[] = [];
@@ -575,6 +654,59 @@ describe("runPublish — the shell", () => {
     const run = runPublishIn({ record: "{ not json", cliStarted: true });
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toBe("");
+  });
+
+  test("a no-credentials record with a PR but no head still gets its comment, and no status", () => {
+    const run = runPublishIn({
+      record: record({
+        decision: "no-credentials",
+        params: { backend: "claude" },
+        head_sha: undefined,
+      }),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusCalls(run.calls)).toEqual([]);
+    expect(commentPost(run.calls)?.args).toContain(
+      `repos/${REPO}/issues/7/comments`,
+    );
+  });
+
+  test("a setup record is posted on the PR under its own code, status and comment alike", () => {
+    const run = runPublishIn({
+      record: record(),
+      setup: {
+        v: 1,
+        cls: { kind: "config-parse", source: "routing" },
+        detail: "the routing input is not valid JSON",
+      },
+    });
+    expect(run.stdout).toContain("::error title=pr-hero PRH-ROUTING-INVALID::");
+    expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
+    const [status] = statusCalls(run.calls);
+    expect(status?.args).toContain(
+      "description=PRH-ROUTING-INVALID: PRHERO_ROUTING is invalid: the routing input is not valid JSON",
+    );
+    expect(commentPost(run.calls)).toBeDefined();
+  });
+
+  test("an unreadable setup record falls back to the install failure, with a warning", () => {
+    const run = runPublishIn({ record: record(), setup: "{ not json" });
+    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::error title=pr-hero PRH-INSTALL-FAILED::");
+  });
+
+  test("a setup record outside the two classes the setup step writes is refused the same way", () => {
+    const run = runPublishIn({
+      record: record(),
+      setup: {
+        v: 1,
+        cls: { kind: "trigger", check: "no-credential" },
+        detail: "x",
+      },
+    });
+    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("PRH-INSTALL-FAILED");
+    expect(run.stdout).not.toContain("PRH-CRED-MISSING");
   });
 
   test("a record for another run is refused: nothing is posted", () => {
