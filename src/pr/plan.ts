@@ -25,7 +25,7 @@ import type { ResolvedRoutePlan } from "#model/routing";
 import {
   type CiAdmissionLedgerState,
   publishCiSkip,
-  settleCiAdmissionLedger,
+  settleCiGateSkip,
 } from "#pr/admission";
 import { ghRepoWebUrl } from "#pr/pr";
 import { commitStatusRequest, type PrTarget, prHtmlUrl } from "#pr/preflight";
@@ -150,9 +150,8 @@ export async function resolvePrPlanAndConfirm(params: {
       force: params.options.force,
     });
     if (budgetPlan !== null) {
-      await settleCiAdmissionLedger(
+      await settleCiGateSkip(
         params.ciAdmissionLedger,
-        "skipped",
         "estimated cost exceeds the configured CI budget ceiling",
       );
       const exitCode = await publishCiSkip({

@@ -37,6 +37,7 @@ import {
   publishCiSkip,
   reserveCiAdmissionLedger,
   settleCiAdmissionLedger,
+  settleCiGateSkip,
 } from "#pr/admission";
 import {
   evaluateCiAdmissionGate,
@@ -308,9 +309,8 @@ export async function reviewPr(
         maxChangedFiles: gateConfig.maxChangedFiles,
       });
       if (sizePlan !== null) {
-        await settleCiAdmissionLedger(
+        await settleCiGateSkip(
           ciAdmissionLedger,
-          "skipped",
           "diff exceeds the configured size gate",
         );
         return await publishCiSkip({

@@ -66,9 +66,17 @@ export async function tryPersistCiAdmissionLedger(
 
 // `"yielded"` is terminal too: without it here, teardown's safety net (or
 // any later exit) could overwrite a yield with `"failed"`, which is the red
-// check this status exists to prevent.
+// check this status exists to prevent. `"gate-skipped"` (#326) is the same:
+// a later settle must not rewrite a gate skip as `"failed"`.
 const TERMINAL_ADMISSION_STATUSES: ReadonlySet<AdmissionAttemptStatus> =
-  new Set(["completed", "failed", "cancelled", "skipped", "yielded"]);
+  new Set([
+    "completed",
+    "failed",
+    "cancelled",
+    "skipped",
+    "yielded",
+    "gate-skipped",
+  ]);
 
 // A record that already reached a terminal status is never re-settled: the
 // review shells call this from several exits (and teardown's finally), and
@@ -130,6 +138,18 @@ export async function settleCiAdmissionLedger(
   if (TERMINAL_ADMISSION_STATUSES.has(state.record.status)) return;
   state.record = settleAdmissionAttempt(state.record, status, reason);
   await tryPersistCiAdmissionLedger(state, options);
+}
+
+// #326: the SIZE gate and the BUDGET gate settle through here, not with
+// `"skipped"`. An admission skip (recordCiAdmissionGateSkip below) keeps
+// `"skipped"` and keeps counting; a gate skip spent nothing, so its row must
+// not count against the PR's attempts (see TERMINAL_BUDGET_STATUSES).
+export async function settleCiGateSkip(
+  state: CiAdmissionLedgerState | null,
+  reason: string,
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<void> {
+  await settleCiAdmissionLedger(state, "gate-skipped", reason, options);
 }
 
 export async function reserveCiAdmissionLedger(input: {

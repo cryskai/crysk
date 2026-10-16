@@ -26,6 +26,7 @@ import {
   ciReviewManualRequiredDetail,
   ciReviewPolicyHash,
   ciReviewSkipDetail,
+  countableWorkflowHeads,
   deltaTouchesPriorFindings,
   evaluateCiReviewAdmission,
   formatCiAdmissionObserveNotice,
@@ -169,9 +170,40 @@ export async function evaluateCiAdmissionGate(input: {
         : await ghPrHeroWorkflowRunHeads(operatorRoot, headBranch, {
             spawnFn,
           });
+    // #326: a run concluded `success` even when the gate skipped it (a skip
+    // exits 0), so the run list alone over-counts. Each workflow head's ledger
+    // rows say whether it spent. One read per distinct head: `gh run list`
+    // returns at most 20 runs by default, so that is at most 20 reads per gate
+    // evaluation. Each read fails open to [], which keeps that head counted (the
+    // pre-fix behavior), so a failed read can only over-count, never under-count.
+    // Each read asks for the head's full attempt history (`includeHistory`): the
+    // default returns only the newest row, which would hide a spent attempt
+    // behind a later skip.
+    //
+    // WHY every head reads history, the current head included: the current head
+    // can be a workflow head too (a prior concluded run on this same head), and
+    // its newest row alone can be a gate-skip that hides an earlier spent
+    // attempt. Reusing ledgerRecords (latest-only) here would drop that head and
+    // admit an extra paid review past ci_max_attempts. ledgerRecords itself stays
+    // latest-only because its other readers (the active-reservation check and
+    // countTerminalAttempts) want current state; changing them is a separate
+    // decision.
+    const ledgerByHead = new Map<string, readonly AdmissionRecord[]>();
+    await Promise.all(
+      [...workflowHeads].map(async (head) => {
+        ledgerByHead.set(
+          head,
+          await listAdmissionCheckRuns(operatorRoot, head, {
+            spawnFn,
+            includeHistory: true,
+          }),
+        );
+      }),
+    );
+    const countedHeads = countableWorkflowHeads(workflowHeads, ledgerByHead);
     const reviewCount = resolveCiAdmissionAttemptCount({
       stateCount,
-      workflowHeads,
+      workflowHeads: countedHeads,
       ledgerRecords,
     });
     let deltaTouchesPriorFindingsFlag = false;

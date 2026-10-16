@@ -499,8 +499,16 @@ the published `juanmaagd/pr-hero@v0`, where the checkout does not select the eng
 
 Admission attempts are persisted as Check Runs named `pr-hero/ci-admission` on the reviewed commit.
 The workflow needs **`checks: write`** (listed under [Token permissions](#token-permissions)) so pr-hero can
-reserve attempts before provider spend and record failed/cancelled outcomes. PR comments remain
-presentation only; the Check Run ledger is authoritative.
+reserve attempts before provider spend and record outcomes. PR comments remain presentation only; the
+Check Run ledger is authoritative.
+
+An attempt counts toward `ci_max_attempts` when its run reached the provider (completed, failed, or
+still in progress) or when admission itself skipped it. Two outcomes spend nothing and do not count: a
+run that stood down for a review already in flight on the same head, and a run the size gate or the
+budget ceiling skipped before any agent started. A cancelled row does not count either, but it is not
+proof that nothing was spent: a cancel signal can arrive after the provider started, so a run that
+GitHub concludes as `failure` (for example one killed by `timeout-minutes`) still counts. A skipped run
+still shows as a skipped check on the commit.
 
 Skipped and manual-required outcomes include admission metadata in the step summary: decision, reason,
 current head, reviewed head, risk class, score, attempt count, remaining budget, policy mode, and a

@@ -17,6 +17,7 @@ import type { LocalConfig } from "#review/preflight";
 import {
   type AdmissionRecord,
   countTerminalAttempts,
+  PROVABLY_UNSPENT_STATUSES,
 } from "./admission-ledger";
 import type { CiReviewPolicyMode } from "./review-policy";
 import {
@@ -192,6 +193,42 @@ export function resolveReviewAttemptCount(input: {
   workflowHeads: ReadonlySet<string>;
 }): number {
   return Math.max(input.stateCount, input.workflowHeads.size);
+}
+
+// #326: a workflow head counts toward the attempt budget only when its
+// pr-hero run could have spent. The run list cannot tell them apart, because a
+// gate skip exits 0 and concludes `success`. So each head's ledger rows decide:
+// a head is dropped only when it has ledger rows and EVERY row is provably
+// unspent (PROVABLY_UNSPENT_STATUSES: gate-skipped, yielded). A `cancelled` row
+// is not proof: a cancel signal can land after the provider started, and a
+// `timeout-minutes` kill concludes the run `failure`, which this list does
+// include, so that head stays counted. (A run GitHub concludes `cancelled`
+// never reaches this function, because ghPrHeroWorkflowRunHeads keeps only
+// success and failure, COMPLETED_WORKFLOW_CONCLUSIONS.) A `reserved` row is not
+// proof either, because its provider-started settle is best-effort and the run
+// may have spent anyway, so that head stays counted, and so does any row with a
+// status this engine does not know. A head with no
+// ledger row at all stays counted, because it is a run older than the ledger
+// and the run list is the only evidence it spent. An unreadable ledger reads as
+// no rows (listAdmissionCheckRuns fails open to []), which keeps the head
+// counted, the pre-fix behavior. So a failed read can only over-count and
+// refuse a review early; it never admits one the budget would have refused.
+export function countableWorkflowHeads(
+  workflowHeads: ReadonlySet<string>,
+  ledgerByHead: ReadonlyMap<string, readonly AdmissionRecord[]>,
+): Set<string> {
+  const countable = new Set<string>();
+  for (const head of workflowHeads) {
+    const rows = ledgerByHead.get(head);
+    const provablyUnspent =
+      rows !== undefined &&
+      rows.length > 0 &&
+      rows.every((row) => PROVABLY_UNSPENT_STATUSES.has(row.status));
+    if (!provablyUnspent) {
+      countable.add(head);
+    }
+  }
+  return countable;
 }
 
 // Authoritative attempt count for admission: summary counter, workflow heads,

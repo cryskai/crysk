@@ -90,6 +90,39 @@ describe("countTerminalAttempts", () => {
     // reviewed nothing, so it is not a spent attempt either (musive #1935).
     expect(countTerminalAttempts(records)).toBe(4);
   });
+
+  // #326: a size or budget gate skip spent nothing and reviewed nothing, so
+  // its own row is not a spent attempt, the same as a cancellation.
+  test("does not count a gate skip (size or budget), the same as a cancellation", () => {
+    expect(
+      countTerminalAttempts([baseRecord({ status: "gate-skipped" })]),
+    ).toBe(0);
+  });
+});
+
+describe("gate-skipped rows read like the other non-spending statuses", () => {
+  test("a gate-skipped row round-trips through the check-run text", () => {
+    const record = baseRecord({
+      status: "gate-skipped",
+      decisionReason: "diff exceeds the configured size gate",
+    });
+    expect(parseAdmissionRecord(serializeAdmissionRecord(record))).toEqual(
+      record,
+    );
+  });
+
+  test("a gate-skipped row does not block the next reservation", () => {
+    const { record, created } = reserveAdmissionAttempt({
+      existing: [baseRecord({ status: "gate-skipped", attemptNumber: 1 })],
+      prNumber: PR,
+      headSha: HEAD,
+      policyHash: POLICY_HASH,
+      reservationTtlSeconds: 900,
+      now: new Date("2026-08-28T12:00:00.000Z"),
+    });
+    expect(created).toBe(true);
+    expect(record.attemptNumber).toBe(2);
+  });
 });
 
 describe("isReservationStale", () => {

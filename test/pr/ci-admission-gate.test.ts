@@ -30,12 +30,16 @@ import {
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
 import { renderCiAdmissionBlock } from "#ci/review-admission";
-import type { CiAdmissionLedgerState } from "#pr/admission";
+import {
+  type CiAdmissionLedgerState,
+  settleCiAdmissionLedger,
+  settleCiGateSkip,
+} from "#pr/admission";
 import {
   evaluateCiAdmissionGate,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
-import { CommentsTruncatedError } from "#pr/pr";
+import { CommentsTruncatedError, upsertAdmissionCheckRun } from "#pr/pr";
 import { COMMIT_STATUS_CONTEXT, PR_COMMENT_MARKER_PREFIX } from "#pr/preflight";
 import {
   type CliOptions,
@@ -492,6 +496,410 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
 // and the check-run upsert inside the real settleCiAdmissionLedger) go
 // through one fake, so the observables are the exit code, the ledger record,
 // the check-run request GitHub would receive, and the stderr line.
+// #326, end to end through the gate: the PR's first head was budget-skipped
+// (its run concluded success, spent nothing), the second was reviewed, and a
+// third head arrives. The gate must admit the third head, and it must read
+// each other head's ledger exactly once (the bounded-I/O half of the fix).
+describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an attempt (#326)", () => {
+  const HEAD_C = "c".repeat(40);
+
+  test("the gate admits the new head and reads each other workflow head's ledger once", async () => {
+    const gateSkipped = admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-gate-skip",
+      status: "gate-skipped",
+      decisionReason: "estimated cost exceeds the configured CI budget ceiling",
+    });
+    const checkRunLine = (record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name: "pr-hero/ci-admission",
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: {
+            stdout: JSON.stringify([
+              { headSha: HEAD_A, conclusion: "success" },
+              { headSha: HEAD_B, conclusion: "success" },
+            ]),
+          },
+        },
+        {
+          match: [`commits/${HEAD_A}/check-runs`],
+          response: { stdout: checkRunLine(gateSkipped) },
+        },
+        {
+          match: [`commits/${HEAD_B}/check-runs`],
+          response: { stdout: checkRunLine(admissionCheckRunRecord()) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: `${JSON.stringify(summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1))}\n`,
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const recordCalls: unknown[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/gate-skip",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_C,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions({ head: HEAD_C }),
+          spawnFn,
+          recordSkip: async (recorded) => {
+            recordCalls.push(recorded);
+          },
+        }),
+    );
+
+    expect(result.exitCode).toBeUndefined();
+    expect(recordCalls).toEqual([]);
+    const readsOf = (head: string) =>
+      calls.filter((argv) =>
+        argv.join(" ").includes(`commits/${head}/check-runs`),
+      ).length;
+    expect(readsOf(HEAD_A)).toBe(1);
+    expect(readsOf(HEAD_B)).toBe(1);
+    expect(readsOf(HEAD_C)).toBe(1);
+  });
+
+  // F002: GitHub's check-runs endpoint defaults to filter=latest, which hides
+  // every earlier admission attempt on a head. The fake below answers with the
+  // newest row only unless the request carries filter=all, so this goes red
+  // unless the per-head read asks for history through the real shell.
+  test("keeps a head whose history has a completed attempt even though its latest row is gate-skipped", async () => {
+    const completed = admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-a-completed",
+      status: "completed",
+      attemptNumber: 1,
+    });
+    const gateSkipped = admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-a-gate-skip",
+      status: "gate-skipped",
+      attemptNumber: 2,
+      decisionReason: "estimated cost exceeds the configured CI budget ceiling",
+    });
+    const checkRunLine = (record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name: "pr-hero/ci-admission",
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: {
+            stdout: JSON.stringify([
+              { headSha: HEAD_A, conclusion: "success" },
+              { headSha: HEAD_B, conclusion: "success" },
+            ]),
+          },
+        },
+        {
+          // Listed before the plain entry below, which also matches this URL.
+          match: [`commits/${HEAD_A}/check-runs`, "filter=all"],
+          response: {
+            stdout: checkRunLine(completed) + checkRunLine(gateSkipped),
+          },
+        },
+        {
+          match: [`commits/${HEAD_A}/check-runs`],
+          response: { stdout: checkRunLine(gateSkipped) },
+        },
+        {
+          match: [`commits/${HEAD_B}/check-runs`],
+          response: { stdout: checkRunLine(admissionCheckRunRecord()) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: `${JSON.stringify(summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1))}\n`,
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const recordCalls: { reason: string }[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/gate-skip",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_C,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions({ head: HEAD_C }),
+          spawnFn,
+          recordSkip: async (recorded) => {
+            recordCalls.push({ reason: recorded.reason });
+          },
+        }),
+    );
+
+    // HEAD_A and HEAD_B both spent an attempt, so maxAttempts (2) is exhausted
+    // and the gate records a manual-required skip. A dropped HEAD_A would leave
+    // one attempt and let the run through.
+    expect(recordCalls).toHaveLength(1);
+    expect(recordCalls[0]?.reason).toBe(
+      "automatic review budget exhausted (2/2 attempts on this PR).",
+    );
+    expect(result.exitCode).toBe(0);
+
+    const checkRunReads = (head: string) =>
+      calls
+        .map((argv) => argv.join(" "))
+        .filter((line) => line.includes(`commits/${head}/check-runs`));
+    // The per-head reads ask for history. HEAD_C is not a workflow head in this
+    // test, so its only read is the latest-only ledgerRecords read, which must
+    // not ask for history. The history read for a current head that IS a
+    // workflow head is asserted in the next test.
+    expect(checkRunReads(HEAD_A)).toHaveLength(1);
+    expect(checkRunReads(HEAD_A)[0]).toContain("filter=all");
+    expect(checkRunReads(HEAD_B)).toHaveLength(1);
+    expect(checkRunReads(HEAD_B)[0]).toContain("filter=all");
+    expect(checkRunReads(HEAD_C)).toHaveLength(1);
+    expect(checkRunReads(HEAD_C)[0]).not.toContain("filter=all");
+  });
+
+  // The current head can be a workflow head too (a prior concluded run on this
+  // same head). Its newest row alone is gate-skipped, which looks unspent, but
+  // its history holds a failed attempt that spent. The head must stay counted:
+  // dropping it would admit a review past the budget. The count map must read
+  // that history; ledgerRecords stays latest-only for its other readers.
+  test("keeps the current head when its latest row is gate-skipped but its history has a failed attempt", async () => {
+    const failed = admissionCheckRunRecord({
+      headSha: HEAD_C,
+      reservationId: "reservation-c-failed",
+      status: "failed",
+      attemptNumber: 1,
+    });
+    const gateSkipped = admissionCheckRunRecord({
+      headSha: HEAD_C,
+      reservationId: "reservation-c-gate-skip",
+      status: "gate-skipped",
+      attemptNumber: 2,
+      decisionReason: "estimated cost exceeds the configured CI budget ceiling",
+    });
+    const checkRunLine = (record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name: "pr-hero/ci-admission",
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: {
+            stdout: JSON.stringify([
+              { headSha: HEAD_B, conclusion: "success" },
+              { headSha: HEAD_C, conclusion: "success" },
+            ]),
+          },
+        },
+        {
+          // Listed before the plain entry below, which also matches this URL.
+          match: [`commits/${HEAD_C}/check-runs`, "filter=all"],
+          response: {
+            stdout: checkRunLine(failed) + checkRunLine(gateSkipped),
+          },
+        },
+        {
+          match: [`commits/${HEAD_C}/check-runs`],
+          response: { stdout: checkRunLine(gateSkipped) },
+        },
+        {
+          match: [`commits/${HEAD_B}/check-runs`],
+          response: { stdout: checkRunLine(admissionCheckRunRecord()) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: `${JSON.stringify(summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1))}\n`,
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const recordCalls: { reason: string }[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/gate-skip",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_C,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions({ head: HEAD_C }),
+          spawnFn,
+          recordSkip: async (recorded) => {
+            recordCalls.push({ reason: recorded.reason });
+          },
+        }),
+    );
+
+    // HEAD_B (completed) and HEAD_C (failed, then gate-skipped) both spent, so
+    // maxAttempts (2) is exhausted and the gate records a manual-required skip.
+    // A dropped HEAD_C would leave one attempt and admit the review.
+    expect(recordCalls).toHaveLength(1);
+    expect(recordCalls[0]?.reason).toBe(
+      "automatic review budget exhausted (2/2 attempts on this PR).",
+    );
+    expect(result.exitCode).toBe(0);
+
+    const checkRunReads = (head: string) =>
+      calls
+        .map((argv) => argv.join(" "))
+        .filter((line) => line.includes(`commits/${head}/check-runs`));
+    // HEAD_C is read twice: the history read for the workflow-head count, and
+    // the latest-only read that ledgerRecords (reservation and terminal
+    // counting) still uses.
+    const headCReads = checkRunReads(HEAD_C);
+    expect(headCReads).toHaveLength(2);
+    expect(
+      headCReads.filter((line) => line.includes("filter=all")),
+    ).toHaveLength(1);
+    expect(
+      headCReads.filter((line) => !line.includes("filter=all")),
+    ).toHaveLength(1);
+  });
+});
+
+// #326: the SIZE gate and the BUDGET gate settle through settleCiGateSkip. The
+// row must say `gate-skipped`, not `skipped`: an admission skip keeps counting,
+// and a gate skip spent nothing.
+describe("settleCiGateSkip — a size or budget skip settles as gate-skipped (#326)", () => {
+  const GATE_REASON = "diff exceeds the configured size gate";
+
+  test("a reserved record takes the gate-skipped status and reason, and the check run carries it", async () => {
+    const state = gateLedgerState("reserved");
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await settleCiGateSkip(state, GATE_REASON, { spawnFn });
+
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(GATE_REASON);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toContain("output[summary]=gate-skipped (attempt 1)");
+  });
+
+  test("a null ledger (outside CI) is a no-op", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh([], calls);
+
+    await settleCiGateSkip(null, GATE_REASON, { spawnFn });
+
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("settleCiAdmissionLedger — a gate-skipped record is terminal (#326)", () => {
+  test("keeps its status and reason, and nothing is sent to GitHub", async () => {
+    const state = gateLedgerState("gate-skipped");
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await settleCiAdmissionLedger(state, "failed", "settled after the skip", {
+      spawnFn,
+    });
+
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(
+      "reason recorded before settlement",
+    );
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("upsertAdmissionCheckRun — a gate-skipped check run (#326)", () => {
+  test("concludes skipped, so GitHub renders it grey as the old skip did", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await upsertAdmissionCheckRun(
+      "/repo",
+      { headSha: HEAD_A, record: gateLedgerState("gate-skipped").record },
+      { spawnFn },
+    );
+
+    expect(calls[0]).toContain("conclusion=skipped");
+  });
+});
+
+function gateLedgerState(
+  status: AdmissionRecord["status"],
+): CiAdmissionLedgerState {
+  return {
+    record: admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-gate-skip",
+      status,
+      decisionReason: "reason recorded before settlement",
+    }),
+    checkRunId: 11,
+    headSha: HEAD_A,
+    operatorRoot: "/repo",
+  };
+}
+
 describe("yieldToInFlightReview", () => {
   // musive #1935's shape: another review set its pending status 47s before
   // this run looked. Well inside the 90-minute in-flight TTL.
