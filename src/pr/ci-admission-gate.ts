@@ -26,6 +26,7 @@ import {
   ciReviewManualRequiredDetail,
   ciReviewPolicyHash,
   ciReviewSkipDetail,
+  countableWorkflowHeads,
   deltaTouchesPriorFindings,
   evaluateCiReviewAdmission,
   formatCiAdmissionObserveNotice,
@@ -169,9 +170,30 @@ export async function evaluateCiAdmissionGate(input: {
         : await ghPrHeroWorkflowRunHeads(operatorRoot, headBranch, {
             spawnFn,
           });
+    // #326: a run concluded `success` even when the gate skipped it (a skip
+    // exits 0), so the run list alone over-counts. Each other head's ledger
+    // rows say whether it spent. One read per distinct head: `gh run list`
+    // returns at most 20 runs by default, so that is at most 20 extra reads per
+    // gate evaluation. The current head reuses ledgerRecords. Each read fails
+    // open to [], which keeps that head counted (the pre-fix behavior), so a
+    // failed read can only over-count, never under-count.
+    const ledgerByHead = new Map<string, readonly AdmissionRecord[]>([
+      [headSha, ledgerRecords],
+    ]);
+    await Promise.all(
+      [...workflowHeads]
+        .filter((head) => head !== headSha)
+        .map(async (head) => {
+          ledgerByHead.set(
+            head,
+            await listAdmissionCheckRuns(operatorRoot, head, { spawnFn }),
+          );
+        }),
+    );
+    const countedHeads = countableWorkflowHeads(workflowHeads, ledgerByHead);
     const reviewCount = resolveCiAdmissionAttemptCount({
       stateCount,
-      workflowHeads,
+      workflowHeads: countedHeads,
       ledgerRecords,
     });
     let deltaTouchesPriorFindingsFlag = false;

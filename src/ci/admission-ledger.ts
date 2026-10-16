@@ -20,6 +20,11 @@ export type AdmissionAttemptStatus =
   | "failed"
   | "cancelled"
   | "yielded"
+  // #326: a size or budget gate skip. Terminal, and it spends nothing (see
+  // TERMINAL_BUDGET_STATUSES). An older engine reads it as an unknown string
+  // status, which is neither budget-counting nor active: the same answer as
+  // `"yielded"` above, so no schema bump either.
+  | "gate-skipped"
   | "unknown";
 
 export interface AdmissionRecord {
@@ -51,6 +56,11 @@ export interface AdmissionRecord {
 // counted where it records itself (its own ledger row in CI, or the summary
 // comment's state block for a local review). Counting the yield as well
 // would charge the PR twice for one review and exhaust the budget early.
+// #326: a SIZE or BUDGET gate skip stands down the same way, so it settles as
+// `"gate-skipped"`, and that stays out too. It used to settle as `"skipped"`,
+// which is in this set (admission skips keep it on purpose), so every gate
+// skip spent an attempt. The workflow-heads leg then counted that head a second
+// time, and a PR with one review run reported "2/2 attempts" (#326).
 const TERMINAL_BUDGET_STATUSES: ReadonlySet<AdmissionAttemptStatus> = new Set([
   "completed",
   "failed",

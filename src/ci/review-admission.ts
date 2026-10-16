@@ -194,6 +194,35 @@ export function resolveReviewAttemptCount(input: {
   return Math.max(input.stateCount, input.workflowHeads.size);
 }
 
+// #326: a workflow head counts toward the attempt budget only when its
+// pr-hero run could have spent. The run list cannot tell them apart, because a
+// gate skip exits 0 and concludes `success`. So each head's ledger rows decide:
+// a head whose rows are all non-spending (gate-skipped, cancelled, yielded, or a
+// reservation that never reached the provider) spent nothing and is dropped. A
+// head with no ledger row at all stays counted, because it is a run older than
+// the ledger and the run list is the only evidence it spent. An unreadable
+// ledger reads as no rows (listAdmissionCheckRuns fails open to []), which
+// keeps the head counted, the pre-fix behavior. So a failed read can only
+// over-count and refuse a review early; it never admits one the budget would
+// have refused.
+export function countableWorkflowHeads(
+  workflowHeads: ReadonlySet<string>,
+  ledgerByHead: ReadonlyMap<string, readonly AdmissionRecord[]>,
+): Set<string> {
+  const countable = new Set<string>();
+  for (const head of workflowHeads) {
+    const rows = ledgerByHead.get(head);
+    if (
+      rows === undefined ||
+      rows.length === 0 ||
+      countTerminalAttempts(rows) > 0
+    ) {
+      countable.add(head);
+    }
+  }
+  return countable;
+}
+
 // Authoritative attempt count for admission: summary counter, workflow heads,
 // and durable ledger terminal rows — whichever is highest.
 export function resolveCiAdmissionAttemptCount(input: {

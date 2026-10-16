@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { AdmissionRecord } from "#ci/admission-ledger";
 import {
   CI_REVIEW_POLICY_SCHEMA_VERSION,
   type CiReviewAdmissionInput,
@@ -6,6 +7,7 @@ import {
   canonicalAdmissionFindings,
   ciReviewPolicyHash,
   ciReviewSkipDetail,
+  countableWorkflowHeads,
   DEFAULT_CI_ADVISORY_WEIGHT,
   DEFAULT_CI_BLOCKING_WEIGHT,
   DEFAULT_CI_MAX_ATTEMPTS,
@@ -820,6 +822,81 @@ describe("resolveReviewAttemptCount", () => {
         workflowHeads: new Set([HEAD_A, HEAD_B]),
       }),
     ).toBe(2);
+  });
+});
+
+function ledgerRow(
+  headSha: string,
+  status: AdmissionRecord["status"],
+): AdmissionRecord {
+  return {
+    schemaVersion: 1,
+    prNumber: 326,
+    headSha,
+    policyHash: "abc123def4567890",
+    reservationId: "0123456789abcdef",
+    attemptNumber: 1,
+    status,
+    decisionReason: "",
+    priorScore: null,
+    blockingCount: null,
+    advisoryCount: null,
+    workflowRunId: null,
+    createdAt: "2026-10-16T12:00:00.000Z",
+    settledAt: null,
+  };
+}
+
+// #326: a head whose pr-hero run concluded success only because the gate
+// skipped it spent nothing, so it must not count as a review attempt. A
+// head with no ledger row at all (a run older than the ledger) still counts.
+describe("countableWorkflowHeads", () => {
+  test("drops a head whose only ledger row is a gate skip (#326)", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [ledgerRow(HEAD_A, "gate-skipped")]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(false);
+  });
+
+  test.each(["cancelled", "yielded", "reserved"] as const)(
+    "drops a head whose only ledger row is %s (spent nothing, like the gate skip)",
+    (status) => {
+      const countable = countableWorkflowHeads(
+        new Set([HEAD_A]),
+        new Map([[HEAD_A, [ledgerRow(HEAD_A, status)]]]),
+      );
+      expect(countable.has(HEAD_A)).toBe(false);
+    },
+  );
+
+  test("keeps a head that has no ledger row at all", () => {
+    const countable = countableWorkflowHeads(new Set([HEAD_B]), new Map());
+    expect(countable.has(HEAD_B)).toBe(true);
+  });
+
+  test.each(["completed", "failed", "provider-started", "skipped"] as const)(
+    "keeps a head with a %s row",
+    (status) => {
+      const countable = countableWorkflowHeads(
+        new Set([HEAD_B]),
+        new Map([[HEAD_B, [ledgerRow(HEAD_B, status)]]]),
+      );
+      expect(countable.has(HEAD_B)).toBe(true);
+    },
+  );
+
+  test("keeps a gate-skipped head that also has a completed row", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([
+        [
+          HEAD_A,
+          [ledgerRow(HEAD_A, "gate-skipped"), ledgerRow(HEAD_A, "completed")],
+        ],
+      ]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
   });
 });
 

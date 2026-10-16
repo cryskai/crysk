@@ -2115,6 +2115,10 @@ function admissionCheckRunConclusion(
     // than red on the PR (musive #1935 showed a red check for exactly this).
     case "yielded":
       return "skipped";
+    // #326: a size or budget gate skip. It was `skipped` (grey) before the
+    // status split, so it stays grey; `neutral` would change how the PR reads.
+    case "gate-skipped":
+      return "skipped";
     default:
       return "neutral";
   }

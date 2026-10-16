@@ -30,12 +30,16 @@ import {
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
 import { renderCiAdmissionBlock } from "#ci/review-admission";
-import type { CiAdmissionLedgerState } from "#pr/admission";
+import {
+  type CiAdmissionLedgerState,
+  settleCiAdmissionLedger,
+  settleCiGateSkip,
+} from "#pr/admission";
 import {
   evaluateCiAdmissionGate,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
-import { CommentsTruncatedError } from "#pr/pr";
+import { CommentsTruncatedError, upsertAdmissionCheckRun } from "#pr/pr";
 import { COMMIT_STATUS_CONTEXT, PR_COMMENT_MARKER_PREFIX } from "#pr/preflight";
 import {
   type CliOptions,
@@ -492,6 +496,182 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
 // and the check-run upsert inside the real settleCiAdmissionLedger) go
 // through one fake, so the observables are the exit code, the ledger record,
 // the check-run request GitHub would receive, and the stderr line.
+// #326, end to end through the gate: the PR's first head was budget-skipped
+// (its run concluded success, spent nothing), the second was reviewed, and a
+// third head arrives. The gate must admit the third head, and it must read
+// each other head's ledger exactly once (the bounded-I/O half of the fix).
+describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an attempt (#326)", () => {
+  const HEAD_C = "c".repeat(40);
+
+  test("the gate admits the new head and reads each other workflow head's ledger once", async () => {
+    const gateSkipped = admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-gate-skip",
+      status: "gate-skipped",
+      decisionReason: "estimated cost exceeds the configured CI budget ceiling",
+    });
+    const checkRunLine = (record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name: "pr-hero/ci-admission",
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: {
+            stdout: JSON.stringify([
+              { headSha: HEAD_A, conclusion: "success" },
+              { headSha: HEAD_B, conclusion: "success" },
+            ]),
+          },
+        },
+        {
+          match: [`commits/${HEAD_A}/check-runs`],
+          response: { stdout: checkRunLine(gateSkipped) },
+        },
+        {
+          match: [`commits/${HEAD_B}/check-runs`],
+          response: { stdout: checkRunLine(admissionCheckRunRecord()) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: `${JSON.stringify(summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1))}\n`,
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const recordCalls: unknown[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/gate-skip",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_C,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions({ head: HEAD_C }),
+          spawnFn,
+          recordSkip: async (recorded) => {
+            recordCalls.push(recorded);
+          },
+        }),
+    );
+
+    expect(result.exitCode).toBeUndefined();
+    expect(recordCalls).toEqual([]);
+    const readsOf = (head: string) =>
+      calls.filter((argv) =>
+        argv.join(" ").includes(`commits/${head}/check-runs`),
+      ).length;
+    expect(readsOf(HEAD_A)).toBe(1);
+    expect(readsOf(HEAD_B)).toBe(1);
+    expect(readsOf(HEAD_C)).toBe(1);
+  });
+});
+
+// #326: the SIZE gate and the BUDGET gate settle through settleCiGateSkip. The
+// row must say `gate-skipped`, not `skipped`: an admission skip keeps counting,
+// and a gate skip spent nothing.
+describe("settleCiGateSkip — a size or budget skip settles as gate-skipped (#326)", () => {
+  const GATE_REASON = "diff exceeds the configured size gate";
+
+  test("a reserved record takes the gate-skipped status and reason, and the check run carries it", async () => {
+    const state = gateLedgerState("reserved");
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await settleCiGateSkip(state, GATE_REASON, { spawnFn });
+
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(GATE_REASON);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toContain("output[summary]=gate-skipped (attempt 1)");
+  });
+
+  test("a null ledger (outside CI) is a no-op", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh([], calls);
+
+    await settleCiGateSkip(null, GATE_REASON, { spawnFn });
+
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("settleCiAdmissionLedger — a gate-skipped record is terminal (#326)", () => {
+  test("keeps its status and reason, and nothing is sent to GitHub", async () => {
+    const state = gateLedgerState("gate-skipped");
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await settleCiAdmissionLedger(state, "failed", "settled after the skip", {
+      spawnFn,
+    });
+
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(
+      "reason recorded before settlement",
+    );
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("upsertAdmissionCheckRun — a gate-skipped check run (#326)", () => {
+  test("concludes skipped, so GitHub renders it grey as the old skip did", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await upsertAdmissionCheckRun(
+      "/repo",
+      { headSha: HEAD_A, record: gateLedgerState("gate-skipped").record },
+      { spawnFn },
+    );
+
+    expect(calls[0]).toContain("conclusion=skipped");
+  });
+});
+
+function gateLedgerState(
+  status: AdmissionRecord["status"],
+): CiAdmissionLedgerState {
+  return {
+    record: admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-gate-skip",
+      status,
+      decisionReason: "reason recorded before settlement",
+    }),
+    checkRunId: 11,
+    headSha: HEAD_A,
+    operatorRoot: "/repo",
+  };
+}
+
 describe("yieldToInFlightReview", () => {
   // musive #1935's shape: another review set its pending status 47s before
   // this run looked. Well inside the 90-minute in-flight TTL.
