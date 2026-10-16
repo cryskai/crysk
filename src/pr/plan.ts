@@ -285,8 +285,13 @@ export async function resolvePrPlanAndConfirm(params: {
   // pending status on that head and posts the error status (unless the head's newest
   // pr-hero status already settled), which is right, because the run died. If the CLI
   // completes, its terminal record overwrites `reviewing`.
+  // WHY the start is read here, before the record and the POST: the POST can take two
+  // attempts of 15 s, and an override posted while it is in flight was posted during this
+  // run. Stamping after the POST would class that override as before the run and overwrite
+  // it (the override rule, src/ci/override.ts).
+  const runStartedMs = Date.now();
   recordReviewing(params.headSha);
-  await tryPublishCommitStatus(
+  const pendingLanded = await tryPublishCommitStatus(
     params.operatorRoot,
     params.headSha,
     commitStatusRequest({
@@ -300,13 +305,19 @@ export async function resolvePrPlanAndConfirm(params: {
   // the finally below on the normal path, and the signal handlers in runCli
   // on the cancelled one. Held even if the publish above failed — a settle
   // for a status that was never posted is a harmless no-op write, whereas
-  // skipping the hold on a publish that actually landed is the #162 bug.
-  holdCommitStatusLock({
-    operatorRoot: params.operatorRoot,
-    sha: params.headSha,
-    targetUrl: statusTargetUrl,
-    context: params.statusContext,
-  });
+  // skipping the hold on a publish that actually landed is the #162 bug. Whether the
+  // pending landed is passed too: only a landed pending vouches for runStartedMs in the
+  // override check (teardown.ts).
+  holdCommitStatusLock(
+    {
+      operatorRoot: params.operatorRoot,
+      sha: params.headSha,
+      targetUrl: statusTargetUrl,
+      context: params.statusContext,
+    },
+    runStartedMs,
+    pendingLanded,
+  );
 
   return {
     exitCode: undefined,

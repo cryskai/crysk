@@ -240,8 +240,8 @@ Flags worth knowing: `--dry-run` (plan + cost band, creates nothing), `--yes`, `
 `--scout` / `--no-scout` (toggle pre-hunt reconnaissance scout),
 `--post` / `--no-post` (toggle PR comment publishing),
 `--force` (local only: review this diff even when the size gate would skip it;
-in GitHub Actions the same override is a `/pr-hero review` comment on the pull request,
-which runs on the Actions runner),
+in GitHub Actions the same forced re-review is a `/pr-hero review` comment on the pull request,
+which runs on the Actions runner; `/pr-hero override` instead unlocks a red gate with no review),
 `--full` (run un-capped refuter verification steps),
 `--no-summary` (skip the summarizer; see `summary` in config above),
 `--out <dir>` (run dir for `review`), `--runs <dir>` (ledger's runs root),
@@ -472,7 +472,8 @@ only ever over-count, never under-count.
 ```bash
 pr-hero review --pr 42 --dry-run          # prints the gate verdict, spends nothing
 pr-hero review --pr 42 --force            # local: review it anyway (does NOT skip the cost prompt)
-gh pr comment 42 --body "/pr-hero review"  # CI: same override, on the Actions runner
+gh pr comment 42 --body "/pr-hero review"  # CI: same forced re-review, on the Actions runner
+gh pr comment 42 --body "/pr-hero override"  # CI: unlock a red gate on this head, no review, $0
 pr-hero review --pr 42 --max-changed-lines 0   # 0 disables that limit entirely
 pr-hero watch add --max-changed-lines 800       # per-repo threshold for the watcher
 ```

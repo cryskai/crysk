@@ -405,6 +405,12 @@ function escapeRules(source: string): string[] {
   ].map((match) => `${match[1] ?? ""} -> ${match[2] ?? ""}`);
 }
 
+// The regex literal a module declares for a constant, as written. Both copies of the
+// login pattern are compared as text: neither module may import the other at runtime.
+function loginPatternLiteral(source: string, name: string): string | undefined {
+  return source.match(new RegExp(`^const ${name} = (\\/.+\\/);$`, "m"))?.[1];
+}
+
 describe("codeOf and ownerOf: every class variant", () => {
   test("every sample maps to its expected code", () => {
     for (const sample of SAMPLES) {
@@ -823,6 +829,21 @@ describe("renderCode and renderError: the annotation", () => {
     const theirs = escapeRules(readFileSync(TRIGGER_SRC, "utf8"));
     expect(theirs).toHaveLength(3);
     expect(ours).toEqual(theirs);
+  });
+
+  test("the override login pattern is the one src/ci/trigger.ts uses (drift guard on source text)", () => {
+    const ours = loginPatternLiteral(
+      readFileSync(OUTCOME_SRC, "utf8"),
+      "LOGIN_PATTERN",
+    );
+    const theirs = loginPatternLiteral(
+      readFileSync(TRIGGER_SRC, "utf8"),
+      "GITHUB_LOGIN",
+    );
+    expect(theirs, "trigger.ts declares GITHUB_LOGIN").toBeDefined();
+    expect(ours, "outcome.ts declares LOGIN_PATTERN").toBeDefined();
+    expect(ours).toBe(theirs);
+    expect(ours).toContain("{0,90}");
   });
 
   test("the cancelled code renders as a notice under the Not reviewed lead, and its summary says so", () => {
@@ -1573,6 +1594,70 @@ describe("parseTriggerRecord — the trigger.json contract", () => {
   });
 });
 
+// T6 (S8): an override record names WHO unlocked the gate. The reader refuses an
+// override without a valid actor or without its PR, and refuses an actor on any
+// other decision, because the writer produces neither.
+describe("parseTriggerRecord — the override record (S8)", () => {
+  const SHA = "d".repeat(40);
+  const override: TriggerRecord = {
+    v: 1,
+    decision: "override",
+    params: {},
+    pr: 7,
+    head_sha: SHA,
+    actor: "maintainer",
+    repository: "acme/widgets",
+    run_id: "4242",
+    run_attempt: 1,
+    run_url: "https://github.com/acme/widgets/actions/runs/4242",
+  };
+  const text = (value: unknown) => JSON.stringify(value);
+
+  test("an override carries its actor through", () => {
+    expect(parseTriggerRecord(text(override))).toEqual(override);
+  });
+
+  // An Enterprise Managed User login (`handle_shortcode`) parses, up to the same 91
+  // characters the trigger accepts, so the publisher can post what the trigger allowed.
+  test.each([
+    ["an underscore login", "octo_corp"],
+    ["a 91-character login, the bound", "a".repeat(91)],
+    ["a bot login of 91 characters in all", `${"a".repeat(86)}[bot]`],
+  ])("an override with %s parses and keeps its actor", (_label, actor) => {
+    expect(parseTriggerRecord(text({ ...override, actor }))).toEqual({
+      ...override,
+      actor,
+    });
+  });
+
+  test("an override with no head still parses, because the comment posts without a status", () => {
+    const { head_sha: _headSha, ...headless } = override;
+    expect(parseTriggerRecord(text(headless))?.decision).toBe("override");
+  });
+
+  test.each([
+    ["no actor", { actor: undefined }],
+    ["an empty actor", { actor: "" }],
+    ["a newline in the actor", { actor: "evil\n::warning::x" }],
+    ["an actor that is not a string", { actor: 7 }],
+    ["a 92-character actor", { actor: "a".repeat(92) }],
+    ["a 96-character bot actor", { actor: `${"a".repeat(91)}[bot]` }],
+    ["no PR", { pr: undefined }],
+  ])("an override with %s is refused", (_label, change) => {
+    expect(
+      parseTriggerRecord(text({ ...override, ...change })),
+    ).toBeUndefined();
+  });
+
+  test("an actor on a review, or on any other decision, is refused", () => {
+    for (const decision of ["review", "denied", "unverifiable"]) {
+      expect(
+        parseTriggerRecord(text({ ...override, decision })),
+      ).toBeUndefined();
+    }
+  });
+});
+
 describe("parseCliRecord — the cli.json contract", () => {
   const SHA = "c".repeat(40);
   const text = (value: unknown) => JSON.stringify(value);
@@ -1909,4 +1994,54 @@ describe("parseCliRecord — the unsettled_status field", () => {
       ).toBeUndefined();
     },
   );
+});
+
+// Fix 4: the override cutoff on a reviewed record, read by the publisher to tell an override
+// posted during the run from one posted before it. Optional, so a record without it parses.
+describe("parseCliRecord — the override_cutoff_ms field", () => {
+  const SHA = "c".repeat(40);
+  const text = (value: unknown) => JSON.stringify(value);
+  const REVIEWED: CliRecord = {
+    v: 1,
+    outcome: "reviewed",
+    head_sha: SHA,
+    unsettled_status: { state: "success", description: "review complete" },
+  };
+
+  test("a reviewed record with a positive integer override_cutoff_ms parses with it", () => {
+    const value: CliRecord = {
+      ...REVIEWED,
+      override_cutoff_ms: 1_792_238_395_000,
+    };
+    expect(parseCliRecord(text(value))).toEqual(value);
+  });
+
+  test("a reviewed record without override_cutoff_ms still parses unchanged", () => {
+    expect(parseCliRecord(text(REVIEWED))).toEqual(REVIEWED);
+  });
+
+  test.each([
+    ["zero", 0],
+    ["a negative number", -5],
+    ["a fraction", 1.5],
+    ["a string", "1792238400000"],
+    ["null", null],
+    ["an integer beyond the safe range", 1e20],
+  ])("refuses override_cutoff_ms of %s", (_label, value) => {
+    expect(
+      parseCliRecord(text({ ...REVIEWED, override_cutoff_ms: value })),
+    ).toBeUndefined();
+  });
+
+  test("refuses the field on a record that did not deliver a review", () => {
+    expect(
+      parseCliRecord(
+        text({
+          v: 1,
+          outcome: "yielded",
+          override_cutoff_ms: 1_792_238_400_000,
+        }),
+      ),
+    ).toBeUndefined();
+  });
 });

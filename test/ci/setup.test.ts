@@ -86,7 +86,9 @@ const own = () => generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
 // The exact job-level group and cancel rule. Spelled out in full because
 // every clause is load-bearing; see the template's own comments for why.
 const WRITER_ASSOCIATION = `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)`;
-const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION})) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
+// T6 (S8): the group also admits `/pr-hero override` from the same associations, so
+// an override queues behind an in-flight review and lands last.
+const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
 const PUSH_ONLY_CANCEL = `\${{ github.event_name == 'pull_request' }}`;
 
 describe("generateCiWorkflowTemplate (pure)", () => {
@@ -123,13 +125,14 @@ describe("generateCiWorkflowTemplate (pure)", () => {
   // so credential presence is the action's to detect, loudly, inside the
   // run. The `if` only routes events. Fork pull_request runs never receive
   // secrets, so they are skipped here; a maintainer's comment reviews them.
-  test("the review job skips fork pushes, starts only on a `/pr-hero review` comment, and never reads secrets", () => {
+  test("the review job skips fork pushes, starts only on a `/pr-hero review` or `/pr-hero override` comment, and never reads secrets", () => {
     const reviewIf = String(
       parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
     );
     expect(reviewIf).toBe(
       "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || " +
-        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review'))",
+        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) || " +
+        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))",
     );
     expect(reviewIf).not.toContain("secrets.");
   });
@@ -172,12 +175,52 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     );
   });
 
+  // S8: an override from an author GitHub does not associate with the repository
+  // gets its own group, exactly as a review does, so it cannot replace a
+  // maintainer's queued review.
+  test("an override comment joins the pull request's group only from an OWNER, MEMBER or COLLABORATOR", () => {
+    const group = String(
+      (
+        parseWorkflow(scaffolded()).jobs.review?.concurrency as
+          | { group?: unknown }
+          | undefined
+      )?.group ?? "",
+    );
+    expect(group).toContain(
+      `(startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})`,
+    );
+  });
+
   test("the docs' workflow snippet carries the generator's exact concurrency group", () => {
     const docs = readFileSync(
       path.resolve(import.meta.dir, "../../docs/github-actions.md"),
       "utf-8",
     );
     expect(docs).toContain(`\n      group: ${REVIEW_CONCURRENCY_GROUP}\n`);
+  });
+
+  // A copy-pasted docs workflow must admit the same comments the generator does. The
+  // job `if:` is compared as parsed YAML, so the folded scalar's layout cannot hide a
+  // missing `/pr-hero override` clause.
+  test("the docs' workflow snippet admits the same comments as the generator's job", () => {
+    const docs = readFileSync(
+      path.resolve(import.meta.dir, "../../docs/github-actions.md"),
+      "utf-8",
+    );
+    const workflowSection = docs.slice(
+      docs.indexOf("## What the workflow does"),
+    );
+    const snippet = /```yaml\n([\s\S]*?)\n```/.exec(workflowSection)?.[1] ?? "";
+    expect(snippet).toContain("name: pr-hero Review");
+    const generatedIf = String(
+      parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
+    );
+    expect(generatedIf).toContain(
+      "startsWith(github.event.comment.body, '/pr-hero override')",
+    );
+    expect(String(parseWorkflow(snippet).jobs.review?.if ?? "")).toBe(
+      generatedIf,
+    );
   });
 
   test("there is exactly one job, so its bound is the whole workflow's bound", () => {

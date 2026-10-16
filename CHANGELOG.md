@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the review itself failed before delivery, a failed final status write is logged and never replaces that failure.
   When a delivered review's final status write fails, including when a step after the delivery failed, the publisher
   step of the same job posts that status once more, so the required check does not stay pending; the job still fails.
+  `/pr-hero override` unlocks a red gate for the head it names, and is refused on a pull request from a fork. When the
+  override's status is written, it also removes earlier outcome comments from the pull request, as a completed review
+  does, and keeps every override record.
 
 ### Fixed
 - **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left
@@ -26,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count only when the re-review verifies it gone or its files were deleted. Known gap: a blocking finding first
   raised by a re-review, rather than by the first review, is not yet carried to the reviews after it. An advisory
   finding from this run never clears a blocking one at the same spot.
+- **An override holds against every verdict write of the review (`success` or `failure`)**: the check covers a body that
+  failed after delivery, and the publisher step's repost of a status the CLI could not write. An `error` write, such as a
+  review whose hunters all failed, is not a verdict and may replace the override. The run's start is stamped before its
+  pending status is posted, with a 5-second clock-skew allowance, so an override posted while that post was slow stands;
+  when that pending did not land, the allowance is dropped. The CLI's head-status read asks for 100 contexts per page, as
+  the publisher's does, so a busy head's `pr-hero` row is not missed. A failed head lookup for `/pr-hero override` gets its
+  own refusal notice, apart from the notice for a proven fork.
 
 ## [0.2.3] - 2026-10-16
 

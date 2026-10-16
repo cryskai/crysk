@@ -123,20 +123,39 @@ export function recordReviewDelivered(
 // or hunters-failed record keeps its own outcome, and a head that is not a SHA writes nothing.
 // It never throws, like the other writers.
 //
+// The override cutoff rides on the same record (override_cutoff_ms), when the caller has one: the
+// CLI computes it once for the run (overrideCutoffMs, src/ci/override.ts), and the publisher
+// compares an override with it before it reposts, without re-deriving it. A cutoff that is not a
+// positive safe integer is left out, since the reader would refuse the record.
+//
 // WHY the earlier record is read here: the writer must know the outcome it would overwrite,
 // and the write above has no such check of its own.
 export function recordUnsettledStatus(
   headSha: string,
   status: UnsettledStatus,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  overrideCutoffMs?: number | null,
 ): void {
   const dir = env.PRHERO_OUTCOME_DIR ?? "";
   if (dir === "") return;
   const head = cliHeadField(headSha);
   if (head.head_sha === undefined) return;
   if (readEarlierRecord(dir)?.outcome !== "reviewed") return;
+  const cutoff =
+    overrideCutoffMs !== undefined &&
+    overrideCutoffMs !== null &&
+    Number.isSafeInteger(overrideCutoffMs) &&
+    overrideCutoffMs > 0
+      ? { override_cutoff_ms: overrideCutoffMs }
+      : {};
   writeCliRecord(
-    { v: 1, outcome: "reviewed", ...head, unsettled_status: status },
+    {
+      v: 1,
+      outcome: "reviewed",
+      ...head,
+      unsettled_status: status,
+      ...cutoff,
+    },
     env,
   );
 }

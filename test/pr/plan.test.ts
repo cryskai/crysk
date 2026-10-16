@@ -47,11 +47,40 @@ describe("resolvePrPlanAndConfirm records its progress on the head it posted", (
   test("the progress record precedes the pending post, the hold, and the success return", () => {
     const record = body.search(/recordReviewing\(/);
     const post = body.search(/await tryPublishCommitStatus\(/);
-    const hold = body.search(/holdCommitStatusLock\(\{/);
+    const hold = body.search(/holdCommitStatusLock\(\s*\{/);
     const successReturn = body.lastIndexOf("return {");
     expect(record).toBeGreaterThan(-1);
     expect(post).toBeGreaterThan(record);
     expect(hold).toBeGreaterThan(post);
     expect(successReturn).toBeGreaterThan(hold);
+  });
+
+  // Fix 1 on the override rule: the run's start is taken before the pending POST, which
+  // can take two 15 s attempts. The hold is stamped with that start, not with the time
+  // the POST returned, so an override posted while the POST was slow counts as posted
+  // during the run.
+  test("the run's start is captured before the pending post, and the hold is stamped with it", () => {
+    const start = body.search(/const runStartedMs = Date\.now\(\)/);
+    const post = body.search(/await tryPublishCommitStatus\(/);
+    expect(start).toBeGreaterThan(-1);
+    expect(post).toBeGreaterThan(start);
+    expect(body).toMatch(
+      /holdCommitStatusLock\(\s*\{[\s\S]*?\},\s*runStartedMs(?:,\s*pendingLanded)?,?\s*\);/,
+    );
+  });
+
+  // Fix 3 on the override rule: the hold records whether this run's own pending status
+  // landed, taken from the post's own result. teardown.ts drops the clock-skew allowance
+  // when it did not, because a pending that never landed cannot vouch for the run's start.
+  test("the hold carries whether the pending post landed, taken from that post's result", () => {
+    const landed = body.search(
+      /const pendingLanded = await tryPublishCommitStatus\(/,
+    );
+    const hold = body.search(/holdCommitStatusLock\(\s*\{/);
+    expect(landed).toBeGreaterThan(-1);
+    expect(hold).toBeGreaterThan(landed);
+    expect(body).toMatch(
+      /holdCommitStatusLock\(\s*\{[\s\S]*?\},\s*runStartedMs,\s*pendingLanded,?\s*\);/,
+    );
   });
 });

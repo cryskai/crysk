@@ -160,11 +160,20 @@ export interface RenderedError {
 // It carries the decision, never a secret, a comment body or gh's own text.
 export interface TriggerRecord {
   v: 1;
-  decision: "review" | "ignore" | "denied" | "unverifiable" | "no-credentials";
+  decision:
+    | "review"
+    | "ignore"
+    | "denied"
+    | "unverifiable"
+    | "no-credentials"
+    | "override";
   cls?: ErrorClass;
   params: ErrorParams;
   pr?: number;
   head_sha?: string;
+  // Only for an override: the login that unlocked the gate (odd/tasks/agent-first-ci.md,
+  // S8). The override must name who acted, so an override without one is refused.
+  actor?: string;
   repository: string;
   run_id: string;
   // The attempt of this run. gh run rerun keeps run_id for every attempt, so
@@ -248,6 +257,12 @@ export interface CliRecord {
   // publisher posts this status once more (src/ci/publish.ts), exactly as the CLI tried
   // to write it.
   unsettled_status?: UnsettledStatus;
+  // Only for outcome "reviewed", beside unsettled_status: the override cutoff, in ms, that the
+  // CLI computed for this run (overrideCutoffMs, src/ci/override.ts): the instant at or after
+  // which an override counts as posted during the run. The publisher compares with it as it is,
+  // and never re-derives it. Absent on a record without one, and then the publisher reposts as
+  // before.
+  override_cutoff_ms?: number;
 }
 
 const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
@@ -256,7 +271,14 @@ const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
   "denied",
   "unverifiable",
   "no-credentials",
+  "override",
 ];
+// A GitHub login, with the bound and characters of the trigger's check (GITHUB_LOGIN in
+// src/ci/trigger.ts), including the 91-character limit that keeps the override's status
+// description within GitHub's 140. A copy, not an import: this file and trigger.ts may
+// import builtins only at runtime (see the header of src/ci/trigger.ts), and
+// test/ci/outcome.test.ts fails if the two texts differ.
+const LOGIN_PATTERN = /^(?=.{1,91}$)[A-Za-z0-9][A-Za-z0-9_-]{0,90}(\[bot\])?$/;
 const RECORD_PARAM_KEYS: readonly string[] = [
   "backend",
   "provider",
@@ -409,6 +431,22 @@ export function parseTriggerRecord(text: string): TriggerRecord | undefined {
     if (cls === undefined) return undefined;
     record.cls = cls;
   }
+  // WHY fail closed here: an override names who unlocked the gate, and the
+  // publisher posts both the status and that name from this record. A record
+  // without a valid actor or without its PR is refused, and an actor on any
+  // other decision is refused, because the writer produces neither.
+  if (decision === "override") {
+    if (
+      typeof value.actor !== "string" ||
+      !LOGIN_PATTERN.test(value.actor) ||
+      record.pr === undefined
+    ) {
+      return undefined;
+    }
+    record.actor = value.actor;
+  } else if (value.actor !== undefined) {
+    return undefined;
+  }
   return record;
 }
 
@@ -547,6 +585,15 @@ export function parseCliRecord(text: string): CliRecord | undefined {
     const unsettled = parseUnsettledStatus(value.unsettled_status);
     if (unsettled === undefined) return undefined;
     record.unsettled_status = unsettled;
+  }
+  if (value.override_cutoff_ms !== undefined) {
+    if (outcome !== "reviewed") return undefined;
+    const cutoff = value.override_cutoff_ms;
+    if (typeof cutoff !== "number" || !Number.isSafeInteger(cutoff)) {
+      return undefined;
+    }
+    if (cutoff <= 0) return undefined;
+    record.override_cutoff_ms = cutoff;
   }
   return record;
 }

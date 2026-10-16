@@ -668,6 +668,31 @@ describe("run: the S4 gate verdicts against the fake repository", () => {
     ).toBe(true);
   });
 
+  test("override exits 0: a red gate turns green with the actor's status and an audit comment, and no review is posted for it", async () => {
+    const world = new FakeGithub({ ref: REF, blockingFindings: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["override"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}override: \[1\] status matches the blocking findings/.test(l),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}override: \[2\] status is success, description starts with pr-hero: overridden by @/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}override: \[2\] an override comment this run posted on this head/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
   test("review-advisory exits 0 with success even when the review finds a blocking issue", async () => {
     const world = new FakeGithub({ ref: REF, blockingFindings: true });
     const h = world.harness();

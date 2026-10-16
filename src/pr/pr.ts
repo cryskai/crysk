@@ -412,6 +412,16 @@ export async function postCommitStatus(
 // `pr-hero` past page 1 and the watcher would miss an in-flight pending.
 // Combined returns the latest row per context in one shot.
 //
+// WHY per_page=100: the combined endpoint pages its contexts at 30 by default, so a
+// busy head's `pr-hero` row can sit past the first page. The publisher's reader asks for
+// 100 (src/ci/publish.ts, readHeadStatuses), and this one must see the same rows, or the
+// CLI writes its verdict over an override the publisher sees. The in-flight readers
+// (watch, the admission yield guard) take the newest row per context, so the extra rows
+// only add contexts they would otherwise miss.
+//
+// The description rides along for the override check (src/pr/teardown.ts), which tells
+// an override from a review's own status by it. The in-flight readers ignore it.
+//
 // Never throws: a 403, a hung gh (timeout), or garbage jq must not take
 // the watch tick down. Unreadable reads as not in-flight.
 export async function fetchCommitStatuses(
@@ -425,9 +435,9 @@ export async function fetchCommitStatuses(
       operatorRoot,
       [
         "api",
-        `repos/{owner}/{repo}/commits/${sha}/status`,
+        `repos/{owner}/{repo}/commits/${sha}/status?per_page=100`,
         "--jq",
-        ".statuses[]? | {state: .state, context: .context, created_at: .created_at}",
+        ".statuses[]? | {state: .state, context: .context, created_at: .created_at, description: .description}",
       ],
       undefined,
       options?.spawnFn,

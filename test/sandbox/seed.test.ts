@@ -5,12 +5,13 @@
 // because a rejected config burns a live run as PRH-CONFIG-INVALID.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { GOTCHAS } from "../../fixtures/setup";
 import {
   OUTCOME_MARKER_PREFIX,
+  OVERRIDE_MARKER_PREFIX,
   STATUS_CONTEXT,
 } from "../../scripts/sandbox/markers";
 import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
@@ -24,7 +25,7 @@ import {
   WORKFLOW_PATH,
   workflowFor,
 } from "../../scripts/sandbox/seed";
-import { decidePublication } from "../../src/ci/publish";
+import { decidePublication, runPublish } from "../../src/ci/publish";
 import { materializeCiOpenCodeData } from "../../src/ci/setup";
 import { prheroLayout } from "../../src/home-preflight";
 import { resolveModelRoute } from "../../src/model/routing";
@@ -135,6 +136,51 @@ describe("routing value", () => {
     expect(await readFile(resolveOpenCodeAuthPath(env, home), "utf8")).toBe(
       "{}",
     );
+  });
+});
+
+describe("the override marker pinned against the product's publisher", () => {
+  test("the override comment the publisher posts starts with OVERRIDE_MARKER_PREFIX", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "prhero-seed-override-"));
+    try {
+      await writeFile(
+        path.join(dir, "trigger.json"),
+        JSON.stringify({
+          v: 1,
+          decision: "override",
+          params: {},
+          pr: 7,
+          head_sha: "a".repeat(40),
+          actor: "maintainer",
+          repository: SANDBOX_REPO,
+          run_id: "1",
+          run_attempt: 1,
+          run_url: "https://example.invalid/run/1",
+        }),
+      );
+      const posted: string[] = [];
+      runPublish({
+        env: {
+          PRHERO_OUTCOME_DIR: dir,
+          GITHUB_REPOSITORY: SANDBOX_REPO,
+          GITHUB_RUN_ID: "1",
+        },
+        gh: (args, stdin) => {
+          if (args.includes("POST") && stdin !== undefined) posted.push(stdin);
+          return {
+            exitCode: 0,
+            stdout: args.includes("POST") ? JSON.stringify([2, "bot"]) : "",
+            stderr: "",
+          };
+        },
+        stdout: () => {},
+        appendSummary: () => {},
+      });
+      expect(posted).toHaveLength(1);
+      expect(posted[0]?.startsWith(OVERRIDE_MARKER_PREFIX)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

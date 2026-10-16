@@ -402,6 +402,71 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       },
     }),
   },
+  // S8: a red gate on a reviewed head, then the override that turns it green.
+  "override/0": {
+    pass: obs({
+      status: {
+        state: "failure",
+        description:
+          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+      comments: [
+        { source: "issue", kind: "report", head: NEW },
+        { source: "inline", kind: "finding", blocking: true, head: NEW },
+      ],
+    }),
+    // The gate ignored its own blocking finding: the consistency check catches it.
+    fail: obs({
+      status: { state: "success", description: "review posted" },
+      comments: [
+        { source: "issue", kind: "report", head: NEW },
+        { source: "inline", kind: "finding", blocking: true, head: NEW },
+      ],
+    }),
+  },
+  "override/1": {
+    pass: obs({
+      triggeredAt: Date.parse("2026-10-17T12:10:00Z"),
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [],
+      },
+      status: {
+        state: "success",
+        description:
+          "pr-hero: overridden by @juanmaagd — no review on this head",
+      },
+      comments: [
+        { source: "issue", kind: "report", head: NEW },
+        {
+          source: "issue",
+          kind: "override",
+          head: NEW,
+          createdAt: "2026-10-17T12:10:04Z",
+        },
+      ],
+    }),
+    // The override never posted: the gate is still the review's failure.
+    fail: obs({
+      triggeredAt: Date.parse("2026-10-17T12:10:00Z"),
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [],
+      },
+      status: {
+        state: "failure",
+        description:
+          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+      comments: [{ source: "issue", kind: "report", head: NEW }],
+    }),
+  },
   "same-head-rereview/0": {
     pass: obs(),
     fail: obs({
@@ -434,6 +499,75 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     }),
   },
 };
+
+describe("override-comment: only this run's override, on this head", () => {
+  const triggeredAt = Date.parse("2026-10-17T12:10:00Z");
+  const overrideRun = obs({
+    triggeredAt,
+    run: {
+      id: 9,
+      event: "issue_comment",
+      status: "completed",
+      conclusion: "success",
+      steps: [],
+    },
+  });
+  const check = { kind: "override-comment" } as const;
+
+  test("the override marker classifies as its own kind, with the head it names, and never as an outcome", () => {
+    expect(
+      classifyComment(
+        `<!-- pr-hero-override head=${NEW} run=9 attempt=1 -->\n\n@juanmaagd`,
+        "issue",
+      ),
+    ).toEqual({ source: "issue", kind: "override", head: NEW });
+  });
+
+  test("an override posted by this run, on this head, passes", () => {
+    const posted = obs({
+      ...overrideRun,
+      comments: [
+        {
+          source: "issue",
+          kind: "override",
+          head: NEW,
+          createdAt: "2026-10-17T12:10:04Z",
+        },
+      ],
+    });
+    expect(evaluateCheck(check, posted).pass).toBe(true);
+  });
+
+  test("an override on an earlier head does not count for this head", () => {
+    const earlierHead = obs({
+      ...overrideRun,
+      comments: [
+        {
+          source: "issue",
+          kind: "override",
+          head: OLD,
+          createdAt: "2026-10-17T12:10:04Z",
+        },
+      ],
+    });
+    expect(evaluateCheck(check, earlierHead).pass).toBe(false);
+  });
+
+  test("an override posted before this run's trigger does not count", () => {
+    const earlier = obs({
+      ...overrideRun,
+      comments: [
+        {
+          source: "issue",
+          kind: "override",
+          head: NEW,
+          createdAt: "2026-10-17T11:00:00Z",
+        },
+      ],
+    });
+    expect(evaluateCheck(check, earlier).pass).toBe(false);
+  });
+});
 
 describe("scenario data: every declared expectation, pass and fail", () => {
   for (const scenario of SCENARIOS) {

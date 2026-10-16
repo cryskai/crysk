@@ -6,24 +6,30 @@
 // comments below move with the code they explain.
 
 import { recordUnsettledStatus } from "#ci/cli-record";
+import { overrideCutoffMs, overrideStandsOverRun } from "#ci/override";
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import { settleCiAdmissionLedger } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
+import { fetchCommitStatuses } from "#pr/pr";
 import {
   blockingCommitStatusRequest,
   type CiMode,
   COMMIT_STATUS_CONTEXT,
   type CommitStatusContext,
+  type CommitStatusFact,
   commitStatusCompletion,
   commitStatusRequest,
 } from "#pr/preflight";
 import {
+  heldCommitStatusPendingLanded,
+  heldCommitStatusSince,
   publishFinalCommitStatus,
   releaseCommitStatusLock,
   tryPublishCommitStatus,
 } from "#pr/status";
 import type { PipelineResult } from "#review/pipeline";
 import { runGc } from "#store/gc";
+import { log } from "#ui/primitives";
 import { releasePidLock } from "../home";
 
 // The ledger has no equivalent hand-off to the SIGTERM/SIGINT handlers (which
@@ -54,6 +60,43 @@ async function settleLedgerIfPending(
   }
 }
 
+// The override cutoff of this run: the instant at or after which an override counts as posted
+// during it (overrideCutoffMs, src/ci/override.ts). The CLI computes it here, once per settle,
+// while the lock is held, and uses the same value for its own check and for the unsettled
+// record the publisher reads. Null when the run took no lock, so it has no start to judge an
+// override against.
+//
+// WHY the cutoff carries the landed decision: the 5 s clock-skew allowance is only safe while
+// this run's own pending is on the head, because that pending is what witnesses the start.
+// When the pending did not land, the cutoff is the start itself, so an override created a few
+// seconds before the start is not taken as posted during the run.
+function thisRunOverrideCutoff(): number | null {
+  const startedMs = heldCommitStatusSince();
+  if (startedMs === null) return null;
+  return overrideCutoffMs(startedMs, heldCommitStatusPendingLanded());
+}
+
+// Whether an override posted during this run stands over its final write. The rule itself
+// is overrideStandsOverRun (src/ci/override.ts), applied to the cutoff the CLI computed. A
+// failed read is no evidence of an override, so the write goes ahead, as before (fail open to
+// the review's verdict).
+async function overrideStandsOverThisRun(
+  operatorRoot: string,
+  headSha: string,
+  spawnFn: typeof Bun.spawn | undefined,
+  readStatuses: typeof fetchCommitStatuses,
+  cutoffMs: number | null,
+): Promise<boolean> {
+  if (cutoffMs === null) return false;
+  let statuses: readonly CommitStatusFact[];
+  try {
+    statuses = await readStatuses(operatorRoot, headSha, { spawnFn });
+  } catch {
+    return false;
+  }
+  return overrideStandsOverRun(statuses, cutoffMs);
+}
+
 // The inner `finally`: the commit status must settle BEFORE the lock is
 // released, and the lock must be released on every path — throw, early
 // return, or normal exit. The release sits in a try/finally around the
@@ -71,7 +114,8 @@ async function settleLedgerIfPending(
 // catch). The body's error is then the run's failure, and it must reach the
 // CLI unchanged: a throw from this finally would replace it, and
 // writeFatalCliRecord would record the status error's class instead of the
-// real cause. So that write still goes out, through tryPublishCommitStatus,
+// real cause. So that write still goes out, through tryPublishCommitStatus
+// (unless an override stands, which is checked first only for a verdict write),
 // and a failed post only logs. Nothing throws on that path, so the ledger
 // settles here too, rather than in finalizePrReviewRun. The body may have
 // failed after the review was delivered, so a failed gate post is still
@@ -103,6 +147,10 @@ export async function settleCommitStatusAndLedger(input: {
   bodyFailed?: boolean;
   spawnFn?: typeof Bun.spawn;
   settle?: typeof settleCiAdmissionLedger;
+  // The head's statuses, read before a gate's final write to see whether an override
+  // posted during this run stands (overrideStandsOverRun). Production omits it and
+  // gets the real reader; a test injects one.
+  readStatuses?: typeof fetchCommitStatuses;
   // Where the CLI's outcome record is written (PRHERO_OUTCOME_DIR). Production omits
   // it, and the record writer then reads process.env, as every other writer does.
   env?: Readonly<Record<string, string | undefined>>;
@@ -132,8 +180,34 @@ export async function settleCommitStatusAndLedger(input: {
           targetUrl: input.statusTargetUrl,
           context: input.statusContext,
         });
+  // The cutoff is read once, while the lock is still held. The check below and both unsettled
+  // records use this value, so the CLI and the publisher judge an override by the same instant.
+  const overrideCutoff = thisRunOverrideCutoff();
   try {
-    if (effectiveMode === "gate" && input.bodyFailed !== true) {
+    // WHY only a verdict write checks the override: `success` and `failure` are the review's
+    // verdict, which an override holds against. An `error` write is a failed review, whether
+    // a body threw or every hunter failed, and it may replace the override (the rule in
+    // docs/github-actions.md, "Overriding a red gate"). The publisher applies the same rule
+    // (src/ci/publish.ts). Advisory is left as it was: this rule is the gate's.
+    const verdictWrite =
+      request.state === "success" || request.state === "failure";
+    const overrideStands =
+      effectiveMode === "gate" &&
+      verdictWrite &&
+      (await overrideStandsOverThisRun(
+        input.operatorRoot,
+        input.headSha,
+        input.spawnFn,
+        input.readStatuses ?? fetchCommitStatuses,
+        overrideCutoff,
+      ));
+    if (overrideStands) {
+      // WHY one line and no status: the override stays the head's status. This run's
+      // findings and PR comments are not affected by this write.
+      log(
+        "pr-hero: an override on this head stands, so this review's verdict is not written over it.",
+      );
+    } else if (effectiveMode === "gate" && input.bodyFailed !== true) {
       try {
         await publishFinalCommitStatus(
           input.operatorRoot,
@@ -152,6 +226,7 @@ export async function settleCommitStatusAndLedger(input: {
             input.headSha,
             { state: request.state, description: request.description },
             input.env,
+            overrideCutoff,
           );
         }
         throw error;
@@ -178,6 +253,7 @@ export async function settleCommitStatusAndLedger(input: {
           input.headSha,
           { state: request.state, description: request.description },
           input.env,
+          overrideCutoff,
         );
       }
     }

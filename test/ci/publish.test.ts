@@ -7,9 +7,10 @@
 // decidePublication is the pure table; runPublish is the shell.
 //
 // The builtins-only guard at the bottom mirrors the one in outcome.test.ts. The
-// one allowed relative import is "./outcome": it is itself builtins-only at
-// runtime (its repo imports are `import type`, erased at transpile), and it
-// needs no node_modules, which is the only thing this step cannot have.
+// allowed relative imports are "./outcome" and "./override": both are builtins-only
+// at runtime (outcome's repo imports are `import type`, erased at transpile; override
+// imports nothing), and they need no node_modules, which is the only thing this step
+// cannot have.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -188,6 +189,31 @@ describe("decidePublication — the pure table", () => {
           description: "review complete",
           targetUrl: RUN_URL,
         },
+      });
+    });
+
+    // Fix 4: the override cutoff rides on the cleanup beside the status it may guard, so the
+    // publisher can judge an override against the cutoff the CLI computed, before it reposts.
+    test("a reviewed record's override cutoff rides on the cleanup beside its unsettled status", () => {
+      const CUTOFF = Date.parse("2026-10-17T12:00:00Z") - 5_000;
+      expect(
+        decidePublication({
+          record: record(),
+          cliStarted: true,
+          cliRecord: {
+            ...REVIEWED,
+            head_sha: REVIEWED_HEAD,
+            unsettled_status: {
+              state: "success",
+              description: "review complete",
+            },
+            override_cutoff_ms: CUTOFF,
+          },
+        }),
+      ).toMatchObject({
+        kind: "cleanup",
+        headSha: REVIEWED_HEAD,
+        overrideCutoffMs: CUTOFF,
       });
     });
 
@@ -840,6 +866,9 @@ function runPublishIn(options: {
   // as the --jq filter does. Unset, the read fails.
   latestStatus?: GhResult;
   env?: Record<string, string>;
+  // The publisher's clock. Unset, the real one: only a test that reads the time
+  // back needs it pinned.
+  now?: () => Date;
 }) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-publish-"));
   try {
@@ -907,6 +936,7 @@ function runPublishIn(options: {
         return options.list ?? ok("");
       },
       sleep: () => {},
+      ...(options.now === undefined ? {} : { now: options.now }),
       stdout: (text) => {
         stdout += text;
       },
@@ -1904,6 +1934,348 @@ describe("runPublish — cleanup once the CLI started", () => {
   });
 });
 
+// Fix 4: the CLI's final status write failed, so its own status reads may have failed too, and
+// an override posted during the run may not have been seen by the CLI. Before the repost, the
+// publisher reads the head once and skips the repost when the override rule (src/ci/override.ts)
+// says an override stands, against the cutoff the CLI recorded. A failed read reposts, as
+// before, and so does a record with no cutoff.
+describe("runPublish — the repost of an unsettled status, against an override (Fix 4)", () => {
+  const RUN_START = Date.parse("2026-10-17T12:00:00Z");
+  const OVERRIDE =
+    "pr-hero: overridden by @maintainer — no review on this head";
+  const UNSETTLED = { state: "success", description: "review complete" };
+  const at = (ms: number) => new Date(ms).toISOString();
+  // One row per status of the head, as the status read's --jq filter prints them with the
+  // description: [context, state, created_at, description].
+  const describedStatusRows = (
+    ...rows: Array<[string, string, string, string]>
+  ): GhResult => ok(rows.map((row) => JSON.stringify(row)).join("\n"));
+  // The record as the CLI wrote it. The default cutoff is the run's start, which is the record
+  // the CLI writes when its own pending did not land (no clock-skew allowance).
+  const withCutoff = (cutoffMs: number = RUN_START, extra: object = {}) => ({
+    ...REVIEWED,
+    head_sha: REVIEWED_HEAD,
+    unsettled_status: UNSETTLED,
+    override_cutoff_ms: cutoffMs,
+    ...extra,
+  });
+  const runWith = (cliRecord: object, latestStatus: GhResult | undefined) =>
+    runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord,
+      status: [ok()],
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+      ...(latestStatus === undefined ? {} : { latestStatus }),
+    });
+  const HEAD_READ = `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`;
+
+  test("a fresh override as the newest status: the repost is skipped, the head is read once, and the cleanup still runs", () => {
+    const run = runWith(
+      withCutoff(),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START + 30_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(statusReadEndpoints(run.calls)).toEqual([HEAD_READ]);
+    expect(statusCalls(run.calls)).toEqual([]);
+    expect(deletions(run.calls)).toEqual([`repos/${REPO}/issues/comments/10`]);
+  });
+
+  test("a newest status that is not an override is reposted", () => {
+    const run = runWith(
+      withCutoff(),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START + 30_000),
+        "review complete",
+      ]),
+    );
+    const posted = statusCalls(run.calls);
+    expect(posted).toHaveLength(1);
+    expect((posted[0] as Call).args).toEqual(
+      expect.arrayContaining(["state=success", "description=review complete"]),
+    );
+  });
+
+  test("an override older than the run is reposted", () => {
+    const run = runWith(
+      withCutoff(),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START - 60_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(statusCalls(run.calls)).toHaveLength(1);
+  });
+
+  // The pending did not land, so the CLI's cutoff is the run's start with no allowance. An
+  // override created 3 s before that start did not stand over the run, and the publisher
+  // reposts it. The read is asserted, because a publisher that did not read the head would
+  // repost too, and would not be judging the override at all.
+  test("the cutoff is the run's start (the pending did not land): an override created 3 s before the start is reposted", () => {
+    const run = runWith(
+      withCutoff(RUN_START),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START - 3_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(statusReadEndpoints(run.calls)).toEqual([HEAD_READ]);
+    expect(statusCalls(run.calls)).toHaveLength(1);
+  });
+
+  // The pending landed, so the CLI's cutoff is the start less the 5 s allowance. The same
+  // override, created 3 s before the start, is inside it and stands, so the publisher skips.
+  // The publisher adds no allowance of its own: this is the cutoff it was given, verbatim.
+  test("the cutoff is the start less 5 s (the pending landed): the same override stands and the repost is skipped", () => {
+    const run = runWith(
+      withCutoff(RUN_START - 5_000),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START - 3_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(statusReadEndpoints(run.calls)).toEqual([HEAD_READ]);
+    expect(statusCalls(run.calls)).toEqual([]);
+  });
+
+  test("a failed head read reposts, as before", () => {
+    const run = runWith(withCutoff(), fail("gh: Server Error (HTTP 500)"));
+    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(run.exitCode).toBe(0);
+  });
+
+  test("a record without the override cutoff reposts as before, and reads no status", () => {
+    const run = runWith(
+      { ...REVIEWED, head_sha: REVIEWED_HEAD, unsettled_status: UNSETTLED },
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START + 30_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(statusReadEndpoints(run.calls)).toEqual([]);
+    expect(statusCalls(run.calls)).toHaveLength(1);
+  });
+});
+
+// T6 (S8): an override is a human's decision, not an outcome. It posts a success
+// status on the head it names and an audit comment. Nothing renders an error, and
+// no cleanup may ever remove the comment.
+const OVERRIDE_DESCRIPTION =
+  "pr-hero: overridden by @maintainer — no review on this head";
+const overrideRecord = (overrides: Partial<TriggerRecord> = {}) =>
+  record({ decision: "override", actor: "maintainer", ...overrides });
+
+describe("decidePublication — the override (S8)", () => {
+  test("an override with a head publishes a success status and the audit comment, never an error", () => {
+    const plan = decidePublication({
+      record: overrideRecord(),
+      cliStarted: false,
+    });
+    expect(plan).toMatchObject({
+      kind: "override",
+      repository: REPO,
+      pr: 7,
+      actor: "maintainer",
+      headSha: SHA,
+    });
+    expect(JSON.stringify(plan)).not.toContain("PRH-");
+  });
+
+  test("an override with no head still publishes, with no head to set a status on", () => {
+    const plan = decidePublication({
+      record: overrideRecord({ head_sha: undefined }),
+      cliStarted: false,
+    });
+    expect(plan).toMatchObject({ kind: "override", headSha: undefined });
+  });
+});
+
+describe("runPublish — the override (S8)", () => {
+  test("a head gets the success status first, then the audit comment with its marker and the actor", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      now: () => new Date("2026-10-17T12:34:56.000Z"),
+    });
+    expect(run.exitCode).toBe(0);
+    const statuses = statusCalls(run.calls);
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.args).toContain("state=success");
+    expect(statuses[0]?.args).toContain(`description=${OVERRIDE_DESCRIPTION}`);
+    const comment = commentPost(run.calls);
+    expect(comment).toBeDefined();
+    expect(run.calls.indexOf(statuses[0] as Call)).toBeLessThan(
+      run.calls.indexOf(comment as Call),
+    );
+    const body = comment?.stdin ?? "";
+    expect(body.split("\n")[0]).toBe(
+      `<!-- pr-hero-override head=${SHA} run=4242 attempt=1 -->`,
+    );
+    expect(body).toContain("@maintainer");
+    expect(body).toContain("2026-10-17 12:34 UTC");
+    expect(body).toContain(
+      "A new push or a later `/pr-hero review` on this head replaces it",
+    );
+    expect(run.stdout).toContain("::notice title=pr-hero::");
+    expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
+  });
+
+  // The longest login the trigger accepts (91 characters) makes the description
+  // exactly GitHub's 140-character limit. The whole sentence is posted, unclipped.
+  test("a 91-character login's override description is posted whole, within 140 characters", () => {
+    const login = "a".repeat(91);
+    const run = runPublishIn({
+      record: overrideRecord({ actor: login }),
+    });
+    const statuses = statusCalls(run.calls);
+    expect(statuses).toHaveLength(1);
+    const descriptionArg = statuses[0]?.args.find((arg) =>
+      arg.startsWith("description="),
+    );
+    const description = descriptionArg?.slice("description=".length) ?? "";
+    expect(description.length).toBeLessThanOrEqual(140);
+    expect(description).toBe(
+      `pr-hero: overridden by @${login} — no review on this head`,
+    );
+  });
+
+  test("no head posts the comment alone, and says that no status could be set", () => {
+    const run = runPublishIn({
+      record: overrideRecord({ head_sha: undefined }),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusCalls(run.calls)).toHaveLength(0);
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body.split("\n")[0]).toBe(
+      `<!-- pr-hero-override head=unknown run=4242 attempt=1 -->`,
+    );
+    expect(body).toContain("no commit status could be set");
+  });
+
+  test("a failed status write is PRH-STATUS-WRITE-FAILED and exit 1, and the comment then says no status was set", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      status: [fail("gh: HTTP 500"), fail("gh: HTTP 500")],
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body).toContain("no commit status could be set");
+    expect(body).not.toContain("gate was overridden");
+  });
+
+  test("a review's cleanup leaves an override comment alone, even an older one by the same bot", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      cliRecord: REVIEWED,
+      viewer: ok("github-actions"),
+      list: listing(
+        [501, "github-actions[bot]", "Bot", OVERRIDE_OLDER_MARKER],
+        [502, "github-actions[bot]", "Bot", OLDER_MARKER],
+      ),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(deletions(run.calls)).toEqual([
+      "repos/acme/widgets/issues/comments/502",
+    ]);
+  });
+
+  test("a review's comment post never deletes an override comment of the same author", () => {
+    const run = runPublishIn({
+      record: record(),
+      create: ok(JSON.stringify([9000, "bot-a"])),
+      list: listing(
+        [501, "bot-a", "Bot", OVERRIDE_OLDER_MARKER],
+        [502, "bot-a", "Bot", OLDER_MARKER],
+      ),
+    });
+    expect(deletions(run.calls)).toEqual([
+      "repos/acme/widgets/issues/comments/502",
+    ]);
+  });
+
+  // WHY the override settles the head the way a completed review does, so it removes the
+  // same older outcome comments. The list also holds an older override audit comment, a
+  // newer run's outcome comment and the pr-hero-report summary: only the older outcome goes.
+  test("an override whose status write succeeds deletes an older run's outcome comment, and keeps the override audit, the newer outcome and the report summary", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      viewer: ok("github-actions"),
+      list: listing(
+        [501, "github-actions[bot]", "Bot", OVERRIDE_OLDER_MARKER],
+        [502, "github-actions[bot]", "Bot", OLDER_MARKER],
+        [503, "github-actions[bot]", "Bot", NEWER_MARKER],
+        [504, "github-actions[bot]", "Bot", REPORT_SUMMARY_MARKER],
+      ),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(deletions(run.calls)).toEqual([
+      "repos/acme/widgets/issues/comments/502",
+    ]);
+  });
+
+  // WHY nothing is cleaned up when the status write fails: the head is not green, so the
+  // outcome comments stay beside the red status. The graphql call is the viewer lookup
+  // that starts the cleanup, so its absence proves the cleanup never began.
+  test("an override whose status write fails deletes nothing, and never starts the cleanup", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      status: [fail("gh: HTTP 500"), fail("gh: HTTP 500")],
+      viewer: ok("github-actions"),
+      list: listing([502, "github-actions[bot]", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(1);
+    expect(deletions(run.calls)).toEqual([]);
+    expect(run.calls.some((call) => call.args.includes("graphql"))).toBe(false);
+  });
+
+  test("an override with no head sets no status, so it cleans up nothing", () => {
+    const run = runPublishIn({
+      record: overrideRecord({ head_sha: undefined }),
+      viewer: ok("github-actions"),
+      list: listing([502, "github-actions[bot]", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(deletions(run.calls)).toEqual([]);
+  });
+
+  // WHY a warning, not a failure: the override's exit code follows the status write alone,
+  // as a completed review's does. The status is set, so the exit stays 0.
+  test("a failed delete of an older outcome comment is a warning, and the override still exits 0", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      viewer: ok("github-actions"),
+      list: listing([502, "github-actions[bot]", "Bot", OLDER_MARKER]),
+      remove: fail("gh: Server Error (HTTP 500)"),
+    });
+    expect(deletions(run.calls)).toEqual([
+      "repos/acme/widgets/issues/comments/502",
+    ]);
+    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("could not delete an older outcome comment");
+    expect(run.exitCode).toBe(0);
+  });
+});
+
+const OVERRIDE_OLDER_MARKER = `<!-- pr-hero-override head=${SHA} run=4000 attempt=1 -->`;
+const REPORT_SUMMARY_MARKER = `<!-- pr-hero-report head=${SHA} -->`;
+
 describe("publish.ts runs before `bun install`", () => {
   // The real entry point, spawned with an empty PATH and HOME: it must start
   // and finish with no node_modules and no gh, when there is nothing to say.
@@ -1966,9 +2338,11 @@ describe("publish.ts runs before `bun install`", () => {
     }
   });
 
-  test("it imports only builtins, plus the builtins-only ./outcome sibling", () => {
+  test("it imports only builtins, plus the builtins-only ./outcome and ./override siblings", () => {
     const source = readFileSync(MODULE_PATH, "utf8");
-    expect(runtimeImportViolations(source, ["./outcome"])).toEqual([]);
+    expect(
+      runtimeImportViolations(source, ["./outcome", "./override"]),
+    ).toEqual([]);
   });
 
   test("the guard itself fails on a repo import and passes a type-only one", () => {

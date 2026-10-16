@@ -8,6 +8,7 @@ import {
   COMMENT_RUN_CLOCK_SKEW_MS,
   classifyPath,
   type Observation,
+  postedByThisRun,
 } from "./observe";
 
 export type Check =
@@ -29,7 +30,10 @@ export type Check =
   // The run's own evidence for the path it observed. A reviewed path needs the
   // run's own artifact; a skip needs a skip marker the run posted after its trigger.
   // Checks on the head alone cannot tell this run from one that did nothing.
-  | { kind: "own-evidence" };
+  | { kind: "own-evidence" }
+  // S8: the run posted an override comment on the observed head. An override on an
+  // earlier head, or one posted before this run's trigger, does not count.
+  | { kind: "override-comment" };
 
 export interface CheckResult {
   label: string;
@@ -71,6 +75,8 @@ export function describeCheck(check: Check): string {
       return "the run's review step succeeded";
     case "own-evidence":
       return "the run left its own evidence (its artifact, or its skip marker)";
+    case "override-comment":
+      return "an override comment this run posted on this head";
   }
 }
 
@@ -239,6 +245,15 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         return pass(own, "no skip marker posted after this run's trigger");
       }
       return pass(false, `path ${path} leaves no evidence this run could own`);
+    }
+    case "override-comment": {
+      const ok = obs.comments.some(
+        (c) =>
+          c.kind === "override" &&
+          c.head === obs.headSha &&
+          postedByThisRun(c, obs),
+      );
+      return pass(ok, `no override comment on ${obs.headSha} from this run`);
     }
   }
 }

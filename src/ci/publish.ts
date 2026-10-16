@@ -37,10 +37,11 @@
 // one, and the trigger's head is the fallback, since a failed `gh pr view` at trigger
 // time can leave it out.
 //
-// WHY ONLY BUILTINS (plus ./outcome): the step runs before anything is installed,
-// so a package import has no node_modules to resolve against. ./outcome is a
-// sibling that is itself builtins-only at runtime: its repository imports are
-// `import type`, erased at transpile. Relative imports need no node_modules.
+// WHY ONLY BUILTINS (plus ./outcome and ./override): the step runs before anything is
+// installed, so a package import has no node_modules to resolve against. ./outcome and
+// ./override are siblings that are themselves builtins-only at runtime: ./outcome's
+// repository imports are `import type`, erased at transpile, and ./override imports
+// nothing. Relative imports need no node_modules.
 //
 // WHY repost, not edit: GitHub does not notify on an edit, and an edited comment
 // does not move down the timeline. So the fresh comment is POSTED first, and the
@@ -66,6 +67,12 @@ import {
   renderError,
   STATUS_DESCRIPTION_MAX,
 } from "./outcome";
+import {
+  newestStatusInContext,
+  OVERRIDE_DESCRIPTION_PREFIX,
+  type OverrideStatusFact,
+  overrideStandsOverRun,
+} from "./override";
 
 // The commit status context. The required check reads this name, so it must
 // equal COMMIT_STATUS_CONTEXT in src/pr/preflight.ts (a test pins the two).
@@ -101,6 +108,8 @@ export interface GhResult {
 }
 
 interface StatusPost {
+  // `success` comes from an override (odd/tasks/agent-first-ci.md, S8) or from the
+  // final status a CLI could not write; `failure` only from the latter.
   state: "error" | "success" | "failure";
   context: "pr-hero";
   description: string;
@@ -117,6 +126,23 @@ export type Publication =
   | { kind: "none" }
   // Annotation and step summary only: no PR can be written to.
   | { kind: "local"; rendered: RenderedError }
+  // A human's override (odd/tasks/agent-first-ci.md, S8): a success status on the
+  // head it names, then, only when that status was written, the cleanup of older
+  // outcome comments (the same cleanup a completed review runs, since both settle the
+  // head), then an audit comment. Nothing ran, so nothing is rendered as an outcome.
+  // The override's audit comments and the report summary are never cleaned up.
+  | {
+      kind: "override";
+      repository: string;
+      pr: number;
+      runId: string;
+      runAttempt: number;
+      runUrl: string;
+      actor: string;
+      // Undefined when the record names no head: the comment still posts, and says
+      // that no status could be set.
+      headSha: string | undefined;
+    }
   // The CLI's review completed. Its record may carry the status the CLI could not
   // write, which is posted first, on the record's head. Then only older runs' (or
   // earlier attempts') outcome comments on this PR go, when the PR is known. runId
@@ -132,6 +158,11 @@ export type Publication =
       // Undefined otherwise, which is every reviewed record without the field.
       headSha?: string;
       status?: StatusPost;
+      // The override cutoff the CLI computed for the run, when the record carries one. The repost
+      // is skipped when an override created at or after it stands on the head
+      // (overrideStandsBeforeRepost). Undefined means no cutoff to judge against, and the repost
+      // goes ahead as before.
+      overrideCutoffMs?: number;
     }
   | {
       kind: "remote";
@@ -170,6 +201,9 @@ export function decidePublication(input: {
     // Denied and ignored commands publish nothing, by design (T2e adds reactions).
     return { kind: "none" };
   }
+  // WHY before the outcome fallthrough below: an override is not an error, and
+  // rendering it as one would publish a false PRH-INSTALL-FAILED.
+  if (record.decision === "override") return decideOverride(record);
   if (record.decision === "review" && input.cliStarted) {
     return decideCliOutcome(record, input.cliRecord, input.latestStatusState);
   }
@@ -187,12 +221,31 @@ export function decidePublication(input: {
   );
 }
 
+// WHY the record's PR and actor are both required: parseTriggerRecord refuses an
+// override without them, so this is the reader's own guarantee for the type.
+function decideOverride(record: TriggerRecord): Publication {
+  if (record.pr === undefined || record.actor === undefined) {
+    return { kind: "none" };
+  }
+  return {
+    kind: "override",
+    repository: record.repository,
+    pr: record.pr,
+    runId: record.run_id,
+    runAttempt: record.run_attempt,
+    runUrl: record.run_url,
+    actor: record.actor,
+    headSha: record.head_sha,
+  };
+}
+
 // WHY the CLI's record decides: the CLI posts its own status and comment for a
 // completed review and for a skip, so those need nothing here. It posts neither
 // for a crash, a class it could not map, or all hunters failing, so the publisher
-// speaks for those with the code the record names. Cleanup needs a completed
-// review: a stale outcome comment contradicts it, and nothing else removes that
-// comment. A run with no record took no lock the publisher can see, so it gets the
+// speaks for those with the code the record names. Cleanup needs a settled head:
+// a completed review, or an override that set its status (publishOverride), makes
+// a stale outcome comment contradict the PR, and nothing else removes that comment.
+// A run with no record took no lock the publisher can see, so it gets the
 // comment alone (see the no-record branch below). A reviewing record decides its status
 // by the head it names (see that case), never by the trigger's head.
 function decideCliOutcome(
@@ -296,13 +349,16 @@ function decideCliOutcome(
 function unsettledStatusOf(
   record: TriggerRecord,
   cliRecord: CliRecord,
-): { headSha: string; status: StatusPost } | undefined {
+):
+  | { headSha: string; status: StatusPost; overrideCutoffMs?: number }
+  | undefined {
   const unsettled = cliRecord.unsettled_status;
   if (unsettled === undefined || cliRecord.head_sha === undefined) {
     return undefined;
   }
   return {
     headSha: cliRecord.head_sha,
+    overrideCutoffMs: cliRecord.override_cutoff_ms,
     status: {
       state: unsettled.state,
       context: STATUS_CONTEXT,
@@ -400,6 +456,9 @@ export interface PublishDeps {
   // Stdin is the comment body; the answer is gh's result.
   gh: (args: readonly string[], stdin?: string) => GhResult;
   sleep?: (ms: number) => void;
+  // The clock for an override's UTC time. Optional, so a test pins it and the real
+  // clock is the default.
+  now?: () => Date;
   stdout: (text: string) => void;
   appendSummary: (text: string) => void;
 }
@@ -489,23 +548,28 @@ function statusWriteFailure(
 // Posts the comment, then deletes the older outcome comments of the same author.
 // Returns the failure of the POST only: the cleanup is best effort, because the
 // fresh comment has already landed and one stale duplicate is the safe error.
-function postComment(
+// The comment's POST alone, with the id and author GitHub answers with. Either is
+// undefined when the answer is unreadable, and then nothing is cleaned up.
+function createComment(
   deps: PublishDeps,
-  plan: Extract<Publication, { kind: "remote" }>,
-): { ok: true } | { ok: false; detail: string } {
-  const repo = plan.repository;
+  repo: string,
+  pr: number,
+  body: string,
+):
+  | { ok: true; newId: number | undefined; author: string | undefined }
+  | { ok: false; detail: string } {
   const created = deps.gh(
     [
       "api",
       "--method",
       "POST",
-      `repos/${repo}/issues/${plan.pr}/comments`,
+      `repos/${repo}/issues/${pr}/comments`,
       "-F",
       "body=@-",
       "--jq",
       "[.id, .user.login] | @json",
     ],
-    plan.commentBody,
+    body,
   );
   if (created.exitCode !== 0) {
     const status = httpStatusOf(created);
@@ -515,6 +579,20 @@ function postComment(
     };
   }
   const [newId, author] = parseCreated(created.stdout);
+  return { ok: true, newId, author };
+}
+
+// Posts the comment, then deletes the older outcome comments of the same author.
+// Returns the failure of the POST only: the cleanup is best effort, because the
+// fresh comment has already landed and one stale duplicate is the safe error.
+function postComment(
+  deps: PublishDeps,
+  plan: Extract<Publication, { kind: "remote" }>,
+): { ok: true } | { ok: false; detail: string } {
+  const repo = plan.repository;
+  const created = createComment(deps, repo, plan.pr, plan.commentBody);
+  if (!created.ok) return created;
+  const { newId, author } = created;
   if (newId === undefined || author === undefined || author === "") {
     // WHY nothing is deleted: without a known author, "the same author" is not
     // a test this step can pass, so an old comment is never removed on a guess.
@@ -594,6 +672,9 @@ function listComments(
   return rows;
 }
 
+// WHY only the outcome marker counts: an override comment is the audit trail of a
+// human's unlock (S8). Its marker starts `<!-- pr-hero-override`, which does not
+// start with MARKER_PREFIX, so no cleanup or older-run pass can remove it.
 function isOutcomeComment(row: ListedComment): boolean {
   return row.firstLine.startsWith(MARKER_PREFIX);
 }
@@ -705,10 +786,12 @@ function deleteOlderOutcomes(
   );
 }
 
-// WHY cleanup runs once the CLI's review completed: an older outcome comment says
-// a run could not start the review. A later run's review has now completed, so
-// that comment contradicts the PR, and nothing else removes it. Only older runs'
-// and earlier attempts' comments go (see isOlderRunComment).
+// WHY cleanup runs once a head settles: a completed review (runPublish's cleanup
+// branch), or an override whose success status was written (publishOverride). An
+// older outcome comment says a run could not start the review. A later run has now
+// settled the head, so that comment contradicts the PR, and nothing else removes it.
+// Only older runs' and earlier attempts' comments go (see isOlderRunComment), and
+// the override's audit comments and the report summary never match isOutcomeComment.
 //
 // WHY the identity chain: the older comments were written with the workflow's
 // token, which cannot read /user. GraphQL `viewer` names the login that wrote
@@ -783,25 +866,24 @@ const SETTLED_STATES: ReadonlySet<string> = new Set([
   "failure",
 ]);
 
-// The head's newest pr-hero status, as the three states the table needs. WHY
-// per_page=100: the combined endpoint pages at 30 contexts by default, and a busy
-// head's pr-hero row can sit past the first page. The newest row is picked by its
-// time, not by its place in the answer. A failed read, no pr-hero row, or a state
-// the table does not name is unknown, which the table answers with the status.
-function readLatestCliStatusState(
+// The head's statuses, as the combined-status endpoint returns them, read through this step's
+// own gh seam in one attempt. A failed read is undefined. WHY per_page=100: the combined
+// endpoint pages at 30 contexts by default, and a busy head's pr-hero row can sit past the
+// first page. A row the parse cannot read is skipped. The description is read too, for the
+// override rule.
+function readHeadStatuses(
   deps: PublishDeps,
   repo: string,
   sha: string,
-): LatestStatusState {
+): OverrideStatusFact[] | undefined {
   const read = deps.gh([
     "api",
     `repos/${repo}/commits/${sha}/status?per_page=100`,
     "--jq",
-    ".statuses[]? | [.context, .state, .created_at] | @json",
+    ".statuses[]? | [.context, .state, .created_at, .description] | @json",
   ]);
-  if (read.exitCode !== 0) return "unknown";
-  let latestState: string | undefined;
-  let latestMs = Number.NEGATIVE_INFINITY;
+  if (read.exitCode !== 0) return undefined;
+  const statuses: OverrideStatusFact[] = [];
   for (const line of read.stdout.split("\n")) {
     if (line.trim() === "") continue;
     let value: unknown;
@@ -811,22 +893,168 @@ function readLatestCliStatusState(
       continue;
     }
     if (!Array.isArray(value)) continue;
-    const [context, state, createdAt] = value;
+    const [context, state, createdAt, description] = value;
     if (
-      context !== STATUS_CONTEXT ||
+      typeof context !== "string" ||
       typeof state !== "string" ||
       typeof createdAt !== "string"
     ) {
       continue;
     }
-    const createdMs = Date.parse(createdAt);
-    if (Number.isNaN(createdMs) || createdMs < latestMs) continue;
-    latestState = state;
-    latestMs = createdMs;
+    statuses.push({
+      context,
+      state,
+      created_at: createdAt,
+      description: typeof description === "string" ? description : undefined,
+    });
   }
-  if (latestState === undefined) return "unknown";
-  if (latestState === "pending") return "pending";
-  return SETTLED_STATES.has(latestState) ? "settled" : "unknown";
+  return statuses;
+}
+
+// The head's newest pr-hero status, as the three states the table needs. The newest row is
+// picked by its time, not by its place in the answer. A failed read, no pr-hero row, or a
+// state the table does not name is unknown, which the table answers with the status.
+function readLatestCliStatusState(
+  deps: PublishDeps,
+  repo: string,
+  sha: string,
+): LatestStatusState {
+  const statuses = readHeadStatuses(deps, repo, sha);
+  if (statuses === undefined) return "unknown";
+  const latest = newestStatusInContext(statuses, STATUS_CONTEXT);
+  if (latest === undefined) return "unknown";
+  if (latest.state === "pending") return "pending";
+  return SETTLED_STATES.has(latest.state) ? "settled" : "unknown";
+}
+
+// Whether an override posted during the run stands over the repost of the CLI's unsettled
+// status (overrideStandsOverRun, src/ci/override.ts). WHY it is read here: the CLI's final
+// write failed, so its own status reads may have failed too, and the override may not have
+// been seen by the CLI. A failed read, or a record with no cutoff to judge against, is no
+// evidence of an override, so the repost goes ahead as before. The status reposted is the
+// review's own verdict, so a failed review's failure is reposted as a failure.
+//
+// WHY the cutoff is the CLI's and not re-derived here: the CLI computed it once for the run,
+// and it knows whether its own pending landed, which decides the clock-skew allowance (the
+// landed decision is carried by the cutoff, src/ci/override.ts overrideCutoffMs). The publisher
+// has neither the pending's outcome nor the allowance, so it compares with the cutoff as given.
+function overrideStandsBeforeRepost(
+  deps: PublishDeps,
+  repo: string,
+  sha: string,
+  overrideCutoffMs: number | undefined,
+): boolean {
+  if (overrideCutoffMs === undefined) return false;
+  const statuses = readHeadStatuses(deps, repo, sha);
+  if (statuses === undefined) return false;
+  return overrideStandsOverRun(statuses, overrideCutoffMs);
+}
+
+// The override's reporter: the shared rendering (statusWriteFailure), reported.
+function reportStatusWriteFailure(
+  deps: PublishDeps,
+  httpStatus: number | undefined,
+  runId: string,
+  runUrl: string,
+): void {
+  report(deps, statusWriteFailure(httpStatus, runId, runUrl));
+}
+
+// The one status an override writes. Its description starts with OVERRIDE_DESCRIPTION_PREFIX,
+// the text the override rule (src/ci/override.ts) recognises. Its description names the actor, so the
+// status alone says who unlocked the gate.
+function overrideDescription(actor: string): string {
+  return `${OVERRIDE_DESCRIPTION_PREFIX}${actor} — no review on this head`;
+}
+
+// The audit comment. Its first line is the marker, which is not an outcome marker,
+// so no cleanup removes it. Its wording follows the status: a comment that claimed
+// an override the status never received would be a false record.
+function overrideCommentBody(
+  plan: Extract<Publication, { kind: "override" }>,
+  statusSet: boolean,
+  at: Date,
+): string {
+  const when = `${at.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  const marker = `<!-- pr-hero-override head=${plan.headSha ?? "unknown"} run=${plan.runId} attempt=${plan.runAttempt} -->`;
+  if (statusSet && plan.headSha !== undefined) {
+    return [
+      marker,
+      "",
+      `pr-hero's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. ` +
+        "The `pr-hero` status on that head is now success, with no review of this head. " +
+        "A new push or a later `/pr-hero review` on this head replaces it.",
+    ].join("\n");
+  }
+  const where =
+    plan.headSha === undefined
+      ? ", because the head of this pull request is unknown"
+      : ` on head \`${plan.headSha}\``;
+  return [
+    marker,
+    "",
+    `@${plan.actor} asked to override pr-hero's gate at ${when}, but no commit status could be set${where}, so the gate is unchanged. Comment \`/pr-hero override\` again to retry.`,
+  ].join("\n");
+}
+
+// WHY the status goes first and the comment's wording follows it: the audit
+// comment must never claim an override that the status did not receive. The
+// cleanup of older outcome comments runs only after a written status (below), the
+// same settle a completed review does; a failed status leaves them in place.
+function publishOverride(
+  deps: PublishDeps,
+  plan: Extract<Publication, { kind: "override" }>,
+): number {
+  let statusSet = false;
+  let exitCode = 0;
+  if (plan.headSha !== undefined) {
+    const status = postStatus(deps, plan.repository, plan.headSha, {
+      state: "success",
+      context: STATUS_CONTEXT,
+      description: overrideDescription(plan.actor),
+      targetUrl: plan.runUrl,
+    });
+    if (status.ok) {
+      statusSet = true;
+      // WHY here, right after the success and before the audit comment: the head is green
+      // now, so an earlier run's outcome comment contradicts it. The audit comment does not
+      // gate this cleanup, and its warnings never change the exit code (as for a review).
+      cleanupOlderOutcomes(deps, plan);
+    } else {
+      reportStatusWriteFailure(
+        deps,
+        status.httpStatus,
+        plan.runId,
+        plan.runUrl,
+      );
+      exitCode = 1;
+    }
+  }
+  deps.stdout(
+    workflowCommand(
+      "notice",
+      statusSet
+        ? `pr-hero gate overridden by @${plan.actor} on head ${plan.headSha}.`
+        : `pr-hero override by @${plan.actor} set no commit status.`,
+    ),
+  );
+  const at = (deps.now ?? (() => new Date()))();
+  const comment = createComment(
+    deps,
+    plan.repository,
+    plan.pr,
+    overrideCommentBody(plan, statusSet, at),
+  );
+  if (!comment.ok) {
+    deps.stdout(
+      workflowCommand(
+        "error",
+        `pr-hero could not post its override comment on #${plan.pr} (${comment.detail}).`,
+      ),
+    );
+    return 1;
+  }
+  return exitCode;
 }
 
 export function runPublish(deps: PublishDeps): number {
@@ -912,23 +1140,43 @@ export function runPublish(deps: PublishDeps): number {
     // but the cleanup still runs, since the review did complete.
     let exitCode = 0;
     if (plan.headSha !== undefined && plan.status !== undefined) {
-      const status = postStatus(
-        deps,
-        plan.repository,
-        plan.headSha,
-        plan.status,
-        1,
-      );
-      if (!status.ok) {
-        report(
+      // WHY the override check comes before the repost (Fix 4): an override posted during this
+      // run stands over the review's verdict, the same rule the CLI's final write applies
+      // (src/ci/override.ts), against the cutoff the CLI recorded. Then the repost is skipped,
+      // and the notice says why.
+      if (
+        overrideStandsBeforeRepost(
           deps,
-          statusWriteFailure(
-            status.httpStatus,
-            plan.runId,
-            plan.status.targetUrl,
+          plan.repository,
+          plan.headSha,
+          plan.overrideCutoffMs,
+        )
+      ) {
+        deps.stdout(
+          workflowCommand(
+            "notice",
+            "pr-hero: an override on this head stands, so the review's status is not reposted over it.",
           ),
         );
-        exitCode = 1;
+      } else {
+        const status = postStatus(
+          deps,
+          plan.repository,
+          plan.headSha,
+          plan.status,
+          1,
+        );
+        if (!status.ok) {
+          report(
+            deps,
+            statusWriteFailure(
+              status.httpStatus,
+              plan.runId,
+              plan.status.targetUrl,
+            ),
+          );
+          exitCode = 1;
+        }
       }
     }
     if (plan.pr !== undefined) {
@@ -936,6 +1184,7 @@ export function runPublish(deps: PublishDeps): number {
     }
     return exitCode;
   }
+  if (plan.kind === "override") return publishOverride(deps, plan);
   report(deps, plan.rendered);
   if (plan.kind === "local") return 0;
 

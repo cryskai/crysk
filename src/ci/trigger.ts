@@ -34,6 +34,17 @@ import path from "node:path";
 
 export const REVIEW_COMMAND = "/pr-hero review";
 export const REVIEW_FULL_COMMAND = "/pr-hero review --full";
+// The human escape hatch (odd/tasks/agent-first-ci.md, S8). Exact, like the review
+// command: a loose match would let a quoted reply unlock a gate.
+export const OVERRIDE_COMMAND = "/pr-hero override";
+
+// A GitHub login: letters, digits, hyphens and underscores (an Enterprise Managed
+// User login is `handle_shortcode`), plus the `[bot]` suffix an app posts under. The
+// override records the login, so it must be one. The bound is 91 characters in all,
+// `[bot]` included: the override status's description is 49 characters around the
+// login, and GitHub refuses a description over 140. A copy lives in src/ci/outcome.ts
+// (LOGIN_PATTERN); test/ci/outcome.test.ts fails if the two texts differ.
+const GITHUB_LOGIN = /^(?=.{1,91}$)[A-Za-z0-9][A-Za-z0-9_-]{0,90}(\[bot\])?$/;
 
 // The only answers of the collaborator-permission endpoint that may spend
 // money. `maintain` already reports as `write` there and `triage` as `read`,
@@ -130,10 +141,15 @@ export interface CiTriggerInput {
   selfHostedRunner: boolean;
   forceInput: boolean;
   fullInput: boolean;
+  // GITHUB_RUN_ATTEMPT when it is a positive integer. Absent outside Actions.
+  // Above 1 the run is a re-run, which replays the original comment event.
+  runAttempt?: number;
 }
 
 export type CiTriggerDecision =
   | { kind: "review"; force: boolean; full: boolean }
+  // A human's override: no CLI run, $0. `actor` is the login that unlocked the gate.
+  | { kind: "override"; actor: string }
   | { kind: "ignore"; reason: string }
   | { kind: "denied"; reason: string }
   | {
@@ -156,10 +172,20 @@ export function parseReviewCommand(
   return undefined;
 }
 
+// A comment that asks for something. Both kinds are permission-gated, so the
+// comment kind (and not the command) decides whether the lookup runs.
+type CommentCommand = { kind: "review"; full: boolean } | { kind: "override" };
+
 type EventVerdict =
   | { kind: "ignore"; reason: string }
-  | { kind: "comment"; full: boolean }
+  | { kind: "comment"; command: CommentCommand }
   | { kind: "event" };
+
+// The exact text a commenter typed, for the messages that name it.
+function commandText(command: CommentCommand): string {
+  if (command.kind === "override") return OVERRIDE_COMMAND;
+  return command.full ? REVIEW_FULL_COMMAND : REVIEW_COMMAND;
+}
 
 // Stage 1 of the precedence. Shared by decideCiTrigger and
 // commenterPermissionNeeded, so the shell can never look a permission up for
@@ -196,17 +222,23 @@ function classifyEvent(input: CiTriggerInput): EventVerdict {
     }
     // The reason never quotes the body: it is free text anyone can type,
     // and this string is printed as a workflow command.
-    const command = parseReviewCommand(input.commentBody);
-    if (command === undefined) {
+    const review = parseReviewCommand(input.commentBody);
+    if (review !== undefined) {
       return {
-        kind: "ignore",
-        reason:
-          `This comment is not a pr-hero command. Comment exactly ` +
-          `\`${REVIEW_COMMAND}\` or \`${REVIEW_FULL_COMMAND}\` to request ` +
-          "a review.",
+        kind: "comment",
+        command: { kind: "review", full: review.full },
       };
     }
-    return { kind: "comment", full: command.full };
+    if (input.commentBody.trim() === OVERRIDE_COMMAND) {
+      return { kind: "comment", command: { kind: "override" } };
+    }
+    return {
+      kind: "ignore",
+      reason:
+        `This comment is not a pr-hero command. Comment exactly ` +
+        `\`${REVIEW_COMMAND}\` or \`${REVIEW_FULL_COMMAND}\` to request ` +
+        `a review, or \`${OVERRIDE_COMMAND}\` to unlock a gate.`,
+    };
   }
   // workflow_dispatch and anything else a consumer wires: the caller's own
   // `pr-number` / `force` / `full` inputs decide, as they always have.
@@ -224,7 +256,7 @@ export function commenterPermissionNeeded(input: CiTriggerInput): boolean {
 // maintainer whose command met a GitHub outage would see nothing happen.
 function commenterVerdict(
   input: CiTriggerInput,
-  full: boolean,
+  command: CommentCommand,
 ): CiTriggerDecision | undefined {
   const permission = input.commenterPermission;
   if (
@@ -235,21 +267,29 @@ function commenterVerdict(
   }
   const who = `@${input.commenterLogin || "unknown"}`;
   if (permission?.kind === "indeterminate") {
-    const command = full ? REVIEW_FULL_COMMAND : REVIEW_COMMAND;
+    // An override that is not verified changes nothing, so it says so instead of
+    // "no review was started", which would be wrong for it.
+    const outcome =
+      command.kind === "override"
+        ? "the gate was not overridden"
+        : "no review was started";
     return {
       kind: "unverifiable",
       reason:
         `pr-hero could not verify whether ${who} has write access to ` +
         `${input.repository}, because the GitHub API call failed ` +
-        `(${permission.detail}), so no review was started. Comment ` +
-        `\`${command}\` again to retry.`,
+        `(${permission.detail}), so ${outcome}. Comment ` +
+        `\`${commandText(command)}\` again to retry.`,
       status: permission.status,
       rateLimited: permission.rateLimited,
     };
   }
   const rule =
-    `Only a maintainer (write or admin access to ${input.repository}) can ` +
-    `request a review with \`${REVIEW_COMMAND}\`.`;
+    command.kind === "override"
+      ? `Only a maintainer (write or admin access to ${input.repository}) can ` +
+        `unlock a gate with \`${OVERRIDE_COMMAND}\`.`
+      : `Only a maintainer (write or admin access to ${input.repository}) can ` +
+        `request a review with \`${REVIEW_COMMAND}\`.`;
   if (permission === undefined) {
     return {
       kind: "denied",
@@ -274,13 +314,42 @@ function commenterVerdict(
 // credentials. An ignored or denied run must never report missing
 // credentials: that error is red, and a near-miss comment or a stranger's
 // command turning a PR red would be noise the author cannot fix.
+// WHY the login check: the override records the login and the publisher prints
+// it in a status and a comment. GitHub's own logins always match, so this refuses
+// only a value that was never one, and the refusal never echoes it.
+function overrideDecision(input: CiTriggerInput): CiTriggerDecision {
+  // WHY refused on a re-run: GitHub replays the comment event, and this run then
+  // resolves the head as it is NOW. The override would name a head the commenter
+  // never saw, so the commenter comments again to act on the current head.
+  if (input.runAttempt !== undefined && input.runAttempt > 1) {
+    return {
+      kind: "denied",
+      reason:
+        "pr-hero did not override the gate: an override applies to the head at " +
+        "the time of the comment; comment `/pr-hero override` again.",
+    };
+  }
+  if (!GITHUB_LOGIN.test(input.commenterLogin)) {
+    return {
+      kind: "denied",
+      reason:
+        "The commenter's login is not a GitHub login, so the override was " +
+        "refused and nothing was recorded.",
+    };
+  }
+  return { kind: "override", actor: input.commenterLogin };
+}
+
 export function decideCiTrigger(input: CiTriggerInput): CiTriggerDecision {
   const event = classifyEvent(input);
   if (event.kind === "ignore") return event;
 
   if (event.kind === "comment") {
-    const verdict = commenterVerdict(input, event.full);
+    const verdict = commenterVerdict(input, event.command);
     if (verdict !== undefined) return verdict;
+    // WHY before the credential check: an override spends nothing, so a repository
+    // with no credential can still unlock its own gate.
+    if (event.command.kind === "override") return overrideDecision(input);
   }
 
   // `no-credentials` is red, so it fires only when nothing the engine can
@@ -308,10 +377,14 @@ export function decideCiTrigger(input: CiTriggerInput): CiTriggerDecision {
   }
 
   const fromComment = event.kind === "comment";
+  const commentFull =
+    event.kind === "comment" &&
+    event.command.kind === "review" &&
+    event.command.full;
   return {
     kind: "review",
     force: input.forceInput || fromComment,
-    full: input.fullInput || (fromComment && event.full),
+    full: input.fullInput || commentFull,
   };
 }
 
@@ -520,6 +593,9 @@ interface RecordFields {
   cls?: RecordClass;
   pr?: string;
   headSha?: string;
+  // Set only by the override call site: the record names who unlocked the gate
+  // and no other decision names anyone (see parseTriggerRecord).
+  actor?: string;
 }
 
 // A positive integer read from runner text, or undefined. Trigger imports only
@@ -588,6 +664,7 @@ function writeRecord(
     ...(fields.cls === undefined ? {} : { cls: fields.cls }),
     ...(fields.pr === undefined ? {} : { pr: Number(fields.pr) }),
     ...(fields.headSha === undefined ? {} : { head_sha: fields.headSha }),
+    ...(fields.actor === undefined ? {} : { actor: fields.actor }),
     repository: run.repository,
     run_id: run.run_id,
     ...(run.run_attempt === undefined ? {} : { run_attempt: run.run_attempt }),
@@ -687,8 +764,8 @@ function validSha(value: string): string | undefined {
 }
 
 // Every name below is bound by the trigger step's `env:` in action.yml,
-// except GITHUB_REPOSITORY, GITHUB_RUN_ID, RUNNER_ENVIRONMENT, HOME and
-// XDG_DATA_HOME, which every step inherits from the runner.
+// except GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, RUNNER_ENVIRONMENT,
+// HOME and XDG_DATA_HOME, which every step inherits from the runner.
 function readTriggerInput(
   deps: CiTriggerDeps,
 ): Omit<CiTriggerInput, "commenterPermission"> {
@@ -696,6 +773,7 @@ function readTriggerInput(
   const text = (name: string): string => env[name] ?? "";
   const flag = (name: string): boolean => text(name) === "true";
   const exists = deps.exists ?? existsSync;
+  const runAttempt = positiveInteger(text("GITHUB_RUN_ATTEMPT"));
   return {
     eventName: text("EVENT_NAME"),
     repository: text("GITHUB_REPOSITORY"),
@@ -712,6 +790,7 @@ function readTriggerInput(
     selfHostedRunner: text("RUNNER_ENVIRONMENT") === "self-hosted",
     forceInput: flag("FORCE_INPUT"),
     fullInput: flag("FULL_INPUT"),
+    ...(runAttempt === undefined ? {} : { runAttempt }),
   };
 }
 
@@ -846,6 +925,87 @@ function resolveHeadSha(
   return UNKNOWN_HEAD_SHA;
 }
 
+// Short, like the permission retry: long enough for a transient gh failure to
+// clear, short enough that a real outage costs the comment run seconds.
+const OVERRIDE_HEAD_RETRY_DELAY_MS = 2_000;
+
+// The notice a refused override prints. docs/github-actions.md ("Overriding a red
+// gate") describes the same refusal in prose, so keep the two in step.
+const OVERRIDE_FORK_REFUSAL =
+  "`/pr-hero override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/pr-hero review` and merge it with your repository's own rules.";
+
+// The notice for an answer that does not say whether the pull request is a fork (a
+// failed or invalid lookup). It is not a claim that the pull request is one, so it gets
+// its own text: the same refusal, with the way to retry.
+const OVERRIDE_UNKNOWN_FORK_REFUSAL =
+  "`/pr-hero override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/pr-hero override` again.";
+
+// What the override's one lookup says. `crossRepository` is undefined when the
+// answer does not say (a failed call, output that is not JSON, or a field that is
+// missing or not a boolean). `head` is a validated sha, or undefined.
+interface OverrideHeadAnswer {
+  head: string | undefined;
+  crossRepository: boolean | undefined;
+}
+
+// One `gh pr view --json headRefOid,isCrossRepository`. Only an override asks
+// for the fork flag: a review's lookup stays the bare-sha query it always was.
+function askOverrideHead(
+  deps: CiTriggerDeps,
+  repository: string,
+  pr: string,
+): OverrideHeadAnswer {
+  const unanswered: OverrideHeadAnswer = {
+    head: undefined,
+    crossRepository: undefined,
+  };
+  const result = callGh(deps, [
+    "pr",
+    "view",
+    pr,
+    "--repo",
+    repository,
+    "--json",
+    "headRefOid,isCrossRepository",
+  ]);
+  if (result.exitCode !== 0) return unanswered;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return unanswered;
+  }
+  if (typeof parsed !== "object" || parsed === null) return unanswered;
+  const { headRefOid, isCrossRepository } = parsed as {
+    headRefOid?: unknown;
+    isCrossRepository?: unknown;
+  };
+  const sha = typeof headRefOid === "string" ? headRefOid.trim() : "";
+  return {
+    head: SHA_RE.test(sha) ? sha : undefined,
+    crossRepository:
+      typeof isCrossRepository === "boolean" ? isCrossRepository : undefined,
+  };
+}
+
+// WHY one retry, for an override only: the head is the whole target of an
+// override's status, so one failed lookup would leave the gate unchanged with
+// no status. The same answer also says whether the pull request is a fork, and
+// an unanswered fork question is refused, so the retry covers both. A definite
+// fork answer is final: a fork is refused on the first answer, with no retry.
+function lookupOverrideHead(
+  deps: CiTriggerDeps,
+  repository: string,
+  pr: string,
+): OverrideHeadAnswer {
+  const first = askOverrideHead(deps, repository, pr);
+  if (first.crossRepository === true) return first;
+  if (first.crossRepository === false && first.head !== undefined) return first;
+  const sleep = deps.sleep ?? ((ms: number) => Bun.sleepSync(ms));
+  sleep(OVERRIDE_HEAD_RETRY_DELAY_MS);
+  return askOverrideHead(deps, repository, pr);
+}
+
 export function runCiTrigger(deps: CiTriggerDeps): number {
   const base = readTriggerInput(deps);
   const input: CiTriggerInput = commenterPermissionNeeded(base)
@@ -935,6 +1095,50 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
 
   // Past the early return the resolution is the resolved PR, so its number is a string.
   const prNumber = resolution.pr;
+  if (decision.kind === "override") {
+    // WHY refused unless the lookup says "same repository": a fork's head can change
+    // after the comment, and the job binds the override to the head it resolves now.
+    // A fork's author has no write access, so a fork's push after the comment would
+    // turn the gate green on code the maintainer never saw. A same-repository pusher
+    // already has write access. An answer that does not say is refused too, because
+    // the lookup cannot rule the fork out. Refused like the denied path: no status. The
+    // two refusals print different notices: a proven fork, and an answer that did not say.
+    const answer = lookupOverrideHead(deps, base.repository, prNumber);
+    if (answer.crossRepository !== false) {
+      writeRecord(deps, run, { decision: "denied", params: {} });
+      deps.appendOutput(formatTriggerOutputs(NO_RUN));
+      deps.stdout(
+        workflowCommand(
+          "notice",
+          answer.crossRepository === true
+            ? OVERRIDE_FORK_REFUSAL
+            : OVERRIDE_UNKNOWN_FORK_REFUSAL,
+        ),
+      );
+      return 0;
+    }
+    // WHY the no-head path is kept: a same-repository answer with no usable sha
+    // still posts, and the publisher's comment says no status could be set.
+    const head = answer.head ?? UNKNOWN_HEAD_SHA;
+    const write = writeRecord(deps, run, {
+      decision: "override",
+      params: {},
+      pr: prNumber,
+      headSha: validSha(head),
+      actor: decision.actor,
+    });
+    deps.appendOutput(
+      formatTriggerOutputs({
+        ...NO_RUN,
+        pr: prNumber,
+        head_sha: head,
+        publish: publishes(write),
+      }),
+    );
+    // WHY a failed record write is red: the publisher then has nothing to post,
+    // so a green run would claim an override that never reached the gate.
+    return write === "failed" ? 1 : 0;
+  }
   const head = resolveHeadSha(
     deps,
     base.eventName,

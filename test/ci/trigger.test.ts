@@ -1,8 +1,10 @@
 // The action-side trigger (odd/tasks/agent-first-ci.md, T1/S1): which events
 // review, who may ask for one by comment, and what a run with no credential
-// does. The consumer workflow's job `if:` pre-filters forks and comments, but
-// the action re-decides all of it, so every rule here is pinned on the
-// action's own module rather than on the caller's YAML.
+// does. The consumer workflow's job `if:` pre-filters fork `pull_request` runs
+// and comments that are not a command. It cannot pre-filter a comment by its
+// head repository, because an `issue_comment` event does not carry one, so the
+// action re-decides all of it, and every rule here is pinned on the action's
+// own module rather than on the caller's YAML.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -150,6 +152,408 @@ describe("decideCiTrigger — the comment commands", () => {
     );
     expect(decision.kind).toBe("ignore");
     expect((decision as { reason: string }).reason).toContain("pull request");
+  });
+});
+
+// T6 (odd/tasks/agent-first-ci.md, S8): `/pr-hero override` is the human escape
+// hatch. It spends nothing, so it never reaches the credential check, and it is
+// the only comment that records WHO acted (the actor), because the override must
+// name who unlocked the gate.
+describe("decideCiTrigger — the override command (S8)", () => {
+  test.each([
+    ["exact", "/pr-hero override"],
+    ["surrounding spaces", "   /pr-hero override  "],
+    ["surrounding newlines", "\n/pr-hero override\n"],
+  ])("`/pr-hero override` (%s) overrides for a writer", (_label, body) => {
+    expect(decideCiTrigger(comment(body))).toEqual({
+      kind: "override",
+      actor: "maintainer",
+    });
+  });
+
+  test("an admin may override", () => {
+    expect(
+      decideCiTrigger(
+        comment("/pr-hero override", {
+          commenterPermission: { kind: "resolved", permission: "admin" },
+        }),
+      ),
+    ).toEqual({ kind: "override", actor: "maintainer" });
+  });
+
+  test.each([
+    "/pr-hero override please",
+    "/pr-hero overriding",
+    "/PR-HERO override",
+    "/pr-hero  override",
+    "/pr-hero override --force",
+    "please /pr-hero override",
+    "/pr-hero review override",
+  ])("a near-miss %j is ignored, never an override", (body) => {
+    expect(decideCiTrigger(comment(body)).kind).toBe("ignore");
+  });
+
+  test("a commenter with read access is denied, and the reason names the override command", () => {
+    const verdict = decideCiTrigger(
+      comment("/pr-hero override", {
+        commenterPermission: { kind: "resolved", permission: "read" },
+      }),
+    );
+    expect(verdict.kind).toBe("denied");
+    expect(verdict).toMatchObject({
+      reason: expect.stringContaining("`/pr-hero override`"),
+    });
+  });
+
+  test("an override with no permission answer is denied, never run", () => {
+    expect(
+      decideCiTrigger(
+        comment("/pr-hero override", { commenterPermission: undefined }),
+      ),
+    ).toMatchObject({ kind: "denied" });
+  });
+
+  test("an unverifiable permission lookup is unverifiable, never an override", () => {
+    const verdict = decideCiTrigger(
+      comment("/pr-hero override", {
+        commenterPermission: {
+          kind: "indeterminate",
+          detail: "HTTP 503",
+          status: 503,
+        },
+      }),
+    );
+    expect(verdict.kind).toBe("unverifiable");
+    expect(verdict).toMatchObject({
+      reason: expect.stringContaining("`/pr-hero override`"),
+    });
+  });
+
+  test("an override needs no credential: it spends nothing, so a repository with none can still unlock", () => {
+    expect(
+      decideCiTrigger(
+        comment("/pr-hero override", {
+          credentials: NO_CREDENTIALS,
+          selfHostedRunner: false,
+        }),
+      ),
+    ).toEqual({ kind: "override", actor: "maintainer" });
+  });
+
+  test("a login that is not a GitHub login is refused, and the refusal never echoes it", () => {
+    const verdict = decideCiTrigger(
+      comment("/pr-hero override", {
+        commenterLogin: "evil\n::warning::HOSTILE",
+      }),
+    );
+    expect(verdict.kind).toBe("denied");
+    expect(JSON.stringify(verdict)).not.toContain("HOSTILE");
+  });
+
+  // An Enterprise Managed User login is `handle_shortcode` and can be longer than
+  // 39 characters, so the guard must accept both (the maintainer could not override).
+  // The bound is 91 characters, the longest login whose override description
+  // (49 characters around it) still fits GitHub's 140-character status limit.
+  test.each([
+    ["an EMU login with an underscore", "octo_corp"],
+    ["a 45-character EMU-style login", `${"a".repeat(40)}_corp`],
+    ["a 91-character login, the bound", "a".repeat(91)],
+    ["a bot login", "dependabot[bot]"],
+    ["a bot login of 91 characters in all", `${"a".repeat(86)}[bot]`],
+  ])("%s is accepted as the override actor", (_label, login) => {
+    expect(
+      decideCiTrigger(comment("/pr-hero override", { commenterLogin: login })),
+    ).toEqual({ kind: "override", actor: login });
+  });
+
+  // One past the bound is refused, for a plain login and for a bot login whose
+  // `[bot]` suffix counts toward the same 91.
+  test.each([
+    ["a 92-character login", "a".repeat(92)],
+    ["a 96-character bot login", `${"a".repeat(91)}[bot]`],
+  ])(
+    "%s is refused, so its override description cannot overflow",
+    (_label, login) => {
+      const verdict = decideCiTrigger(
+        comment("/pr-hero override", { commenterLogin: login }),
+      );
+      expect(verdict.kind).toBe("denied");
+      expect(JSON.stringify(verdict)).not.toContain(login);
+    },
+  );
+
+  // Whatever could break the status text or the markdown comment stays refused.
+  test.each([
+    ["a space", "octo corp"],
+    ["a backtick", "octo`corp"],
+    ["an opening angle bracket", "octo<corp"],
+    ["a closing angle bracket", "octo>corp"],
+    ["an @ sign", "@octo"],
+    ["a newline", "octo\ncorp"],
+    ["a trailing newline", "octo\n"],
+  ])("a login with %s is refused", (_label, login) => {
+    const verdict = decideCiTrigger(
+      comment("/pr-hero override", { commenterLogin: login }),
+    );
+    expect(verdict.kind).toBe("denied");
+    expect(JSON.stringify(verdict)).not.toContain(login);
+  });
+
+  // A re-run replays the original comment event, but resolves the head at re-run
+  // time. The override would then land on a head its commenter never saw.
+  test("an override on a re-run attempt is refused, and the first attempt proceeds", () => {
+    expect(
+      decideCiTrigger(comment("/pr-hero override", { runAttempt: 2 })),
+    ).toMatchObject({
+      kind: "denied",
+      reason: expect.stringContaining(
+        "an override applies to the head at the time of the comment",
+      ),
+    });
+    expect(
+      decideCiTrigger(comment("/pr-hero override", { runAttempt: 1 })),
+    ).toEqual({ kind: "override", actor: "maintainer" });
+    expect(decideCiTrigger(comment("/pr-hero override"))).toEqual({
+      kind: "override",
+      actor: "maintainer",
+    });
+  });
+
+  test("the override record names its actor, and a review record never does", () => {
+    const override = outcomeRun(
+      commentEnv("/pr-hero override"),
+      scriptedGh(ok("write"), overrideHead(HEAD_SHA, false)),
+    );
+    expect(override.exitCode).toBe(0);
+    expect(override.outputs).toMatchObject({
+      run: "false",
+      publish: "true",
+      pr: "21",
+      head_sha: HEAD_SHA,
+    });
+    expect(override.record).toMatchObject({
+      decision: "override",
+      actor: "maintainer",
+      pr: 21,
+    });
+
+    const review = outcomeRun(
+      commentEnv("/pr-hero review"),
+      scriptedGh(ok("write"), ok(HEAD_SHA)),
+    );
+    expect(review.recordText).toBeDefined();
+    expect(JSON.parse(review.recordText ?? "{}")).not.toHaveProperty("actor");
+  });
+
+  test("an override whose head cannot be resolved still records its actor, with no head", () => {
+    // A same-repository answer with no usable sha: the head is unknown, not the fork.
+    const run = outcomeRun(
+      commentEnv("/pr-hero override"),
+      scriptedGh(ok("write"), overrideHead("", false)),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.record).toMatchObject({
+      decision: "override",
+      actor: "maintainer",
+      pr: 21,
+    });
+    expect(run.record?.head_sha).toBeUndefined();
+  });
+
+  test("an override on a pull request that cannot be resolved takes the review's error path", () => {
+    const run = outcomeRun(
+      commentEnv("/pr-hero override", { EVENT_ISSUE_NUMBER: "" }),
+      scriptedGh(ok("write"), ok(HEAD_SHA)),
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.outputs.run).toBe("false");
+  });
+
+  test("an override whose record cannot be written fails the job, never silently", () => {
+    const run = runShell(
+      commentEnv("/pr-hero override", {
+        PRHERO_OUTCOME_DIR: path.join(
+          os.tmpdir(),
+          "prhero-override-unwritable",
+        ),
+      }),
+      scriptedGh(ok("write"), overrideHead(HEAD_SHA, false)),
+      () => false,
+      failingFs,
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toContain("could not write its outcome record");
+  });
+
+  test("an override re-run (attempt 2) sets nothing and looks up no head; attempt 1 records the override", () => {
+    const rerun = outcomeRun(
+      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "2" }),
+      scriptedGh(ok("write"), ok(HEAD_SHA)),
+    );
+    expect(rerun.exitCode).toBe(0);
+    expect(rerun.outputs).toMatchObject({ run: "false", head_sha: "" });
+    expect(rerun.record).toMatchObject({ decision: "denied", run_attempt: 2 });
+    expect(rerun.record).not.toHaveProperty("actor");
+    expect(rerun.ghCalls.filter((args) => args[0] === "pr")).toEqual([]);
+    expect(rerun.stdout).toContain(
+      "an override applies to the head at the time of the comment; comment `/pr-hero override` again",
+    );
+
+    const first = outcomeRun(
+      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "1" }),
+      scriptedGh(ok("write"), overrideHead(HEAD_SHA, false)),
+    );
+    expect(first.exitCode).toBe(0);
+    expect(first.record).toMatchObject({
+      decision: "override",
+      actor: "maintainer",
+    });
+  });
+
+  // The head is the whole target of an override's status, so its one lookup is
+  // retried once. A review only names an artifact with its head, so it is not.
+  test("an override retries its head lookup once: a second answer is used", () => {
+    let headCalls = 0;
+    const run = outcomeRun(commentEnv("/pr-hero override"), (args) => {
+      if (args[0] === "api") return ok("write");
+      headCalls += 1;
+      return headCalls === 1
+        ? { exitCode: 1, stdout: "", stderr: "gh: transient failure" }
+        : overrideHead(HEAD_SHA, false);
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.record).toMatchObject({
+      decision: "override",
+      head_sha: HEAD_SHA,
+    });
+    expect(run.outputs).toMatchObject({ head_sha: HEAD_SHA });
+    expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(2);
+    expect(run.sleeps).toHaveLength(1);
+  });
+
+  // The lookup also answers whether the pull request is from a fork, so a lookup
+  // that fails twice cannot tell, and the override is refused rather than guessed.
+  test("an override whose head lookup fails twice is refused, with no status", () => {
+    const run = outcomeRun(commentEnv("/pr-hero override"), (args) =>
+      args[0] === "api"
+        ? ok("write")
+        : { exitCode: 1, stdout: "", stderr: "gh: still failing" },
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(2);
+    expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
+    expect(run.record).toMatchObject({ decision: "denied" });
+    expect(run.record).not.toHaveProperty("actor");
+    expect(run.stdout).toContain(UNKNOWN_FORK_OVERRIDE_REFUSAL);
+    expect(run.stdout).not.toContain(FORK_OVERRIDE_REFUSAL);
+  });
+
+  // A fork's head can change after the comment, and an override binds to the head
+  // the job resolves. So a fork pull request is refused, and a definite answer
+  // is not retried.
+  test("an override on a fork pull request is refused: a notice, no status, and no actor recorded", () => {
+    const run = outcomeRun(
+      commentEnv("/pr-hero override"),
+      scriptedGh(ok("write"), overrideHead(HEAD_SHA, true)),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs).toMatchObject({
+      run: "false",
+      publish: "false",
+      head_sha: "",
+    });
+    expect(run.record).toMatchObject({ decision: "denied" });
+    expect(run.record).not.toHaveProperty("actor");
+    expect(run.stdout).toContain(FORK_OVERRIDE_REFUSAL);
+    expect(run.stdout).not.toContain(UNKNOWN_FORK_OVERRIDE_REFUSAL);
+    // The only gh API call is the permission lookup: the shell posts no status,
+    // and the publisher, which would, never runs for a refused override.
+    expect(run.ghCalls.filter((args) => args[0] === "api")).toHaveLength(1);
+    expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(1);
+    expect(run.sleeps).toEqual([]);
+  });
+
+  test("an override on a same-repository pull request still overrides on the head it names", () => {
+    const run = outcomeRun(
+      commentEnv("/pr-hero override"),
+      scriptedGh(ok("write"), overrideHead(HEAD_SHA, false)),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs).toMatchObject({
+      run: "false",
+      publish: "true",
+      head_sha: HEAD_SHA,
+    });
+    expect(run.record).toMatchObject({
+      decision: "override",
+      actor: "maintainer",
+      head_sha: HEAD_SHA,
+    });
+    expect(run.stdout).not.toContain(FORK_OVERRIDE_REFUSAL);
+  });
+
+  test.each([
+    ["the lookup failed", { exitCode: 1, stdout: "", stderr: "gh: failing" }],
+    ["the field is missing", ok(JSON.stringify({ headRefOid: HEAD_SHA }))],
+    [
+      "the field is not a boolean",
+      ok(JSON.stringify({ headRefOid: HEAD_SHA, isCrossRepository: "false" })),
+    ],
+    ["the answer is the review's bare sha", ok(HEAD_SHA)],
+  ])(
+    "an override is refused when the lookup cannot tell a fork (%s)",
+    (_label, answer) => {
+      const run = outcomeRun(commentEnv("/pr-hero override"), (args) =>
+        args[0] === "api" ? ok("write") : answer,
+      );
+      expect(run.exitCode).toBe(0);
+      expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
+      expect(run.record).toMatchObject({ decision: "denied" });
+      expect(run.record).not.toHaveProperty("actor");
+      expect(run.stdout).toContain(UNKNOWN_FORK_OVERRIDE_REFUSAL);
+      expect(run.stdout).not.toContain(FORK_OVERRIDE_REFUSAL);
+      expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(2);
+    },
+  );
+
+  test("a review of a fork pull request is not refused and keeps its bare-sha lookup", () => {
+    const run = outcomeRun(commentEnv("/pr-hero review"), (args) => {
+      if (args[0] === "api") return ok("write");
+      // The fork answer is for the override's combined lookup only.
+      return args.includes("isCrossRepository")
+        ? overrideHead(HEAD_SHA, true)
+        : ok(HEAD_SHA);
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs).toMatchObject({
+      run: "true",
+      publish: "true",
+      head_sha: HEAD_SHA,
+    });
+    expect(run.ghCalls.filter((args) => args[0] === "pr")).toEqual([
+      [
+        "pr",
+        "view",
+        "21",
+        "--repo",
+        REPO,
+        "--json",
+        "headRefOid",
+        "--jq",
+        ".headRefOid",
+      ],
+    ]);
+    expect(run.stdout).not.toContain(FORK_OVERRIDE_REFUSAL);
+  });
+
+  test("a review does not retry its head lookup", () => {
+    const run = outcomeRun(commentEnv("/pr-hero review"), (args) =>
+      args[0] === "api"
+        ? ok("write")
+        : { exitCode: 1, stdout: "", stderr: "gh: failing" },
+    );
+    expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(1);
+    expect(run.sleeps).toEqual([]);
   });
 });
 
@@ -605,6 +1009,20 @@ function runShell(
 }
 
 const ok = (stdout: string): GhResult => ({ exitCode: 0, stdout, stderr: "" });
+
+// The override's one head lookup, `gh pr view --json headRefOid,isCrossRepository`,
+// answers in JSON. A review's lookup still answers with the bare sha.
+const overrideHead = (sha: string, crossRepository: boolean): GhResult =>
+  ok(JSON.stringify({ headRefOid: sha, isCrossRepository: crossRepository }));
+
+// The notice a refused override prints, verbatim.
+const FORK_OVERRIDE_REFUSAL =
+  "`/pr-hero override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/pr-hero review` and merge it with your repository's own rules.";
+
+// The notice an override prints when the lookup could not say whether the pull request is
+// a fork. Distinct from the fork notice: a lookup that failed is not a proven fork.
+const UNKNOWN_FORK_OVERRIDE_REFUSAL =
+  "`/pr-hero override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/pr-hero override` again.";
 
 // Runs the shell with PRHERO_OUTCOME_DIR pointed at a fresh directory that does
 // not exist yet (the trigger must create it), then reads trigger.json back.
