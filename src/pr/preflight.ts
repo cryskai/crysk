@@ -860,10 +860,12 @@ export function commitStatusRequest(input: {
   };
 }
 
-// S4, gate mode: a finished review with blocking findings. The description
-// names the unlock, but `/pr-hero review` alone re-reviews this same head: a
-// head whose blocking findings are still there stays red. The honest unlock is
-// a fix and a push, which runs a new review on the new head.
+// S4, gate mode: a finished review with unresolved blocking findings. The count
+// is the gate's own (rereview/state.ts): this run's blocking survivors plus every
+// live blocking prior that a verifier verdict or a deletion did not clear. A
+// same-head `/pr-hero review` re-runs that same count, so it stays red. The
+// ways to green are a fix that the re-review verifies gone, or
+// `/pr-hero override`. A triage reply never lowers the count on its own (S7).
 // Gate-only: the only caller is a gate-mode settle, which is always a `--ci` run.
 // The context defaults to LOCAL so a caller that forgets it cannot reach the
 // gate; the gate's callers pass COMMIT_STATUS_CONTEXT explicitly.
@@ -876,7 +878,7 @@ export function blockingCommitStatusRequest(input: {
     state: "failure",
     context: input.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
     description: clipStatusDescription(
-      `pr-hero: ${input.blockingCount} blocking finding(s) — fix and push; /pr-hero review re-runs this head`,
+      `pr-hero: ${input.blockingCount} blocking finding(s) — fix and push, or /pr-hero override`,
     ),
     targetUrl: input.targetUrl,
   };

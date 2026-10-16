@@ -545,7 +545,7 @@ The table shows the status and the job exit for each case:
 
 | Cause | `gate` status | `advisory` status | Exit |
 |---|---|---|---|
-| Finished review with one or more blocking findings | `failure`: `pr-hero: N blocking finding(s) — fix and push; /pr-hero review re-runs this head` | `success` | `0` |
+| Finished review with unresolved blocking findings (see below) | `failure`: `pr-hero: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
 | Size or budget skip (`/pr-hero review` reviews it anyway) | `failure`: `pr-hero skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
 | Admission skip (coverage, same head, low risk, below threshold) or manual override required | none | none | `0` |
@@ -554,10 +554,20 @@ The table shows the status and the job exit for each case:
 Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
 below keep their own status and exit, as they did before the gate.
 
-**Unlocking a gate.** A `failure` for blocking findings clears when you fix the findings and push: the new
-head is reviewed and its status is set again. `/pr-hero review` reviews the head you comment on, so with the
-findings still there it sets `failure` again. The size and budget `failure` is the one that `/pr-hero review`
-clears, because that run passes both gates. An override for blocking findings is not built yet.
+**What counts as unresolved.** The count behind a blocking `failure` is every blocking finding that is still
+open: this run's blocking findings, plus each blocking finding from an earlier review of the PR that has not
+been cleared. A finding is still open when it is carried forward unchanged, when the verifier could not
+decide, when a triage reply deferred it, or when a triage reply dismissed it. A dismissal the adjudicator
+upheld counts too. A finding leaves the count only when the re-review verifies it gone, when every file it
+names was deleted, or when this run re-tiers it below blocking. Triage replies (`applied`, `dismissed`,
+`deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator that
+would check them does not exist yet. The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none.
+
+**Unlocking a gate.** A `failure` for blocking findings clears in one of two ways. A fix pushed to a new head
+clears its own finding once the re-review verifies it gone. `/pr-hero override` from a user with write access
+turns the status green for that head with no new review. The re-review does not clear it by itself: a same-head
+`/pr-hero review` runs the same count, so the `failure` stays. The size and budget `failure` is the one that
+`/pr-hero review` clears, because that run passes both gates.
 
 **A failed final write.** In gate mode the job fails with an `::error::` annotation when the final status
 cannot be written. The commit-status lock is still released. The head then stays `pending`, so the required

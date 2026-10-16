@@ -29,7 +29,7 @@ import {
   type WorseningHit,
 } from "#rereview/classify";
 import type { RereviewProvenance } from "#rereview/prepare";
-import { assembleLive } from "#rereview/state";
+import { assembleLive, type GateRow } from "#rereview/state";
 import {
   assignVerifyIds,
   closeVerifyQueue,
@@ -527,6 +527,11 @@ export interface PipelineResult {
   // process restart) stays visible to whatever reads this result, not just
   // to a reader of the artifact. Always an array, empty on the common case.
   unresolved: UnresolvedSpend[];
+  // The re-review's gate rows (rereview/state.ts): every prior the re-review did
+  // not verify gone. Handed to the publish step in memory only. They never reach
+  // pipeline.json, so the persisted `rereview` block keeps its shape. Absent when
+  // there was no re-review.
+  gatePriors?: readonly GateRow[];
   // D2 PR3: Route plan provenance
   routePlan?: ResolvedRoutePlan;
   routeFingerprint?: string;
@@ -1037,6 +1042,9 @@ interface RunState {
   usageTotalV2?: NormalizedUsage;
   steps: StepMeta[];
   worsenedHits: WorseningHit[];
+  // Set by fillRereviewProvenance, the one place the phase B settlement and the
+  // verify verdicts meet. Both return paths read it.
+  gatePriors?: readonly GateRow[];
 }
 
 export async function runPipeline(
@@ -1218,6 +1226,11 @@ async function execute(
       usage: zeroUsage(),
       sessionFailed: false,
       unresolved: [],
+      // The early return ran no check, so every prior phase B left open stays
+      // open here. The gate reads them, and nothing retires them.
+      ...(state.gatePriors === undefined
+        ? {}
+        : { gatePriors: state.gatePriors }),
     };
   }
 
@@ -2665,6 +2678,7 @@ async function finish(
     sessionFailed:
       state.hunterCount > 0 && state.hunterFailures === state.hunterCount,
     unresolved: collectUnresolvedSpend(state),
+    ...(state.gatePriors === undefined ? {} : { gatePriors: state.gatePriors }),
     ...(state.routePlan === undefined
       ? {}
       : {
@@ -2813,6 +2827,14 @@ function fillRereviewProvenance(
     input.phaseB === undefined
       ? {
           live: base.live,
+          // No phase B means no settled rows to read, so the gate gets the same
+          // open set `live` already carries, and nothing more.
+          gateRows: base.live.map((row) => ({
+            id: row.id,
+            tier: row.tier,
+            locs: row.locs,
+            status: row.status,
+          })),
           verifiedGone: base.resolved_verified ?? 0,
           verifiedGoneIds: base.resolved_ids ?? [],
           returned: base.returned ?? 0,
@@ -2823,6 +2845,7 @@ function fillRereviewProvenance(
           priors: input.phaseB.priors,
           verifyVerdicts: state.verifyVerdicts,
         });
+  state.gatePriors = assembled.gateRows;
   const filled: RereviewProvenance = {
     ...base,
     verified: state.verificationSpawned,

@@ -228,7 +228,7 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       status: {
         state: "failure",
         description:
-          "pr-hero: 1 blocking finding(s) — fix and push; /pr-hero review re-runs this head",
+          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
       },
     }),
   },
@@ -329,6 +329,37 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       },
     }),
     // The pull_request run was read again instead of the comment run: the check must catch it.
+    fail: obs({
+      run: {
+        id: 8,
+        event: "pull_request",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+    }),
+  },
+  "same-head-rereview/0": {
+    pass: obs(),
+    fail: obs({
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed",
+      },
+      comments: [outcome("PRH-HUNTERS-FAILED")],
+    }),
+  },
+  "same-head-rereview/1": {
+    pass: obs({
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+    }),
+    // The pull_request run was read instead of the comment run: the trigger never ran.
     fail: obs({
       run: {
         id: 8,

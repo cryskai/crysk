@@ -320,4 +320,68 @@ describe("assembleLive", () => {
     expect(row2?.c).not.toBe(claimFingerprint(""));
     expect(row1?.c).not.toBe(row2?.c);
   });
+
+  // The gate reads every prior that is not verified gone. `live` drops
+  // returned and re-tiered rows, and the gate must not: a misclassified tag is
+  // the author's own claim, and a rejected dismissal reopens the finding. Only
+  // a verifier verdict (or a deleted file) takes a row out of the gate.
+  test("gateRows keep the returned and re-tiered rows that live drops, and drop only verified-gone", () => {
+    const mk = (id: string) => ({
+      id,
+      sev: "CRITICAL" as const,
+      tier: "blocking" as const,
+      channel: "inline" as const,
+      locs: [`src/${id}.ts:1`],
+      claim: id,
+      triage: null,
+      newThreadReply: false,
+    });
+    const priors = ["R001", "R002", "R003", "R004", "R005"].map(mk);
+    const assembled = assembleLive({
+      settled: [
+        {
+          id: "R001",
+          status: "carried",
+          locs: ["src/R001.ts:1"],
+          renamed: false,
+        },
+        {
+          id: "R002",
+          status: "re-tiered",
+          locs: ["src/R002.ts:1"],
+          renamed: false,
+        },
+        {
+          id: "R003",
+          status: "returned",
+          locs: ["src/R003.ts:1"],
+          renamed: false,
+        },
+        {
+          id: "R004",
+          status: "verified-gone",
+          locs: ["src/R004.ts:1"],
+          renamed: false,
+        },
+        {
+          id: "R005",
+          status: "queued",
+          locs: ["src/R005.ts:1"],
+          renamed: false,
+          trigger: "touched",
+        },
+      ],
+      priors,
+      verifyVerdicts: new Map([["R005", "verified-gone"]]),
+    });
+    expect(assembled.live.map((row) => row.id)).toEqual(["R001"]);
+    expect(assembled.gateRows.map((row) => `${row.id}:${row.status}`)).toEqual([
+      "R001:carried",
+      "R002:re-tiered",
+      "R003:returned",
+    ]);
+    expect(assembled.gateRows.every((row) => row.tier === "blocking")).toBe(
+      true,
+    );
+  });
 });

@@ -45,6 +45,7 @@ import type { PrDiscoveryResult } from "#pr/discovery";
 import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
 import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
 import type { CiMode } from "#pr/preflight";
+import { unresolvedBlockingCount } from "#rereview/state";
 import type { Telemetry } from "#review/findings";
 import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
@@ -94,7 +95,8 @@ export interface PublishRunOutcomeInput {
   onPosted: (posted: InlinePostOutcome | null) => void;
   // S4's sibling sink, for the same reason as onPosted: the commit status
   // (settleCommitStatusAndLedger) reads this count in reviewPr()'s finally,
-  // and a throw later in this tail must not leave it unknown.
+  // and a throw later in this tail must not leave it unknown. The count is the
+  // gate's UNRESOLVED blocking count (rereview/state.ts), not this run's survivors.
   onBlockingCount: (count: number) => void;
   // Test-only seam (default: the real postFindingsIfEnabled). The posting stage
   // reaches gh with no offline seam of its own, so the suite passes a fake that
@@ -128,12 +130,17 @@ export async function publishRunOutcome(
     engine: await engineIdentity(),
     telemetry,
   });
-  // S4: the blocking count, from the findings doc the CI publish and ciExitCode
-  // read below. Computed once here, and fired the moment the doc exists, so a
-  // later throw still leaves the gate a count to read.
-  const blockingCount = doc.findings.filter(
-    (f) => f.tier === "blocking",
-  ).length;
+  // S4: the gate's unresolved count, read by the commit status in teardown.
+  // It is this run's blocking survivors PLUS every live blocking prior that no
+  // verifier verdict and no deletion cleared (rereview/state.ts owns the rule and
+  // its dedupe key). Counting only this run's survivors read green on a
+  // same-head forced re-review and on any re-review that carried a blocking
+  // prior. Computed once here, and fired the moment the doc exists, so a later
+  // throw still leaves the gate a count to read.
+  const blockingCount = unresolvedBlockingCount(
+    doc.findings,
+    result.gatePriors ?? [],
+  );
   input.onBlockingCount(blockingCount);
   const reportPath = await writeRunReport({
     runDir: input.runDir,

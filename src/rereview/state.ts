@@ -14,6 +14,12 @@
 import { isFullCommitId } from "#git/refs";
 import { claimFingerprint } from "#pr/preflight";
 import {
+  identitiesMatch,
+  identityFromFinding,
+  identityFromLocs,
+} from "#rereview/identity";
+import type { Finding } from "#review/findings";
+import {
   type FindingChannel,
   type GateStatus,
   isRecoveredSeverity,
@@ -22,6 +28,7 @@ import {
   type PriorRecord,
   type RecoveredSeverity,
   type RecoveredTier,
+  TIER_UNRECOVERABLE,
 } from "./classify";
 
 export const PR_STATE_MARKER_PREFIX = "<!-- pr-hero-state ";
@@ -310,6 +317,11 @@ export function assembleLive(input: {
   verifyVerdicts: ReadonlyMap<string, GateStatus>;
 }): {
   live: LiveFinding[];
+  // Every prior the re-review did not verify gone, returned and re-tiered rows
+  // included. `live` drops those two, and the gate must not: see unresolvedBlockingCount below.
+  // Written to the in-memory result only, never to the state block or
+  // pipeline.json, so the persisted `live[]` contract is unchanged.
+  gateRows: GateRow[];
   verifiedGone: number;
   verifiedGoneIds: string[];
   returned: number;
@@ -317,6 +329,7 @@ export function assembleLive(input: {
 } {
   const priorById = new Map(input.priors.map((prior) => [prior.id, prior]));
   const live: LiveFinding[] = [];
+  const gateRows: GateRow[] = [];
   const verifiedGoneIds: string[] = [];
   let returned = 0;
   let reTiered = 0;
@@ -328,6 +341,15 @@ export function assembleLive(input: {
     if (status === "verified-gone") {
       verifiedGoneIds.push(row.id);
       continue;
+    }
+    const gatePrior = priorById.get(row.id);
+    if (gatePrior !== undefined) {
+      gateRows.push({
+        id: gatePrior.id,
+        tier: gatePrior.tier,
+        locs: row.locs,
+        status,
+      });
     }
     if (status === "returned") {
       returned++;
@@ -353,9 +375,110 @@ export function assembleLive(input: {
   }
   return {
     live,
+    gateRows,
     verifiedGone: verifiedGoneIds.length,
     verifiedGoneIds,
     returned,
     reTiered,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The gate's unresolved-blocking count (S4, S6, S7). Pure: this run's
+// survivors plus the re-review's gate rows in, one number out.
+//
+// The gate must count what the author still owes, not only what this run
+// happened to find. A carried blocking prior that the re-review did not touch
+// is still open, and so is a same-head forced re-review, which runs no hunters
+// and so has no survivors at all. Before this count existed, both read green.
+//
+// A prior leaves the count only when something outside the author cleared it:
+//   - verified-gone: the verifier refuted the finding, or every file it names
+//     was deleted (classifyPrior settles that as verified-gone);
+//   - re-tiered below blocking by THIS run's own classification: a survivor of
+//     this run matches the prior and carries an advisory tier.
+// A self-asserted triage tag never leaves the count (S7). `misclassified`
+// lands as `re-tiered` (classifyPrior), and its tier is the author's claim,
+// not the pipeline's, so it is not evidence. A dismissal the adjudicator upheld
+// is `suppressed`, and it stays counted for the same reason.
+//
+// Dedupe key. Two rules, both stated so a reader can check them:
+//   - a gate row is one prior, keyed by its id (R###). A duplicate row for the
+//     same id counts once;
+//   - a survivor pairs with at most one gate row, by the identity the worsening
+//     step already uses (identityFromLocs of the prior against
+//     identityFromFinding of the survivor). The pairing prefers a row of the
+//     survivor's own tier, so a blocking survivor claims a blocking prior ahead
+//     of an advisory one at the same spot. A paired row is carried by its
+//     survivor and not counted again; a survivor counts by its own tier.
+// One-to-one is the fail-closed choice: two priors at one spot and one survivor
+// count as two, because the survivor can be only one of them.
+//
+// Unrecoverable tiers ARE counted, as blocking. A prior whose tier could not be
+// read back is unclassified, and the fail-visible rule (classify.ts) and S7 both
+// forbid a green gate on a finding we cannot classify. Only a verifier verdict or
+// a deleted file lowers such a row. An advisory survivor at the same spot still
+// pairs with it below, because that tier is this run's own classification, not
+// the author's claim.
+
+export interface GateRow {
+  id: string;
+  tier: RecoveredTier;
+  locs: readonly string[];
+  status: GateStatus;
+}
+
+export type GateSurvivor = Pick<
+  Finding,
+  "path" | "line" | "proof_refs" | "tier"
+>;
+
+export function unresolvedBlockingCount(
+  survivors: readonly GateSurvivor[],
+  rows: readonly GateRow[],
+): number {
+  const blockingSurvivors = survivors.filter(
+    (survivor) => survivor.tier === "blocking",
+  ).length;
+
+  // One entry per prior id, and verified-gone never enters the count.
+  const seen = new Set<string>();
+  const open: GateRow[] = [];
+  for (const row of rows) {
+    if (row.status === "verified-gone") continue;
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    open.push(row);
+  }
+
+  const identities = open.map((row) => identityFromLocs(row.locs));
+  const paired = new Set<number>();
+  for (const survivor of survivors) {
+    const survivorIdentity = identityFromFinding({
+      path: survivor.path,
+      line: survivor.line,
+      proof_refs: survivor.proof_refs,
+    });
+    let sameTier = -1;
+    let anyTier = -1;
+    for (let i = 0; i < open.length; i++) {
+      if (paired.has(i)) continue;
+      const identity = identities[i] ?? new Map();
+      if (!identitiesMatch(identity, survivorIdentity)) continue;
+      if (anyTier === -1) anyTier = i;
+      if (sameTier === -1 && open[i]?.tier === survivor.tier) sameTier = i;
+    }
+    const pick = sameTier !== -1 ? sameTier : anyTier;
+    if (pick !== -1) paired.add(pick);
+  }
+
+  // WHY unrecoverable counts: fail closed, see the note above the GateRow type.
+  // Counting only "blocking" would let an unreadable tier turn the gate green.
+  let unpairedBlocking = 0;
+  for (let i = 0; i < open.length; i++) {
+    if (paired.has(i)) continue;
+    const tier = open[i]?.tier;
+    if (tier === "blocking" || tier === TIER_UNRECOVERABLE) unpairedBlocking++;
+  }
+  return blockingSurvivors + unpairedBlocking;
 }

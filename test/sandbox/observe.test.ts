@@ -138,7 +138,7 @@ describe("classifyPath", () => {
       status: {
         state: "failure",
         description:
-          "pr-hero: 2 blocking finding(s) — fix and push; /pr-hero review re-runs this head",
+          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
       },
     });
     expect(classifyPath(obs)).toBe("reviewed");

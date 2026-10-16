@@ -41,6 +41,7 @@ import {
   settleHeldCommitStatusOnSignal,
 } from "#pr/status";
 import { finalizePrReviewRun, settleCommitStatusAndLedger } from "#pr/teardown";
+import { unresolvedBlockingCount } from "#rereview/state";
 import type { PipelineResult } from "#review/pipeline";
 import { CliError } from "../../src/errors";
 
@@ -291,7 +292,7 @@ describe("settleCommitStatusAndLedger — commit status lock lifecycle", () => {
 
 describe("settleCommitStatusAndLedger — gate mode (S4)", () => {
   const BLOCKING_DESCRIPTION =
-    "pr-hero: 2 blocking finding(s) — fix and push; /pr-hero review re-runs this head";
+    "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override";
 
   test.each([
     [
@@ -575,6 +576,68 @@ describe("S7: only an explicit --ci run writes the pr-hero context", () => {
     const flags = parseStatusFlags(calls[0] as string[]);
     expect(flags.context).toBe(COMMIT_STATUS_CONTEXT);
     expect(flags.state).toBe("failure");
+  });
+
+  // The count the publish step hands over, computed by the same function, so
+  // these pin the chain from the gate's rows to the posted status.
+  test("a same-head forced re-review with a live blocking prior posts failure through the gate count", async () => {
+    const count = unresolvedBlockingCount(
+      [],
+      [
+        {
+          id: "R001",
+          tier: "blocking",
+          locs: ["src/app.ts:10"],
+          status: "carried",
+        },
+      ],
+    );
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ...resolveCiPosture({ ci: true }),
+      blockingCount: count,
+    });
+    expect(calls).toHaveLength(1);
+    const flags = parseStatusFlags(calls[0] as string[]);
+    expect(flags.state).toBe("failure");
+    expect(flags.description).toBe(
+      "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+    );
+  });
+
+  test("a fix the verifier refuted posts success through the gate count", async () => {
+    const count = unresolvedBlockingCount(
+      [],
+      [
+        {
+          id: "R001",
+          tier: "blocking",
+          locs: ["src/app.ts:10"],
+          status: "verified-gone",
+        },
+      ],
+    );
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ...resolveCiPosture({ ci: true }),
+      blockingCount: count,
+    });
+    expect(calls).toHaveLength(1);
+    expect(parseStatusFlags(calls[0] as string[]).state).toBe("success");
   });
 
   test("a local run asked for gate still grades nothing: the mixed input posts advisory on pr-hero/local", async () => {

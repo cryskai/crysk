@@ -1350,7 +1350,7 @@ describe("blockingCommitStatusRequest", () => {
       state: "failure",
       context: COMMIT_STATUS_CONTEXT,
       description:
-        "pr-hero: 2 blocking finding(s) — fix and push; /pr-hero review re-runs this head",
+        "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
       targetUrl: gateTargetUrl,
     });
     expect(request.description.length).toBeLessThanOrEqual(
