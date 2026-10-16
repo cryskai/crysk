@@ -1366,6 +1366,35 @@ describe("renderCode and renderError: the annotation", () => {
   });
 });
 
+describe("PRH-PR-UNRESOLVED: the malformed pr-number variant", () => {
+  const DETAIL = "the pr-number input is not a positive integer";
+
+  test("a malformed pr-number says to pass a positive integer, and names the cause", () => {
+    for (const ctx of CONTEXTS) {
+      const rendered = renderError(
+        { kind: "trigger", check: "pr-unresolved" },
+        { detail: DETAIL },
+        ctx,
+      );
+      expect(rendered.annotation, ctx).toContain(
+        "Fix: pass a positive integer as the `pr-number` input.",
+      );
+      expect(rendered.annotation, ctx).toContain(`(${DETAIL})`);
+      expect(rendered.what, ctx).toContain(DETAIL);
+    }
+  });
+
+  test("a missing pr-number keeps the default fix, which names no positive integer", () => {
+    const rendered = renderError(
+      { kind: "trigger", check: "pr-unresolved" },
+      {},
+      "action",
+    );
+    expect(rendered.annotation).toContain("or pass the `pr-number` input.");
+    expect(rendered.annotation).not.toContain("positive integer");
+  });
+});
+
 describe("ownerLead", () => {
   test("names each owner in the contract's words", () => {
     expect(ownerLead("config")).toBe("Your configuration:");
@@ -1496,6 +1525,16 @@ describe("parseTriggerRecord — the trigger.json contract", () => {
     ["a missing run url", { ...documented, run_url: undefined }],
     ["a missing run id", { ...documented, run_id: undefined }],
     ["an unknown class kind", { ...documented, cls: { kind: "magic" } }],
+    // The trigger writes only pr-unresolved. A no-credential check on a review
+    // would render PRH-CRED-MISSING for a record the trigger never wrote.
+    [
+      "a no-credential trigger class on a review",
+      { ...documented, cls: { kind: "trigger", check: "no-credential" } },
+    ],
+    [
+      "a routing-missing trigger class on a review",
+      { ...documented, cls: { kind: "trigger", check: "routing-missing" } },
+    ],
     [
       "a github class without a status",
       { ...documented, cls: { kind: "github" } },

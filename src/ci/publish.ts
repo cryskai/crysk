@@ -7,14 +7,18 @@
 // when no head is known. The trigger writes the decision to trigger.json, and the
 // setup step may leave setup.json; this step reads them and speaks.
 //
-// It runs `if: always()`: a failed install skips every later step, and this
-// step is the only one that can still say so. It is gated on the trigger's
+// It runs `if: !cancelled()`: a failed install skips every later step, and this
+// step is the only one that can still say so, while a cancelled job (a
+// superseded run) must not report a failure it never had. It is gated on the trigger's
 // `publish` output, not on `run`, because `run` is false for exactly the
 // outcomes this step reports.
 //
-// In this release it speaks only for pre-CLI outcomes. `cli-started` is the
-// marker the run step writes before anything else: when it exists, the CLI ran
-// and owns its own status and comment (T2c moves those here later).
+// It speaks for pre-CLI outcomes. `cli-started` is the marker the run step writes
+// before anything else: when it exists, the CLI ran and owns this run's status
+// and comment (T2c moves those here later). Then this step does one thing only,
+// `cleanup`: it deletes the PR's older outcome comments that pr-hero wrote,
+// because one left by an earlier run would contradict a review that has since
+// started. It never posts a status or a comment on that path, and it always exits 0.
 //
 // WHY ONLY BUILTINS (plus ./outcome): the step runs before anything is installed,
 // so a package import has no node_modules to resolve against. ./outcome is a
@@ -76,6 +80,8 @@ export type Publication =
   | { kind: "none" }
   // Annotation and step summary only: no PR can be written to.
   | { kind: "local"; rendered: RenderedError }
+  // The CLI started and a PR is known: only this PR's older outcome comments go.
+  | { kind: "cleanup"; repository: string; pr: number }
   | {
       kind: "remote";
       rendered: RenderedError;
@@ -102,9 +108,16 @@ export function decidePublication(input: {
     // Denied and ignored commands publish nothing, by design (T2e adds reactions).
     return { kind: "none" };
   }
-  // WHY: the CLI owns its own output in this release, so a second outcome here
-  // would be a duplicate on the same PR. T2c hands those outcomes over.
-  if (record.decision === "review" && input.cliStarted) return { kind: "none" };
+  // WHY: the CLI owns this run's status and comment, so a second outcome here
+  // would be a duplicate on the same PR. T2c hands those outcomes over. What is
+  // left is the cleanup: a stale outcome comment from an earlier run says the
+  // review could not start, and this run's review did start, so that comment
+  // now contradicts the PR. Without a PR there is nothing to clean.
+  if (record.decision === "review" && input.cliStarted) {
+    return record.pr === undefined
+      ? { kind: "none" }
+      : { kind: "cleanup", repository: record.repository, pr: record.pr };
+  }
 
   const params: ErrorParams = {
     ...record.params,
@@ -209,7 +222,7 @@ function report(deps: PublishDeps, rendered: RenderedError): void {
 // Workflow-command text, escaped as the runner's toolkit escapes it, so a
 // message can never start a second command.
 function workflowCommand(
-  command: "error" | "warning",
+  command: "error" | "warning" | "notice",
   message: string,
 ): string {
   const escaped = message
@@ -304,29 +317,30 @@ function parseCreated(
   return [undefined, undefined];
 }
 
-function deleteOlderOutcomes(
+// One comment, as the listing's --jq filter prints it.
+interface ListedComment {
+  id: number;
+  login: string;
+  type: string;
+  firstLine: string;
+}
+
+// Every comment on the PR, in the order the API lists them. undefined when the
+// listing call fails, so each caller words that failure for its own path.
+function listComments(
   deps: PublishDeps,
   repo: string,
   pr: number,
-  newId: number,
-  author: string,
-): void {
+): ListedComment[] | undefined {
   const listed = deps.gh([
     "api",
     "--paginate",
     `repos/${repo}/issues/${pr}/comments`,
     "--jq",
-    '.[] | [.id, .user.login, (.body | split("\\n") | .[0])] | @json',
+    '.[] | [.id, .user.login, .user.type, (.body | split("\\n") | .[0])] | @json',
   ]);
-  if (listed.exitCode !== 0) {
-    deps.stdout(
-      workflowCommand(
-        "warning",
-        `pr-hero could not list the older outcome comments on #${pr}; they were left in place.`,
-      ),
-    );
-    return;
-  }
+  if (listed.exitCode !== 0) return undefined;
+  const rows: ListedComment[] = [];
   for (const line of listed.stdout.split("\n")) {
     if (line.trim() === "") continue;
     let row: unknown;
@@ -336,14 +350,30 @@ function deleteOlderOutcomes(
       continue;
     }
     if (!Array.isArray(row)) continue;
-    const [id, login, firstLine] = row;
-    const older =
-      typeof id === "number" &&
-      id < newId &&
-      login === author &&
-      typeof firstLine === "string" &&
-      firstLine.startsWith(MARKER_PREFIX);
-    if (!older) continue;
+    const [id, login, type, firstLine] = row;
+    if (typeof id !== "number" || typeof firstLine !== "string") continue;
+    rows.push({
+      id,
+      login: typeof login === "string" ? login : "",
+      type: typeof type === "string" ? type : "",
+      firstLine,
+    });
+  }
+  return rows;
+}
+
+function isOutcomeComment(row: ListedComment): boolean {
+  return row.firstLine.startsWith(MARKER_PREFIX);
+}
+
+// Deletes each comment. A failed delete is a warning, and the rest still run.
+function deleteComments(
+  deps: PublishDeps,
+  repo: string,
+  pr: number,
+  ids: readonly number[],
+): void {
+  for (const id of ids) {
     const removed = deps.gh([
       "api",
       "--method",
@@ -359,6 +389,82 @@ function deleteOlderOutcomes(
       );
     }
   }
+}
+
+function deleteOlderOutcomes(
+  deps: PublishDeps,
+  repo: string,
+  pr: number,
+  newId: number,
+  author: string,
+): void {
+  const rows = listComments(deps, repo, pr);
+  if (rows === undefined) {
+    deps.stdout(
+      workflowCommand(
+        "warning",
+        `pr-hero could not list the older outcome comments on #${pr}; they were left in place.`,
+      ),
+    );
+    return;
+  }
+  deleteComments(
+    deps,
+    repo,
+    pr,
+    rows
+      .filter(
+        (row) =>
+          row.id < newId && row.login === author && isOutcomeComment(row),
+      )
+      .map((row) => row.id),
+  );
+}
+
+// WHY cleanup runs once the CLI started: an older outcome comment says a run
+// could not start the review. This run did start it, so that comment now
+// contradicts the PR, and nothing else removes it.
+//
+// WHY the identity chain: the older comments were written with the workflow's
+// token, which cannot read /user. GraphQL `viewer` names the login that wrote
+// them, but whether it answers for this token is not verified here, so the Bot
+// type is the fallback: the workflow token posts as github-actions[bot], and a
+// person is never a Bot. With a known login only that login's comments match,
+// so a Bot by another login is kept. A person's comment is never deleted on a
+// guess: with no login, only a Bot is deleted.
+function cleanupOlderOutcomes(
+  deps: PublishDeps,
+  plan: { repository: string; pr: number },
+): void {
+  const viewer = deps.gh([
+    "api",
+    "graphql",
+    "-f",
+    "query=query { viewer { login } }",
+    "--jq",
+    ".data.viewer.login",
+  ]);
+  const login = viewer.exitCode === 0 ? viewer.stdout.trim() : "";
+  const rows = listComments(deps, plan.repository, plan.pr);
+  if (rows === undefined) {
+    deps.stdout(
+      workflowCommand(
+        "notice",
+        `pr-hero could not clean up its older outcome comments on #${plan.pr}; they were left in place.`,
+      ),
+    );
+    return;
+  }
+  const isMine = (row: ListedComment): boolean =>
+    login !== "" ? row.login === login : row.type === "Bot";
+  deleteComments(
+    deps,
+    plan.repository,
+    plan.pr,
+    rows
+      .filter((row) => isOutcomeComment(row) && isMine(row))
+      .map((row) => row.id),
+  );
 }
 
 function readIfExists(filePath: string): string | undefined {
@@ -415,6 +521,10 @@ export function runPublish(deps: PublishDeps): number {
   }
   const plan = decidePublication({ record, cliStarted, setup });
   if (plan.kind === "none") return 0;
+  if (plan.kind === "cleanup") {
+    cleanupOlderOutcomes(deps, plan);
+    return 0;
+  }
   report(deps, plan.rendered);
   if (plan.kind === "local") return 0;
 
@@ -466,18 +576,25 @@ if (import.meta.main) {
     runPublish({
       env: process.env,
       gh: (args, stdin) => {
-        const result = Bun.spawnSync(["gh", ...args], {
-          stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
-          stdout: "pipe",
-          stderr: "pipe",
-          // A hung API call must not hold the job: this step runs last.
-          timeout: GH_TIMEOUT_MS,
-        });
-        return {
-          exitCode: result.exitCode ?? -1,
-          stdout: result.stdout.toString(),
-          stderr: result.stderr.toString(),
-        };
+        // WHY the catch: Bun throws, rather than returning, when gh is not on
+        // PATH. A throw would end the step non-zero, and cleanup must exit 0, so
+        // a call that cannot run is a failed call like any other.
+        try {
+          const result = Bun.spawnSync(["gh", ...args], {
+            stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
+            stdout: "pipe",
+            stderr: "pipe",
+            // A hung API call must not hold the job: this step runs last.
+            timeout: GH_TIMEOUT_MS,
+          });
+          return {
+            exitCode: result.exitCode ?? -1,
+            stdout: result.stdout.toString(),
+            stderr: result.stderr.toString(),
+          };
+        } catch (error) {
+          return { exitCode: -1, stdout: "", stderr: String(error) };
+        }
       },
       stdout: (text) => {
         process.stdout.write(text);

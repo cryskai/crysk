@@ -783,7 +783,7 @@ describe("Packaging & distribution configuration", () => {
       );
     });
 
-    test("the publish step is always() and publish-gated, between the run step and the upload", () => {
+    test("the publish step skips a cancelled job, still runs after a failed one, and is publish-gated", () => {
       const all = steps();
       const run = all.findIndex((step) => step.id === "run-pr-hero");
       const publish = all.findIndex((step) => step.id === "publish");
@@ -793,7 +793,11 @@ describe("Packaging & distribution configuration", () => {
       expect(publish).toBe(run + 1);
       expect(upload).toBe(publish + 1);
       const step = all[publish];
-      expect(step?.if).toContain("always()");
+      // A cancelled job still reaches always() steps, so always() would publish
+      // a false install failure on a superseded head. !cancelled() keeps the
+      // failed-install case, which is a failure and not a cancellation.
+      expect(step?.if).toContain("!cancelled()");
+      expect(step?.if).not.toContain("always()");
       expect(step?.if).toContain("steps.trigger.outputs.publish == 'true'");
     });
 

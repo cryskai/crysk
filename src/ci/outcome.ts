@@ -188,7 +188,6 @@ const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
   "unverifiable",
   "no-credentials",
 ];
-const TRIGGER_CHECKS = ["no-credential", "routing-missing", "pr-unresolved"];
 const RECORD_PARAM_KEYS: readonly string[] = [
   "backend",
   "provider",
@@ -261,13 +260,15 @@ export function parseSetupRecord(text: string): SetupRecord | undefined {
 
 // The classes the trigger writes. Any other kind is refused: the record is a
 // contract between two modules, and a wider reader would hide a writer's bug.
+// The trigger's writer type (RecordClass in src/ci/trigger.ts) allows exactly
+// one trigger check, pr-unresolved. The other trigger checks are classes the
+// publisher builds itself, so a record that names one is refused too.
 function parseRecordClass(value: unknown): ErrorClass | undefined {
   if (!isRecordObject(value)) return undefined;
   if (value.kind === "unknown") return { kind: "unknown" };
   if (value.kind === "trigger") {
-    return typeof value.check === "string" &&
-      TRIGGER_CHECKS.includes(value.check)
-      ? { kind: "trigger", check: value.check as "pr-unresolved" }
+    return value.check === "pr-unresolved"
+      ? { kind: "trigger", check: "pr-unresolved" }
       : undefined;
   }
   if (value.kind === "github") {
@@ -1035,13 +1036,23 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "config",
     what: "pr-hero could not determine the pull request number or head",
-    variants: single(
-      "nothing can be posted on a PR it cannot identify",
-      [
-        "Run from a pull_request or issue_comment event, or pass the `pr-number` input.",
-      ],
-      "run from a pull_request or issue_comment event, or pass the `pr-number` input",
-    ),
+    variants: {
+      ...single(
+        "nothing can be posted on a PR it cannot identify",
+        [
+          "Run from a pull_request or issue_comment event, or pass the `pr-number` input.",
+        ],
+        "run from a pull_request or issue_comment event, or pass the `pr-number` input",
+      ),
+      // The pr-number input was given but is not a positive integer. The record's
+      // detail names the input, so the fix tells the reader to correct it.
+      "malformed-input": {
+        what: "pr-hero could not determine the pull request number or head ({detail})",
+        why: "nothing can be posted on a PR it cannot identify",
+        fixes: ["Pass a positive integer as the `pr-number` input."],
+        annotationFix: "pass a positive integer as the `pr-number` input",
+      },
+    },
   },
   "PRH-STATUS-WRITE-FAILED": {
     level: "error",
@@ -1213,7 +1224,7 @@ export function renderCode(
   variant?: string,
 ): RenderedError {
   const entry = ERROR_CATALOG[code];
-  const picked = pickVariant(entry, ctx, scopeVariant(code, params, variant));
+  const picked = pickVariant(entry, ctx, paramVariant(code, params, variant));
   const owner = ownerFor(picked.owner ?? entry.owner, ctx);
   const providerName = entry.providerName ?? cleanName(params.provider);
   const lead = entry.lead ?? ownerLead(owner, providerName);
@@ -1251,17 +1262,29 @@ function capitalized(text: string): string {
   return first.toUpperCase() + text.slice(first.length);
 }
 
-// WHY the catalog picks the scope-less wording, not the caller: a permission 403
-// with no scope names no scope, so every caller (a class or a direct renderCode)
-// gets the same text and no placeholder reaches the PR.
-function scopeVariant(
+// WHY the catalog picks the variant from the params, not the caller: a permission
+// 403 with no scope names no scope, so every caller (a class or a direct
+// renderCode) gets the same text and no placeholder reaches the PR. The same
+// holds for an unresolved PR: a detail means the pr-number input was given and
+// is malformed, so the fix must name that input, not ask for one that was passed.
+function paramVariant(
   code: ErrorCode,
   params: ErrorParams,
   variant: string | undefined,
 ): string | undefined {
-  return code === "PRH-TOKEN-PERMISSION" && isBlank(params.scope)
-    ? "no-scope"
-    : variant;
+  if (code === "PRH-TOKEN-PERMISSION" && isBlank(params.scope)) {
+    return "no-scope";
+  }
+  // A caller that names a variant keeps it, so the default wording stays
+  // reachable with a detail present.
+  if (
+    variant === undefined &&
+    code === "PRH-PR-UNRESOLVED" &&
+    !isBlank(params.detail)
+  ) {
+    return "malformed-input";
+  }
+  return variant;
 }
 
 function pickVariant(

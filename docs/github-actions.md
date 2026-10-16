@@ -119,7 +119,7 @@ model credential, the pull request number or head cannot be resolved, the commen
 cannot be verified, or an install step fails before pr-hero starts, pr-hero posts one `pr-hero`
 commit status (`error`) and one comment on the pull request. The comment gives the error code, whose
 fix it is (your configuration, a provider, pr-hero, or unclassified) and the command that fixes it.
-A newer comment replaces the older one from the same author. A denied or ignored `/pr-hero review`
+A newer comment replaces the older one from the same author. When a later run gets the review going, pr-hero removes its earlier outcome comment. A denied or ignored `/pr-hero review`
 comment posts nothing. Outcomes of a run that did start (review results, size and budget skips) keep
 their own status and comment for now.
 
@@ -1029,6 +1029,18 @@ gh run rerun {runId}
 **Fix:**
 
 Run from a pull_request or issue_comment event, or pass the `pr-number` input.
+
+#### `malformed-input`
+
+The `pr-number` input was given but is not a positive integer. pr-hero names the input and never echoes its value.
+
+**What:** pr-hero could not determine the pull request number or head ({detail})
+
+**Why:** nothing can be posted on a PR it cannot identify
+
+**Fix:**
+
+Pass a positive integer as the `pr-number` input.
 
 ### PRH-STATUS-WRITE-FAILED
 

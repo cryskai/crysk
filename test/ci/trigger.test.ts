@@ -24,6 +24,7 @@ import {
   commenterPermissionNeeded,
   decideCiTrigger,
   type GhResult,
+  type OutcomeFs,
   parseReviewCommand,
   resolvePrNumber,
   runCiTrigger,
@@ -513,6 +514,20 @@ function commentEnv(body: string, overrides: Record<string, string> = {}) {
 // `exists` answers for the on-runner credential files and defaults to
 // "nothing on disk", so no test reads the developer's own home. `sleep` is
 // recorded, never real, so the permission retry costs no wall time.
+// The record's file writes fail, as a full disk would. Nothing is left behind.
+const failingFs: OutcomeFs = {
+  mkdir: (dir) => {
+    mkdirSync(dir, { recursive: true });
+  },
+  writeFile: () => {
+    throw new Error("ENOSPC: no space left on device");
+  },
+  rename: () => {
+    throw new Error("rename must not run after a failed write");
+  },
+  remove: (filePath) => rmSync(filePath, { force: true }),
+};
+
 function runShell(
   env: Record<string, string>,
   answer: (args: readonly string[]) => GhResult = () => ({
@@ -521,6 +536,7 @@ function runShell(
     stderr: "gh: not scripted",
   }),
   exists: (filePath: string) => boolean = () => false,
+  fs?: OutcomeFs,
 ) {
   const ghCalls: string[][] = [];
   const sleeps: number[] = [];
@@ -546,6 +562,7 @@ function runShell(
     appendSummary: (text) => {
       summary += text;
     },
+    ...(fs === undefined ? {} : { fs }),
   });
   const outputs = Object.fromEntries(
     output
@@ -696,9 +713,15 @@ describe("runCiTrigger — the shell", () => {
       );
       expect(run.exitCode).toBe(1);
       expect(run.outputs.run).toBe("false");
-      // The reason, naming the commenter, is the publisher's to print now.
+      // No outcome dir means no record for the publisher, so the trigger names
+      // the cause itself: one line, the commenter and the failed lookup.
       expect(run.outputs.publish).toBe("true");
-      expect(run.stdout).toBe("");
+      expect(run.stdout).toStartWith(
+        "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+      );
+      expect(run.stdout.split("\n").filter((line) => line !== "")).toHaveLength(
+        1,
+      );
       expect(run.ghCalls.filter((call) => call[0] === "api")).toHaveLength(2);
       expect(run.ghCalls.filter((call) => call[0] === "pr")).toHaveLength(0);
       // One short fixed pause between the two attempts, never more.
@@ -737,8 +760,11 @@ describe("runCiTrigger — the shell", () => {
     expect(run.exitCode).toBe(1);
     expect(run.outputs.run).toBe("false");
     expect(run.outputs.publish).toBe("true");
-    // The publisher, not the trigger, writes the workflow command now.
-    expect(run.stdout).toBe("");
+    // No outcome dir, so no record: the trigger names the cause itself.
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+    );
+    expect(run.stdout).toContain("spawn gh ENOENT");
     // The retry is the whole lookup: an unverifiable run asks for no head.
     expect(run.ghCalls).toHaveLength(2);
   });
@@ -769,12 +795,14 @@ describe("runCiTrigger — the shell", () => {
     }
   });
 
-  test("no credential is red with run=false and publish=true; the publisher writes the error", () => {
+  test("no credential is red with run=false and publish=true; with no record the trigger names the cause", () => {
     const run = runShell(baseEnv({ HAS_CLAUDE_TOKEN: "false" }));
     expect(run.exitCode).toBe(1);
     expect(run.outputs.run).toBe("false");
     expect(run.outputs.publish).toBe("true");
-    expect(run.stdout).toBe("");
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::pr-hero has no credential for this review",
+    );
     expect(run.summary).toBe("");
   });
 
@@ -789,6 +817,85 @@ describe("runCiTrigger — the shell", () => {
     expect(record?.decision).toBe("review");
     expect(record?.cls).toEqual({ kind: "trigger", check: "pr-unresolved" });
     expect(record?.pr).toBeUndefined();
+  });
+
+  test("with no outcome dir, an unresolved PR names its cause on one error line", () => {
+    const run = runShell(
+      baseEnv({ EVENT_NAME: "workflow_dispatch", EVENT_PR_NUMBER: "" }),
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::Could not determine the pull request number",
+    );
+    expect(run.stdout.split("\n").filter((line) => line !== "")).toHaveLength(
+      1,
+    );
+  });
+
+  test("with no outcome dir, a missing credential names its cause on one error line", () => {
+    const run = runShell(baseEnv({ HAS_CLAUDE_TOKEN: "false" }));
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::pr-hero has no credential for this review",
+    );
+    expect(run.stdout).toContain("anthropic-api-key");
+  });
+
+  test("with no outcome dir, an unverifiable lookup names its cause and the gh detail", () => {
+    const run = runShell(
+      commentEnv("/pr-hero review"),
+      scriptedGh(
+        { exitCode: 1, stdout: "", stderr: "gh: Server Error (HTTP 500)" },
+        ok(HEAD_SHA),
+      ),
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toStartWith(
+      "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+    );
+    expect(run.stdout).toContain("gh: Server Error (HTTP 500)");
+  });
+
+  test("a record that cannot be written names the cause after the write error, on its own line", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-cause-"));
+    try {
+      const dir = path.join(root, "outcome");
+      const run = runShell(
+        baseEnv({ HAS_CLAUDE_TOKEN: "false", PRHERO_OUTCOME_DIR: dir }),
+        undefined,
+        undefined,
+        failingFs,
+      );
+      expect(run.exitCode).toBe(1);
+      const lines = run.stdout.split("\n").filter((line) => line !== "");
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toStartWith(
+        "::error title=pr-hero::pr-hero could not write",
+      );
+      expect(lines[1]).toStartWith(
+        "::error title=pr-hero::pr-hero has no credential for this review",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed pr-number is recorded with its fixed detail, and the record never echoes the value", () => {
+    const { exitCode, outputs, stdout, recordText, record } = outcomeRun(
+      baseEnv({
+        EVENT_NAME: "workflow_dispatch",
+        EVENT_PR_NUMBER: "",
+        PR_NUMBER_INPUT: "12\nrun=true",
+      }),
+    );
+    expect(exitCode).toBe(1);
+    expect(outputs.publish).toBe("true");
+    expect(stdout).toBe("");
+    expect(record?.cls).toEqual({ kind: "trigger", check: "pr-unresolved" });
+    expect(record?.params).toEqual({
+      detail: "the pr-number input is not a positive integer",
+    });
+    expect(recordText).not.toContain("run=true");
   });
 
   test("the legacy force dispatch flows pr-number, force and full straight through", () => {

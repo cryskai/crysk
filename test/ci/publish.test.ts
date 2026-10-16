@@ -48,12 +48,23 @@ describe("decidePublication — the pure table", () => {
     );
   });
 
-  test("a review whose CLI started is owned by the CLI: nothing at all", () => {
-    // WHY: until T2c the CLI still posts its own status and comment, so a
-    // second outcome from here would be a duplicate on the same PR.
+  test("a review whose CLI started cleans up its PR, and posts neither status nor comment", () => {
+    // WHY: an outcome comment from an earlier run contradicts the review this
+    // run started, and the CLI owns this run's status and comment. So the plan
+    // names only the PR to clean.
     expect(decidePublication({ record: record(), cliStarted: true })).toEqual({
-      kind: "none",
+      kind: "cleanup",
+      repository: REPO,
+      pr: 7,
     });
+  });
+
+  test("a review whose CLI started without a known PR has nothing to clean up", () => {
+    const input = {
+      record: record({ pr: undefined, head_sha: undefined }),
+      cliStarted: true,
+    };
+    expect(decidePublication(input)).toEqual({ kind: "none" });
   });
 
   test.each(["ignore", "denied"] as const)(
@@ -380,8 +391,8 @@ const fail = (stderr: string): GhResult => ({
 });
 
 // One JSON array per listed comment, as the real --jq filter prints them:
-// [id, login, first line of the body].
-function listing(...rows: Array<[number, string, string]>): GhResult {
+// [id, login, user type, first line of the body].
+function listing(...rows: Array<[number, string, string, string]>): GhResult {
   return ok(rows.map((row) => JSON.stringify(row)).join("\n"));
 }
 
@@ -393,6 +404,8 @@ function runPublishIn(options: {
   create?: GhResult;
   list?: GhResult;
   remove?: GhResult;
+  // The answer to the GraphQL `viewer` lookup. Unset, the lookup fails.
+  viewer?: GhResult;
   env?: Record<string, string>;
 }) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-publish-"));
@@ -430,6 +443,10 @@ function runPublishIn(options: {
       },
       gh: (args, stdin) => {
         calls.push({ args: [...args], stdin });
+        // The viewer lookup has no repos/ endpoint, so it is routed first.
+        if (args.includes("graphql")) {
+          return options.viewer ?? fail("gh: viewer not answered");
+        }
         const endpoint = args.find((arg) => arg.startsWith("repos/")) ?? "";
         if (endpoint.includes("/statuses/")) {
           return statusAnswers.length > 1
@@ -489,11 +506,16 @@ describe("runPublish — the shell", () => {
     expect(run.stdout).toBe("");
   });
 
-  test("nothing at all when the CLI started, whatever the record says", () => {
-    const run = runPublishIn({ record: record(), cliStarted: true });
+  test("a CLI-started run with a known PR never posts a status or a comment", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      viewer: ok("pr-hero-bot"),
+      list: listing(),
+    });
     expect(run.exitCode).toBe(0);
-    expect(run.calls).toEqual([]);
-    expect(run.stdout).toBe("");
+    expect(statusCalls(run.calls)).toEqual([]);
+    expect(run.calls.filter((call) => call.args.includes("POST"))).toEqual([]);
     expect(run.summary).toBe("");
   });
 
@@ -538,11 +560,11 @@ describe("runPublish — the shell", () => {
     const run = runPublishIn({
       record: record(),
       list: listing(
-        [10, "bot-a", MARKER],
-        [11, "someone-else", MARKER],
-        [12, "bot-a", "Quoting it here: <!-- pr-hero-outcome"],
-        [13, "bot-a", MARKER],
-        [25, "bot-a", MARKER],
+        [10, "bot-a", "User", MARKER],
+        [11, "someone-else", "User", MARKER],
+        [12, "bot-a", "User", "Quoting it here: <!-- pr-hero-outcome"],
+        [13, "bot-a", "User", MARKER],
+        [25, "bot-a", "User", MARKER],
       ),
     });
     // The new comment is id 20 by bot-a. 25 is newer than it (a concurrent
@@ -557,7 +579,7 @@ describe("runPublish — the shell", () => {
     const run = runPublishIn({
       record: record(),
       create: ok(JSON.stringify([20, ""])),
-      list: listing([10, "", MARKER]),
+      list: listing([10, "", "User", MARKER]),
     });
     expect(deletions(run.calls)).toEqual([]);
     expect(run.exitCode).toBe(0);
@@ -720,11 +742,161 @@ describe("runPublish — the shell", () => {
   });
 });
 
+describe("runPublish — cleanup once the CLI started", () => {
+  const BOT_AUTHOR = "github-actions[bot]";
+  const removedIds = (run: { calls: Call[] }) =>
+    deletions(run.calls).map((url) => url.split("/").pop());
+
+  test("with a viewer login, deletes only that login's marker comments", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      viewer: ok("pr-hero-bot\n"),
+      list: listing(
+        [10, "pr-hero-bot", "Bot", MARKER],
+        [11, "alice", "User", MARKER],
+        [12, "pr-hero-bot", "Bot", "Thanks for the review"],
+        [13, "pr-hero-bot", "Bot", MARKER],
+        // A Bot-typed marker by another login: the viewer chain keeps it.
+        [14, BOT_AUTHOR, "Bot", MARKER],
+      ),
+    });
+    expect(deletions(run.calls)).toEqual([
+      `repos/${REPO}/issues/comments/10`,
+      `repos/${REPO}/issues/comments/13`,
+    ]);
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toBe("");
+    expect(run.summary).toBe("");
+    expect(statusCalls(run.calls)).toEqual([]);
+    expect(run.calls.filter((call) => call.args.includes("POST"))).toEqual([]);
+  });
+
+  test.each([
+    ["fails", fail("gh: Bad credentials (HTTP 401)")],
+    ["answers empty", ok("")],
+  ])(
+    "when the viewer lookup %s, deletes only Bot-typed marker comments",
+    (_label, viewer) => {
+      const run = runPublishIn({
+        record: record(),
+        cliStarted: true,
+        viewer,
+        list: listing(
+          [10, "pr-hero-bot", "Bot", MARKER],
+          [11, "alice", "User", MARKER],
+          [12, BOT_AUTHOR, "Bot", MARKER],
+          [13, "bob", "User", "Thanks for the review"],
+        ),
+      });
+      expect(removedIds(run)).toEqual(["10", "12"]);
+      expect(run.exitCode).toBe(0);
+      expect(statusCalls(run.calls)).toEqual([]);
+      expect(run.calls.filter((call) => call.args.includes("POST"))).toEqual(
+        [],
+      );
+    },
+  );
+
+  test("when the comments cannot be listed, one notice names the cleanup, nothing is deleted, exit 0", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      viewer: ok("pr-hero-bot"),
+      list: fail("gh: Server Error (HTTP 502)"),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(deletions(run.calls)).toEqual([]);
+    expect(run.stdout.match(/::notice title=pr-hero::/g)).toHaveLength(1);
+    expect(run.stdout).toContain(
+      "could not clean up its older outcome comments",
+    );
+    expect(run.stdout).not.toContain("::error");
+    expect(run.stdout).not.toContain("::warning");
+    expect(statusCalls(run.calls)).toEqual([]);
+    expect(run.calls.filter((call) => call.args.includes("POST"))).toEqual([]);
+  });
+
+  test("a failed single delete is a warning, and the other deletions still run", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      viewer: ok("pr-hero-bot"),
+      list: listing(
+        [10, "pr-hero-bot", "Bot", MARKER],
+        [11, "pr-hero-bot", "Bot", MARKER],
+      ),
+      remove: fail("gh: Server Error (HTTP 500)"),
+    });
+    expect(deletions(run.calls)).toHaveLength(2);
+    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).not.toContain("::error");
+    expect(run.exitCode).toBe(0);
+  });
+
+  test("with no known PR, a CLI-started run makes no gh call at all", () => {
+    const run = runPublishIn({
+      record: record({ pr: undefined, head_sha: undefined }),
+      cliStarted: true,
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.calls).toEqual([]);
+    expect(run.stdout).toBe("");
+  });
+
+  test("a pre-CLI outcome posts, cleans up by the new comment's author, and never asks for the viewer", () => {
+    // WHY: the viewer lookup belongs to the CLI-started cleanup only. A
+    // pre-CLI outcome keeps its author-based cleanup exactly as before.
+    const run = runPublishIn({
+      record: record(),
+      list: listing(
+        [10, "bot-a", "User", MARKER],
+        [11, "someone-else", "User", MARKER],
+      ),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(commentPost(run.calls)).toBeDefined();
+    expect(run.calls.some((call) => call.args.includes("graphql"))).toBe(false);
+    expect(removedIds(run)).toEqual(["10"]);
+  });
+});
+
 describe("publish.ts runs before `bun install`", () => {
   // The real entry point, spawned with an empty PATH and HOME: it must start
   // and finish with no node_modules and no gh, when there is nothing to say.
-  test("as a process, a CLI-started run exits 0 and writes nothing", () => {
+  test("as a process, a CLI-started run with no PR exits 0 and writes nothing", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-publish-proc-"));
+    try {
+      writeFileSync(
+        path.join(dir, "trigger.json"),
+        JSON.stringify(record({ pr: undefined, head_sha: undefined })),
+      );
+      writeFileSync(path.join(dir, "cli-started"), "");
+      const result = Bun.spawnSync([process.execPath, MODULE_PATH], {
+        cwd: dir,
+        env: {
+          PRHERO_OUTCOME_DIR: dir,
+          GITHUB_REPOSITORY: REPO,
+          GITHUB_RUN_ID: "4242",
+          GITHUB_SERVER_URL: "https://github.com",
+          GITHUB_STEP_SUMMARY: path.join(dir, "summary"),
+          HOME: dir,
+          PATH: dir,
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toBe("");
+      expect(existsSync(path.join(dir, "summary"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("as a process, a CLI-started run whose gh is missing still exits 0, with one notice", () => {
+    // WHY: Bun throws when gh is not on PATH. Cleanup is best effort and must
+    // exit 0, so that throw is handled as a failed call, reported as a notice.
+    const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-publish-nogh-"));
     try {
       writeFileSync(path.join(dir, "trigger.json"), JSON.stringify(record()));
       writeFileSync(path.join(dir, "cli-started"), "");
@@ -741,7 +913,8 @@ describe("publish.ts runs before `bun install`", () => {
         },
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout.toString()).toBe("");
+      expect(result.stdout.toString()).toContain("::notice title=pr-hero::");
+      expect(result.stdout.toString()).not.toContain("::error");
       expect(existsSync(path.join(dir, "summary"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });

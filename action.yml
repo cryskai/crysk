@@ -255,9 +255,15 @@ runs:
     # the trigger wrote and posts ONE annotation, ONE step summary, ONE commit
     # status and ONE sticky comment on the pull request.
     #
-    # WHY always(): the outcome this step reports is exactly the one where an
-    # earlier step failed, and a failed step skips every later one. Without
-    # always() a failed install would be silent again, which is the bug.
+    # WHY !cancelled(), not always(): the outcome this step reports is the one
+    # where an earlier step FAILED, and a failed step skips every later one, so
+    # this step must run after a failure (a failed install is a failure, not a
+    # cancellation). It must NOT run after a cancellation: the scaffolded
+    # workflow cancels a superseded run (`cancel-in-progress`), and a cancelled
+    # job still reaches its always() steps, as the Upload step's comment below
+    # says. Under always(), a run cancelled before its Run step writes
+    # `cli-started` would publish a false PRH-INSTALL-FAILED on the superseded
+    # head.
     #
     # WHY gated on `publish`, not on `run`: `run` is false for every outcome
     # this step reports.
@@ -267,11 +273,14 @@ runs:
     # no node_modules.
     #
     # IN THIS RELEASE it speaks only for pre-CLI outcomes. When the cli-started
-    # marker exists the CLI ran and owns its own status and comment, and this
-    # step publishes nothing. T2c moves those outcomes here.
+    # marker exists the CLI ran and owns its own status and comment, so this
+    # step posts nothing; it only deletes pr-hero's own older outcome comments,
+    # which a successful review would otherwise contradict. T2c moves the CLI's
+    # outcomes here.
     - name: Publish pr-hero outcome
       id: publish
-      if: always() && steps.trigger.outputs.publish == 'true'
+      # Wrapped in ${{ }}: a bare `!cancelled()` is a YAML tag, not an expression.
+      if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}

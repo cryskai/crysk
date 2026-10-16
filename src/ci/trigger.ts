@@ -325,6 +325,12 @@ export interface CiPrNumberSources {
 // trigger existed: the explicit input wins, then the event's own number.
 const MISSING_PR_NUMBER =
   "Could not determine the pull request number from the workflow context. Set the 'pr-number' input explicitly.";
+const MALFORMED_PR_NUMBER = "The 'pr-number' input must be a positive integer.";
+// The outcome record's detail for a malformed pr-number input. Fixed text that
+// names the input and never its value: the value is untrusted, and the record
+// is read back and rendered.
+const MALFORMED_PR_NUMBER_DETAIL =
+  "the pr-number input is not a positive integer";
 
 export function resolvePrNumber(
   sources: CiPrNumberSources,
@@ -345,10 +351,7 @@ export function resolvePrNumber(
   // `pr=<n>`: a newline in it would forge the next output line. The value
   // itself is not echoed back for the same reason.
   if (!/^[1-9][0-9]*$/.test(raw)) {
-    return {
-      ok: false,
-      error: "The 'pr-number' input must be a positive integer.",
-    };
+    return { ok: false, error: MALFORMED_PR_NUMBER };
   }
   return { ok: true, pr: raw };
 }
@@ -492,7 +495,7 @@ interface RunIdentity {
 
 interface RecordFields {
   decision: CiTriggerDecision["kind"];
-  params: { backend?: string; step?: string };
+  params: { backend?: string; step?: string; detail?: string };
   cls?: RecordClass;
   pr?: string;
   headSha?: string;
@@ -522,16 +525,18 @@ function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
   }
 }
 
-// Writes one record for every decision. Unset PRHERO_OUTCOME_DIR (a local run
-// outside Actions) writes nothing. A failed write is reported, and the
-// decision's own exit code stands: the review is not the record's to block.
+// Writes one record for every decision, and returns whether it is on disk for
+// the publisher. Unset PRHERO_OUTCOME_DIR (a local run outside Actions) writes
+// nothing. A failed write is reported, and the decision's own exit code stands:
+// the review is not the record's to block. The return value lets an exit-1
+// decision name its own cause when no publisher will (printCauseUnlessRecorded).
 function writeRecord(
   deps: CiTriggerDeps,
   run: RunIdentity,
   fields: RecordFields,
-): void {
+): boolean {
   const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
-  if (dir === "") return;
+  if (dir === "") return false;
   const record = {
     v: 1,
     decision: fields.decision,
@@ -548,6 +553,7 @@ function writeRecord(
     fs.mkdir(dir);
     clearStaleMarkers(dir, fs);
     writeRecordAtomically(dir, `${JSON.stringify(record)}\n`, fs);
+    return true;
   } catch {
     deps.stdout(
       workflowCommand(
@@ -555,7 +561,25 @@ function writeRecord(
         "pr-hero could not write its outcome record, so this run's result may not reach the pull request.",
       ),
     );
+    return false;
   }
+}
+
+// An exit-1 decision whose record is not on disk has no publisher to name its
+// cause, so the trigger prints the cause itself, as one error line. A record
+// that was written keeps the publisher as the only speaker.
+function printCauseUnlessRecorded(
+  deps: CiTriggerDeps,
+  recorded: boolean,
+  cause: string,
+): void {
+  if (!recorded) deps.stdout(workflowCommand("error", cause));
+}
+
+// The cause of a run with no credential. It names the decision's own input
+// list, so the text cannot drift from the check that produced it.
+function noCredentialCause(inputs: readonly string[]): string {
+  return `pr-hero has no credential for this review: pass one of the ${inputs.join(", ")} inputs.`;
 }
 
 // The lookup's class: only when gh printed an HTTP status. A 403 is a rate
@@ -576,14 +600,26 @@ function backendOf(deps: CiTriggerDeps): string {
   return deps.env.HAS_OPENCODE_ROUTING === "true" ? "opencode" : "claude";
 }
 
-function resolvedPrNumber(deps: CiTriggerDeps): string | undefined {
+// The run's PR number, or why there is none. `malformed` is kept apart from a
+// missing number: a malformed input is the one the reader must change, so its
+// record carries a detail that names it.
+type PrResolution =
+  | { ok: true; pr: string }
+  | { ok: false; error: string; malformed: boolean };
+
+function resolvedPrNumber(deps: CiTriggerDeps): PrResolution {
   const resolved = resolvePrNumber({
     prNumberInput: deps.env.PR_NUMBER_INPUT ?? "",
     eventName: deps.env.EVENT_NAME ?? "",
     eventPrNumber: deps.env.EVENT_PR_NUMBER ?? "",
     eventIssueNumber: deps.env.EVENT_ISSUE_NUMBER ?? "",
   });
-  return resolved.ok ? resolved.pr : undefined;
+  if (resolved.ok) return resolved;
+  return {
+    ok: false,
+    error: resolved.error,
+    malformed: resolved.error === MALFORMED_PR_NUMBER,
+  };
 }
 
 const VALID_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
@@ -768,7 +804,8 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
   const run = runIdentity(deps);
   // Resolved before the decision branches, so every record names the PR the
   // publisher would post on, whatever the decision.
-  const pr = resolvedPrNumber(deps);
+  const resolution = resolvedPrNumber(deps);
+  const pr = resolution.ok ? resolution.pr : undefined;
 
   if (decision.kind === "ignore" || decision.kind === "denied") {
     writeRecord(deps, run, { decision: decision.kind, params: {} });
@@ -780,12 +817,13 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
   if (decision.kind === "unverifiable") {
     // gh is already failing for this lookup, so asking it for the head would
     // only add another failing call: the publisher degrades to its summary.
-    writeRecord(deps, run, {
+    const recorded = writeRecord(deps, run, {
       decision: "unverifiable",
       params: { step: "the commenter permission check" },
       cls: lookupClass(decision),
       pr,
     });
+    printCauseUnlessRecorded(deps, recorded, decision.reason);
     deps.appendOutput(
       formatTriggerOutputs({ ...NO_RUN, pr: pr ?? "", publish: true }),
     );
@@ -797,12 +835,17 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
       pr === undefined
         ? UNKNOWN_HEAD_SHA
         : resolveHeadSha(deps, base.eventName, base.repository, pr, true);
-    writeRecord(deps, run, {
+    const recorded = writeRecord(deps, run, {
       decision: "no-credentials",
       params: { backend: backendOf(deps) },
       pr,
       headSha: validSha(head),
     });
+    printCauseUnlessRecorded(
+      deps,
+      recorded,
+      noCredentialCause(decision.inputs),
+    );
     deps.appendOutput(
       formatTriggerOutputs({
         ...NO_RUN,
@@ -814,23 +857,35 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
     return 1;
   }
 
-  if (pr === undefined) {
+  if (!resolution.ok) {
     // The publisher renders the class (PRH-PR-UNRESOLVED). The review never
-    // started, so the install step's marker is absent by design.
-    writeRecord(deps, run, {
+    // started, so the install step's marker is absent by design. A malformed
+    // input carries its fixed detail, so the fix names the input to correct.
+    const recorded = writeRecord(deps, run, {
       decision: "review",
-      params: {},
+      params: resolution.malformed
+        ? { detail: MALFORMED_PR_NUMBER_DETAIL }
+        : {},
       cls: { kind: "trigger", check: "pr-unresolved" },
     });
+    printCauseUnlessRecorded(deps, recorded, resolution.error);
     deps.appendOutput(formatTriggerOutputs({ ...NO_RUN, publish: true }));
     return 1;
   }
 
-  const head = resolveHeadSha(deps, base.eventName, base.repository, pr, false);
+  // Past the early return the resolution is the resolved PR, so its number is a string.
+  const prNumber = resolution.pr;
+  const head = resolveHeadSha(
+    deps,
+    base.eventName,
+    base.repository,
+    prNumber,
+    false,
+  );
   writeRecord(deps, run, {
     decision: "review",
     params: {},
-    pr,
+    pr: prNumber,
     headSha: validSha(head),
   });
   deps.appendOutput(
@@ -838,7 +893,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
       run: true,
       force: decision.force,
       full: decision.full,
-      pr,
+      pr: prNumber,
       head_sha: head,
       publish: true,
     }),
