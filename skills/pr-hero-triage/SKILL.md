@@ -37,7 +37,9 @@ tag, not applying the review as a todo list.
 
 ## You own the judgment
 
-Every pr-hero comment is a **claim to verify**, not an order and not a merge gate. You — the
+Every pr-hero comment is a **claim to verify**, not an order. An advisory report never blocks anything. A CI
+report in gate mode can turn the `pr-hero` status red on blocking findings. Your reply is argument and evidence,
+and it does not clear that status on its own: a fix pushed to the head and reviewed again does. You — the
 coding agent running this skill — have the authority and the duty to accept it **or reject
 it**. The four tags are peers. None is the default.
 

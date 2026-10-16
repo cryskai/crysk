@@ -53,7 +53,7 @@ import {
   fetchPrReviewComments,
   ghPrFiles,
 } from "#pr/pr";
-import { createPrRunDir, resolveCiMode } from "#pr/preflight";
+import { createPrRunDir, resolveCiPosture } from "#pr/preflight";
 import { publishRunOutcome } from "#pr/publish-outcome";
 import { resolveEagerLocalIgnore, resolvePrFetchAndRange } from "#pr/range";
 import {
@@ -120,9 +120,11 @@ export async function reviewPr(
   const step1 = await resolvePrRunOptions(options, prArg);
   options = step1.options;
   const { operatorRoot, prNumber, home, isCi, loaded, config, summary } = step1;
-  // S4: the run's one CI-mode resolution. Every gate, skip, status, comment
-  // and summary below takes this value; nothing re-resolves it.
-  const ciMode = resolveCiMode(options.ciMode, isCi);
+  // S4 + T3 S7: the run's one posture. Every gate, skip, status, comment and
+  // summary below takes these values; nothing re-resolves them. Both key on the
+  // explicit --ci flag, never on `isCi` (which also folds in the CI/GITHUB_ACTIONS
+  // environment): a shell that exports CI=1 is advisory, on pr-hero/local.
+  const { ciMode, statusContext } = resolveCiPosture(options);
   // The eager, non-CI-only `.prheroignore` read (O-8). See
   // resolveEagerLocalIgnore (src/pr/range.ts) for the full rationale — under
   // CI this stays `undefined` on purpose; the CI read instead needs the
@@ -449,6 +451,7 @@ export async function reviewPr(
       loaded,
       isCi,
       ciMode,
+      statusContext,
       ciBudgetCeiling,
       ciAdmissionLedger,
       skipDiscovery,
@@ -671,6 +674,7 @@ export async function reviewPr(
         statusTargetUrl,
         ciAdmissionLedger,
         ciMode,
+        statusContext,
         blockingCount,
       });
     }

@@ -25,9 +25,12 @@ import {
 } from "#pr/pr";
 import {
   commitStatusRequest,
+  IN_FLIGHT_TTL_MS,
   isInFlightCommitStatus,
-  latestPrHeroStatus,
+  LOCAL_COMMIT_STATUS_CONTEXT,
+  latestStatusInContext,
   prHtmlUrl,
+  RUN_STATUS_CONTEXTS,
 } from "#pr/preflight";
 import {
   type CliOptions,
@@ -395,11 +398,25 @@ export async function gatherRepoFacts(
         markerSeen: markerCommentSeen(comments),
       });
       const statuses = await fetchCommitStatuses(repoRoot, candidate.head);
-      const latest = latestPrHeroStatus(statuses);
+      // The watcher's own leftover pending is local-only (T3 S7): it settles
+      // only what it posted. A pending on pr-hero is a CI run's to finish.
+      const latest = latestStatusInContext(
+        statuses,
+        LOCAL_COMMIT_STATUS_CONTEXT,
+      );
       if (latest?.state === "pending") {
         pending.push({ pr: candidate.pr, head: candidate.head });
       }
-      if (isInFlightCommitStatus(statuses, nowMs)) {
+      // In flight on EITHER context: CI's gate or a local run already reviewing
+      // this head is a reason to launch nothing here (T3 S7).
+      if (
+        isInFlightCommitStatus(
+          statuses,
+          nowMs,
+          IN_FLIGHT_TTL_MS,
+          RUN_STATUS_CONTEXTS,
+        )
+      ) {
         inFlight.push({ pr: candidate.pr, head: candidate.head });
       }
     }
@@ -472,6 +489,39 @@ async function scanRunDirs(runsRoot: string): Promise<{
   return { facts, localReviews };
 }
 
+// The argv a launched review runs with, after the engine's own invocation. No
+// `--ci`: the watcher is a local actor (T3 S7), so its child resolves advisory on
+// pr-hero/local and can never write the gate's context. Exported so a test reads
+// the real argv, not a copy of it.
+export function localReviewArgv(input: {
+  pr: number;
+  post: boolean;
+  sizeArgs: readonly string[];
+}): string[] {
+  return [
+    "review",
+    "--pr",
+    String(input.pr),
+    "--yes",
+    ...input.sizeArgs,
+    ...(input.post ? ["--post"] : []),
+  ];
+}
+
+// The settle for a leftover pending this watcher owns (T3 S7). It settles on the
+// LOCAL context only: a `pr-hero` pending belongs to a CI run the watcher cannot
+// grade, and a `success` written here would turn a failed CI gate green.
+export function orphanPendingSettleRequest(
+  targetUrl: string | undefined,
+): ReturnType<typeof commitStatusRequest> {
+  return commitStatusRequest({
+    phase: "success",
+    posted: false,
+    targetUrl,
+    context: LOCAL_COMMIT_STATUS_CONTEXT,
+  });
+}
+
 // Completes a leftover pending status on a PR this tick will not launch
 // again. Fail-soft: a yellow dot is worse than silence, a thrown tick is
 // worse than a yellow dot. Dry-run never calls this (runTick is live only).
@@ -485,11 +535,7 @@ async function settleOrphanPendings(
       await postCommitStatus(
         job.repo,
         job.head,
-        commitStatusRequest({
-          phase: "success",
-          posted: false,
-          targetUrl,
-        }),
+        orphanPendingSettleRequest(targetUrl),
       );
     } catch {
       // Leave the pending in place; the next live tick will try again.
@@ -773,12 +819,7 @@ async function runTick(
     [
       self.command,
       ...self.args,
-      "review",
-      "--pr",
-      String(launch.pr),
-      "--yes",
-      ...sizeArgs,
-      ...(launch.post ? ["--post"] : []),
+      ...localReviewArgv({ pr: launch.pr, post: launch.post, sizeArgs }),
     ],
     {
       cwd: launch.repo,

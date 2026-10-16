@@ -615,19 +615,15 @@ export function deriveTier(
   // gets this power — `inconclusive` still blocks, mirroring the rule that
   // `refuted` requires positive disproof. Silence is not a demotion.
   if (finding.refuter_verdict === "downgraded-latent") return "advisory";
-  // Blocking tier stops NOTHING — pr-hero is an assistant, not a merge gate
-  // (action.yml keeps the CLI in headless posture and never fails the job on
-  // findings; every report footer says so out loud). What the tier really buys
-  // is the report's loudest register: the red badge, the "Blocking" section,
-  // and the headline count a human reads before anything else. That is why
-  // claiming it still asserts that an adversary looked and failed to knock the
-  // claim down — the obligation is honesty about what was checked, not merge
-  // mechanics. Saying otherwise, as this comment did until 2026-08-27,
-  // invents a consequence and invites a reader to design against it — and it
-  // was never even an open question: "blocking findings exit 0 in CI —
-  // reviewer, not a merge gate" (test/ci/review.test.ts) has pinned the truth
-  // the whole time. Four comments justified design decisions against a premise
-  // a test in this same repo already refuted.
+  // The blocking tier does not change the job's exit code: ciExitCode stays 0
+  // on findings, and "blocking findings exit 0 in CI — reviewer, not a merge
+  // gate" (test/ci/review.test.ts) pins that. What it does change is the pr-hero commit status, and only in
+  // gate mode (the CI default, S4): there that status, which is the required
+  // check, goes red on blocking findings. In advisory mode the tier buys only
+  // the report's loudest register: the red badge, the "Blocking" section, and
+  // the headline count a human reads first. Either way the tier claims that an
+  // adversary looked and failed to knock the claim down, so the obligation is
+  // honesty about what was checked, and a gate may act on it.
   //
   // The demotion below
   // fires on a THREE-part condition, and every part is load-bearing:

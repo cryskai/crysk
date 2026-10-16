@@ -29,11 +29,16 @@ import {
 } from "#ci/admission-ledger";
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
-import { COMMIT_STATUS_CONTEXT } from "#pr/preflight";
+import {
+  COMMIT_STATUS_CONTEXT,
+  LOCAL_COMMIT_STATUS_CONTEXT,
+  resolveCiPosture,
+} from "#pr/preflight";
 import {
   heldCommitStatusLock,
   holdCommitStatusLock,
   releaseCommitStatusLock,
+  settleHeldCommitStatusOnSignal,
 } from "#pr/status";
 import { finalizePrReviewRun, settleCommitStatusAndLedger } from "#pr/teardown";
 import type { PipelineResult } from "#review/pipeline";
@@ -212,6 +217,7 @@ describe("settleCommitStatusAndLedger — commit status matrix", () => {
       ciAdmissionLedger: null,
       spawnFn,
       ciMode: "advisory",
+      statusContext: COMMIT_STATUS_CONTEXT,
       blockingCount: null,
     });
     expect(calls).toHaveLength(1);
@@ -247,6 +253,7 @@ describe("settleCommitStatusAndLedger — commit status lock lifecycle", () => {
       ciAdmissionLedger: null,
       spawnFn,
       ciMode: "advisory",
+      statusContext: COMMIT_STATUS_CONTEXT,
       blockingCount: null,
     });
     expect(lockDuringPost).not.toBeNull();
@@ -271,6 +278,7 @@ describe("settleCommitStatusAndLedger — commit status lock lifecycle", () => {
       spawnFn,
       settle: fakeSettle,
       ciMode: "advisory",
+      statusContext: COMMIT_STATUS_CONTEXT,
       blockingCount: null,
     });
     // gh was really attempted (and really failed) — this is not a no-op.
@@ -321,6 +329,7 @@ describe("settleCommitStatusAndLedger — gate mode (S4)", () => {
       ciAdmissionLedger: null,
       spawnFn,
       ciMode: "gate",
+      statusContext: COMMIT_STATUS_CONTEXT,
       blockingCount,
     });
     expect(calls).toHaveLength(1);
@@ -352,6 +361,7 @@ describe("settleCommitStatusAndLedger — gate mode (S4)", () => {
         spawnFn,
         settle: fakeSettle,
         ciMode: "gate",
+        statusContext: COMMIT_STATUS_CONTEXT,
         blockingCount: 0,
       });
     } catch (error) {
@@ -402,6 +412,7 @@ describe("settleCommitStatusAndLedger — ledger settlement guard", () => {
         spawnFn,
         settle: fakeSettle,
         ciMode: "advisory",
+        statusContext: COMMIT_STATUS_CONTEXT,
         blockingCount: null,
       });
       expect(ledger.record.status).toBe(expectedStatus);
@@ -424,6 +435,7 @@ describe("settleCommitStatusAndLedger — ledger settlement guard", () => {
         calls.push(1);
       },
       ciMode: "advisory",
+      statusContext: COMMIT_STATUS_CONTEXT,
       blockingCount: null,
     });
     expect(calls).toEqual([]);
@@ -516,4 +528,121 @@ describe("finalizePrReviewRun — cleanup ordering", () => {
       expect(ledger.record.decisionReason).toBe(expectedReason);
     },
   );
+});
+
+// T3 S7 (the verifier's BLOCKER): `pr-hero` is the CI gate. A run that is not
+// an explicit `--ci` run never writes it: local `review --pr`, the watcher's
+// child, and CI=1 without --ci all post on `pr-hero/local`, advisory. The
+// posture comes from the one resolver reviewPr uses, so these cases drive the
+// production decision, not a hand-picked context.
+describe("S7: only an explicit --ci run writes the pr-hero context", () => {
+  test("a local advisory run with blocking findings posts success on pr-hero/local, never on pr-hero", async () => {
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "advisory",
+      statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
+      blockingCount: 2,
+    });
+    expect(calls).toHaveLength(1);
+    expect(parseStatusFlags(calls[0] as string[])).toEqual({
+      state: "success",
+      context: LOCAL_COMMIT_STATUS_CONTEXT,
+      description: "review complete",
+    });
+  });
+
+  test("a --ci gate run with blocking findings posts failure on pr-hero", async () => {
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ...resolveCiPosture({ ci: true }),
+      blockingCount: 2,
+    });
+    expect(calls).toHaveLength(1);
+    const flags = parseStatusFlags(calls[0] as string[]);
+    expect(flags.context).toBe(COMMIT_STATUS_CONTEXT);
+    expect(flags.state).toBe("failure");
+  });
+
+  test("a local run asked for gate still grades nothing: the mixed input posts advisory on pr-hero/local", async () => {
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "gate",
+      statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
+      blockingCount: 2,
+    });
+    expect(calls).toHaveLength(1);
+    const flags = parseStatusFlags(calls[0] as string[]);
+    expect(flags.context).toBe(LOCAL_COMMIT_STATUS_CONTEXT);
+    expect(flags.state).toBe("success");
+  });
+
+  test("S7 pin: every non-ci posture, every outcome, never writes the pr-hero context", async () => {
+    const outcomes: Array<[PipelineResult | undefined, number | null]> = [
+      [undefined, null],
+      [pipelineResult(false), null],
+      [pipelineResult(false), 0],
+      [pipelineResult(false), 2],
+      [pipelineResult(true), 2],
+    ];
+    let posts = 0;
+    for (const ciMode of [undefined, "gate", "advisory"] as const) {
+      const posture = resolveCiPosture({ ci: false, ciMode });
+      for (const [result, blockingCount] of outcomes) {
+        const { spawnFn, calls } = makeStatusSpawn();
+        await settleCommitStatusAndLedger({
+          result,
+          posted: null,
+          operatorRoot: "/repo",
+          headSha: HEAD,
+          statusTargetUrl: undefined,
+          ciAdmissionLedger: null,
+          spawnFn,
+          ...posture,
+          blockingCount,
+        });
+        for (const argv of calls) {
+          posts += 1;
+          expect(parseStatusFlags(argv).context).toBe(
+            LOCAL_COMMIT_STATUS_CONTEXT,
+          );
+        }
+      }
+    }
+    expect(posts).toBeGreaterThan(0);
+  });
+
+  test("a cancelled local run settles its own pending on pr-hero/local, never pr-hero", async () => {
+    holdCommitStatusLock({
+      operatorRoot: "/repo",
+      sha: HEAD,
+      targetUrl: undefined,
+      context: LOCAL_COMMIT_STATUS_CONTEXT,
+    });
+    const contexts: string[] = [];
+    await settleHeldCommitStatusOnSignal(async (_root, _sha, request) => {
+      contexts.push(request.context);
+    });
+    expect(contexts).toEqual([LOCAL_COMMIT_STATUS_CONTEXT]);
+  });
 });

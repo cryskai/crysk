@@ -31,6 +31,7 @@ import {
 import { ghRepoWebUrl } from "#pr/pr";
 import {
   type CiMode,
+  type CommitStatusContext,
   commitStatusRequest,
   type PrTarget,
   prHtmlUrl,
@@ -101,9 +102,12 @@ export async function resolvePrPlanAndConfirm(params: {
   summary: LoadedRunConfig["summary"];
   loaded: LoadedRunConfig["loaded"];
   isCi: boolean;
-  // The one resolution of the run's CI mode (resolveCiMode, reviewPr). Passed
+  // The one resolution of the run's CI mode (resolveCiPosture, reviewPr). Passed
   // down, never re-resolved here.
   ciMode: CiMode;
+  // The context this run's statuses post on: pr-hero only for an explicit --ci
+  // run, pr-hero/local otherwise (resolveCiPosture). Passed down, never re-derived.
+  statusContext: CommitStatusContext;
   ciBudgetCeiling: { budgetUsd: number | undefined };
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
@@ -289,6 +293,7 @@ export async function resolvePrPlanAndConfirm(params: {
       phase: "pending",
       posted: false,
       targetUrl: statusTargetUrl,
+      context: params.statusContext,
     }),
   );
   // From here the lock is HELD, and the only two ways out both clear it:
@@ -300,6 +305,7 @@ export async function resolvePrPlanAndConfirm(params: {
     operatorRoot: params.operatorRoot,
     sha: params.headSha,
     targetUrl: statusTargetUrl,
+    context: params.statusContext,
   });
 
   return {

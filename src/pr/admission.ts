@@ -21,8 +21,17 @@ import {
   formatWorkflowCommand,
 } from "#ci/reporter";
 import type { CiReviewPolicy } from "#ci/review-admission";
-import { repostMarkedPrComment, upsertAdmissionCheckRun } from "#pr/pr";
-import { type CiMode, skipCommitStatusRequest } from "#pr/preflight";
+import {
+  ghRepoWebUrl,
+  repostMarkedPrComment,
+  upsertAdmissionCheckRun,
+} from "#pr/pr";
+import {
+  type CiMode,
+  COMMIT_STATUS_CONTEXT,
+  prHtmlUrl,
+  skipCommitStatusRequest,
+} from "#pr/preflight";
 import { publishFinalCommitStatus } from "#pr/status";
 import { log } from "#ui/primitives";
 
@@ -259,6 +268,7 @@ export async function publishCiSkip(input: {
   // publishFinalCommitStatus).
   repost?: typeof repostMarkedPrComment;
   postStatus?: typeof publishFinalCommitStatus;
+  repoWebUrl?: typeof ghRepoWebUrl;
 }): Promise<number> {
   log(formatWorkflowCommand("notice", input.noticeMessage));
   // The record names the skip kind only. The plan carries no head, so none is
@@ -296,10 +306,24 @@ export async function publishCiSkip(input: {
     input.headSha !== undefined &&
     (skip === "size" || skip === "budget")
   ) {
+    // The run's pull URL, like every other status the CLI writes (T3 advisory
+    // 3): a skip is a red check, and the link is how a reader reaches the PR.
+    // Best effort: ghRepoWebUrl answers undefined when it cannot, and the status
+    // still lands, without a link.
+    const targetUrl = prHtmlUrl(
+      await (input.repoWebUrl ?? ghRepoWebUrl)(input.operatorRoot),
+      input.prNumber,
+    );
+    // Gate-only, and gate implies `--ci` (resolveCiPosture), so this is the gate's
+    // own context: the one skip write that names pr-hero.
     await (input.postStatus ?? publishFinalCommitStatus)(
       input.operatorRoot,
       input.headSha,
-      skipCommitStatusRequest({ kind: skip, targetUrl: undefined }),
+      skipCommitStatusRequest({
+        kind: skip,
+        targetUrl,
+        context: COMMIT_STATUS_CONTEXT,
+      }),
     );
   }
   // Written only once the notice is on the PR, or once the log line is out when

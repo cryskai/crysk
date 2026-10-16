@@ -560,12 +560,19 @@ findings still there it sets `failure` again. The size and budget `failure` is t
 clears, because that run passes both gates. An override for blocking findings is not built yet.
 
 **A failed final write.** In gate mode the job fails with an `::error::` annotation when the final status
-cannot be written, because the required check would otherwise stay pending. The commit-status lock is still
-released. The pending status, written when a review starts, is best-effort in both modes.
+cannot be written. The commit-status lock is still released. The head then stays `pending`, so the required
+check does not settle, and a re-run of that head yields to the pending for up to 90 minutes unless it is
+forced. `/pr-hero review` forces the review past that yield and writes the status again. The pending status,
+written when a review starts, is best-effort in both modes.
 
-**Known gap: the local watcher.** `pr-hero watch` runs on your machine, outside CI, and writes its own status
-on the heads it reviews. It can overwrite a red gate status with a green one. A `pr-hero review --pr` you run
-locally is advisory, and it can do the same. Neither is changed by this slice; closing the gap is a follow-up.
+**Local runs and the watcher post on `pr-hero/local`.** Only an explicit `--ci` run writes the `pr-hero`
+status, which is the required check. A `pr-hero review --pr` you run locally, and each review that
+`pr-hero watch` starts, post advisory statuses on `pr-hero/local` instead, so they cannot overwrite a red gate
+on the same head. Only the `--ci` flag makes a run post to the gate; `CI=1` in your shell does not. The watcher yields
+to a review in flight on either context, and it settles only its own leftover pending, on `pr-hero/local`.
+
+Local statuses used to share the `pr-hero` name. A status a local run wrote there before this change stays in
+that head's history, and the next `--ci` run on the head is what settles the gate.
 
 Three things can make the job fail. Only the first sets `status=error`:
 

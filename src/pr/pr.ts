@@ -73,7 +73,6 @@ import {
 import {
   buildComparisonJson,
   type CiMode,
-  COMMIT_STATUS_CONTEXT,
   COMMIT_STATUS_TIMEOUT_MS,
   type CommitStatusFact,
   type CommitStatusRequest,
@@ -359,8 +358,10 @@ export async function ghRepoWebUrl(
 
 // In-flight / completed signal on the head SHA. Fail-loud here: the CLI
 // catches and warns, because a missing `repo:status` scope must not abort a
-// review that already cost hunter money. Context is COMMIT_STATUS_CONTEXT
-// so the watcher can find this row among CI statuses.
+// review that already cost hunter money. The context is the request's own
+// (T3 S7): the gate's `pr-hero` only from a `--ci` run's request, and
+// `pr-hero/local` from every other run, so the POST can never pick a context
+// the caller did not choose.
 export async function postCommitStatus(
   operatorRoot: string,
   sha: string,
@@ -384,7 +385,7 @@ export async function postCommitStatus(
     "-f",
     `state=${status.state}`,
     "-f",
-    `context=${COMMIT_STATUS_CONTEXT}`,
+    `context=${status.context}`,
     "-f",
     `description=${status.description}`,
   ];

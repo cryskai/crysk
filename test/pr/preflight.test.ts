@@ -31,6 +31,8 @@ import {
   findMarkedCommentId,
   IN_FLIGHT_TTL_MS,
   isInFlightCommitStatus,
+  LOCAL_COMMIT_STATUS_CONTEXT,
+  latestStatusInContext,
   PR_COMMENT_COVERAGE_PARTIAL_TOKEN,
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
@@ -39,7 +41,9 @@ import {
   prCommentMarker,
   prHtmlUrl,
   prRunDirCandidate,
+  RUN_STATUS_CONTEXTS,
   resolveCiMode,
+  resolveCiPosture,
   resolveCurrentPrNumber,
   resolvePrTarget,
   settleRequestForCancellation,
@@ -1114,6 +1118,7 @@ describe("commitStatusRequest", () => {
         phase: "pending",
         posted: true,
         targetUrl,
+        context: COMMIT_STATUS_CONTEXT,
       }),
     ).toEqual({
       state: "pending",
@@ -1129,6 +1134,7 @@ describe("commitStatusRequest", () => {
         phase: "success",
         posted: true,
         targetUrl,
+        context: COMMIT_STATUS_CONTEXT,
       }).description,
     ).toBe("review posted");
     expect(
@@ -1136,6 +1142,7 @@ describe("commitStatusRequest", () => {
         phase: "success",
         posted: false,
         targetUrl: undefined,
+        context: COMMIT_STATUS_CONTEXT,
       }),
     ).toEqual({
       state: "success",
@@ -1150,6 +1157,7 @@ describe("commitStatusRequest", () => {
       phase: "error",
       posted: false,
       targetUrl,
+      context: COMMIT_STATUS_CONTEXT,
     });
     expect(request.state).toBe("error");
     expect(request.description).toBe("review did not finish");
@@ -1171,7 +1179,23 @@ describe("settleRequestForCancellation", () => {
     operatorRoot: "/repo",
     sha: "a".repeat(40),
     targetUrl: "https://github.com/org/repo/pull/162",
+    context: COMMIT_STATUS_CONTEXT as typeof COMMIT_STATUS_CONTEXT,
   };
+
+  test("a lock taken by a local run settles on pr-hero/local, never on pr-hero", () => {
+    const request = settleRequestForCancellation({
+      ...lock,
+      context: LOCAL_COMMIT_STATUS_CONTEXT,
+    })?.request;
+    expect(request?.context).toBe(LOCAL_COMMIT_STATUS_CONTEXT);
+  });
+
+  test("a lock with no recorded context settles on the local context, never the gate's", () => {
+    const { context: _omitted, ...bare } = lock;
+    expect(settleRequestForCancellation(bare)?.request.context).toBe(
+      LOCAL_COMMIT_STATUS_CONTEXT,
+    );
+  });
 
   test("holding no lock settles nothing", () => {
     expect(settleRequestForCancellation(null)).toBeNull();
@@ -1320,6 +1344,7 @@ describe("blockingCommitStatusRequest", () => {
     const request = blockingCommitStatusRequest({
       blockingCount: 2,
       targetUrl: gateTargetUrl,
+      context: COMMIT_STATUS_CONTEXT,
     });
     expect(request).toEqual({
       state: "failure",
@@ -1339,6 +1364,7 @@ describe("skipCommitStatusRequest (S4 size and budget skips)", () => {
     const request = skipCommitStatusRequest({
       kind: "size",
       targetUrl: gateTargetUrl,
+      context: COMMIT_STATUS_CONTEXT,
     });
     expect(request.state).toBe("failure");
     expect(request.context).toBe(COMMIT_STATUS_CONTEXT);
@@ -1354,6 +1380,7 @@ describe("skipCommitStatusRequest (S4 size and budget skips)", () => {
     const request = skipCommitStatusRequest({
       kind: "budget",
       targetUrl: gateTargetUrl,
+      context: COMMIT_STATUS_CONTEXT,
     });
     expect(request.state).toBe("failure");
     expect(request.description).toContain("skipped");
@@ -1381,6 +1408,89 @@ describe("resolveCiMode", () => {
   test("a local run is advisory whatever the flag says: today's posture", () => {
     expect(resolveCiMode(undefined, false)).toBe("advisory");
     expect(resolveCiMode("gate", false)).toBe("advisory");
+  });
+});
+
+describe("resolveCiPosture: the explicit --ci flag alone picks the gate and the context", () => {
+  test("only --ci writes pr-hero; a run without it is advisory on pr-hero/local", () => {
+    expect(resolveCiPosture({ ci: true })).toEqual({
+      ciMode: "gate",
+      statusContext: COMMIT_STATUS_CONTEXT,
+    });
+    expect(resolveCiPosture({ ci: true, ciMode: "advisory" })).toEqual({
+      ciMode: "advisory",
+      statusContext: COMMIT_STATUS_CONTEXT,
+    });
+    expect(resolveCiPosture({})).toEqual({
+      ciMode: "advisory",
+      statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
+    });
+    expect(resolveCiPosture({ ci: false, ciMode: "gate" })).toEqual({
+      ciMode: "advisory",
+      statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
+    });
+  });
+
+  test("the context is the only way to write pr-hero: no non-ci posture names it", () => {
+    for (const ciMode of [undefined, "gate", "advisory"] as const) {
+      expect(resolveCiPosture({ ci: false, ciMode }).statusContext).toBe(
+        LOCAL_COMMIT_STATUS_CONTEXT,
+      );
+    }
+  });
+
+  test("the local context is distinct from the gate's, and both are in the run's read set", () => {
+    expect(LOCAL_COMMIT_STATUS_CONTEXT).toBe("pr-hero/local");
+    expect(LOCAL_COMMIT_STATUS_CONTEXT).not.toBe(COMMIT_STATUS_CONTEXT);
+    expect(RUN_STATUS_CONTEXTS).toEqual([
+      COMMIT_STATUS_CONTEXT,
+      LOCAL_COMMIT_STATUS_CONTEXT,
+    ]);
+  });
+});
+
+describe("the readers: CI yields to pr-hero only, the watcher to both", () => {
+  const now = Date.parse("2026-08-18T17:00:00.000Z");
+  const fresh = "2026-08-18T16:30:00.000Z";
+  const localPending = {
+    state: "pending",
+    context: LOCAL_COMMIT_STATUS_CONTEXT,
+    created_at: fresh,
+  };
+  const ciPending = {
+    state: "pending",
+    context: COMMIT_STATUS_CONTEXT,
+    created_at: fresh,
+  };
+
+  test("the CI yield (default read) ignores a local pending: a CI run never stands down for a local one", () => {
+    expect(isInFlightCommitStatus([localPending], now)).toBe(false);
+  });
+
+  test("the watcher's read sees a local pending and a CI pending", () => {
+    expect(
+      isInFlightCommitStatus(
+        [localPending],
+        now,
+        undefined,
+        RUN_STATUS_CONTEXTS,
+      ),
+    ).toBe(true);
+    expect(
+      isInFlightCommitStatus([ciPending], now, undefined, RUN_STATUS_CONTEXTS),
+    ).toBe(true);
+  });
+
+  test("latestStatusInContext reads one context: a CI pending is never the local latest", () => {
+    expect(
+      latestStatusInContext([ciPending], LOCAL_COMMIT_STATUS_CONTEXT),
+    ).toBeNull();
+    expect(
+      latestStatusInContext(
+        [ciPending, localPending],
+        LOCAL_COMMIT_STATUS_CONTEXT,
+      ),
+    ).toEqual(localPending);
   });
 });
 
