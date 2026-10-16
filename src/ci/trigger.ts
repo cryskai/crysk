@@ -540,18 +540,22 @@ function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
   }
 }
 
-// Writes one record for every decision, and returns whether it is on disk for
-// the publisher. Unset PRHERO_OUTCOME_DIR (a local run outside Actions) writes
-// nothing. A failed write is reported, and the decision's own exit code stands:
-// the review is not the record's to block. The return value lets an exit-1
-// decision name its own cause when no publisher will (printCauseUnlessRecorded).
+// What the record write did. `unset` is a local run with no outcome directory:
+// nothing was written and nothing will be published from one. `failed` is a
+// write that was attempted and did not land, so the file on disk (if any) is an
+// earlier attempt's.
+type RecordWrite = "written" | "unset" | "failed";
+
+// Writes one record for every decision, and says what happened to it. A failed
+// write is reported, and the decision's own exit code stands: the review is not
+// the record's to block.
 function writeRecord(
   deps: CiTriggerDeps,
   run: RunIdentity,
   fields: RecordFields,
-): boolean {
+): RecordWrite {
   const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
-  if (dir === "") return false;
+  if (dir === "") return "unset";
   const record = {
     v: 1,
     decision: fields.decision,
@@ -569,7 +573,7 @@ function writeRecord(
     fs.mkdir(dir);
     clearStaleMarkers(dir, fs);
     writeRecordAtomically(dir, `${JSON.stringify(record)}\n`, fs);
-    return true;
+    return "written";
   } catch {
     deps.stdout(
       workflowCommand(
@@ -577,8 +581,16 @@ function writeRecord(
         "pr-hero could not write its outcome record, so this run's result may not reach the pull request.",
       ),
     );
-    return false;
+    return "failed";
   }
+}
+
+// The publish output follows the record. A failed write leaves the publisher
+// nothing to read for this run, and the file on disk is an earlier attempt's, so
+// the publish step must not run against it. An unset outcome directory keeps
+// publish as the decision set it.
+function publishes(write: RecordWrite): boolean {
+  return write !== "failed";
 }
 
 // An exit-1 decision whose record is not on disk has no publisher to name its
@@ -586,10 +598,10 @@ function writeRecord(
 // that was written keeps the publisher as the only speaker.
 function printCauseUnlessRecorded(
   deps: CiTriggerDeps,
-  recorded: boolean,
+  write: RecordWrite,
   cause: string,
 ): void {
-  if (!recorded) deps.stdout(workflowCommand("error", cause));
+  if (write !== "written") deps.stdout(workflowCommand("error", cause));
 }
 
 // The cause of a run with no credential. It names the decision's own input
@@ -833,15 +845,19 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
   if (decision.kind === "unverifiable") {
     // gh is already failing for this lookup, so asking it for the head would
     // only add another failing call: the publisher degrades to its summary.
-    const recorded = writeRecord(deps, run, {
+    const write = writeRecord(deps, run, {
       decision: "unverifiable",
       params: { step: "the commenter permission check" },
       cls: lookupClass(decision),
       pr,
     });
-    printCauseUnlessRecorded(deps, recorded, decision.reason);
+    printCauseUnlessRecorded(deps, write, decision.reason);
     deps.appendOutput(
-      formatTriggerOutputs({ ...NO_RUN, pr: pr ?? "", publish: true }),
+      formatTriggerOutputs({
+        ...NO_RUN,
+        pr: pr ?? "",
+        publish: publishes(write),
+      }),
     );
     return 1;
   }
@@ -851,23 +867,19 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
       pr === undefined
         ? UNKNOWN_HEAD_SHA
         : resolveHeadSha(deps, base.eventName, base.repository, pr, true);
-    const recorded = writeRecord(deps, run, {
+    const write = writeRecord(deps, run, {
       decision: "no-credentials",
       params: { backend: backendOf(deps) },
       pr,
       headSha: validSha(head),
     });
-    printCauseUnlessRecorded(
-      deps,
-      recorded,
-      noCredentialCause(decision.inputs),
-    );
+    printCauseUnlessRecorded(deps, write, noCredentialCause(decision.inputs));
     deps.appendOutput(
       formatTriggerOutputs({
         ...NO_RUN,
         pr: pr ?? "",
         head_sha: validSha(head) ?? "",
-        publish: true,
+        publish: publishes(write),
       }),
     );
     return 1;
@@ -877,15 +889,17 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
     // The publisher renders the class (PRH-PR-UNRESOLVED). The review never
     // started, so the install step's marker is absent by design. A malformed
     // input carries its fixed detail, so the fix names the input to correct.
-    const recorded = writeRecord(deps, run, {
+    const write = writeRecord(deps, run, {
       decision: "review",
       params: resolution.malformed
         ? { detail: MALFORMED_PR_NUMBER_DETAIL }
         : {},
       cls: { kind: "trigger", check: "pr-unresolved" },
     });
-    printCauseUnlessRecorded(deps, recorded, resolution.error);
-    deps.appendOutput(formatTriggerOutputs({ ...NO_RUN, publish: true }));
+    printCauseUnlessRecorded(deps, write, resolution.error);
+    deps.appendOutput(
+      formatTriggerOutputs({ ...NO_RUN, publish: publishes(write) }),
+    );
     return 1;
   }
 
@@ -898,7 +912,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
     prNumber,
     false,
   );
-  writeRecord(deps, run, {
+  const write = writeRecord(deps, run, {
     decision: "review",
     params: {},
     pr: prNumber,
@@ -911,7 +925,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
       full: decision.full,
       pr: prNumber,
       head_sha: head,
-      publish: true,
+      publish: publishes(write),
     }),
   );
   return 0;

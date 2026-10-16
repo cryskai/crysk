@@ -1206,6 +1206,63 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     }
   });
 
+  // WHY: the publish step reads whatever trigger.json is on disk. When this
+  // run's write failed, the file there is an earlier attempt's, so publish must
+  // be off. A decision that is the only speaker (no credential, an unresolved
+  // PR, an unverifiable permission) names its own cause on the failed write.
+  test.each([
+    ["a review", baseEnv(), undefined, 0, undefined],
+    [
+      "no credentials",
+      baseEnv({ HAS_CLAUDE_TOKEN: "false" }),
+      undefined,
+      1,
+      "pr-hero has no credential",
+    ],
+    [
+      "an unresolved PR",
+      baseEnv({ EVENT_NAME: "workflow_dispatch", EVENT_PR_NUMBER: "" }),
+      undefined,
+      1,
+      "Could not determine the pull request number",
+    ],
+    [
+      "an unverifiable permission",
+      commentEnv("/pr-hero review"),
+      (): GhResult => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: "gh: Server Error (HTTP 503)",
+      }),
+      1,
+      "could not verify",
+    ],
+  ])(
+    "a failed record write on %s turns publish off",
+    (_label, env, answer, exitCode, cause) => {
+      const root = mkdtempSync(
+        path.join(os.tmpdir(), "prhero-trigger-publish-off-"),
+      );
+      try {
+        const run = runShell(
+          { ...env, PRHERO_OUTCOME_DIR: path.join(root, "outcome") },
+          answer,
+          () => false,
+          failingFs,
+        );
+        expect(run.exitCode).toBe(exitCode);
+        expect(run.outputs.publish).toBe("false");
+        if (cause === undefined) {
+          expect(run.outputs.run).toBe("true");
+        } else {
+          expect(run.stdout).toContain(cause);
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("with no PRHERO_OUTCOME_DIR nothing is written and the outputs are unchanged", () => {
     const run = runShell(baseEnv());
     expect(run.outputs.run).toBe("true");

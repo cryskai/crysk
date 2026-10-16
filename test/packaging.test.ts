@@ -821,6 +821,13 @@ describe("Packaging & distribution configuration", () => {
       expect(step?.env?.GITHUB_RUN_ID).toBe(`\${{ github.run_id }}`);
     });
 
+    // WHY: gh run rerun keeps the run id. The publisher compares the record's
+    // attempt with this one, so a record from an earlier attempt is refused.
+    test("the publish step binds the run attempt, so a record of another attempt is refused", () => {
+      const step = steps().find((candidate) => candidate.id === "publish");
+      expect(step?.env?.GITHUB_RUN_ATTEMPT).toBe(`\${{ github.run_attempt }}`);
+    });
+
     test("the run step writes cli-started as its first command, before anything can fail", () => {
       const run = steps().find((step) => step.id === "run-pr-hero");
       const firstCommand = String(run?.run ?? "")

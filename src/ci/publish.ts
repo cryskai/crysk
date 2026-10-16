@@ -163,6 +163,21 @@ export function decidePublication(input: {
   // that completed. cli-started alone does not prove that, and a CLI that did
   // not complete leaves no outcome of its own, so its run is left alone. T2c
   // moves that case here. Without a PR or a head there is nothing to clean.
+  //
+  // KNOWN GAPS of this gate, left as they are until T2c. The gate reads the
+  // `pr-hero` status on the head the TRIGGER recorded, not on the head the CLI
+  // reviewed (the CLI posts its status on its own head, src/pr/plan.ts).
+  // (a) The trigger recorded no head (a failed `gh pr view` on a comment or
+  //     dispatch run): there is no head to read, so cleanup does not run.
+  // (b) The PR head moved between the trigger and the CLI: the read lands on the
+  //     trigger's head, not the reviewed one. Its latest pr-hero status may be a
+  //     completed review left by an earlier run on that head. Cleanup then runs
+  //     on a status this run did not write, and can delete an older run's
+  //     outcome comment while this run's review is incomplete. This case is NOT
+  //     fail-safe.
+  // T2c replaces this gate with the CLI's own outcome record, which carries the
+  // head the CLI actually reviewed, so cleanup no longer depends on the
+  // trigger's head or on reading a commit status.
   if (record.decision === "review" && input.cliStarted) {
     if (
       !cliReviewCompleted(input.cliStatus) ||
@@ -630,9 +645,11 @@ function latestCliStatus(rows: readonly StatusRow[]): CliStatus | undefined {
 }
 
 // The head's pr-hero status as the CLI left it. WHY the combined endpoint: it
-// returns the latest status of each context, so the newest pr-hero status is
-// never paged out of reach. src/pr/pr.ts reads the same endpoint. A failed read
-// is undefined, which cleans up nothing and prints nothing.
+// returns the latest status of each context. WHY per_page=100: it pages at 30
+// contexts by default, and a busy head's pr-hero row can sit past the first
+// page; a head with more than 100 contexts still needs a further page.
+// src/pr/pr.ts reads the same endpoint. A failed read is undefined, which cleans
+// up nothing and prints nothing.
 function readCliStatus(
   deps: PublishDeps,
   repo: string,
@@ -640,7 +657,7 @@ function readCliStatus(
 ): CliStatus | undefined {
   const read = deps.gh([
     "api",
-    `repos/${repo}/commits/${sha}/status`,
+    `repos/${repo}/commits/${sha}/status?per_page=100`,
     "--jq",
     ".statuses[]? | [.context, .state, .description, .created_at] | @json",
   ]);
@@ -707,17 +724,22 @@ export function runPublish(deps: PublishDeps): number {
     return 1;
   }
   // WHY: the record must describe this run. A mismatch means the directory is
-  // not this job's, and nothing is posted on a PR on a guess.
+  // not this job's, and nothing is posted on a PR on a guess. The attempt is
+  // part of it: gh run rerun keeps the run id, so a record of an earlier attempt
+  // can still be on disk. An absent or invalid attempt is attempt 1, the same
+  // default the trigger writes.
   const runRepository = deps.env.GITHUB_REPOSITORY ?? "";
   const runId = deps.env.GITHUB_RUN_ID ?? "";
+  const runAttempt = positiveInteger(deps.env.GITHUB_RUN_ATTEMPT ?? "") ?? 1;
   if (
     (runRepository !== "" && record.repository !== runRepository) ||
-    (runId !== "" && record.run_id !== runId)
+    (runId !== "" && record.run_id !== runId) ||
+    record.run_attempt !== runAttempt
   ) {
     deps.stdout(
       workflowCommand(
         "error",
-        "pr-hero's outcome record belongs to another run, so nothing was posted.",
+        "pr-hero's outcome record belongs to another run or attempt, so nothing was posted.",
       ),
     );
     return 1;

@@ -800,6 +800,7 @@ describe("runPublish — the shell", () => {
     // failures apart. Without it, the first comment stays beside the second.
     const run = runPublishIn({
       record: record({ run_attempt: 2 }),
+      env: { GITHUB_RUN_ATTEMPT: "2" },
       list: listing([10, "bot-a", "User", FIRST_ATTEMPT_MARKER]),
     });
     expect(deletions(run.calls)).toEqual([`repos/${REPO}/issues/comments/10`]);
@@ -811,6 +812,7 @@ describe("runPublish — the shell", () => {
   test("a marker written before attempts were recorded counts as attempt 1", () => {
     const run = runPublishIn({
       record: record({ run_attempt: 2 }),
+      env: { GITHUB_RUN_ATTEMPT: "2" },
       list: listing([
         10,
         "bot-a",
@@ -832,6 +834,34 @@ describe("runPublish — the shell", () => {
       ]),
     });
     expect(deletions(run.calls)).toEqual([]);
+  });
+
+  // WHY: gh run rerun keeps the run id and bumps the attempt. On a runner that
+  // reuses runner.temp, attempt 2 can find attempt 1's record still on disk
+  // (its own record write failed), and must not publish attempt 1's outcome.
+  test("a record from an earlier attempt of this run is refused before anything is read or posted", () => {
+    const run = runPublishIn({
+      record: record({ run_attempt: 1 }),
+      env: { GITHUB_RUN_ATTEMPT: "2" },
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toContain("belongs to another run");
+    expect(run.calls).toEqual([]);
+  });
+
+  test("a record of the attempt that is running publishes, and an absent or invalid attempt counts as attempt 1", () => {
+    const matching = runPublishIn({
+      record: record({ run_attempt: 2 }),
+      env: { GITHUB_RUN_ATTEMPT: "2" },
+    });
+    expect(matching.exitCode).toBe(0);
+    expect(statusCalls(matching.calls)).not.toEqual([]);
+    const invalid = runPublishIn({
+      record: record({ run_attempt: 1 }),
+      env: { GITHUB_RUN_ATTEMPT: "abc" },
+    });
+    expect(invalid.exitCode).toBe(0);
+    expect(statusCalls(invalid.calls)).not.toEqual([]);
   });
 
   test("a failed cleanup never fails the run: the fresh comment already landed", () => {
@@ -996,6 +1026,27 @@ describe("runPublish — cleanup once the CLI started", () => {
   const removedIds = (run: { calls: Call[] }) =>
     deletions(run.calls).map((url) => url.split("/").pop());
 
+  test("the combined-status read asks for 100 contexts per page, so a busy head's pr-hero row is on the first page", () => {
+    // WHY: the endpoint returns 30 contexts a page by default. A head with more
+    // contexts than that could page the CLI's pr-hero row out of the first page.
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      reviewStatus: cliStatusRow(
+        CLI_COMPLETED.state,
+        CLI_COMPLETED.description,
+      ),
+      viewer: ok("pr-hero-bot"),
+      list: listing(),
+    });
+    const read = run.calls.find((call) =>
+      call.args.some((arg) => arg.includes("/commits/")),
+    );
+    expect(read?.args).toContain(
+      `repos/${REPO}/commits/${SHA}/status?per_page=100`,
+    );
+  });
+
   test("with a viewer login, deletes only that login's older marker comments", () => {
     const run = runPublishIn({
       record: record(),
@@ -1030,6 +1081,7 @@ describe("runPublish — cleanup once the CLI started", () => {
     // contradicts it. Same run id, so only the attempt orders the two.
     const run = runPublishIn({
       record: record({ run_attempt: 2 }),
+      env: { GITHUB_RUN_ATTEMPT: "2" },
       cliStarted: true,
       reviewStatus: cliStatusRow(
         CLI_COMPLETED.state,
