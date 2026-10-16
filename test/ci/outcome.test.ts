@@ -1726,6 +1726,51 @@ describe("parseCliRecord — the cli.json contract", () => {
         params: { backend: "opencode", pr: 7 },
       },
     ],
+    // T2d-1: the classes the CLI writes for its classified config and engine errors.
+    [
+      "error, gotchas empty",
+      { v: 1, outcome: "error", cls: { kind: "gotchas", reason: "empty" } },
+    ],
+    [
+      "error, gotchas placeholder",
+      {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "gotchas", reason: "placeholder" },
+      },
+    ],
+    [
+      "error, prompt-set",
+      { v: 1, outcome: "error", cls: { kind: "prompt-set" } },
+    ],
+    [
+      "error, config-parse for the repo config",
+      {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "config-parse", source: "repo-config" },
+      },
+    ],
+    [
+      "error, config-parse for routing",
+      {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "config-parse", source: "routing" },
+      },
+    ],
+    [
+      "error, config-parse for extra hunters",
+      {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "config-parse", source: "extra-hunters" },
+      },
+    ],
+    [
+      "error, the engine invariant",
+      { v: 1, outcome: "error", cls: { kind: "invariant" } },
+    ],
   ])("accepts a %s record unchanged", (_label, value) => {
     expect(parseCliRecord(text(value))).toEqual(value as CliRecord);
   });
@@ -1832,6 +1877,36 @@ describe("parseCliRecord — the cli.json contract", () => {
     [
       "params on a non-error outcome, which carries no params",
       text({ v: 1, outcome: "reviewed", params: { pr: 7 } }),
+    ],
+    // T2d-1: a class the CLI never writes is refused, not read as a guess. The
+    // person layer is one: its catalog text names the repo file, so it stays out.
+    [
+      "config-parse for the person layer",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "config-parse", source: "person-config" },
+      }),
+    ],
+    [
+      "config-parse with no source",
+      text({ v: 1, outcome: "error", cls: { kind: "config-parse" } }),
+    ],
+    [
+      "gotchas with a reason the gate never returns",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "gotchas", reason: "magic" },
+      }),
+    ],
+    [
+      "a trigger class, which only the trigger writes",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "trigger", check: "no-credential" },
+      }),
     ],
   ])("refuses %s", (_label, value) => {
     expect(parseCliRecord(value)).toBeUndefined();

@@ -5,13 +5,19 @@
 // observed value in the table.
 
 import { describe, expect, test } from "bun:test";
+import { GOTCHAS_TEMPLATE, gotchasUnusableReason } from "#review/preflight";
 import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import {
   renderScenarioTable,
   type ScenarioResult,
 } from "../../scripts/sandbox/report";
 import { runScenarios } from "../../scripts/sandbox/scenario";
-import { sandboxFiles, WORKFLOW_PATH } from "../../scripts/sandbox/seed";
+import { findScenario } from "../../scripts/sandbox/scenarios";
+import {
+  GOTCHAS_PATH,
+  sandboxFiles,
+  WORKFLOW_PATH,
+} from "../../scripts/sandbox/seed";
 import { fail, START_ISO } from "./fakes";
 import { FakeGithub } from "./world";
 
@@ -78,6 +84,35 @@ describe("run: the scenarios against the fake repository", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  // T2d-1 (S2): the scenario branch commits the scaffold gotchas file, the fake
+  // reads it the way the CLI's gate does, and the outcome names the config owner.
+  test("bad-gotchas exits 0: a scaffold gotchas file is PRH-GOTCHAS-MISSING, owned by your configuration", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["bad-gotchas"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}bad-gotchas: outcome comment with code PRH-GOTCHAS-MISSING, owner lead Your configuration:/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) => /PASS {2}bad-gotchas: no report on the head/.test(l)),
+    ).toBe(true);
+  });
+
+  test("bad-gotchas: the override is the scaffold the product's gate refuses, at the path the gate reads", () => {
+    const scenario = findScenario("bad-gotchas");
+    const open = scenario?.phases[0]?.action;
+    expect(open?.kind).toBe("open");
+    if (open?.kind !== "open") return;
+    expect(open.overrides).toEqual([
+      { path: GOTCHAS_PATH, contents: GOTCHAS_TEMPLATE },
+    ]);
+    expect(gotchasUnusableReason(GOTCHAS_TEMPLATE)).toBe("placeholder");
   });
 
   test("cleanup: the second push waits for the first run, and the final observation is on the new head", async () => {

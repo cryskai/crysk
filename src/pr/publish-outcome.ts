@@ -108,7 +108,11 @@ export async function publishRunOutcome(
   input: PublishRunOutcomeInput,
 ): Promise<number> {
   if (input.result === undefined) {
-    throw new CliError("internal: pipeline returned no result");
+    // An engine invariant, not the reader's configuration: the record names it as
+    // the pr-hero defect class (T2d-1).
+    throw new CliError("internal: pipeline returned no result", {
+      cls: { kind: "invariant" },
+    });
   }
   const result = input.result;
   const wallMs = Math.round(performance.now() - input.started);
