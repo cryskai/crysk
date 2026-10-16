@@ -12,6 +12,13 @@ import {
   SCENARIO_BRANCH_PREFIX,
 } from "./rails";
 import { ghJson, ghOk } from "./repo";
+import {
+  cancelTiming,
+  findOrphanRuns,
+  pollTiming,
+  type RunTiming,
+  stopRun,
+} from "./runs";
 
 export interface ScenarioPr {
   number: number;
@@ -101,13 +108,27 @@ export async function runList(input: SandboxDeps): Promise<number> {
   return 0;
 }
 
-export async function runClean(input: SandboxDeps): Promise<number> {
+// A PR is closed only after the runs on its head are stopped. Closing it over a
+// live run releases the serialization lock while the review keeps running, so
+// clean keeps the order smoke's cleanup keeps: cancel, wait, then close. A run
+// that will not stop keeps its PR open, for the next clean.
+export async function runClean(
+  input: SandboxDeps,
+  options: RunTiming = {},
+): Promise<number> {
   const deps = guarded(input);
   const open = await listScenarioPrs(deps);
   let failed = 0;
   for (const pr of open) {
-    deps.log(`closing ${pr.url} and deleting ${pr.headRefName}`);
     try {
+      if (!(await stopHeadRuns(deps, pr.headRefName, options))) {
+        failed += 1;
+        deps.log(
+          `left open: ${pr.url} stays open until its run ends (then clean)`,
+        );
+        continue;
+      }
+      deps.log(`closing ${pr.url} and deleting ${pr.headRefName}`);
       await closeScenarioPr(deps, pr);
     } catch (error) {
       failed += 1;
@@ -118,6 +139,28 @@ export async function runClean(input: SandboxDeps): Promise<number> {
   }
   if (open.length === 0) deps.log("no open sandbox/ PRs");
   return failed === 0 ? 0 : 1;
+}
+
+// Cancels each run of the branch that is still going, and waits for every one to
+// report completed. Returns false when one did not stop within the cancel wait. No
+// stop signal reaches clean, so its waits run to their bounds.
+async function stopHeadRuns(
+  deps: SandboxDeps,
+  branch: string,
+  options: RunTiming,
+): Promise<boolean> {
+  const runIds = await findOrphanRuns(
+    deps,
+    branch,
+    pollTiming(options),
+    undefined,
+  );
+  for (const runId of runIds) {
+    if (!(await stopRun(deps, runId, cancelTiming(options), undefined))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function guarded(input: SandboxDeps): SandboxDeps {

@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 import { parseCliArgs, runCli, USAGE } from "../../scripts/sandbox/cli";
+import { WORKFLOW_NAME } from "../../scripts/sandbox/markers";
 import { runClean, runList } from "../../scripts/sandbox/pr";
 import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import { realDeps } from "../../scripts/sandbox/real";
@@ -64,6 +65,76 @@ describe("clean", () => {
         args[1] === "list" ? ok(JSON.stringify(OPEN)) : fail("boom"),
     });
     expect(await runClean(h.deps)).toBe(1);
+  });
+});
+
+// clean closes a scenario PR only after the runs on its head are stopped, the same
+// order smoke's cleanup keeps: a PR closed over a live run releases the lock while
+// the review still runs. The fake keeps a run in flight until a cancel is seen, so
+// what is checked is the order of the calls.
+describe("clean: a run still going on the head is cancelled before its PR closes", () => {
+  const runOn = (status: string) => ({
+    databaseId: 42,
+    headSha: "b".repeat(40),
+    status,
+    conclusion: null,
+    workflowName: WORKFLOW_NAME,
+    url: "https://x/run/42",
+  });
+
+  for (const status of ["queued", "in_progress"]) {
+    test(`a ${status} run is cancelled and awaited, and only then is the PR closed`, async () => {
+      let cancelled = false;
+      const h = harness({
+        gh: (args) => {
+          if (args[0] === "pr" && args[1] === "list") {
+            return ok(JSON.stringify([OPEN[0]]));
+          }
+          if (args[0] === "run" && args[1] === "list") {
+            return ok(JSON.stringify([runOn(status)]));
+          }
+          if (args[0] === "run" && args[1] === "cancel") {
+            cancelled = true;
+            return ok();
+          }
+          if (args[0] === "run" && args[1] === "view") {
+            return ok(
+              JSON.stringify({ status: cancelled ? "completed" : status }),
+            );
+          }
+          return ok();
+        },
+      });
+      expect(await runClean(h.deps)).toBe(0);
+      const cancel = h.events.findIndex((e) =>
+        e.startsWith("gh run cancel 42 "),
+      );
+      const close = h.events.findIndex((e) => e.startsWith("gh pr close 3 "));
+      expect(cancel).toBeGreaterThan(-1);
+      expect(close).toBeGreaterThan(cancel);
+    });
+  }
+
+  test("a run that does not stop keeps its PR open, and clean exits 1", async () => {
+    const h = harness({
+      gh: (args) => {
+        if (args[0] === "pr" && args[1] === "list") {
+          return ok(JSON.stringify([OPEN[0]]));
+        }
+        if (args[0] === "run" && args[1] === "list") {
+          return ok(JSON.stringify([runOn("in_progress")]));
+        }
+        if (args[0] === "run" && args[1] === "view") {
+          return ok(JSON.stringify({ status: "in_progress" }));
+        }
+        return ok();
+      },
+    });
+    expect(await runClean(h.deps)).toBe(1);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(
+      false,
+    );
+    expect(h.logs.some((l) => l.startsWith("left open"))).toBe(true);
   });
 });
 
