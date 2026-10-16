@@ -866,7 +866,7 @@ gh variable set PRHERO_ROUTING --body "$(jq -c . routing.json)"
 
 #### `unmapped`
 
-Add a `modelSnapshot` for this route to PRHERO_ROUTING.
+Add or complete this model's route in PRHERO_ROUTING, with an explicit `modelSnapshot`.
 
 #### `ambiguous`
 

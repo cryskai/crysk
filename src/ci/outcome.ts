@@ -209,6 +209,7 @@ export interface CliRecord {
   head_sha?: string;
   // Only for outcome "error".
   cls?: CliErrorClass;
+  // Only for outcome "error", and the writer does not set it today.
   params?: ErrorParams;
 }
 
@@ -417,7 +418,9 @@ function parseCliClass(value: unknown): CliErrorClass | undefined {
 
 // Returns undefined for anything the publisher must not act on. The rules mirror
 // the writer's: `skip` is present exactly for a skipped outcome, `cls` exactly
-// for an error, and `params` carries only the keys a record may name.
+// for an error, and `params` only for an error, carrying only the keys a record
+// may name. The publisher reads this shape, so a looser reader would accept a
+// record the writer never produces.
 export function parseCliRecord(text: string): CliRecord | undefined {
   let value: unknown;
   try {
@@ -453,6 +456,7 @@ export function parseCliRecord(text: string): CliRecord | undefined {
     return undefined;
   }
   if (value.params !== undefined) {
+    if (outcome !== "error") return undefined;
     const params = parseRecordParams(value.params);
     if (params === undefined) return undefined;
     record.params = params;
@@ -896,10 +900,16 @@ const CREDENTIAL_UNUSABLE_ENV: CatalogVariant = {
   annotationFix: "set the {secret} secret with `gh secret set {secret}`",
 };
 
+// Two UnmappedRouteError throw sites (src/model/routing.ts) share this variant: a
+// model with no mapping at all, and a mapping that names no modelSnapshot. "Add or
+// complete" covers both; "add a modelSnapshot" alone was false for the first.
 const ROUTE_UNMAPPED: CatalogVariant = {
   why: ROUTE_WHY,
-  fixes: ["Add a `modelSnapshot` for this route to PRHERO_ROUTING."],
-  annotationFix: "add a `modelSnapshot` for this route to PRHERO_ROUTING",
+  fixes: [
+    "Add or complete this model's route in PRHERO_ROUTING, with an explicit `modelSnapshot`.",
+  ],
+  annotationFix:
+    "add or complete this model's route in PRHERO_ROUTING, with an explicit `modelSnapshot`",
 };
 
 const RUNTIME_LOCAL: CatalogVariant = {

@@ -1698,9 +1698,26 @@ describe("parseCliRecord — the cli.json contract", () => {
     ],
     [
       "a params value of the wrong type",
-      text({ v: 1, outcome: "yielded", params: { pr: "7" } }),
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "unknown" },
+        params: { pr: "7" },
+      }),
     ],
-    ["null params", text({ v: 1, outcome: "yielded", params: null })],
+    [
+      "null params",
+      text({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "unknown" },
+        params: null,
+      }),
+    ],
+    [
+      "params on a non-error outcome, which carries no params",
+      text({ v: 1, outcome: "reviewed", params: { pr: 7 } }),
+    ],
   ])("refuses %s", (_label, value) => {
     expect(parseCliRecord(value)).toBeUndefined();
   });

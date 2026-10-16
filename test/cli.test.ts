@@ -938,7 +938,7 @@ describe("main — the outcome record in action mode", () => {
       path.join(import.meta.dir, "../src/cli.ts"),
     ).text();
     const runCliAt = source.indexOf("export async function runCli(");
-    const writeAt = source.indexOf("writeCliRecord({", runCliAt);
+    const writeAt = source.indexOf("writeFatalCliRecord(", runCliAt);
     const rethrowAt = source.indexOf("throw error;", runCliAt);
     expect(runCliAt).toBeGreaterThan(-1);
     expect(writeAt).toBeGreaterThan(runCliAt);

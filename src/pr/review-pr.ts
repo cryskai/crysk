@@ -91,10 +91,12 @@ import type { ProductionRuntime } from "../production-runtime";
 
 // The CLI's verdict on its own pipeline, for cli.json (odd/tasks/agent-first-ci.md,
 // T2c). reviewPr writes it right after runPipeline returns and before
-// publishRunOutcome, so a throw while publishing still leaves the review's own
-// result on disk. It reads the same completion predicate as the commit status,
-// so the record and the status cannot disagree about success. A pipeline that
-// never returned writes nothing: its throw reaches the fatal record instead.
+// publishRunOutcome. The pipeline's verdict stands: a failure while posting does
+// not turn a completed review into an error, because the fatal path keeps a
+// terminal record (writeFatalCliRecord, src/ci/cli-record.ts). The commit status
+// settled in teardown reads the same completion predicate, so it stays a success
+// too, and the record and the status cannot disagree about success. A pipeline
+// that never returned writes nothing: its throw reaches the fatal record instead.
 export function recordPipelineOutcome(
   result: { readonly sessionFailed: boolean } | undefined,
   headSha: string,

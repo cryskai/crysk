@@ -57,7 +57,7 @@ export {
 };
 
 import { classifyCliError } from "#ci/classify-error";
-import { writeCliRecord } from "#ci/cli-record";
+import { writeFatalCliRecord } from "#ci/cli-record";
 import {
   reportFatalCiError,
   reportFatalCiErrorIfInJobStep,
@@ -249,7 +249,7 @@ export async function main(argv: string[]): Promise<number> {
                                       : await review(parsed.options);
   } catch (error) {
     if (error instanceof CliError || error instanceof CliUsageError) {
-      writeCliRecord({ v: 1, outcome: "error", cls: classifyCliError(error) });
+      writeFatalCliRecord(classifyCliError(error));
       log(`error: ${error.message}`);
       await reportFatalCiErrorIfInJobStep(error);
       return 1;
@@ -310,8 +310,9 @@ export async function runCli(
     exitCode = await main(argv);
   } catch (error) {
     // Before the rethrow below, and whatever GITHUB_OUTPUT says: a crash in
-    // action mode is the record's to name, even outside a job step.
-    writeCliRecord({ v: 1, outcome: "error", cls: classifyCliError(error) });
+    // action mode is the record's to name, unless this job already recorded its
+    // terminal outcome (writeFatalCliRecord keeps that one).
+    writeFatalCliRecord(classifyCliError(error));
     const outputPath = process.env.GITHUB_OUTPUT;
     if (outputPath === undefined || outputPath.length === 0) {
       // Not a real GitHub Actions job step — preserve the original
