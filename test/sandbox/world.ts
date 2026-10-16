@@ -16,6 +16,7 @@ import {
   skipCommitStatusRequest,
 } from "#pr/preflight";
 import {
+  OVERRIDE_MARKER_PREFIX,
   RUN_STEP_NAME,
   SKIP_MARKERS,
   WORKFLOW_NAME,
@@ -82,16 +83,22 @@ interface CommentRow {
 // `review-advisory` is a review under `mode: advisory`: the same comments, a
 // success status whatever it finds. `size-skip` is a pull_request run over the
 // size gate: the skip marker and a failure status, and no report.
+// `override` is a `/pr-hero override` comment run: the audit comment and a success
+// status naming the actor, and no report and no outcome (S8).
 type Outcome =
   | "credential"
   | "routing"
   | "review"
   | "review-advisory"
   | "size-skip"
+  | "override"
   | "hunters-failed";
 
+// The actor the fake gives an override: the sandbox owner's login.
+const FAKE_ACTOR = "juanmaagd";
+
 const OUTCOME_CODE: Record<
-  Exclude<Outcome, "review" | "review-advisory" | "size-skip">,
+  Exclude<Outcome, "review" | "review-advisory" | "size-skip" | "override">,
   string
 > = {
   credential: "PRH-CRED-MISSING",
@@ -277,9 +284,13 @@ export class FakeGithub {
     headSha: string,
     reviewSha: string,
     workflow: string,
+    // A run whose outcome is fixed by its trigger (an override), which does not
+    // consume the queue of the runs a scenario scripted.
+    forced?: Outcome,
   ): void {
     const id = this.nextId++;
-    const outcome = this.queued.shift() ?? this.decide(workflow, event);
+    const outcome =
+      forced ?? this.queued.shift() ?? this.decide(workflow, event);
     // A run whose hunters all failed fails its review step, as the engine exits non-zero.
     const failed = outcome === "hunters-failed";
     const stepFails =
@@ -362,6 +373,18 @@ export class FakeGithub {
     } else if (outcome === "size-skip") {
       list.push(this.comment(SKIP_MARKERS.size));
       this.statuses.set(sha, skipStatus());
+    } else if (outcome === "override") {
+      // The audit comment and the success status, as the publisher writes them.
+      // No report and no outcome: an override runs no review.
+      list.push(
+        this.comment(
+          `${OVERRIDE_MARKER_PREFIX} head=${sha} run=${runId} attempt=1 -->\n\npr-hero's gate was overridden by @${FAKE_ACTOR}.`,
+        ),
+      );
+      this.statuses.set(sha, {
+        state: "success",
+        description: `pr-hero: overridden by @${FAKE_ACTOR} — no review on this head`,
+      });
     } else {
       const code = OUTCOME_CODE[outcome];
       list.push(
@@ -448,6 +471,19 @@ export class FakeGithub {
           MAIN_SHA,
           head,
           this.mainFiles.get(WORKFLOW_PATH) ?? "",
+        );
+      }
+      if (body === "/pr-hero override") {
+        const pr = this.prs.get(number);
+        const head = this.branches.get(pr?.headRefName ?? "") ?? MAIN_SHA;
+        this.startRun(
+          "issue_comment",
+          number,
+          "main",
+          MAIN_SHA,
+          head,
+          this.mainFiles.get(WORKFLOW_PATH) ?? "",
+          "override",
         );
       }
       return ok(`${REPO_URL}/pull/${number}#issuecomment-${id}\n`);

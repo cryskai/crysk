@@ -207,7 +207,7 @@ export function generateCiWorkflowTemplate(
               *"HTTP 404"*) break ;;
             esac
             if [ "$attempt" = 2 ]; then
-              echo "::error title=pr-hero::could not verify the commenter's write access: the GitHub API call failed twice, so no review was started. Comment /pr-hero review again to retry"
+              echo "::error title=pr-hero::could not verify the commenter's write access: the GitHub API call failed twice, so nothing was reviewed or overridden. Comment /pr-hero review or /pr-hero override again to retry"
               exit 1
             fi
             sleep 2
@@ -215,7 +215,7 @@ export function generateCiWorkflowTemplate(
           case "$permission" in
             admin|write) ;;
             *)
-              echo "::notice title=pr-hero::only users with write access to this repository can run /pr-hero review"
+              echo "::notice title=pr-hero::only users with write access to this repository can run /pr-hero review or /pr-hero override"
               echo "proceed=false" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
@@ -267,8 +267,10 @@ export function generateCiWorkflowTemplate(
 # This one file is the whole install. It reviews every push to a pull
 # request. A pull request comment that is exactly \`/pr-hero review\` runs the
 # review again with the skip gates bypassed, and \`/pr-hero review --full\`
-# also re-discovers the whole range. The action parses the comment and
-# refuses a commenter without write access.
+# also re-discovers the whole range. A comment that is exactly
+# \`/pr-hero override\` turns the gate green on that head with no review and
+# no cost, and records who did it. The action parses the comment and refuses a
+# commenter without write access.
 name: pr-hero Review
 
 on:
@@ -306,13 +308,14 @@ jobs:
     # instead, and that run (base-branch context, with secrets) reviews the
     # fork's head.
     #
-    # A comment starts the job only when it BEGINS with \`/pr-hero review\`.
-    # The action then requires an exact match after trimming, so a near-miss
-    # such as "/pr-hero review please" starts a job the action ends without
-    # reviewing.
+    # A comment starts the job only when it BEGINS with \`/pr-hero review\` or
+    # \`/pr-hero override\`. The action then requires an exact match after
+    # trimming, so a near-miss such as "/pr-hero review please" starts a job the
+    # action ends without reviewing or overriding.
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review'))
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))
     # Job-level and keyed on the pull request number. A workflow-level group
     # on \`github.head_ref || github.ref\` put every comment on every pull
     # request into ONE group, because head_ref is empty on issue_comment, so
@@ -327,9 +330,9 @@ jobs:
     #
     # GitHub keeps one PENDING run per group, and a newer run replaces it. So
     # a comment enters the pull request's group only when it starts with
-    # /pr-hero review AND GitHub associates its author with the repository
-    # as OWNER, MEMBER or COLLABORATOR; every other comment gets its own
-    # group. Without that, anyone who can comment could replace a
+    # /pr-hero review or /pr-hero override, and GitHub associates its author
+    # with the repository as OWNER, MEMBER or COLLABORATOR; every other comment
+    # gets its own group. Without that, anyone who can comment could replace a
     # maintainer's queued review with a run the action then refuses. The job
     # \`if:\` above does NOT check the association: a writer GitHub reports
     # under another one (a private org member shown as CONTRIBUTOR) still
@@ -348,7 +351,7 @@ jobs:
     # other event gets a unique per-run group for the same reason, so a
     # skipped job can never cancel or replace a review.
     concurrency:
-      group: \${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: \${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: \${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     # Backstop for a HUNG runner, not a second review budget. pr-hero already

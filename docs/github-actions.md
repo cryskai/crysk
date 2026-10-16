@@ -13,8 +13,9 @@ block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mo
 2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
    to `.github/workflows/pr-hero.yml`, or run `pr-hero setup --ci` (or `pr-hero ci init`) in a clone of
    your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need pr-hero
-   installed locally: the file is the whole install. It reviews every push to a pull request and
-   answers a `/pr-hero review` comment (see [Manual override](#manual-override)). Do **not** copy this
+   installed locally: the file is the whole install. It reviews every push to a pull request, answers a
+   `/pr-hero review` comment (see [Re-review on demand](#re-review-on-demand)), and answers a
+   `/pr-hero override` comment (see [Overriding a red gate](#overriding-a-red-gate)). Do **not** copy this
    repository's own `.github/workflows/pr-hero.yml`: that file is generated with
    `OWN_CI_WORKFLOW_OPTIONS` so this repo can dogfood the checkout (`uses: ./`,
    `max-changed-lines: 5000`, and a step that pins the pull request head on a comment run).
@@ -57,7 +58,7 @@ jobs:
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review'))
     concurrency:
-      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -330,7 +331,7 @@ secret as an input.
 
 In this repository only, a comment run checks out the pull request's head and runs that engine
 (`uses: ./`), so it refuses fork pull requests outright: there the fork would supply the engine and run
-it with this repository's secrets. See [Manual override](#manual-override).
+it with this repository's secrets. See [Re-review on demand](#re-review-on-demand).
 
 ### Action version pinning
 The default workflow targets the floating major tag `uses: juanmaagd/pr-hero@v0`, which moves to every new 0.x release. While the major version is 0, a minor release may include breaking changes to the Action contract (see the pre-1.0 semantics in `docs/release-runbook.md`), so `@v0` is not a compatibility guarantee: read `CHANGELOG.md` before a new 0.x minor lands, or pin an exact tag or SHA. If your organization enforces strict immutable SHA pinning, you can pin the full commit SHA directly:
@@ -354,7 +355,7 @@ nothing:
 
 Both gates exit 0 and leave a courteous PR comment plus step-summary note when they trip — they are cost
 gates, not quality gates, and never fail the job. The comment names the one-shot override: comment
-`/pr-hero review` on the pull request (see [Manual override](#manual-override)). That runs the review on
+`/pr-hero review` on the pull request (see [Re-review on demand](#re-review-on-demand)). That runs the review on
 GitHub Actions. It does not change the ceilings for later pushes, and it does not review on the machine
 of whoever comments.
 
@@ -409,7 +410,7 @@ exclusions, see the README): under CI it is read from the PR's base ref, never t
 | `thresholded` | Re-review when the prior score reaches `ci_rereview_min_score`. |
 | `risk_aware` | Re-review when the delta touches risky paths **or** the prior score reaches the threshold. Recommended default. |
 | `every_push` | Review every push (still bounded by `ci_max_attempts`). |
-| `manual_only` | No automatic re-review; explicit override required. |
+| `manual_only` | No automatic re-review; a `/pr-hero review` comment is required. |
 
 Example:
 
@@ -425,7 +426,7 @@ Example:
 }
 ```
 
-### Manual override
+### Re-review on demand
 
 When CI skips a pull request — size gate, admission policy, or budget ceiling — comment on the pull
 request:
@@ -548,7 +549,7 @@ The table shows the status and the job exit for each case:
 | Finished review with one or more blocking findings | `failure`: `pr-hero: N blocking finding(s) — fix and push; /pr-hero review re-runs this head` | `success` | `0` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
 | Size or budget skip (`/pr-hero review` reviews it anyway) | `failure`: `pr-hero skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
-| Admission skip (coverage, same head, low risk, below threshold) or manual override required | none | none | `0` |
+| Admission skip (coverage, same head, low risk, below threshold) or a manual re-review required | none | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
 Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
@@ -557,7 +558,30 @@ below keep their own status and exit, as they did before the gate.
 **Unlocking a gate.** A `failure` for blocking findings clears when you fix the findings and push: the new
 head is reviewed and its status is set again. `/pr-hero review` reviews the head you comment on, so with the
 findings still there it sets `failure` again. The size and budget `failure` is the one that `/pr-hero review`
-clears, because that run passes both gates. An override for blocking findings is not built yet.
+clears, because that run passes both gates. To unlock a red gate without a new review, use
+`/pr-hero override`, described next.
+
+**Overriding a red gate.** Comment exactly `/pr-hero override` on the pull request. The same rule as
+`/pr-hero review` applies: a user with write or admin access may do it, and the pull request's author may too
+when they have that access. Anyone else is refused with a notice, and nothing is posted. The override turns the `pr-hero` status on the head it names
+into `success`, with the description `pr-hero: overridden by @<login> — no review on this head`. It runs no
+review and spends nothing, and it needs no credential, so a repository without one can still unlock its gate.
+
+Every override is recorded. The status names who acted, and a pr-hero comment on the pull request names who,
+on which head, and when (UTC). It starts with `<!-- pr-hero-override`, and no later cleanup removes it, so the
+history of overrides stays on the pull request.
+
+An override is valid only for the head it names. The newest status on a head wins, so the override stands
+until one of two things happens: a new push creates a new head, which is reviewed on its own, or a later
+`/pr-hero review` on that same head posts a newer status. A `failure` from that review then replaces the
+override.
+
+Two limits. First, the override works on pull requests from this repository only: the gate never checks out
+a fork's head, so a fork pull request cannot be overridden here. Second,
+GitHub keeps one pending run per concurrency group. A `/pr-hero override` that is queued behind a running
+review is replaced if another comment on the same pull request arrives before it starts, and then no
+override comment appears. Comment `/pr-hero override` again when that happens. If the head cannot be
+resolved, the comment still posts and says that no status could be set.
 
 **A failed final write.** In gate mode the job fails with an `::error::` annotation when the final status
 cannot be written, because the required check would otherwise stay pending. The commit-status lock is still
@@ -1338,7 +1362,7 @@ gh pr comment {pr} --body "/pr-hero review"
   head completed without really reviewing (for example, every hunter returned nothing within
   seconds), and its summary marker now scopes discovery to nothing. On a head that was genuinely
   reviewed this message is expected and needs no action. Otherwise, comment `/pr-hero review --full`
-  to re-discover the whole pull request; see [Manual override](#manual-override).
+  to re-discover the whole pull request; see [Re-review on demand](#re-review-on-demand).
 - **No comment appears on the PR** — check `permissions: pull-requests: write` is present, and that at
   least one of the three credential secrets is set (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or
   `OPENCODE_AUTH_JSON`). Fork pushes never receive those secrets; a maintainer's `/pr-hero review`

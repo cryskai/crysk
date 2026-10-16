@@ -710,6 +710,9 @@ function runPublishIn(options: {
   // as the --jq filter does. Unset, the read fails.
   latestStatus?: GhResult;
   env?: Record<string, string>;
+  // The publisher's clock. Unset, the real one: only a test that reads the time
+  // back needs it pinned.
+  now?: () => Date;
 }) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-publish-"));
   try {
@@ -777,6 +780,7 @@ function runPublishIn(options: {
         return options.list ?? ok("");
       },
       sleep: () => {},
+      ...(options.now === undefined ? {} : { now: options.now }),
       stdout: (text) => {
         stdout += text;
       },
@@ -1698,6 +1702,127 @@ describe("runPublish — cleanup once the CLI started", () => {
     expect(removedIds(run)).toEqual(["10"]);
   });
 });
+
+// T6 (S8): an override is a human's decision, not an outcome. It posts a success
+// status on the head it names and an audit comment. Nothing renders an error, and
+// no cleanup may ever remove the comment.
+const OVERRIDE_DESCRIPTION =
+  "pr-hero: overridden by @maintainer — no review on this head";
+const overrideRecord = (overrides: Partial<TriggerRecord> = {}) =>
+  record({ decision: "override", actor: "maintainer", ...overrides });
+
+describe("decidePublication — the override (S8)", () => {
+  test("an override with a head publishes a success status and the audit comment, never an error", () => {
+    const plan = decidePublication({
+      record: overrideRecord(),
+      cliStarted: false,
+    });
+    expect(plan).toMatchObject({
+      kind: "override",
+      repository: REPO,
+      pr: 7,
+      actor: "maintainer",
+      headSha: SHA,
+    });
+    expect(JSON.stringify(plan)).not.toContain("PRH-");
+  });
+
+  test("an override with no head still publishes, with no head to set a status on", () => {
+    const plan = decidePublication({
+      record: overrideRecord({ head_sha: undefined }),
+      cliStarted: false,
+    });
+    expect(plan).toMatchObject({ kind: "override", headSha: undefined });
+  });
+});
+
+describe("runPublish — the override (S8)", () => {
+  test("a head gets the success status first, then the audit comment with its marker and the actor", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      now: () => new Date("2026-10-17T12:34:56.000Z"),
+    });
+    expect(run.exitCode).toBe(0);
+    const statuses = statusCalls(run.calls);
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.args).toContain("state=success");
+    expect(statuses[0]?.args).toContain(`description=${OVERRIDE_DESCRIPTION}`);
+    const comment = commentPost(run.calls);
+    expect(comment).toBeDefined();
+    expect(run.calls.indexOf(statuses[0] as Call)).toBeLessThan(
+      run.calls.indexOf(comment as Call),
+    );
+    const body = comment?.stdin ?? "";
+    expect(body.split("\n")[0]).toBe(
+      `<!-- pr-hero-override head=${SHA} run=4242 attempt=1 -->`,
+    );
+    expect(body).toContain("@maintainer");
+    expect(body).toContain("2026-10-17 12:34 UTC");
+    expect(body).toContain(
+      "A new push or a later `/pr-hero review` on this head replaces it",
+    );
+    expect(run.stdout).toContain("::notice title=pr-hero::");
+    expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
+  });
+
+  test("no head posts the comment alone, and says that no status could be set", () => {
+    const run = runPublishIn({
+      record: overrideRecord({ head_sha: undefined }),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusCalls(run.calls)).toHaveLength(0);
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body.split("\n")[0]).toBe(
+      `<!-- pr-hero-override head=unknown run=4242 attempt=1 -->`,
+    );
+    expect(body).toContain("no commit status could be set");
+  });
+
+  test("a failed status write is PRH-STATUS-WRITE-FAILED and exit 1, and the comment then says no status was set", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      status: [fail("gh: HTTP 500"), fail("gh: HTTP 500")],
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body).toContain("no commit status could be set");
+    expect(body).not.toContain("gate was overridden");
+  });
+
+  test("a review's cleanup leaves an override comment alone, even an older one by the same bot", () => {
+    const run = runPublishIn({
+      record: record(),
+      cliStarted: true,
+      cliRecord: REVIEWED,
+      viewer: ok("github-actions"),
+      list: listing(
+        [501, "github-actions[bot]", "Bot", OVERRIDE_OLDER_MARKER],
+        [502, "github-actions[bot]", "Bot", OLDER_MARKER],
+      ),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(deletions(run.calls)).toEqual([
+      "repos/acme/widgets/issues/comments/502",
+    ]);
+  });
+
+  test("a review's comment post never deletes an override comment of the same author", () => {
+    const run = runPublishIn({
+      record: record(),
+      create: ok(JSON.stringify([9000, "bot-a"])),
+      list: listing(
+        [501, "bot-a", "Bot", OVERRIDE_OLDER_MARKER],
+        [502, "bot-a", "Bot", OLDER_MARKER],
+      ),
+    });
+    expect(deletions(run.calls)).toEqual([
+      "repos/acme/widgets/issues/comments/502",
+    ]);
+  });
+});
+
+const OVERRIDE_OLDER_MARKER = `<!-- pr-hero-override head=${SHA} run=4000 attempt=1 -->`;
 
 describe("publish.ts runs before `bun install`", () => {
   // The real entry point, spawned with an empty PATH and HOME: it must start

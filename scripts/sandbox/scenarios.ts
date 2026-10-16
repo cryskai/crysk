@@ -152,6 +152,37 @@ export const SCENARIOS: readonly Scenario[] = [
     ],
   },
   {
+    name: "override",
+    description:
+      "the human escape hatch (S8): a red gate on a reviewed head, unlocked by a /pr-hero override comment that posts a success status and an audit comment on that head, with no review and no cost",
+    phases: [
+      {
+        action: { kind: "open", variant: "normal" },
+        wait: "pull_request",
+        checks: [
+          REVIEWED,
+          STEP_SUCCEEDED,
+          STATUS_MATCHES_FINDINGS,
+          ONE_REPORT,
+          { kind: "no-outcome" },
+        ],
+      },
+      {
+        action: { kind: "comment", body: "/pr-hero override" },
+        wait: "issue_comment",
+        checks: [
+          { kind: "run-completed", event: "issue_comment" },
+          {
+            kind: "status",
+            state: "success",
+            descriptionStartsWith: "pr-hero: overridden by @",
+          },
+          { kind: "override-comment" },
+        ],
+      },
+    ],
+  },
+  {
     name: "cleanup",
     description:
       "an outcome comment from a failed run is deleted once a later run on the same branch completes its review",

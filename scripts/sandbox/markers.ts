@@ -23,6 +23,10 @@ export const FINDING_MARKER_PREFIX = PR_FINDING_MARKER_PREFIX;
 // Private MARKER_PREFIX in src/ci/publish.ts: the outcome comment's first line.
 export const OUTCOME_MARKER_PREFIX = "<!-- pr-hero-outcome";
 
+// Private MARKER_PREFIX of the override comment in src/ci/publish.ts (S8). It is
+// not an outcome marker, so the classifier must read it as its own kind.
+export const OVERRIDE_MARKER_PREFIX = "<!-- pr-hero-override";
+
 // Private STATUS_CONTEXT in src/ci/publish.ts: the commit status context.
 export const STATUS_CONTEXT = "pr-hero";
 

@@ -11,6 +11,7 @@
 import {
   FINDING_MARKER_PREFIX,
   OUTCOME_MARKER_PREFIX,
+  OVERRIDE_MARKER_PREFIX,
   PRH_CODE,
   REPORT_MARKER_PREFIX,
   SKIP_MARKERS,
@@ -26,7 +27,13 @@ const HUNTERS_FAILED_CODE = "PRH-HUNTERS-FAILED";
 // before the comment from being mistaken for an earlier one.
 export const COMMENT_RUN_CLOCK_SKEW_MS = 5_000;
 
-export type CommentKind = "report" | "finding" | "outcome" | "skip" | "other";
+export type CommentKind =
+  | "report"
+  | "finding"
+  | "outcome"
+  | "skip"
+  | "override"
+  | "other";
 
 export interface CommentFact {
   source: "issue" | "inline";
@@ -115,6 +122,13 @@ export function classifyComment(
     if (first === marker)
       return { source, kind: "skip", skip: reason as SkipReason };
   }
+  if (first.startsWith(OVERRIDE_MARKER_PREFIX)) {
+    // The head names the commit the override unlocked; an override is valid for that head only.
+    const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
+    return head === undefined
+      ? { source, kind: "override" }
+      : { source, kind: "override", head };
+  }
   return { source, kind: "other" };
 }
 
@@ -125,7 +139,12 @@ export function classifyComment(
 // forced review of the same head (/pr-hero review after a size skip) decides
 // the path from its own report. A phase with no trigger has no window to test,
 // so every notice counts there, as it always has.
-function skipIsThisRunsOwn(comment: CommentFact, obs: Observation): boolean {
+// Exported for the override check: an override is this run's only when the run
+// posted it, the same proof a skip notice needs.
+export function postedByThisRun(
+  comment: CommentFact,
+  obs: Observation,
+): boolean {
   if (obs.triggeredAt === undefined) return true;
   if (comment.createdAt === undefined) return false;
   return (
@@ -145,7 +164,7 @@ export function classifyPath(obs: Observation): SmokePath {
     return `error:${outcome.code ?? "no-code"}`;
   }
   const skip = obs.comments.find(
-    (c) => c.kind === "skip" && skipIsThisRunsOwn(c, obs),
+    (c) => c.kind === "skip" && postedByThisRun(c, obs),
   );
   if (skip?.skip !== undefined) return `skipped:${skip.skip}`;
 

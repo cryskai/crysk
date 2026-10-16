@@ -153,6 +153,171 @@ describe("decideCiTrigger — the comment commands", () => {
   });
 });
 
+// T6 (odd/tasks/agent-first-ci.md, S8): `/pr-hero override` is the human escape
+// hatch. It spends nothing, so it never reaches the credential check, and it is
+// the only comment that records WHO acted (the actor), because the override must
+// name who unlocked the gate.
+describe("decideCiTrigger — the override command (S8)", () => {
+  test.each([
+    ["exact", "/pr-hero override"],
+    ["surrounding spaces", "   /pr-hero override  "],
+    ["surrounding newlines", "\n/pr-hero override\n"],
+  ])("`/pr-hero override` (%s) overrides for a writer", (_label, body) => {
+    expect(decideCiTrigger(comment(body))).toEqual({
+      kind: "override",
+      actor: "maintainer",
+    });
+  });
+
+  test("an admin may override", () => {
+    expect(
+      decideCiTrigger(
+        comment("/pr-hero override", {
+          commenterPermission: { kind: "resolved", permission: "admin" },
+        }),
+      ),
+    ).toEqual({ kind: "override", actor: "maintainer" });
+  });
+
+  test.each([
+    "/pr-hero override please",
+    "/pr-hero overriding",
+    "/PR-HERO override",
+    "/pr-hero  override",
+    "/pr-hero override --force",
+    "please /pr-hero override",
+    "/pr-hero review override",
+  ])("a near-miss %j is ignored, never an override", (body) => {
+    expect(decideCiTrigger(comment(body)).kind).toBe("ignore");
+  });
+
+  test("a commenter with read access is denied, and the reason names the override command", () => {
+    const verdict = decideCiTrigger(
+      comment("/pr-hero override", {
+        commenterPermission: { kind: "resolved", permission: "read" },
+      }),
+    );
+    expect(verdict.kind).toBe("denied");
+    expect(verdict).toMatchObject({
+      reason: expect.stringContaining("`/pr-hero override`"),
+    });
+  });
+
+  test("an override with no permission answer is denied, never run", () => {
+    expect(
+      decideCiTrigger(
+        comment("/pr-hero override", { commenterPermission: undefined }),
+      ),
+    ).toMatchObject({ kind: "denied" });
+  });
+
+  test("an unverifiable permission lookup is unverifiable, never an override", () => {
+    const verdict = decideCiTrigger(
+      comment("/pr-hero override", {
+        commenterPermission: {
+          kind: "indeterminate",
+          detail: "HTTP 503",
+          status: 503,
+        },
+      }),
+    );
+    expect(verdict.kind).toBe("unverifiable");
+    expect(verdict).toMatchObject({
+      reason: expect.stringContaining("`/pr-hero override`"),
+    });
+  });
+
+  test("an override needs no credential: it spends nothing, so a repository with none can still unlock", () => {
+    expect(
+      decideCiTrigger(
+        comment("/pr-hero override", {
+          credentials: NO_CREDENTIALS,
+          selfHostedRunner: false,
+        }),
+      ),
+    ).toEqual({ kind: "override", actor: "maintainer" });
+  });
+
+  test("a login that is not a GitHub login is refused, and the refusal never echoes it", () => {
+    const verdict = decideCiTrigger(
+      comment("/pr-hero override", {
+        commenterLogin: "evil\n::warning::HOSTILE",
+      }),
+    );
+    expect(verdict.kind).toBe("denied");
+    expect(JSON.stringify(verdict)).not.toContain("HOSTILE");
+  });
+
+  test("the override record names its actor, and a review record never does", () => {
+    const override = outcomeRun(
+      commentEnv("/pr-hero override"),
+      scriptedGh(ok("write"), ok(HEAD_SHA)),
+    );
+    expect(override.exitCode).toBe(0);
+    expect(override.outputs).toMatchObject({
+      run: "false",
+      publish: "true",
+      pr: "21",
+      head_sha: HEAD_SHA,
+    });
+    expect(override.record).toMatchObject({
+      decision: "override",
+      actor: "maintainer",
+      pr: 21,
+    });
+
+    const review = outcomeRun(
+      commentEnv("/pr-hero review"),
+      scriptedGh(ok("write"), ok(HEAD_SHA)),
+    );
+    expect(review.recordText).toBeDefined();
+    expect(JSON.parse(review.recordText ?? "{}")).not.toHaveProperty("actor");
+  });
+
+  test("an override whose head cannot be resolved still records its actor, with no head", () => {
+    const run = outcomeRun(
+      commentEnv("/pr-hero override"),
+      scriptedGh(ok("write"), {
+        exitCode: 1,
+        stdout: "",
+        stderr: "gh: head not answered",
+      }),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.record).toMatchObject({
+      decision: "override",
+      actor: "maintainer",
+      pr: 21,
+    });
+    expect(run.record?.head_sha).toBeUndefined();
+  });
+
+  test("an override on a pull request that cannot be resolved takes the review's error path", () => {
+    const run = outcomeRun(
+      commentEnv("/pr-hero override", { EVENT_ISSUE_NUMBER: "" }),
+      scriptedGh(ok("write"), ok(HEAD_SHA)),
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.outputs.run).toBe("false");
+  });
+
+  test("an override whose record cannot be written fails the job, never silently", () => {
+    const run = runShell(
+      commentEnv("/pr-hero override", {
+        PRHERO_OUTCOME_DIR: path.join(
+          os.tmpdir(),
+          "prhero-override-unwritable",
+        ),
+      }),
+      scriptedGh(ok("write"), ok(HEAD_SHA)),
+      () => false,
+      failingFs,
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout).toContain("could not write its outcome record");
+  });
+});
+
 describe("decideCiTrigger — the pull_request filter", () => {
   test("a same-repo pull_request reviews without force", () => {
     expect(decideCiTrigger(pullRequest())).toEqual({

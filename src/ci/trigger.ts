@@ -34,6 +34,13 @@ import path from "node:path";
 
 export const REVIEW_COMMAND = "/pr-hero review";
 export const REVIEW_FULL_COMMAND = "/pr-hero review --full";
+// The human escape hatch (odd/tasks/agent-first-ci.md, S8). Exact, like the review
+// command: a loose match would let a quoted reply unlock a gate.
+export const OVERRIDE_COMMAND = "/pr-hero override";
+
+// A GitHub login: letters, digits and hyphens, plus the `[bot]` suffix an app
+// posts under. The override records the login, so it must be one.
+const GITHUB_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$/;
 
 // The only answers of the collaborator-permission endpoint that may spend
 // money. `maintain` already reports as `write` there and `triage` as `read`,
@@ -134,6 +141,8 @@ export interface CiTriggerInput {
 
 export type CiTriggerDecision =
   | { kind: "review"; force: boolean; full: boolean }
+  // A human's override: no CLI run, $0. `actor` is the login that unlocked the gate.
+  | { kind: "override"; actor: string }
   | { kind: "ignore"; reason: string }
   | { kind: "denied"; reason: string }
   | {
@@ -156,10 +165,20 @@ export function parseReviewCommand(
   return undefined;
 }
 
+// A comment that asks for something. Both kinds are permission-gated, so the
+// comment kind (and not the command) decides whether the lookup runs.
+type CommentCommand = { kind: "review"; full: boolean } | { kind: "override" };
+
 type EventVerdict =
   | { kind: "ignore"; reason: string }
-  | { kind: "comment"; full: boolean }
+  | { kind: "comment"; command: CommentCommand }
   | { kind: "event" };
+
+// The exact text a commenter typed, for the messages that name it.
+function commandText(command: CommentCommand): string {
+  if (command.kind === "override") return OVERRIDE_COMMAND;
+  return command.full ? REVIEW_FULL_COMMAND : REVIEW_COMMAND;
+}
 
 // Stage 1 of the precedence. Shared by decideCiTrigger and
 // commenterPermissionNeeded, so the shell can never look a permission up for
@@ -196,17 +215,23 @@ function classifyEvent(input: CiTriggerInput): EventVerdict {
     }
     // The reason never quotes the body: it is free text anyone can type,
     // and this string is printed as a workflow command.
-    const command = parseReviewCommand(input.commentBody);
-    if (command === undefined) {
+    const review = parseReviewCommand(input.commentBody);
+    if (review !== undefined) {
       return {
-        kind: "ignore",
-        reason:
-          `This comment is not a pr-hero command. Comment exactly ` +
-          `\`${REVIEW_COMMAND}\` or \`${REVIEW_FULL_COMMAND}\` to request ` +
-          "a review.",
+        kind: "comment",
+        command: { kind: "review", full: review.full },
       };
     }
-    return { kind: "comment", full: command.full };
+    if (input.commentBody.trim() === OVERRIDE_COMMAND) {
+      return { kind: "comment", command: { kind: "override" } };
+    }
+    return {
+      kind: "ignore",
+      reason:
+        `This comment is not a pr-hero command. Comment exactly ` +
+        `\`${REVIEW_COMMAND}\` or \`${REVIEW_FULL_COMMAND}\` to request ` +
+        `a review, or \`${OVERRIDE_COMMAND}\` to unlock a gate.`,
+    };
   }
   // workflow_dispatch and anything else a consumer wires: the caller's own
   // `pr-number` / `force` / `full` inputs decide, as they always have.
@@ -224,7 +249,7 @@ export function commenterPermissionNeeded(input: CiTriggerInput): boolean {
 // maintainer whose command met a GitHub outage would see nothing happen.
 function commenterVerdict(
   input: CiTriggerInput,
-  full: boolean,
+  command: CommentCommand,
 ): CiTriggerDecision | undefined {
   const permission = input.commenterPermission;
   if (
@@ -235,21 +260,29 @@ function commenterVerdict(
   }
   const who = `@${input.commenterLogin || "unknown"}`;
   if (permission?.kind === "indeterminate") {
-    const command = full ? REVIEW_FULL_COMMAND : REVIEW_COMMAND;
+    // An override that is not verified changes nothing, so it says so instead of
+    // "no review was started", which would be wrong for it.
+    const outcome =
+      command.kind === "override"
+        ? "the gate was not overridden"
+        : "no review was started";
     return {
       kind: "unverifiable",
       reason:
         `pr-hero could not verify whether ${who} has write access to ` +
         `${input.repository}, because the GitHub API call failed ` +
-        `(${permission.detail}), so no review was started. Comment ` +
-        `\`${command}\` again to retry.`,
+        `(${permission.detail}), so ${outcome}. Comment ` +
+        `\`${commandText(command)}\` again to retry.`,
       status: permission.status,
       rateLimited: permission.rateLimited,
     };
   }
   const rule =
-    `Only a maintainer (write or admin access to ${input.repository}) can ` +
-    `request a review with \`${REVIEW_COMMAND}\`.`;
+    command.kind === "override"
+      ? `Only a maintainer (write or admin access to ${input.repository}) can ` +
+        `unlock a gate with \`${OVERRIDE_COMMAND}\`.`
+      : `Only a maintainer (write or admin access to ${input.repository}) can ` +
+        `request a review with \`${REVIEW_COMMAND}\`.`;
   if (permission === undefined) {
     return {
       kind: "denied",
@@ -274,13 +307,31 @@ function commenterVerdict(
 // credentials. An ignored or denied run must never report missing
 // credentials: that error is red, and a near-miss comment or a stranger's
 // command turning a PR red would be noise the author cannot fix.
+// WHY the login check: the override records the login and the publisher prints
+// it in a status and a comment. GitHub's own logins always match, so this refuses
+// only a value that was never one, and the refusal never echoes it.
+function overrideDecision(input: CiTriggerInput): CiTriggerDecision {
+  if (!GITHUB_LOGIN.test(input.commenterLogin)) {
+    return {
+      kind: "denied",
+      reason:
+        "The commenter's login is not a GitHub login, so the override was " +
+        "refused and nothing was recorded.",
+    };
+  }
+  return { kind: "override", actor: input.commenterLogin };
+}
+
 export function decideCiTrigger(input: CiTriggerInput): CiTriggerDecision {
   const event = classifyEvent(input);
   if (event.kind === "ignore") return event;
 
   if (event.kind === "comment") {
-    const verdict = commenterVerdict(input, event.full);
+    const verdict = commenterVerdict(input, event.command);
     if (verdict !== undefined) return verdict;
+    // WHY before the credential check: an override spends nothing, so a repository
+    // with no credential can still unlock its own gate.
+    if (event.command.kind === "override") return overrideDecision(input);
   }
 
   // `no-credentials` is red, so it fires only when nothing the engine can
@@ -308,10 +359,14 @@ export function decideCiTrigger(input: CiTriggerInput): CiTriggerDecision {
   }
 
   const fromComment = event.kind === "comment";
+  const commentFull =
+    event.kind === "comment" &&
+    event.command.kind === "review" &&
+    event.command.full;
   return {
     kind: "review",
     force: input.forceInput || fromComment,
-    full: input.fullInput || (fromComment && event.full),
+    full: input.fullInput || commentFull,
   };
 }
 
@@ -520,6 +575,9 @@ interface RecordFields {
   cls?: RecordClass;
   pr?: string;
   headSha?: string;
+  // Set only by the override call site: the record names who unlocked the gate
+  // and no other decision names anyone (see parseTriggerRecord).
+  actor?: string;
 }
 
 // A positive integer read from runner text, or undefined. Trigger imports only
@@ -588,6 +646,7 @@ function writeRecord(
     ...(fields.cls === undefined ? {} : { cls: fields.cls }),
     ...(fields.pr === undefined ? {} : { pr: Number(fields.pr) }),
     ...(fields.headSha === undefined ? {} : { head_sha: fields.headSha }),
+    ...(fields.actor === undefined ? {} : { actor: fields.actor }),
     repository: run.repository,
     run_id: run.run_id,
     ...(run.run_attempt === undefined ? {} : { run_attempt: run.run_attempt }),
@@ -935,6 +994,35 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
 
   // Past the early return the resolution is the resolved PR, so its number is a string.
   const prNumber = resolution.pr;
+  if (decision.kind === "override") {
+    // WHY quiet: the publisher says in its comment when no head is known, so no
+    // second warning is printed for the same gap (as for no-credentials).
+    const head = resolveHeadSha(
+      deps,
+      base.eventName,
+      base.repository,
+      prNumber,
+      true,
+    );
+    const write = writeRecord(deps, run, {
+      decision: "override",
+      params: {},
+      pr: prNumber,
+      headSha: validSha(head),
+      actor: decision.actor,
+    });
+    deps.appendOutput(
+      formatTriggerOutputs({
+        ...NO_RUN,
+        pr: prNumber,
+        head_sha: head,
+        publish: publishes(write),
+      }),
+    );
+    // WHY a failed record write is red: the publisher then has nothing to post,
+    // so a green run would claim an override that never reached the gate.
+    return write === "failed" ? 1 : 0;
+  }
   const head = resolveHeadSha(
     deps,
     base.eventName,

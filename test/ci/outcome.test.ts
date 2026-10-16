@@ -1572,6 +1572,55 @@ describe("parseTriggerRecord — the trigger.json contract", () => {
   });
 });
 
+// T6 (S8): an override record names WHO unlocked the gate. The reader refuses an
+// override without a valid actor or without its PR, and refuses an actor on any
+// other decision, because the writer produces neither.
+describe("parseTriggerRecord — the override record (S8)", () => {
+  const SHA = "d".repeat(40);
+  const override: TriggerRecord = {
+    v: 1,
+    decision: "override",
+    params: {},
+    pr: 7,
+    head_sha: SHA,
+    actor: "maintainer",
+    repository: "acme/widgets",
+    run_id: "4242",
+    run_attempt: 1,
+    run_url: "https://github.com/acme/widgets/actions/runs/4242",
+  };
+  const text = (value: unknown) => JSON.stringify(value);
+
+  test("an override carries its actor through", () => {
+    expect(parseTriggerRecord(text(override))).toEqual(override);
+  });
+
+  test("an override with no head still parses, because the comment posts without a status", () => {
+    const { head_sha: _headSha, ...headless } = override;
+    expect(parseTriggerRecord(text(headless))?.decision).toBe("override");
+  });
+
+  test.each([
+    ["no actor", { actor: undefined }],
+    ["an empty actor", { actor: "" }],
+    ["a newline in the actor", { actor: "evil\n::warning::x" }],
+    ["an actor that is not a string", { actor: 7 }],
+    ["no PR", { pr: undefined }],
+  ])("an override with %s is refused", (_label, change) => {
+    expect(
+      parseTriggerRecord(text({ ...override, ...change })),
+    ).toBeUndefined();
+  });
+
+  test("an actor on a review, or on any other decision, is refused", () => {
+    for (const decision of ["review", "denied", "unverifiable"]) {
+      expect(
+        parseTriggerRecord(text({ ...override, decision })),
+      ).toBeUndefined();
+    }
+  });
+});
+
 describe("parseCliRecord — the cli.json contract", () => {
   const SHA = "c".repeat(40);
   const text = (value: unknown) => JSON.stringify(value);
