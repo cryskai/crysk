@@ -35,22 +35,35 @@ let heldLock: HeldCommitStatusLock | null = null;
 // compares it with GitHub's status times, which are server time, so the two differ by
 // whatever the runner's clock skew is; the override rule's allowance covers that.
 let heldSinceMs: number | null = null;
+// Whether this run's own pending status landed (plan.ts passes it with the hold). The
+// start above is only a witness while that pending is on the head: when it did not land,
+// no pr-hero status vouches for the start, so the override check compares with no
+// clock-skew allowance (teardown.ts). Defaults to landed, the case every caller had before
+// this flag existed.
+let heldPendingLanded = true;
 
 export function holdCommitStatusLock(
   lock: HeldCommitStatusLock,
   nowMs: number = Date.now(),
+  pendingLanded: boolean = true,
 ): void {
   heldLock = lock;
   heldSinceMs = nowMs;
+  heldPendingLanded = pendingLanded;
 }
 
 export function releaseCommitStatusLock(): void {
   heldLock = null;
   heldSinceMs = null;
+  heldPendingLanded = true;
 }
 
 export function heldCommitStatusSince(): number | null {
   return heldSinceMs;
+}
+
+export function heldCommitStatusPendingLanded(): boolean {
+  return heldPendingLanded;
 }
 
 export function heldCommitStatusLock(): HeldCommitStatusLock | null {

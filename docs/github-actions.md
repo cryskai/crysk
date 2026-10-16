@@ -587,12 +587,13 @@ until one of two things happens: a new push creates a new head, which is reviewe
 override.
 
 **An override stands against a review that was already running when it was posted; a review started after it replaces it.**
-The rule holds for every write of the review's verdict, including the publisher step's repost of a status the CLI could
-not write. Each write checks the head's newest `pr-hero` status first. When that status is an override created after the
-review started, allowing 5 seconds of clock skew between the runner and GitHub, the write is skipped and the run logs one
-line that the override stands. The review's findings and comments are unchanged. This does not cover a review that is cancelled, or that
-crashes after the override was posted: such a run can still replace the override with its own `error` status, and
-then comment `/pr-hero override` again.
+The rule holds for every verdict write (`success` or `failure`) of the review, including the publisher step's repost of a
+status the CLI could not write. Each verdict write checks the head's newest `pr-hero` status first. When that status is an
+override created after the review started, allowing 5 seconds of clock skew between the runner and GitHub, the write is
+skipped and the run logs one line that the override stands. When the review's own pending status did not land, the allowance
+is zero, because nothing else on the head shows when the review started. The review's findings and comments are unchanged.
+A review that fails (for example, every hunter failed), is cancelled, or crashes can replace the override with its own
+`error` status; comment `/pr-hero override` again.
 
 Two limits. First, a fork pull request cannot be overridden: `/pr-hero override` is refused there with a notice,
 because a fork's head can change after the comment, so the override would not be bound to the code you saw. Second, GitHub keeps one pending run per

@@ -65,7 +65,22 @@ describe("resolvePrPlanAndConfirm records its progress on the head it posted", (
     expect(start).toBeGreaterThan(-1);
     expect(post).toBeGreaterThan(start);
     expect(body).toMatch(
-      /holdCommitStatusLock\(\s*\{[\s\S]*?\},\s*runStartedMs,?\s*\);/,
+      /holdCommitStatusLock\(\s*\{[\s\S]*?\},\s*runStartedMs(?:,\s*pendingLanded)?,?\s*\);/,
+    );
+  });
+
+  // Fix 3 on the override rule: the hold records whether this run's own pending status
+  // landed, taken from the post's own result. teardown.ts drops the clock-skew allowance
+  // when it did not, because a pending that never landed cannot vouch for the run's start.
+  test("the hold carries whether the pending post landed, taken from that post's result", () => {
+    const landed = body.search(
+      /const pendingLanded = await tryPublishCommitStatus\(/,
+    );
+    const hold = body.search(/holdCommitStatusLock\(\s*\{/);
+    expect(landed).toBeGreaterThan(-1);
+    expect(hold).toBeGreaterThan(landed);
+    expect(body).toMatch(
+      /holdCommitStatusLock\(\s*\{[\s\S]*?\},\s*runStartedMs,\s*pendingLanded,?\s*\);/,
     );
   });
 });

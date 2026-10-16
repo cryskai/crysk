@@ -1846,6 +1846,21 @@ describe("fetchCommitStatuses", () => {
     ]);
   });
 
+  // The publisher's reader asks for 100 contexts per page (src/ci/publish.ts, readHeadStatuses),
+  // and this reader must see the same rows. At GitHub's default of 30 a busy head's pr-hero
+  // row can be missing, and the CLI would then write its verdict over an override the
+  // publisher sees. The path is asserted whole, because the fakes below match by substring.
+  test("asks for 100 contexts per page, the same page size as the publisher's reader", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      { match: [`commits/${HEAD}/status`], response: { stdout: "" } },
+    ]);
+    await fetchCommitStatuses(OPERATOR_ROOT, HEAD, { spawnFn });
+    const argv = calls[0]?.argv ?? [];
+    expect(argv).toContain(
+      `repos/{owner}/{repo}/commits/${HEAD}/status?per_page=100`,
+    );
+  });
+
   // The override check (src/pr/teardown.ts) tells an override from a review's own
   // status by its description, so the request must ask for it. The jq is asserted
   // because a fake that echoed the field would pass against a filter that drops it.

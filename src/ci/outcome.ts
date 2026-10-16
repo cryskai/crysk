@@ -257,11 +257,12 @@ export interface CliRecord {
   // publisher posts this status once more (src/ci/publish.ts), exactly as the CLI tried
   // to write it.
   unsettled_status?: UnsettledStatus;
-  // Only for outcome "reviewed", beside unsettled_status: the run's start, in ms, the time the
-  // CLI took the pending lock (before its POST). The publisher judges an override posted during
-  // the run against it before it reposts (src/ci/override.ts). Absent on a record that predates
-  // it, and then the publisher reposts as before.
-  run_started_ms?: number;
+  // Only for outcome "reviewed", beside unsettled_status: the override cutoff, in ms, that the
+  // CLI computed for this run (overrideCutoffMs, src/ci/override.ts): the instant at or after
+  // which an override counts as posted during the run. The publisher compares with it as it is,
+  // and never re-derives it. Absent on a record without one, and then the publisher reposts as
+  // before.
+  override_cutoff_ms?: number;
 }
 
 const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
@@ -585,14 +586,14 @@ export function parseCliRecord(text: string): CliRecord | undefined {
     if (unsettled === undefined) return undefined;
     record.unsettled_status = unsettled;
   }
-  if (value.run_started_ms !== undefined) {
+  if (value.override_cutoff_ms !== undefined) {
     if (outcome !== "reviewed") return undefined;
-    const started = value.run_started_ms;
-    if (typeof started !== "number" || !Number.isSafeInteger(started)) {
+    const cutoff = value.override_cutoff_ms;
+    if (typeof cutoff !== "number" || !Number.isSafeInteger(cutoff)) {
       return undefined;
     }
-    if (started <= 0) return undefined;
-    record.run_started_ms = started;
+    if (cutoff <= 0) return undefined;
+    record.override_cutoff_ms = cutoff;
   }
   return record;
 }

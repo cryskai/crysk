@@ -2,12 +2,12 @@
 // used: the CLI's final write in test/pr/teardown.test.ts, and the publisher's repost in
 // test/ci/publish.test.ts. This file pins what only the module itself can break: that it
 // stays builtins-only (the publisher imports it before `bun install`), that its context is
-// the one the required check reads, and the exact edge of the clock-skew allowance.
+// the one the required check reads, and the exact edge of the cutoff the CLI computes.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { overrideStandsOverRun } from "#ci/override";
+import { overrideCutoffMs, overrideStandsOverRun } from "#ci/override";
 
 const MODULE_PATH = path.resolve(import.meta.dir, "../../src/ci/override.ts");
 
@@ -47,7 +47,7 @@ describe("override rule: the context is the one the required check reads", () =>
   });
 });
 
-describe("override rule: the clock-skew allowance edge", () => {
+describe("override rule: the cutoff", () => {
   const OVERRIDE =
     "pr-hero: overridden by @maintainer — no review on this head";
   const RUN_START = Date.parse("2026-10-17T12:00:00Z");
@@ -58,15 +58,54 @@ describe("override rule: the clock-skew allowance edge", () => {
     description: OVERRIDE,
   });
 
-  test("an override created exactly the allowance before the run started (5 s) stands", () => {
+  // The CLI computes the cutoff once: the start less the 5 s clock-skew allowance when its
+  // own pending landed (it witnesses the start), and the start itself when it did not.
+  test("with the pending landed, the cutoff is the run's start less 5 s", () => {
+    expect(overrideCutoffMs(RUN_START, true)).toBe(RUN_START - 5_000);
+  });
+
+  test("with the pending not landed, the cutoff is the run's start", () => {
+    expect(overrideCutoffMs(RUN_START, false)).toBe(RUN_START);
+  });
+
+  // The rule compares with the cutoff it is given and adds no allowance of its own.
+  test("an override created exactly at the cutoff (start less 5 s) stands", () => {
     expect(
-      overrideStandsOverRun([override(RUN_START - 5_000)], RUN_START),
+      overrideStandsOverRun([override(RUN_START - 5_000)], RUN_START - 5_000),
     ).toBe(true);
   });
 
-  test("an override created 10 s before the run started does not stand", () => {
+  test("an override created 1 ms before the cutoff (start less 5 s) does not stand", () => {
     expect(
-      overrideStandsOverRun([override(RUN_START - 10_000)], RUN_START),
+      overrideStandsOverRun([override(RUN_START - 5_001)], RUN_START - 5_000),
+    ).toBe(false);
+  });
+
+  test("an override created 3 s before the start stands against a cutoff of start less 5 s", () => {
+    expect(
+      overrideStandsOverRun([override(RUN_START - 3_000)], RUN_START - 5_000),
+    ).toBe(true);
+  });
+
+  test("an override created 3 s before the start does not stand against a cutoff of the start", () => {
+    expect(
+      overrideStandsOverRun([override(RUN_START - 3_000)], RUN_START),
+    ).toBe(false);
+  });
+
+  test("an override created exactly at the start stands against a cutoff of the start", () => {
+    expect(overrideStandsOverRun([override(RUN_START)], RUN_START)).toBe(true);
+  });
+
+  test("an override created 1 ms before the start does not stand against a cutoff of the start", () => {
+    expect(overrideStandsOverRun([override(RUN_START - 1)], RUN_START)).toBe(
+      false,
+    );
+  });
+
+  test("an override created 10 s before the run started does not stand against the cutoff", () => {
+    expect(
+      overrideStandsOverRun([override(RUN_START - 10_000)], RUN_START - 5_000),
     ).toBe(false);
   });
 });

@@ -156,10 +156,11 @@ export type Publication =
       // Undefined otherwise, which is every reviewed record without the field.
       headSha?: string;
       status?: StatusPost;
-      // The run's start, when the record carries one. The repost is skipped when an override
-      // posted during the run stands on the head (overrideStandsBeforeRepost). Undefined
-      // means no start to judge against, and the repost goes ahead as before.
-      runStartedMs?: number;
+      // The override cutoff the CLI computed for the run, when the record carries one. The repost
+      // is skipped when an override created at or after it stands on the head
+      // (overrideStandsBeforeRepost). Undefined means no cutoff to judge against, and the repost
+      // goes ahead as before.
+      overrideCutoffMs?: number;
     }
   | {
       kind: "remote";
@@ -345,14 +346,16 @@ function decideCliOutcome(
 function unsettledStatusOf(
   record: TriggerRecord,
   cliRecord: CliRecord,
-): { headSha: string; status: StatusPost; runStartedMs?: number } | undefined {
+):
+  | { headSha: string; status: StatusPost; overrideCutoffMs?: number }
+  | undefined {
   const unsettled = cliRecord.unsettled_status;
   if (unsettled === undefined || cliRecord.head_sha === undefined) {
     return undefined;
   }
   return {
     headSha: cliRecord.head_sha,
-    runStartedMs: cliRecord.run_started_ms,
+    overrideCutoffMs: cliRecord.override_cutoff_ms,
     status: {
       state: unsettled.state,
       context: STATUS_CONTEXT,
@@ -922,19 +925,24 @@ function readLatestCliStatusState(
 // Whether an override posted during the run stands over the repost of the CLI's unsettled
 // status (overrideStandsOverRun, src/ci/override.ts). WHY it is read here: the CLI's final
 // write failed, so its own status reads may have failed too, and the override may not have
-// been seen by the CLI. A failed read, or a record with no start to judge against, is no
+// been seen by the CLI. A failed read, or a record with no cutoff to judge against, is no
 // evidence of an override, so the repost goes ahead as before. The status reposted is the
 // review's own verdict, so a failed review's failure is reposted as a failure.
+//
+// WHY the cutoff is the CLI's and not re-derived here: the CLI computed it once for the run,
+// and it knows whether its own pending landed, which decides the clock-skew allowance (the
+// landed decision is carried by the cutoff, src/ci/override.ts overrideCutoffMs). The publisher
+// has neither the pending's outcome nor the allowance, so it compares with the cutoff as given.
 function overrideStandsBeforeRepost(
   deps: PublishDeps,
   repo: string,
   sha: string,
-  runStartedMs: number | undefined,
+  overrideCutoffMs: number | undefined,
 ): boolean {
-  if (runStartedMs === undefined) return false;
+  if (overrideCutoffMs === undefined) return false;
   const statuses = readHeadStatuses(deps, repo, sha);
   if (statuses === undefined) return false;
-  return overrideStandsOverRun(statuses, runStartedMs);
+  return overrideStandsOverRun(statuses, overrideCutoffMs);
 }
 
 // The override's reporter: the shared rendering (statusWriteFailure), reported.
@@ -1123,13 +1131,14 @@ export function runPublish(deps: PublishDeps): number {
     if (plan.headSha !== undefined && plan.status !== undefined) {
       // WHY the override check comes before the repost (Fix 4): an override posted during this
       // run stands over the review's verdict, the same rule the CLI's final write applies
-      // (src/ci/override.ts). Then the repost is skipped, and the notice says why.
+      // (src/ci/override.ts), against the cutoff the CLI recorded. Then the repost is skipped,
+      // and the notice says why.
       if (
         overrideStandsBeforeRepost(
           deps,
           plan.repository,
           plan.headSha,
-          plan.runStartedMs,
+          plan.overrideCutoffMs,
         )
       ) {
         deps.stdout(

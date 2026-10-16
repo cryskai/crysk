@@ -23,7 +23,30 @@ export const OVERRIDE_STATUS_CONTEXT = "pr-hero";
 // deemed to start a few seconds early leaves a fresh override standing, while a missed
 // override overwrites a deliberate unlock. created_at has one-second precision, which the
 // same allowance already covers.
+//
+// WHY it is only taken when the run's own pending status landed: the allowance is safe only
+// while something in the run witnesses the start, and the CLI's own pending status is that
+// witness. When that pending did not land, no pr-hero status vouches for the start, and the
+// cutoff is the start itself (overrideCutoffMs).
 const OVERRIDE_CLOCK_SKEW_ALLOWANCE_MS = 5_000;
+
+// The override cutoff: the instant at or after which an override counts as posted during the
+// run. The CLI computes it ONCE, from its own start and whether its pending landed (teardown.ts),
+// and records it (override_cutoff_ms, src/ci/cli-record.ts). The publisher reads that recorded
+// cutoff and never re-derives it, so the two writers cannot disagree about the same override.
+//
+// WHY the start less the allowance when the pending landed: the pending is the witness that the
+// start is on the head's timeline, so the skew allowance may widen the window (see above).
+// WHY the start itself when it did not: nothing vouches for the start, so an override created a
+// few seconds before it is not one posted during the run, and it must not stand over the run.
+export function overrideCutoffMs(
+  runStartedMs: number,
+  pendingLanded: boolean,
+): number {
+  return pendingLanded
+    ? runStartedMs - OVERRIDE_CLOCK_SKEW_ALLOWANCE_MS
+    : runStartedMs;
+}
 
 // The fields of a commit status the rule reads. A status the reader did not describe has
 // no description, and is never taken as an override.
@@ -34,17 +57,26 @@ export interface OverrideStatusFact {
   description?: string | null;
 }
 
-// Whether an override stands over a review that started at runStartedMs. The override
-// stands when the newest OVERRIDE_STATUS_CONTEXT status is a successful override created
-// at or after the run's start, less the allowance. A later review has posted its own
-// status since, which is then the newest, so this is false and its write goes ahead.
+// Whether an override stands over a review, given the review's override cutoff. The override
+// stands when the newest OVERRIDE_STATUS_CONTEXT status is a successful override created at or
+// after cutoffMs. A later review has posted its own status since, which is then the newest, so
+// this is false and its write goes ahead.
+//
+// WHY no allowance here: the cutoff already carries the decision (overrideCutoffMs). Both
+// writers compare with the same cutoff and nothing else.
+//
+// WHY the rule guards a verdict write only (`success` or `failure`): an `error` write is a
+// failed review (every hunter failed, a cancel, a crash), and it may replace an override.
+// The CLI checks the write's state before it calls this (teardown.ts). The publisher's
+// repost is a verdict by construction: the CLI records only `success` or `failure` as an
+// unsettled status, and the repost writes that record (publish.ts).
 //
 // WHY the state too: an override is a success. A status that merely carries the
 // description (a failure or a pending one) is not an override, and must not hold the gate
 // open over a review that finished.
 export function overrideStandsOverRun(
   statuses: readonly OverrideStatusFact[],
-  runStartedMs: number,
+  cutoffMs: number,
 ): boolean {
   const latest = newestStatusInContext(statuses, OVERRIDE_STATUS_CONTEXT);
   if (latest === undefined) return false;
@@ -58,7 +90,7 @@ export function overrideStandsOverRun(
   }
   const createdMs = Date.parse(latest.created_at);
   if (Number.isNaN(createdMs)) return false;
-  return createdMs >= runStartedMs - OVERRIDE_CLOCK_SKEW_ALLOWANCE_MS;
+  return createdMs >= cutoffMs;
 }
 
 // The newest status of one context by created_at: a tie goes to the later row, and a row

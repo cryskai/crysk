@@ -970,33 +970,42 @@ describe("settleCommitStatusAndLedger — the unsettled final status", () => {
     });
   });
 
-  // Fix 4: the record carries the run's start (the stamp the lock was taken with), so the
-  // publisher's repost can tell an override posted during this run from one posted before it.
-  test("the unsettled record carries the run's start when the lock was held", async () => {
-    const { env, recordPath } = await outcomeEnv();
-    recordReviewDelivered(HEAD, env);
-    const STAMP = Date.parse("2026-10-17T12:00:00Z");
-    holdCommitStatusLock(
-      {
-        operatorRoot: "/repo",
-        sha: HEAD,
-        targetUrl: undefined,
-        context: COMMIT_STATUS_CONTEXT,
-      },
-      STAMP,
-    );
-    const { spawnFn } = makeStatusSpawn({ fail: true });
-    const error = await settleCommitStatusAndLedger({
-      ...settleInput(env, { spawnFn }),
-      readStatuses: async () => [],
-    }).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(CliError);
-    expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toMatchObject({
-      outcome: "reviewed",
-      unsettled_status: { state: "success" },
-      run_started_ms: STAMP,
-    });
-  });
+  // Fix 4: the record carries the override cutoff the CLI computed from the run's start, so the
+  // publisher's repost can tell an override posted during this run from one posted before it,
+  // without re-deriving the cutoff. The cutoff keeps the 5 s allowance only when the run's own
+  // pending landed (overrideCutoffMs, src/ci/override.ts).
+  test.each([
+    ["landed", true, Date.parse("2026-10-17T12:00:00Z") - 5_000],
+    ["not landed", false, Date.parse("2026-10-17T12:00:00Z")],
+  ] as const)(
+    "the unsettled record carries the override cutoff when the pending %s",
+    async (_label, pendingLanded, expectedCutoff) => {
+      const { env, recordPath } = await outcomeEnv();
+      recordReviewDelivered(HEAD, env);
+      const STAMP = Date.parse("2026-10-17T12:00:00Z");
+      holdCommitStatusLock(
+        {
+          operatorRoot: "/repo",
+          sha: HEAD,
+          targetUrl: undefined,
+          context: COMMIT_STATUS_CONTEXT,
+        },
+        STAMP,
+        pendingLanded,
+      );
+      const { spawnFn } = makeStatusSpawn({ fail: true });
+      const error = await settleCommitStatusAndLedger({
+        ...settleInput(env, { spawnFn }),
+        readStatuses: async () => [],
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(CliError);
+      expect(parseCliRecord(readFileSync(recordPath, "utf8"))).toMatchObject({
+        outcome: "reviewed",
+        unsettled_status: { state: "success" },
+        override_cutoff_ms: expectedCutoff,
+      });
+    },
+  );
 
   // Fix 3: a body that failed after delivery still writes the review's verdict, so the override
   // check guards that write too. An override posted during the run stands: nothing is written
@@ -1322,6 +1331,50 @@ describe("settleCommitStatusAndLedger — an override posted during this run", (
     expect(heldCommitStatusLock()).toBeNull();
   });
 
+  // Fix 3: the 5-second allowance covers the clock skew between the run's start and
+  // GitHub's clock, and it is only safe while this run's own pending status is the newest
+  // pr-hero status to witness that start. When that pending did not land, an override
+  // created up to 5 s before the start would read as posted during the run, so the
+  // allowance is dropped and the run compares with its start alone.
+  test("pending landed: an override created 3 s before the run started stands, inside the allowance", async () => {
+    const STAMP = Date.parse("2026-10-17T12:00:00Z");
+    holdCommitStatusLock(LOCK, STAMP, true);
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        readStatuses: async () => [overrideAt(STAMP - 3_000)],
+      }),
+    );
+    expect(postCount(calls)).toBe(0);
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
+  test("pending failed: an override created 3 s before the run started does not stand: the final write happens", async () => {
+    const STAMP = Date.parse("2026-10-17T12:00:00Z");
+    holdCommitStatusLock(LOCK, STAMP, false);
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        readStatuses: async () => [overrideAt(STAMP - 3_000)],
+      }),
+    );
+    expect(postCount(calls)).toBe(1);
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
+  test("pending failed: an override created 2 s after the run started still stands", async () => {
+    const STAMP = Date.parse("2026-10-17T12:00:00Z");
+    holdCommitStatusLock(LOCK, STAMP, false);
+    const { spawnFn, calls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        readStatuses: async () => [overrideAt(STAMP + 2_000)],
+      }),
+    );
+    expect(postCount(calls)).toBe(0);
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
   test("a failed statuses read writes the final status, as before", async () => {
     holdCommitStatusLock(LOCK);
     const { spawnFn, calls } = makeStatusSpawn();
@@ -1360,9 +1413,50 @@ describe("settleCommitStatusAndLedger — an override posted during this run", (
     expect(postCount(calls)).toBe(1);
   });
 
+  // Fix 2: an `error` write is not a verdict, so it never checks the override, whether or
+  // not a body threw. A review whose hunters all failed (sessionFailed) posts `error`, and
+  // it replaces a fresh override. The publisher's error write reads no head either, so the
+  // two writers give one answer.
+  test("a sessionFailed error write is not a verdict: it reads no override and writes over a fresh one", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    let reads = 0;
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        result: pipelineResult(true),
+        readStatuses: async () => {
+          reads += 1;
+          return [overrideAt(Date.now() + 120_000)];
+        },
+      }),
+    );
+    expect(postCount(calls)).toBe(1);
+    expect(reads).toBe(0);
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
+  // A verdict still respects the override: a failure verdict with a fresh override writes
+  // nothing. This is the verdict-only scope's other half.
+  test("a failure verdict with a fresh override present writes nothing", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    let reads = 0;
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        blockingCount: 2,
+        readStatuses: async () => {
+          reads += 1;
+          return [overrideAt(Date.now() + 120_000)];
+        },
+      }),
+    );
+    expect(reads).toBe(1);
+    expect(postCount(calls)).toBe(0);
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
   // The body's best-effort error status is not the gate's verdict, so the check does
-  // not guard it. The publisher's own error branch is the remaining gap (see the comment
-  // in settleCommitStatusAndLedger).
+  // not guard it, whether the body threw or not (the sessionFailed test above).
   test("a body that threw still writes its best-effort status: the check covers the gate's verdict only", async () => {
     holdCommitStatusLock(LOCK);
     const { spawnFn, calls } = makeStatusSpawn();

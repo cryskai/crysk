@@ -192,10 +192,10 @@ describe("decidePublication — the pure table", () => {
       });
     });
 
-    // Fix 4: the run's start rides on the cleanup beside the status it may guard, so the
-    // publisher can judge an override posted during the run before it reposts.
-    test("a reviewed record's run start rides on the cleanup beside its unsettled status", () => {
-      const RUN_START = Date.parse("2026-10-17T12:00:00Z");
+    // Fix 4: the override cutoff rides on the cleanup beside the status it may guard, so the
+    // publisher can judge an override against the cutoff the CLI computed, before it reposts.
+    test("a reviewed record's override cutoff rides on the cleanup beside its unsettled status", () => {
+      const CUTOFF = Date.parse("2026-10-17T12:00:00Z") - 5_000;
       expect(
         decidePublication({
           record: record(),
@@ -207,13 +207,13 @@ describe("decidePublication — the pure table", () => {
               state: "success",
               description: "review complete",
             },
-            run_started_ms: RUN_START,
+            override_cutoff_ms: CUTOFF,
           },
         }),
       ).toMatchObject({
         kind: "cleanup",
         headSha: REVIEWED_HEAD,
-        runStartedMs: RUN_START,
+        overrideCutoffMs: CUTOFF,
       });
     });
 
@@ -1937,7 +1937,8 @@ describe("runPublish — cleanup once the CLI started", () => {
 // Fix 4: the CLI's final status write failed, so its own status reads may have failed too, and
 // an override posted during the run may not have been seen by the CLI. Before the repost, the
 // publisher reads the head once and skips the repost when the override rule (src/ci/override.ts)
-// says an override stands. A failed read reposts, as before, and so does a record with no start.
+// says an override stands, against the cutoff the CLI recorded. A failed read reposts, as
+// before, and so does a record with no cutoff.
 describe("runPublish — the repost of an unsettled status, against an override (Fix 4)", () => {
   const RUN_START = Date.parse("2026-10-17T12:00:00Z");
   const OVERRIDE =
@@ -1949,11 +1950,13 @@ describe("runPublish — the repost of an unsettled status, against an override 
   const describedStatusRows = (
     ...rows: Array<[string, string, string, string]>
   ): GhResult => ok(rows.map((row) => JSON.stringify(row)).join("\n"));
-  const withRunStart = (extra: object = {}) => ({
+  // The record as the CLI wrote it. The default cutoff is the run's start, which is the record
+  // the CLI writes when its own pending did not land (no clock-skew allowance).
+  const withCutoff = (cutoffMs: number = RUN_START, extra: object = {}) => ({
     ...REVIEWED,
     head_sha: REVIEWED_HEAD,
     unsettled_status: UNSETTLED,
-    run_started_ms: RUN_START,
+    override_cutoff_ms: cutoffMs,
     ...extra,
   });
   const runWith = (cliRecord: object, latestStatus: GhResult | undefined) =>
@@ -1970,7 +1973,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
 
   test("a fresh override as the newest status: the repost is skipped, the head is read once, and the cleanup still runs", () => {
     const run = runWith(
-      withRunStart(),
+      withCutoff(),
       describedStatusRows([
         "pr-hero",
         "success",
@@ -1986,7 +1989,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
 
   test("a newest status that is not an override is reposted", () => {
     const run = runWith(
-      withRunStart(),
+      withCutoff(),
       describedStatusRows([
         "pr-hero",
         "success",
@@ -2003,7 +2006,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
 
   test("an override older than the run is reposted", () => {
     const run = runWith(
-      withRunStart(),
+      withCutoff(),
       describedStatusRows([
         "pr-hero",
         "success",
@@ -2014,13 +2017,48 @@ describe("runPublish — the repost of an unsettled status, against an override 
     expect(statusCalls(run.calls)).toHaveLength(1);
   });
 
+  // The pending did not land, so the CLI's cutoff is the run's start with no allowance. An
+  // override created 3 s before that start did not stand over the run, and the publisher
+  // reposts it. The read is asserted, because a publisher that did not read the head would
+  // repost too, and would not be judging the override at all.
+  test("the cutoff is the run's start (the pending did not land): an override created 3 s before the start is reposted", () => {
+    const run = runWith(
+      withCutoff(RUN_START),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START - 3_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(statusReadEndpoints(run.calls)).toEqual([HEAD_READ]);
+    expect(statusCalls(run.calls)).toHaveLength(1);
+  });
+
+  // The pending landed, so the CLI's cutoff is the start less the 5 s allowance. The same
+  // override, created 3 s before the start, is inside it and stands, so the publisher skips.
+  // The publisher adds no allowance of its own: this is the cutoff it was given, verbatim.
+  test("the cutoff is the start less 5 s (the pending landed): the same override stands and the repost is skipped", () => {
+    const run = runWith(
+      withCutoff(RUN_START - 5_000),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START - 3_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(statusReadEndpoints(run.calls)).toEqual([HEAD_READ]);
+    expect(statusCalls(run.calls)).toEqual([]);
+  });
+
   test("a failed head read reposts, as before", () => {
-    const run = runWith(withRunStart(), fail("gh: Server Error (HTTP 500)"));
+    const run = runWith(withCutoff(), fail("gh: Server Error (HTTP 500)"));
     expect(statusCalls(run.calls)).toHaveLength(1);
     expect(run.exitCode).toBe(0);
   });
 
-  test("a record without the run's start reposts as before, and reads no status", () => {
+  test("a record without the override cutoff reposts as before, and reads no status", () => {
     const run = runWith(
       { ...REVIEWED, head_sha: REVIEWED_HEAD, unsettled_status: UNSETTLED },
       describedStatusRows([

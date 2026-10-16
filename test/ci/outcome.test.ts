@@ -1996,9 +1996,9 @@ describe("parseCliRecord — the unsettled_status field", () => {
   );
 });
 
-// Fix 4: the run's start on a reviewed record, read by the publisher to tell an override
+// Fix 4: the override cutoff on a reviewed record, read by the publisher to tell an override
 // posted during the run from one posted before it. Optional, so a record without it parses.
-describe("parseCliRecord — the run_started_ms field", () => {
+describe("parseCliRecord — the override_cutoff_ms field", () => {
   const SHA = "c".repeat(40);
   const text = (value: unknown) => JSON.stringify(value);
   const REVIEWED: CliRecord = {
@@ -2008,12 +2008,15 @@ describe("parseCliRecord — the run_started_ms field", () => {
     unsettled_status: { state: "success", description: "review complete" },
   };
 
-  test("a reviewed record with a positive integer run_started_ms parses with it", () => {
-    const value: CliRecord = { ...REVIEWED, run_started_ms: 1_792_238_400_000 };
+  test("a reviewed record with a positive integer override_cutoff_ms parses with it", () => {
+    const value: CliRecord = {
+      ...REVIEWED,
+      override_cutoff_ms: 1_792_238_395_000,
+    };
     expect(parseCliRecord(text(value))).toEqual(value);
   });
 
-  test("a reviewed record without run_started_ms still parses unchanged", () => {
+  test("a reviewed record without override_cutoff_ms still parses unchanged", () => {
     expect(parseCliRecord(text(REVIEWED))).toEqual(REVIEWED);
   });
 
@@ -2024,16 +2027,20 @@ describe("parseCliRecord — the run_started_ms field", () => {
     ["a string", "1792238400000"],
     ["null", null],
     ["an integer beyond the safe range", 1e20],
-  ])("refuses run_started_ms of %s", (_label, value) => {
+  ])("refuses override_cutoff_ms of %s", (_label, value) => {
     expect(
-      parseCliRecord(text({ ...REVIEWED, run_started_ms: value })),
+      parseCliRecord(text({ ...REVIEWED, override_cutoff_ms: value })),
     ).toBeUndefined();
   });
 
   test("refuses the field on a record that did not deliver a review", () => {
     expect(
       parseCliRecord(
-        text({ v: 1, outcome: "yielded", run_started_ms: 1_792_238_400_000 }),
+        text({
+          v: 1,
+          outcome: "yielded",
+          override_cutoff_ms: 1_792_238_400_000,
+        }),
       ),
     ).toBeUndefined();
   });

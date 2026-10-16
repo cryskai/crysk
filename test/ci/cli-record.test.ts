@@ -434,30 +434,30 @@ describe("recordUnsettledStatus", () => {
     });
   });
 
-  // Fix 4: the run's start rides on the unsettled record, so the publisher can tell an
-  // override posted during this run from one posted before it.
-  test("records the run's start next to the status, when the caller has one", () => {
+  // Fix 4: the override cutoff rides on the unsettled record, so the publisher can tell an
+  // override posted during this run from one posted before it, without re-deriving the cutoff.
+  test("records the override cutoff next to the status, when the caller has one", () => {
     recordReviewDelivered(SHA, env);
-    recordUnsettledStatus(SHA, UNSETTLED, env, 1_792_238_400_000);
+    recordUnsettledStatus(SHA, UNSETTLED, env, 1_792_238_395_000);
     expect(parseCliRecord(onDisk())).toEqual({
       v: 1,
       outcome: "reviewed",
       head_sha: SHA,
       unsettled_status: UNSETTLED,
-      run_started_ms: 1_792_238_400_000,
+      override_cutoff_ms: 1_792_238_395_000,
     });
   });
 
   test.each([
-    ["no start", null],
+    ["no cutoff", null],
     ["zero", 0],
     ["a fraction", 1.5],
     ["a negative number", -1],
   ])(
-    "leaves run_started_ms out when the start is %s, since the reader would refuse it",
-    (_label, runStartedMs) => {
+    "leaves override_cutoff_ms out when the cutoff is %s, since the reader would refuse it",
+    (_label, overrideCutoffMs) => {
       recordReviewDelivered(SHA, env);
-      recordUnsettledStatus(SHA, UNSETTLED, env, runStartedMs);
+      recordUnsettledStatus(SHA, UNSETTLED, env, overrideCutoffMs);
       expect(parseCliRecord(onDisk())).toEqual({
         v: 1,
         outcome: "reviewed",
