@@ -38,6 +38,32 @@ describe("CliError and CliUsageError carry an optional record class", () => {
   });
 });
 
+describe("an unset class adds no own property to a CLI error", () => {
+  // WHY pinned: Bun prints an error's enumerable own properties when it is uncaught.
+  // A `cls: undefined` own property shows up there as a new line in the local output.
+  test("a CliError without a class has no own enumerable property", () => {
+    expect(Object.keys(new CliError("x"))).toEqual([]);
+  });
+
+  test("a CliUsageError without a class has no own enumerable property", () => {
+    expect(Object.keys(new CliUsageError("x"))).toEqual([]);
+  });
+
+  test("a CliError with a class stores it as its own property, and classifyCliError reads it", () => {
+    const error = new CliError("x", { cls: { kind: "invariant" } });
+    expect(Object.keys(error)).toEqual(["cls"]);
+    expect(error.cls).toEqual({ kind: "invariant" });
+    expect(classifyCliError(error)).toEqual({ kind: "invariant" });
+  });
+
+  test("a CliUsageError with a class stores it as its own property, and classifyCliError reads it", () => {
+    const error = new CliUsageError("x", { cls: { kind: "invariant" } });
+    expect(Object.keys(error)).toEqual(["cls"]);
+    expect(error.cls).toEqual({ kind: "invariant" });
+    expect(classifyCliError(error)).toEqual({ kind: "invariant" });
+  });
+});
+
 describe("withUsageClass", () => {
   test("gives a classless CliUsageError the class, with the same message", () => {
     let thrown: unknown;

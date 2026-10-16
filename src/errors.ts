@@ -18,12 +18,17 @@ export interface CliErrorOptions {
   cls?: CliErrorClass;
 }
 
+// `cls` is declared, not a field initialiser: under the class-field semantics this
+// repo compiles with (target ESNext), a plain `readonly cls` declaration defines an
+// own `cls: undefined` on every instance. Bun's uncaught print shows own enumerable
+// properties, so that would add a `cls: undefined` line to every local crash. The
+// constructor assigns it only when a class was named.
 export class CliUsageError extends Error {
-  readonly cls: CliErrorClass | undefined;
+  declare readonly cls?: CliErrorClass;
 
   constructor(message: string, options: CliErrorOptions = {}) {
     super(message);
-    this.cls = options.cls;
+    if (options.cls !== undefined) this.cls = options.cls;
   }
 }
 
@@ -31,11 +36,11 @@ export class CliUsageError extends Error {
 // Defined here rather than in a shell so every I/O shell (cli.ts, pr/pr.ts,
 // and others) can throw the same class without importing each other.
 export class CliError extends Error {
-  readonly cls: CliErrorClass | undefined;
+  declare readonly cls?: CliErrorClass;
 
   constructor(message: string, options: CliErrorOptions = {}) {
     super(message);
-    this.cls = options.cls;
+    if (options.cls !== undefined) this.cls = options.cls;
   }
 }
 

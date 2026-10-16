@@ -2339,9 +2339,13 @@ describe("parse errors carry their record class (T2d-1)", () => {
     );
   });
 
-  test("routing that the person layer rejects is routing, same message", () => {
+  test("routing that the person layer rejects stays unclassified, same message", () => {
+    // WHY: the routing class renders PRH-ROUTING-INVALID, whose text names PRHERO_ROUTING
+    // and `gh variable set`. Neither is the fix for a personal file, so the person
+    // layer's routing error carries no class, like the rest of that file's errors.
     const error = thrownBy(() => parseGlobalConfig('{"routing": "invalid"}'));
-    expect(error.cls).toEqual({ kind: "config-parse", source: "routing" });
+    expect(error).toBeInstanceOf(CliUsageError);
+    expect(error.cls).toBeUndefined();
     expect(error.message).toBe(
       "~/.prhero/config.json routing must be an object",
     );
