@@ -7,8 +7,10 @@ finding, and deterministic code — never a model — assigns blocking/advisory 
 Its measured profile, stated up front: **high precision, narrow coverage**. What it reports is
 almost always real (13% false positives measured); it specializes in lifecycle and state-machine
 defects — stuck loading latches, missing cleanups, re-entrancy, stalls — and says nothing about
-style or convention. It is an **assistant, not a merge gate**: every report closes with that
-disclaimer, and nothing in this tool blocks a merge.
+style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
+disclaimer, and nothing it prints blocks a merge. In CI its commit status is a gate by default: require the
+`pr-hero` check in branch protection, and blocking findings block the merge. `mode: advisory` keeps that check
+green.
 
 ## Requirements
 
@@ -285,8 +287,8 @@ Reviews launch two ways: **by hand**, or through the opt-in local watcher (`pr-h
 | --- | --- |
 | Manual CLI (`review`, `--pr`, `--post`, `ledger`) | **Available now** — this README. |
 | Auto-trigger on new PRs / new pushes (local watcher) | **Available now** — `pr-hero watch`, below. Deliberately opt-in: every review spends real money, so nothing fires until you `watch add` a repo AND `watch install` the agent. |
-| CI mode (GitHub Actions) | **Available now** — official `action.yml` at the repo root, canonical `.github/workflows/pr-hero.yml`, full setup in [`docs/github-actions.md`](docs/github-actions.md). Assistant posture (exit 0 on findings), the size/budget gates, and `pr-hero setup --ci` scaffolding all apply. |
-| Required status check that blocks merges | **Deliberately deferred.** At the engine's measured recall it has no business gating a merge — the disclaimer in every report is the contract. |
+| CI mode (GitHub Actions) | **Available now** — official `action.yml` at the repo root, canonical `.github/workflows/pr-hero.yml`, full setup in [`docs/github-actions.md`](docs/github-actions.md). The commit-status gate (`mode: gate`, the default; `mode: advisory` opts out), exit 0 on findings, the size/budget gates, and `pr-hero setup --ci` scaffolding all apply. |
+| Required status check that blocks merges | **Available in CI** — the `pr-hero` commit status is the check (`mode: gate`, the default). Require it in branch protection. Fail-closed for a head with no run stays deferred. |
 
 ## Watching PRs automatically — `pr-hero watch`
 

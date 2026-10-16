@@ -171,8 +171,9 @@ a scheduled block before launch, and promoting it to a gate is Juanma's call, no
    `reverts`, `corpus`.
 3. **GitHub Actions CI.** A thin Action wrapping `pr-hero review --pr --ci --post --yes`. Documented
    `CLAUDE_CODE_OAUTH_TOKEN` (or the equivalent) in repo secrets. Unattended spend is bounded: the
-   size gate plus an explicit cap (per-PR / daily). It comments; it does **not** install a required
-   status check. The local watcher remains the Mac-side adapter — same product, two triggers.
+   size gate plus an explicit cap (per-PR / daily). It comments, and its commit status is the required
+   check: `mode: gate` (the default) turns it red on blocking findings, a size or budget skip, and a crash;
+   `mode: advisory` keeps it green. The local watcher remains the Mac-side adapter — same product, two triggers.
    **Shipped 2026-08-24** (5 phases, `openspec/changes/pillar3-github-actions-ci/`): `action.yml`
    (composite action, repo root), the canonical `.github/workflows/pr-hero.yml`, and
    `docs/github-actions.md`. Assistant posture, the size/budget gates (including `budget-usd <= 0`
@@ -254,7 +255,7 @@ Distribution — on a machine that is not this one:
 - [x] the Action runs on an open PR, posts, and respects the cap
       - [x] `v1` and `v1.0.0` tags published — 2026-08-25 (`aff0324`)
       - [x] live open-PR run on stranger's repo (`juanmaagd/pr-hero-landing#1`) verified end-to-end via `uses: juanmaagd/pr-hero@v1`
-- [x] every report still says assistant, not merge gate (verified footer & exit code 0)
+- [x] every report still says assistant, not merge gate (verified footer & exit code 0) — superseded by the S4 gate mode: the commit status is the gate, the exit code is not, and `mode: advisory` restores the assistant posture
 
 ### Explicitly after launch
 
@@ -1339,9 +1340,9 @@ What is still manual, in the order it should be closed:
    refuter's per-finding fan-out and runner retries, both invisible today. Bound the height — the panel
    redraws with `\x1b[<n>A` cursor-up, and a tree that outgrows the terminal corrupts the screen.
 
-Deliberately still deferred: the required status check per head SHA (fail-closed, no run = no merge) and
-the audited `skip-deep-review` label. Both are merge gates, and at 0.00 measured recall on 1677 this
-engine has no business blocking a merge yet.
+The required status check is shipped as gate mode (the `pr-hero` commit status, `mode: gate`, the default;
+`mode: advisory` opts out). Still deliberately deferred: fail-closed for a head with no run (no status, no
+merge), and the audited `skip-deep-review` label.
 
 Cancelling Greptile is no longer the goal of this phase — see the north-star note in THE PIVOT.
 
