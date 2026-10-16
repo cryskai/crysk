@@ -154,9 +154,21 @@ describe("classifyPath", () => {
     expect(classifyPath(obs)).toBe("hunters-failed");
   });
 
-  test("hunters-failed from the run itself: the step failed, nothing posted, the run directory uploaded", () => {
-    // This is the shape the product produces today: the CLI publishes its
-    // "review did not finish" error status and no comment (see the S7 test).
+  test("hunters-failed from a status description that starts with the code, with no comment", () => {
+    const obs = observation({
+      comments: [],
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed",
+      },
+    });
+    expect(classifyPath(obs)).toBe("hunters-failed");
+  });
+
+  test("a failed step and an uploaded run directory are not positive evidence of hunters-failed", () => {
+    // The run directory is uploaded only when a hunter ran, and a finished
+    // pipeline whose post threw looks the same from here. Without a PRH code
+    // on the PR the path is no-outcome.
     const obs = observation({
       run: {
         id: 42,
@@ -167,7 +179,27 @@ describe("classifyPath", () => {
       comments: [],
       status: { state: "error", description: "review did not finish" },
     });
-    expect(classifyPath(obs)).toBe("hunters-failed");
+    expect(classifyPath(obs)).toBe("no-outcome");
+  });
+
+  test("a failed step with a success status, no report and an artifact never exits 0", () => {
+    // The false pass: the pipeline finished, its post threw, the status says
+    // success, and the run directory was uploaded. None of that is a
+    // hunters-failed outcome, so the run must exit 1.
+    const obs = observation({
+      run: {
+        id: 42,
+        status: "completed",
+        conclusion: "failure",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "failure" }],
+      },
+      comments: [],
+      status: { state: "success", description: "review posted" },
+      artifacts: [`pr-hero-run-7-${SHA}`],
+    });
+    const path = classifyPath(obs);
+    expect(path).toBe("no-outcome");
+    expect(exitCodeFor(path, invariantViolations(obs))).toBe(1);
   });
 
   test("skipped: a skip marker names its reason", () => {
@@ -243,7 +275,7 @@ describe("S7 invariants", () => {
     expect(running).toEqual([]);
   });
 
-  test("the hunters-failed collision: the product's own error status trips S7 on a path that exits 0 otherwise", () => {
+  test("an error status without a PRH code trips S7 and, with no other evidence, exits 1", () => {
     const obs = observation({
       run: {
         id: 42,
@@ -254,7 +286,7 @@ describe("S7 invariants", () => {
       comments: [],
       status: { state: "error", description: "review did not finish" },
     });
-    expect(classifyPath(obs)).toBe("hunters-failed");
+    expect(classifyPath(obs)).toBe("no-outcome");
     expect(invariantViolations(obs).length).toBe(1);
     expect(exitCodeFor(classifyPath(obs), invariantViolations(obs))).toBe(1);
   });
@@ -269,6 +301,7 @@ describe("exit code", () => {
     expect(exitCodeFor("error:PRH-CRED-MISSING", [])).toBe(1);
     expect(exitCodeFor("skipped:size", [])).toBe(1);
     expect(exitCodeFor("no-outcome", [])).toBe(1);
+    expect(exitCodeFor("timed-out", [])).toBe(1);
   });
 });
 

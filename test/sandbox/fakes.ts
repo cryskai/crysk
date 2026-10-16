@@ -13,6 +13,8 @@ import type {
   Git,
   GitResult,
   SandboxDeps,
+  Signal,
+  SignalSource,
   Workspace,
 } from "../../scripts/sandbox/ports";
 import { SANDBOX_REMOTE_URL } from "../../scripts/sandbox/rails";
@@ -71,6 +73,41 @@ export function memoryWorkspace(): MemoryWorkspace {
   };
 }
 
+// A signal source a test can fire. `listeners` counts the handlers still
+// installed, so a test can prove the runner removed its own.
+export interface FakeSignals extends SignalSource {
+  fire(signal: Signal): void;
+  listeners(): number;
+}
+
+export function fakeSignals(): FakeSignals {
+  const handlers = new Map<Signal, Set<() => void>>();
+  const of = (signal: Signal) => {
+    let set = handlers.get(signal);
+    if (set === undefined) {
+      set = new Set();
+      handlers.set(signal, set);
+    }
+    return set;
+  };
+  return {
+    on: (signal, handler) => {
+      of(signal).add(handler);
+    },
+    off: (signal, handler) => {
+      of(signal).delete(handler);
+    },
+    fire: (signal) => {
+      for (const handler of [...of(signal)]) handler();
+    },
+    listeners: () => {
+      let count = 0;
+      for (const set of handlers.values()) count += set.size;
+      return count;
+    },
+  };
+}
+
 export interface Harness {
   deps: SandboxDeps;
   events: string[];
@@ -79,6 +116,7 @@ export interface Harness {
   logs: string[];
   clock: Clock & { sleeps: number[] };
   workspace: MemoryWorkspace;
+  signals: FakeSignals;
 }
 
 export type GhScript = (
@@ -122,6 +160,7 @@ export function harness(script: { gh: GhScript; git?: GitScript }): Harness {
   const clock = fakeClock(START_ISO);
   const workspace = memoryWorkspace();
   const gitScript = script.git ?? defaultGit;
+  const signals = fakeSignals();
   const h: Harness = {
     deps: undefined as unknown as SandboxDeps,
     events,
@@ -130,6 +169,7 @@ export function harness(script: { gh: GhScript; git?: GitScript }): Harness {
     logs,
     clock,
     workspace,
+    signals,
   };
   const gh: Gh = async (args) => {
     ghCalls.push([...args]);
@@ -145,6 +185,6 @@ export function harness(script: { gh: GhScript; git?: GitScript }): Harness {
     logs.push(line);
     events.push(`log ${line}`);
   };
-  h.deps = { gh, git, clock, workspace, log };
+  h.deps = { gh, git, clock, workspace, signals, log };
   return h;
 }

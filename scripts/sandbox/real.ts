@@ -12,24 +12,111 @@ import type {
   Git,
   GitResult,
   SandboxDeps,
+  Signal,
+  SignalSource,
   Workspace,
 } from "./ports";
 
-async function run(
-  cmd: string[],
-  cwd?: string,
-  env?: Record<string, string | undefined>,
-): Promise<GhResult> {
-  const proc = Bun.spawn(cmd, { cwd, env, stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { exitCode, stdout, stderr };
+// The part of a child process the runner reads. Bun.spawn returns it; a test
+// hands in a fake, so a child that never answers can be simulated offline.
+export interface Child {
+  stdout: ReadableStream<Uint8Array>;
+  stderr: ReadableStream<Uint8Array>;
+  exited: Promise<number>;
+  kill(signal?: number | NodeJS.Signals): void;
 }
 
-export const realGh: Gh = (args) => run(["gh", ...args]);
+export type Spawn = (
+  cmd: string[],
+  opts: { cwd?: string; env?: Record<string, string | undefined> },
+) => Child;
+
+export interface RunOptions {
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+  spawn?: Spawn;
+  timeoutMs: number;
+  killGraceMs?: number;
+}
+
+const spawnBun: Spawn = (cmd, opts) =>
+  Bun.spawn(cmd, { ...opts, stdout: "pipe", stderr: "pipe" });
+
+// The deadlines of every gh and git call. A call that outlives its budget is
+// killed and fails like a non-zero exit, so a stall can neither hang the run
+// past its deadline nor past cleanup. Named here so the budgets are reviewed in
+// one place.
+export const GH_TIMEOUT_MS = 120_000;
+// A clone and a push move the whole repository, so they get the long budget.
+export const TRANSFER_TIMEOUT_MS = 300_000;
+// After a kill, how long the output may take to settle. A grandchild that
+// inherited a pipe can hold it open, and the grace keeps that from stalling.
+export const KILL_GRACE_MS = 5_000;
+const TIMEOUT_EXIT_CODE = 124;
+
+export function ghTimeoutMs(args: readonly string[]): number {
+  return args[0] === "repo" && args[1] === "clone"
+    ? TRANSFER_TIMEOUT_MS
+    : GH_TIMEOUT_MS;
+}
+
+export function gitTimeoutMs(args: readonly string[]): number {
+  return args[0] === "push" ? TRANSFER_TIMEOUT_MS : GH_TIMEOUT_MS;
+}
+
+const TIMED_OUT = Symbol("timed-out");
+
+// Resolves with the value, or with TIMED_OUT once `ms` has passed. The timer is
+// cleared on the normal path, so a finished call leaves nothing running.
+async function within<T>(
+  promise: Promise<T>,
+  ms: number,
+): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+  });
+  try {
+    return await Promise.race([promise, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Runs one command and returns its output. On the deadline the child is killed,
+// and the call returns a non-zero result rather than waiting on a pipe that a
+// killed child may never close.
+export async function runCommand(
+  cmd: string[],
+  opts: RunOptions,
+): Promise<GhResult> {
+  const child = (opts.spawn ?? spawnBun)(cmd, {
+    cwd: opts.cwd,
+    env: opts.env,
+  });
+  const output = Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }));
+  const first = await within(output, opts.timeoutMs);
+  if (first !== TIMED_OUT) return first;
+  child.kill("SIGKILL");
+  // Killing the child normally closes its pipes, so the output settles and is
+  // read to the end. The grace bounds the wait for the case where it does not.
+  await within(
+    output.catch(() => undefined),
+    opts.killGraceMs ?? KILL_GRACE_MS,
+  );
+  return {
+    exitCode: TIMEOUT_EXIT_CODE,
+    stdout: "",
+    stderr: `timed out after ${Math.round(opts.timeoutMs / 1000)}s: ${cmd.slice(0, 2).join(" ")}`,
+  };
+}
+
+export const realGh: Gh = (args) =>
+  runCommand(["gh", ...args], { timeoutMs: ghTimeoutMs(args) });
 
 // The user's own git config stays in force: pushing to the sandbox needs their
 // credentials. Only the prompt is disabled, so a missing credential fails the
@@ -44,7 +131,21 @@ const GIT_ENV: Record<string, string | undefined> = {
 };
 
 export const realGit: Git = (args, cwd): Promise<GitResult> =>
-  run(["git", ...args], cwd, GIT_ENV);
+  runCommand(["git", ...args], {
+    cwd,
+    env: GIT_ENV,
+    timeoutMs: gitTimeoutMs(args),
+  });
+
+// The process's own signals. The runner listens only for the length of a scenario.
+export const realSignals: SignalSource = {
+  on: (signal: Signal, handler) => {
+    process.on(signal, handler);
+  },
+  off: (signal: Signal, handler) => {
+    process.off(signal, handler);
+  },
+};
 
 export const realClock: Clock = {
   now: () => new Date(),
@@ -75,6 +176,7 @@ export function realDeps(): SandboxDeps {
     git: realGit,
     clock: realClock,
     workspace: realWorkspace,
+    signals: realSignals,
     log: (line) => console.log(line),
   };
 }

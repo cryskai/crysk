@@ -13,7 +13,6 @@ import {
   OUTCOME_MARKER_PREFIX,
   PRH_CODE,
   REPORT_MARKER_PREFIX,
-  RUN_STEP_NAME,
   SKIP_MARKERS,
   type SkipReason,
 } from "./markers";
@@ -57,6 +56,7 @@ export type SmokePath =
   | "hunters-failed"
   | `error:${string}`
   | `skipped:${string}`
+  | "timed-out"
   | "no-outcome";
 
 export function outcomeCodeOf(body: string): string | undefined {
@@ -86,10 +86,6 @@ export function classifyComment(
   return { source, kind: "other" };
 }
 
-function stepConclusion(obs: Observation): string | null | undefined {
-  return obs.run?.steps.find((s) => s.name === RUN_STEP_NAME)?.conclusion;
-}
-
 export function classifyPath(obs: Observation): SmokePath {
   const outcome = obs.comments.find((c) => c.kind === "outcome");
   if (outcome !== undefined) {
@@ -107,15 +103,13 @@ export function classifyPath(obs: Observation): SmokePath {
   const statusCode = /^PRH-[A-Z]+(?:-[A-Z]+)*/.exec(
     obs.status?.description ?? "",
   )?.[0];
+  // The publisher writes this code on an error status as well as in the outcome
+  // comment (#330). Without either, a failed step is no-outcome: a run directory
+  // and a failed step also fit a finished pipeline whose post threw.
+  if (obs.status?.state === "error" && statusCode === "PRH-HUNTERS-FAILED")
+    return "hunters-failed";
   if (obs.status?.state === "error" && statusCode !== undefined)
     return `error:${statusCode}`;
-
-  // The step failed, nothing was posted, and the run directory was uploaded:
-  // the engine started and produced no review. That is the hunters-failed
-  // shape, which the product does not name with its catalog code today.
-  const uploaded = obs.artifacts.some((a) => a.startsWith("pr-hero-run-"));
-  if (!hasReport && stepConclusion(obs) === "failure" && uploaded)
-    return "hunters-failed";
   return "no-outcome";
 }
 

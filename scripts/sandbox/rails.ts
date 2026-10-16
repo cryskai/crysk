@@ -35,6 +35,9 @@ const GH_TARGETED = new Set([
   "pr close",
   "run list",
   "run view",
+  // Cancelling a sandbox run is how a timed-out scenario stops its review. It
+  // is still only ever aimed at the sandbox, by the same -R check as the rest.
+  "run cancel",
 ]);
 
 // `gh api` is GET on a path inside the sandbox, plus one DELETE of a scenario
@@ -47,19 +50,44 @@ const API_WRITE_FLAGS = new Set([
   "--input",
 ]);
 const API_WRITE_FLAG_PREFIXES = ["--field=", "--raw-field=", "--input="];
+// pflag takes an attached value as readily as a separated one: -XDELETE,
+// -fbody=x and -Fk=v all write or change the method. The bare -X is the only
+// form the runner uses, and -f/-F are refused by the list above.
+const ATTACHED_API_FLAG = /^-[XfF]./;
 
-function flagValue(
-  args: readonly string[],
-  names: readonly string[],
-): string | undefined {
+// Every method flag, in either spelling. gh keeps the last one it is given, so
+// a list is returned and the caller refuses more than one.
+function methodFlags(args: readonly string[]): string[] {
+  const methods: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] ?? "";
-    for (const name of names) {
-      if (arg === name) return args[i + 1];
-      if (arg.startsWith(`${name}=`)) return arg.slice(name.length + 1);
+    if (arg === "-X" || arg === "--method") {
+      methods.push(args[i + 1] ?? "");
+      i += 1;
+    } else if (arg.startsWith("--method=")) {
+      methods.push(arg.slice("--method=".length));
     }
   }
-  return undefined;
+  return methods;
+}
+
+// Every -R or --repo value, in each spelling gh accepts: separated, `=`, or
+// pflag's attached shorthand. gh keeps the last occurrence, so the caller
+// checks all of them rather than the first.
+function repoFlagValues(args: readonly string[]): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    if (arg === "-R" || arg === "--repo") {
+      values.push(args[i + 1] ?? "");
+      i += 1;
+    } else if (arg.startsWith("--repo=")) {
+      values.push(arg.slice("--repo=".length));
+    } else if (arg.startsWith("-R")) {
+      values.push(arg.slice(2).replace(/^=/, ""));
+    }
+  }
+  return values;
 }
 
 function assertApi(args: readonly string[]): void {
@@ -73,6 +101,12 @@ function assertApi(args: readonly string[]): void {
   ) {
     throw new RailViolation(`gh api ${endpoint} is outside ${SANDBOX_REPO}`);
   }
+  const attached = args.find((arg) => ATTACHED_API_FLAG.test(arg));
+  if (attached !== undefined) {
+    throw new RailViolation(
+      `gh api ${attached} attaches a method or field value, which the runner never sends`,
+    );
+  }
   if (
     args.some(
       (arg) =>
@@ -84,7 +118,13 @@ function assertApi(args: readonly string[]): void {
       "gh api field flags are writes, which the runner does not send",
     );
   }
-  const method = (flagValue(args, ["-X", "--method"]) ?? "GET").toUpperCase();
+  const methods = methodFlags(args);
+  if (methods.length > 1) {
+    throw new RailViolation(
+      "gh api takes one method, and the runner sends one",
+    );
+  }
+  const method = (methods[0] ?? "GET").toUpperCase();
   if (method === "GET") return;
   const scenarioRef = `repos/${SANDBOX_REPO}/git/refs/heads/${SCENARIO_BRANCH_PREFIX}`;
   if (
@@ -117,7 +157,8 @@ function assertRepoTarget(args: readonly string[]): void {
       `gh ${verb ?? ""} ${sub ?? ""} is not a sandbox operation`,
     );
   }
-  if (flagValue(args, ["-R", "--repo"]) !== SANDBOX_REPO) {
+  const repos = repoFlagValues(args);
+  if (repos.length === 0 || repos.some((repo) => repo !== SANDBOX_REPO)) {
     throw new RailViolation(`gh ${verb} ${sub} must target ${SANDBOX_REPO}`);
   }
 }
@@ -162,7 +203,12 @@ function assertPush(rest: readonly string[]): void {
       throw new RailViolation(`git push ${arg} is not a sandbox push`);
     }
   }
+  // Exactly a remote and one refspec. A third positional (`main +dev:dev`)
+  // would otherwise slip past a check that reads only the first two.
   const positional = rest.filter((arg) => !arg.startsWith("-"));
+  if (positional.length !== 2) {
+    throw new RailViolation("git push must be `origin <branch>`");
+  }
   const [remote, refspec] = positional;
   if (remote !== "origin" || refspec === undefined) {
     throw new RailViolation("git push must be `origin <branch>`");
