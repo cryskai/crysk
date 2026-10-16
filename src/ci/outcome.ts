@@ -26,6 +26,18 @@ import type { CredentialProjectionFailureClass } from "../security/credential-br
 
 export type Owner = "config" | "provider" | "pr-hero" | "unclassified";
 export type OutcomeContext = "action" | "local";
+// An owner is fixed, or depends on the context (PRH-RUNTIME-UNAVAILABLE).
+type OwnerRule = Owner | Readonly<Record<OutcomeContext, Owner>>;
+
+type CapabilityIssue =
+  | "binary_unresolved"
+  | "sdk_unavailable"
+  | "version_unsupported";
+type RouteReason =
+  | "unmapped"
+  | "ambiguous"
+  | "spend-disabled"
+  | "multiple-opencode-providers";
 
 export type ErrorClass =
   | {
@@ -38,27 +50,21 @@ export type ErrorClass =
     }
   | { kind: "prompt-set" }
   | { kind: "gotchas"; reason: "empty" | "placeholder" }
-  | {
-      kind: "route";
-      reason:
-        | "unmapped"
-        | "ambiguous"
-        | "spend-disabled"
-        | "multiple-opencode-providers";
-    }
+  | { kind: "route"; reason: RouteReason }
   | {
       kind: "credential";
       failureClass: CredentialProjectionFailureClass | "env-absent";
     }
-  | {
-      kind: "capability";
-      issue: "binary_unresolved" | "sdk_unavailable" | "version_unsupported";
-    }
+  | { kind: "capability"; issue: CapabilityIssue }
   | { kind: "transport"; cause: TransportFailureCause | "legacy_terminal" }
-  | { kind: "github"; status: number }
+  // `rateLimited` is the caller's reading of the response body: GitHub answers
+  // a spent rate limit with 403 or 429, and a refused permission with 403.
+  | { kind: "github"; status: number; rateLimited?: boolean }
   | { kind: "install"; step: string }
   | { kind: "invariant" }
   | { kind: "unknown" };
+
+type GithubClass = Extract<ErrorClass, { kind: "github" }>;
 
 export const ERROR_CODES = [
   "PRH-CRED-MISSING",
@@ -90,8 +96,16 @@ export const ERROR_CODES = [
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 interface CatalogVariant {
+  // Replaces the entry's `what` for this sub-class.
+  readonly what?: string;
+  // Replaces the entry's owner for this sub-class.
+  readonly owner?: OwnerRule;
   readonly why: string;
   readonly fixes: readonly string[];
+  // The annotation's Fix: ONE short imperative sentence that names the real
+  // fixing step, with no trailing period. A string is filled like the other
+  // text; a function reads the params when one value picks the step.
+  readonly annotationFix: string | ((params: ErrorParams) => string);
 }
 
 // A fix line starting with "$ " is a command; any other line is prose. Each
@@ -99,14 +113,18 @@ interface CatalogVariant {
 // used when a value is missing).
 export interface CatalogEntry {
   readonly level: "error" | "notice";
-  readonly owner: Owner | Readonly<Record<OutcomeContext, Owner>>;
+  readonly owner: OwnerRule;
   readonly headline?: string;
   readonly lead?: string;
   readonly providerName?: string;
   readonly what: string;
+  // Replaces `what` when no step is given, so the sentence never names the
+  // placeholder ("The this step step failed"). Filled like `what`.
+  readonly whatWithoutStep?: string;
   // "default" is always present. Keys "action" / "local" select by context
   // (PRH-RUNTIME-UNAVAILABLE); other keys are the failure's sub-class
-  // (credential failureClass, route reason), chosen by renderError.
+  // (credential failureClass, route reason, GitHub status family), chosen by
+  // renderError or by the caller through renderCode.
   readonly variants: Readonly<Record<string, CatalogVariant>>;
 }
 
@@ -215,9 +233,7 @@ export function codeOf(cls: ErrorClass): ErrorCode {
     case "transport":
       return transportCode(cls.cause);
     case "github":
-      if (cls.status === 403) return "PRH-TOKEN-PERMISSION";
-      if (cls.status === 401) return "PRH-GITHUB-TOKEN-INVALID";
-      return "PRH-GITHUB-UNAVAILABLE";
+      return githubCode(cls);
     case "install":
       return "PRH-INSTALL-FAILED";
     case "invariant":
@@ -227,6 +243,21 @@ export function codeOf(cls: ErrorClass): ErrorCode {
     default:
       return unmapped(cls, "PRH-UNCLASSIFIED");
   }
+}
+
+// WHY a 403 splits on `rateLimited`: GitHub answers a refused permission and a
+// spent rate limit with the same status, and only the caller reads the body. A
+// 403 without the flag is a permission problem. A 429 is always a rate limit.
+// A status outside the mapped families is unclassified, never an outage.
+function githubCode(cls: GithubClass): ErrorCode {
+  if (cls.status === 401) return "PRH-GITHUB-TOKEN-INVALID";
+  if (cls.status === 403) {
+    return cls.rateLimited === true
+      ? "PRH-GITHUB-UNAVAILABLE"
+      : "PRH-TOKEN-PERMISSION";
+  }
+  if (cls.status === 429 || cls.status >= 500) return "PRH-GITHUB-UNAVAILABLE";
+  return "PRH-UNCLASSIFIED";
 }
 
 function transportCode(
@@ -250,8 +281,18 @@ function transportCode(
     case "protocol_overflow":
     case "output_limit_exceeded":
     case "context_window_exceeded":
-    case "runtime_unavailable":
       return "PRH-ENGINE-DEFECT";
+    // WHY runtime_unavailable is unclassified, not an engine defect: one cause
+    // covers failures with different owners. OpenCodeSdkTransport raises it
+    // from classifyFailure for a provider refusal the provider marked not
+    // retryable (the MARKER_PROVIDER_REFUSAL branch in
+    // src/transports/opencode-sdk.ts). The same cause also covers pr-hero's own
+    // permission control failing (MARKER_PERMISSION_REJECT_FAILED) and a
+    // session or prompt that failed (MARKER_SESSION_CREATE, MARKER_PROMPT_REFUSED).
+    // ClaudeCodeCliTransport raises it when the child process cannot spawn
+    // (src/transports/claude-code-cli.ts). Naming one owner would be the guess
+    // this contract exists to prevent.
+    case "runtime_unavailable":
     case "legacy_terminal":
       return "PRH-UNCLASSIFIED";
     default:
@@ -312,7 +353,7 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
     case "transport":
       return transportOwner(cls.cause);
     case "github":
-      return cls.status === 403 || cls.status === 401 ? "config" : "provider";
+      return githubOwner(cls);
     case "install":
       return "unclassified";
     case "invariant":
@@ -324,26 +365,41 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
   }
 }
 
+function githubOwner(cls: GithubClass): Owner {
+  switch (githubCode(cls)) {
+    case "PRH-TOKEN-PERMISSION":
+    case "PRH-GITHUB-TOKEN-INVALID":
+      return "config";
+    case "PRH-GITHUB-UNAVAILABLE":
+      return "provider";
+    default:
+      return "unclassified";
+  }
+}
+
 function transportOwner(
   cause: TransportFailureCause | "legacy_terminal",
 ): Owner {
   switch (cause) {
+    // WHY a rejected credential is the user's to fix: the provider refused the
+    // secret the user configured, and only the user can replace it (S2, L12).
     case "auth_invalid":
+    case "provider_configuration_invalid":
+      return "config";
     case "quota_exhausted":
     case "rate_limit":
     case "network_transient":
     case "remote_abort_unconfirmed":
     case "safety_refusal":
       return "provider";
-    case "provider_configuration_invalid":
-      return "config";
     case "protocol_truncation":
     case "protocol_mismatch":
     case "protocol_overflow":
     case "output_limit_exceeded":
     case "context_window_exceeded":
-    case "runtime_unavailable":
       return "pr-hero";
+    // See transportCode: runtime_unavailable has no single owner.
+    case "runtime_unavailable":
     case "legacy_terminal":
       return "unclassified";
     default:
@@ -382,6 +438,60 @@ const NEUTRAL: Record<keyof ErrorParams, string> = {
   detail: "no further detail",
 };
 
+// The human phrase a failure's detail renders as. A raw identifier never reaches
+// an annotation or summary. Each table is typed over its whole union, so a new
+// member fails `tsc` here instead of leaking its name into user-facing text.
+const CREDENTIAL_PHRASE: Record<
+  CredentialProjectionFailureClass | "env-absent",
+  string
+> = {
+  unsupported_kind:
+    "this credential kind is not supported by this pr-hero version",
+  projection_layout_invalid: "the credential layout pr-hero built is invalid",
+  source_read_failed: "the credential store could not be read",
+  malformed_payload: "the auth store is not a JSON object",
+  // Raised for a Claude keychain record and for an OpenAI OAuth record alike.
+  missing_subscription_record:
+    "the expected subscription login is missing or of the wrong kind",
+  missing_provider_record:
+    "the OpenCode auth store has no entry for this provider",
+  "env-absent": "the secret is not set",
+};
+
+const CAPABILITY_PHRASE: Record<CapabilityIssue, string> = {
+  binary_unresolved: "a required program is not installed",
+  sdk_unavailable: "the OpenCode SDK is not installed",
+  version_unsupported: "an unsupported OpenCode version is installed",
+};
+
+const ROUTE_PHRASE: Record<RouteReason, string> = {
+  unmapped: "no mapping covers this route",
+  ambiguous: "more than one mapping matches this route",
+  "spend-disabled": "spend is turned off for this route",
+  "multiple-opencode-providers":
+    "more than one OpenCode provider is configured",
+};
+
+const TRANSPORT_PHRASE: Record<
+  TransportFailureCause | "legacy_terminal",
+  string
+> = {
+  auth_invalid: "the provider rejected the credential",
+  quota_exhausted: "the provider's quota is used up",
+  rate_limit: "the provider rate-limited the request",
+  network_transient: "the network failed before the provider answered",
+  remote_abort_unconfirmed: "the remote abort could not be confirmed",
+  safety_refusal: "the provider's safety system declined the input",
+  provider_configuration_invalid: "the provider configuration is invalid",
+  protocol_truncation: "the reply was cut short",
+  protocol_mismatch: "the reply did not match the expected protocol",
+  protocol_overflow: "the reply overflowed the protocol limit",
+  output_limit_exceeded: "the output exceeded its limit",
+  context_window_exceeded: "the input exceeded the model's context window",
+  runtime_unavailable: "the agent runtime was unavailable",
+  legacy_terminal: "the run ended in a state pr-hero no longer produces",
+};
+
 const DOCS_BASE =
   "https://github.com/juanmaagd/pr-hero/blob/v0/docs/github-actions.md#";
 
@@ -395,6 +505,14 @@ const CRED_STORE_WHY =
   "the credential store does not hold what this route needs";
 const ROUTE_WHY = "every agent needs exactly one backend, provider and model";
 const PROVIDER_REFUSED_WHY = "the provider's safety system declined this input";
+const UNCLASSIFIED_FIXES = [
+  "Re-run the failed jobs:",
+  RERUN_FAILED,
+  "If it repeats, read the log and report it:",
+  "$ gh run view {runId} --log-failed",
+] as const;
+const UNCLASSIFIED_FIX =
+  "re-run the failed jobs with `gh run rerun {runId} --failed`";
 // The GitHub Actions expression is spliced in from two literals so the source
 // never holds a `${` pair that reads as a template placeholder here.
 const GITHUB_TOKEN_INPUT = "github-token: $" + "{{ secrets.GITHUB_TOKEN }}";
@@ -402,23 +520,34 @@ const GITHUB_TOKEN_INPUT = "github-token: $" + "{{ secrets.GITHUB_TOKEN }}";
 function single(
   why: string,
   fixes: readonly string[],
+  annotationFix: CatalogVariant["annotationFix"],
 ): Readonly<Record<string, CatalogVariant>> {
-  return { default: { why, fixes } };
+  return { default: { why, fixes, annotationFix } };
 }
 
 const CREDENTIAL_UNUSABLE_ENV: CatalogVariant = {
   why: CRED_STORE_WHY,
   fixes: ["Set the secret again:", "$ gh secret set {secret}"],
+  annotationFix: "set the {secret} secret with `gh secret set {secret}`",
 };
 
 const ROUTE_UNMAPPED: CatalogVariant = {
   why: ROUTE_WHY,
   fixes: ["Add a `modelSnapshot` for this route to PRHERO_ROUTING."],
+  annotationFix: "add a `modelSnapshot` for this route to PRHERO_ROUTING",
 };
 
 const RUNTIME_LOCAL: CatalogVariant = {
   why: "a required tool is missing from your environment",
   fixes: ["Reconcile the pr-hero install:", "$ pr-hero upgrade --reconcile"],
+  annotationFix:
+    "reconcile the pr-hero install with `pr-hero upgrade --reconcile`",
+};
+
+const GITHUB_SERVER: CatalogVariant = {
+  why: "the failure happened on GitHub's side, and a retry may succeed",
+  fixes: ["Re-run the workflow:", "$ gh run rerun {runId}"],
+  annotationFix: "re-run the workflow once GitHub is serving requests again",
 };
 
 // WHY no class maps to PRH-STATUS-WRITE-FAILED, PRH-HUNTERS-FAILED or
@@ -442,6 +571,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         "Then re-run the workflow:",
         "$ gh run rerun {runId}",
       ],
+      (params) =>
+        params.backend?.trim() === "opencode"
+          ? "set the OPENCODE_AUTH_JSON secret: `gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json`"
+          : "set a Claude credential: `claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN`",
     ),
   },
   "PRH-CRED-UNUSABLE": {
@@ -456,12 +589,16 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "$ opencode auth login",
           OPENCODE_STORE,
         ],
+        annotationFix:
+          "add {provider} to the OpenCode store with `opencode auth login`, then set OPENCODE_AUTH_JSON again",
       },
       missing_subscription_record: {
         why: CRED_STORE_WHY,
         fixes: [
           "Provider `openai` means ChatGPT OAuth: log in that way, or rename the provider in PRHERO_ROUTING.",
         ],
+        annotationFix:
+          "log in the way the provider expects (ChatGPT OAuth for `openai`), or rename the provider in PRHERO_ROUTING",
       },
       malformed_payload: {
         why: CRED_STORE_WHY,
@@ -471,6 +608,8 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "Then re-set the secret:",
           OPENCODE_STORE,
         ],
+        annotationFix:
+          "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
       },
       source_read_failed: CREDENTIAL_UNUSABLE_ENV,
       "env-absent": CREDENTIAL_UNUSABLE_ENV,
@@ -479,8 +618,8 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   },
   "PRH-CRED-REJECTED": {
     level: "error",
-    owner: "provider",
-    what: "the credential in {secret} was rejected",
+    owner: "config",
+    what: "provider {provider} rejected the credential in {secret}",
     variants: single(
       "it is expired, revoked, or a short-lived /login session token",
       [
@@ -490,6 +629,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         "Then ask for a new review:",
         REVIEW_AGAIN,
       ],
+      "replace the credential in {secret} with a new one, then run `gh secret set {secret}`",
     ),
   },
   "PRH-ROUTING-MISSING": {
@@ -501,6 +641,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       [
         '$ gh variable set PRHERO_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"',
       ],
+      `set PRHERO_ROUTING from your routing config: \`gh variable set PRHERO_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"\``,
     ),
   },
   "PRH-ROUTING-INVALID": {
@@ -513,6 +654,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         "Edit the JSON, then set it again:",
         '$ gh variable set PRHERO_ROUTING --body "$(jq -c . routing.json)"',
       ],
+      "fix the JSON in PRHERO_ROUTING ({detail}), then set it again with `gh variable set PRHERO_ROUTING`",
     ),
   },
   "PRH-ROUTE-UNRESOLVABLE": {
@@ -526,14 +668,19 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         fixes: [
           "Remove the duplicate mapping for this route from PRHERO_ROUTING.",
         ],
+        annotationFix:
+          "remove the duplicate mapping for this route from PRHERO_ROUTING",
       },
       "spend-disabled": {
         why: ROUTE_WHY,
         fixes: ["Enable spend for this route in PRHERO_ROUTING."],
+        annotationFix: "enable spend for this route in PRHERO_ROUTING",
       },
       "multiple-opencode-providers": {
         why: ROUTE_WHY,
         fixes: ["Keep one OpenCode provider per review in PRHERO_ROUTING."],
+        annotationFix:
+          "keep one OpenCode provider per review in PRHERO_ROUTING",
       },
       default: ROUTE_UNMAPPED,
     },
@@ -542,11 +689,15 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "config",
     what: "Provider {provider} does not serve the model configured for {step}",
-    variants: single("the routing names a model this provider does not offer", [
-      "Fix the `modelSnapshot` for this step in PRHERO_ROUTING.",
-      "List the models this provider serves:",
-      "$ opencode models {provider}",
-    ]),
+    variants: single(
+      "the routing names a model this provider does not offer",
+      [
+        "Fix the `modelSnapshot` for this step in PRHERO_ROUTING.",
+        "List the models this provider serves:",
+        "$ opencode models {provider}",
+      ],
+      "fix the `modelSnapshot` for {step} in PRHERO_ROUTING to a model that {provider} serves",
+    ),
   },
   "PRH-PROMPTSET-INVALID": {
     level: "error",
@@ -558,73 +709,127 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         "Fix the file or `agents_dir`, then check for free:",
         "$ pr-hero review --pr {pr} --dry-run",
       ],
+      "fix the agent file or `agents_dir` ({detail}), then check it with `pr-hero review --pr {pr} --dry-run`",
     ),
   },
   "PRH-GOTCHAS-MISSING": {
     level: "error",
     owner: "config",
     what: ".prhero/gotchas.md is missing or still the scaffold",
-    variants: single("reviews need real repository facts to be accurate", [
-      "Write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).",
-    ]),
+    variants: single(
+      "reviews need real repository facts to be accurate",
+      [
+        "Write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).",
+      ],
+      "write real facts into .prhero/gotchas.md, remove the scaffold marker line, and commit it to the base branch",
+    ),
   },
   "PRH-CONFIG-INVALID": {
     level: "error",
     owner: "config",
     what: ".prhero/config.json is invalid: {detail}",
-    variants: single("pr-hero refuses to guess repository settings", [
-      "Fix the file, then check it:",
-      "$ pr-hero review --pr {pr} --dry-run",
-    ]),
+    variants: single(
+      "pr-hero refuses to guess repository settings",
+      ["Fix the file, then check it:", "$ pr-hero review --pr {pr} --dry-run"],
+      "fix `.prhero/config.json` ({detail}), then check it with `pr-hero review --pr {pr} --dry-run`",
+    ),
   },
   "PRH-TOKEN-PERMISSION": {
     level: "error",
     owner: "config",
     what: "The workflow token lacks `{scope}: write`",
-    variants: single("pr-hero cannot post its result on the PR", [
-      "Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:",
-      "$ pr-hero ci init --force",
-    ]),
+    variants: single(
+      "pr-hero cannot post its result on the PR",
+      [
+        "Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:",
+        "$ pr-hero ci init --force",
+      ],
+      (params) =>
+        isBlank(params.scope)
+          ? "add the missing scope under the job's `permissions:` (see docs)"
+          : "add `{scope}: write` under the job's `permissions:` in the workflow",
+    ),
   },
   "PRH-GITHUB-TOKEN-INVALID": {
     level: "error",
     owner: "config",
     what: "The github-token input is invalid",
-    variants: single("every GitHub API call is rejected", [
-      `Set \`${GITHUB_TOKEN_INPUT}\` on the action step.`,
-    ]),
+    variants: single(
+      "every GitHub API call is rejected",
+      [`Set \`${GITHUB_TOKEN_INPUT}\` on the action step.`],
+      `set \`${GITHUB_TOKEN_INPUT}\` on the action step`,
+    ),
   },
   "PRH-GITHUB-UNAVAILABLE": {
     level: "error",
     owner: "provider",
     providerName: "GitHub",
-    what: "The GitHub API failed ({detail})",
-    variants: single("this is an outage or rate limit outside pr-hero", [
-      "Re-run the workflow:",
-      "$ gh run rerun {runId}",
-    ]),
+    what: "the GitHub API failed (HTTP {detail})",
+    variants: {
+      rate_limit: {
+        what: "the GitHub API rate limit was reached",
+        why: "GitHub has throttled this token, so an immediate retry would fail the same way",
+        fixes: [
+          "Wait for the limit to reset, then re-run the workflow:",
+          "$ gh run rerun {runId}",
+        ],
+        annotationFix:
+          "wait for the GitHub rate limit to reset, then re-run the workflow",
+      },
+      server: GITHUB_SERVER,
+      default: GITHUB_SERVER,
+    },
   },
   "PRH-PR-UNRESOLVED": {
     level: "error",
     owner: "config",
     what: "pr-hero could not determine the pull request number or head",
-    variants: single("nothing can be posted on a PR it cannot identify", [
-      "Run from a pull_request or issue_comment event, or pass the `pr-number` input.",
-    ]),
+    variants: single(
+      "nothing can be posted on a PR it cannot identify",
+      [
+        "Run from a pull_request or issue_comment event, or pass the `pr-number` input.",
+      ],
+      "run from a pull_request or issue_comment event, or pass the `pr-number` input",
+    ),
   },
   "PRH-STATUS-WRITE-FAILED": {
     level: "error",
-    owner: "config",
+    owner: "unclassified",
+    providerName: "GitHub",
     what: "pr-hero could not write its commit status ({detail})",
-    variants: single(
-      "the required check has no result for this head without it",
-      ["see PRH-TOKEN-PERMISSION"],
-    ),
+    variants: {
+      default: {
+        why: "the required check has no result for this head without it",
+        fixes: [
+          "Re-run the failed jobs:",
+          RERUN_FAILED,
+          "If it repeats, report it.",
+        ],
+        annotationFix: UNCLASSIFIED_FIX,
+      },
+      permission: {
+        owner: "config",
+        why: "the required check has no result for this head without it",
+        fixes: [
+          "Add `statuses: write` to the job's `permissions:`, or re-scaffold the workflow:",
+          "$ pr-hero ci init --force",
+        ],
+        annotationFix:
+          "add `statuses: write` under the job's `permissions:` in the workflow",
+      },
+      server: {
+        owner: "provider",
+        why: "the required check has no result for this head without it",
+        fixes: ["Re-run the workflow:", "$ gh run rerun {runId}"],
+        annotationFix:
+          "re-run the workflow once GitHub accepts commit statuses again",
+      },
+    },
   },
   "PRH-RUNTIME-UNAVAILABLE": {
     level: "error",
     owner: { action: "pr-hero", local: "config" },
-    what: "{detail} is unavailable or the wrong version",
+    what: "a runtime pr-hero depends on is unusable: {detail}",
     variants: {
       action: {
         why: "the action installs this runtime itself, so this is a pr-hero defect",
@@ -632,6 +837,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "Report it with this run:",
           '$ gh issue create -R juanmaagd/pr-hero --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"',
         ],
+        annotationFix: "report it at juanmaagd/pr-hero with this run's URL",
       },
       local: RUNTIME_LOCAL,
       default: RUNTIME_LOCAL,
@@ -641,11 +847,16 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "unclassified",
     what: "The {step} step failed",
-    variants: single("an external download failed; pr-hero cannot tell why", [
-      "Re-run only the failed jobs:",
-      RERUN_FAILED,
-      "If it repeats, report it.",
-    ]),
+    whatWithoutStep: "An install step failed",
+    variants: single(
+      "a download or install step failed, and pr-hero cannot tell which external cause it was",
+      [
+        "Re-run only the failed jobs:",
+        RERUN_FAILED,
+        "If it repeats, report it.",
+      ],
+      "re-run only the failed jobs with `gh run rerun {runId} --failed`",
+    ),
   },
   "PRH-PROVIDER-LIMITED": {
     level: "error",
@@ -654,6 +865,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "the provider has throttled this account or key, so an immediate retry would fail the same way",
       ["Wait, or raise the quota, then ask for a new review:", REVIEW_AGAIN],
+      "wait for the limit to reset or raise the quota, then comment /pr-hero review on the PR",
     ),
   },
   "PRH-PROVIDER-UNAVAILABLE": {
@@ -663,26 +875,28 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "the request did not complete, and the provider's outcome cannot be confirmed from here",
       ["Re-run the workflow:", "$ gh run rerun {runId}"],
+      "re-run the workflow with `gh run rerun {runId}`",
     ),
   },
   "PRH-PROVIDER-REFUSED": {
     level: "error",
     owner: "provider",
     what: "the request was refused",
-    variants: single(PROVIDER_REFUSED_WHY, [
-      "Ask for a new review once:",
-      REVIEW_AGAIN,
-      "If it repeats, report it.",
-    ]),
+    variants: single(
+      PROVIDER_REFUSED_WHY,
+      ["Ask for a new review once:", REVIEW_AGAIN, "If it repeats, report it."],
+      "ask for a new review once, and report it if the provider refuses again",
+    ),
   },
   "PRH-ENGINE-DEFECT": {
     level: "error",
     owner: "pr-hero",
     what: "pr-hero hit an internal error ({detail}) in {step}",
-    variants: single("this is a defect in pr-hero, not in your configuration", [
-      "Report it, with this run:",
-      `$ ${ENGINE_DEFECT_ISSUE}`,
-    ]),
+    variants: single(
+      "this is a defect in pr-hero, not in your configuration",
+      ["Report it, with this run:", `$ ${ENGINE_DEFECT_ISSUE}`],
+      "report it at juanmaagd/pr-hero with this run's URL",
+    ),
   },
   "PRH-HUNTERS-FAILED": {
     level: "error",
@@ -691,18 +905,26 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "no hunter returned a result, so there is no finding to report",
       ["Re-run the failed jobs:", RERUN_FAILED, "If it repeats, report it."],
+      "re-run the failed jobs with `gh run rerun {runId} --failed`",
     ),
   },
   "PRH-UNCLASSIFIED": {
     level: "error",
     owner: "unclassified",
     what: "pr-hero stopped at {step} and could not tell why",
-    variants: single("rather than guess, it reports this honestly", [
-      "Re-run the failed jobs:",
-      RERUN_FAILED,
-      "If it repeats, read the log and report it:",
-      "$ gh run view {runId} --log-failed",
-    ]),
+    variants: {
+      default: {
+        why: "rather than guess, it reports this honestly",
+        fixes: UNCLASSIFIED_FIXES,
+        annotationFix: UNCLASSIFIED_FIX,
+      },
+      github: {
+        what: "GitHub returned {detail} at {step}, and pr-hero cannot tell whose fix it is",
+        why: "pr-hero does not map this GitHub status to an owner, so it does not guess",
+        fixes: UNCLASSIFIED_FIXES,
+        annotationFix: UNCLASSIFIED_FIX,
+      },
+    },
   },
   "PRH-CANCELLED": {
     level: "notice",
@@ -713,6 +935,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "a newer run replaces this one, so this result would describe an outdated head",
       ["Ask for a review of the current head:", REVIEW_AGAIN],
+      'ask for a review of the current head with `gh pr comment {pr} --body "/pr-hero review"`',
     ),
   },
 };
@@ -724,40 +947,52 @@ export function renderError(
 ): RenderedError {
   const detail = isBlank(params.detail) ? classDetail(cls) : params.detail;
   const merged = detail === undefined ? params : { ...params, detail };
-  return renderCode(
-    codeOf(cls),
-    ownerOf(cls, ctx),
-    merged,
-    ctx,
-    variantOf(cls),
-  );
+  return renderCode(codeOf(cls), merged, ctx, variantOf(cls));
 }
 
-// For a code the caller requests directly. `variant` picks a sub-class fix; it
-// is only needed for codes with sub-class variants, and renderError supplies it.
+// For a code the caller requests directly. `variant` picks the sub-class, which
+// fixes the owner, the wording and the fix; renderError supplies it for classes.
 export function renderCode(
   code: ErrorCode,
-  owner: Owner,
   params: ErrorParams,
   ctx: OutcomeContext,
   variant?: string,
 ): RenderedError {
   const entry = ERROR_CATALOG[code];
   const picked = pickVariant(entry, ctx, variant);
+  const owner = ownerFor(picked.owner ?? entry.owner, ctx);
   const providerName = entry.providerName ?? cleanName(params.provider);
   const lead = entry.lead ?? ownerLead(owner, providerName);
   const link = `${DOCS_BASE}${code.toLowerCase()}`;
+  const what = picked.what ?? whatOf(entry, params);
   const message =
-    `${lead} ${fill(entry.what, params, false)}. ` +
-    `Why: ${fill(picked.why, params, false)}. ` +
-    `Fix: ${annotationFix(picked.fixes, params)}. ` +
+    `${lead} ${capitalized(fill(what, params, "annotation"))}. ` +
+    `Why: ${fill(picked.why, params, "annotation")}. ` +
+    `Fix: ${annotationFixOf(picked, params)}. ` +
     `Docs: ${link}`;
   return {
     code,
     owner,
     annotation: `::${entry.level} title=pr-hero ${code}::${escapeCommandData(message)}`,
-    summary: summaryLines(code, entry, lead, picked, params, link),
+    summary: summaryLines(code, entry, lead, what, picked, params, link),
   };
+}
+
+// The entry's sentence, or its step-free form when no step is given.
+function whatOf(entry: CatalogEntry, params: ErrorParams): string {
+  return entry.whatWithoutStep !== undefined && isBlank(params.step)
+    ? entry.whatWithoutStep
+    : entry.what;
+}
+
+// Upper-cases the first character only. The owner lead ends in a colon, so the
+// sentence after it must start with a capital; backticked code and the rest of
+// the text are left as they are.
+function capitalized(text: string): string {
+  // WHY: the product name is always lowercase `pr-hero`; upper-casing it reads as "Pr-hero".
+  if (text.startsWith("pr-hero")) return text;
+  const first = text.slice(0, 1);
+  return first.toUpperCase() + text.slice(first.length);
 }
 
 function pickVariant(
@@ -773,24 +1008,45 @@ function pickVariant(
   );
 }
 
+function ownerFor(rule: OwnerRule, ctx: OutcomeContext): Owner {
+  return typeof rule === "string" ? rule : rule[ctx];
+}
+
 function variantOf(cls: ErrorClass): string | undefined {
-  if (cls.kind === "credential") return cls.failureClass;
-  if (cls.kind === "route") return cls.reason;
-  return undefined;
+  switch (cls.kind) {
+    case "credential":
+      return cls.failureClass;
+    case "route":
+      return cls.reason;
+    case "github":
+      return githubVariant(cls);
+    default:
+      return undefined;
+  }
+}
+
+// The GitHub sub-class names the family whose wording and fix apply. A status
+// with no family of its own returns undefined and renders the code's default.
+function githubVariant(cls: GithubClass): string | undefined {
+  if (cls.status === 429 || (cls.status === 403 && cls.rateLimited === true)) {
+    return "rate_limit";
+  }
+  if (cls.status >= 500) return "server";
+  return githubCode(cls) === "PRH-UNCLASSIFIED" ? "github" : undefined;
 }
 
 function classDetail(cls: ErrorClass): string | undefined {
   switch (cls.kind) {
     case "capability":
-      return cls.issue;
+      return CAPABILITY_PHRASE[cls.issue];
     case "credential":
-      return cls.failureClass;
+      return CREDENTIAL_PHRASE[cls.failureClass];
     case "transport":
-      return cls.cause;
+      return TRANSPORT_PHRASE[cls.cause];
     case "route":
-      return cls.reason;
+      return ROUTE_PHRASE[cls.reason];
     case "github":
-      return `HTTP ${cls.status}`;
+      return String(cls.status);
     default:
       return undefined;
   }
@@ -810,42 +1066,60 @@ function paramText(params: ErrorParams, key: keyof ErrorParams): string {
   return text.trim() === "" ? NEUTRAL[key] : text;
 }
 
-// Fills {name} placeholders. The annotation keeps raw values (escaped below);
-// the Markdown summary flattens line breaks so a value cannot break its block.
-function fill(template: string, params: ErrorParams, flatten: boolean): string {
+// "annotation" keeps raw values (escaped later); "summary" flattens line breaks
+// so a value cannot break its block; "command" also keeps only shell-safe
+// characters in `detail`, because a failure's free text must not reach a command
+// the reader may paste.
+type FillMode = "annotation" | "summary" | "command";
+
+// Fills {name} placeholders.
+function fill(template: string, params: ErrorParams, mode: FillMode): string {
   return template.replace(/\{(\w+)\}/g, (placeholder: string, name: string) => {
     const key = name as keyof ErrorParams;
     if (!(key in NEUTRAL)) return placeholder;
     const text = paramText(params, key);
-    return flatten ? text.replace(/\r\n|\r|\n/g, " ") : text;
+    if (mode === "annotation") return text;
+    const safe =
+      mode === "command" && key === "detail" ? shellSafe(text) : text;
+    return safe.replace(/\r\n|\r|\n/g, " ");
   });
 }
 
-function annotationFix(fixes: readonly string[], params: ErrorParams): string {
-  const command = fixes.find((line) => line.startsWith("$ "));
-  const chosen = command !== undefined ? command.slice(2) : (fixes[0] ?? "");
-  return fill(chosen, params, false).replace(/[:.]+$/, "");
+// WHY an allowlist: detail is free text from a failure, and a command the reader
+// pastes must not carry a quote, a substitution or a separator.
+function shellSafe(text: string): string {
+  return text.replace(/[^A-Za-z0-9 _.:-]/g, "");
+}
+
+function annotationFixOf(picked: CatalogVariant, params: ErrorParams): string {
+  const raw =
+    typeof picked.annotationFix === "function"
+      ? picked.annotationFix(params)
+      : picked.annotationFix;
+  return fill(raw, params, "annotation").replace(/[:.]+$/, "");
 }
 
 function summaryLines(
   code: ErrorCode,
   entry: CatalogEntry,
   lead: string,
+  what: string,
   picked: CatalogVariant,
   params: ErrorParams,
   link: string,
 ): string[] {
-  const flat = (text: string): string => fill(text, params, true);
+  const prose = (text: string): string => fill(text, params, "summary");
+  const command = (text: string): string => fill(text, params, "command");
   return [
     `### ${entry.headline ?? code}`,
     "",
-    `${lead} ${flat(entry.what)}`,
+    `${lead} ${capitalized(prose(what))}`,
     "",
-    `Why: ${flat(picked.why)}`,
+    `Why: ${prose(picked.why)}`,
     "",
     "Fix:",
     "",
-    ...fixBlocks(picked.fixes, flat),
+    ...fixBlocks(picked.fixes, prose, command),
     `Docs: ${link}`,
   ];
 }
@@ -853,22 +1127,23 @@ function summaryLines(
 // Consecutive "$ " lines share one bash fence; prose lines stand alone.
 function fixBlocks(
   fixes: readonly string[],
-  flat: (text: string) => string,
+  prose: (text: string) => string,
+  command: (text: string) => string,
 ): string[] {
   const out: string[] = [];
   let inBlock = false;
   for (const line of fixes) {
-    const command = line.startsWith("$ ");
-    if (command && !inBlock) {
+    const isCommand = line.startsWith("$ ");
+    if (isCommand && !inBlock) {
       out.push("```bash");
       inBlock = true;
     }
-    if (!command && inBlock) {
+    if (!isCommand && inBlock) {
       out.push("```", "");
       inBlock = false;
     }
-    out.push(command ? flat(line.slice(2)) : flat(line));
-    if (!command) out.push("");
+    out.push(isCommand ? command(line.slice(2)) : prose(line));
+    if (!isCommand) out.push("");
   }
   if (inBlock) out.push("```", "");
   return out;

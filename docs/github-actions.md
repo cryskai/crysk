@@ -738,9 +738,9 @@ gh secret set {secret}
 
 ### PRH-CRED-REJECTED
 
-**Owner:** provider
+**Owner:** your configuration
 
-**What:** the credential in {secret} was rejected
+**What:** provider {provider} rejected the credential in {secret}
 
 **Why:** it is expired, revoked, or a short-lived /login session token
 
@@ -912,9 +912,27 @@ Set `github-token: ${{ secrets.GITHUB_TOKEN }}` on the action step.
 
 **Owner:** provider
 
-**What:** The GitHub API failed ({detail})
+**What:** the GitHub API failed (HTTP {detail})
 
-**Why:** this is an outage or rate limit outside pr-hero
+**Why** and **Fix**, by cause:
+
+#### `rate_limit`
+
+**What:** the GitHub API rate limit was reached
+
+**Why:** GitHub has throttled this token, so an immediate retry would fail the same way
+
+**Fix:**
+
+Wait for the limit to reset, then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+#### `server`
+
+**Why:** the failure happened on GitHub's side, and a retry may succeed
 
 **Fix:**
 
@@ -938,7 +956,7 @@ Run from a pull_request or issue_comment event, or pass the `pr-number` input.
 
 ### PRH-STATUS-WRITE-FAILED
 
-**Owner:** your configuration
+**Owner:** unclassified
 
 **What:** pr-hero could not write its commit status ({detail})
 
@@ -946,13 +964,47 @@ Run from a pull_request or issue_comment event, or pass the `pr-number` input.
 
 **Fix:**
 
-see PRH-TOKEN-PERMISSION
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, report it.
+
+#### `permission`
+
+**Owner:** your configuration
+
+**Why:** the required check has no result for this head without it
+
+**Fix:**
+
+Add `statuses: write` to the job's `permissions:`, or re-scaffold the workflow:
+
+```bash
+pr-hero ci init --force
+```
+
+#### `server`
+
+**Owner:** provider
+
+**Why:** the required check has no result for this head without it
+
+**Fix:**
+
+Re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
 
 ### PRH-RUNTIME-UNAVAILABLE
 
 **Owner:** pr-hero in the action, your configuration locally
 
-**What:** {detail} is unavailable or the wrong version
+**What:** a runtime pr-hero depends on is unusable: {detail}
 
 #### `action`
 
@@ -984,7 +1036,7 @@ pr-hero upgrade --reconcile
 
 **What:** The {step} step failed
 
-**Why:** an external download failed; pr-hero cannot tell why
+**Why:** a download or install step failed, and pr-hero cannot tell which external cause it was
 
 **Fix:**
 
@@ -1087,6 +1139,26 @@ If it repeats, report it.
 **What:** pr-hero stopped at {step} and could not tell why
 
 **Why:** rather than guess, it reports this honestly
+
+**Fix:**
+
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, read the log and report it:
+
+```bash
+gh run view {runId} --log-failed
+```
+
+#### `github`
+
+**What:** GitHub returned {detail} at {step}, and pr-hero cannot tell whose fix it is
+
+**Why:** pr-hero does not map this GitHub status to an owner, so it does not guess
 
 **Fix:**
 
