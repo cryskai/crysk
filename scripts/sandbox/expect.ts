@@ -24,9 +24,14 @@ export interface CheckResult {
   pass: boolean;
   // What was seen, when it was not what the check asked for.
   detail?: string;
+  // Set on a failed check whose phase observed `hunters-failed`: the free
+  // model's flake, which a re-run is expected to clear.
+  cause?: "free-model-hunters-failed";
 }
 
-function describeCheck(check: Check): string {
+// The label a check is printed under. Exported so the runner can name a check it
+// did not assert, in the same words the table would have used.
+export function describeCheck(check: Check): string {
   switch (check.kind) {
     case "path":
       return `path is ${check.accept.join(" or ")}`;

@@ -93,6 +93,7 @@ describe("classifyComment", () => {
       source: "issue",
       kind: "outcome",
       code: "PRH-CRED-MISSING",
+      head: SHA,
     });
     expect(outcomeCodeOf(body)).toBe("PRH-CRED-MISSING");
   });
@@ -269,6 +270,40 @@ describe("S7 invariants", () => {
     });
     expect(classifyPath(obs)).toBe("hunters-failed");
     expect(invariantViolations(obs).length).toBe(1);
+  });
+});
+
+// The publisher writes head=<sha> into every outcome marker. An outcome left by an
+// earlier head on the PR is that head's failure, so it must not decide this one.
+describe("the head an outcome belongs to", () => {
+  const OLD = "e".repeat(40);
+
+  test("an outcome comment names the head it was written for", () => {
+    const body = `<!-- pr-hero-outcome v=1 head=${OLD} run=1 attempt=1 -->\n\n## PRH-CRED-MISSING`;
+    expect(classifyComment(body, "issue")).toEqual({
+      source: "issue",
+      kind: "outcome",
+      code: "PRH-CRED-MISSING",
+      head: OLD,
+    });
+  });
+
+  test("an outcome of an earlier head does not decide this head's path", () => {
+    const obs = observation({
+      comments: [
+        {
+          source: "issue",
+          kind: "outcome",
+          code: "PRH-CRED-MISSING",
+          head: OLD,
+        },
+      ],
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed",
+      },
+    });
+    expect(classifyPath(obs)).toBe("hunters-failed");
   });
 });
 

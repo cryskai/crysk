@@ -6,7 +6,7 @@
 //
 // smoke is the review-free scenario, run through this same code (smoke.ts).
 
-import { type CheckResult, evaluateChecks } from "./expect";
+import { type CheckResult, describeCheck, evaluateChecks } from "./expect";
 import { STATUS_CONTEXT, WORKFLOW_NAME } from "./markers";
 import {
   type CommentFact,
@@ -187,6 +187,7 @@ async function runOne(
     if (scenario.phases.some((p) => p.action.kind === "comment")) {
       await requirePinnedMain(deps, live.dir, options.ref);
     }
+    let previous: Observation | undefined;
     for (const [index, phase] of scenario.phases.entries()) {
       await perform(deps, live, phase.action, options.ref, opened);
       live.run = await waitForRun(deps, live, phase, options);
@@ -194,8 +195,33 @@ async function runOne(
       const observed: SmokePath = classifyPath(obs);
       path = observed;
       const violations = invariantViolations(obs);
-      const phaseChecks = evaluateChecks(phase.checks, obs);
       const tag = scenario.phases.length > 1 ? `[${index + 1}] ` : "";
+      // A check after a prior outcome is asserted only when the phase before it
+      // left an outcome comment; otherwise it is named, so the skip is explained.
+      const priorOutcome =
+        previous?.comments.some((c) => c.kind === "outcome") === true;
+      const after = phase.afterPriorOutcome ?? [];
+      if (!priorOutcome) {
+        for (const check of after) {
+          deps.log(
+            `  not asserted: ${scenario.name} [${index + 1}] ${describeCheck(check)} (phase ${index} posted no outcome comment)`,
+          );
+        }
+      }
+      const asserted = priorOutcome
+        ? [...phase.checks, ...after]
+        : phase.checks;
+      // A failed check of a run whose hunters failed is the free model's flake. It
+      // keeps its failure and exit code; only its label says why. A head that posted
+      // success was reviewed, whatever an outcome comment still says, so it is no flake.
+      const freeModelFlake =
+        observed === "hunters-failed" && obs.status?.state !== "success";
+      const phaseChecks = evaluateChecks(asserted, obs).map(
+        (r): CheckResult =>
+          freeModelFlake && !r.pass
+            ? { ...r, cause: "free-model-hunters-failed" }
+            : r,
+      );
       checks.push(...phaseChecks.map((r) => ({ ...r, label: tag + r.label })));
       s7.push(...violations);
       const passed =
@@ -208,6 +234,7 @@ async function runOne(
       )) {
         deps.log(line);
       }
+      previous = obs;
     }
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught);

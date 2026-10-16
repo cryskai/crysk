@@ -29,8 +29,9 @@ export interface CommentFact {
   kind: CommentKind;
   code?: string;
   skip?: SkipReason;
-  // A report names the head it reviewed. Only a report for the head under test
-  // counts as this run's review: an earlier head's summary on the same PR is not.
+  // A report or an outcome names the head it was written for. Only a report for
+  // the head under test counts as this run's review, and only an outcome for it
+  // decides this run's path: an earlier head's comment on the same PR is not.
   head?: string;
 }
 
@@ -84,7 +85,12 @@ export function classifyComment(
   if (first.startsWith(FINDING_MARKER_PREFIX))
     return { source, kind: "finding" };
   if (first.startsWith(OUTCOME_MARKER_PREFIX)) {
-    return { source, kind: "outcome", code: outcomeCodeOf(body) };
+    // The head is "unknown" when the publisher had no sha; such an outcome has no head.
+    const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
+    const code = outcomeCodeOf(body);
+    return head === undefined
+      ? { source, kind: "outcome", code }
+      : { source, kind: "outcome", code, head };
   }
   for (const [reason, marker] of Object.entries(SKIP_MARKERS)) {
     if (first === marker)
@@ -98,7 +104,12 @@ function stepConclusion(obs: Observation): string | null | undefined {
 }
 
 export function classifyPath(obs: Observation): SmokePath {
-  const outcome = obs.comments.find((c) => c.kind === "outcome");
+  // An outcome of an earlier head is that head's failure, not this one's. It still
+  // counts for S7 (invariantViolations reads every outcome on the PR).
+  const outcome = obs.comments.find(
+    (c) =>
+      c.kind === "outcome" && (c.head === undefined || c.head === obs.headSha),
+  );
   if (outcome !== undefined) {
     if (outcome.code === HUNTERS_FAILED_CODE) return "hunters-failed";
     return `error:${outcome.code ?? "no-code"}`;

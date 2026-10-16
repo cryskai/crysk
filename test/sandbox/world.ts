@@ -43,7 +43,15 @@ interface PrRow {
   closed: boolean;
 }
 
-type Outcome = "credential" | "routing" | "review";
+// What a run leaves behind. `hunters-failed` is the free model's flake: every
+// hunter returned nothing, so the publisher posts PRH-HUNTERS-FAILED.
+type Outcome = "credential" | "routing" | "review" | "hunters-failed";
+
+const OUTCOME_CODE: Record<Exclude<Outcome, "review">, string> = {
+  credential: "PRH-CRED-MISSING",
+  routing: "PRH-ROUTING-INVALID",
+  "hunters-failed": "PRH-HUNTERS-FAILED",
+};
 
 export interface WorldOptions {
   ref: string;
@@ -52,6 +60,13 @@ export interface WorldOptions {
   // Every run decides `credential`, whatever its workflow says. Used to make an
   // expectation fail on purpose.
   forceCredentialOutcome?: boolean;
+  // The outcomes of the first runs, in the order the runs start (the pull_request
+  // run of a PR's first push, then each later push or comment). A run past the
+  // list decides from its workflow as usual.
+  runOutcomes?: readonly Outcome[];
+  // A review does not remove the outcome comments of earlier runs, so the
+  // runner's cleanup assertion has something to catch.
+  keepOutcomeComments?: boolean;
   // A PR comment fails at the transport, so the scenario ends early.
   failComment?: boolean;
 }
@@ -71,9 +86,11 @@ export class FakeGithub {
   private shaCounter = 0;
   private readonly cwdHead = new Map<string, string>();
   private readonly pushedWorkflow = new Map<string, string>();
+  private readonly queued: Outcome[];
 
   constructor(options: WorldOptions) {
     this.options = options;
+    this.queued = [...(options.runOutcomes ?? [])];
     this.mainFiles = sandboxFiles(options.ref);
     if (options.mainWorkflow !== undefined) {
       this.mainFiles.set(WORKFLOW_PATH, options.mainWorkflow);
@@ -122,21 +139,24 @@ export class FakeGithub {
     workflow: string,
   ): void {
     const id = this.nextId++;
+    const outcome = this.queued.shift() ?? this.decide(workflow);
+    // A run whose hunters all failed fails its review step, as the engine exits non-zero.
+    const failed = outcome === "hunters-failed";
     this.runs.push({
       databaseId: id,
       headSha,
       headBranch,
       event,
       status: "completed",
-      conclusion: "success",
+      conclusion: failed ? "failure" : "success",
       workflowName: WORKFLOW_NAME,
       url: `${REPO_URL}/actions/runs/${id}`,
-      stepConclusion: "success",
+      stepConclusion: failed ? "failure" : "success",
       prNumber,
       reviewSha,
     });
     this.events.push(`run ${id} ${event} completed`);
-    this.post(this.decide(workflow), prNumber, reviewSha, id);
+    this.post(outcome, prNumber, reviewSha, id);
   }
 
   // What the publisher leaves on the PR for one run's outcome.
@@ -150,15 +170,16 @@ export class FakeGithub {
       if (at >= 0) list[at] = { id: this.nextId++, body: report };
       else list.push({ id: this.nextId++, body: report });
       // Cleanup: the outcome comments of earlier runs are removed once a review completes.
-      const kept = list.filter((c) => !c.body.startsWith(OUTCOME_PREFIX));
-      list.splice(0, list.length, ...kept);
+      if (this.options.keepOutcomeComments !== true) {
+        const kept = list.filter((c) => !c.body.startsWith(OUTCOME_PREFIX));
+        list.splice(0, list.length, ...kept);
+      }
       this.statuses.set(sha, {
         state: "success",
         description: "review posted",
       });
     } else {
-      const code =
-        outcome === "credential" ? "PRH-CRED-MISSING" : "PRH-ROUTING-INVALID";
+      const code = OUTCOME_CODE[outcome];
       list.push({
         id: this.nextId++,
         body: `${OUTCOME_PREFIX} v=1 head=${sha} run=${runId} attempt=1 -->\n\n## ${code}\n\nfake outcome`,

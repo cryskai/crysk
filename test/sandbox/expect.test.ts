@@ -293,3 +293,49 @@ describe("scenario data: every declared expectation, pass and fail", () => {
     expect(keys.sort()).toEqual(Object.keys(RECORDED).sort());
   });
 });
+
+// comment-trigger's first phase is a precondition: its free route may have
+// hunters-failed, which is a flake of the model, not the subject of the scenario.
+// Its second phase checks the cleanup of that outcome comment, and only then.
+describe("comment-trigger: phase 1 accepts a flake, and the cleanup check is conditional", () => {
+  const trigger = SCENARIOS.find((s) => s.name === "comment-trigger");
+  const first = trigger?.phases[0];
+  const second = trigger?.phases[1];
+
+  test("phase 1 passes on reviewed and on hunters-failed, and fails on a credential outcome", () => {
+    if (first === undefined) throw new Error("comment-trigger has no phase 1");
+    const huntersFailed = obs({
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed",
+      },
+      comments: [outcome("PRH-HUNTERS-FAILED")],
+    });
+    expect(evaluateChecks(first.checks, obs()).every((r) => r.pass)).toBe(true);
+    expect(
+      evaluateChecks(first.checks, huntersFailed).every((r) => r.pass),
+    ).toBe(true);
+    expect(
+      evaluateChecks(
+        first.checks,
+        obs({
+          status: errorStatus("PRH-CRED-MISSING"),
+          comments: [outcome("PRH-CRED-MISSING")],
+        }),
+      ).some((r) => !r.pass),
+    ).toBe(true);
+  });
+
+  test("phase 2 declares its cleanup check apart from its own checks, and reads a surviving outcome comment as a failure", () => {
+    if (second === undefined) throw new Error("comment-trigger has no phase 2");
+    const cleanup = second.afterPriorOutcome ?? [];
+    expect(cleanup.length).toBe(1);
+    expect(evaluateChecks(cleanup, obs()).every((r) => r.pass)).toBe(true);
+    expect(
+      evaluateChecks(
+        cleanup,
+        obs({ comments: [outcome("PRH-HUNTERS-FAILED")] }),
+      ).some((r) => !r.pass),
+    ).toBe(true);
+  });
+});

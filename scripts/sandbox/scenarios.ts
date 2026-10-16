@@ -23,6 +23,10 @@ export interface Phase {
   // issue_comment run that the comment started (main's workflow).
   wait: "pull_request" | "issue_comment";
   checks: readonly Check[];
+  // Asserted only when the phase before this one posted an outcome comment, such
+  // as the cleanup of that comment. Otherwise they are not asserted, and the
+  // runner says so.
+  afterPriorOutcome?: readonly Check[];
 }
 
 export interface Scenario {
@@ -114,12 +118,14 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "comment-trigger",
     description:
-      "/pr-hero review on a reviewed head starts an issue_comment run that completes the review",
+      "/pr-hero review starts an issue_comment run that completes the review, and removes the outcome comment a failed first run left",
     phases: [
       {
         action: { kind: "open", variant: "normal" },
         wait: "pull_request",
-        checks: [REVIEWED],
+        // A precondition, not the subject: the free route may fail its hunters on
+        // this first run (a flake), and the comment run is what is under test.
+        checks: [{ kind: "path", accept: ["reviewed", "hunters-failed"] }],
       },
       {
         action: { kind: "comment", body: "/pr-hero review" },
@@ -134,6 +140,9 @@ export const SCENARIOS: readonly Scenario[] = [
           POSTED_STATUS,
           ONE_REPORT,
         ],
+        // The cleanup of phase 1's outcome comment. Only meaningful when phase 1
+        // left one, so it is not asserted otherwise.
+        afterPriorOutcome: [{ kind: "no-outcome" }],
       },
     ],
   },

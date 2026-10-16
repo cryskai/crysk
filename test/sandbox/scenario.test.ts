@@ -167,6 +167,91 @@ describe("run: the scenarios against the fake repository", () => {
     expect(h.logs.some((l) => l.includes(`init --ref ${REF}`))).toBe(true);
   });
 
+  test("comment-trigger accepts a phase 1 that hunters-failed, and its cleanup holds once the comment run reviews", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "review"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.includes(
+        "  PASS  comment-trigger: [1] path is reviewed or hunters-failed",
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.includes("  PASS  comment-trigger: [2] no outcome comment"),
+    ).toBe(true);
+    // The publisher's cleanup removed the PRH-HUNTERS-FAILED comment of phase 1.
+    const pr = [...world.prs.values()][0];
+    const left = world.comments.get(pr?.number ?? -1) ?? [];
+    expect(left.some((c) => c.body.startsWith("<!-- pr-hero-outcome"))).toBe(
+      false,
+    );
+  });
+
+  test("comment-trigger asserts nothing about cleanup when phase 1 posted no outcome comment", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+    // Not a PASS or a FAIL row: the check is named on a line of its own, below.
+    expect(
+      h.logs.some((l) =>
+        /^ {2}(PASS|FAIL)\b.*\[2\] no outcome comment/.test(l),
+      ),
+    ).toBe(false);
+    expect(
+      h.logs.some((l) =>
+        l.startsWith("  not asserted: comment-trigger [2] no outcome comment"),
+      ),
+    ).toBe(true);
+  });
+
+  test("comment-trigger fails its cleanup check when the phase 1 outcome comment survives the comment run", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "review"],
+      keepOutcomeComments: true,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.includes(
+        "  FAIL  comment-trigger: [2] no outcome comment (got PRH-HUNTERS-FAILED)",
+      ),
+    ).toBe(true);
+  });
+
+  test("a failed expectation of a run that hunters-failed is labelled as the free model's flake, and still exits 1", async () => {
+    const world = new FakeGithub({ ref: REF, runOutcomes: ["hunters-failed"] });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.includes(
+        "  FAIL (free-model hunters failed: re-run)  review-free: path is reviewed (got hunters-failed)",
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.includes(
+        "  FAIL  review-free: path is reviewed (got hunters-failed)",
+      ),
+    ).toBe(false);
+  });
+
+  test("cleanup: a second run that hunters-failed is labelled as the flake, and its checks still fail the run", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["credential", "hunters-failed"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["cleanup"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.includes(
+        "  FAIL (free-model hunters failed: re-run)  cleanup: [2] path is reviewed (got hunters-failed)",
+      ),
+    ).toBe(true);
+  });
+
   test("a failed expectation exits 1, and the table names the check with what was seen", async () => {
     const world = new FakeGithub({ ref: REF, forceCredentialOutcome: true });
     const h = world.harness();
@@ -279,6 +364,30 @@ describe("run: --keep and the serialization check", () => {
 });
 
 describe("the final table", () => {
+  test("a flake is printed as the free model's, so a failed run reads as a re-run, not a regression", () => {
+    const lines = renderScenarioTable([
+      {
+        name: "review-free",
+        path: "hunters-failed",
+        checks: [
+          {
+            label: "path is reviewed",
+            pass: false,
+            detail: "got hunters-failed",
+            cause: "free-model-hunters-failed",
+          },
+          { label: "no outcome comment", pass: true },
+        ],
+        s7: [],
+        exitCode: 1,
+      },
+    ]);
+    expect(lines).toContain(
+      "  FAIL (free-model hunters failed: re-run)  review-free: path is reviewed (got hunters-failed)",
+    );
+    expect(lines).toContain("  PASS  review-free: no outcome comment");
+  });
+
   test("names each scenario's path, S7 and exit, and each expectation as PASS or FAIL", () => {
     const results: ScenarioResult[] = [
       {
