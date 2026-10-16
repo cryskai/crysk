@@ -5,7 +5,8 @@ import {
   PR_COMMENT_MARKER_PREFIX,
   prCommentMarker,
 } from "#pr/preflight";
-import { SEVERITY_UNRECOVERABLE } from "#rereview/classify";
+import { type PriorRecord, SEVERITY_UNRECOVERABLE } from "#rereview/classify";
+import { assembleLive } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import {
   estimateCost,
@@ -17,6 +18,7 @@ import {
   renderIssueFindingComment,
   renderPrComment,
   renderReport,
+  rereviewDeltaFromProvenance,
   scanAidEmoji,
   severityEmoji,
 } from "#review/report";
@@ -1115,6 +1117,64 @@ describe("renderPrComment", () => {
     expect(body).not.toContain("✅");
     expect(body).toContain("Live: 1 carried");
   });
+
+  // A triage-driven prior is persisted as carried, so the delta counts it once.
+  // Built through assembleLive and rereviewDeltaFromProvenance, the same path
+  // fillRereviewProvenance takes, so the test proves what the renderer reads.
+  // The trailing period pins the list: any extra bucket would sit before it.
+  test.each([
+    [
+      "a misclassified prior",
+      { tag: "misclassified", verdict: null, createdAt: null },
+      "re-tiered",
+    ],
+    [
+      "a rejected dismissal",
+      { tag: "dismissed", verdict: "rejected", createdAt: null },
+      "returned",
+    ],
+  ] as const)(
+    "%s renders as one carried finding, with no re-tiered or returned segment",
+    (_label, triage, status) => {
+      const prior: PriorRecord = {
+        id: "R001",
+        sev: "CRITICAL",
+        tier: "blocking",
+        channel: "inline",
+        locs: ["src/app.ts:10"],
+        claim: "a live defect",
+        triage,
+        newThreadReply: false,
+      };
+      const assembled = assembleLive({
+        settled: [
+          { id: "R001", status, locs: ["src/app.ts:10"], renamed: false },
+        ],
+        priors: [prior],
+        verifyVerdicts: new Map(),
+      });
+      const body = renderPrComment(
+        doc(),
+        undefined,
+        {
+          resolved: 0,
+          new: 0,
+          persist: 1,
+          rereview: rereviewDeltaFromProvenance(
+            {
+              live: assembled.live,
+              returned: assembled.returned,
+              re_tiered: assembled.reTiered,
+            },
+            0,
+          ),
+        },
+        [],
+        undefined,
+      );
+      expect(body).toContain("No new findings this delta. Live: 1 carried.");
+    },
+  );
 
   // GitHub #166: a same-head re-review (case B) or a restricted delta that
   // touches none of the PR's own files (case C) runs ZERO discovery hunters.

@@ -134,7 +134,9 @@ async function overrideStandsOverThisRun(
 // writeFatalCliRecord would record the status error's class instead of the
 // real cause. So that write still goes out, through tryPublishCommitStatus,
 // and a failed post only logs. Nothing throws on that path, so the ledger
-// settles here too, rather than in finalizePrReviewRun.
+// settles here too, rather than in finalizePrReviewRun. The body may have
+// failed after the review was delivered, so a failed gate post is still
+// recorded as unsettled, as on the throw path above (see the else branch).
 //
 // `spawnFn` threads into the write (status.ts's own seam, invisible to
 // production), so a test can prove the real `gh` boundary: a failed gh post
@@ -240,12 +242,29 @@ export async function settleCommitStatusAndLedger(input: {
         throw error;
       }
     } else {
-      await tryPublishCommitStatus(
+      const landed = await tryPublishCommitStatus(
         input.operatorRoot,
         input.headSha,
         request,
         input.spawnFn,
       );
+      // WHY the record here too: a body that threw after publishRunOutcome delivered
+      // the review leaves cli.json `reviewed`, and then this gate status is the pending
+      // one with no other writer. Same record as the throw path above, so the publisher
+      // step can repost what did not land. Gate only: advisory never grades, and a local
+      // run demoted to advisory is advisory here too. recordUnsettledStatus rewrites only
+      // a reviewed record, so a body that failed before delivery is left alone.
+      if (
+        !landed &&
+        effectiveMode === "gate" &&
+        (request.state === "success" || request.state === "failure")
+      ) {
+        recordUnsettledStatus(
+          input.headSha,
+          { state: request.state, description: request.description },
+          input.env,
+        );
+      }
     }
   } finally {
     // Settled, so nothing is held: the signal handlers must never post a
