@@ -18,6 +18,10 @@ import {
   type SkipReason,
 } from "./markers";
 
+// The catalog code of "every hunter failed" (src/ci/outcome.ts, ERROR_CATALOG).
+// Both the outcome comment and the status carry it, and both read as the same path.
+const HUNTERS_FAILED_CODE = "PRH-HUNTERS-FAILED";
+
 export type CommentKind = "report" | "finding" | "outcome" | "skip" | "other";
 
 export interface CommentFact {
@@ -32,6 +36,9 @@ export interface CommentFact {
 
 export interface RunFact {
   id: number;
+  // The event that started the run. A comment-triggered run and the pull_request
+  // run of the same PR are different runs, and a check must tell them apart.
+  event?: string;
   status: string;
   conclusion: string | null;
   steps: { name: string; conclusion: string | null }[];
@@ -93,7 +100,7 @@ function stepConclusion(obs: Observation): string | null | undefined {
 export function classifyPath(obs: Observation): SmokePath {
   const outcome = obs.comments.find((c) => c.kind === "outcome");
   if (outcome !== undefined) {
-    if (outcome.code === "PRH-HUNTERS-FAILED") return "hunters-failed";
+    if (outcome.code === HUNTERS_FAILED_CODE) return "hunters-failed";
     return `error:${outcome.code ?? "no-code"}`;
   }
   const skip = obs.comments.find((c) => c.kind === "skip");
@@ -104,15 +111,21 @@ export function classifyPath(obs: Observation): SmokePath {
   );
   if (hasReport && obs.status?.state === "success") return "reviewed";
 
+  // The status is written apart from the outcome comment, so a read can see it
+  // alone. Its code is the same failure the comment names, so it classifies the
+  // same way; an error status with any other code stays `error:<code>`.
   const statusCode = /^PRH-[A-Z]+(?:-[A-Z]+)*/.exec(
     obs.status?.description ?? "",
   )?.[0];
-  if (obs.status?.state === "error" && statusCode !== undefined)
-    return `error:${statusCode}`;
+  if (obs.status?.state === "error" && statusCode !== undefined) {
+    return statusCode === HUNTERS_FAILED_CODE
+      ? "hunters-failed"
+      : `error:${statusCode}`;
+  }
 
   // The step failed, nothing was posted, and the run directory was uploaded:
-  // the engine started and produced no review. That is the hunters-failed
-  // shape, which the product does not name with its catalog code today.
+  // the engine started and produced no review. The dev-era CLI posts no PRH
+  // code here ("review did not finish", which S7 flags), so only the run tells.
   const uploaded = obs.artifacts.some((a) => a.startsWith("pr-hero-run-"));
   if (!hasReport && stepConclusion(obs) === "failure" && uploaded)
     return "hunters-failed";
@@ -143,15 +156,4 @@ export function invariantViolations(obs: Observation): string[] {
     );
   }
   return violations;
-}
-
-// reviewed and hunters-failed both prove the free route ran end to end. A
-// violation overrides them: a run that passed the path but broke an invariant
-// is a failure of the publisher, which is what this runner exists to catch.
-export function exitCodeFor(
-  path: SmokePath,
-  violations: readonly string[],
-): 0 | 1 {
-  if (violations.length > 0) return 1;
-  return path === "reviewed" || path === "hunters-failed" ? 0 : 1;
 }

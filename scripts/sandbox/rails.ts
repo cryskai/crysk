@@ -33,6 +33,9 @@ const GH_TARGETED = new Set([
   "pr create",
   "pr view",
   "pr close",
+  // The only write a scenario makes to a PR: the `/pr-hero review` comment that
+  // starts a comment-triggered run. Still repo-targeted like every verb here.
+  "pr comment",
   "run list",
   "run view",
 ]);

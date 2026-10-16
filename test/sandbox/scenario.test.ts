@@ -1,0 +1,328 @@
+// The runner, end to end under the phase-aware fake (world.ts). These pin the
+// sequencing that the live scenarios depend on: the second push of `cleanup`
+// waits for the first run, the comment run is found by its own run and never by
+// the pull_request run, S6 and --keep agree, and a failed check exits 1 with the
+// observed value in the table.
+
+import { describe, expect, test } from "bun:test";
+import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
+import {
+  renderScenarioTable,
+  type ScenarioResult,
+} from "../../scripts/sandbox/report";
+import { runScenarios } from "../../scripts/sandbox/scenario";
+import { sandboxFiles, WORKFLOW_PATH } from "../../scripts/sandbox/seed";
+import { fail } from "./fakes";
+import { FakeGithub } from "./world";
+
+const REF = "v0.2.0";
+const OPTIONS = {
+  ref: REF,
+  keep: false,
+  pollIntervalMs: 15_000,
+  timeoutMs: 60_000,
+};
+
+describe("run: the scenarios against the fake repository", () => {
+  test("review-free exits 0, closes its PR and branch, and the table names each expectation", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    const code = await runScenarios(h.deps, ["review-free"], OPTIONS);
+    expect(code).toBe(0);
+    expect(
+      h.logs.some((l) => /PASS {2}review-free: path is reviewed/.test(l)),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) => /^scenario\s+path\s+S7\s+exit\s+PR$/.test(l)),
+    ).toBe(true);
+    const number = [...world.prs.keys()][0];
+    expect(h.ghCalls).toContainEqual([
+      "pr",
+      "close",
+      String(number),
+      "-R",
+      SANDBOX_REPO,
+      "--delete-branch",
+    ]);
+    const branch =
+      h.gitCalls.find((c) => c.args[0] === "checkout")?.args[2] ?? "";
+    expect(branch).toMatch(/^sandbox\/review-free-\d{8}T\d{6}Z$/);
+  });
+
+  test("no-credential exits 0: the PRH-CRED-MISSING outcome, the error status, and no report", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["no-credential"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}no-credential: outcome comment with code PRH-CRED-MISSING/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}no-credential: no report on the head/.test(l),
+      ),
+    ).toBe(true);
+  });
+
+  test("bad-routing exits 0: a malformed routing input is PRH-ROUTING-INVALID", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["bad-routing"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}bad-routing: outcome comment with code PRH-ROUTING-INVALID/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("cleanup: the second push waits for the first run, and the final observation is on the new head", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["cleanup"], OPTIONS)).toBe(0);
+
+    const [first, second] = world.events
+      .filter((e) => e.startsWith("push "))
+      .map((e) => e.slice("push ".length));
+    const firstRunDone = world.events.findIndex((e) =>
+      e.endsWith("pull_request completed"),
+    );
+    const firstObserved = world.events.indexOf(`observe status ${first}`);
+    const secondPush = world.events.indexOf(`push ${second}`);
+    expect(first).not.toBe(second);
+    expect(firstRunDone).toBeGreaterThanOrEqual(0);
+    expect(firstRunDone).toBeLessThan(secondPush);
+    expect(firstObserved).toBeLessThan(secondPush);
+    expect(world.events.indexOf(`observe status ${second}`)).toBeGreaterThan(
+      secondPush,
+    );
+
+    // The second push is a plain fast-forward on the same branch.
+    const pushes = h.gitCalls.filter((c) => c.args[0] === "push");
+    const branches = pushes.map((c) => c.args[3]);
+    expect(branches.length).toBe(2);
+    expect(new Set(branches).size).toBe(1);
+    expect(pushes.some((c) => c.args.includes("--force"))).toBe(false);
+    // The earlier outcome comment is gone, as the publisher's cleanup leaves it.
+    const pr = [...world.prs.values()][0];
+    const left = world.comments.get(pr?.number ?? -1) ?? [];
+    expect(left.some((c) => c.body.startsWith("<!-- pr-hero-outcome"))).toBe(
+      false,
+    );
+  });
+
+  test("comment-trigger finds the issue_comment run, and never reads the pull_request run as its own", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+
+    const prRun = world.runs.find((r) => r.event === "pull_request");
+    const commentRun = world.runs.find((r) => r.event === "issue_comment");
+    expect(commentRun).toBeDefined();
+    expect(h.ghCalls).toContainEqual([
+      "pr",
+      "comment",
+      String(prRun?.prNumber),
+      "-R",
+      SANDBOX_REPO,
+      "--body",
+      "/pr-hero review",
+    ]);
+    // The comment's run is a list of issue_comment runs with no branch filter.
+    const commentLists = h.ghCalls.filter(
+      (c) => c[0] === "run" && c[1] === "list" && c.includes("issue_comment"),
+    );
+    expect(commentLists.length).toBeGreaterThan(0);
+    expect(commentLists.every((c) => !c.includes("--branch"))).toBe(true);
+    // Each run is read once, in order: the pull_request run in its phase, then the comment run.
+    const views = h.ghCalls
+      .filter((c) => c[0] === "run" && c[1] === "view")
+      .map((c) => c[2]);
+    expect(views).toEqual([
+      String(prRun?.databaseId),
+      String(commentRun?.databaseId),
+    ]);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}comment-trigger: \[2\] issue_comment run completed/.test(l),
+      ),
+    ).toBe(true);
+  });
+
+  test("comment-trigger refuses to start when main is not pinned to the ref, and pushes nothing", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      mainWorkflow: sandboxFiles("v0.1.0").get(WORKFLOW_PATH),
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.gitCalls.some((c) => c.args[0] === "push")).toBe(false);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "create")).toBe(
+      false,
+    );
+    expect(h.logs.some((l) => l.includes(`init --ref ${REF}`))).toBe(true);
+  });
+
+  test("a failed expectation exits 1, and the table names the check with what was seen", async () => {
+    const world = new FakeGithub({ ref: REF, forceCredentialOutcome: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        l.includes(
+          "FAIL  review-free: path is reviewed (got error:PRH-CRED-MISSING)",
+        ),
+      ),
+    ).toBe(true);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(true);
+  });
+
+  test("a scenario that errors mid-run is recorded, cleaned up, and the next scenario still runs", async () => {
+    const world = new FakeGithub({ ref: REF, failComment: true });
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["comment-trigger", "review-free"], OPTIONS),
+    ).toBe(1);
+    expect(
+      h.logs.some((l) => l.includes("scenario comment-trigger stopped early")),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) => /PASS {2}review-free: path is reviewed/.test(l)),
+    ).toBe(true);
+    // Both PRs were closed: the failed one by cleanup, the next one by its own run.
+    expect([...world.prs.values()].every((p) => p.closed)).toBe(true);
+  });
+});
+
+describe("run: --keep and the serialization check", () => {
+  test("--keep leaves each PR open, and the next scenario of the same run passes the check past the PR it opened", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["no-credential", "review-free"], {
+        ...OPTIONS,
+        keep: true,
+      }),
+    ).toBe(0);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "close")).toBe(
+      false,
+    );
+    expect([...world.prs.values()].every((p) => !p.closed)).toBe(true);
+    expect(h.logs.filter((l) => l.startsWith("kept:")).length).toBe(2);
+  });
+
+  test("without --keep each PR is closed before the next scenario opens its own", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["no-credential", "review-free"], OPTIONS),
+    ).toBe(0);
+    const closeAt = world.events.findIndex((e) => e.startsWith("pr close"));
+    const createAt = world.events
+      .map((e, i) => (e.startsWith("pr create") ? i : -1))
+      .filter((i) => i >= 0);
+    expect(createAt.length).toBe(2);
+    expect(closeAt).toBeGreaterThanOrEqual(0);
+    expect(closeAt).toBeLessThan(createAt[1] ?? -1);
+  });
+
+  test("a foreign open sandbox PR refuses the run even with --keep, and starts nothing", async () => {
+    const world = new FakeGithub({ ref: REF });
+    world.openForeignPr(3, "sandbox/smoke-20261015T100000Z");
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["review-free", "no-credential"], {
+        ...OPTIONS,
+        keep: true,
+      }),
+    ).toBe(1);
+    expect(h.ghCalls.some((c) => c[0] === "pr" && c[1] === "create")).toBe(
+      false,
+    );
+    expect(h.gitCalls.some((c) => c.args[0] === "push")).toBe(false);
+    expect(
+      h.logs.some((l) =>
+        l.includes("refusing to start: 1 scenario PR(s) still open"),
+      ),
+    ).toBe(true);
+    expect(h.logs.some((l) => l === "not run: no-credential")).toBe(true);
+  });
+
+  test("a PR the run failed to close still refuses the next scenario when --keep is not given", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    const inner = h.deps.gh;
+    const deps = {
+      ...h.deps,
+      gh: async (args: readonly string[]) =>
+        args[1] === "close" ? fail("HTTP 500") : inner(args),
+    };
+    expect(
+      await runScenarios(deps, ["no-credential", "review-free"], OPTIONS),
+    ).toBe(1);
+    expect(h.logs.some((l) => l.startsWith("cleanup failed:"))).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        l.includes("refusing to start: 1 scenario PR(s) still open"),
+      ),
+    ).toBe(true);
+    // review-free is the refused scenario itself, so it has the REFUSED row and nothing is left unrun.
+    expect(h.logs.some((l) => l.startsWith("  REFUSED  review-free:"))).toBe(
+      true,
+    );
+    expect(h.logs.some((l) => l.startsWith("not run:"))).toBe(false);
+  });
+});
+
+describe("the final table", () => {
+  test("names each scenario's path, S7 and exit, and each expectation as PASS or FAIL", () => {
+    const results: ScenarioResult[] = [
+      {
+        name: "review-free",
+        path: "reviewed",
+        prUrl: "https://x/pull/1",
+        checks: [
+          { label: "path is reviewed", pass: true },
+          { label: "status is success", pass: false, detail: "got error: x" },
+        ],
+        s7: [],
+        exitCode: 1,
+      },
+      {
+        name: "cleanup",
+        path: "reviewed",
+        checks: [],
+        s7: ["S7 violation: outcome comment on a head whose status is success"],
+        exitCode: 1,
+      },
+      {
+        name: "comment-trigger",
+        path: "not run",
+        checks: [],
+        s7: [],
+        error: "1 scenario PR(s) still open",
+        refused: true,
+        exitCode: 1,
+      },
+    ];
+    const lines = renderScenarioTable(results);
+    expect(lines[0]).toMatch(/^scenario\s+path\s+S7\s+exit\s+PR$/);
+    expect(lines[1]).toMatch(
+      /^review-free\s+reviewed\s+ok\s+1\s+https:\/\/x\/pull\/1$/,
+    );
+    expect(lines).toContain("  PASS  review-free: path is reviewed");
+    expect(lines).toContain(
+      "  FAIL  review-free: status is success (got error: x)",
+    );
+    expect(
+      lines.some((l) => l.startsWith("  FAIL  cleanup: S7 violation")),
+    ).toBe(true);
+    expect(lines).toContain(
+      "  REFUSED  comment-trigger: 1 scenario PR(s) still open",
+    );
+  });
+});

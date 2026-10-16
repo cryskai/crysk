@@ -7,7 +7,6 @@ import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
 import {
   classifyComment,
   classifyPath,
-  exitCodeFor,
   invariantViolations,
   type Observation,
   outcomeCodeOf,
@@ -170,6 +169,20 @@ describe("classifyPath", () => {
     expect(classifyPath(obs)).toBe("hunters-failed");
   });
 
+  test("hunters-failed from the status alone: the error status names the code and no comment is visible yet", () => {
+    // The status and the outcome comment are separate writes, so a read can
+    // see the status first. It names the same failure as the comment does, so
+    // it must not fall through to `error:PRH-HUNTERS-FAILED`.
+    const obs = observation({
+      comments: [],
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed in review",
+      },
+    });
+    expect(classifyPath(obs)).toBe("hunters-failed");
+  });
+
   test("skipped: a skip marker names its reason", () => {
     expect(
       classifyPath(
@@ -256,19 +269,6 @@ describe("S7 invariants", () => {
     });
     expect(classifyPath(obs)).toBe("hunters-failed");
     expect(invariantViolations(obs).length).toBe(1);
-    expect(exitCodeFor(classifyPath(obs), invariantViolations(obs))).toBe(1);
-  });
-});
-
-describe("exit code", () => {
-  test("0 for reviewed and hunters-failed without a violation, 1 for everything else", () => {
-    expect(exitCodeFor("reviewed", [])).toBe(0);
-    expect(exitCodeFor("hunters-failed", [])).toBe(0);
-    expect(exitCodeFor("hunters-failed", ["S7 violation"])).toBe(1);
-    expect(exitCodeFor("reviewed", ["S7 violation"])).toBe(1);
-    expect(exitCodeFor("error:PRH-CRED-MISSING", [])).toBe(1);
-    expect(exitCodeFor("skipped:size", [])).toBe(1);
-    expect(exitCodeFor("no-outcome", [])).toBe(1);
   });
 });
 

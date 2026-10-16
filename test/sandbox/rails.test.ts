@@ -74,6 +74,34 @@ describe("gh rail: the sandbox repo is the only target", () => {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
     }
   });
+  test("posts a PR comment only on the sandbox, and reads back the comment it wrote", () => {
+    expect(() =>
+      assertGhArgs([
+        "pr",
+        "comment",
+        "7",
+        "-R",
+        SANDBOX_REPO,
+        "--body",
+        "/pr-hero review",
+      ]),
+    ).not.toThrow();
+    expect(() =>
+      assertGhArgs(["api", sandboxApi("issues/comments/123")]),
+    ).not.toThrow();
+  });
+
+  test("refuses a PR comment on any other repository, or with no repository named", () => {
+    const refused: string[][] = [
+      ["pr", "comment", "7", "-R", "juanmaagd/pr-hero", "--body", "x"],
+      ["pr", "comment", "7", "--repo=juanmaagd/pr-hero", "--body", "x"],
+      ["pr", "comment", "7", "--body", "x"],
+      ["issue", "comment", "7", "-R", SANDBOX_REPO, "--body", "x"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
 });
 
 describe("git rail: no force, no deletes, no rewritten main", () => {

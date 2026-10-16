@@ -34,6 +34,25 @@ describe("list", () => {
   });
 });
 
+describe("list lists the scenario names after the open PRs", () => {
+  test("the command prints the open PRs, then each scenario by name", async () => {
+    const h = harness({
+      gh: (args) => (args[1] === "list" ? ok(JSON.stringify(OPEN)) : ok()),
+    });
+    expect(await runCli(["list"], h.deps)).toBe(0);
+    expect(h.logs.some((l) => l.includes("https://x/3"))).toBe(true);
+    for (const name of [
+      "no-credential",
+      "bad-routing",
+      "review-free",
+      "cleanup",
+      "comment-trigger",
+    ]) {
+      expect(h.logs.some((l) => l.startsWith(`scenario ${name}: `))).toBe(true);
+    }
+  });
+});
+
 describe("clean", () => {
   test("closes and deletes the branch of sandbox/ PRs only", async () => {
     const h = harness({
@@ -72,6 +91,54 @@ describe("cli arguments", () => {
     expect("error" in parseCliArgs(["smoke"])).toBe(true);
     expect("error" in parseCliArgs(["init", "--ref"])).toBe(true);
     expect("error" in parseCliArgs(["frobnicate"])).toBe(true);
+  });
+
+  test("run takes one or more named scenarios, --ref, and --keep", () => {
+    expect(
+      parseCliArgs([
+        "run",
+        "no-credential",
+        "review-free",
+        "--ref",
+        "v0.2.0",
+        "--keep",
+      ]),
+    ).toEqual({
+      command: "run",
+      scenarios: ["no-credential", "review-free"],
+      ref: "v0.2.0",
+      keep: true,
+    });
+    expect("error" in parseCliArgs(["run", "--ref", "v0.2.0"])).toBe(true);
+    expect("error" in parseCliArgs(["run", "review-free"])).toBe(true);
+    expect(
+      "error" in parseCliArgs(["run", "frobnicate", "--ref", "v0.2.0"]),
+    ).toBe(true);
+    // --keep is a run and smoke flag; it means nothing to init.
+    expect("error" in parseCliArgs(["init", "--ref", "v0.2.0", "--keep"])).toBe(
+      true,
+    );
+  });
+
+  test("an unknown scenario is a usage error that names it, and touches nothing", async () => {
+    const h = harness({ gh: () => fail("should not be called") });
+    expect(await runCli(["run", "nope", "--ref", "v0.2.0"], h.deps)).toBe(2);
+    expect(h.logs.some((l) => l.includes("unknown scenario: nope"))).toBe(true);
+    expect(h.ghCalls).toEqual([]);
+    expect(h.gitCalls).toEqual([]);
+  });
+
+  test("the usage names every scenario and the smoke alias", () => {
+    for (const name of [
+      "no-credential",
+      "bad-routing",
+      "review-free",
+      "cleanup",
+      "comment-trigger",
+    ]) {
+      expect(USAGE).toContain(name);
+    }
+    expect(USAGE).toContain("alias of `run review-free`");
   });
 
   test("help prints the usage and touches nothing", async () => {

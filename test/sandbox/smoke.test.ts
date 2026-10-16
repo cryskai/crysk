@@ -203,7 +203,8 @@ describe("smoke: the planted-bug PR", () => {
     expect(messages).toEqual(["refactor: simplify volume scaling"]);
     const branch =
       h.gitCalls.find((c) => c.args[0] === "checkout")?.args[2] ?? "";
-    expect(branch).toMatch(/^sandbox\/smoke-\d{8}T\d{6}Z$/);
+    // smoke is the review-free scenario, so its branch is named after it.
+    expect(branch).toMatch(/^sandbox\/review-free-\d{8}T\d{6}Z$/);
     expect(h.gitCalls.map((c) => c.args)).toContainEqual([
       "push",
       "-u",
