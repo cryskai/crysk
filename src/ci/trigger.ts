@@ -934,6 +934,12 @@ const OVERRIDE_HEAD_RETRY_DELAY_MS = 2_000;
 const OVERRIDE_FORK_REFUSAL =
   "`/pr-hero override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/pr-hero review` and merge it with your repository's own rules.";
 
+// The notice for an answer that does not say whether the pull request is a fork (a
+// failed or invalid lookup). It is not a claim that the pull request is one, so it gets
+// its own text: the same refusal, with the way to retry.
+const OVERRIDE_UNKNOWN_FORK_REFUSAL =
+  "`/pr-hero override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/pr-hero override` again.";
+
 // What the override's one lookup says. `crossRepository` is undefined when the
 // answer does not say (a failed call, output that is not JSON, or a field that is
 // missing or not a boolean). `head` is a validated sha, or undefined.
@@ -1095,12 +1101,20 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
     // A fork's author has no write access, so a fork's push after the comment would
     // turn the gate green on code the maintainer never saw. A same-repository pusher
     // already has write access. An answer that does not say is refused too, because
-    // the lookup cannot rule the fork out. Refused like the denied path: no status.
+    // the lookup cannot rule the fork out. Refused like the denied path: no status. The
+    // two refusals print different notices: a proven fork, and an answer that did not say.
     const answer = lookupOverrideHead(deps, base.repository, prNumber);
     if (answer.crossRepository !== false) {
       writeRecord(deps, run, { decision: "denied", params: {} });
       deps.appendOutput(formatTriggerOutputs(NO_RUN));
-      deps.stdout(workflowCommand("notice", OVERRIDE_FORK_REFUSAL));
+      deps.stdout(
+        workflowCommand(
+          "notice",
+          answer.crossRepository === true
+            ? OVERRIDE_FORK_REFUSAL
+            : OVERRIDE_UNKNOWN_FORK_REFUSAL,
+        ),
+      );
       return 0;
     }
     // WHY the no-head path is kept: a same-repository answer with no usable sha

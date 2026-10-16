@@ -444,7 +444,8 @@ describe("decideCiTrigger — the override command (S8)", () => {
     expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
     expect(run.record).toMatchObject({ decision: "denied" });
     expect(run.record).not.toHaveProperty("actor");
-    expect(run.stdout).toContain(FORK_OVERRIDE_REFUSAL);
+    expect(run.stdout).toContain(UNKNOWN_FORK_OVERRIDE_REFUSAL);
+    expect(run.stdout).not.toContain(FORK_OVERRIDE_REFUSAL);
   });
 
   // A fork's head can change after the comment, and an override binds to the head
@@ -464,6 +465,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
     expect(run.record).toMatchObject({ decision: "denied" });
     expect(run.record).not.toHaveProperty("actor");
     expect(run.stdout).toContain(FORK_OVERRIDE_REFUSAL);
+    expect(run.stdout).not.toContain(UNKNOWN_FORK_OVERRIDE_REFUSAL);
     // The only gh API call is the permission lookup: the shell posts no status,
     // and the publisher, which would, never runs for a refused override.
     expect(run.ghCalls.filter((args) => args[0] === "api")).toHaveLength(1);
@@ -508,7 +510,8 @@ describe("decideCiTrigger — the override command (S8)", () => {
       expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
       expect(run.record).toMatchObject({ decision: "denied" });
       expect(run.record).not.toHaveProperty("actor");
-      expect(run.stdout).toContain(FORK_OVERRIDE_REFUSAL);
+      expect(run.stdout).toContain(UNKNOWN_FORK_OVERRIDE_REFUSAL);
+      expect(run.stdout).not.toContain(FORK_OVERRIDE_REFUSAL);
       expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(2);
     },
   );
@@ -1015,6 +1018,11 @@ const overrideHead = (sha: string, crossRepository: boolean): GhResult =>
 // The notice a refused override prints, verbatim.
 const FORK_OVERRIDE_REFUSAL =
   "`/pr-hero override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/pr-hero review` and merge it with your repository's own rules.";
+
+// The notice an override prints when the lookup could not say whether the pull request is
+// a fork. Distinct from the fork notice: a lookup that failed is not a proven fork.
+const UNKNOWN_FORK_OVERRIDE_REFUSAL =
+  "`/pr-hero override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/pr-hero override` again.";
 
 // Runs the shell with PRHERO_OUTCOME_DIR pointed at a fresh directory that does
 // not exist yet (the trigger must create it), then reads trigger.json back.

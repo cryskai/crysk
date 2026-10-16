@@ -7,9 +7,10 @@
 // decidePublication is the pure table; runPublish is the shell.
 //
 // The builtins-only guard at the bottom mirrors the one in outcome.test.ts. The
-// one allowed relative import is "./outcome": it is itself builtins-only at
-// runtime (its repo imports are `import type`, erased at transpile), and it
-// needs no node_modules, which is the only thing this step cannot have.
+// allowed relative imports are "./outcome" and "./override": both are builtins-only
+// at runtime (outcome's repo imports are `import type`, erased at transpile; override
+// imports nothing), and they need no node_modules, which is the only thing this step
+// cannot have.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -188,6 +189,31 @@ describe("decidePublication — the pure table", () => {
           description: "review complete",
           targetUrl: RUN_URL,
         },
+      });
+    });
+
+    // Fix 4: the run's start rides on the cleanup beside the status it may guard, so the
+    // publisher can judge an override posted during the run before it reposts.
+    test("a reviewed record's run start rides on the cleanup beside its unsettled status", () => {
+      const RUN_START = Date.parse("2026-10-17T12:00:00Z");
+      expect(
+        decidePublication({
+          record: record(),
+          cliStarted: true,
+          cliRecord: {
+            ...REVIEWED,
+            head_sha: REVIEWED_HEAD,
+            unsettled_status: {
+              state: "success",
+              description: "review complete",
+            },
+            run_started_ms: RUN_START,
+          },
+        }),
+      ).toMatchObject({
+        kind: "cleanup",
+        headSha: REVIEWED_HEAD,
+        runStartedMs: RUN_START,
       });
     });
 
@@ -1908,6 +1934,107 @@ describe("runPublish — cleanup once the CLI started", () => {
   });
 });
 
+// Fix 4: the CLI's final status write failed, so its own status reads may have failed too, and
+// an override posted during the run may not have been seen by the CLI. Before the repost, the
+// publisher reads the head once and skips the repost when the override rule (src/ci/override.ts)
+// says an override stands. A failed read reposts, as before, and so does a record with no start.
+describe("runPublish — the repost of an unsettled status, against an override (Fix 4)", () => {
+  const RUN_START = Date.parse("2026-10-17T12:00:00Z");
+  const OVERRIDE =
+    "pr-hero: overridden by @maintainer — no review on this head";
+  const UNSETTLED = { state: "success", description: "review complete" };
+  const at = (ms: number) => new Date(ms).toISOString();
+  // One row per status of the head, as the status read's --jq filter prints them with the
+  // description: [context, state, created_at, description].
+  const describedStatusRows = (
+    ...rows: Array<[string, string, string, string]>
+  ): GhResult => ok(rows.map((row) => JSON.stringify(row)).join("\n"));
+  const withRunStart = (extra: object = {}) => ({
+    ...REVIEWED,
+    head_sha: REVIEWED_HEAD,
+    unsettled_status: UNSETTLED,
+    run_started_ms: RUN_START,
+    ...extra,
+  });
+  const runWith = (cliRecord: object, latestStatus: GhResult | undefined) =>
+    runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord,
+      status: [ok()],
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+      ...(latestStatus === undefined ? {} : { latestStatus }),
+    });
+  const HEAD_READ = `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`;
+
+  test("a fresh override as the newest status: the repost is skipped, the head is read once, and the cleanup still runs", () => {
+    const run = runWith(
+      withRunStart(),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START + 30_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(statusReadEndpoints(run.calls)).toEqual([HEAD_READ]);
+    expect(statusCalls(run.calls)).toEqual([]);
+    expect(deletions(run.calls)).toEqual([`repos/${REPO}/issues/comments/10`]);
+  });
+
+  test("a newest status that is not an override is reposted", () => {
+    const run = runWith(
+      withRunStart(),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START + 30_000),
+        "review complete",
+      ]),
+    );
+    const posted = statusCalls(run.calls);
+    expect(posted).toHaveLength(1);
+    expect((posted[0] as Call).args).toEqual(
+      expect.arrayContaining(["state=success", "description=review complete"]),
+    );
+  });
+
+  test("an override older than the run is reposted", () => {
+    const run = runWith(
+      withRunStart(),
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START - 60_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(statusCalls(run.calls)).toHaveLength(1);
+  });
+
+  test("a failed head read reposts, as before", () => {
+    const run = runWith(withRunStart(), fail("gh: Server Error (HTTP 500)"));
+    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(run.exitCode).toBe(0);
+  });
+
+  test("a record without the run's start reposts as before, and reads no status", () => {
+    const run = runWith(
+      { ...REVIEWED, head_sha: REVIEWED_HEAD, unsettled_status: UNSETTLED },
+      describedStatusRows([
+        "pr-hero",
+        "success",
+        at(RUN_START + 30_000),
+        OVERRIDE,
+      ]),
+    );
+    expect(statusReadEndpoints(run.calls)).toEqual([]);
+    expect(statusCalls(run.calls)).toHaveLength(1);
+  });
+});
+
 // T6 (S8): an override is a human's decision, not an outcome. It posts a success
 // status on the head it names and an audit comment. Nothing renders an error, and
 // no cleanup may ever remove the comment.
@@ -2110,9 +2237,11 @@ describe("publish.ts runs before `bun install`", () => {
     }
   });
 
-  test("it imports only builtins, plus the builtins-only ./outcome sibling", () => {
+  test("it imports only builtins, plus the builtins-only ./outcome and ./override siblings", () => {
     const source = readFileSync(MODULE_PATH, "utf8");
-    expect(runtimeImportViolations(source, ["./outcome"])).toEqual([]);
+    expect(
+      runtimeImportViolations(source, ["./outcome", "./override"]),
+    ).toEqual([]);
   });
 
   test("the guard itself fails on a repo import and passes a type-only one", () => {

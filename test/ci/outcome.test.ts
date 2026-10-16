@@ -1995,3 +1995,46 @@ describe("parseCliRecord — the unsettled_status field", () => {
     },
   );
 });
+
+// Fix 4: the run's start on a reviewed record, read by the publisher to tell an override
+// posted during the run from one posted before it. Optional, so a record without it parses.
+describe("parseCliRecord — the run_started_ms field", () => {
+  const SHA = "c".repeat(40);
+  const text = (value: unknown) => JSON.stringify(value);
+  const REVIEWED: CliRecord = {
+    v: 1,
+    outcome: "reviewed",
+    head_sha: SHA,
+    unsettled_status: { state: "success", description: "review complete" },
+  };
+
+  test("a reviewed record with a positive integer run_started_ms parses with it", () => {
+    const value: CliRecord = { ...REVIEWED, run_started_ms: 1_792_238_400_000 };
+    expect(parseCliRecord(text(value))).toEqual(value);
+  });
+
+  test("a reviewed record without run_started_ms still parses unchanged", () => {
+    expect(parseCliRecord(text(REVIEWED))).toEqual(REVIEWED);
+  });
+
+  test.each([
+    ["zero", 0],
+    ["a negative number", -5],
+    ["a fraction", 1.5],
+    ["a string", "1792238400000"],
+    ["null", null],
+    ["an integer beyond the safe range", 1e20],
+  ])("refuses run_started_ms of %s", (_label, value) => {
+    expect(
+      parseCliRecord(text({ ...REVIEWED, run_started_ms: value })),
+    ).toBeUndefined();
+  });
+
+  test("refuses the field on a record that did not deliver a review", () => {
+    expect(
+      parseCliRecord(
+        text({ v: 1, outcome: "yielded", run_started_ms: 1_792_238_400_000 }),
+      ),
+    ).toBeUndefined();
+  });
+});

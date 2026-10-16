@@ -6,7 +6,7 @@
 // comments below move with the code they explain.
 
 import { recordUnsettledStatus } from "#ci/cli-record";
-import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/publish";
+import { overrideStandsOverRun } from "#ci/override";
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import { settleCiAdmissionLedger } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
@@ -19,7 +19,6 @@ import {
   type CommitStatusFact,
   commitStatusCompletion,
   commitStatusRequest,
-  latestStatusInContext,
 } from "#pr/preflight";
 import {
   heldCommitStatusSince,
@@ -60,42 +59,8 @@ async function settleLedgerIfPending(
   }
 }
 
-// The rule (docs/github-actions.md, "Overriding a red gate"): an override stands
-// against a review that was already running when it was posted, and a review started
-// after it replaces it. So the override stands when the newest `pr-hero` status is a
-// successful override and was created after this run started. A later review has posted its own
-// status since, which is then the newest, so this check is false and its write goes
-// ahead as before.
-//
-// WHY the floor to the second: GitHub's created_at has one-second precision. An
-// override in the run's own second is taken as posted during the run, the side that
-// keeps a human's unlock.
-//
-// The description comes from the statuses reader, fetchCommitStatuses (pr.ts), which
-// requests it. A status without one is never taken as an override.
-export function overrideStandsOverRun(
-  statuses: readonly CommitStatusFact[],
-  runStartedMs: number,
-): boolean {
-  const latest = latestStatusInContext(statuses, COMMIT_STATUS_CONTEXT);
-  if (latest === null) return false;
-  // WHY the state too: an override is a success. A status that merely carries the
-  // description (a failure or a pending one) is not an override, and must not hold
-  // the gate open over a review that finished.
-  if (latest.state !== "success") return false;
-  const description = latest.description;
-  if (
-    typeof description !== "string" ||
-    !description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)
-  ) {
-    return false;
-  }
-  const createdMs = Date.parse(latest.created_at);
-  if (Number.isNaN(createdMs)) return false;
-  return createdMs >= Math.floor(runStartedMs / 1000) * 1000;
-}
-
-// Whether an override posted during this run stands over its final write. Only a run
+// Whether an override posted during this run stands over its final write. The rule itself
+// is overrideStandsOverRun (src/ci/override.ts). Only a run
 // that took the lock has a start to compare with. A failed read is no evidence of an
 // override, so the write goes ahead, as before (fail open to the review's verdict).
 async function overrideStandsOverThisRun(
@@ -132,7 +97,8 @@ async function overrideStandsOverThisRun(
 // catch). The body's error is then the run's failure, and it must reach the
 // CLI unchanged: a throw from this finally would replace it, and
 // writeFatalCliRecord would record the status error's class instead of the
-// real cause. So that write still goes out, through tryPublishCommitStatus,
+// real cause. So that write still goes out, through tryPublishCommitStatus
+// (unless an override stands, which is checked first, like every verdict write),
 // and a failed post only logs. Nothing throws on that path, so the ledger
 // settles here too, rather than in finalizePrReviewRun. The body may have
 // failed after the review was delivered, so a failed gate post is still
@@ -198,14 +164,16 @@ export async function settleCommitStatusAndLedger(input: {
           context: input.statusContext,
         });
   try {
-    // WHY only the gate's own final write: a body that threw is written best-effort,
-    // and that error status is not the review's verdict. It is not checked here, and
-    // the publisher's own error branch posts an `error` status for that CLI record
-    // without reading the head (src/ci/publish.ts, remoteOrLocal), so it can still
-    // replace an override. Advisory is left as it was: this rule is the gate's.
+    // WHY every gate write of the review's verdict is checked, including the best-effort
+    // write after a body that threw: a body's failure is not the verdict, and the verdict
+    // is what an override holds against. The one write not checked is the `error` a body
+    // that threw leaves, which is the crash exception the rule documents. Advisory is left
+    // as it was: this rule is the gate's.
+    const verdictWrite =
+      request.state === "success" || request.state === "failure";
     const overrideStands =
       effectiveMode === "gate" &&
-      input.bodyFailed !== true &&
+      (input.bodyFailed !== true || verdictWrite) &&
       (await overrideStandsOverThisRun(
         input.operatorRoot,
         input.headSha,
@@ -237,6 +205,7 @@ export async function settleCommitStatusAndLedger(input: {
             input.headSha,
             { state: request.state, description: request.description },
             input.env,
+            heldCommitStatusSince(),
           );
         }
         throw error;
@@ -263,6 +232,7 @@ export async function settleCommitStatusAndLedger(input: {
           input.headSha,
           { state: request.state, description: request.description },
           input.env,
+          heldCommitStatusSince(),
         );
       }
     }

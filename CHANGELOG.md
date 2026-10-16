@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count only when the re-review verifies it gone or its files were deleted. Known gap: a blocking finding first
   raised by a re-review, rather than by the first review, is not yet carried to the reviews after it. An advisory
   finding from this run never clears a blocking one at the same spot.
+- **An override holds against every write of the review's verdict**: the check now covers a body that failed after
+  delivery, and the publisher step's repost of a status the CLI could not write. The run's start is stamped before its
+  pending status is posted, with a 5-second clock-skew allowance, so an override posted while that post was slow stands.
+  A failed head lookup for `/pr-hero override` gets its own refusal notice, apart from the notice for a proven fork.
 
 ## [0.2.3] - 2026-10-16
 

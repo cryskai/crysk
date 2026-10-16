@@ -434,6 +434,39 @@ describe("recordUnsettledStatus", () => {
     });
   });
 
+  // Fix 4: the run's start rides on the unsettled record, so the publisher can tell an
+  // override posted during this run from one posted before it.
+  test("records the run's start next to the status, when the caller has one", () => {
+    recordReviewDelivered(SHA, env);
+    recordUnsettledStatus(SHA, UNSETTLED, env, 1_792_238_400_000);
+    expect(parseCliRecord(onDisk())).toEqual({
+      v: 1,
+      outcome: "reviewed",
+      head_sha: SHA,
+      unsettled_status: UNSETTLED,
+      run_started_ms: 1_792_238_400_000,
+    });
+  });
+
+  test.each([
+    ["no start", null],
+    ["zero", 0],
+    ["a fraction", 1.5],
+    ["a negative number", -1],
+  ])(
+    "leaves run_started_ms out when the start is %s, since the reader would refuse it",
+    (_label, runStartedMs) => {
+      recordReviewDelivered(SHA, env);
+      recordUnsettledStatus(SHA, UNSETTLED, env, runStartedMs);
+      expect(parseCliRecord(onDisk())).toEqual({
+        v: 1,
+        outcome: "reviewed",
+        head_sha: SHA,
+        unsettled_status: UNSETTLED,
+      });
+    },
+  );
+
   test.each([
     ["an error", { v: 1, outcome: "error", cls: { kind: "unknown" } }],
     ["a hunters-failed", { v: 1, outcome: "hunters-failed", head_sha: SHA }],

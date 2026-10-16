@@ -257,6 +257,11 @@ export interface CliRecord {
   // publisher posts this status once more (src/ci/publish.ts), exactly as the CLI tried
   // to write it.
   unsettled_status?: UnsettledStatus;
+  // Only for outcome "reviewed", beside unsettled_status: the run's start, in ms, the time the
+  // CLI took the pending lock (before its POST). The publisher judges an override posted during
+  // the run against it before it reposts (src/ci/override.ts). Absent on a record that predates
+  // it, and then the publisher reposts as before.
+  run_started_ms?: number;
 }
 
 const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
@@ -579,6 +584,15 @@ export function parseCliRecord(text: string): CliRecord | undefined {
     const unsettled = parseUnsettledStatus(value.unsettled_status);
     if (unsettled === undefined) return undefined;
     record.unsettled_status = unsettled;
+  }
+  if (value.run_started_ms !== undefined) {
+    if (outcome !== "reviewed") return undefined;
+    const started = value.run_started_ms;
+    if (typeof started !== "number" || !Number.isSafeInteger(started)) {
+      return undefined;
+    }
+    if (started <= 0) return undefined;
+    record.run_started_ms = started;
   }
   return record;
 }

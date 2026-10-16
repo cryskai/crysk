@@ -37,10 +37,11 @@
 // one, and the trigger's head is the fallback, since a failed `gh pr view` at trigger
 // time can leave it out.
 //
-// WHY ONLY BUILTINS (plus ./outcome): the step runs before anything is installed,
-// so a package import has no node_modules to resolve against. ./outcome is a
-// sibling that is itself builtins-only at runtime: its repository imports are
-// `import type`, erased at transpile. Relative imports need no node_modules.
+// WHY ONLY BUILTINS (plus ./outcome and ./override): the step runs before anything is
+// installed, so a package import has no node_modules to resolve against. ./outcome and
+// ./override are siblings that are themselves builtins-only at runtime: ./outcome's
+// repository imports are `import type`, erased at transpile, and ./override imports
+// nothing. Relative imports need no node_modules.
 //
 // WHY repost, not edit: GitHub does not notify on an edit, and an edited comment
 // does not move down the timeline. So the fresh comment is POSTED first, and the
@@ -66,6 +67,12 @@ import {
   renderError,
   STATUS_DESCRIPTION_MAX,
 } from "./outcome";
+import {
+  newestStatusInContext,
+  OVERRIDE_DESCRIPTION_PREFIX,
+  type OverrideStatusFact,
+  overrideStandsOverRun,
+} from "./override";
 
 // The commit status context. The required check reads this name, so it must
 // equal COMMIT_STATUS_CONTEXT in src/pr/preflight.ts (a test pins the two).
@@ -149,6 +156,10 @@ export type Publication =
       // Undefined otherwise, which is every reviewed record without the field.
       headSha?: string;
       status?: StatusPost;
+      // The run's start, when the record carries one. The repost is skipped when an override
+      // posted during the run stands on the head (overrideStandsBeforeRepost). Undefined
+      // means no start to judge against, and the repost goes ahead as before.
+      runStartedMs?: number;
     }
   | {
       kind: "remote";
@@ -334,13 +345,14 @@ function decideCliOutcome(
 function unsettledStatusOf(
   record: TriggerRecord,
   cliRecord: CliRecord,
-): { headSha: string; status: StatusPost } | undefined {
+): { headSha: string; status: StatusPost; runStartedMs?: number } | undefined {
   const unsettled = cliRecord.unsettled_status;
   if (unsettled === undefined || cliRecord.head_sha === undefined) {
     return undefined;
   }
   return {
     headSha: cliRecord.head_sha,
+    runStartedMs: cliRecord.run_started_ms,
     status: {
       state: unsettled.state,
       context: STATUS_CONTEXT,
@@ -846,25 +858,24 @@ const SETTLED_STATES: ReadonlySet<string> = new Set([
   "failure",
 ]);
 
-// The head's newest pr-hero status, as the three states the table needs. WHY
-// per_page=100: the combined endpoint pages at 30 contexts by default, and a busy
-// head's pr-hero row can sit past the first page. The newest row is picked by its
-// time, not by its place in the answer. A failed read, no pr-hero row, or a state
-// the table does not name is unknown, which the table answers with the status.
-function readLatestCliStatusState(
+// The head's statuses, as the combined-status endpoint returns them, read through this step's
+// own gh seam in one attempt. A failed read is undefined. WHY per_page=100: the combined
+// endpoint pages at 30 contexts by default, and a busy head's pr-hero row can sit past the
+// first page. A row the parse cannot read is skipped. The description is read too, for the
+// override rule.
+function readHeadStatuses(
   deps: PublishDeps,
   repo: string,
   sha: string,
-): LatestStatusState {
+): OverrideStatusFact[] | undefined {
   const read = deps.gh([
     "api",
     `repos/${repo}/commits/${sha}/status?per_page=100`,
     "--jq",
-    ".statuses[]? | [.context, .state, .created_at] | @json",
+    ".statuses[]? | [.context, .state, .created_at, .description] | @json",
   ]);
-  if (read.exitCode !== 0) return "unknown";
-  let latestState: string | undefined;
-  let latestMs = Number.NEGATIVE_INFINITY;
+  if (read.exitCode !== 0) return undefined;
+  const statuses: OverrideStatusFact[] = [];
   for (const line of read.stdout.split("\n")) {
     if (line.trim() === "") continue;
     let value: unknown;
@@ -874,22 +885,56 @@ function readLatestCliStatusState(
       continue;
     }
     if (!Array.isArray(value)) continue;
-    const [context, state, createdAt] = value;
+    const [context, state, createdAt, description] = value;
     if (
-      context !== STATUS_CONTEXT ||
+      typeof context !== "string" ||
       typeof state !== "string" ||
       typeof createdAt !== "string"
     ) {
       continue;
     }
-    const createdMs = Date.parse(createdAt);
-    if (Number.isNaN(createdMs) || createdMs < latestMs) continue;
-    latestState = state;
-    latestMs = createdMs;
+    statuses.push({
+      context,
+      state,
+      created_at: createdAt,
+      description: typeof description === "string" ? description : undefined,
+    });
   }
-  if (latestState === undefined) return "unknown";
-  if (latestState === "pending") return "pending";
-  return SETTLED_STATES.has(latestState) ? "settled" : "unknown";
+  return statuses;
+}
+
+// The head's newest pr-hero status, as the three states the table needs. The newest row is
+// picked by its time, not by its place in the answer. A failed read, no pr-hero row, or a
+// state the table does not name is unknown, which the table answers with the status.
+function readLatestCliStatusState(
+  deps: PublishDeps,
+  repo: string,
+  sha: string,
+): LatestStatusState {
+  const statuses = readHeadStatuses(deps, repo, sha);
+  if (statuses === undefined) return "unknown";
+  const latest = newestStatusInContext(statuses, STATUS_CONTEXT);
+  if (latest === undefined) return "unknown";
+  if (latest.state === "pending") return "pending";
+  return SETTLED_STATES.has(latest.state) ? "settled" : "unknown";
+}
+
+// Whether an override posted during the run stands over the repost of the CLI's unsettled
+// status (overrideStandsOverRun, src/ci/override.ts). WHY it is read here: the CLI's final
+// write failed, so its own status reads may have failed too, and the override may not have
+// been seen by the CLI. A failed read, or a record with no start to judge against, is no
+// evidence of an override, so the repost goes ahead as before. The status reposted is the
+// review's own verdict, so a failed review's failure is reposted as a failure.
+function overrideStandsBeforeRepost(
+  deps: PublishDeps,
+  repo: string,
+  sha: string,
+  runStartedMs: number | undefined,
+): boolean {
+  if (runStartedMs === undefined) return false;
+  const statuses = readHeadStatuses(deps, repo, sha);
+  if (statuses === undefined) return false;
+  return overrideStandsOverRun(statuses, runStartedMs);
 }
 
 // The override's reporter: the shared rendering (statusWriteFailure), reported.
@@ -902,12 +947,8 @@ function reportStatusWriteFailure(
   report(deps, statusWriteFailure(httpStatus, runId, runUrl));
 }
 
-// The start of an override's status description. The CLI's gate reads it to tell an
-// override from a review's own status (src/pr/teardown.ts), so the CLI imports this
-// constant rather than repeating the text. Exported, not private, for that reason.
-export const OVERRIDE_DESCRIPTION_PREFIX = "pr-hero: overridden by @";
-
-// The one status an override writes. Its description names the actor, so the
+// The one status an override writes. Its description starts with OVERRIDE_DESCRIPTION_PREFIX,
+// the text the override rule (src/ci/override.ts) recognises. Its description names the actor, so the
 // status alone says who unlocked the gate.
 function overrideDescription(actor: string): string {
   return `${OVERRIDE_DESCRIPTION_PREFIX}${actor} — no review on this head`;
@@ -1080,23 +1121,42 @@ export function runPublish(deps: PublishDeps): number {
     // but the cleanup still runs, since the review did complete.
     let exitCode = 0;
     if (plan.headSha !== undefined && plan.status !== undefined) {
-      const status = postStatus(
-        deps,
-        plan.repository,
-        plan.headSha,
-        plan.status,
-        1,
-      );
-      if (!status.ok) {
-        report(
+      // WHY the override check comes before the repost (Fix 4): an override posted during this
+      // run stands over the review's verdict, the same rule the CLI's final write applies
+      // (src/ci/override.ts). Then the repost is skipped, and the notice says why.
+      if (
+        overrideStandsBeforeRepost(
           deps,
-          statusWriteFailure(
-            status.httpStatus,
-            plan.runId,
-            plan.status.targetUrl,
+          plan.repository,
+          plan.headSha,
+          plan.runStartedMs,
+        )
+      ) {
+        deps.stdout(
+          workflowCommand(
+            "notice",
+            "pr-hero: an override on this head stands, so the review's status is not reposted over it.",
           ),
         );
-        exitCode = 1;
+      } else {
+        const status = postStatus(
+          deps,
+          plan.repository,
+          plan.headSha,
+          plan.status,
+          1,
+        );
+        if (!status.ok) {
+          report(
+            deps,
+            statusWriteFailure(
+              status.httpStatus,
+              plan.runId,
+              plan.status.targetUrl,
+            ),
+          );
+          exitCode = 1;
+        }
       }
     }
     if (plan.pr !== undefined) {

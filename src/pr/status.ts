@@ -30,10 +30,10 @@ import { CliError } from "../errors";
 // a signal handler installed in runCli cannot see reviewPr's scope, so what it
 // needs has to be parked where both can reach it.
 let heldLock: HeldCommitStatusLock | null = null;
-// When the lock was taken, in ms. plan.ts takes it right after the pending post, so
-// this is the run's own start for the override check (teardown.ts). It is taken
-// on the runner's clock; GitHub's status times are server time, so the two differ
-// by whatever the runner's clock skew is.
+// When the lock was taken, in ms: the run's own start, which plan.ts reads before the
+// pending post and passes in. The override check (teardown.ts, src/ci/override.ts)
+// compares it with GitHub's status times, which are server time, so the two differ by
+// whatever the runner's clock skew is; the override rule's allowance covers that.
 let heldSinceMs: number | null = null;
 
 export function holdCommitStatusLock(
