@@ -13,7 +13,8 @@ import { realDeps } from "../../scripts/sandbox/real";
 // otherwise reach scripts/. The entry only runs under `bun scripts/sandbox.ts`
 // (import.meta.main), so importing it here starts nothing.
 import "../../scripts/sandbox";
-import { fail, harness, ok } from "./fakes";
+import { fail, harness, ok, START_ISO } from "./fakes";
+import { FakeGithub } from "./world";
 
 // The fields gh returns for each PR: a same-repo PR owned by the sandbox owner
 // is the only kind that counts as a scenario PR.
@@ -44,6 +45,25 @@ describe("list", () => {
     expect(await runList(h.deps)).toBe(0);
     expect(h.logs.some((l) => l.includes("https://x/3"))).toBe(true);
     expect(h.logs.some((l) => l.includes("https://x/4"))).toBe(false);
+  });
+});
+
+describe("list lists the scenario names after the open PRs", () => {
+  test("the command prints the open PRs, then each scenario by name", async () => {
+    const h = harness({
+      gh: (args) => (args[1] === "list" ? ok(JSON.stringify(OPEN)) : ok()),
+    });
+    expect(await runCli(["list"], h.deps)).toBe(0);
+    expect(h.logs.some((l) => l.includes("https://x/3"))).toBe(true);
+    for (const name of [
+      "no-credential",
+      "bad-routing",
+      "review-free",
+      "cleanup",
+      "comment-trigger",
+    ]) {
+      expect(h.logs.some((l) => l.startsWith(`scenario ${name}: `))).toBe(true);
+    }
   });
 });
 
@@ -224,6 +244,54 @@ describe("cli arguments", () => {
     expect("error" in parseCliArgs(["frobnicate"])).toBe(true);
   });
 
+  test("run takes one or more named scenarios, --ref, and --keep", () => {
+    expect(
+      parseCliArgs([
+        "run",
+        "no-credential",
+        "review-free",
+        "--ref",
+        "v0.2.0",
+        "--keep",
+      ]),
+    ).toEqual({
+      command: "run",
+      scenarios: ["no-credential", "review-free"],
+      ref: "v0.2.0",
+      keep: true,
+    });
+    expect("error" in parseCliArgs(["run", "--ref", "v0.2.0"])).toBe(true);
+    expect("error" in parseCliArgs(["run", "review-free"])).toBe(true);
+    expect(
+      "error" in parseCliArgs(["run", "frobnicate", "--ref", "v0.2.0"]),
+    ).toBe(true);
+    // --keep is a run and smoke flag; it means nothing to init.
+    expect("error" in parseCliArgs(["init", "--ref", "v0.2.0", "--keep"])).toBe(
+      true,
+    );
+  });
+
+  test("an unknown scenario is a usage error that names it, and touches nothing", async () => {
+    const h = harness({ gh: () => fail("should not be called") });
+    expect(await runCli(["run", "nope", "--ref", "v0.2.0"], h.deps)).toBe(2);
+    expect(h.logs.some((l) => l.includes("unknown scenario: nope"))).toBe(true);
+    expect(h.ghCalls).toEqual([]);
+    expect(h.gitCalls).toEqual([]);
+  });
+
+  test("the usage names every scenario and the smoke alias", () => {
+    for (const name of [
+      "no-credential",
+      "bad-routing",
+      "review-free",
+      "cleanup",
+      "comment-trigger",
+    ]) {
+      expect(USAGE).toContain(name);
+    }
+    expect(USAGE).toContain("alias of `run review-free`");
+  });
+
   test("help prints the usage and touches nothing", async () => {
     const h = harness({ gh: () => fail("should not be called") });
     expect(await runCli(["--help"], h.deps)).toBe(0);
@@ -260,5 +328,49 @@ describe("cli arguments", () => {
     expect(typeof deps.clock.sleep).toBe("function");
     expect(typeof deps.workspace.mkdtemp).toBe("function");
     expect(typeof deps.log).toBe("function");
+  });
+});
+
+// clean looks up every run of a scenario PR, not only the runs on its branch: a
+// comment run lives on main and carries the PR's title. Each of them is cancelled
+// before the PR closes, and an old PR costs one lookup and no wait (see runs.ts).
+describe("clean: the comment runs of a PR are cancelled before it closes", () => {
+  const REF = "v0.2.0";
+  const BRANCH = "sandbox/review-free-20261016T120000Z";
+
+  test("an in-progress comment run carrying the PR's title is cancelled, then the PR closes", async () => {
+    const world = new FakeGithub({ ref: REF });
+    world.openForeignPr(9, BRANCH);
+    const title = `pr-hero sandbox foreign ${BRANCH}`;
+    const run = world.addRun({
+      event: "issue_comment",
+      displayTitle: title,
+      createdAt: "2026-10-16T13:00:00Z",
+      status: "in_progress",
+    });
+    const h = world.harness();
+    expect(await runClean(h.deps)).toBe(0);
+    const cancelAt = world.events.indexOf(`run cancel ${run}`);
+    const closeAt = world.events.indexOf("pr close 9");
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(closeAt).toBeGreaterThan(cancelAt);
+  });
+
+  test("an old PR costs one lookup of each kind and no wait", async () => {
+    const world = new FakeGithub({ ref: REF });
+    world.openForeignPr(9, BRANCH);
+    const h = world.harness();
+    expect(await runClean(h.deps)).toBe(0);
+    expect(h.clock.sleeps).toEqual([]);
+    const runLists = h.ghCalls.filter((c) => c[0] === "run" && c[1] === "list");
+    expect(runLists).toHaveLength(2);
+  });
+
+  test("a fresh PR is looked for until the lookup window closes", async () => {
+    const world = new FakeGithub({ ref: REF });
+    world.openForeignPr(9, BRANCH, START_ISO);
+    const h = world.harness();
+    expect(await runClean(h.deps)).toBe(0);
+    expect(h.clock.sleeps).toEqual([15_000, 15_000, 15_000, 15_000]);
   });
 });

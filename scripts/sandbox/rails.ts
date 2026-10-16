@@ -33,6 +33,9 @@ const GH_TARGETED = new Set([
   "pr create",
   "pr view",
   "pr close",
+  // The only write a scenario makes to a PR: the `/pr-hero review` comment that
+  // starts a comment-triggered run. Still repo-targeted like every verb here.
+  "pr comment",
   "run list",
   "run view",
   // Cancelling a sandbox run is how a timed-out scenario stops its review. It
@@ -90,6 +93,14 @@ function assertCommonGhArgs(args: readonly string[]): void {
     if (isScopeFlag(arg)) {
       throw new RailViolation(
         `gh ${arg} widens the call beyond ${SANDBOX_REPO}`,
+      );
+    }
+    // The end-of-options marker hands what follows to gh's own positional or
+    // pass-through handling (`repo clone <sandbox> dir -- <git flags>` runs git flags),
+    // so the -R check cannot see it. None of the runner's calls use it.
+    if (arg === "--") {
+      throw new RailViolation(
+        "gh -- passes what follows as positionals or git flags, which the runner never sends",
       );
     }
   }

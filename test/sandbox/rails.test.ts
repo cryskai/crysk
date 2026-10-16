@@ -76,6 +76,34 @@ describe("gh rail: the sandbox repo is the only target", () => {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
     }
   });
+  test("posts a PR comment only on the sandbox, and reads back the comment it wrote", () => {
+    expect(() =>
+      assertGhArgs([
+        "pr",
+        "comment",
+        "7",
+        "-R",
+        SANDBOX_REPO,
+        "--body",
+        "/pr-hero review",
+      ]),
+    ).not.toThrow();
+    expect(() =>
+      assertGhArgs(["api", sandboxApi("issues/comments/123")]),
+    ).not.toThrow();
+  });
+
+  test("refuses a PR comment on any other repository, or with no repository named", () => {
+    const refused: string[][] = [
+      ["pr", "comment", "7", "-R", "juanmaagd/pr-hero", "--body", "x"],
+      ["pr", "comment", "7", "--repo=juanmaagd/pr-hero", "--body", "x"],
+      ["pr", "comment", "7", "--body", "x"],
+      ["issue", "comment", "7", "-R", SANDBOX_REPO, "--body", "x"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
 });
 
 describe("gh rail: attached flags and repeated flags", () => {
@@ -236,6 +264,29 @@ describe("git rail: no force, no deletes, no rewritten main", () => {
     ];
     for (const args of refused) {
       expect(() => assertGitArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
+describe("gh rail: the end-of-options marker", () => {
+  // `gh repo clone <sandbox> dir -- <git flags>` passed the -R check, and gh handed
+  // the flags after `--` to git. No gh call the runner makes uses `--`, so it is
+  // refused on every verb.
+  test("refuses -- on every gh call, however the call is otherwise sandbox-only", () => {
+    const refused: string[][] = [
+      [
+        "repo",
+        "clone",
+        SANDBOX_REPO,
+        "/scratch/x",
+        "--",
+        "--upload-pack=touch /tmp/p",
+      ],
+      ["pr", "list", "-R", SANDBOX_REPO, "--", "--state"],
+      ["api", `repos/${SANDBOX_REPO}/issues`, "--"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
     }
   });
 });

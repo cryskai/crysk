@@ -17,6 +17,15 @@ import {
   type SkipReason,
 } from "./markers";
 
+// The catalog code of "every hunter failed" (src/ci/outcome.ts, ERROR_CATALOG).
+// Both the outcome comment and the status carry it, and both read as the same path.
+const HUNTERS_FAILED_CODE = "PRH-HUNTERS-FAILED";
+
+// The slack allowed between a comment's created_at and the run it started. GitHub
+// stamps both, so the gap is small; the window only keeps a run created a moment
+// before the comment from being mistaken for an earlier one.
+export const COMMENT_RUN_CLOCK_SKEW_MS = 5_000;
+
 export type CommentKind = "report" | "finding" | "outcome" | "skip" | "other";
 
 export interface CommentFact {
@@ -24,13 +33,20 @@ export interface CommentFact {
   kind: CommentKind;
   code?: string;
   skip?: SkipReason;
-  // A report names the head it reviewed. Only a report for the head under test
-  // counts as this run's review: an earlier head's summary on the same PR is not.
+  // A report or an outcome names the head it was written for. Only a report for
+  // the head under test counts as this run's review, and only an outcome for it
+  // decides this run's path: an earlier head's comment on the same PR is not.
   head?: string;
+  // When GitHub stored the comment. Set for the comments of a phase that waits on a
+  // comment run, so a skip marker can be tied to that run and not to an earlier one.
+  createdAt?: string;
 }
 
 export interface RunFact {
   id: number;
+  // The event that started the run. A comment-triggered run and the pull_request
+  // run of the same PR are different runs, and a check must tell them apart.
+  event?: string;
   status: string;
   conclusion: string | null;
   steps: { name: string; conclusion: string | null }[];
@@ -49,6 +65,9 @@ export interface Observation {
   status?: StatusFact;
   comments: CommentFact[];
   artifacts: string[];
+  // When the trigger comment of the phase was created, in epoch ms. Only set for a
+  // phase that waits on a comment run; a run it started was created after this.
+  triggeredAt?: number;
 }
 
 export type SmokePath =
@@ -77,7 +96,12 @@ export function classifyComment(
   if (first.startsWith(FINDING_MARKER_PREFIX))
     return { source, kind: "finding" };
   if (first.startsWith(OUTCOME_MARKER_PREFIX)) {
-    return { source, kind: "outcome", code: outcomeCodeOf(body) };
+    // The head is "unknown" when the publisher had no sha; such an outcome has no head.
+    const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
+    const code = outcomeCodeOf(body);
+    return head === undefined
+      ? { source, kind: "outcome", code }
+      : { source, kind: "outcome", code, head };
   }
   for (const [reason, marker] of Object.entries(SKIP_MARKERS)) {
     if (first === marker)
@@ -87,9 +111,14 @@ export function classifyComment(
 }
 
 export function classifyPath(obs: Observation): SmokePath {
-  const outcome = obs.comments.find((c) => c.kind === "outcome");
+  // An outcome of an earlier head is that head's failure, not this one's. It still
+  // counts for S7 (invariantViolations reads every outcome on the PR).
+  const outcome = obs.comments.find(
+    (c) =>
+      c.kind === "outcome" && (c.head === undefined || c.head === obs.headSha),
+  );
   if (outcome !== undefined) {
-    if (outcome.code === "PRH-HUNTERS-FAILED") return "hunters-failed";
+    if (outcome.code === HUNTERS_FAILED_CODE) return "hunters-failed";
     return `error:${outcome.code ?? "no-code"}`;
   }
   const skip = obs.comments.find((c) => c.kind === "skip");
@@ -100,13 +129,18 @@ export function classifyPath(obs: Observation): SmokePath {
   );
   if (hasReport && obs.status?.state === "success") return "reviewed";
 
+  // The status is written apart from the outcome comment, so a read can see it
+  // alone. Its code is the same failure the comment names, so it classifies the
+  // same way; an error status with any other code stays `error:<code>`.
   const statusCode = /^PRH-[A-Z]+(?:-[A-Z]+)*/.exec(
     obs.status?.description ?? "",
   )?.[0];
   // The publisher writes this code on an error status as well as in the outcome
-  // comment (#330). Without either, a failed step is no-outcome: a run directory
-  // and a failed step also fit a finished pipeline whose post threw.
-  if (obs.status?.state === "error" && statusCode === "PRH-HUNTERS-FAILED")
+  // comment (#330). Only that positive evidence decides hunters-failed: a failed
+  // step plus an uploaded run directory also fits a finished pipeline whose post
+  // threw, and a real all-hunters-dead run uploads nothing (review #332, F007).
+  // Without either, a failed step is no-outcome.
+  if (obs.status?.state === "error" && statusCode === HUNTERS_FAILED_CODE)
     return "hunters-failed";
   if (obs.status?.state === "error" && statusCode !== undefined)
     return `error:${statusCode}`;
@@ -137,15 +171,4 @@ export function invariantViolations(obs: Observation): string[] {
     );
   }
   return violations;
-}
-
-// reviewed and hunters-failed both prove the free route ran end to end. A
-// violation overrides them: a run that passed the path but broke an invariant
-// is a failure of the publisher, which is what this runner exists to catch.
-export function exitCodeFor(
-  path: SmokePath,
-  violations: readonly string[],
-): 0 | 1 {
-  if (violations.length > 0) return 1;
-  return path === "reviewed" || path === "hunters-failed" ? 0 : 1;
 }

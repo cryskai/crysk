@@ -12,12 +12,50 @@ import type {
   GhResult,
   Git,
   GitResult,
+  LockHolder,
+  RunLockFile,
   SandboxDeps,
   Signal,
   SignalSource,
   Workspace,
 } from "../../scripts/sandbox/ports";
 import { SANDBOX_REMOTE_URL } from "../../scripts/sandbox/rails";
+
+// The pid of the fake process that takes a memory lock, and which the fake treats as
+// alive. A lock recorded under any other pid is stale unless a test marks it live.
+export const FAKE_PID = 4242;
+
+// A run lock held in memory. `recorded()` is what the lock file would hold: the pid
+// it records, `"unreadable"` for a file that names no pid, or undefined for no file.
+export interface MemoryRunLock extends RunLockFile {
+  recorded(): number | "unreadable" | undefined;
+}
+
+export function memoryRunLock(
+  init: { recorded?: number | "unreadable"; livePids?: readonly number[] } = {},
+): MemoryRunLock {
+  let record: number | "unreadable" | undefined = init.recorded;
+  const live = new Set<number>([FAKE_PID, ...(init.livePids ?? [])]);
+  return {
+    path: "/memory/sandbox.lock",
+    pid: FAKE_PID,
+    recorded: () => record,
+    create: async () => {
+      if (record !== undefined) return false;
+      record = FAKE_PID;
+      return true;
+    },
+    holder: async (): Promise<LockHolder> => {
+      if (record === undefined) return { kind: "none" };
+      if (record === "unreadable") return { kind: "unreadable" };
+      return { kind: "pid", pid: record };
+    },
+    remove: async (pid) => {
+      if (record === pid) record = undefined;
+    },
+    alive: (pid) => live.has(pid),
+  };
+}
 
 export const ok = (stdout = ""): GhResult => ({
   exitCode: 0,
@@ -117,6 +155,7 @@ export interface Harness {
   clock: Clock & { sleeps: number[] };
   workspace: MemoryWorkspace;
   signals: FakeSignals;
+  lock: MemoryRunLock;
 }
 
 export type GhScript = (
@@ -152,7 +191,13 @@ function fakeClock(startIso: string): Clock & { sleeps: number[] } {
   };
 }
 
-export function harness(script: { gh: GhScript; git?: GitScript }): Harness {
+// A harness's run lock is its own unless the test passes one, so two harnesses that
+// share a lock model two invocations on one machine.
+export function harness(script: {
+  gh: GhScript;
+  git?: GitScript;
+  lock?: MemoryRunLock;
+}): Harness {
   const events: string[] = [];
   const ghCalls: string[][] = [];
   const gitCalls: { args: string[]; cwd: string }[] = [];
@@ -161,6 +206,7 @@ export function harness(script: { gh: GhScript; git?: GitScript }): Harness {
   const workspace = memoryWorkspace();
   const gitScript = script.git ?? defaultGit;
   const signals = fakeSignals();
+  const lock = script.lock ?? memoryRunLock();
   const h: Harness = {
     deps: undefined as unknown as SandboxDeps,
     events,
@@ -170,6 +216,7 @@ export function harness(script: { gh: GhScript; git?: GitScript }): Harness {
     clock,
     workspace,
     signals,
+    lock,
   };
   const gh: Gh = async (args) => {
     ghCalls.push([...args]);
@@ -185,6 +232,6 @@ export function harness(script: { gh: GhScript; git?: GitScript }): Harness {
     logs.push(line);
     events.push(`log ${line}`);
   };
-  h.deps = { gh, git, clock, workspace, signals, log };
+  h.deps = { gh, git, clock, workspace, signals, lock, log };
   return h;
 }

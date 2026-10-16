@@ -3,11 +3,11 @@
 // product's own publisher, so a drift in the comment format fails here first.
 
 import { describe, expect, test } from "bun:test";
+import { evaluateCheck } from "../../scripts/sandbox/expect";
 import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
 import {
   classifyComment,
   classifyPath,
-  exitCodeFor,
   invariantViolations,
   type Observation,
   outcomeCodeOf,
@@ -94,6 +94,7 @@ describe("classifyComment", () => {
       source: "issue",
       kind: "outcome",
       code: "PRH-CRED-MISSING",
+      head: SHA,
     });
     expect(outcomeCodeOf(body)).toBe("PRH-CRED-MISSING");
   });
@@ -199,7 +200,25 @@ describe("classifyPath", () => {
     });
     const path = classifyPath(obs);
     expect(path).toBe("no-outcome");
-    expect(exitCodeFor(path, invariantViolations(obs))).toBe(1);
+    // ADAPTED (was exitCodeFor, removed with the smoke-only exit rule): the runner
+    // decides the exit, and review-free requires the reviewed path, so this fails.
+    expect(
+      evaluateCheck({ kind: "path", accept: ["reviewed"] }, obs).pass,
+    ).toBe(false);
+  });
+
+  test("hunters-failed from the status alone: the error status names the code and no comment is visible yet", () => {
+    // The status and the outcome comment are separate writes, so a read can
+    // see the status first. It names the same failure as the comment does, so
+    // it must not fall through to `error:PRH-HUNTERS-FAILED`.
+    const obs = observation({
+      comments: [],
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed in review",
+      },
+    });
+    expect(classifyPath(obs)).toBe("hunters-failed");
   });
 
   test("skipped: a skip marker names its reason", () => {
@@ -288,20 +307,40 @@ describe("S7 invariants", () => {
     });
     expect(classifyPath(obs)).toBe("no-outcome");
     expect(invariantViolations(obs).length).toBe(1);
-    expect(exitCodeFor(classifyPath(obs), invariantViolations(obs))).toBe(1);
   });
 });
 
-describe("exit code", () => {
-  test("0 for reviewed and hunters-failed without a violation, 1 for everything else", () => {
-    expect(exitCodeFor("reviewed", [])).toBe(0);
-    expect(exitCodeFor("hunters-failed", [])).toBe(0);
-    expect(exitCodeFor("hunters-failed", ["S7 violation"])).toBe(1);
-    expect(exitCodeFor("reviewed", ["S7 violation"])).toBe(1);
-    expect(exitCodeFor("error:PRH-CRED-MISSING", [])).toBe(1);
-    expect(exitCodeFor("skipped:size", [])).toBe(1);
-    expect(exitCodeFor("no-outcome", [])).toBe(1);
-    expect(exitCodeFor("timed-out", [])).toBe(1);
+// The publisher writes head=<sha> into every outcome marker. An outcome left by an
+// earlier head on the PR is that head's failure, so it must not decide this one.
+describe("the head an outcome belongs to", () => {
+  const OLD = "e".repeat(40);
+
+  test("an outcome comment names the head it was written for", () => {
+    const body = `<!-- pr-hero-outcome v=1 head=${OLD} run=1 attempt=1 -->\n\n## PRH-CRED-MISSING`;
+    expect(classifyComment(body, "issue")).toEqual({
+      source: "issue",
+      kind: "outcome",
+      code: "PRH-CRED-MISSING",
+      head: OLD,
+    });
+  });
+
+  test("an outcome of an earlier head does not decide this head's path", () => {
+    const obs = observation({
+      comments: [
+        {
+          source: "issue",
+          kind: "outcome",
+          code: "PRH-CRED-MISSING",
+          head: OLD,
+        },
+      ],
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed",
+      },
+    });
+    expect(classifyPath(obs)).toBe("hunters-failed");
   });
 });
 
@@ -311,5 +350,83 @@ describe("report", () => {
     expect(lines.some((l) => /path\s+reviewed/.test(l))).toBe(true);
     expect(lines.some((l) => /S7\s+ok/.test(l))).toBe(true);
     expect(lines.some((l) => /exit\s+0/.test(l))).toBe(true);
+  });
+});
+
+// ADAPTED from the "exit code" table, which pinned the removed exitCodeFor. The
+// review-free check and the S7 invariants now decide the exit, the same way for
+// every path. hunters-failed no longer exits 0 here: review-free requires a
+// reviewed head, and a hunters-failed run is a labelled flake (scenario.test.ts).
+describe("exit code (adapted from exitCodeFor)", () => {
+  const REVIEWED = { kind: "path", accept: ["reviewed"] } as const;
+  const exitOf = (obs: Observation): 0 | 1 =>
+    evaluateCheck(REVIEWED, obs).pass && invariantViolations(obs).length === 0
+      ? 0
+      : 1;
+
+  test("0 only for a reviewed head without a violation; 1 for every other path and for an S7 violation", () => {
+    expect(exitOf(observation())).toBe(0);
+    // hunters-failed: positive evidence on the status, no report.
+    expect(
+      exitOf(
+        observation({
+          comments: [],
+          status: {
+            state: "error",
+            description: "PRH-HUNTERS-FAILED: every hunter failed",
+          },
+        }),
+      ),
+    ).toBe(1);
+    // error:<code>: the outcome of this head names a credential failure.
+    expect(
+      exitOf(
+        observation({
+          comments: [
+            {
+              source: "issue",
+              kind: "outcome",
+              code: "PRH-CRED-MISSING",
+              head: SHA,
+            },
+          ],
+          status: { state: "error", description: "PRH-CRED-MISSING: no key" },
+        }),
+      ),
+    ).toBe(1);
+    // skipped:size: a skip marker, no status.
+    expect(
+      exitOf(
+        observation({
+          comments: [{ source: "issue", kind: "skip", skip: "size" }],
+          status: undefined,
+        }),
+      ),
+    ).toBe(1);
+    // no-outcome: the failed step, no code anywhere.
+    expect(
+      exitOf(
+        observation({
+          comments: [],
+          status: { state: "error", description: "review did not finish" },
+        }),
+      ),
+    ).toBe(1);
+    // reviewed, but an outcome of an earlier head sits on a success status: S7.
+    expect(
+      exitOf(
+        observation({
+          comments: [
+            { source: "issue", kind: "report", head: SHA },
+            {
+              source: "issue",
+              kind: "outcome",
+              code: "PRH-CRED-MISSING",
+              head: "e".repeat(40),
+            },
+          ],
+        }),
+      ),
+    ).toBe(1);
   });
 });

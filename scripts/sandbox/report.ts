@@ -1,6 +1,7 @@
 // The table a smoke run prints. Pure: it returns lines and never writes, so the
 // runner decides where they go and the tests read them directly.
 
+import type { CheckResult } from "./expect";
 import type { Observation, SmokePath } from "./observe";
 
 const HUNTERS_FAILED_NOTE =
@@ -57,5 +58,65 @@ export function renderReport(
     lines.push(
       `  note${" ".repeat(Math.max(0, width - 4))}  ${HUNTERS_FAILED_NOTE}`,
     );
+  return lines;
+}
+
+// One scenario's outcome, as the final table shows it.
+export interface ScenarioResult {
+  name: string;
+  prUrl?: string;
+  path: string;
+  checks: readonly CheckResult[];
+  s7: readonly string[];
+  error?: string;
+  refused?: boolean;
+  exitCode: 0 | 1;
+}
+
+// The verdict of a failed check whose run hunters-failed: the same failure, named as
+// the free model's flake so a re-run is the obvious next step.
+const FREE_MODEL_FLAKE_VERDICT = "FAIL (free-model hunters failed: re-run)";
+
+// The run's one report: a row per scenario (path, S7, exit, PR), with each of its
+// expectations under it as PASS or FAIL, so a failed check is named where it
+// happened. Pure: the caller decides where the lines go.
+export function renderScenarioTable(
+  results: readonly ScenarioResult[],
+): string[] {
+  const header = ["scenario", "path", "S7", "exit", "PR"];
+  const rows = results.map((r) => [
+    r.name,
+    r.path,
+    r.s7.length === 0 ? "ok" : `${r.s7.length} violation(s)`,
+    String(r.exitCode),
+    r.prUrl ?? "-",
+  ]);
+  const widths = header.map((h, i) =>
+    Math.max(h.length, ...rows.map((row) => (row[i] ?? "").length)),
+  );
+  const line = (cells: readonly string[]) =>
+    cells
+      .map((cell, i) => cell.padEnd(widths[i] ?? 0))
+      .join("  ")
+      .trimEnd();
+  const lines = [line(header), ...rows.map(line)];
+  for (const r of results) {
+    for (const check of r.checks) {
+      const detail =
+        check.pass || check.detail === undefined ? "" : ` (${check.detail})`;
+      const verdict = check.pass
+        ? "PASS"
+        : check.cause === "free-model-hunters-failed"
+          ? FREE_MODEL_FLAKE_VERDICT
+          : "FAIL";
+      lines.push(`  ${verdict}  ${r.name}: ${check.label}${detail}`);
+    }
+    for (const violation of r.s7) lines.push(`  FAIL  ${r.name}: ${violation}`);
+    if (r.error !== undefined) {
+      lines.push(
+        `  ${r.refused === true ? "REFUSED" : "ERROR"}  ${r.name}: ${r.error}`,
+      );
+    }
+  }
   return lines;
 }

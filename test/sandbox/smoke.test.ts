@@ -12,7 +12,7 @@ import {
   workflowFor,
 } from "../../scripts/sandbox/seed";
 import { runSmoke } from "../../scripts/sandbox/smoke";
-import { fail, type Harness, HEAD_SHA, harness, ok } from "./fakes";
+import { fail, type Harness, HEAD_SHA, harness, ok, START_ISO } from "./fakes";
 
 const PR_NUMBER = 7;
 const PR_URL = `https://github.com/${SANDBOX_REPO}/pull/${PR_NUMBER}`;
@@ -53,6 +53,9 @@ interface World {
   artifacts: string[];
   remoteFiles: Map<string, string>;
   statusFails: boolean;
+  // When GitHub reports the scenario PR as created. The harness clock starts at the
+  // same moment, so the PR reads as fresh.
+  prCreatedAt: string;
 }
 
 function world(overrides: Partial<World> = {}): World {
@@ -67,6 +70,7 @@ function world(overrides: Partial<World> = {}): World {
     artifacts: [`pr-hero-run-${PR_NUMBER}-${HEAD_SHA}`],
     remoteFiles: sandboxFiles("v0.2.0"),
     statusFails: false,
+    prCreatedAt: START_ISO,
     ...overrides,
   };
 }
@@ -131,6 +135,9 @@ function ghFor(w: World) {
       }
       if (path.includes("/issues/")) {
         return ok(JSON.stringify(w.issueComments.map((body) => ({ body }))));
+      }
+      if (/\/pulls\/\d+$/.test(path)) {
+        return ok(JSON.stringify({ created_at: w.prCreatedAt }));
       }
       if (path.includes("/pulls/")) {
         return ok(JSON.stringify(w.inlineComments.map((body) => ({ body }))));
@@ -239,7 +246,8 @@ describe("smoke: the planted-bug PR", () => {
     expect(messages).toEqual(["refactor: simplify volume scaling"]);
     const branch =
       h.gitCalls.find((c) => c.args[0] === "checkout")?.args[2] ?? "";
-    expect(branch).toMatch(/^sandbox\/smoke-\d{8}T\d{6}Z$/);
+    // smoke is the review-free scenario, so its branch is named after it.
+    expect(branch).toMatch(/^sandbox\/review-free-\d{8}T\d{6}Z$/);
     expect(h.gitCalls.map((c) => c.args)).toContainEqual([
       "push",
       "-u",
@@ -443,8 +451,9 @@ describe("smoke: transient poll failures", () => {
     });
     const code = await runSmoke(h.deps, { ...SMOKE, timeoutMs: 10 * 60_000 });
     expect(code).toBe(1);
+    // Adapted: smoke is the review-free scenario, so the runner names it as such.
     const stoppedAt = h.events.findIndex((e) =>
-      e.startsWith("log smoke stopped early"),
+      e.startsWith("log scenario review-free stopped early"),
     );
     expect(stoppedAt).toBeGreaterThan(0);
     expect(
@@ -745,7 +754,8 @@ describe("smoke: a run the opened event queued", () => {
     expect(await runSmoke(h.deps, CLEANUP_SMOKE)).toBe(130);
     expect(
       h.logs.some((l) =>
-        /^no run on sandbox\/smoke-\S+ appeared within 60s/.test(l),
+        // Adapted: the branch is named for its scenario, review-free.
+        /^no run on sandbox\/review-free-\S+ appeared within 60s/.test(l),
       ),
     ).toBe(true);
     expect(h.ghCalls.some((c) => c[0] === "run" && c[1] === "cancel")).toBe(
