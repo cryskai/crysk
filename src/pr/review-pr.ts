@@ -19,7 +19,7 @@
 //     stay outside of.
 
 import path from "node:path";
-import { writeCliRecord } from "#ci/cli-record";
+import { cliHeadField, writeCliRecord } from "#ci/cli-record";
 import { planCiSizeSkip } from "#ci/gates";
 import { withCiWorkflowGroup } from "#ci/reporter";
 import { pipelineConfigInput } from "#config/config";
@@ -53,7 +53,7 @@ import {
   fetchPrReviewComments,
   ghPrFiles,
 } from "#pr/pr";
-import { commitStatusCompletion, createPrRunDir } from "#pr/preflight";
+import { createPrRunDir } from "#pr/preflight";
 import { publishRunOutcome } from "#pr/publish-outcome";
 import { resolveEagerLocalIgnore, resolvePrFetchAndRange } from "#pr/range";
 import {
@@ -89,30 +89,23 @@ import { worktreeLockPath } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
 import type { ProductionRuntime } from "../production-runtime";
 
-// The CLI's verdict on its own pipeline, for cli.json (odd/tasks/agent-first-ci.md,
-// T2c). reviewPr writes it right after runPipeline returns and before
-// publishRunOutcome. The pipeline's verdict stands: a failure while posting does
-// not turn a completed review into an error, because the fatal path keeps a
-// terminal record (writeFatalCliRecord, src/ci/cli-record.ts). The commit status
-// settled in teardown reads the same completion predicate, so it stays a success
-// too, and the record and the status cannot disagree about success. A pipeline
-// that never returned writes nothing: its throw reaches the fatal record instead.
+// The CLI's record for a pipeline whose every hunter failed (cli.json,
+// odd/tasks/agent-first-ci.md, T2c). reviewPr writes it right after the pipeline's
+// group closes, before publishRunOutcome. A completed pipeline writes NOTHING here:
+// the pipeline finishing is not the review being delivered, so reviewed is written by
+// publishRunOutcome at the delivery point (recordReviewDelivered). A failure while
+// posting therefore never leaves reviewed behind. A pipeline that never returned
+// writes nothing either: its throw reaches the fatal record instead.
 export function recordPipelineOutcome(
   result: { readonly sessionFailed: boolean } | undefined,
   headSha: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
-  const head = /^[0-9a-f]{40}$/.test(headSha) ? headSha : undefined;
-  const headField = head === undefined ? {} : { head_sha: head };
-  const completion = commitStatusCompletion({
-    pipelineFinished: result !== undefined,
-    sessionFailed: result?.sessionFailed === true,
-  });
-  if (completion === "success") {
-    writeCliRecord({ v: 1, outcome: "reviewed", ...headField }, env);
-  } else if (result?.sessionFailed === true) {
-    writeCliRecord({ v: 1, outcome: "hunters-failed", ...headField }, env);
-  }
+  if (result?.sessionFailed !== true) return;
+  writeCliRecord(
+    { v: 1, outcome: "hunters-failed", ...cliHeadField(headSha) },
+    env,
+  );
 }
 
 export async function reviewPr(

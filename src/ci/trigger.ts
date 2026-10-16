@@ -460,6 +460,10 @@ export const NODE_FS: OutcomeFs = {
   },
 };
 
+// The suffix of the temp file writeRecordAtomically writes before its rename. The
+// stale-file clearing below names the same file, so the two cannot drift apart.
+const RECORD_TEMP_SUFFIX = ".tmp";
+
 // WHY tmp then rename: the publish step reads the record in a later step, and
 // it must never see a half-written file. A failed write removes its temp file,
 // so nothing partial is left for the publisher to misread. The CLI's cli.json
@@ -471,7 +475,7 @@ export function writeRecordAtomically(
   fs: OutcomeFs,
 ): void {
   const finalPath = path.join(dir, name);
-  const tempPath = `${finalPath}.tmp`;
+  const tempPath = `${finalPath}${RECORD_TEMP_SUFFIX}`;
   fs.mkdir(dir);
   try {
     fs.writeFile(tempPath, text);
@@ -543,9 +547,19 @@ function runIdentity(deps: CiTriggerDeps): RunIdentity {
 const CLI_STARTED_MARKER = "cli-started";
 const SETUP_RECORD = "setup.json";
 const CLI_RECORD = "cli.json";
+// WHY the temp file too: the CLI's record write goes through writeRecordAtomically,
+// which writes cli.json.tmp before its rename. A stale one another user left in
+// this directory can make that write fail (EACCES), so the record is lost. Cleared
+// here, the CLI's write starts from no temp file.
+const CLI_RECORD_TEMP = `${CLI_RECORD}${RECORD_TEMP_SUFFIX}`;
 
 function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
-  for (const name of [CLI_STARTED_MARKER, SETUP_RECORD, CLI_RECORD]) {
+  for (const name of [
+    CLI_STARTED_MARKER,
+    SETUP_RECORD,
+    CLI_RECORD,
+    CLI_RECORD_TEMP,
+  ]) {
     fs.remove(path.join(dir, name));
   }
 }

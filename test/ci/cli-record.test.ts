@@ -15,7 +15,11 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { writeCliRecord, writeFatalCliRecord } from "#ci/cli-record";
+import {
+  recordReviewDelivered,
+  writeCliRecord,
+  writeFatalCliRecord,
+} from "#ci/cli-record";
 import { CLI_RECORD_FILE, type CliRecord, parseCliRecord } from "#ci/outcome";
 
 const SHA = "e".repeat(40);
@@ -172,15 +176,22 @@ describe("writeFatalCliRecord", () => {
     expect(chunks).toEqual([]);
   });
 
-  test("an earlier error record is replaced by the new fatal error, not kept", () => {
-    writeCliRecord({ v: 1, outcome: "error", cls: { kind: "unknown" } }, env);
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
-    expect(parseCliRecord(onDisk())).toEqual({
+  // WHY kept, not replaced: the writer closest to the failure (a posting or a
+  // skip notice that threw) already named its step, and the top-level catch
+  // knows less. The trigger clears cli.json at job start, so this record is ours.
+  test("an earlier error record that names its step is kept, and one line names the kept outcome", () => {
+    const posting = {
       v: 1,
       outcome: "error",
-      cls: unmapped,
-    });
-    expect(chunks).toEqual([]);
+      cls: { kind: "unknown" },
+      params: { step: "posting the review" },
+    } as const;
+    writeCliRecord(posting, env);
+    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    expect(parseCliRecord(onDisk())).toEqual(posting);
+    expect(chunks).toEqual([
+      "pr-hero: kept the recorded error outcome; a later step failed\n",
+    ]);
   });
 
   test("with PRHERO_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
@@ -208,5 +219,44 @@ describe("writeFatalCliRecord", () => {
     expect(chunks).toEqual([
       "pr-hero: could not write the outcome record: ENOTDIR\n",
     ]);
+  });
+});
+
+describe("recordReviewDelivered", () => {
+  let root: string;
+  let dir: string;
+  let env: Record<string, string>;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-delivered-"));
+    dir = path.join(root, "outcome");
+    env = { PRHERO_OUTCOME_DIR: dir };
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function onDisk(): string {
+    return readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
+  }
+
+  test("writes reviewed with the head the review was delivered for", () => {
+    recordReviewDelivered(SHA, env);
+    expect(parseCliRecord(onDisk())).toEqual({
+      v: 1,
+      outcome: "reviewed",
+      head_sha: SHA,
+    });
+  });
+
+  test("leaves out a head that is not a 40-character lowercase SHA, so the record still parses", () => {
+    recordReviewDelivered("not-a-sha", env);
+    expect(parseCliRecord(onDisk())).toEqual({ v: 1, outcome: "reviewed" });
+  });
+
+  test("with PRHERO_OUTCOME_DIR unset, nothing is written", () => {
+    recordReviewDelivered(SHA, {});
+    expect(existsSync(dir)).toBe(false);
   });
 });

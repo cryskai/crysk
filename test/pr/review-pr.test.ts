@@ -27,17 +27,17 @@ describe("recordPipelineOutcome", () => {
     dir = mkdtempSync(path.join(os.tmpdir(), "prhero-pipeline-record-"));
   }
 
-  test("a finished pipeline with live hunters records reviewed, with the head it reviewed", () => {
+  // WHY no reviewed here: the pipeline finishing is not the review being
+  // delivered. publishRunOutcome writes reviewed once the findings are posted
+  // (or the artifacts exist when posting is off), so a posting failure never
+  // leaves a reviewed record behind.
+  test("a finished pipeline with live hunters writes nothing: reviewed waits for the delivery", () => {
     setup();
     try {
       recordPipelineOutcome({ sessionFailed: false }, SHA, {
         PRHERO_OUTCOME_DIR: dir,
       });
-      expect(parseCliRecord(written() ?? "")).toEqual({
-        v: 1,
-        outcome: "reviewed",
-        head_sha: SHA,
-      });
+      expect(written()).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -72,12 +72,12 @@ describe("recordPipelineOutcome", () => {
   test("a head that is not a 40-character lowercase SHA is left out, so the record still parses", () => {
     setup();
     try {
-      recordPipelineOutcome({ sessionFailed: false }, "not-a-sha", {
+      recordPipelineOutcome({ sessionFailed: true }, "not-a-sha", {
         PRHERO_OUTCOME_DIR: dir,
       });
       expect(parseCliRecord(written() ?? "")).toEqual({
         v: 1,
-        outcome: "reviewed",
+        outcome: "hunters-failed",
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -220,6 +220,25 @@ describe("decidePublication — the pure table", () => {
       expect(plan.status?.description).toStartWith("PRH-UNCLASSIFIED: ");
     });
 
+    // WHY the step is named: a posting failure is the CLI's own error, and the
+    // step tells the operator which stage the review stopped at.
+    test("a posting failure names the posting step in the status and the comment", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "error",
+          cls: { kind: "unknown" },
+          params: { step: "posting the review" },
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.status?.description).toContain("posting the review");
+      expect(plan.commentBody).toContain("posting the review");
+    });
+
     test("a CLI error on a PR the trigger could not resolve is annotation only", () => {
       const plan = decidePublication({
         record: record({ pr: undefined, head_sha: undefined }),
@@ -232,9 +251,12 @@ describe("decidePublication — the pure table", () => {
     });
 
     // WHY stopped-before-reporting: no record after cli-started means the CLI
-    // exited without writing one, a crash, a kill, or a usage error. The text
-    // claims only what is known: it stopped before it reported an outcome.
-    test("no CLI record after the CLI started is PRH-UNCLASSIFIED: it stopped before reporting", () => {
+    // exited without writing one, a crash, a kill, a usage error, or a record
+    // write that failed. The text claims only what is known: it stopped before
+    // it reported an outcome.
+    // WHY comment only: the publisher cannot tell those causes apart, so it
+    // never overrides the CLI's own commit status (decideCliOutcome says why).
+    test("no CLI record after the CLI started is PRH-UNCLASSIFIED as a comment only: no status, whatever head the trigger saw", () => {
       const plan = decidePublication({ record: record(), cliStarted: true });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
@@ -243,8 +265,11 @@ describe("decidePublication — the pure table", () => {
       expect(plan.rendered.annotation).toContain(
         "pr-hero stopped at the review before it reported an outcome and could not tell why",
       );
-      expect(plan.headSha).toBe(SHA);
-      expect(plan.status?.state).toBe("error");
+      expect(plan.headSha).toBeUndefined();
+      expect(plan.status).toBeUndefined();
+      expect(plan.commentBody.split("\n")[0]).toBe(
+        `<!-- pr-hero-outcome v=1 head=unknown run=4242 attempt=1 -->`,
+      );
     });
 
     test("a CLI record is ignored when the CLI did not start: the install failure stands", () => {
@@ -835,7 +860,10 @@ describe("runPublish — the shell", () => {
     );
   });
 
-  test("with no CLI record, the run stopped before reporting: PRH-UNCLASSIFIED is posted on the PR", () => {
+  // WHY no status: F004 on #330. A completed review whose cli.json write failed
+  // (ENOSPC, or EACCES on a stale cli.json.tmp) used to get an `error` status
+  // after the CLI's own success status, and turned green into red.
+  test("with no CLI record, the run stopped before reporting: PRH-UNCLASSIFIED is posted as one comment, never as a status", () => {
     const run = runPublishIn({ record: record(), cliStarted: true });
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
@@ -843,10 +871,10 @@ describe("runPublish — the shell", () => {
       "pr-hero stopped at the review before it reported an outcome",
     );
     expect(run.summary).toContain("### PRH-UNCLASSIFIED");
-    expect(statusCalls(run.calls)).toHaveLength(1);
-    expect(commentPost(run.calls)?.args).toContain(
-      `repos/${REPO}/issues/7/comments`,
-    );
+    expect(statusCalls(run.calls)).toEqual([]);
+    const posts = run.calls.filter((call) => call.args.includes("POST"));
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.args).toContain(`repos/${REPO}/issues/7/comments`);
   });
 
   test.each([
@@ -871,6 +899,8 @@ describe("runPublish — the shell", () => {
       });
       expect(run.exitCode).toBe(0);
       expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+      // An unreadable cli.json is the same as a missing one: no status either.
+      expect(statusCalls(run.calls)).toEqual([]);
     },
   );
 

@@ -2,7 +2,9 @@
 // outcome of a run becomes ONE annotation, ONE step summary and, when the PR is
 // known, ONE sticky comment on that PR. The commit status is posted only when a
 // valid head sha is known: a status needs a sha, a comment does not. The
-// comment's marker says head=unknown when no head is known. The trigger writes
+// comment's marker says head=unknown when no head is known. One case posts a
+// comment with no status even when a head is known: a CLI-started run with no
+// cli.json (see decideCliOutcome). The trigger writes
 // the decision to trigger.json, the setup step may leave setup.json, and the CLI
 // leaves cli.json for each terminal outcome of a review it started. This step
 // reads them and speaks.
@@ -70,8 +72,9 @@ const SETUP_RECORD_FILE = "setup.json";
 // outcome is about the review, so the publisher names it.
 const REVIEW_STEP = "the review";
 // The step a run names when no cli.json exists. The CLI exits without writing a
-// record on a usage error and on a crash or kill, and the publisher cannot tell
-// which, so the text claims only that it stopped before it reported an outcome.
+// record on a usage error, on a crash or kill, or when its record write failed,
+// and the publisher cannot tell which, so the text claims only that it stopped
+// before it reported an outcome.
 const STOPPED_STEP = "the review before it reported an outcome";
 // What a hunters-failed record says about the failure: the CLI writes no detail,
 // and the publisher's wording names what its own record means (sessionFailed:
@@ -121,7 +124,8 @@ export type Publication =
       // comments of an older run, or of an earlier attempt of this run.
       runId: string;
       runAttempt: number;
-      // Undefined when the record has no valid head: the comment still posts.
+      // Undefined when no head is known (no valid head in the record, or a
+      // CLI-started run with no cli.json): the comment still posts.
       headSha: string | undefined;
       // Undefined exactly when headSha is: a commit status needs a sha.
       status: StatusPost | undefined;
@@ -168,7 +172,8 @@ export function decidePublication(input: {
 // speaks for those with the code the record names. Cleanup needs a completed
 // review: a stale outcome comment contradicts it, and nothing else removes that
 // comment. A run with no record stopped before it reported, so it is the code for
-// that, never silence.
+// that, never silence, but only as a comment: the status stays the CLI's (see the
+// no-record branch below).
 function decideCliOutcome(
   record: TriggerRecord,
   cliRecord: CliRecord | undefined,
@@ -179,6 +184,16 @@ function decideCliOutcome(
     runUrl: record.run_url,
   };
   if (cliRecord === undefined) {
+    // WHY no status (F004 on #330): without a record the publisher cannot tell a
+    // killed CLI from one whose record write failed (ENOSPC, or EACCES on a stale
+    // cli.json.tmp). The CLI's own commit status already says how far it got:
+    // success once the pipeline finished, error when its own teardown settled a
+    // failure, pending when a kill left it in flight, or none when it died before
+    // posting pending. A pending or missing required check still blocks a merge,
+    // so the publisher explains in a comment and never overrides that status. An
+    // error status here turned a completed review red. Passing no head is what
+    // keeps the status out, since a status needs a sha. The marker then says
+    // head=unknown even when the trigger knew one; nothing reads that field.
     return remoteOrLocal(
       record,
       renderError(
@@ -186,7 +201,7 @@ function decideCliOutcome(
         { ...runParams, step: STOPPED_STEP },
         "action",
       ),
-      record.head_sha,
+      undefined,
     );
   }
   switch (cliRecord.outcome) {

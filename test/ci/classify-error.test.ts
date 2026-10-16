@@ -14,9 +14,12 @@ import {
 } from "../../src/model/routing";
 import {
   admitOpenCodeVersionPair,
+  DefaultTransportRegistry,
   OpenCodeProductionGatedError,
   OpenCodeVersionAdmissionError,
   RouteAdmissionError,
+  SUPPORTED_OPENCODE_SDK_VERSION,
+  SUPPORTED_OPENCODE_SERVER_VERSION,
 } from "../../src/transport-registry";
 import { OpenCodeSdkUnavailableError } from "../../src/transports/opencode-admission";
 
@@ -56,6 +59,48 @@ describe("classifyCliError: the mapped classes", () => {
       kind: "capability",
       issue: "version_unsupported",
     });
+  });
+
+  test("an OpenCode identity production cannot observe is unknown, not a version mismatch", () => {
+    // The real throw site: production, with evidence that passes the D1-11 gate
+    // (so the gate is not the one that throws) and no observed identity.
+    const ready = {
+      sdkAvailable: true,
+      credentialAuthority: true,
+      workspaceBroker: true,
+      pricingReady: true,
+    };
+    let thrown: unknown;
+    try {
+      new DefaultTransportRegistry({ mode: "production" }).get("opencode", {
+        evidence: new Map([["opencode", ready]]),
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(OpenCodeVersionAdmissionError);
+    expect(classifyCliError(thrown)).toEqual({ kind: "unknown" });
+  });
+
+  test("declared OpenCode versions that contradict the observed identity are unknown, not a version mismatch", () => {
+    // The real throw site: each declared version is admitted on its own, and
+    // only the pair disagrees with the identity that was observed.
+    let thrown: unknown;
+    try {
+      new DefaultTransportRegistry({ mode: "conformance" }).get("opencode", {
+        observedOpenCodeIdentity: {
+          sdkVersion: SUPPORTED_OPENCODE_SDK_VERSION,
+          serverVersion: SUPPORTED_OPENCODE_SERVER_VERSION,
+          executablePath: "/fixture/opencode",
+          executableSha256: "fixture",
+        },
+        serverVersion: "1.18.23",
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(OpenCodeVersionAdmissionError);
+    expect(classifyCliError(thrown)).toEqual({ kind: "unknown" });
   });
 
   test("an OpenCode SDK that is not installed is capability/sdk_unavailable", () => {

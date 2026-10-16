@@ -11,9 +11,14 @@
 //   duplicate mappings"; its text asks to remove the duplicate.
 // - UnauthorizedRouteError (src/model/routing.ts) -> route/spend-disabled: every
 //   throw says "Spend is disabled"; its text asks to enable spend.
-// - OpenCodeVersionAdmissionError (src/transport-registry.ts) -> capability/
-//   version_unsupported: every throw is a version pair check; PRH-RUNTIME-UNAVAILABLE
-//   calls the action-installed runtime a pr-hero defect, which the pinned version is.
+// - OpenCodeVersionAdmissionError (src/transport-registry.ts) with reason "version"
+//   -> capability/version_unsupported: the pinned version-pair checks
+//   (admitOpenCodeVersionPair, loadOpenCodeSdk); PRH-RUNTIME-UNAVAILABLE calls the
+//   action-installed runtime a pr-hero defect, which the pinned version is.
+// - The same class with reason "identity" -> unknown: the observed identity is missing
+//   in production, or the declared versions contradict it (transport-registry.ts). That
+//   is not a version mismatch, and nothing here can name its owner, so the record does
+//   not guess one.
 // - OpenCodeSdkUnavailableError (src/transports/opencode-admission.ts) -> capability/
 //   sdk_unavailable: "is not installed"; the same code, the local text says reconcile.
 //
@@ -45,7 +50,9 @@ export function classifyCliError(error: unknown): CliErrorClass {
     return { kind: "route", reason: "spend-disabled" };
   }
   if (error instanceof OpenCodeVersionAdmissionError) {
-    return { kind: "capability", issue: "version_unsupported" };
+    return error.reason === "identity"
+      ? { kind: "unknown" }
+      : { kind: "capability", issue: "version_unsupported" };
   }
   if (error instanceof OpenCodeSdkUnavailableError) {
     return { kind: "capability", issue: "sdk_unavailable" };

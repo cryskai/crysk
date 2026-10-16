@@ -1180,6 +1180,24 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     }
   });
 
+  test("a cli.json.tmp left by an earlier job is removed at trigger start, the name the CLI's record write uses", () => {
+    // WHY: writeRecordAtomically writes `<file>.tmp` and renames it. A stale temp
+    // file another user left in the directory can make the CLI's own write fail
+    // (EACCES), which drops its record and turns a completed review into an
+    // unclassified outcome.
+    const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-cli-tmp-"));
+    try {
+      const dir = path.join(root, "pr-hero-outcome");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "cli.json.tmp"), "stale\n");
+      runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      expect(existsSync(path.join(dir, "cli.json.tmp"))).toBe(false);
+      expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a review whose PR resolves records no class and no error", () => {
     const run = outcomeRun(baseEnv());
     expect(run.record?.cls).toBeUndefined();

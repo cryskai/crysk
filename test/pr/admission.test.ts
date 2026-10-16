@@ -4,7 +4,7 @@
 // `spawnFn`; the ledger record and the check run sent to GitHub are the
 // observables.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +23,8 @@ import {
   settleCiAdmissionLedger,
   settleHeldAdmissionLedgerOnSignal,
 } from "#pr/admission";
+import type { repostMarkedPrComment } from "#pr/pr";
+import { CliError } from "../../src/errors";
 
 const HEAD = "b".repeat(40);
 const PR = 7;
@@ -258,6 +260,79 @@ describe("publishCiSkip: the outcome record", () => {
       }
     },
   );
+
+  // WHY the order: the skipped record tells the publisher the skip reached the
+  // PR. Written before the repost, a notice that then failed would still read
+  // as skipped, and the record would name an outcome that never happened.
+  describe("with post on", () => {
+    let dir: string;
+    let saved: string | undefined;
+
+    beforeEach(() => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-post-"));
+      saved = process.env.PRHERO_OUTCOME_DIR;
+      process.env.PRHERO_OUTCOME_DIR = dir;
+    });
+
+    afterEach(() => {
+      restoreOutcomeDir(saved);
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    function skipInput(repost: typeof repostMarkedPrComment) {
+      return {
+        operatorRoot: "/unused",
+        prNumber: PR,
+        post: true,
+        isCi: false,
+        stepSummaryFlag: false,
+        plan: planFor("skipped-size"),
+        noticeMessage: "pr-hero review skipped — fixture",
+        repost,
+      };
+    }
+
+    function readRecord(): unknown {
+      return parseCliRecord(
+        readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8"),
+      );
+    }
+
+    test("the skipped record is written only after the notice is reposted", async () => {
+      let recordAtRepost: boolean | undefined;
+      const repost = (async () => {
+        recordAtRepost = existsSync(path.join(dir, CLI_RECORD_FILE));
+        return { commentId: 1, deletedIds: [] };
+      }) as typeof repostMarkedPrComment;
+      expect(await publishCiSkip(skipInput(repost))).toBe(0);
+      expect(recordAtRepost).toBe(false);
+      expect(readRecord()).toEqual({ v: 1, outcome: "skipped", skip: "size" });
+    });
+
+    test("a notice that cannot be reposted records error at the notice step, never skipped, and rethrows", async () => {
+      const failure = new CliError("gh api (post PR comment) failed: fixture");
+      const repost = (async () => {
+        throw failure;
+      }) as typeof repostMarkedPrComment;
+      await expect(publishCiSkip(skipInput(repost))).rejects.toBe(failure);
+      expect(readRecord()).toEqual({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "unknown" },
+        params: { step: "posting the skip notice" },
+      });
+    });
+
+    test("with no outcome directory, a reposted notice writes nothing", async () => {
+      delete process.env.PRHERO_OUTCOME_DIR;
+      const repost = (async () => ({
+        commentId: 1,
+        deletedIds: [],
+      })) as typeof repostMarkedPrComment;
+      expect(await publishCiSkip(skipInput(repost))).toBe(0);
+      expect(existsSync(path.join(dir, CLI_RECORD_FILE))).toBe(false);
+    });
+  });
 
   test("the notice and the exit code are identical with and without the outcome directory", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-same-"));

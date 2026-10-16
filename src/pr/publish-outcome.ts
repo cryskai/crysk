@@ -25,6 +25,8 @@
 // reassigning the binding itself, so passing the reference through is enough.
 
 import path from "node:path";
+import { classifyCliError } from "#ci/classify-error";
+import { recordReviewDelivered, writeCliRecord } from "#ci/cli-record";
 import { ciExitCode } from "#ci/gates";
 import {
   ingestReviewMetrics,
@@ -41,7 +43,7 @@ import { publishCiReviewIfEligible } from "#pr/ci-publish";
 import { computeGreptileComparison } from "#pr/comparison";
 import type { PrDiscoveryResult } from "#pr/discovery";
 import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
-import { postFindingsIfEnabled } from "#pr/posting";
+import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
 import type { Telemetry } from "#review/findings";
 import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
@@ -86,6 +88,10 @@ export interface PublishRunOutcomeInput {
   // Fired the instant `posted` would have been assigned inside reviewPr()
   // itself — see the header above.
   onPosted: (posted: InlinePostOutcome | null) => void;
+  // Test-only seam (default: the real postFindingsIfEnabled). The posting stage
+  // reaches gh with no offline seam of its own, so the suite passes a fake that
+  // rejects or resolves, the way it drives the throw and the delivery point.
+  postFindings?: typeof postFindingsIfEnabled;
 }
 
 export async function publishRunOutcome(
@@ -125,6 +131,13 @@ export async function publishRunOutcome(
     result,
     wallMs,
   });
+  // The delivery point when posting is off: nothing is posted, so the written
+  // artifacts are the delivery. Written after writeRunReport, never before, so a
+  // failed artifact write leaves no record of a delivery. A failed session keeps the
+  // hunters-failed record that reviewPr wrote when the pipeline returned.
+  if (!input.postEnabled && !result.sessionFailed) {
+    recordReviewDelivered(input.headSha);
+  }
 
   // 13 — the Greptile head-to-head, then (13b) the comparison.json
   // read-back for the observability store. See computeGreptileComparison
@@ -172,18 +185,32 @@ export async function publishRunOutcome(
   // links must be built from the SAME web url the comments were
   // published against. See postFindingsIfEnabled (src/pr/posting.ts) for
   // the full rationale.
-  const postingResult = await postFindingsIfEnabled({
-    postEnabled: input.postEnabled,
-    sessionFailed: result.sessionFailed,
-    operatorRoot: input.operatorRoot,
-    pr: input.prNumber,
-    headSha: input.headSha,
-    doc,
-    diffPatch: input.diffPatch,
-    runDir: input.runDir,
-    rereview: input.rereview,
-    rereviewPriors: input.phaseB?.priors,
-  });
+  // Only the posting call is wrapped. A throw here is the posting's own failure, so its
+  // record names the step and the publisher can say the review stopped while posting.
+  // The error is rethrown unchanged, and no stage around this call is wrapped.
+  let postingResult: PostingStageResult;
+  try {
+    postingResult = await (input.postFindings ?? postFindingsIfEnabled)({
+      postEnabled: input.postEnabled,
+      sessionFailed: result.sessionFailed,
+      operatorRoot: input.operatorRoot,
+      pr: input.prNumber,
+      headSha: input.headSha,
+      doc,
+      diffPatch: input.diffPatch,
+      runDir: input.runDir,
+      rereview: input.rereview,
+      rereviewPriors: input.phaseB?.priors,
+    });
+  } catch (error) {
+    writeCliRecord({
+      v: 1,
+      outcome: "error",
+      cls: classifyCliError(error),
+      params: { step: "posting the review" },
+    });
+    throw error;
+  }
   // The hazard this whole module exists for: fire the sink IMMEDIATELY, at
   // the exact point reviewPr() used to assign its own `posted` variable —
   // not at the end of this function, and not via the return value — so a
@@ -192,6 +219,13 @@ export async function publishRunOutcome(
   // correct for its finally block.
   const posted = postingResult.posted;
   input.onPosted(posted);
+  // THE delivery point when posting is on: the findings post has completed, so the
+  // review is delivered. Written before the summary and the CI tail, so a throw in that
+  // tail keeps reviewed (writeFatalCliRecord keeps it). A failed session does not reach
+  // a delivery: its record is hunters-failed.
+  if (input.postEnabled && !result.sessionFailed) {
+    recordReviewDelivered(input.headSha);
+  }
   const postedWebUrl = postingResult.postedWebUrl;
 
   // 15 — the summary. One shared renderer with local mode; the mode-specific parts (comparison,

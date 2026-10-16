@@ -7,13 +7,24 @@
 // or none at all. The write goes through the trigger's atomic writer, so the
 // publisher never reads a half-written file.
 //
-// The pipeline's verdict stands. recordPipelineOutcome (src/pr/review-pr.ts) writes
-// the terminal record (reviewed, hunters-failed, skipped, yielded) as soon as the
-// pipeline returns, before posting. A failure after that point is fatal, and
-// writeFatalCliRecord keeps the terminal record instead of replacing it with an
-// error: a completed review whose posting then threw is still a completed review.
-// The commit status settled in teardown reads the same completion predicate, so the
-// record and the status agree.
+// The record names what was DELIVERED, and the first, most specific writer wins:
+// - hunters-failed: recordPipelineOutcome (src/pr/review-pr.ts), when the pipeline
+//   returns with every hunter failed. Nothing was delivered, so it is a record of its own.
+// - skipped: publishCiSkip (src/pr/admission.ts), once the notice is on the PR (or
+//   the log line is printed, when posting is off).
+// - reviewed: recordReviewDelivered, from publishRunOutcome (src/pr/publish-outcome.ts),
+//   once the findings post completes, or once the artifacts exist when posting is off.
+// - error: a writer that catches a failure at its own step (a posting, a skip notice),
+//   or writeFatalCliRecord for anything else.
+// The pipeline finishing is not the review being delivered, and the commit status does
+// not say delivery: its success phase means the pipeline finished without every hunter
+// failing (its description is "review posted" or "review complete"). So the status and
+// the record can differ. A posting that throws after a finished pipeline leaves the
+// status success and the record error, and the publisher reports that error. The
+// publisher posts its own status later under the same context ("pr-hero") when it
+// knows the head, and that later status is the one GitHub shows.
+// A failure after the pipeline returns and before delivery leaves no reviewed record,
+// including a throw in the pipeline closure's finally or in the workflow group close.
 //
 // WHY ONLY BUILTINS (plus this directory's own builtins-only modules): the CLI
 // imports this module, and the rule that keeps src/ci modules free of node_modules
@@ -49,10 +60,29 @@ export function writeCliRecord(
   }
 }
 
-// The fatal path's writer: the CLI's catches call this, never writeCliRecord. It
-// replaces the record only when this job has no terminal record yet (an error, a
-// malformed file, or no file). A terminal record this job already wrote stays, and
-// one line on stderr says which outcome was kept.
+// The head field a record may name: 40 lowercase hex, or nothing, so the record still
+// parses when the head is not one. The pipeline record and the delivery record share it.
+export function cliHeadField(headSha: string): { head_sha?: string } {
+  return /^[0-9a-f]{40}$/.test(headSha) ? { head_sha: headSha } : {};
+}
+
+// The delivery writer: publishRunOutcome calls it once the review is delivered (see the
+// header for which delivery point, and why). A run that did not deliver never calls it.
+export function recordReviewDelivered(
+  headSha: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  writeCliRecord({ v: 1, outcome: "reviewed", ...cliHeadField(headSha) }, env);
+}
+
+// The fatal path's writer: the CLI's catches call this, never writeCliRecord. It keeps
+// ANY record this job already wrote, terminal or error, and writes its own error only
+// when there is no parseable record (none, or a malformed file). One line on stderr
+// says which outcome was kept.
+//
+// WHY keep an error record too: the writer closest to the failure knows more than this
+// top-level catch. A posting or a skip notice that threw has already named its step, and
+// replacing that record with an unclassified error would discard the step.
 //
 // WHY no check that the record belongs to this job: the trigger clears cli.json at
 // job start (clearStaleMarkers in trigger.ts), so a record present here was written
@@ -64,7 +94,7 @@ export function writeFatalCliRecord(
   const dir = env.PRHERO_OUTCOME_DIR ?? "";
   if (dir === "") return;
   const earlier = readEarlierRecord(dir);
-  if (earlier !== undefined && earlier.outcome !== "error") {
+  if (earlier !== undefined) {
     process.stderr.write(
       `pr-hero: kept the recorded ${earlier.outcome} outcome; a later step failed\n`,
     );
