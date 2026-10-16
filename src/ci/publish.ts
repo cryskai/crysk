@@ -1,11 +1,11 @@
-// The outcome publisher (odd/tasks/agent-first-ci.md, T2b / S3). Every outcome
-// that happens BEFORE the CLI step starts (no credential, an unresolved PR, an
-// unverifiable commenter permission, a failed install step) becomes ONE
-// annotation, ONE step summary and, when the PR is known, ONE sticky comment on
-// that PR. The commit status is posted only when a valid head sha is known: a
-// status needs a sha, a comment does not. The comment's marker says head=unknown
-// when no head is known. The trigger writes the decision to trigger.json, and the
-// setup step may leave setup.json; this step reads them and speaks.
+// The outcome publisher (odd/tasks/agent-first-ci.md, T2b / S3, T2c). Every
+// outcome of a run becomes ONE annotation, ONE step summary and, when the PR is
+// known, ONE sticky comment on that PR. The commit status is posted only when a
+// valid head sha is known: a status needs a sha, a comment does not. The
+// comment's marker says head=unknown when no head is known. The trigger writes
+// the decision to trigger.json, the setup step may leave setup.json, and the CLI
+// leaves cli.json for each terminal outcome of a review it started. This step
+// reads them and speaks.
 //
 // It runs `if: !cancelled()`: a failed install skips every later step, and this
 // step is the only one that can still say so, while a cancelled job (a
@@ -13,16 +13,20 @@
 // `publish` output, not on `run`, because `run` is false for exactly the
 // outcomes this step reports.
 //
-// It speaks for pre-CLI outcomes. `cli-started` is the marker the run step writes
-// before anything else. The CLI owns this run's status and comment (T2c moves
-// those here later), so once the CLI has started this step posts neither. What
-// is left is one thing, `cleanup`: when the CLI's own commit status on the head
-// says its review completed, it deletes the PR's older outcome comments that
-// pr-hero wrote, because an earlier run's outcome would contradict that review.
-// Only comments of an older run, or of an earlier attempt of this run, go. A CLI
-// that did not complete keeps its comments: it left no outcome of its own, so the
-// earlier comment is the only explanation on the PR. This path never posts a
-// status or a comment, and it always exits 0.
+// WHY the CLI's record decides once the CLI started: `cli-started` is the marker
+// the run step writes before the CLI runs, and cli.json says what the run did.
+// A `reviewed` record cleans up: a completed review contradicts an older run's
+// outcome comment, so pr-hero's own older outcome comments on the PR go. An
+// `error`, a `hunters-failed`, or a run with no record is published here with its
+// code, because the CLI posts no comment for those. A `skipped` or `yielded` run
+// is left alone: the CLI posted its own notice. A record that is absent,
+// unreadable or malformed reads as no record, so the run stopped before it
+// reported an outcome. Cleanup needs a PR, and it never posts a status.
+//
+// WHY the CLI's head comes first: cli.json names the head the CLI reviewed or
+// resolved, when it knows one, and that is the head its outcome belongs to. The
+// trigger's head is the fallback, since a failed `gh pr view` at trigger time can
+// leave it out.
 //
 // WHY ONLY BUILTINS (plus ./outcome): the step runs before anything is installed,
 // so a package import has no node_modules to resolve against. ./outcome is a
@@ -38,12 +42,15 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type {
+  CliRecord,
   ErrorParams,
   RenderedError,
   SetupRecord,
   TriggerRecord,
 } from "./outcome";
 import {
+  CLI_RECORD_FILE,
+  parseCliRecord,
   parseSetupRecord,
   parseTriggerRecord,
   renderCode,
@@ -55,24 +62,21 @@ import {
 const STATUS_CONTEXT = "pr-hero";
 // GitHub's limit on a commit status description.
 const STATUS_DESCRIPTION_MAX = 140;
-// The success descriptions the CLI posts when its review completed
-// (src/pr/preflight.ts, commitStatusRequest: "review posted" when it published a
-// comment, "review complete" when it did not). This module is builtins-only and
-// cannot import that file, so the test suite builds the CLI's own statuses and
-// fails here if their wording drifts.
-const CLI_REVIEW_COMPLETED_DESCRIPTIONS: readonly string[] = [
-  "review posted",
-  "review complete",
-];
 const MARKER_PREFIX = "<!-- pr-hero-outcome";
 const CLI_STARTED_FILE = "cli-started";
 const RECORD_FILE = "trigger.json";
 const SETUP_RECORD_FILE = "setup.json";
-// The CLI's findings artifact, in its run directory. Its top-level head_sha is
-// the head the CLI reviewed (src/review/findings.ts, mergeRunEnvelope).
-const FINDINGS_FILE = "findings.json";
-// A full lowercase commit id, the only shape a head can take in a status path.
-const FULL_HEAD_SHA = /^[0-9a-f]{40}$/;
+// The step a CLI outcome names. A CLI record carries no step, and every CLI
+// outcome is about the review, so the publisher names it.
+const REVIEW_STEP = "the review";
+// The step a run names when no cli.json exists. The CLI exits without writing a
+// record on a usage error and on a crash or kill, and the publisher cannot tell
+// which, so the text claims only that it stopped before it reported an outcome.
+const STOPPED_STEP = "the review before it reported an outcome";
+// What a hunters-failed record says about the failure: the CLI writes no detail,
+// and the publisher's wording names what its own record means (sessionFailed:
+// every hunter failed, src/review/findings.ts).
+const HUNTERS_DETAIL = "each hunter's session ended without a result";
 // The step an unverifiable lookup stopped at. The trigger writes the same text
 // into its record; the publisher names it itself, so the message never depends
 // on what a record carries.
@@ -92,12 +96,6 @@ interface StatusPost {
   context: "pr-hero";
   description: string;
   targetUrl: string;
-}
-
-// The CLI's own commit status on the head: the latest `pr-hero` status.
-interface CliStatus {
-  state: string;
-  description: string;
 }
 
 export type Publication =
@@ -130,52 +128,15 @@ export type Publication =
       commentBody: string;
     };
 
-// WHY the status and not an exit code: the CLI exits 0 on a size-gate skip, an
-// admission skip, manual-required and a yield to an in-flight review, and a
-// completed review can exit 1 when findings were dropped. Only the CLI's
-// teardown posts a success status, and only when its pipeline finished, so this
-// status alone says that a review completed.
-function cliReviewCompleted(status: CliStatus | undefined): boolean {
-  return (
-    status !== undefined &&
-    status.state === "success" &&
-    CLI_REVIEW_COMPLETED_DESCRIPTIONS.includes(status.description)
-  );
-}
-
-// The head the CLI reviewed, from the text of its findings.json. Only a full
-// lowercase hex sha passes, because the sha is spliced into the status read's
-// path. Never throws: anything unreadable names no head.
-export function reviewedHeadOf(findingsJson: string): string | undefined {
-  let value: unknown;
-  try {
-    value = JSON.parse(findingsJson);
-  } catch {
-    return undefined;
-  }
-  if (typeof value !== "object" || value === null || !("head_sha" in value)) {
-    return undefined;
-  }
-  const head = value.head_sha;
-  return typeof head === "string" && FULL_HEAD_SHA.test(head)
-    ? head
-    : undefined;
-}
-
 // The pure table. Which outcome this run has is the record's decision and class
 // (renderError / renderCode say what it means); whether anything can be posted
 // on a PR is the record's pr alone: the head only decides the status.
 export function decidePublication(input: {
   record: TriggerRecord | undefined;
   cliStarted: boolean;
-  // The head the CLI reviewed (see reviewedHeadOf). The cleanup gate reads the
-  // CLI's status on it, not on the trigger's head. Undefined when no run
-  // directory names one, which cleans nothing.
-  reviewedHead?: string;
-  // The reviewed head's latest pr-hero status. Read only for a review the CLI
-  // started on a known PR and reviewed head, so it is undefined everywhere else,
-  // and when the read failed or no such status exists. Undefined deletes nothing.
-  cliStatus?: CliStatus;
+  // The CLI's cli.json, read only for a review the CLI started. Undefined when
+  // the file is absent, unreadable or malformed: the same as no record.
+  cliRecord?: CliRecord;
   setup?: SetupRecord;
 }): Publication {
   const record = input.record;
@@ -184,40 +145,8 @@ export function decidePublication(input: {
     // Denied and ignored commands publish nothing, by design (T2e adds reactions).
     return { kind: "none" };
   }
-  // WHY: the CLI owns this run's status and comment, so a second outcome here
-  // would be a duplicate on the same PR. T2c hands those outcomes over. What is
-  // left is the cleanup, and only once the CLI's own status says its review
-  // completed: a stale outcome comment from an earlier run contradicts a review
-  // that completed. cli-started alone does not prove that, and a CLI that did
-  // not complete leaves no outcome of its own, so its run is left alone. T2c
-  // moves that case here. Without a PR or a reviewed head there is nothing to
-  // clean.
-  //
-  // WHY the reviewed head: the CLI posts its status on the head it reviewed
-  // (src/pr/plan.ts posts the pending one, src/pr/teardown.ts the final one) and
-  // writes that same head into its run directory's findings.json, which is where
-  // this gate reads it. The trigger's head is not used: it can be absent (a
-  // failed `gh pr view` at trigger time) or stale (the PR head moved after the
-  // trigger), and a read there can judge a status an earlier run left on that
-  // head. Without a run directory the gate cannot locate a reviewed head, so it
-  // cleans nothing. The run step publishes one only after a finished pipeline
-  // wrote findings.json (src/pr/ci-publish.ts), so a run that completed but
-  // failed after that write keeps its older comments: the safe side.
   if (record.decision === "review" && input.cliStarted) {
-    if (
-      !cliReviewCompleted(input.cliStatus) ||
-      record.pr === undefined ||
-      input.reviewedHead === undefined
-    ) {
-      return { kind: "none" };
-    }
-    return {
-      kind: "cleanup",
-      repository: record.repository,
-      pr: record.pr,
-      runId: record.run_id,
-      runAttempt: record.run_attempt,
-    };
+    return decideCliOutcome(record, input.cliRecord);
   }
 
   const params: ErrorParams = {
@@ -226,9 +155,92 @@ export function decidePublication(input: {
     runId: record.run_id,
     runUrl: record.run_url,
   };
-  const rendered = renderRecordOutcome(record, params, input.setup);
+  return remoteOrLocal(
+    record,
+    renderRecordOutcome(record, params, input.setup),
+    record.head_sha,
+  );
+}
+
+// WHY the CLI's record decides: the CLI posts its own status and comment for a
+// completed review and for a skip, so those need nothing here. It posts neither
+// for a crash, a class it could not map, or all hunters failing, so the publisher
+// speaks for those with the code the record names. Cleanup needs a completed
+// review: a stale outcome comment contradicts it, and nothing else removes that
+// comment. A run with no record stopped before it reported, so it is the code for
+// that, never silence.
+function decideCliOutcome(
+  record: TriggerRecord,
+  cliRecord: CliRecord | undefined,
+): Publication {
+  const runParams: ErrorParams = {
+    pr: record.pr,
+    runId: record.run_id,
+    runUrl: record.run_url,
+  };
+  if (cliRecord === undefined) {
+    return remoteOrLocal(
+      record,
+      renderError(
+        { kind: "unknown" },
+        { ...runParams, step: STOPPED_STEP },
+        "action",
+      ),
+      record.head_sha,
+    );
+  }
+  switch (cliRecord.outcome) {
+    case "reviewed":
+      // WHY the cleanup needs a PR and no head: the older comments are on the
+      // PR, and the completed review is the proof, whatever head the trigger saw.
+      return record.pr === undefined
+        ? { kind: "none" }
+        : {
+            kind: "cleanup",
+            repository: record.repository,
+            pr: record.pr,
+            runId: record.run_id,
+            runAttempt: record.run_attempt,
+          };
+    case "skipped":
+    case "yielded":
+      return { kind: "none" };
+    case "hunters-failed":
+      return remoteOrLocal(
+        record,
+        renderCode(
+          "PRH-HUNTERS-FAILED",
+          { ...runParams, step: REVIEW_STEP, detail: HUNTERS_DETAIL },
+          "action",
+        ),
+        cliRecord.head_sha ?? record.head_sha,
+      );
+    case "error":
+      // WHY the params merge: the review is the default step, the CLI's own
+      // params (a backend or a secret name, when it has one) replace that
+      // default, and this run's pr and run link replace both. The cls fallback
+      // only narrows the type: parseCliRecord always sets cls for an error.
+      return remoteOrLocal(
+        record,
+        renderError(
+          cliRecord.cls ?? { kind: "unknown" },
+          { step: REVIEW_STEP, ...cliRecord.params, ...runParams },
+          "action",
+        ),
+        cliRecord.head_sha ?? record.head_sha,
+      );
+  }
+}
+
+// The one place an outcome becomes a plan: the annotation and summary always, and
+// the PR's comment and status when the PR is known. The status needs a head; the
+// comment does not, and its marker says head=unknown without one.
+function remoteOrLocal(
+  record: TriggerRecord,
+  rendered: RenderedError,
+  headSha: string | undefined,
+): Publication {
   if (record.pr === undefined) return { kind: "local", rendered };
-  const headSha = record.head_sha;
   return {
     kind: "remote",
     rendered,
@@ -643,100 +655,16 @@ function readIfExists(filePath: string): string | undefined {
   return existsSync(filePath) ? readFileSync(filePath, "utf8") : undefined;
 }
 
-// One row of the head's status list, as the read's --jq filter prints it.
-interface StatusRow {
-  context: string;
-  state: string;
-  description: string;
-  createdAt: string;
-}
-
-// The newest `pr-hero` row. The read keeps the latest status of each context,
-// but the newest is still picked by time, as the CLI's own reader does
-// (src/pr/preflight.ts, latestPrHeroStatus). A row with no readable time is out.
-function latestCliStatus(rows: readonly StatusRow[]): CliStatus | undefined {
-  let latest: StatusRow | undefined;
-  let latestMs = Number.NEGATIVE_INFINITY;
-  for (const row of rows) {
-    if (row.context !== STATUS_CONTEXT) continue;
-    const createdMs = Date.parse(row.createdAt);
-    if (Number.isNaN(createdMs) || createdMs < latestMs) continue;
-    latest = row;
-    latestMs = createdMs;
-  }
-  return latest === undefined
-    ? undefined
-    : { state: latest.state, description: latest.description };
-}
-
-// The head's pr-hero status as the CLI left it. WHY the combined endpoint: it
-// returns the latest status of each context. WHY per_page=100: it pages at 30
-// contexts by default, and a busy head's pr-hero row can sit past the first
-// page; a head with more than 100 contexts still needs a further page.
-// src/pr/pr.ts reads the same endpoint. A failed read is undefined, which cleans
-// up nothing and prints nothing.
-function readCliStatus(
-  deps: PublishDeps,
-  repo: string,
-  sha: string,
-): CliStatus | undefined {
-  const read = deps.gh([
-    "api",
-    `repos/${repo}/commits/${sha}/status?per_page=100`,
-    "--jq",
-    ".statuses[]? | [.context, .state, .description, .created_at] | @json",
-  ]);
-  if (read.exitCode !== 0) return undefined;
-  const rows: StatusRow[] = [];
-  for (const line of read.stdout.split("\n")) {
-    if (line.trim() === "") continue;
-    let value: unknown;
-    try {
-      value = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(value)) continue;
-    const [context, state, description, createdAt] = value;
-    if (
-      typeof context !== "string" ||
-      typeof state !== "string" ||
-      typeof description !== "string" ||
-      typeof createdAt !== "string"
-    ) {
-      continue;
-    }
-    rows.push({ context, state, description, createdAt });
-  }
-  return latestCliStatus(rows);
-}
-
-// The head the CLI reviewed, read from this job's run directory. Undefined when
-// the CLI published no run directory, or its findings.json is absent, unreadable
-// or names no valid head: then no completed review can be located. No gh call.
-function readReviewedHead(deps: PublishDeps): string | undefined {
-  const runDir = deps.env.PRHERO_RUN_DIR ?? "";
-  if (runDir === "") return undefined;
+// The CLI's own record. Absent, unreadable or malformed all read as no record,
+// so the caller's one rule covers each of them. No gh call.
+function readCliRecord(dir: string): CliRecord | undefined {
   try {
-    return reviewedHeadOf(
-      readFileSync(path.join(runDir, FINDINGS_FILE), "utf8"),
+    return parseCliRecord(
+      readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8"),
     );
   } catch {
     return undefined;
   }
-}
-
-// The status is read only where it can decide: a review the CLI started on a
-// known PR and reviewed head. Everywhere else no gh call is made.
-function readCliStatusFor(
-  deps: PublishDeps,
-  record: TriggerRecord,
-  cliStarted: boolean,
-  reviewedHead: string | undefined,
-): CliStatus | undefined {
-  if (record.decision !== "review" || !cliStarted) return undefined;
-  if (record.pr === undefined || reviewedHead === undefined) return undefined;
-  return readCliStatus(deps, record.repository, reviewedHead);
 }
 
 export function runPublish(deps: PublishDeps): number {
@@ -792,20 +720,11 @@ export function runPublish(deps: PublishDeps): number {
       ),
     );
   }
-  // WHY read only for a review the CLI started: no other outcome cleans up, so
-  // no run directory is opened for it.
-  const reviewedHead =
-    record.decision === "review" && cliStarted
-      ? readReviewedHead(deps)
-      : undefined;
-  const cliStatus = readCliStatusFor(deps, record, cliStarted, reviewedHead);
-  const plan = decidePublication({
-    record,
-    cliStarted,
-    reviewedHead,
-    cliStatus,
-    setup,
-  });
+  // WHY read only for a review the CLI started: no other outcome depends on the
+  // CLI's record.
+  const cliRecord =
+    record.decision === "review" && cliStarted ? readCliRecord(dir) : undefined;
+  const plan = decidePublication({ record, cliStarted, cliRecord, setup });
   if (plan.kind === "none") return 0;
   if (plan.kind === "cleanup") {
     cleanupOlderOutcomes(deps, plan);

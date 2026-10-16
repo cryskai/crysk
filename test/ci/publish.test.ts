@@ -1,7 +1,9 @@
-// The outcome publisher (odd/tasks/agent-first-ci.md, T2b / S3). It speaks for
-// the outcomes that happen BEFORE the CLI step starts: no credential, an
+// The outcome publisher (odd/tasks/agent-first-ci.md, T2b / S3, T2c). It speaks
+// for the outcomes that happen BEFORE the CLI step starts: no credential, an
 // unresolved PR, an unverifiable commenter permission, and an install step
-// that failed. decidePublication is the pure table; runPublish is the shell.
+// that failed. Once the CLI started, its cli.json decides: a reviewed run cleans
+// up, and an error, a hunters-failed run or a missing record is published.
+// decidePublication is the pure table; runPublish is the shell.
 //
 // The builtins-only guard at the bottom mirrors the one in outcome.test.ts. The
 // one allowed relative import is "./outcome": it is itself builtins-only at
@@ -11,7 +13,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -19,14 +20,14 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { TriggerRecord } from "#ci/outcome";
-import { decidePublication, reviewedHeadOf, runPublish } from "#ci/publish";
-import { commitStatusRequest } from "#pr/preflight";
+import type { CliRecord, TriggerRecord } from "#ci/outcome";
+import { decidePublication, runPublish } from "#ci/publish";
 
 const REPO = "acme/widgets";
 const SHA = "c".repeat(40);
 // The head the trigger recorded, and a head the PR moved to before the CLI
-// reviewed it. The CLI's run directory names REVIEWED; cleanup must read there.
+// reviewed it. The CLI's cli.json may name REVIEWED_HEAD; the trigger's head is
+// never a cleanup proof.
 const TRIGGER_HEAD = "e".repeat(40);
 const REVIEWED_HEAD = "d".repeat(40);
 const RUN_URL = `https://github.com/${REPO}/actions/runs/4242`;
@@ -38,11 +39,8 @@ const OLDER_MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=4000 attempt=1 --
 const NEWER_MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=5000 attempt=1 -->`;
 // The same run's first attempt, which a re-run (attempt 2) must replace.
 const FIRST_ATTEMPT_MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=4242 attempt=1 -->`;
-// What the CLI posts on the head when its review completed (success phase).
-const CLI_COMPLETED = {
-  state: "success",
-  description: "review posted",
-} as const;
+// What the CLI writes to cli.json when its review completed.
+const REVIEWED: CliRecord = { v: 1, outcome: "reviewed" };
 
 function record(overrides: Partial<TriggerRecord> = {}): TriggerRecord {
   return {
@@ -66,133 +64,198 @@ describe("decidePublication — the pure table", () => {
     );
   });
 
-  test("a review the CLI completed cleans up its PR, and posts neither status nor comment", () => {
-    // WHY: an outcome comment from an earlier run contradicts the review this
-    // run completed, and the CLI owns this run's status and comment. So the plan
-    // names only the PR to clean, and the run whose comments may be removed.
-    expect(
-      decidePublication({
-        record: record(),
-        cliStarted: true,
-        reviewedHead: SHA,
-        cliStatus: CLI_COMPLETED,
-      }),
-    ).toEqual({
-      kind: "cleanup",
-      repository: REPO,
-      pr: 7,
-      runId: "4242",
-      runAttempt: 1,
-    });
-  });
-
-  test("a review whose CLI started but did not complete is left alone, so the CLI's own output stays the explanation", () => {
-    // WHY: cli-started is written before the CLI runs, so an early CLI failure
-    // leaves no outcome of its own. Cleaning up here would delete the only
-    // explanation on the PR. The CLI's status says whether it completed.
-    expect(
-      decidePublication({
-        record: record(),
-        cliStarted: true,
-        reviewedHead: SHA,
-        cliStatus: { state: "error", description: "review did not finish" },
-      }),
-    ).toEqual({ kind: "none" });
-  });
-
-  test("a review whose CLI started without a known PR has nothing to clean up", () => {
-    const input = {
-      record: record({ pr: undefined, head_sha: undefined }),
-      cliStarted: true,
-      reviewedHead: SHA,
-      cliStatus: CLI_COMPLETED,
-    };
-    expect(decidePublication(input)).toEqual({ kind: "none" });
-  });
-
-  describe("the CLI's review-completed status is the only cleanup proof", () => {
-    // Every status the CLI can post on the head, built by the CLI's own
-    // builder, so a change to its wording reaches this table. Only the
-    // success phase, with a "review ..." description, says a review completed.
-    const cliStatus = (
-      phase: "pending" | "success" | "error",
-      posted = false,
-    ) => {
-      const request = commitStatusRequest({
-        phase,
-        posted,
-        targetUrl: undefined,
+  // WHY the record decides: once the CLI started, cli.json says what its run
+  // did. A trigger head is never a cleanup proof, so the table never reads it.
+  describe("once the CLI started, its record decides", () => {
+    test("a reviewed record cleans up its PR, and posts neither status nor comment", () => {
+      // WHY: an outcome comment from an earlier run contradicts the review this
+      // run completed, and the CLI owns this run's status and comment. So the
+      // plan names only the PR to clean, and the run whose comments may go.
+      expect(
+        decidePublication({
+          record: record(),
+          cliStarted: true,
+          cliRecord: REVIEWED,
+        }),
+      ).toEqual({
+        kind: "cleanup",
+        repository: REPO,
+        pr: 7,
+        runId: "4242",
+        runAttempt: 1,
       });
-      return { state: request.state, description: request.description };
-    };
+    });
 
-    test.each([
-      ["posted", true],
-      ["not posted", false],
-    ])(
-      "the CLI's success status with a review %s cleans up",
-      (_label, posted) => {
-        expect(
-          decidePublication({
-            record: record(),
-            cliStarted: true,
-            reviewedHead: SHA,
-            cliStatus: cliStatus("success", posted),
-          }),
-        ).toMatchObject({ kind: "cleanup", pr: 7 });
-      },
-    );
-
-    // F002: a failed `gh pr view` at trigger time records no head. The CLI still
-    // reviewed a head, and its status on that head is the proof.
-    test("a trigger that recorded no head cleans up when the CLI's review completed on the reviewed head", () => {
+    // F002: a failed `gh pr view` at trigger time records no head. The CLI's own
+    // record does not need one.
+    test("a reviewed record cleans up even when the trigger recorded no head", () => {
       expect(
         decidePublication({
           record: record({ head_sha: undefined }),
           cliStarted: true,
-          reviewedHead: REVIEWED_HEAD,
-          cliStatus: CLI_COMPLETED,
+          cliRecord: REVIEWED,
         }),
       ).toMatchObject({ kind: "cleanup", pr: 7 });
     });
 
-    test.each([
-      ["no pr-hero status exists", undefined],
-      ["the review is still pending", cliStatus("pending")],
-      ["the review did not finish", cliStatus("error")],
-      [
-        "a success with another description",
-        { state: "success", description: "pr-hero reviewing" },
-      ],
-      [
-        "a publisher's own error status",
-        {
-          state: "error",
-          description: "PRH-INSTALL-FAILED: An install step failed",
-        },
-      ],
-    ])("%s leaves the earlier comments alone", (_label, status) => {
+    // F004: the PR head can move after the trigger. The reviewed record is the
+    // proof of the review, whichever head the trigger saw.
+    test("a reviewed record cleans up whatever head the trigger saw", () => {
       expect(
         decidePublication({
-          record: record(),
+          record: record({ head_sha: TRIGGER_HEAD }),
           cliStarted: true,
-          reviewedHead: SHA,
-          cliStatus: status,
+          cliRecord: { ...REVIEWED, head_sha: REVIEWED_HEAD },
+        }),
+      ).toMatchObject({ kind: "cleanup", pr: 7 });
+    });
+
+    test("a reviewed record whose PR is unknown cleans nothing", () => {
+      expect(
+        decidePublication({
+          record: record({ pr: undefined, head_sha: undefined }),
+          cliStarted: true,
+          cliRecord: REVIEWED,
         }),
       ).toEqual({ kind: "none" });
     });
 
-    // Rewritten from the trigger-head version: the reviewed head, not the
-    // trigger's, is what the status is read on, so its absence is the gap.
-    test("a review with no reviewed head has no status to read, so nothing is cleaned", () => {
+    test.each(["size", "budget", "coverage", "manual-required"] as const)(
+      "a CLI skip for %s posts nothing: the CLI already posted its own notice",
+      (skip) => {
+        expect(
+          decidePublication({
+            record: record(),
+            cliStarted: true,
+            cliRecord: { v: 1, outcome: "skipped", skip },
+          }),
+        ).toEqual({ kind: "none" });
+      },
+    );
+
+    test("a yielded run posts nothing: the CLI already posted its own notice", () => {
       expect(
         decidePublication({
           record: record(),
           cliStarted: true,
-          reviewedHead: undefined,
-          cliStatus: CLI_COMPLETED,
+          cliRecord: { v: 1, outcome: "yielded" },
         }),
       ).toEqual({ kind: "none" });
+    });
+
+    test("hunters-failed is an error publication with its own code, on the trigger's head when the record has none", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: { v: 1, outcome: "hunters-failed" },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.annotation).toStartWith(
+        "::error title=pr-hero PRH-HUNTERS-FAILED::",
+      );
+      expect(plan.rendered.annotation).toContain(
+        "each hunter's session ended without a result",
+      );
+      expect(plan.headSha).toBe(SHA);
+    });
+
+    test("hunters-failed names the head the CLI recorded, over the trigger's", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: { v: 1, outcome: "hunters-failed", head_sha: REVIEWED_HEAD },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.headSha).toBe(REVIEWED_HEAD);
+      expect(plan.status?.description).toStartWith("PRH-HUNTERS-FAILED: ");
+    });
+
+    test("a CLI error is rendered from its class: a route class names the route code and its owner", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "error",
+          cls: { kind: "route", reason: "unmapped" },
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-ROUTE-UNRESOLVABLE");
+      expect(plan.rendered.owner).toBe("config");
+    });
+
+    test("a CLI error for an unusable runtime is the runtime code, owned by pr-hero in action mode", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "error",
+          cls: { kind: "capability", issue: "sdk_unavailable" },
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-RUNTIME-UNAVAILABLE");
+      expect(plan.rendered.owner).toBe("pr-hero");
+    });
+
+    test("an unclassified CLI error says pr-hero could not tell why, naming the review as the step", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: { v: 1, outcome: "error", cls: { kind: "unknown" } },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+      expect(plan.rendered.annotation).toContain(
+        "pr-hero stopped at the review and could not tell why",
+      );
+      expect(plan.status?.description).toStartWith("PRH-UNCLASSIFIED: ");
+    });
+
+    test("a CLI error on a PR the trigger could not resolve is annotation only", () => {
+      const plan = decidePublication({
+        record: record({ pr: undefined, head_sha: undefined }),
+        cliStarted: true,
+        cliRecord: { v: 1, outcome: "error", cls: { kind: "unknown" } },
+      });
+      expect(plan.kind).toBe("local");
+      if (plan.kind !== "local") return;
+      expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+    });
+
+    // WHY stopped-before-reporting: no record after cli-started means the CLI
+    // exited without writing one, a crash, a kill, or a usage error. The text
+    // claims only what is known: it stopped before it reported an outcome.
+    test("no CLI record after the CLI started is PRH-UNCLASSIFIED: it stopped before reporting", () => {
+      const plan = decidePublication({ record: record(), cliStarted: true });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+      expect(plan.rendered.owner).toBe("unclassified");
+      expect(plan.rendered.annotation).toContain(
+        "pr-hero stopped at the review before it reported an outcome and could not tell why",
+      );
+      expect(plan.headSha).toBe(SHA);
+      expect(plan.status?.state).toBe("error");
+    });
+
+    test("a CLI record is ignored when the CLI did not start: the install failure stands", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: false,
+        cliRecord: REVIEWED,
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-INSTALL-FAILED");
     });
   });
 
@@ -525,28 +588,11 @@ function listing(...rows: Array<[number, string, string, string]>): GhResult {
   return ok(rows.map((row) => JSON.stringify(row)).join("\n"));
 }
 
-// The head's status list as the combined-status read prints it: the one
-// latest `pr-hero` row, [context, state, description, created_at]. Unset, the
-// read fails, so a cleanup test must state the CLI status it relies on.
-function cliStatusRow(state: string, description: string): GhResult {
-  return ok(
-    JSON.stringify(["pr-hero", state, description, "2026-10-16T10:00:00Z"]),
-  );
-}
-
 function runPublishIn(options: {
   record?: TriggerRecord | string;
   cliStarted?: boolean;
-  reviewStatus?: GhResult;
-  // The status answer for one head, keyed by sha. It wins over reviewStatus
-  // for that head, so a test can say which head holds a completed review.
-  reviewStatusBySha?: Record<string, GhResult>;
-  // The CLI's run directory and its findings.json, which names the head the CLI
-  // reviewed. Unset, a CLI-started run gets one naming SHA (the record fixture's
-  // head), so the shell tests that predate the reviewed head keep their meaning.
-  // A string is the file's text, an object is stringified, and null publishes no
-  // run directory at all.
-  findings?: object | string | null;
+  // The CLI's cli.json. A string is the file's text, an object is stringified.
+  cliRecord?: object | string;
   setup?: object | string;
   status?: GhResult[];
   create?: GhResult;
@@ -568,27 +614,20 @@ function runPublishIn(options: {
     if (options.cliStarted === true) {
       writeFileSync(path.join(dir, "cli-started"), "");
     }
+    if (options.cliRecord !== undefined) {
+      writeFileSync(
+        path.join(dir, "cli.json"),
+        typeof options.cliRecord === "string"
+          ? options.cliRecord
+          : JSON.stringify(options.cliRecord),
+      );
+    }
     if (options.setup !== undefined) {
       writeFileSync(
         path.join(dir, "setup.json"),
         typeof options.setup === "string"
           ? options.setup
           : JSON.stringify(options.setup),
-      );
-    }
-    const runDir = path.join(dir, "run");
-    const findings =
-      options.findings === undefined
-        ? options.cliStarted === true
-          ? { head_sha: SHA }
-          : undefined
-        : options.findings;
-    const publishesRunDir = findings !== undefined && findings !== null;
-    if (publishesRunDir) {
-      mkdirSync(runDir);
-      writeFileSync(
-        path.join(runDir, "findings.json"),
-        typeof findings === "string" ? findings : JSON.stringify(findings),
       );
     }
     const statusAnswers = [...(options.status ?? [ok()])];
@@ -598,7 +637,6 @@ function runPublishIn(options: {
     const exitCode = runPublish({
       env: {
         PRHERO_OUTCOME_DIR: dir,
-        ...(publishesRunDir ? { PRHERO_RUN_DIR: runDir } : {}),
         GITHUB_REPOSITORY: REPO,
         GITHUB_RUN_ID: "4242",
         GITHUB_SERVER_URL: "https://github.com",
@@ -612,12 +650,10 @@ function runPublishIn(options: {
           return options.viewer ?? fail("gh: viewer not answered");
         }
         const endpoint = args.find((arg) => arg.startsWith("repos/")) ?? "";
-        // The combined-status read routes here, never to the listing below.
+        // Nothing in the publisher reads a commit status any more. A read here
+        // is a regression, and the tests assert no call routes to it.
         if (endpoint.includes("/commits/")) {
-          const sha = /\/commits\/([^/]+)\//.exec(endpoint)?.[1] ?? "";
-          const perSha = options.reviewStatusBySha?.[sha];
-          if (perSha !== undefined) return perSha;
-          return options.reviewStatus ?? fail("gh: status read not answered");
+          return fail("gh: status read not answered");
         }
         if (endpoint.includes("/statuses/")) {
           return statusAnswers.length > 1
@@ -677,35 +713,6 @@ function deletions(calls: Call[]): string[] {
     .map((call) => call.args.find((arg) => arg.includes("/comments/")) ?? "");
 }
 
-describe("reviewedHeadOf — the head the CLI reviewed", () => {
-  test("a findings.json with a full lowercase sha at the top level names that head", () => {
-    expect(
-      reviewedHeadOf(JSON.stringify({ head_sha: REVIEWED_HEAD, pr: 7 })),
-    ).toBe(REVIEWED_HEAD);
-  });
-
-  test.each([
-    ["malformed JSON", "{ not json"],
-    ["an empty file", ""],
-    ["a JSON null", "null"],
-    ["a JSON array", JSON.stringify([REVIEWED_HEAD])],
-    ["no head_sha", JSON.stringify({ pr: 7 })],
-    ["a head_sha that is not a string", JSON.stringify({ head_sha: 40 })],
-    ["a short sha", JSON.stringify({ head_sha: "d".repeat(39) })],
-    [
-      "a sha with a non-hex character",
-      JSON.stringify({ head_sha: "g".repeat(40) }),
-    ],
-    ["an uppercase sha", JSON.stringify({ head_sha: "D".repeat(40) })],
-    [
-      "a head_sha below the top level",
-      JSON.stringify({ run: { head_sha: REVIEWED_HEAD } }),
-    ],
-  ])("%s names no head", (_label, text) => {
-    expect(reviewedHeadOf(text)).toBeUndefined();
-  });
-});
-
 describe("runPublish — the shell", () => {
   test("nothing is written when no trigger record exists", () => {
     const run = runPublishIn({});
@@ -714,55 +721,158 @@ describe("runPublish — the shell", () => {
     expect(run.stdout).toBe("");
   });
 
-  test("a CLI-started run with a known PR never posts a status or a comment", () => {
+  test("a reviewed record never reads a commit status, and posts neither status nor comment", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
+      cliRecord: REVIEWED,
       viewer: ok("pr-hero-bot"),
       list: listing(),
     });
     expect(run.exitCode).toBe(0);
+    expect(statusReadEndpoints(run.calls)).toEqual([]);
     expect(statusCalls(run.calls)).toEqual([]);
     expect(run.calls.filter((call) => call.args.includes("POST"))).toEqual([]);
     expect(run.summary).toBe("");
   });
 
-  test("a CLI that started and did not complete deletes nothing, writes nothing, and prints nothing", () => {
+  test.each([
+    ["a size skip", { v: 1, outcome: "skipped", skip: "size" }],
+    ["a budget skip", { v: 1, outcome: "skipped", skip: "budget" }],
+    ["a coverage skip", { v: 1, outcome: "skipped", skip: "coverage" }],
+    [
+      "a manual-required skip",
+      { v: 1, outcome: "skipped", skip: "manual-required" },
+    ],
+    ["a yield", { v: 1, outcome: "yielded" }],
+  ])(
+    "%s posts nothing, deletes nothing, and prints nothing: the CLI spoke",
+    (_label, cliRecord) => {
+      const run = runPublishIn({
+        record: record(),
+        cliStarted: true,
+        cliRecord,
+        viewer: ok("pr-hero-bot"),
+        list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+      });
+      expect(run.exitCode).toBe(0);
+      expect(run.calls).toEqual([]);
+      expect(run.stdout).toBe("");
+      expect(run.summary).toBe("");
+    },
+  );
+
+  test("an error record posts its comment and its status on the trigger's head, with the code the record names", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
-      reviewStatus: cliStatusRow("error", "review did not finish"),
-      viewer: ok("pr-hero-bot"),
-      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+      cliRecord: {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "route", reason: "unmapped" },
+      },
     });
     expect(run.exitCode).toBe(0);
-    expect(run.calls.filter((call) => call.args.includes("DELETE"))).toEqual(
-      [],
+    expect(run.stdout).toContain(
+      "::error title=pr-hero PRH-ROUTE-UNRESOLVABLE::",
     );
-    expect(run.calls.filter((call) => call.args.includes("POST"))).toEqual([]);
-    expect(run.stdout).toBe("");
-    expect(run.summary).toBe("");
+    expect(run.summary).toContain("### PRH-ROUTE-UNRESOLVABLE");
+    const [status] = statusCalls(run.calls);
+    expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
+    expect(status?.args).toContain("state=error");
+    expect(
+      status?.args.some((arg) =>
+        arg.startsWith("description=PRH-ROUTE-UNRESOLVABLE: "),
+      ),
+    ).toBe(true);
+    expect(commentPost(run.calls)?.args).toContain(
+      `repos/${REPO}/issues/7/comments`,
+    );
   });
 
-  test("a failed status read on a CLI-started run deletes nothing and prints nothing", () => {
-    // WHY: an unreadable status is not a completed review. The gate says no,
-    // and the CLI still owns this run's output.
+  test("an error record's own head wins over the trigger's: the status and the marker name the reviewed head", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: {
+        v: 1,
+        outcome: "error",
+        cls: { kind: "route", reason: "unmapped" },
+        head_sha: REVIEWED_HEAD,
+      },
+    });
+    const [status] = statusCalls(run.calls);
+    expect(status?.args).toContain(`repos/${REPO}/statuses/${REVIEWED_HEAD}`);
+    expect(commentPost(run.calls)?.stdin).toContain(
+      `head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
+    );
+  });
+
+  test("hunters-failed falls back to the trigger's head when the record names none", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
-      reviewStatus: fail("gh: Server Error (HTTP 502)"),
-      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+      cliRecord: { v: 1, outcome: "hunters-failed" },
     });
-    expect(run.exitCode).toBe(0);
-    expect(run.calls.filter((call) => call.args.includes("DELETE"))).toEqual(
-      [],
+    const [status] = statusCalls(run.calls);
+    expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
+    expect(run.stdout).toContain("::error title=pr-hero PRH-HUNTERS-FAILED::");
+    expect(commentPost(run.calls)?.stdin).toContain(
+      `head=${SHA} run=4242 attempt=1 -->`,
     );
-    expect(run.stdout).toBe("");
   });
+
+  test("hunters-failed posts on the head the CLI recorded, not the trigger's", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "hunters-failed", head_sha: REVIEWED_HEAD },
+    });
+    const [status] = statusCalls(run.calls);
+    expect(status?.args).toContain(`repos/${REPO}/statuses/${REVIEWED_HEAD}`);
+    expect(commentPost(run.calls)?.stdin).toContain(
+      `head=${REVIEWED_HEAD} run=4242`,
+    );
+  });
+
+  test("with no CLI record, the run stopped before reporting: PRH-UNCLASSIFIED is posted on the PR", () => {
+    const run = runPublishIn({ record: record(), cliStarted: true });
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+    expect(run.stdout).toContain(
+      "pr-hero stopped at the review before it reported an outcome",
+    );
+    expect(run.summary).toContain("### PRH-UNCLASSIFIED");
+    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(commentPost(run.calls)?.args).toContain(
+      `repos/${REPO}/issues/7/comments`,
+    );
+  });
+
+  test.each([
+    ["malformed JSON", "{ not json"],
+    ["an unknown outcome", JSON.stringify({ v: 1, outcome: "crashed" })],
+    ["another schema version", JSON.stringify({ v: 2, outcome: "reviewed" })],
+    [
+      "an error class the CLI never writes",
+      JSON.stringify({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "github", status: 500 },
+      }),
+    ],
+  ])(
+    "a cli.json that is %s reads as no record: PRH-UNCLASSIFIED, never a silent skip",
+    (_label, cliRecord) => {
+      const run = runPublishIn({
+        record: record(),
+        cliStarted: true,
+        cliRecord,
+      });
+      expect(run.exitCode).toBe(0);
+      expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+    },
+  );
 
   test("an install failure writes the annotation and the summary, then posts", () => {
     const run = runPublishIn({ record: record() });
@@ -1117,142 +1227,41 @@ describe("runPublish — cleanup once the CLI started", () => {
   const removedIds = (run: { calls: Call[] }) =>
     deletions(run.calls).map((url) => url.split("/").pop());
 
-  test("the combined-status read asks for 100 contexts per page, so a busy head's pr-hero row is on the first page", () => {
-    // WHY: the endpoint returns 30 contexts a page by default. A head with more
-    // contexts than that could page the CLI's pr-hero row out of the first page.
-    const run = runPublishIn({
-      record: record(),
-      cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
-      viewer: ok("pr-hero-bot"),
-      list: listing(),
-    });
-    const read = run.calls.find((call) =>
-      call.args.some((arg) => arg.includes("/commits/")),
-    );
-    expect(read?.args).toContain(
-      `repos/${REPO}/commits/${SHA}/status?per_page=100`,
-    );
-  });
-
-  // F002: the trigger recorded no head (a failed `gh pr view`), so the status
-  // must be read on the head the CLI reviewed, from its run directory.
-  test("a trigger that recorded no head still cleans up, reading the status on the reviewed head", () => {
+  // F002: the trigger recorded no head (a failed `gh pr view`). The reviewed
+  // record needs none, so the cleanup still runs and reads no status.
+  test("a trigger that recorded no head still cleans up, and reads no commit status", () => {
     const run = runPublishIn({
       record: record({ head_sha: undefined }),
       cliStarted: true,
-      findings: { head_sha: REVIEWED_HEAD },
-      reviewStatusBySha: {
-        [REVIEWED_HEAD]: cliStatusRow(
-          CLI_COMPLETED.state,
-          CLI_COMPLETED.description,
-        ),
-      },
+      cliRecord: REVIEWED,
       viewer: ok("pr-hero-bot"),
       list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
     });
     expect(run.exitCode).toBe(0);
-    expect(statusReadEndpoints(run.calls)).toEqual([
-      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
-    ]);
+    expect(statusReadEndpoints(run.calls)).toEqual([]);
     expect(removedIds(run)).toEqual(["10"]);
   });
 
-  // F004: the PR head moved between the trigger and the CLI. The status is read
-  // on the reviewed head only, never on the trigger's.
-  test("when the PR head moved after the trigger, a completed review on the reviewed head cleans up", () => {
+  // F004: the PR head moved between the trigger and the CLI. The record is the
+  // proof, so the cleanup runs, and it reads no status on either head.
+  test("when the PR head moved after the trigger, a reviewed record still cleans up, and reads no status", () => {
     const run = runPublishIn({
       record: record({ head_sha: TRIGGER_HEAD }),
       cliStarted: true,
-      findings: { head_sha: REVIEWED_HEAD },
-      reviewStatusBySha: {
-        [REVIEWED_HEAD]: cliStatusRow(
-          CLI_COMPLETED.state,
-          CLI_COMPLETED.description,
-        ),
-      },
+      cliRecord: { ...REVIEWED, head_sha: REVIEWED_HEAD },
       viewer: ok("pr-hero-bot"),
       list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
     });
     expect(run.exitCode).toBe(0);
-    expect(statusReadEndpoints(run.calls)).toEqual([
-      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
-    ]);
+    expect(statusReadEndpoints(run.calls)).toEqual([]);
     expect(removedIds(run)).toEqual(["10"]);
   });
-
-  // F004, the other side: the only completed review is on the trigger's head,
-  // which this run never reviewed. It must not clean up.
-  test("a completed review that exists only on the trigger's head does not clean up", () => {
-    const run = runPublishIn({
-      record: record({ head_sha: TRIGGER_HEAD }),
-      cliStarted: true,
-      findings: { head_sha: REVIEWED_HEAD },
-      reviewStatusBySha: {
-        [TRIGGER_HEAD]: cliStatusRow(
-          CLI_COMPLETED.state,
-          CLI_COMPLETED.description,
-        ),
-        [REVIEWED_HEAD]: ok(""),
-      },
-      viewer: ok("pr-hero-bot"),
-      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
-    });
-    expect(run.exitCode).toBe(0);
-    expect(statusReadEndpoints(run.calls)).toEqual([
-      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
-    ]);
-    expect(removedIds(run)).toEqual([]);
-  });
-
-  // Without a readable reviewed head there is no completed review to locate:
-  // nothing is cleaned, and no status is read on any head.
-  test.each<[string, Partial<Parameters<typeof runPublishIn>[0]>]>([
-    ["PRHERO_RUN_DIR is unset", { findings: null }],
-    [
-      "PRHERO_RUN_DIR is empty",
-      { findings: null, env: { PRHERO_RUN_DIR: "" } },
-    ],
-    [
-      "the run directory does not exist",
-      {
-        findings: null,
-        env: { PRHERO_RUN_DIR: "/pr-hero-test/no-such-run-dir" },
-      },
-    ],
-    ["findings.json is not JSON", { findings: "{ not json" }],
-    ["findings.json names no valid head", { findings: { head_sha: "abc123" } }],
-  ])(
-    "with no reviewed head (%s), nothing is cleaned and no status is read",
-    (_label, options) => {
-      const run = runPublishIn({
-        record: record(),
-        cliStarted: true,
-        reviewStatus: cliStatusRow(
-          CLI_COMPLETED.state,
-          CLI_COMPLETED.description,
-        ),
-        viewer: ok("pr-hero-bot"),
-        list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
-        ...options,
-      });
-      expect(run.exitCode).toBe(0);
-      expect(run.calls).toEqual([]);
-      expect(run.stdout).toBe("");
-    },
-  );
 
   test("with a viewer login, deletes only that login's older marker comments", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
+      cliRecord: REVIEWED,
       viewer: ok("pr-hero-bot\n"),
       list: listing(
         [10, "pr-hero-bot", "Bot", OLDER_MARKER],
@@ -1281,10 +1290,7 @@ describe("runPublish — cleanup once the CLI started", () => {
       record: record({ run_attempt: 2 }),
       env: { GITHUB_RUN_ATTEMPT: "2" },
       cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
+      cliRecord: REVIEWED,
       viewer: ok("pr-hero-bot"),
       list: listing([10, "pr-hero-bot", "Bot", FIRST_ATTEMPT_MARKER]),
     });
@@ -1292,55 +1298,11 @@ describe("runPublish — cleanup once the CLI started", () => {
     expect(run.exitCode).toBe(0);
   });
 
-  test("the newest pr-hero status decides, whatever order the read lists them in", () => {
-    // WHY: the read's order is not the contract. The newest status is the one
-    // that says what the CLI last did on this head.
-    const completed = [
-      "pr-hero",
-      "success",
-      "review posted",
-      "2026-10-16T10:00:00Z",
-    ];
-    const failed = [
-      "pr-hero",
-      "error",
-      "review did not finish",
-      "2026-10-16T11:00:00Z",
-    ];
-    const later = [
-      "pr-hero",
-      "success",
-      "review posted",
-      "2026-10-16T12:00:00Z",
-    ];
-    const rows = (...lines: string[][]): GhResult =>
-      ok(lines.map((line) => JSON.stringify(line)).join("\n"));
-    const cleanedBy = (reviewStatus: GhResult) =>
-      removedIds(
-        runPublishIn({
-          record: record(),
-          cliStarted: true,
-          reviewStatus,
-          viewer: ok("pr-hero-bot"),
-          list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
-        }),
-      );
-    // The failure is the newest, whichever row comes first: nothing is cleaned.
-    expect(cleanedBy(rows(completed, failed))).toEqual([]);
-    expect(cleanedBy(rows(failed, completed))).toEqual([]);
-    // The completed review is the newest, whichever row comes first.
-    expect(cleanedBy(rows(later, failed))).toEqual(["10"]);
-    expect(cleanedBy(rows(failed, later))).toEqual(["10"]);
-  });
-
   test("the cleanup never deletes this run's own marker or a newer run's", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
+      cliRecord: REVIEWED,
       viewer: ok("pr-hero-bot"),
       list: listing(
         [10, "pr-hero-bot", "Bot", OLDER_MARKER],
@@ -1355,10 +1317,7 @@ describe("runPublish — cleanup once the CLI started", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
+      cliRecord: REVIEWED,
       viewer: ok("pr-hero-bot"),
       list: listing(
         [10, "pr-hero-bot", "Bot", `<!-- pr-hero-outcome v=1 head=${SHA} -->`],
@@ -1380,10 +1339,7 @@ describe("runPublish — cleanup once the CLI started", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
+      cliRecord: REVIEWED,
       viewer: ok("github-actions\n"),
       list: listing(
         [10, BOT_AUTHOR, "Bot", OLDER_MARKER],
@@ -1402,10 +1358,7 @@ describe("runPublish — cleanup once the CLI started", () => {
       const run = runPublishIn({
         record: record(),
         cliStarted: true,
-        reviewStatus: cliStatusRow(
-          CLI_COMPLETED.state,
-          CLI_COMPLETED.description,
-        ),
+        cliRecord: REVIEWED,
         viewer,
         list: listing(
           [10, "pr-hero-bot", "Bot", OLDER_MARKER],
@@ -1427,10 +1380,7 @@ describe("runPublish — cleanup once the CLI started", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
+      cliRecord: REVIEWED,
       viewer: ok("pr-hero-bot"),
       list: fail("gh: Server Error (HTTP 502)"),
     });
@@ -1450,10 +1400,7 @@ describe("runPublish — cleanup once the CLI started", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
+      cliRecord: REVIEWED,
       viewer: ok("pr-hero-bot"),
       list: listing(
         [10, "pr-hero-bot", "Bot", OLDER_MARKER],
@@ -1467,14 +1414,11 @@ describe("runPublish — cleanup once the CLI started", () => {
     expect(run.exitCode).toBe(0);
   });
 
-  test("with no known PR, a CLI-started run makes no gh call at all", () => {
+  test("a reviewed record on a PR the trigger could not resolve makes no gh call at all", () => {
     const run = runPublishIn({
       record: record({ pr: undefined, head_sha: undefined }),
       cliStarted: true,
-      reviewStatus: cliStatusRow(
-        CLI_COMPLETED.state,
-        CLI_COMPLETED.description,
-      ),
+      cliRecord: REVIEWED,
     });
     expect(run.exitCode).toBe(0);
     expect(run.calls).toEqual([]);
@@ -1502,7 +1446,7 @@ describe("runPublish — cleanup once the CLI started", () => {
 describe("publish.ts runs before `bun install`", () => {
   // The real entry point, spawned with an empty PATH and HOME: it must start
   // and finish with no node_modules and no gh, when there is nothing to say.
-  test("as a process, a CLI-started run with no PR exits 0 and writes nothing", () => {
+  test("as a process, a reviewed CLI run with no PR exits 0 and writes nothing", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-publish-proc-"));
     try {
       writeFileSync(
@@ -1510,6 +1454,7 @@ describe("publish.ts runs before `bun install`", () => {
         JSON.stringify(record({ pr: undefined, head_sha: undefined })),
       );
       writeFileSync(path.join(dir, "cli-started"), "");
+      writeFileSync(path.join(dir, "cli.json"), JSON.stringify(REVIEWED));
       const result = Bun.spawnSync([process.execPath, MODULE_PATH], {
         cwd: dir,
         env: {
@@ -1530,14 +1475,15 @@ describe("publish.ts runs before `bun install`", () => {
     }
   });
 
-  test("as a process, a CLI-started run whose gh is missing still exits 0, silently", () => {
-    // WHY: Bun throws when gh is not on PATH. The status read is best effort:
-    // a call that cannot run is a failed read, and a failed read cleans up
-    // nothing and says nothing, so the CLI's own output stays the only one.
+  test("as a process, a reviewed CLI run whose gh is missing still exits 0, with no error", () => {
+    // WHY: Bun throws when gh is not on PATH. A call that cannot run is a failed
+    // call like any other, so the cleanup's failed listing becomes one notice,
+    // never a crash and never an error: the cleanup must not fail the job.
     const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-publish-nogh-"));
     try {
       writeFileSync(path.join(dir, "trigger.json"), JSON.stringify(record()));
       writeFileSync(path.join(dir, "cli-started"), "");
+      writeFileSync(path.join(dir, "cli.json"), JSON.stringify(REVIEWED));
       const result = Bun.spawnSync([process.execPath, MODULE_PATH], {
         cwd: dir,
         env: {
@@ -1551,7 +1497,8 @@ describe("publish.ts runs before `bun install`", () => {
         },
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout.toString()).toBe("");
+      expect(result.stdout.toString()).not.toContain("::error");
+      expect(result.stdout.toString()).toContain("::notice title=pr-hero::");
       expect(existsSync(path.join(dir, "summary"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });

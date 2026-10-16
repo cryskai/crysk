@@ -828,14 +828,12 @@ describe("Packaging & distribution configuration", () => {
       expect(step?.env?.GITHUB_RUN_ATTEMPT).toBe(`\${{ github.run_attempt }}`);
     });
 
-    // WHY: the cleanup gate reads the CLI's status on the head the CLI reviewed,
-    // which only the run directory's findings.json names. Without this binding
-    // the publisher finds no reviewed head and never cleans up.
-    test("the publish step binds the CLI's run directory, so cleanup reads the reviewed head", () => {
+    // WHY: the publisher reads the CLI's cli.json from the outcome directory,
+    // which every step already binds. A run-directory binding would be dead, and
+    // a dead binding hides what the publish step really reads, so it stays out.
+    test("the publish step binds no run directory: the CLI's record is in the outcome directory", () => {
       const step = steps().find((candidate) => candidate.id === "publish");
-      expect(step?.env?.PRHERO_RUN_DIR).toBe(
-        `\${{ steps.run-pr-hero.outputs.run_dir }}`,
-      );
+      expect(step?.env?.PRHERO_RUN_DIR).toBeUndefined();
     });
 
     test("the run step writes cli-started as its first command, before anything can fail", () => {
@@ -865,9 +863,9 @@ describe("Packaging & distribution configuration", () => {
       expect(JSON.parse(run.record ?? "{}").decision).toBe("review");
     });
 
-    // WHY: the job's result must be the CLI's own. The publish step judges a
-    // completed review by the CLI's commit status, not by a marker, so the run
-    // step adds nothing after the CLI: a failed CLI fails the step with its code.
+    // WHY: the job's result must be the CLI's own. The publish step reads the
+    // CLI's cli.json, not a marker the run step writes, so the run step adds
+    // nothing after the CLI: a failed CLI fails the step with its code.
     test("the run step exits with the CLI's code, whether the CLI succeeded or failed", async () => {
       const succeeded = await runAction(
         { ...CREDENTIAL, "pr-number": "305" },

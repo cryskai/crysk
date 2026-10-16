@@ -537,9 +537,9 @@ function runIdentity(deps: CiTriggerDeps): RunIdentity {
 // CLI's own outcome (src/ci/outcome.ts's CLI_RECORD_FILE, named out here because
 // this module imports nothing from outcome.ts). All are cleared before this
 // run's record, so a stale marker cannot make an install failure look like the
-// CLI ran, and a stale CLI record cannot stand in for this run's. No marker
-// records the CLI's completion either: the publisher reads the CLI's commit
-// status for that.
+// CLI ran, and a stale CLI record cannot stand in for this run's. The CLI
+// record is how the publisher learns the CLI's outcome, so a stale one would
+// name an earlier job's result.
 const CLI_STARTED_MARKER = "cli-started";
 const SETUP_RECORD = "setup.json";
 const CLI_RECORD = "cli.json";
