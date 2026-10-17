@@ -2197,6 +2197,52 @@ describe("fetchCommitStatuses", () => {
     ).rejects.toBeInstanceOf(CliError);
   });
 
+  // failClosed: "read" is the override check's reading: a failed gh read throws, but a malformed
+  // row is skipped, so one garbage line cannot hide a valid override on the same head.
+  test('failClosed "read": a failed gh read still throws a CliError', async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: { stdout: "", stderr: "gh: HTTP 500", exitCode: 1 },
+      },
+    ]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, { spawnFn, failClosed: "read" }),
+    ).rejects.toBeInstanceOf(CliError);
+  });
+
+  test('failClosed "read": an unparseable or non-status line is skipped, and the valid rows are kept', async () => {
+    const valid = {
+      state: "success",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: "2026-08-18T16:30:00Z",
+      description: "pr-hero: overridden by @maintainer",
+    };
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: { stdout: `not-json\nnull\n${ndjson([valid])}` },
+      },
+    ]);
+    const statuses = await fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+      failClosed: "read",
+    });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.description).toBe(valid.description);
+  });
+
+  test('failClosed "read": an abbreviated sha throws, where the default is empty', async () => {
+    const { spawnFn, calls } = makeFakeGh([]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, "abc", {
+        spawnFn,
+        failClosed: "read",
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+    expect(calls).toHaveLength(0);
+  });
+
   test("failClosed: an abbreviated sha throws, where the default is empty", async () => {
     const { spawnFn, calls } = makeFakeGh([]);
     await expect(

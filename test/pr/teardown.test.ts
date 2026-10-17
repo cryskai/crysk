@@ -1492,3 +1492,130 @@ describe("settleCommitStatusAndLedger — an override posted during this run", (
     expect(postCount(calls)).toBe(1);
   });
 });
+
+// The override check reads the head through the real reader (fetchCommitStatuses), not a seam.
+// The read's gh call is the one carrying `--jq`; the status POST carries none, so a fake can
+// fail the read alone and let the verdict write go through.
+function readSplitSpawn(read: { ok: boolean; stdout: string }): {
+  spawnFn: typeof Bun.spawn;
+  calls: string[][];
+} {
+  const calls: string[][] = [];
+  const encoder = new TextEncoder();
+  const stream = (text: string) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (text) controller.enqueue(encoder.encode(text));
+        controller.close();
+      },
+    });
+  const spawnFn = ((argv: string[]) => {
+    calls.push(argv);
+    const isRead = argv.includes("--jq");
+    const ok = !isRead || read.ok;
+    return {
+      stdout: stream(isRead ? read.stdout : ""),
+      stderr: stream(ok ? "" : "gh: HTTP 500"),
+      exited: Promise.resolve(ok ? 0 : 1),
+      kill() {},
+    };
+  }) as unknown as typeof Bun.spawn;
+  return { spawnFn, calls };
+}
+
+describe("settleCommitStatusAndLedger — the override read is strict and logged", () => {
+  const OVERRIDE =
+    "pr-hero: overridden by @maintainer — no review on this head";
+  const LOCK: Parameters<typeof holdCommitStatusLock>[0] = {
+    operatorRoot: "/repo",
+    sha: HEAD,
+    targetUrl: undefined,
+    context: COMMIT_STATUS_CONTEXT,
+  };
+  const postCount = (calls: string[][]) =>
+    calls.filter((argv) => parseStatusFlags(argv).state !== undefined).length;
+  const overrideRow = (createdMs: number) =>
+    `${JSON.stringify({
+      state: "success",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: new Date(createdMs).toISOString(),
+      description: OVERRIDE,
+      target_url: null,
+    })}\n`;
+
+  afterEach(() => {
+    releaseCommitStatusLock();
+  });
+
+  async function captureStderr(run: () => Promise<unknown>): Promise<string> {
+    const logged: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      logged.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await run();
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    return logged.join("\n");
+  }
+
+  function gateInput(
+    spawnFn: typeof Bun.spawn,
+  ): Parameters<typeof settleCommitStatusAndLedger>[0] {
+    return {
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "gate",
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: 0,
+    };
+  }
+
+  test("a failed head read writes the verdict and logs a warning that says so", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = readSplitSpawn({ ok: false, stdout: "" });
+    const logged = await captureStderr(() =>
+      settleCommitStatusAndLedger(gateInput(spawnFn)),
+    );
+    expect(postCount(calls)).toBe(1);
+    expect(logged).toContain("::warning");
+    expect(logged).toContain("could not read the statuses");
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
+  test("a malformed row next to a valid fresh override: the override stands, nothing is written, and no warning is logged", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = readSplitSpawn({
+      ok: true,
+      stdout: `not a status row\n${overrideRow(Date.now() + 120_000)}`,
+    });
+    const logged = await captureStderr(() =>
+      settleCommitStatusAndLedger(gateInput(spawnFn)),
+    );
+    expect(postCount(calls)).toBe(0);
+    expect(logged).not.toContain("::warning");
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
+  test("a read that succeeds with a fresh override writes nothing, as before", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = readSplitSpawn({
+      ok: true,
+      stdout: overrideRow(Date.now() + 120_000),
+    });
+    const logged = await captureStderr(() =>
+      settleCommitStatusAndLedger(gateInput(spawnFn)),
+    );
+    expect(postCount(calls)).toBe(0);
+    expect(logged).not.toContain("::warning");
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+});

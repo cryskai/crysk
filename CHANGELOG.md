@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential is retried once, so a transient failure no longer leaves that run without its status.
 
 ### Fixed
+- **An unreadable override check is no longer silent**: when a review's override check cannot read the head's statuses, the verdict is written as before and the run logs a warning that says so, and the publisher's repost of an unsettled status logs the same warning. A malformed status row is ignored and the valid rows decide, so a valid fresh override beside a garbage row still stands and nothing is written over it; only a failed gh read (an error or a timeout) counts as unreadable and writes the verdict with the warning.
 - **A skipped head no longer leaves the gate silent**: in gate mode, a head the admission gate skips (low-risk or
   below-threshold delta, or once per PR) inherits the verdict of the pull request's last reviewed commit, read from
   that commit's own statuses (the newest earlier commit with a review's verdict, within the last 20), never from

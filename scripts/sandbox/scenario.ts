@@ -13,8 +13,9 @@
 
 import { type CheckResult, describeCheck, evaluateChecks } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
-import { RUN_STEP_NAME, STATUS_CONTEXT } from "./markers";
+import { STATUS_CONTEXT } from "./markers";
 import {
+  COMMENT_RUN_CLOCK_SKEW_MS,
   type CommentFact,
   classifyComment,
   classifyPath,
@@ -255,21 +256,43 @@ export function isFreeModelFlake(result: ScenarioResult): boolean {
   );
 }
 
-// The hunters-failed flake belongs to this phase only when its own run is the failed
-// one: its review step failed, or the outcome that names it was posted by this run.
-// A phase-1 outcome left on the PR is no flake of a later phase, so a check of that
-// phase is not re-run away. A phase with no trigger has no window, so its outcome counts.
-function isOwnHuntersFailed(obs: Observation): boolean {
-  const reviewFailed =
-    obs.run?.steps.some(
-      (step) => step.name === RUN_STEP_NAME && step.conclusion === "failure",
-    ) === true;
-  const outcome = obs.comments.find(
-    (c) =>
-      c.kind === "outcome" && (c.head === undefined || c.head === obs.headSha),
-  );
+// The hunters-failed flake belongs to this phase only when this run posted the
+// PRH-HUNTERS-FAILED outcome on the observed head. A failed review step is not enough:
+// a later phase whose step fails for another reason posts no outcome of its own, and
+// the path it reads is an earlier phase's outcome, which is no flake of this phase.
+// The code is spelled out because observe.ts keeps its constant private. Any outcome
+// of this run with that code counts, not only the first one on the head, because an
+// earlier phase's outcome may still sit on the PR above it. A phase with no trigger
+// has no window, so its outcome counts (postedByThisRun reads it as this run's).
+const HUNTERS_FAILED_OUTCOME = "PRH-HUNTERS-FAILED";
+// The head's status carries the same code when the publisher's comment POST failed:
+// it writes the status first. Its created_at is judged against the same window a
+// comment is (postedByThisRun), so a status an earlier run left on the head is no
+// flake of this phase. observe.ts's StatusFact has no timestamp, so the caller reads
+// it from the commit statuses and passes it in.
+function isOwnHuntersFailed(
+  obs: Observation,
+  statusCreatedAt: string | undefined,
+): boolean {
+  if (
+    obs.comments.some(
+      (c) =>
+        c.kind === "outcome" &&
+        c.code === HUNTERS_FAILED_OUTCOME &&
+        (c.head === undefined || c.head === obs.headSha) &&
+        postedByThisRun(c, obs),
+    )
+  )
+    return true;
+  const statusCode = /^PRH-[A-Z]+(?:-[A-Z]+)*/.exec(
+    obs.status?.description ?? "",
+  )?.[0];
+  if (obs.status?.state !== "error" || statusCode !== HUNTERS_FAILED_OUTCOME)
+    return false;
+  if (obs.triggeredAt === undefined) return true;
+  if (statusCreatedAt === undefined) return false;
   return (
-    reviewFailed || (outcome !== undefined && postedByThisRun(outcome, obs))
+    Date.parse(statusCreatedAt) >= obs.triggeredAt - COMMENT_RUN_CLOCK_SKEW_MS
   );
 }
 
@@ -481,7 +504,7 @@ async function runOne(
       const freeModelFlake =
         observed === "hunters-failed" &&
         obs.status?.state !== "success" &&
-        isOwnHuntersFailed(obs);
+        isOwnHuntersFailed(obs, collected.statusCreatedAt);
       const phaseChecks = evaluateChecks(asserted, obs).map(
         (r): CheckResult =>
           freeModelFlake && !r.pass
@@ -831,9 +854,12 @@ async function findCommentRun(
   return fresh[0];
 }
 
+// An observation plus the head status's created_at, which StatusFact does not carry.
+type Collected = Observation & { statusCreatedAt?: string };
+
 // Reads the observables of the phase. Each source is a separate call, so a failure
 // in one is an error for the whole scenario, not a silently empty field.
-async function collect(deps: SandboxDeps, live: Live): Promise<Observation> {
+async function collect(deps: SandboxDeps, live: Live): Promise<Collected> {
   const pr = requirePr(live);
   const headSha = live.headSha;
   if (headSha === undefined)
@@ -856,7 +882,12 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Observation> {
           "status,conclusion,jobs",
         ]);
   const combined = await ghJson<{
-    statuses: { context: string; state: string; description: string }[];
+    statuses: {
+      context: string;
+      state: string;
+      description: string;
+      created_at: string;
+    }[];
   }>(deps, ["api", `repos/${SANDBOX_REPO}/commits/${headSha}/status`]);
   const issueComments = await ghJson<{ body: string; created_at: string }[]>(
     deps,
@@ -902,6 +933,7 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Observation> {
       latest === undefined
         ? undefined
         : { state: latest.state, description: latest.description },
+    statusCreatedAt: latest?.created_at,
     comments,
     artifacts,
     // Only a comment run was started by the comment, so only it is judged against

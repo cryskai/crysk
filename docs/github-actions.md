@@ -623,7 +623,7 @@ The rule holds for every verdict write (`success` or `failure`) of the review, i
 status the CLI could not write. Each verdict write checks the head's newest `pr-hero` status first. When that status is an
 override created after the review started, allowing 5 seconds of clock skew between the runner and GitHub, the write is
 skipped and the run logs one line that the override stands. When the review's own pending status did not land, the allowance
-is zero, because nothing else on the head shows when the review started. The review's findings and comments are unchanged.
+is zero, because nothing else on the head shows when the review started. When the head's statuses cannot be read, the review's verdict is written and a warning is logged, since the override cannot be checked. A status row that does not parse is ignored and the valid rows decide, so a fresh override beside a malformed row still stands; only a failed read (GitHub's answer is an error or the lookup times out) counts as unreadable. The review's findings and comments are unchanged.
 A review that fails (for example, every hunter failed), is cancelled, or crashes can replace the override with its own
 `error` status; comment `/pr-hero override` again.
 
