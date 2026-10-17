@@ -1591,6 +1591,20 @@ describe("settleCommitStatusAndLedger — the override read is strict and logged
     expect(heldCommitStatusLock()).toBeNull();
   });
 
+  test("a malformed row next to a valid fresh override: the override stands, nothing is written, and no warning is logged", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = readSplitSpawn({
+      ok: true,
+      stdout: `not a status row\n${overrideRow(Date.now() + 120_000)}`,
+    });
+    const logged = await captureStderr(() =>
+      settleCommitStatusAndLedger(gateInput(spawnFn)),
+    );
+    expect(postCount(calls)).toBe(0);
+    expect(logged).not.toContain("::warning");
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
   test("a read that succeeds with a fresh override writes nothing, as before", async () => {
     holdCommitStatusLock(LOCK);
     const { spawnFn, calls } = readSplitSpawn({

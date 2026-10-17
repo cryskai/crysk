@@ -880,17 +880,14 @@ type HeadStatusRead =
 // endpoint pages at 30 contexts by default, and a busy head's pr-hero row can sit past the
 // first page. The description is read too, for the override rule.
 //
-// The two callers differ on a row the parse cannot read, so the caller names the mode:
-// - "fail" (the override check before a repost): that row could be the override the check is
-//   looking for, so dropping it would read a head with an override as one without. A corrupt
-//   answer is a failed read, not a partial one.
-// - "skip" (the reviewing path): the row is dropped and the rest read, as before. A corrupt row
-//   must never turn a settled head into an error overwrite; only a failed gh call is unknown.
+// A malformed row is dropped and the rest are read, for both callers (the override check before a
+// repost, and the reviewing path). WHY: a corrupt row must never turn a settled head into an error
+// overwrite, and a valid override on the head must not be hidden by a garbage line next to it. Only
+// a failed gh call is an unknown read.
 function readHeadStatuses(
   deps: PublishDeps,
   repo: string,
   sha: string,
-  malformedRows: "fail" | "skip",
 ): HeadStatusRead {
   const read = deps.gh([
     "api",
@@ -903,10 +900,7 @@ function readHeadStatuses(
   for (const line of read.stdout.split("\n")) {
     if (line.trim() === "") continue;
     const row = parseStatusRow(line);
-    if (row === undefined) {
-      if (malformedRows === "fail") return { ok: false };
-      continue;
-    }
+    if (row === undefined) continue;
     statuses.push(row);
   }
   return { ok: true, statuses };
@@ -945,7 +939,7 @@ function readLatestCliStatusState(
   repo: string,
   sha: string,
 ): LatestStatusState {
-  const read = readHeadStatuses(deps, repo, sha, "skip");
+  const read = readHeadStatuses(deps, repo, sha);
   if (!read.ok) return "unknown";
   const latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
   if (latest === undefined) return "unknown";
@@ -958,7 +952,9 @@ function readLatestCliStatusState(
 // write failed, so its own status reads may have failed too, and the override may not have
 // been seen by the CLI. A record with no cutoff to judge against is no evidence of an override,
 // so the repost goes ahead as before. A failed or corrupt read is also no evidence, so the repost
-// goes ahead too, but it is logged as a warning: the override check could not read the head.
+// goes ahead too, but it is logged as a warning: the override check could not read the head. A
+// malformed row is not a failed read: it is skipped, and the valid rows decide, so a fresh override
+// beside a garbage row stands.
 // WHY the warning: a repost over a head we could not read is the tradeoff, and it must be visible.
 // The status reposted is the review's own verdict, so a failed review's failure is reposted as a failure.
 //
@@ -973,7 +969,7 @@ function overrideStandsBeforeRepost(
   overrideCutoffMs: number | undefined,
 ): boolean {
   if (overrideCutoffMs === undefined) return false;
-  const read = readHeadStatuses(deps, repo, sha, "fail");
+  const read = readHeadStatuses(deps, repo, sha);
   if (!read.ok) {
     deps.stdout(
       workflowCommand(

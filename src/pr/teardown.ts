@@ -80,8 +80,9 @@ function thisRunOverrideCutoff(): number | null {
 // Whether an override posted during this run stands over its final write. The rule itself
 // is overrideStandsOverRun (src/ci/override.ts), applied to the cutoff the CLI computed.
 //
-// WHY the read is strict: the reader is asked with failClosed, so a failed read throws instead of
-// looking like a head with no override (fetchCommitStatuses, src/pr/pr.ts).
+// WHY the read is strict: the reader is asked with failClosed "read", so a failed gh read throws instead
+// of looking like a head with no override (fetchCommitStatuses, src/pr/pr.ts). A malformed row is
+// skipped, not a failure: a valid fresh override on the same head still stands over the run.
 // WHY a failed read still writes the verdict: on a failed read we cannot tell whether an override
 // stands, so the verdict is written as planned. That is a tradeoff, not a guarantee: this write can
 // replace an override on the head that we could not read. Holding the verdict back would leave the
@@ -99,7 +100,7 @@ async function overrideStandsOverThisRun(
   try {
     statuses = await readStatuses(operatorRoot, headSha, {
       spawnFn,
-      failClosed: true,
+      failClosed: "read",
     });
   } catch {
     log(

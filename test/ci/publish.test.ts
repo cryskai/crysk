@@ -2439,11 +2439,14 @@ describe("runPublish — the override read before a repost is strict and logged"
     expect(warnings[0]).toContain("could not read the statuses");
   });
 
-  test("a malformed row makes the whole read failed: the override is not trusted, the status is reposted, and a warning is logged", () => {
-    const run = runWith(ok(`${overrideRow}\nnot a status row`));
-    expect(statusCalls(run.calls)).toHaveLength(1);
-    expect(run.stdout).toContain("::warning");
-    expect(run.stdout).toContain("could not read the statuses");
+  // A malformed row is skipped and the valid rows decide. The fresh override is a valid row, so it
+  // stands: no repost, and no warning, because the head was read.
+  test("a malformed row next to a valid fresh override: the override stands, no repost, and no warning", () => {
+    const run = runWith(ok(`not a status row\n${overrideRow}`));
+    expect(statusCalls(run.calls)).toHaveLength(0);
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).not.toContain("::warning");
+    expect(run.stdout).toContain("an override on this head stands");
   });
 });
 
