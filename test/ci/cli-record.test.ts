@@ -17,13 +17,19 @@ import {
 import os from "node:os";
 import path from "node:path";
 import {
+  recordPendingCreatedAt,
   recordReviewDelivered,
   recordReviewing,
   recordUnsettledStatus,
   writeCliRecord,
   writeFatalCliRecord,
 } from "#ci/cli-record";
-import { CLI_RECORD_FILE, type CliRecord, parseCliRecord } from "#ci/outcome";
+import {
+  CLI_RECORD_FILE,
+  type CliRecord,
+  PENDING_AT_FILE,
+  parseCliRecord,
+} from "#ci/outcome";
 
 const SHA = "e".repeat(40);
 
@@ -349,6 +355,34 @@ describe("recordReviewDelivered", () => {
   test("with PRHERO_OUTCOME_DIR unset, nothing is written", () => {
     recordReviewDelivered(SHA, {});
     expect(existsSync(dir)).toBe(false);
+  });
+});
+
+describe("recordPendingCreatedAt (SB3)", () => {
+  let root: string;
+  let dir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-pending-at-"));
+    dir = path.join(root, "outcome");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("writes the pending's created_at in action mode", () => {
+    recordPendingCreatedAt("2026-10-17T10:00:00Z", {
+      PRHERO_OUTCOME_DIR: dir,
+    });
+    expect(readFileSync(path.join(dir, PENDING_AT_FILE), "utf8")).toBe(
+      "2026-10-17T10:00:00Z\n",
+    );
+  });
+
+  test("writes nothing outside action mode", () => {
+    recordPendingCreatedAt("2026-10-17T10:00:00Z", {});
+    expect(existsSync(path.join(dir, PENDING_AT_FILE))).toBe(false);
   });
 });
 

@@ -61,6 +61,7 @@ import type {
 import {
   CLI_RECORD_FILE,
   OUTCOME_MARKER_PREFIX,
+  PENDING_AT_FILE,
   parseCliRecord,
   parseSetupRecord,
   parseTriggerRecord,
@@ -499,25 +500,18 @@ function clipStatusDescription(text: string): string {
 export const CANCELLED_STATUS_DESCRIPTION =
   "PRH-CANCELLED: not reviewed — /pr-hero review reviews this head";
 
-// WHY the anchor is the cli-started marker: the trigger writes it when the CLI starts, before
-// the CLI posts its pending, and nothing rewrites it. The CLI's own record moves (reviewing,
-// then reviewed or hunters-failed just before the final status), so a cancel in that last
-// window must still find the lock: any record that names a head is this run's lock on it.
-// This run's pending was posted after the marker; an older run's pending was posted before
-// it, and is not this run's to settle. The CLI posts its pending right after it starts,
-// before any review work, so a pending created more than CANCEL_SETTLE_WINDOW_MS after the
-// marker belongs to another run on the same head (one in another concurrency group), which
-// settles it itself (review #347 round 2).
-const CANCEL_SETTLE_SKEW_MS = 5_000;
-const CANCEL_SETTLE_WINDOW_MS = 300_000;
-
-// The pure table of a cancelled run's settle. It settles only when this run's CLI record
-// names a head, the head's newest pr-hero status is pending, and that pending was created
-// after this run's CLI started.
+// WHY an exact match (review #347 rounds 1-3): the CLI records the created_at GitHub returned
+// for its own pending (PENDING_AT_FILE, written once the pending landed). The settle
+// overwrites the head's newest pending only when its created_at is exactly that time, so
+// another run's pending (a Force Review beside a push run on the same head) is never
+// touched, however close in time it was posted. No record of the pending means this run's
+// pending never landed, or the CLI died first, and there is nothing of this run's to settle.
+// Any CLI record that names a head is this run's lock on it: the CLI rewrites its record
+// (reviewing, then reviewed or hunters-failed) before its final status.
 export function decideCancelSettle(input: {
   record: CliRecord | undefined;
   latest: { state: string; created_at: string } | undefined;
-  cliStartedMs: number | undefined;
+  pendingAt: string | undefined;
 }): { settle: true; headSha: string } | { settle: false; reason: string } {
   const record = input.record;
   if (record === undefined || record.head_sha === undefined) {
@@ -529,13 +523,11 @@ export function decideCancelSettle(input: {
       reason: "the head's pr-hero status is not pending",
     };
   }
-  const createdMs = Date.parse(input.latest.created_at);
-  const started = input.cliStartedMs;
+  const own = input.pendingAt;
   if (
-    started === undefined ||
-    !Number.isFinite(createdMs) ||
-    createdMs < started - CANCEL_SETTLE_SKEW_MS ||
-    createdMs > started + CANCEL_SETTLE_WINDOW_MS
+    own === undefined ||
+    Date.parse(input.latest.created_at) !== Date.parse(own) ||
+    !Number.isFinite(Date.parse(own))
   ) {
     return { settle: false, reason: "the pending status is not this run's" };
   }
@@ -1345,12 +1337,7 @@ export function runCancelSettle(deps: PublishDeps): number {
   const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
   if (dir === "") return 0;
   const record = readCliRecord(dir);
-  let cliStartedMs: number | undefined;
-  try {
-    cliStartedMs = statSync(path.join(dir, CLI_STARTED_FILE)).mtimeMs;
-  } catch {
-    cliStartedMs = undefined;
-  }
+  const pendingAt = readIfExists(path.join(dir, PENDING_AT_FILE))?.trim();
   const repository = deps.env.GITHUB_REPOSITORY ?? "";
   const head = record?.head_sha;
   let latest: { state: string; created_at: string } | undefined;
@@ -1367,7 +1354,11 @@ export function runCancelSettle(deps: PublishDeps): number {
     }
     latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
   }
-  const decision = decideCancelSettle({ record, latest, cliStartedMs });
+  const decision = decideCancelSettle({
+    record,
+    latest,
+    pendingAt: pendingAt === "" ? undefined : pendingAt,
+  });
   if (!decision.settle) {
     deps.stdout(
       workflowCommand(

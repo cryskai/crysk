@@ -892,6 +892,7 @@ describe("S7: only an explicit --ci run writes the pr-hero context", () => {
     const contexts: string[] = [];
     await settleHeldCommitStatusOnSignal(async (_root, _sha, request) => {
       contexts.push(request.context);
+      return undefined;
     });
     expect(contexts).toEqual([LOCAL_COMMIT_STATUS_CONTEXT]);
   });

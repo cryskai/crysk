@@ -27,6 +27,7 @@ import { writeFatalCliRecord } from "#ci/cli-record";
 import {
   CLI_RECORD_FILE,
   type CliRecord,
+  PENDING_AT_FILE,
   parseCliRecord,
   type TriggerRecord,
 } from "#ci/outcome";
@@ -2783,150 +2784,95 @@ const pendingAt = (ms: number) => ({
   created_at: new Date(ms).toISOString(),
 });
 
+// The created_at GitHub returned for this run's own pending, as the CLI recorded it.
+const PENDING_ISO = new Date(WRITTEN_MS).toISOString();
+
 describe("decideCancelSettle — the pure table (SB3)", () => {
   test("settles this run's own pending on the head the CLI locked", () => {
     expect(
       decideCancelSettle({
         record: reviewingRecord(),
-        latest: pendingAt(WRITTEN_MS + 3_000),
-        cliStartedMs: WRITTEN_MS,
+        latest: pendingAt(WRITTEN_MS),
+        pendingAt: PENDING_ISO,
       }),
     ).toEqual({ settle: true, headSha: CANCEL_HEAD });
   });
 
-  test("a pending 3 s after the record is this run's and settles", () => {
-    expect(
-      decideCancelSettle({
-        record: reviewingRecord(),
-        latest: pendingAt(WRITTEN_MS + 3_000),
-        cliStartedMs: WRITTEN_MS,
-      }).settle,
-    ).toBe(true);
-  });
-
-  test("no record means no review lock in this run", () => {
-    expect(
-      decideCancelSettle({
-        record: undefined,
-        latest: pendingAt(WRITTEN_MS),
-        cliStartedMs: WRITTEN_MS,
-      }),
-    ).toEqual({ settle: false, reason: "no review lock in this run" });
-  });
-
-  test("a reviewed record that names no head is not a lock in this run", () => {
-    expect(
-      decideCancelSettle({
-        record: REVIEWED,
-        latest: pendingAt(WRITTEN_MS),
-        cliStartedMs: WRITTEN_MS,
-      }),
-    ).toEqual({ settle: false, reason: "no review lock in this run" });
-  });
-
-  // #347 F001: the CLI rewrites its record to reviewed or hunters-failed just before
-  // its final status, so a cancel in that window still holds the lock on the head.
+  // #347 round 1: the CLI rewrites its record just before its final status, so a cancel
+  // in that window still holds the lock on the head.
   test.each(["reviewed", "hunters-failed"])(
     "a %s record that names the head still settles this run's pending",
     (outcome) => {
       expect(
         decideCancelSettle({
           record: { v: 1, outcome, head_sha: CANCEL_HEAD } as CliRecord,
-          latest: pendingAt(WRITTEN_MS + 3_000),
-          cliStartedMs: WRITTEN_MS,
+          latest: pendingAt(WRITTEN_MS),
+          pendingAt: PENDING_ISO,
         }),
       ).toEqual({ settle: true, headSha: CANCEL_HEAD });
     },
   );
 
-  test("a reviewing record that names no head is not a lock in this run", () => {
-    expect(
-      decideCancelSettle({
-        record: reviewingRecord(null),
-        latest: pendingAt(WRITTEN_MS),
-        cliStartedMs: WRITTEN_MS,
-      }),
-    ).toEqual({ settle: false, reason: "no review lock in this run" });
+  test("no record, or a record that names no head, is no lock in this run", () => {
+    for (const record of [undefined, REVIEWED, reviewingRecord(null)]) {
+      expect(
+        decideCancelSettle({
+          record,
+          latest: pendingAt(WRITTEN_MS),
+          pendingAt: PENDING_ISO,
+        }),
+      ).toEqual({ settle: false, reason: "no review lock in this run" });
+    }
   });
 
-  test("a settled head status is left alone", () => {
-    expect(
-      decideCancelSettle({
-        record: reviewingRecord(),
-        latest: {
-          state: "success",
-          created_at: new Date(WRITTEN_MS).toISOString(),
-        },
-        cliStartedMs: WRITTEN_MS,
-      }),
-    ).toEqual({
-      settle: false,
-      reason: "the head's pr-hero status is not pending",
-    });
+  test("a settled head status, or none, is left alone", () => {
+    for (const latest of [
+      { state: "success", created_at: PENDING_ISO },
+      undefined,
+    ]) {
+      expect(
+        decideCancelSettle({
+          record: reviewingRecord(),
+          latest,
+          pendingAt: PENDING_ISO,
+        }),
+      ).toEqual({
+        settle: false,
+        reason: "the head's pr-hero status is not pending",
+      });
+    }
   });
 
-  test("no pr-hero status at all is not pending", () => {
-    expect(
-      decideCancelSettle({
-        record: reviewingRecord(),
-        latest: undefined,
-        cliStartedMs: WRITTEN_MS,
-      }),
-    ).toEqual({
-      settle: false,
-      reason: "the head's pr-hero status is not pending",
-    });
+  // #347 rounds 2-3: another run's pending on the same head (a Force Review beside a push
+  // run) is never this run's, however close in time it was posted.
+  test("a pending one second away from this run's own is another run's", () => {
+    for (const offset of [-1_000, 1_000, 600_000]) {
+      expect(
+        decideCancelSettle({
+          record: reviewingRecord(),
+          latest: pendingAt(WRITTEN_MS + offset),
+          pendingAt: PENDING_ISO,
+        }),
+      ).toEqual({
+        settle: false,
+        reason: "the pending status is not this run's",
+      });
+    }
   });
 
-  test("a pending posted 4 minutes after the CLI started is this run's", () => {
-    expect(
-      decideCancelSettle({
-        record: reviewingRecord(),
-        latest: pendingAt(WRITTEN_MS + 240_000),
-        cliStartedMs: WRITTEN_MS,
-      }),
-    ).toEqual({ settle: true, headSha: CANCEL_HEAD });
-  });
-
-  // #347 round 2: another run on the same head, in another concurrency group, posts its
-  // own pending later; this run's cancel must not overwrite it.
-  test("a pending posted 10 minutes after the CLI started belongs to another run", () => {
-    expect(
-      decideCancelSettle({
-        record: reviewingRecord(),
-        latest: pendingAt(WRITTEN_MS + 600_000),
-        cliStartedMs: WRITTEN_MS,
-      }),
-    ).toEqual({
-      settle: false,
-      reason: "the pending status is not this run's",
-    });
-  });
-
-  test("a pending posted before this run's CLI started belongs to an older run", () => {
-    expect(
-      decideCancelSettle({
-        record: reviewingRecord(),
-        latest: pendingAt(WRITTEN_MS - 10_000),
-        cliStartedMs: WRITTEN_MS,
-      }),
-    ).toEqual({
-      settle: false,
-      reason: "the pending status is not this run's",
-    });
-  });
-
-  test("an unknown CLI start time settles nothing", () => {
-    expect(
-      decideCancelSettle({
-        record: reviewingRecord(),
-        latest: pendingAt(WRITTEN_MS),
-        cliStartedMs: undefined,
-      }),
-    ).toEqual({
-      settle: false,
-      reason: "the pending status is not this run's",
-    });
+  test("no record of this run's pending (it never landed) settles nothing", () => {
+    for (const pending of [undefined, "not a time"]) {
+      expect(
+        decideCancelSettle({
+          record: reviewingRecord(),
+          latest: pendingAt(WRITTEN_MS),
+          pendingAt: pending,
+        }),
+      ).toEqual({
+        settle: false,
+        reason: "the pending status is not this run's",
+      });
+    }
   });
 });
 
@@ -2938,8 +2884,8 @@ function runCancelSettleIn(options: {
   const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-cancel-"));
   try {
     if (options.cliRecord !== undefined) {
-      // The trigger's cli-started marker, written when the CLI starts: the settle's anchor.
-      writeFileSync(path.join(dir, "cli-started"), "");
+      // The CLI's record of its own pending, written once the pending landed.
+      writeFileSync(path.join(dir, PENDING_AT_FILE), `${PENDING_ISO}\n`);
       writeFileSync(
         path.join(dir, CLI_RECORD_FILE),
         typeof options.cliRecord === "string"
@@ -2983,7 +2929,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
   test("posts one PRH-CANCELLED error on the locked head for this run's pending", () => {
     const run = runCancelSettleIn({
       cliRecord: liveRecordText,
-      statuses: statusRows(["pr-hero", "pending", new Date().toISOString()]),
+      statuses: statusRows(["pr-hero", "pending", PENDING_ISO]),
     });
     expect(run.exitCode).toBe(0);
     const posts = statusCalls(run.calls);
@@ -3002,7 +2948,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
   test("a settled head status gets no write", () => {
     const run = runCancelSettleIn({
       cliRecord: liveRecordText,
-      statuses: statusRows(["pr-hero", "success", new Date().toISOString()]),
+      statuses: statusRows(["pr-hero", "success", PENDING_ISO]),
     });
     expect(run.exitCode).toBe(0);
     expect(statusCalls(run.calls)).toHaveLength(0);
@@ -3044,7 +2990,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
   test("a failed status write warns and still exits 0", () => {
     const run = runCancelSettleIn({
       cliRecord: liveRecordText,
-      statuses: statusRows(["pr-hero", "pending", new Date().toISOString()]),
+      statuses: statusRows(["pr-hero", "pending", PENDING_ISO]),
       post: fail("gh: HTTP 500"),
     });
     expect(run.exitCode).toBe(0);

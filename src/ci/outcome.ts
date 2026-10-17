@@ -206,6 +206,9 @@ export interface SetupRecord {
 // carries a secret, raw error text, a comment body or gh's output: `cls` names a
 // class, never a message.
 export const CLI_RECORD_FILE = "cli.json";
+// SB3: the created_at GitHub returned for the CLI's own pending status, written once the
+// pending landed. The cancel settle overwrites only the pending with exactly this time.
+export const PENDING_AT_FILE = "pending-at";
 
 // The only classes the CLI writes (src/ci/classify-error.ts). A wider reader
 // would hide a writer's bug, the same rule as parseRecordClass below. The config

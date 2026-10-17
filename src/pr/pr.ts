@@ -428,7 +428,7 @@ export async function postCommitStatus(
   // handler racing the runner's SIGKILL, where the retry below costs more
   // time than it buys. Every other caller keeps the two-attempt default.
   options?: { attempts?: number; timeoutMs?: number },
-): Promise<void> {
+): Promise<string | undefined> {
   if (!isFullCommitId(sha)) {
     throw new CliError(
       `commit status: head sha is not a full 40-char id: ${sha.slice(0, 16)}`,
@@ -456,12 +456,25 @@ export async function postCommitStatus(
   let lastStderr = "";
   for (let attempt = 0; attempt < attempts; attempt++) {
     const result = await gh(operatorRoot, args, undefined, spawnFn, timeoutMs);
-    if (result.ok) return;
+    if (result.ok) return createdAtOf(result.stdout);
     lastStderr = result.stderr.trim();
   }
   throw new CliError(
     `gh api (commit status ${status.state}) failed: ${lastStderr}`,
   );
+}
+
+// The created_at of the status a POST created, or undefined when the answer has none (a
+// fake, or an answer gh did not print). Never throws: the write already landed.
+function createdAtOf(stdout: string): string | undefined {
+  try {
+    const parsed = JSON.parse(stdout) as { created_at?: unknown };
+    return typeof parsed.created_at === "string"
+      ? parsed.created_at
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Combined status (singular `/status`), not the paginated list (`/statuses`).

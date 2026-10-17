@@ -20,7 +20,7 @@
 // fabricating values nothing produced. Same intent as
 // CiAdmissionGateResult's `exitCode: number | undefined` sentinel
 // (src/pr/ci-admission-gate.ts), expressed so the type checker enforces it.
-import { recordReviewing } from "#ci/cli-record";
+import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
 import type { ResolvedRoutePlan } from "#model/routing";
 import {
@@ -300,6 +300,8 @@ export async function resolvePrPlanAndConfirm(params: {
       targetUrl: statusTargetUrl,
       context: params.statusContext,
     }),
+    undefined,
+    (createdAt) => recordPendingCreatedAt(createdAt),
   );
   // From here the lock is HELD, and the only two ways out both clear it:
   // the finally below on the normal path, and the signal handlers in runCli
