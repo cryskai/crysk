@@ -3061,15 +3061,6 @@ async function writePipelinePlan(
   }
 }
 
-// The priors whose author dismissal the adjudicator upheld this run.
-function upheldAdjudicationIds(state: RunState): Set<string> {
-  return new Set(
-    (state.adjudications ?? [])
-      .filter((outcome) => outcome.verdict === "upheld")
-      .map((outcome) => outcome.priorId),
-  );
-}
-
 function fillRereviewProvenance(
   input: PipelineInput,
   state: RunState,
@@ -3096,23 +3087,14 @@ function fillRereviewProvenance(
           reTiered: base.re_tiered ?? 0,
         }
       : assembleLive({
-          // WHY an upheld CI verdict is applied here, in-run: like the
-          // verifier's `refuted`, the gate trusts it when it is produced. The
-          // bot reply posted afterwards is the persisted record; if that post
-          // fails, the next run counts the finding again.
-          // WHY only these three statuses are rewritten: they are the ones an
-          // author's dismissal can take off the count. "verified-gone" is the
-          // verifier's collapse, which must still happen, and "returned" is a
-          // worsening rediscovery, which must stay counted; rewriting either
-          // would hide a result the adjudication never ruled on.
-          settled: input.phaseB.settled.map((row) =>
-            upheldAdjudicationIds(state).has(row.id) &&
-            (row.status === "suppressed" ||
-              row.status === "carried" ||
-              row.status === "unconfirmed")
-              ? { ...row, status: "ci-dismissed" as const }
-              : row,
-          ),
+          // WHY an upheld CI verdict is NOT applied in-run (review #346 round 2):
+          // the gate trusts only the durable record, the bot reply that GitHub
+          // says github-actions[bot] posted on this head. Applying the verdict in
+          // memory first meant the gate could go green on a ruling whose record
+          // never landed, or was never posted, and every compensation for that
+          // was one more seam. The next review of this head reads the reply
+          // (classifyPrior) and settles the prior as ci-dismissed.
+          settled: input.phaseB.settled,
           priors: input.phaseB.priors,
           verifyVerdicts: state.verifyVerdicts,
         });

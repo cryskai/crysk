@@ -894,6 +894,7 @@ export function adjudicationQueue(
   priors: readonly PriorRecord[],
 ): AdjudicationSubject[] {
   const subjects: AdjudicationSubject[] = [];
+  const retried: AdjudicationSubject[] = [];
   for (const prior of priors) {
     if (prior.tier !== "blocking" && prior.tier !== TIER_UNRECOVERABLE) {
       continue;
@@ -907,7 +908,7 @@ export function adjudicationQueue(
     ) {
       continue;
     }
-    subjects.push({
+    const subject: AdjudicationSubject = {
       priorId: prior.id,
       threadId: triage.threadId,
       replyId: triage.replyId,
@@ -915,9 +916,14 @@ export function adjudicationQueue(
       locs: prior.locs,
       claim: prior.claim,
       argument: triage.argument ?? "",
-    });
+    };
+    // WHY never-ruled first: an inconclusive ruling is retried, and the model often
+    // answers the same way, so retries must not take every slot from a dismissal
+    // that was never ruled on.
+    if (triage.ciVerdict === "inconclusive") retried.push(subject);
+    else subjects.push(subject);
   }
-  return subjects.slice(0, MAX_ADJUDICATIONS_PER_RUN);
+  return [...subjects, ...retried].slice(0, MAX_ADJUDICATIONS_PER_RUN);
 }
 
 export function enrichPriorsFromThreads(input: {

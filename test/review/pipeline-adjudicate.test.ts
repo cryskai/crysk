@@ -307,7 +307,7 @@ describe("runAdjudicate wiring", () => {
     );
   });
 
-  test("an upheld verdict settles a suppressed blocking prior as ci-dismissed", async () => {
+  test("an upheld verdict never changes this run's gate: the prior stays suppressed until the next review reads the reply", async () => {
     const priors: PriorRecord[] = [
       {
         id: "R001",
@@ -339,7 +339,7 @@ describe("runAdjudicate wiring", () => {
     const result = await runPipeline(input, { runner });
 
     expect(result.gatePriors?.find((row) => row.id === "R001")?.status).toBe(
-      "ci-dismissed",
+      "suppressed",
     );
   });
 

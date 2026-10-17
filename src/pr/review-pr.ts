@@ -146,7 +146,7 @@ const ADJUDICATION_REPLY_TIMEOUT_MS = 30_000;
 
 const ADJUDICATION_BADGES = {
   upheld:
-    "✅ **CI adjudication: upheld** — the dismissal stands; this finding no longer counts toward the gate.",
+    "✅ **CI adjudication: upheld** — the dismissal stands; from the next review of this head (`/pr-hero review`) this finding no longer counts toward the gate.",
   rejected:
     "❌ **CI adjudication: rejected** — the finding stands and still counts.",
   inconclusive:
@@ -193,8 +193,7 @@ export async function postAdjudicationReplies(input: {
   headSha: string;
   adjudications: readonly AdjudicationOutcome[];
   spawnFn?: typeof Bun.spawn;
-}): Promise<{ unlandedUpheld: number }> {
-  let unlandedUpheld = 0;
+}): Promise<void> {
   for (const entry of input.adjudications) {
     // No ruling exists: post nothing, so the dismissal stays pending for a later recheck.
     if (entry.failed === true) {
@@ -229,8 +228,8 @@ export async function postAdjudicationReplies(input: {
         `::warning::pr-hero: could not post the CI adjudication for ${entry.priorId}: ${message}\n`,
       );
     }
-    // Only an upheld verdict lowers the count, so only its landing matters. A
-    // read that fails counts as not landed.
+    // Only an upheld verdict can clear the finding on the next review, so only its
+    // landing is checked. A read that fails counts as not landed.
     if (entry.verdict !== "upheld") continue;
     const author =
       commentId === undefined
@@ -241,13 +240,11 @@ export async function postAdjudicationReplies(input: {
             spawnFn: input.spawnFn,
           }).catch(() => undefined);
     if (author !== CI_ADJUDICATOR_LOGIN) {
-      unlandedUpheld += 1;
       process.stdout.write(
         `::warning::pr-hero: the CI adjudication for ${entry.priorId} was not recorded under ${CI_ADJUDICATOR_LOGIN}; the finding still counts toward the gate\n`,
       );
     }
   }
-  return { unlandedUpheld };
 }
 
 export async function reviewPr(
@@ -813,18 +810,14 @@ export async function reviewPr(
       // T5b: the verdicts are posted only after the review itself published.
       // Only a `--ci` run with posting on writes them to the PR.
       if (postEnabled && options.ci === true) {
-        const { unlandedUpheld } = await postAdjudicationReplies({
+        // The verdicts never change this run's count: the next review of this head
+        // reads them back (see fillRereviewProvenance).
+        await postAdjudicationReplies({
           operatorRoot,
           pr: prNumber,
           headSha,
           adjudications: result?.adjudications ?? [],
         });
-        // WHY fail closed: an upheld verdict lowered this run's count in memory. If
-        // its durable record did not land under the trusted login, the next run
-        // counts the finding again, so this run must not go green on it either.
-        // A null count is unknown and stays null.
-        const counted = blockingCount as number | null;
-        if (counted !== null) blockingCount = counted + unlandedUpheld;
       }
       return exitCode;
     } catch (error) {

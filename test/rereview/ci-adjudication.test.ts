@@ -271,6 +271,23 @@ describe("adjudicationQueue", () => {
     expect(queue.map((s) => s.priorId)).toEqual(["R001"]);
   });
 
+  test("never-ruled dismissals take the slots before inconclusive retries", () => {
+    const retries = ["R001", "R002", "R003", "R004", "R005"].map((id) =>
+      dismissedBlocking(id, { ciVerdict: "inconclusive" }),
+    );
+    const queue = adjudicationQueue([
+      ...retries,
+      dismissedBlocking("R006", { ciVerdict: null }),
+    ]);
+    expect(queue.map((s) => s.priorId)).toEqual([
+      "R006",
+      "R001",
+      "R002",
+      "R003",
+      "R004",
+    ]);
+  });
+
   test("excludes a dismissal the CI ruling rejected or upheld", () => {
     const queue = adjudicationQueue([
       dismissedBlocking("R001", { ciVerdict: "rejected" }),

@@ -358,7 +358,7 @@ describe("postAdjudicationReplies", () => {
 
   test("a failed adjudication posts nothing and prints the pending notice", async () => {
     const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
-    const { out, value } = await captureStdout(() =>
+    const { out } = await captureStdout(() =>
       postAdjudicationReplies({
         operatorRoot: "/repo",
         pr: 42,
@@ -375,15 +375,14 @@ describe("postAdjudicationReplies", () => {
       }),
     );
     expect(calls).toHaveLength(0);
-    expect(value.unlandedUpheld).toBe(0);
     expect(out).toContain(
       "::notice::pr-hero: the CI adjudicator could not rule on R001; it stays pending for the next /pr-hero recheck",
     );
   });
 
-  test("an upheld reply whose author is not the CI adjudicator did not land: counted and warned", async () => {
+  test("an upheld reply whose author is not the CI adjudicator did not land: warned, and the count is never touched", async () => {
     const { spawnFn, calls } = fakeAuthorGh("someone-else");
-    const { out, value } = await captureStdout(() =>
+    const { out } = await captureStdout(() =>
       postAdjudicationReplies({
         operatorRoot: "/repo",
         pr: 42,
@@ -393,13 +392,12 @@ describe("postAdjudicationReplies", () => {
       }),
     );
     expect(calls.some((c) => c.argv.includes("--jq"))).toBe(true);
-    expect(value.unlandedUpheld).toBe(1);
     expect(out).toContain(UNLANDED_WARNING);
   });
 
-  test("an upheld post that throws did not land: counted and warned", async () => {
+  test("an upheld post that throws did not land: warned, and the count is never touched", async () => {
     const { spawnFn } = fakeAuthorGh("github-actions[bot]", true);
-    const { out, value } = await captureStdout(() =>
+    const { out } = await captureStdout(() =>
       postAdjudicationReplies({
         operatorRoot: "/repo",
         pr: 42,
@@ -408,13 +406,12 @@ describe("postAdjudicationReplies", () => {
         spawnFn,
       }),
     );
-    expect(value.unlandedUpheld).toBe(1);
     expect(out).toContain(UNLANDED_WARNING);
   });
 
-  test("an upheld reply recorded under github-actions[bot] landed: not counted", async () => {
+  test("an upheld reply recorded under github-actions[bot] landed: no warning", async () => {
     const { spawnFn } = fakeAuthorGh("github-actions[bot]");
-    const { out, value } = await captureStdout(() =>
+    const { out } = await captureStdout(() =>
       postAdjudicationReplies({
         operatorRoot: "/repo",
         pr: 42,
@@ -423,13 +420,12 @@ describe("postAdjudicationReplies", () => {
         spawnFn,
       }),
     );
-    expect(value.unlandedUpheld).toBe(0);
     expect(out).not.toContain("was not recorded under");
   });
 
-  test("rejected and inconclusive replies never count, whoever wrote them", async () => {
+  test("rejected and inconclusive replies are posted with no author read", async () => {
     const { spawnFn } = fakeAuthorGh("someone-else");
-    const { out, value } = await captureStdout(() =>
+    const { out } = await captureStdout(() =>
       postAdjudicationReplies({
         operatorRoot: "/repo",
         pr: 42,
@@ -441,7 +437,6 @@ describe("postAdjudicationReplies", () => {
         spawnFn,
       }),
     );
-    expect(value.unlandedUpheld).toBe(0);
     expect(out).not.toContain("was not recorded under");
   });
 });
