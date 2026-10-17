@@ -9,7 +9,8 @@
 //   - its `reply=` names the comment id of the thread's LATEST triage reply, so a
 //     newer dismissal is pending again;
 //   - that triage reply is `dismissed`, and the verdict is `upheld` (D5: only a
-//     dismissal leaves the count; `deferred` and `misclassified` never do).
+//     dismissal leaves the count; `deferred` and `misclassified` never do);
+//   - its `head=` is the head under review.
 // A run under a token whose login is not CI_ADJUDICATOR_LOGIN posts replies the
 // gate never trusts, so it fails closed: the finding stays counted.
 
@@ -35,7 +36,8 @@ export interface AdjudicationMarker {
   verdict: AdjudicationVerdict;
   // The comment id of the author's triage reply this verdict rules on.
   reply: number;
-  // The head the adjudicator read. Recorded for audit; the gate does not key on it.
+  // The head the adjudicator read. A verdict counts only on that head: a push may
+  // change the code it ruled on, so a later head needs a new recheck.
   head: string;
 }
 
@@ -101,4 +103,9 @@ export interface AdjudicationOutcome {
   verdict: AdjudicationVerdict;
   // path:line citations the adjudicator gave. Empty when it failed.
   evidence: string[];
+  // Set when no ruling exists: the step failed or timed out, the argument forged
+  // the nonce, or no refuter is configured. The verdict is then "inconclusive" for
+  // this run's gate, but nothing is posted, so the dismissal stays pending and a
+  // later recheck rules on it.
+  failed?: true;
 }
