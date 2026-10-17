@@ -187,3 +187,16 @@ test("under Bun, the launcher runs the CLI in-process and prints its usage", () 
   expect(result.exitCode).toBe(0);
   expect(decode(result.stderr)).toContain("Usage:");
 });
+
+test.skipIf(process.platform === "win32")(
+  "a child that dies from SIGINT makes the launcher die from SIGINT, not exit 0",
+  () => {
+    const pathDir = nodeOnlyDir();
+    fakeBunOn(pathDir, "kill -INT $$\nsleep 5");
+
+    const result = runLauncher([], { PATH: `${pathDir}:/bin:/usr/bin` });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.signalCode).toBe("SIGINT");
+  },
+);

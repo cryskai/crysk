@@ -49,9 +49,10 @@ function launchOnBun() {
   // Ctrl+C already reaches it, and a second SIGINT would cut short the CLI's own
   // async cancellation (lock release, commit-status settle). The parent only
   // ignores it, so it waits for the child's exit.
-  process.on("SIGINT", () => {});
+  const ignoreInterrupt = () => {};
+  process.on("SIGINT", ignoreInterrupt);
   const forwarded = ["SIGTERM", "SIGHUP"];
-  const handlers = new Map();
+  const handlers = new Map([["SIGINT", ignoreInterrupt]]);
   for (const sig of forwarded) {
     const handler = () => child.kill(sig);
     handlers.set(sig, handler);
