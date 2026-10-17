@@ -1025,6 +1025,11 @@ export function commitStatusCompletion(input: {
   if (input.blockingCount > 0) {
     return { phase: "failure", blockingCount: input.blockingCount };
   }
+  // WHY a finished pipeline with no hunter is not green: the budget ceiling or an unusable
+  // gotchas file can stop the run before any hunter starts, and sessionFailed stays false
+  // because no hunter failed. The gate cannot call a review clean when no reviewer ran, so it
+  // reads as a review that did not finish. An absent count (a fake result) keeps the old path.
+  if (input.hunterCount === 0) return { phase: "error" };
   // A missing count on either side reads as no partial review: a failed count without its M
   // is not a verdict the gate can word.
   const failed = input.hunterFailures ?? 0;

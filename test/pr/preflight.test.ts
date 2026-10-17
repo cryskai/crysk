@@ -1668,7 +1668,13 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
     expect(gate({})).toEqual({ phase: "success" });
   });
 
-  test("zero failed hunters stays success", () => {
+  test("zero failed hunters stays success, but no hunter at all is error in gate mode", () => {
+    expect(gate({ hunterCount: 0, hunterFailures: 0 })).toEqual({
+      phase: "error",
+    });
+    expect(
+      gate({ ciMode: "advisory", hunterCount: 0, hunterFailures: 0 }),
+    ).toEqual({ phase: "success" });
     expect(gate({ hunterCount: 4, hunterFailures: 0 })).toEqual({
       phase: "success",
     });

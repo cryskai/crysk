@@ -521,7 +521,7 @@ function decideNext(
     return {
       next_action: "review",
       reason:
-        "The last review of this head was partial (some reviewers failed); run /pr-hero review, which retries it.",
+        "The last review of this head was partial (some reviewers failed); run /pr-hero review, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
     };
   }
   if (liveBlocking.length > 0) {
