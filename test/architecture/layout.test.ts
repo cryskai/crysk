@@ -28,7 +28,15 @@ interface MigratedDomain {
 const MIGRATED_DOMAINS: MigratedDomain[] = [
   {
     domain: "rereview",
-    files: ["classify", "identity", "plan", "prepare", "state", "verify"],
+    files: [
+      "adjudicate",
+      "classify",
+      "identity",
+      "plan",
+      "prepare",
+      "state",
+      "verify",
+    ],
   },
   {
     domain: "ui",
@@ -91,7 +99,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   },
   {
     domain: "triage",
-    files: ["reply", "triage", "write"],
+    files: ["adjudication", "reply", "triage", "write"],
   },
   {
     domain: "watch",

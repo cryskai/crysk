@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   usable credential record`). A mix of causes, or `runtime_unavailable`, still renders `PRH-HUNTERS-FAILED`.
 
 ### Added
+- **`/pr-hero recheck` and the CI adjudicator**: a PR comment that is exactly `/pr-hero recheck` runs `/pr-hero review` with `--adjudicate`. The CI adjudicator rules on up to 5 pending `dismissed` replies to blocking findings, and only an upheld dismissal leaves the gate count. `deferred` and `misclassified` never do, and a rejected or inconclusive verdict keeps the finding counted. Verdicts are replies by `github-actions[bot]`, so a custom token fails closed. The recheck run never changes the count itself: an upheld finding leaves it from the next review of the same head, which reads the reply back. A verdict counts only on the head it was given, and a failed adjudicator step posts nothing and stays pending. Refused on fork pull requests, with the same permission check as `/pr-hero review`.
 - **`pr-hero status --pr <n> [--json]`**: a read-only command that reads one PR's pr-hero gate, its posted
   findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `override-or-fix`, `done`) through `gh` alone. With
   `--json` it prints one `pr-hero.status/v1` object on stdout. It fails closed: a failed read or a truncated comment

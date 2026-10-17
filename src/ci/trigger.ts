@@ -34,6 +34,9 @@ import path from "node:path";
 
 export const REVIEW_COMMAND = "/pr-hero review";
 export const REVIEW_FULL_COMMAND = "/pr-hero review --full";
+// The review, plus the CI adjudicator's rulings on pending dismissals (docs/github-actions.md,
+// "Rechecking a dismissal"). Exact, like the review command.
+export const RECHECK_COMMAND = "/pr-hero recheck";
 // The human escape hatch (odd/tasks/agent-first-ci.md, S8). Exact, like the review
 // command: a loose match would let a quoted reply unlock a gate.
 export const OVERRIDE_COMMAND = "/pr-hero override";
@@ -150,7 +153,7 @@ export interface CiTriggerInput {
 }
 
 export type CiTriggerDecision =
-  | { kind: "review"; force: boolean; full: boolean }
+  | { kind: "review"; force: boolean; full: boolean; adjudicate: boolean }
   // A human's override: no CLI run, $0. `actor` is the login that unlocked the gate.
   | { kind: "override"; actor: string }
   // `nearMiss` is set on a comment that starts like a command but is not one: it
@@ -170,16 +173,19 @@ export type CiTriggerDecision =
 // review please" or a quoted reply would start a paid review.
 export function parseReviewCommand(
   body: string,
-): { full: boolean } | undefined {
+): { full: boolean; adjudicate: boolean } | undefined {
   const command = body.trim();
-  if (command === REVIEW_COMMAND) return { full: false };
-  if (command === REVIEW_FULL_COMMAND) return { full: true };
+  if (command === REVIEW_COMMAND) return { full: false, adjudicate: false };
+  if (command === REVIEW_FULL_COMMAND) return { full: true, adjudicate: false };
+  if (command === RECHECK_COMMAND) return { full: false, adjudicate: true };
   return undefined;
 }
 
 // A comment that asks for something. Both kinds are permission-gated, so the
 // comment kind (and not the command) decides whether the lookup runs.
-type CommentCommand = { kind: "review"; full: boolean } | { kind: "override" };
+type CommentCommand =
+  | { kind: "review"; full: boolean; adjudicate: boolean }
+  | { kind: "override" };
 
 type EventVerdict =
   | { kind: "ignore"; reason: string; nearMiss?: true }
@@ -192,12 +198,17 @@ type EventVerdict =
 // and that run reviews nothing; its reaction (confused) is the only word it says.
 function isNearMiss(body: string): boolean {
   const text = body.trim();
-  return text.startsWith(REVIEW_COMMAND) || text.startsWith(OVERRIDE_COMMAND);
+  return (
+    text.startsWith(REVIEW_COMMAND) ||
+    text.startsWith(RECHECK_COMMAND) ||
+    text.startsWith(OVERRIDE_COMMAND)
+  );
 }
 
 // The exact text a commenter typed, for the messages that name it.
 function commandText(command: CommentCommand): string {
   if (command.kind === "override") return OVERRIDE_COMMAND;
+  if (command.adjudicate) return RECHECK_COMMAND;
   return command.full ? REVIEW_FULL_COMMAND : REVIEW_COMMAND;
 }
 
@@ -240,7 +251,11 @@ function classifyEvent(input: CiTriggerInput): EventVerdict {
     if (review !== undefined) {
       return {
         kind: "comment",
-        command: { kind: "review", full: review.full },
+        command: {
+          kind: "review",
+          full: review.full,
+          adjudicate: review.adjudicate,
+        },
       };
     }
     if (input.commentBody.trim() === OVERRIDE_COMMAND) {
@@ -250,7 +265,7 @@ function classifyEvent(input: CiTriggerInput): EventVerdict {
       kind: "ignore",
       reason:
         `This comment is not a pr-hero command. Comment exactly ` +
-        `\`${REVIEW_COMMAND}\` or \`${REVIEW_FULL_COMMAND}\` to request ` +
+        `\`${REVIEW_COMMAND}\`, \`${REVIEW_FULL_COMMAND}\` or \`${RECHECK_COMMAND}\` to request ` +
         `a review, or \`${OVERRIDE_COMMAND}\` to unlock a gate.`,
       ...(isNearMiss(input.commentBody) ? { nearMiss: true as const } : {}),
     };
@@ -396,10 +411,15 @@ export function decideCiTrigger(input: CiTriggerInput): CiTriggerDecision {
     event.kind === "comment" &&
     event.command.kind === "review" &&
     event.command.full;
+  const commentAdjudicate =
+    event.kind === "comment" &&
+    event.command.kind === "review" &&
+    event.command.adjudicate;
   return {
     kind: "review",
     force: input.forceInput || fromComment,
     full: input.fullInput || commentFull,
+    adjudicate: commentAdjudicate,
   };
 }
 
@@ -467,6 +487,7 @@ export interface CiTriggerOutputs {
   run: boolean;
   force: boolean;
   full: boolean;
+  adjudicate: boolean;
   pr: string;
   head_sha: string;
   // Whether the publish step speaks for this run: a review, a missing
@@ -478,6 +499,7 @@ const NO_RUN: CiTriggerOutputs = {
   run: false,
   force: false,
   full: false,
+  adjudicate: false,
   pr: "",
   head_sha: "",
   publish: false,
@@ -488,6 +510,7 @@ export function formatTriggerOutputs(outputs: CiTriggerOutputs): string {
     `run=${outputs.run}`,
     `force=${outputs.force}`,
     `full=${outputs.full}`,
+    `adjudicate=${outputs.adjudicate}`,
     `pr=${outputs.pr}`,
     `head_sha=${outputs.head_sha}`,
     `publish=${outputs.publish}`,
@@ -1004,6 +1027,13 @@ const OVERRIDE_FORK_REFUSAL =
 const OVERRIDE_UNKNOWN_FORK_REFUSAL =
   "`/pr-hero override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/pr-hero override` again.";
 
+// The notices a refused recheck prints: the same refusal as an override on a fork,
+// with the adjudicator's reason. The unknown answer gets its own text, as the override does.
+const RECHECK_FORK_REFUSAL =
+  "/pr-hero recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
+const RECHECK_UNKNOWN_FORK_REFUSAL =
+  "/pr-hero recheck could not confirm whether this pull request comes from a fork, so it was refused; comment `/pr-hero recheck` again.";
+
 // What the override's one lookup says. `crossRepository` is undefined when the
 // answer does not say (a failed call, output that is not JSON, or a field that is
 // missing or not a boolean). `head` is a validated sha, or undefined.
@@ -1182,6 +1212,25 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
 
   // Past the early return the resolution is the resolved PR, so its number is a string.
   const prNumber = resolution.pr;
+  // WHY a recheck is refused on a fork like an override: the adjudicator reads this
+  // repository's checkout of the head, and a fork's head is not one.
+  if (decision.kind === "review" && decision.adjudicate) {
+    const answer = lookupOverrideHead(deps, base.repository, prNumber);
+    if (answer.crossRepository !== false) {
+      writeRecord(deps, run, { decision: "denied", params: {} });
+      deps.appendOutput(formatTriggerOutputs(NO_RUN));
+      deps.stdout(
+        workflowCommand(
+          "notice",
+          answer.crossRepository === true
+            ? RECHECK_FORK_REFUSAL
+            : RECHECK_UNKNOWN_FORK_REFUSAL,
+        ),
+      );
+      react(deps, base, "-1");
+      return 0;
+    }
+  }
   if (decision.kind === "override") {
     // WHY refused unless the lookup says "same repository": a fork's head can change
     // after the comment, and the job binds the override to the head it resolves now.
@@ -1247,6 +1296,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
       run: true,
       force: decision.force,
       full: decision.full,
+      adjudicate: decision.adjudicate,
       pr: prNumber,
       head_sha: head,
       publish: publishes(write),

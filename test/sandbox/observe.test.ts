@@ -741,3 +741,24 @@ test("statePathsOf reads every loc of a row, so a finding whose proof_ref sorts 
     "src/mute.ts",
   ]);
 });
+
+describe("classifyComment: a CI adjudication reply (T5b)", () => {
+  test("an adjudication body classifies with its kind and the verdict on its marker line", () => {
+    const body =
+      "<!-- pr-hero-adjudication verdict=rejected reply=1 head=" +
+      SHA +
+      " -->\n\nThe dismissal does not hold.";
+    expect(classifyComment(body, "inline")).toEqual({
+      source: "inline",
+      kind: "adjudication",
+      verdict: "rejected",
+    });
+  });
+
+  test("an adjudication marker without a verdict token classifies with no verdict key", () => {
+    const body = "<!-- pr-hero-adjudication reply=1 -->\n\nNo verdict here.";
+    const fact = classifyComment(body, "inline");
+    expect(fact.kind).toBe("adjudication");
+    expect("verdict" in fact).toBe(false);
+  });
+});

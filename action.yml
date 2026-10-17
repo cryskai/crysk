@@ -219,6 +219,7 @@ runs:
         TRIGGER_PR: ${{ steps.trigger.outputs.pr }}
         TRIGGER_FORCE: ${{ steps.trigger.outputs.force }}
         TRIGGER_FULL: ${{ steps.trigger.outputs.full }}
+        TRIGGER_ADJUDICATE: ${{ steps.trigger.outputs.adjudicate }}
         MODEL_INPUT: ${{ inputs.model }}
         SCOUT_INPUT: ${{ inputs.scout }}
         MAX_CHANGED_LINES_INPUT: ${{ inputs.max-changed-lines }}
@@ -262,6 +263,7 @@ runs:
         if [ -n "$MODE_INPUT" ]; then set -- "$@" --ci-mode "$MODE_INPUT"; fi
         if [ "$TRIGGER_FORCE" = "true" ]; then set -- "$@" --force; fi
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
+        if [ "$TRIGGER_ADJUDICATE" = "true" ]; then set -- "$@" --adjudicate; fi
 
         # The CLI is the last command, so the job's result is exactly the CLI's.
         # Nothing here writes a marker after it: the CLI's cli.json is its own

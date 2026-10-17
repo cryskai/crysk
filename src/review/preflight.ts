@@ -97,6 +97,10 @@ export interface CliOptions {
   // second push is delta-scoped unless asked otherwise. Verification,
   // triage, and classification still run (R2-C5). Review-only, like --scout.
   full: boolean;
+  // T5b: with --pr --ci, also have the CI adjudicator rule on each pending
+  // dismissal of a blocking finding. Set by a /pr-hero recheck comment. Absent
+  // means off.
+  adjudicate?: boolean;
   hopBudget: number;
   dryRun: boolean;
   yes: boolean;
@@ -503,6 +507,10 @@ Options:
                       full PR range (B..H). Verification and triage still
                       run; the recorded case does not change. On GitHub,
                       comment /pr-hero review --full on the PR
+  --adjudicate        with --pr --ci: also have the CI adjudicator rule on
+                      each pending dismissal of a blocking finding (at most
+                      5 per run) and post its verdict on the finding's
+                      thread. Set by a /pr-hero recheck comment.
   --hop-budget <n>    Hops per hunter (default: ${DEFAULT_HOP_BUDGET}); the biggest
                       per-hunter cost lever there is
   --two-dot           Diff the literal <base>..<head> two-point range instead
@@ -720,6 +728,10 @@ export function parseArgs(argv: string[]): ParsedCli {
     }
     if (arg === "--full") {
       options.full = true;
+      continue;
+    }
+    if (arg === "--adjudicate") {
+      options.adjudicate = true;
       continue;
     }
     if (arg === "--yes" || arg === "-y") {
@@ -976,6 +988,16 @@ export function parseArgs(argv: string[]): ParsedCli {
     throw new CliUsageError(
       "--ci runs the CI headless shell against a PR, so it requires --pr",
     );
+  }
+  if (options.adjudicate && options.pr === undefined) {
+    throw new CliUsageError(
+      "--adjudicate runs the CI adjudicator against a PR, so it requires --pr",
+    );
+  }
+  // The adjudicator's verdicts are posted only by the CI shell, so the flag is a
+  // no-op anywhere else. Same reasoning as --budget-usd below.
+  if (options.adjudicate && !(options.ci && command === "review")) {
+    throw new CliUsageError("--adjudicate only applies with review --ci");
   }
   // Same "silently dropped intention" reasoning as --post/--pr above: a
   // spend ceiling or a summary toggle for a mode that never turns on would

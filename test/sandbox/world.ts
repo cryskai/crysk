@@ -124,6 +124,7 @@ function triggerReaction(body: string): "eyes" | "confused" | undefined {
   if (
     body === "/pr-hero review" ||
     body === "/pr-hero review --full" ||
+    body === "/pr-hero recheck" ||
     body === "/pr-hero override"
   ) {
     return "eyes";
@@ -209,6 +210,10 @@ export interface WorldOptions {
   // D3: a report on a head whose branch carries src/mute.ts gets a state block that
   // names it. This drops that block, the mutation the state-row check must catch.
   omitStateRows?: boolean;
+  // T5b: the verdict the CI adjudicator's reply to a `/pr-hero recheck` carries, with
+  // blockingFindings on. Unset, it is `rejected`; `upheld` is the mutation the
+  // adjudication check must catch.
+  adjudicationVerdict?: string;
 }
 
 // The gate's own status texts, from the product's request builders, so the fake
@@ -238,6 +243,9 @@ export class FakeGithub {
   readonly runs: RunRow[] = [];
   readonly statuses = new Map<string, { state: string; description: string }>();
   readonly comments = new Map<number, CommentRow[]>();
+  // The review (inline) comments of each PR: the blocking findings and the replies to
+  // them, which GitHub lists apart from the issue comments.
+  readonly inline = new Map<number, CommentRow[]>();
   readonly mainFiles: Map<string, string>;
   private readonly options: WorldOptions;
   private nextId = 100;
@@ -449,6 +457,12 @@ export class FakeGithub {
     return { id: this.nextId++, body, createdAt: this.stamp() };
   }
 
+  private inlineOf(prNumber: number): CommentRow[] {
+    const list = this.inline.get(prNumber) ?? [];
+    this.inline.set(prNumber, list);
+    return list;
+  }
+
   // What the publisher leaves on the PR for one run's outcome.
   private post(outcome: Outcome, prNumber: number, sha: string, runId: number) {
     // A near miss runs nothing, so it leaves no report, outcome or status (T2e).
@@ -470,7 +484,7 @@ export class FakeGithub {
       // finding under the gate is failure; advisory is success whatever it finds,
       // and statusIgnoresFindings is the mutation that keeps the gate green.
       if (this.options.blockingFindings === true) {
-        list.push(this.comment(blockingFinding(sha)));
+        this.inlineOf(prNumber).push(this.comment(blockingFinding(sha)));
       }
       const gateFails =
         outcome === "review" &&
@@ -552,6 +566,7 @@ export class FakeGithub {
         createdAt: this.stamp(),
       });
       this.comments.set(number, []);
+      this.inline.set(number, []);
       this.events.push(`pr create ${number}`);
       const sha = this.branches.get(branch) ?? MAIN_SHA;
       this.startRun(
@@ -606,6 +621,19 @@ export class FakeGithub {
           head,
           workflow,
         );
+        // T5b: a recheck's run also has the CI adjudicator rule on the dismissal, and
+        // its reply is an inline comment stamped as this run's.
+        if (
+          body === "/pr-hero recheck" &&
+          this.options.blockingFindings === true
+        ) {
+          const verdict = this.options.adjudicationVerdict ?? "rejected";
+          this.inlineOf(number).push(
+            this.comment(
+              `<!-- pr-hero-adjudication verdict=${verdict} reply=1 head=${head} -->\n\nThe adjudicator ruled on the dismissal.`,
+            ),
+          );
+        }
       } else if (reaction === "confused") {
         this.startRun(
           "issue_comment",
@@ -681,6 +709,14 @@ export class FakeGithub {
   }
 
   private api(path: string, args: readonly string[]): GhResult {
+    // T5b: a reply to a review comment. The body is the `-f body=` field.
+    const reply = /\/pulls\/(\d+)\/comments$/.exec(path);
+    if (reply !== null && flag(args, "--method") === "POST") {
+      const body = (flag(args, "-f") ?? "").replace(/^body=/, "");
+      const posted = this.comment(body);
+      this.inlineOf(Number(reply[1])).push(posted);
+      return ok(JSON.stringify({ id: posted.id }));
+    }
     if (args.includes("DELETE")) {
       this.branches.delete(
         path.slice(path.indexOf("refs/heads/") + "refs/heads/".length),
@@ -726,7 +762,18 @@ export class FakeGithub {
       const contents = this.reactions.get(Number(reacted[1])) ?? [];
       return ok(JSON.stringify(contents.map((content) => ({ content }))));
     }
-    if (/\/pulls\/\d+\/comments/.test(path)) return ok("[]");
+    const inlineList = /\/pulls\/(\d+)\/comments/.exec(path);
+    if (inlineList !== null) {
+      return ok(
+        JSON.stringify(
+          this.inlineOf(Number(inlineList[1])).map((c) => ({
+            id: c.id,
+            body: c.body,
+            created_at: c.createdAt,
+          })),
+        ),
+      );
+    }
     const pull = /\/pulls\/(\d+)$/.exec(path);
     if (pull !== null) {
       const found = this.prs.get(Number(pull[1]));

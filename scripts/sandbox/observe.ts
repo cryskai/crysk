@@ -72,6 +72,7 @@ export type CommentKind =
   | "outcome"
   | "skip"
   | "override"
+  | "adjudication"
   | "other";
 
 export interface CommentFact {
@@ -99,6 +100,8 @@ export interface CommentFact {
   // the findings the PR shows with no inline anchor. Set only when there is at
   // least one, so a report without one keeps the shape it always had.
   outsideDiffBlocking?: number;
+  // T5b: the verdict of a CI adjudication reply (`verdict=` on its marker line).
+  verdict?: string;
   // D3: the paths of a report's state-block rows (every loc of every row, once each), so a check can read what the PR's state remembers. Set only on a report that carries a state block.
   statePaths?: string[];
 }
@@ -203,6 +206,10 @@ export function statePathsOf(body: string): string[] | undefined {
   return paths;
 }
 
+// T5b: the marker the CI adjudicator writes on its reply to a dismissal. Its verdict is
+// the `verdict=` token on that line; a line without one reads as no verdict.
+const ADJUDICATION_MARKER_PREFIX = "<!-- pr-hero-adjudication ";
+
 export function classifyComment(
   body: string,
   source: "issue" | "inline",
@@ -247,6 +254,14 @@ export function classifyComment(
       ...(code === "PRH-CRED-UNUSABLE" && HUNTER_ROUTE_SENTENCE.test(body)
         ? { hunterRoute: true as const }
         : {}),
+    };
+  }
+  if (first.startsWith(ADJUDICATION_MARKER_PREFIX)) {
+    const verdict = /\bverdict=([a-z]+)\b/.exec(first)?.[1];
+    return {
+      source,
+      kind: "adjudication",
+      ...(verdict === undefined ? {} : { verdict }),
     };
   }
   for (const [reason, marker] of Object.entries(SKIP_MARKERS)) {

@@ -207,7 +207,7 @@ export function generateCiWorkflowTemplate(
               *"HTTP 404"*) break ;;
             esac
             if [ "$attempt" = 2 ]; then
-              echo "::error title=pr-hero::could not verify the commenter's write access: the GitHub API call failed twice, so nothing was reviewed or overridden. Comment /pr-hero review or /pr-hero override again to retry"
+              echo "::error title=pr-hero::could not verify the commenter's write access: the GitHub API call failed twice, so nothing was reviewed or overridden. Comment /pr-hero review, /pr-hero recheck or /pr-hero override again to retry"
               exit 1
             fi
             sleep 2
@@ -215,7 +215,7 @@ export function generateCiWorkflowTemplate(
           case "$permission" in
             admin|write) ;;
             *)
-              echo "::notice title=pr-hero::only users with write access to this repository can run /pr-hero review or /pr-hero override"
+              echo "::notice title=pr-hero::only users with write access to this repository can run /pr-hero review, /pr-hero recheck or /pr-hero override"
               echo "proceed=false" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
@@ -315,6 +315,7 @@ jobs:
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero recheck')) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))
     # Job-level and keyed on the pull request number. A workflow-level group
     # on \`github.head_ref || github.ref\` put every comment on every pull
@@ -351,7 +352,7 @@ jobs:
     # other event gets a unique per-run group for the same reason, so a
     # skipped job can never cancel or replace a review.
     concurrency:
-      group: \${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: \${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: \${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     # Backstop for a HUNG runner, not a second review budget. pr-hero already

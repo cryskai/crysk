@@ -289,6 +289,67 @@ describe("gh rail: run cancel", () => {
   });
 });
 
+describe("gh rail: one review-thread reply on a sandbox PR (T5b)", () => {
+  const path = `repos/${SANDBOX_REPO}/pulls/7/comments`;
+  const reply = (...extra: string[]) => [
+    "api",
+    path,
+    "--method",
+    "POST",
+    "-f",
+    "body=<!-- pr-hero-triage tag=dismissed -->",
+    "-F",
+    "in_reply_to=99",
+    ...extra,
+  ];
+
+  test("accepts the exact reply shape", () => {
+    expect(() => assertGhArgs(reply())).not.toThrow();
+  });
+
+  test("refuses any other field, path, method or repository", () => {
+    const refused: string[][] = [
+      reply("-f", "commit_id=abc"),
+      ["api", path, "--method", "POST", "-f", "body=x"],
+      [
+        "api",
+        path,
+        "--method",
+        "PATCH",
+        "-f",
+        "body=x",
+        "-F",
+        "in_reply_to=99",
+      ],
+      [
+        "api",
+        `repos/${SANDBOX_REPO}/issues/7/comments`,
+        "--method",
+        "POST",
+        "-f",
+        "body=x",
+        "-F",
+        "in_reply_to=99",
+      ],
+      [
+        "api",
+        "repos/juanmaagd/pr-hero/pulls/7/comments",
+        "--method",
+        "POST",
+        "-f",
+        "body=x",
+        "-F",
+        "in_reply_to=99",
+      ],
+      ["api", path, "--method", "POST", "-f", "body=x", "-F", "in_reply_to=x"],
+      ["api", path, "--method", "POST", "-F", "in_reply_to=99", "-f", "body=x"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
 describe("git rail: no force, no deletes, no rewritten main", () => {
   test("accepts the pushes the runner makes", () => {
     const allowed: string[][] = [

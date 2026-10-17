@@ -13,7 +13,7 @@
 
 import { type CheckResult, describeCheck, evaluateChecks } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
-import { STATUS_CONTEXT } from "./markers";
+import { FINDING_MARKER_PREFIX, STATUS_CONTEXT } from "./markers";
 import {
   COMMENT_RUN_CLOCK_SKEW_MS,
   type CommentFact,
@@ -433,7 +433,14 @@ async function runOne(
   const work = stopAfterInterrupt(deps, interrupts.scenario);
   try {
     await cloneSandbox(work, live.dir);
-    if (scenario.phases.some((p) => p.action.kind === "comment")) {
+    // A recheck comment starts main's workflow exactly as a plain comment does.
+    if (
+      scenario.phases.some(
+        (p) =>
+          p.action.kind === "comment" ||
+          p.action.kind === "dismiss-and-recheck",
+      )
+    ) {
       await requirePinnedMain(work, live.dir, options.ref);
     }
     let previous: Observation | undefined;
@@ -455,8 +462,10 @@ async function runOne(
       }
       const collected = await collect(work, live);
       // Only a comment phase has a triggering comment whose reactions a check can read.
+      // A recheck phase posts its own triggering comment, so it counts too.
       const obs: Observation =
-        phase.action.kind === "comment"
+        phase.action.kind === "comment" ||
+        phase.action.kind === "dismiss-and-recheck"
           ? {
               ...collected,
               reactions: await triggerReactions(work, live),
@@ -631,6 +640,21 @@ async function perform(
     await pushBranch(deps, live);
     return;
   }
+  if (action.kind === "dismiss-and-recheck") {
+    await dismissBlockingFinding(deps, live, action.argument);
+    await postComment(deps, live, "/pr-hero recheck");
+    return;
+  }
+  await postComment(deps, live, action.body);
+}
+
+// A PR comment as the authenticated user, and the comment's id and creation time for
+// the phase that waits on its run.
+async function postComment(
+  deps: SandboxDeps,
+  live: Live,
+  body: string,
+): Promise<void> {
   const pr = requirePr(live);
   const url = await ghOk(deps, [
     "pr",
@@ -639,11 +663,48 @@ async function perform(
     "-R",
     SANDBOX_REPO,
     "--body",
-    action.body,
+    body,
   ]);
   deps.log(`comment: ${url.trim()}`);
   live.commentId = commentIdOf(url);
   live.commentCreatedAt = await commentCreatedAt(deps, live.commentId);
+}
+
+// T5b: replies `dismissed` on the first blocking finding's thread, as a human author
+// would. A PR with no blocking finding has nothing to dismiss, so no reply is posted.
+async function dismissBlockingFinding(
+  deps: SandboxDeps,
+  live: Live,
+  argument: string,
+): Promise<void> {
+  const pr = requirePr(live);
+  const headSha = live.headSha;
+  if (headSha === undefined)
+    throw new Error("the branch has no head to dismiss on");
+  const comments = await ghJson<{ id: number; body: string }[]>(deps, [
+    "api",
+    `repos/${SANDBOX_REPO}/pulls/${pr.number}/comments?per_page=100`,
+  ]);
+  const finding = comments.find(
+    (c) =>
+      c.body.startsWith(FINDING_MARKER_PREFIX) &&
+      c.body.includes("🔴 blocking"),
+  );
+  if (finding === undefined) {
+    deps.log("no blocking finding to dismiss");
+    return;
+  }
+  await ghOk(deps, [
+    "api",
+    `repos/${SANDBOX_REPO}/pulls/${pr.number}/comments`,
+    "--method",
+    "POST",
+    "-f",
+    `body=<!-- pr-hero-triage tag=dismissed head=${headSha} actor=agent verdict=upheld -->\n\n${argument}`,
+    "-F",
+    `in_reply_to=${finding.id}`,
+  ]);
+  deps.log(`dismissed blocking finding ${finding.id}`);
 }
 
 // The id GitHub gave the comment whose URL gh printed. The comment's run and its
@@ -944,10 +1005,10 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Collected> {
     deps,
     ["api", `repos/${SANDBOX_REPO}/issues/${pr.number}/comments?per_page=100`],
   );
-  const inlineComments = await ghJson<{ body: string }[]>(deps, [
-    "api",
-    `repos/${SANDBOX_REPO}/pulls/${pr.number}/comments?per_page=100`,
-  ]);
+  const inlineComments = await ghJson<{ body: string; created_at: string }[]>(
+    deps,
+    ["api", `repos/${SANDBOX_REPO}/pulls/${pr.number}/comments?per_page=100`],
+  );
   const artifacts =
     run === undefined
       ? []
@@ -962,7 +1023,10 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Collected> {
       ...classifyComment(c.body, "issue"),
       createdAt: c.created_at,
     })),
-    ...inlineComments.map((c) => classifyComment(c.body, "inline")),
+    ...inlineComments.map((c) => ({
+      ...classifyComment(c.body, "inline"),
+      createdAt: c.created_at,
+    })),
   ];
   const latest = combined.statuses.find((s) => s.context === STATUS_CONTEXT);
   const runFact: RunFact | undefined =

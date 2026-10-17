@@ -7,6 +7,12 @@ import { normalizePath } from "#compare/compare";
 import { claimFingerprint } from "#pr/preflight";
 import type { Severity } from "#review/findings";
 import { parseFindingCommentBadge } from "#review/report";
+import {
+  type AdjudicationSubject,
+  CI_ADJUDICATOR_LOGIN,
+  MAX_ADJUDICATIONS_PER_RUN,
+  parseAdjudicationMarker,
+} from "#triage/adjudication";
 import { parseTriageMarker } from "#triage/triage";
 import {
   classifyPrior,
@@ -879,10 +885,56 @@ function resolveRowTie<T extends PostedForPrior>(
   return matching.length === 1 ? matching[0] : undefined;
 }
 
+// T5b: the pending dismissals of blocking priors, at most MAX_ADJUDICATIONS_PER_RUN.
+// WHY advisory priors never cost an adjudicator call: only a blocking prior's
+// dismissal can leave the gate count, so nothing else is worth a ruling.
+// WHY an "inconclusive" ruling stays pending: it counts as not upheld, and a
+// later recheck may retry the same dismissal and get a ruling.
+export function adjudicationQueue(
+  priors: readonly PriorRecord[],
+): AdjudicationSubject[] {
+  const subjects: AdjudicationSubject[] = [];
+  const retried: AdjudicationSubject[] = [];
+  for (const prior of priors) {
+    if (prior.tier !== "blocking" && prior.tier !== TIER_UNRECOVERABLE) {
+      continue;
+    }
+    const triage = prior.triage;
+    if (
+      triage?.tag !== "dismissed" ||
+      triage.replyId === undefined ||
+      triage.threadId === undefined ||
+      (triage.ciVerdict != null && triage.ciVerdict !== "inconclusive")
+    ) {
+      continue;
+    }
+    const subject: AdjudicationSubject = {
+      priorId: prior.id,
+      threadId: triage.threadId,
+      replyId: triage.replyId,
+      sev: prior.sev,
+      locs: prior.locs,
+      claim: prior.claim,
+      argument: triage.argument ?? "",
+    };
+    // WHY never-ruled first: an inconclusive ruling is retried, and the model often
+    // answers the same way, so retries must not take every slot from a dismissal
+    // that was never ruled on.
+    if (triage.ciVerdict === "inconclusive") retried.push(subject);
+    else subjects.push(subject);
+  }
+  return [...subjects, ...retried].slice(0, MAX_ADJUDICATIONS_PER_RUN);
+}
+
 export function enrichPriorsFromThreads(input: {
   priors: readonly PriorRecord[];
   posted: readonly PostedForPrior[];
+  // The head under review. A bot verdict counts only when its `head=` is this
+  // head; when it is undefined no bot verdict counts.
+  headSha?: string;
   replies: readonly {
+    id?: number;
+    user?: string;
     in_reply_to_id: number | null;
     body: string;
     created_at?: string;
@@ -904,7 +956,31 @@ export function enrichPriorsFromThreads(input: {
         tag: marker.tag,
         verdict: marker.verdict ?? null,
         createdAt: reply.created_at ?? null,
+        ...(reply.id === undefined ? {} : { replyId: reply.id }),
+        threadId: parent.id,
+        argument: reply.body.split("\n").slice(1).join("\n").trim(),
+        ciVerdict: null,
       };
+    }
+    // WHY only GitHub's author field is trusted: the marker text is typed by
+    // anyone, so a verdict from any other login is ignored. The LAST match
+    // in thread order wins, and only for the latest triage reply.
+    // WHY the head must match too: a push may change the code the ruling read,
+    // so a verdict on an earlier head is stale and a later head needs a new
+    // recheck. With no headSha, no bot verdict can be shown current.
+    if (triage?.replyId !== undefined && input.headSha !== undefined) {
+      for (const reply of thread) {
+        if (reply.user !== CI_ADJUDICATOR_LOGIN) continue;
+        const adjudication = parseAdjudicationMarker(reply.body);
+        if (
+          adjudication === null ||
+          adjudication.reply !== triage.replyId ||
+          adjudication.head !== input.headSha
+        ) {
+          continue;
+        }
+        triage = { ...triage, ciVerdict: adjudication.verdict };
+      }
     }
     const newThreadReply = thread.some(
       (reply) =>

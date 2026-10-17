@@ -304,6 +304,71 @@ describe("fetchPrReviewComments", () => {
     expect(calls.some((c) => c.argv.join(" ").includes("graphql"))).toBe(true);
   });
 
+  test("GraphQL maps a Bot author to its [bot] login and keeps a User login", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["pulls/42/comments"],
+        response: { stderr: "gh: Not Found (HTTP 404)", exitCode: 1 },
+      },
+      repoView,
+      {
+        match: ["graphql", "reviewThreads"],
+        response: {
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      {
+                        comments: {
+                          nodes: [
+                            {
+                              fullDatabaseId: 9,
+                              body: "bot",
+                              author: {
+                                login: "github-actions",
+                                __typename: "Bot",
+                              },
+                              path: "src/a.ts",
+                              line: 12,
+                              originalLine: 10,
+                              replyTo: null,
+                            },
+                            {
+                              fullDatabaseId: 10,
+                              body: "human",
+                              author: { login: "octocat", __typename: "User" },
+                              path: "src/a.ts",
+                              line: 12,
+                              originalLine: 10,
+                              replyTo: { fullDatabaseId: 9 },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const comments = await fetchPrReviewComments(OPERATOR_ROOT, 42, {
+      spawnFn,
+    });
+    expect(comments.map((c) => [c.id, c.user])).toEqual([
+      [9, "github-actions[bot]"],
+      [10, "octocat"],
+    ]);
+    expect(
+      calls.some((c) => c.argv.join(" ").includes("author{login __typename}")),
+    ).toBe(true);
+  });
+
   test("an unparseable line fails loud rather than silently dropping it", async () => {
     const { spawnFn } = makeFakeGh([
       {

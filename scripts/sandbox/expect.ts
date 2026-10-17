@@ -51,7 +51,9 @@ export type Check =
   // SB3: the phase's run concluded this way.
   | { kind: "run-conclusion"; conclusion: string }
   // SB3: the head's pr-hero status exists and is not pending, so a cancelled run leaves no stuck gate.
-  | { kind: "status-settled" };
+  | { kind: "status-settled" }
+  // T5b: this run posted a CI adjudication reply whose verdict is one of `accept`.
+  | { kind: "adjudication-reply"; accept: readonly string[] };
 
 export interface CheckResult {
   label: string;
@@ -107,6 +109,8 @@ export function describeCheck(check: Check): string {
       return `run concluded ${check.conclusion}`;
     case "status-settled":
       return "pr-hero status is settled (not pending)";
+    case "adjudication-reply":
+      return `CI adjudication reply is one of ${check.accept.join("/")}`;
   }
 }
 
@@ -369,6 +373,26 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         status === undefined
           ? "no pr-hero status"
           : `${status.state}: ${status.description}`,
+      );
+    }
+    case "adjudication-reply": {
+      // Only replies this run posted count: an adjudication an earlier run left on the
+      // PR is that run's ruling, not this one's.
+      const replies = obs.comments.filter(
+        (c) => c.kind === "adjudication" && postedByThisRun(c, obs),
+      );
+      const verdict = replies.find(
+        (c) => c.verdict !== undefined && check.accept.includes(c.verdict),
+      )?.verdict;
+      if (verdict !== undefined) {
+        return { label, pass: true, detail: `adjudication ${verdict}` };
+      }
+      const seen = replies.flatMap((c) =>
+        c.verdict === undefined ? [] : [c.verdict],
+      );
+      return pass(
+        false,
+        `no adjudication reply from this run (verdicts seen: ${seen.join(", ") || "none"})`,
       );
     }
   }
