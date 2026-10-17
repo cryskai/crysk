@@ -48,7 +48,7 @@ export async function runInit(
     gh: guardedGh(input.gh),
     git: guardedGit(input.git),
   };
-  await ensureRepo(deps);
+  await ensureRepo(deps, route);
   const dir = await deps.workspace.mkdtemp();
   try {
     await cloneSandbox(deps, dir);
@@ -61,9 +61,44 @@ export async function runInit(
   else await ensureRoutingVariable(deps, routing);
 }
 
-async function ensureRepo(deps: SandboxDeps): Promise<void> {
+// The API key the scaffold wires into every run (variants.ts). The claude route's
+// "$0 cash" guarantee rests on it being absent: with it set, the engine bills per token.
+const ANTHROPIC_API_KEY_SECRET = "ANTHROPIC_API_KEY";
+
+// Refuses the claude route while ANTHROPIC_API_KEY is set on the sandbox. A listing
+// failure refuses too, since an unknown answer cannot prove the key is absent. It
+// deletes nothing: the owner does.
+async function refuseStrayApiKey(deps: SandboxDeps): Promise<void> {
+  const listed = await deps.gh([
+    "secret",
+    "list",
+    "-R",
+    SANDBOX_REPO,
+    "--json",
+    "name",
+  ]);
+  if (listed.exitCode !== 0) {
+    throw new Error(
+      `gh secret list failed, so nothing was written: ${listed.stderr.trim()}`,
+    );
+  }
+  const names = (JSON.parse(listed.stdout) as { name: string }[]).map(
+    (secret) => secret.name,
+  );
+  if (names.includes(ANTHROPIC_API_KEY_SECRET)) {
+    throw new Error(
+      `${ANTHROPIC_API_KEY_SECRET} is set on the sandbox; the claude route runs on the subscription and must not be able to bill per token. ` +
+        `Remove it: gh secret delete ${ANTHROPIC_API_KEY_SECRET} --repo ${SANDBOX_REPO}`,
+    );
+  }
+}
+
+// An existing repo is checked for the stray key before anything else is written: the
+// seed and the secrets come after this step. A repo this step creates has no secrets.
+async function ensureRepo(deps: SandboxDeps, route: Route): Promise<void> {
   const view = await deps.gh(["repo", "view", SANDBOX_REPO, "--json", "name"]);
   if (view.exitCode === 0) {
+    if (route.kind === "claude") await refuseStrayApiKey(deps);
     deps.log(`repo: ${SANDBOX_REPO} exists`);
     return;
   }

@@ -278,6 +278,37 @@ describe("init: route", () => {
     expect(w.variablesSet).toEqual([]);
   });
 
+  test("the claude route refuses before any write when ANTHROPIC_API_KEY is set on the sandbox, and names the removal command", async () => {
+    const w = world({
+      exists: true,
+      hasCommits: false,
+      secretNames: [
+        OPENCODE_AUTH_SECRET,
+        CLAUDE_TOKEN_SECRET,
+        "ANTHROPIC_API_KEY",
+      ],
+      remoteFiles: new Map(),
+    });
+    const h = harness(scriptFor(w));
+    await expect(runInit(h.deps, REF)).rejects.toThrow(
+      `ANTHROPIC_API_KEY is set on the sandbox; the claude route runs on the subscription and must not be able to bill per token. Remove it: gh secret delete ANTHROPIC_API_KEY --repo ${SANDBOX_REPO}`,
+    );
+    // Nothing was written: no repo, no push, no secret, no variable.
+    expect(w.reposCreated).toEqual([]);
+    expect(h.gitCalls.some((c) => c.args[0] === "push")).toBe(false);
+    expect(w.secretsSet).toEqual([]);
+    expect(w.variablesSet).toEqual([]);
+    expect(w.variablesDeleted).toEqual([]);
+  });
+
+  test("the claude route with ANTHROPIC_API_KEY absent is not refused, as before", async () => {
+    const w = world({ remoteFiles: sandboxFiles(REF) });
+    await expect(
+      runInit(harness(scriptFor(w)).deps, REF),
+    ).resolves.toBeUndefined();
+    expect(w.secretsSet).toEqual([]);
+  });
+
   test("the claude route still writes the OpenCode auth secret, which is harmless while routing is unset", async () => {
     const w = world({
       secretNames: [CLAUDE_TOKEN_SECRET],

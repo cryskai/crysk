@@ -58,7 +58,9 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   No model is reached.
 - The default `claude` route is subscription-backed, $0 cash, and uses subscription quota.
   Reviews run on the `CLAUDE_CODE_OAUTH_TOKEN` subscription. `init` never sets an Anthropic
-  API key, so no review is billed per token.
+  API key, so no review is billed per token. `init` refuses the `claude` route while
+  `ANTHROPIC_API_KEY` is set on the sandbox, before it writes anything; remove it with
+  `gh secret delete ANTHROPIC_API_KEY --repo juanmaagd/pr-hero-sandbox`.
 - The `opencode:<modelSnapshot>` route runs reviews on one OpenCode model at cost 0. The
   sandbox used `opencode/big-pickle` until 2026-10-17: it leaks its reasoning into its
   answers, and in about half of its live runs every hunter failed. `deepseek-v4.1-flash-free`

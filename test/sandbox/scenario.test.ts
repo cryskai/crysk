@@ -283,6 +283,34 @@ describe("run: the scenarios against the fake repository", () => {
     ).toBe(false);
   });
 
+  test("a phase-2 check that fails is not the flake when phase 1 hunters-failed: no re-run, exit 1", async () => {
+    // Phase 1 hunters-failed, and its outcome stays on the PR. Phase 2 is a near miss
+    // that reviews nothing, so it reads phase 1's outcome as its path. Its checks fail
+    // for reasons that are not the free model's flake, so the scenario must not re-run.
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "near-miss"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(false);
+    expect(
+      h.logs.includes(
+        "  FAIL  comment-trigger: [2] path is reviewed (got hunters-failed)",
+      ),
+    ).toBe(true);
+  });
+
+  test("a phase-2 run that hunters-failed itself is the flake and is re-run once", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "hunters-failed"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+    expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(true);
+  });
+
   test("cleanup: a second run that hunters-failed is labelled as the flake, and its checks still fail the run", async () => {
     const world = new FakeGithub({
       ref: REF,

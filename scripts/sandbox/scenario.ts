@@ -13,13 +13,14 @@
 
 import { type CheckResult, describeCheck, evaluateChecks } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
-import { STATUS_CONTEXT } from "./markers";
+import { RUN_STEP_NAME, STATUS_CONTEXT } from "./markers";
 import {
   type CommentFact,
   classifyComment,
   classifyPath,
   invariantViolations,
   type Observation,
+  postedByThisRun,
   type RunFact,
   type SmokePath,
 } from "./observe";
@@ -254,6 +255,24 @@ export function isFreeModelFlake(result: ScenarioResult): boolean {
   );
 }
 
+// The hunters-failed flake belongs to this phase only when its own run is the failed
+// one: its review step failed, or the outcome that names it was posted by this run.
+// A phase-1 outcome left on the PR is no flake of a later phase, so a check of that
+// phase is not re-run away. A phase with no trigger has no window, so its outcome counts.
+function isOwnHuntersFailed(obs: Observation): boolean {
+  const reviewFailed =
+    obs.run?.steps.some(
+      (step) => step.name === RUN_STEP_NAME && step.conclusion === "failure",
+    ) === true;
+  const outcome = obs.comments.find(
+    (c) =>
+      c.kind === "outcome" && (c.head === undefined || c.head === obs.headSha),
+  );
+  return (
+    reviewFailed || (outcome !== undefined && postedByThisRun(outcome, obs))
+  );
+}
+
 // One attempt: the serialization gate, then the scenario. A refused attempt runs
 // nothing and comes back as a REFUSED row. A re-run passes the same gate as the first
 // attempt, so the lock, the rails and the kept PRs apply to it unchanged.
@@ -458,8 +477,11 @@ async function runOne(
       // A failed check of a run whose hunters failed is the free model's flake. It
       // keeps its failure and exit code; only its label says why. A head that posted
       // success was reviewed, whatever an outcome comment still says, so it is no flake.
+      // Only this phase's own hunters-failed run counts (see isOwnHuntersFailed).
       const freeModelFlake =
-        observed === "hunters-failed" && obs.status?.state !== "success";
+        observed === "hunters-failed" &&
+        obs.status?.state !== "success" &&
+        isOwnHuntersFailed(obs);
       const phaseChecks = evaluateChecks(asserted, obs).map(
         (r): CheckResult =>
           freeModelFlake && !r.pass
