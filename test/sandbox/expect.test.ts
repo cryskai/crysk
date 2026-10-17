@@ -390,6 +390,8 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
         conclusion: "success",
         steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
       },
+      // The accepted command's reaction, read from the comment (T2e).
+      reactions: ["eyes"],
     }),
     // The pull_request run was read again instead of the comment run: the check must catch it.
     fail: obs({
@@ -400,6 +402,47 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
         conclusion: "success",
         steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
       },
+    }),
+  },
+  // A near miss: the review's own phase, then a comment that is not the exact command.
+  "near-miss/0": {
+    pass: obs(),
+    fail: obs({
+      status: {
+        state: "error",
+        description: "PRH-CRED-MISSING: no credential",
+      },
+      comments: [outcome("PRH-CRED-MISSING")],
+    }),
+  },
+  "near-miss/1": {
+    pass: obs({
+      run: {
+        id: 10,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        // The composite step concludes success on a near miss, as GitHub reports it:
+        // the evidence that it reviewed nothing is that it left no artifact.
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      triggeredAt: Date.parse("2026-10-16T14:31:00Z"),
+      artifacts: [],
+      reactions: ["confused"],
+    }),
+    // A comment run that uploaded its review artifact: the near miss must not review,
+    // and its comment must not read as accepted. Only the artifact is the evidence here.
+    fail: obs({
+      run: {
+        id: 10,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      triggeredAt: Date.parse("2026-10-16T14:31:00Z"),
+      reactions: ["confused"],
+      comments: [outcome("PRH-CRED-MISSING")],
     }),
   },
   // S8: a red gate on a reviewed head, then the override that turns it green.
@@ -808,6 +851,148 @@ describe("status-matches-findings: the status agrees with the blocking findings 
   test("its label names the rule", () => {
     expect(evaluateCheck(check, withFindings([], "success")).label).toBe(
       "status matches the blocking findings: failure when any is visible, success or a counted failure otherwise",
+    );
+  });
+});
+
+// T2e: the triggering comment carries the reaction its run earned. The check is
+// not in any scenario yet (its observation is wired by scenario.ts), so its pass
+// and fail pair is written out here rather than in the phase table.
+describe("reaction: the triggering comment carries the reaction (T2e)", () => {
+  const check = { kind: "reaction", content: "eyes" } as const;
+
+  test("a recorded pass carries the reaction, and a recorded fail carries another", () => {
+    const pass = obs({ reactions: ["eyes"] });
+    const fail = obs({ reactions: ["-1"] });
+    expect(evaluateCheck(check, pass).pass).toBe(true);
+    expect(evaluateCheck(check, fail).pass).toBe(false);
+    expect(evaluateCheck(check, fail).detail).toBe("got -1");
+  });
+
+  test("a comment with no reaction fails and says so", () => {
+    const result = evaluateCheck(check, obs({ reactions: [] }));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("got no reaction");
+  });
+
+  test("unread reactions (no comment phase, or a failed read) fail as not read, never as a missing reaction", () => {
+    const result = evaluateCheck(check, obs());
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe(
+      "the triggering comment's reactions were not read",
+    );
+  });
+
+  test("its label names the reaction", () => {
+    expect(evaluateCheck(check, obs()).label).toBe(
+      "the triggering comment has the eyes reaction",
+    );
+  });
+});
+
+// T2e: a near miss removes nothing, so a hunters-failed outcome phase 1 left stays on the
+// PR. The near miss is judged by the outcomes its own run posted, read through the same
+// window own-evidence uses; an outcome from before its trigger is not its.
+describe("no-own-outcome: this run posted no outcome comment (T2e)", () => {
+  const check = { kind: "no-own-outcome" } as const;
+  const TRIGGERED = Date.parse("2026-10-16T14:31:00Z");
+  const nearMissRun = (comments: Observation["comments"]) =>
+    obs({
+      run: {
+        id: 10,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      triggeredAt: TRIGGERED,
+      artifacts: [],
+      comments,
+    });
+  const earlier = {
+    source: "issue" as const,
+    kind: "outcome" as const,
+    code: "PRH-HUNTERS-FAILED",
+    createdAt: "2026-10-16T14:20:00Z",
+  };
+
+  test("a hunters-failed outcome that phase 1 left, from before this run's trigger, passes", () => {
+    const result = evaluateCheck(check, nearMissRun([earlier]));
+    expect(result.pass).toBe(true);
+  });
+
+  test("an outcome this run posted after its trigger fails, and names its code", () => {
+    const own = {
+      ...earlier,
+      code: "PRH-CRED-MISSING",
+      createdAt: "2026-10-16T14:31:05Z",
+    };
+    const result = evaluateCheck(check, nearMissRun([earlier, own]));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("this run posted PRH-CRED-MISSING");
+  });
+
+  test("its label says this run posted no outcome comment", () => {
+    expect(evaluateCheck(check, nearMissRun([])).label).toBe(
+      "this run posted no outcome comment",
+    );
+  });
+});
+
+// T2e: a near miss's comment run reviews nothing, and its review step still concludes
+// success, because the composite step has no `if:`. So the step cannot show that no review
+// ran. The run's own evidence can: no review artifact and no skip marker of its own.
+// Evidence from an earlier run (the head's report and status) never counts here.
+describe("no-run-evidence: the comment's run left no review evidence of its own (T2e)", () => {
+  const check = { kind: "no-run-evidence" } as const;
+  const TRIGGERED = Date.parse("2026-10-16T14:31:00Z");
+  // A near miss as GitHub reports it: its step succeeded, and the report of the
+  // review before it is still on the head.
+  const nearMissRun = (overrides: Partial<Observation> = {}) =>
+    obs({
+      run: {
+        id: 10,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      triggeredAt: TRIGGERED,
+      artifacts: [],
+      ...overrides,
+    });
+
+  test("a near miss with no artifact and no skip marker of its own passes, though its step succeeded", () => {
+    expect(evaluateCheck(check, nearMissRun()).pass).toBe(true);
+  });
+
+  test("a near miss that uploaded its review artifact fails, and names it", () => {
+    const uploaded = evaluateCheck(
+      check,
+      nearMissRun({ artifacts: [`pr-hero-run-7-${NEW}`] }),
+    );
+    expect(uploaded.pass).toBe(false);
+    expect(uploaded.detail).toBe(`this run uploaded pr-hero-run-7-${NEW}`);
+  });
+
+  test("a skip marker posted after this run's trigger fails, and one from before it passes", () => {
+    const skip = (createdAt: string) =>
+      nearMissRun({
+        comments: [{ source: "issue", kind: "skip", skip: "size", createdAt }],
+      });
+    expect(evaluateCheck(check, skip("2026-10-16T14:31:02Z")).pass).toBe(false);
+    expect(evaluateCheck(check, skip("2026-10-16T14:30:00Z")).pass).toBe(true);
+  });
+
+  test("no run was found fails, and never passes as an unreviewed run", () => {
+    const result = evaluateCheck(check, obs({ run: undefined, artifacts: [] }));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("no run was found");
+  });
+
+  test("its label says the run left no review evidence of its own", () => {
+    expect(evaluateCheck(check, nearMissRun()).label).toBe(
+      "the run left no review evidence of its own",
     );
   });
 });

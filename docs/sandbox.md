@@ -61,7 +61,8 @@ one observation of the PR. S7 invariants are checked on every observation.
 | `bad-gotchas` | A scaffold `.prhero/gotchas.md` on the branch is refused before admission and spend, and the outcome names its owner. | Outcome comment `PRH-GOTCHAS-MISSING` with the owner lead `Your configuration:`; status `error` with that code; no report on the head. The branch commits the scaffold on top of the planted volume (the scenario's file override). | $0 |
 | `review-free` | The normal workflow on the free route reviews the planted bug end to end, and its gate status agrees with the findings it posted. | Path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings on the PR (see Gate status below); at least one report on the head; no outcome comment. | $0 (free route) |
 | `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings; a report; no outcome comment. | $0 (phase 2 on the free route) |
-| `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own artifact (`pr-hero-run-<pr>-<sha>`); path `reviewed`. Only the run's own review passes: a skip is a failure, because a forced run bypasses admission and budget. Status and report are not asserted here, since phase 1 left them on the same head. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (free route) |
+| `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own artifact (`pr-hero-run-<pr>-<sha>`); path `reviewed`; the triggering comment has the `eyes` reaction. Only the run's own review passes: a skip is a failure, because a forced run bypasses admission and budget. Status and report are not asserted here, since phase 1 left them on the same head. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (free route) |
+| `near-miss` | A `/pr-hero review` comment that is not the exact command runs no review: it gets the `confused` reaction and no text reply. | Phase 1 (normal): path `reviewed` or `hunters-failed`; a precondition, as in `comment-trigger`. Phase 2 (`/pr-hero review please`): the comment run completed; the triggering comment has the `confused` reaction; the run left no review evidence of its own (no `pr-hero-run-<pr>-<sha>` artifact, and no skip marker posted after its trigger), although its `Run pr-hero` step concludes `success`; this run posted no outcome comment (a `PRH-HUNTERS-FAILED` outcome that phase 1 left may remain). | $0 (phase 1 on the free route; phase 2 reaches no model) |
 
 | `same-head-rereview` | A blocking finding survives `/pr-hero review` on the same head, so the gate stays red and the author cannot re-run its way to green (S7). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings on the PR. Phase 2 (`/pr-hero review`, same head): the comment run completed and its review step succeeded. Its status must still be `failure`, but only when phase 1 posted a blocking finding to carry; otherwise that check is printed as `not asserted: no blocking finding to carry`, because the free model may find nothing to carry. | $0 (free route) |
 | `review-advisory` | With `mode: advisory`, the status stays `success` for a finished review, whatever it finds. | Path `reviewed`; the run's review step succeeded; status `success`; at least one report on the head; no outcome comment. | $0 (free route) |
@@ -73,6 +74,15 @@ finds different things from run to run. Their check, `status matches the blockin
 `failure` when the PR shows a blocking finding comment (the `🔴 blocking` header the product posts) and
 `success` when it shows none. `review-advisory` pins `success`. The offline fake (`test/sandbox/world.ts`)
 models blocking findings only behind an option, so the live runs remain the proof of the product's gate.
+
+**Reaction check.** A comment phase reads the reactions on its own comment, through the rails, as one
+GET. The check `the triggering comment has the <content> reaction` asserts the reaction the trigger gives
+it: `eyes` for an accepted command (`comment-trigger`), `confused` for a near miss (`near-miss`). A read
+that fails leaves the reactions unread, and the check fails on that; it never passes. The check
+`the run left no review evidence of its own` asserts that a near miss's run reviewed nothing. It reads the run's artifact and
+its skip marker, not its step: the composite `Run pr-hero` step has no `if:` and always concludes, so a near miss's step reads
+`success` (GitHub reports it that way). The check `this run posted no outcome comment` reads only the outcome comments this run
+created, so a `PRH-HUNTERS-FAILED` outcome from phase 1 does not fail it.
 
 The S7 invariants, checked on every observation, are: an `error` status without a `PRH-`
 code; an outcome comment on a head whose status is `success`; a status still `pending`
@@ -86,8 +96,8 @@ The runner can reach one repository, and nothing else.
   through an allowlist (`scripts/sandbox/rails.ts`). A verb that is not listed is refused.
 - `gh` may view, create or clone only the sandbox repo, manage its secret and variable,
   list, create, view, close and comment on its PRs, and list and view its runs. `gh api`
-  is GET under the sandbox, plus one DELETE of a `sandbox/` branch ref. Field flags are
-  refused.
+  is GET under the sandbox (the reactions read of a comment phase included), plus one DELETE
+  of a `sandbox/` branch ref. Field flags are refused, and so is a POST to a reactions path.
 - `git` pushes only `origin <branch>`, where the branch is `main` or a `sandbox/` branch,
   and never forced. Force flags, `+` refspecs, `:` deletes, mirror, delete, amend and
   orphan are refused.

@@ -131,6 +131,9 @@ runs:
         EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
         # Set only when the commented issue is a pull request.
         EVENT_ISSUE_PR_URL: ${{ github.event.issue.pull_request.url }}
+        # The triggering comment's id, which the reaction names. Empty on a
+        # pull_request event; the trigger accepts digits only.
+        EVENT_COMMENT_ID: ${{ github.event.comment.id }}
         COMMENT_BODY: ${{ github.event.comment.body }}
         COMMENTER_LOGIN: ${{ github.event.comment.user.login }}
         PR_NUMBER_INPUT: ${{ inputs.pr-number }}

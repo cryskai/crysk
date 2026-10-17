@@ -6,7 +6,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { GOTCHAS_TEMPLATE, gotchasUnusableReason } from "#review/preflight";
-import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
+import {
+  assertGhArgs,
+  RailViolation,
+  SANDBOX_REPO,
+} from "../../scripts/sandbox/rails";
 import {
   renderScenarioTable,
   type ScenarioResult,
@@ -778,5 +782,115 @@ describe("same-head-rereview: the status check after a re-run depends on phase 1
         /FAIL {2}same-head-rereview: \[2\] status is failure/.test(l),
       ),
     ).toBe(true);
+  });
+});
+
+// T2e: the reaction on a command, read live through the rails, and the near miss that
+// runs nothing. The fake trigger answers each comment as src/ci/trigger.ts does.
+describe("T2e: the reactions and the near miss, end to end", () => {
+  test("near-miss exits 0: its comment run is confused, its step concludes success with no review evidence, and the PR gets no outcome", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["near-miss"], OPTIONS)).toBe(0);
+    for (const label of [
+      "[2] issue_comment run completed",
+      "[2] the triggering comment has the confused reaction",
+      "[2] the run left no review evidence of its own",
+      "[2] this run posted no outcome comment",
+    ]) {
+      expect(h.logs.some((l) => l.includes(`PASS  near-miss: ${label}`))).toBe(
+        true,
+      );
+    }
+    // One comment run, and it reviewed nothing: its composite step still concludes
+    // success, as GitHub reports it, and it uploaded no review artifact and no outcome.
+    const commentRuns = world.runs.filter((r) => r.event === "issue_comment");
+    expect(commentRuns).toHaveLength(1);
+    expect(commentRuns[0]?.stepConclusion).toBe("success");
+    const prComments = [...world.comments.values()].flat().map((c) => c.body);
+    expect(
+      prComments.filter((b) => b.startsWith("<!-- pr-hero-outcome")),
+    ).toEqual([]);
+  });
+
+  test("near-miss accepts a phase 1 that hunters-failed: the outcome it left is not this near miss's", async () => {
+    // Phase 1 is the only run the queue feeds: a near miss's outcome is forced to
+    // near-miss, so this run posts no outcome and the one phase 1 left stays on the PR.
+    const world = new FakeGithub({ ref: REF, runOutcomes: ["hunters-failed"] });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["near-miss"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        l.includes("PASS  near-miss: [2] this run posted no outcome comment"),
+      ),
+    ).toBe(true);
+    const pr = [...world.prs.values()][0];
+    const left = (world.comments.get(pr?.number ?? -1) ?? []).filter((c) =>
+      c.body.startsWith("<!-- pr-hero-outcome"),
+    );
+    expect(left).toHaveLength(1);
+  });
+
+  test("the comment's reactions are read once, as a GET through the rails, and only on the comment phase", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+    const reads = h.ghCalls.filter(
+      (c) =>
+        c[0] === "api" && /\/issues\/comments\/\d+\/reactions/.test(c[1] ?? ""),
+    );
+    // comment-trigger has one comment phase, so one read, with no method flag.
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toHaveLength(2);
+    expect(reads[0]?.[1]).toMatch(
+      new RegExp(
+        `^repos/${SANDBOX_REPO}/issues/comments/\\d+/reactions\\?per_page=100$`,
+      ),
+    );
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}comment-trigger: \[2\] the triggering comment has the eyes reaction/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("a reactions read that fails fails its check on what it could not read, and never passes it", async () => {
+    const world = new FakeGithub({ ref: REF, reactionsUnreadable: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        l.includes("could not read the reactions on the triggering comment"),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /FAIL {2}comment-trigger: \[2\] the triggering comment has the eyes reaction/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}comment-trigger: \[2\] the triggering comment has the eyes reaction/.test(
+          l,
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  test("the reaction read is a GET the rails allow, and a POST to the same path is refused", () => {
+    const path = `repos/${SANDBOX_REPO}/issues/comments/9001/reactions`;
+    expect(() => assertGhArgs(["api", `${path}?per_page=100`])).not.toThrow();
+    // The endpoint is the second argument, as the rails read it, so the refusal is the
+    // method rule's own, not a missing endpoint.
+    expect(() => assertGhArgs(["api", path, "-X", "POST"])).toThrow(
+      RailViolation,
+    );
+    expect(() => assertGhArgs(["api", path, "-X", "POST"])).toThrow(
+      "is not a sandbox operation",
+    );
   });
 });

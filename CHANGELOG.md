@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/pr-hero override` unlocks a red gate for the head it names, and is refused on a pull request from a fork. When the
   override's status is written, it also removes earlier outcome comments from the pull request, as a completed review
   does, and keeps every override record.
+- **Reactions answer a `/pr-hero` comment the trigger does not review**: a refused or near-miss comment gets a
+  reaction on the comment and no text reply. 👀 marks an accepted command, 👎 a refused one (no write access, or a
+  refused override), and 😕 a near miss, which runs nothing. A reaction is best effort: when GitHub refuses it, the run
+  prints one warning and its outcome does not change. Only a comment's first attempt reacts: a re-run keeps its decision and adds no reaction. A comment run's head lookup for an authorised commenter with no
+  credential is retried once, so a transient failure no longer leaves that run without its status.
 
 ### Fixed
 - **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left

@@ -125,8 +125,18 @@ does, when the CLI reports an error or every review hunter fails; if the CLI tak
 stops before it reports an outcome, pr-hero posts the comment, and its `error` status on the head that lock is on, when that head's `pr-hero` status is still `pending` or cannot be read. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
 or unclassified) and the command that fixes it.
 A newer comment replaces the older one from the same author. pr-hero removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/pr-hero review`
-comment posts nothing. A review that ran keeps its own status. A size or budget skip sets a `failure`
+comment posts no comment: the trigger reacts to it instead ([Reactions on a command](#reactions-on-a-command)). A review that ran keeps its own status. A size or budget skip sets a `failure`
 status in gate mode and none in advisory (see [Gate mode](#gate-mode-the-status-is-the-check)).
+
+### Reactions on a command
+
+The trigger answers a `/pr-hero` comment it does not review with a reaction on that comment, and no text reply:
+
+- 👀 (`eyes`): the command is accepted. That is a writer's `/pr-hero review`, an override that unlocks its gate, and an authorised review on a repository with no credential, which then fails for the credential and says why.
+- 👎 (`-1`): the command is refused. The commenter has no write or admin access, or the override is refused: on a fork, or when the lookup cannot say whether the pull request is a fork.
+- 😕 (`confused`): a near miss, a comment that starts like a command but is not one, such as `/pr-hero review please` or `/pr-hero override --force`. A near miss runs nothing: no permission lookup, no review and no override. Only an exact command runs.
+
+A commenter whose permission cannot be verified gets no reaction: its run is red, and its error comment explains why. A reaction is best effort. When GitHub refuses one, the run prints one warning, and its decision and exit code do not change. Only the first attempt of the comment's job reacts: a re-run (attempt 2 or later) keeps the decision, notices and exit code of the first attempt and adds no reaction, so the comment keeps the one the first attempt gave.
 
 ### Why `fetch-depth: 0`
 
@@ -573,7 +583,7 @@ turns the status green for that head with no new review. The re-review does not 
 
 **Overriding a red gate.** Comment exactly `/pr-hero override` on the pull request. The same rule as
 `/pr-hero review` applies: a user with write or admin access may do it, and the pull request's author may too
-when they have that access. Anyone else is refused with a notice, and nothing is posted. The override turns the `pr-hero` status on the head it names
+when they have that access. Anyone else is refused with a notice and a 👎 reaction on the comment, and nothing is posted. The override turns the `pr-hero` status on the head it names
 into `success`, with the description `pr-hero: overridden by @<login> — no review on this head`. It runs no
 review and spends nothing, and it needs no credential, so a repository without one can still unlock its gate.
 
@@ -595,14 +605,14 @@ is zero, because nothing else on the head shows when the review started. The rev
 A review that fails (for example, every hunter failed), is cancelled, or crashes can replace the override with its own
 `error` status; comment `/pr-hero override` again.
 
-Two limits. First, a fork pull request cannot be overridden: `/pr-hero override` is refused there with a notice,
+Two limits. First, a fork pull request cannot be overridden: `/pr-hero override` is refused there with a notice and a 👎 reaction,
 because a fork's head can change after the comment, so the override would not be bound to the code you saw. Second, GitHub keeps one pending run per
 concurrency group, and that applies to an override from an `OWNER`, `MEMBER` or `COLLABORATOR`: such an
 override that is queued behind a running review is replaced if another comment on the same pull request
 arrives before it starts, and then no override comment appears. Comment `/pr-hero override` again when that
 happens. If the pull request lookup fails twice, the override is refused, since it cannot tell whether the
 pull request comes from a fork; comment again. A
-re-run of the comment's job (run attempt 2 or later) is refused with a notice, because it would apply the
+re-run of the comment's job (run attempt 2 or later) is refused with a notice and no reaction, because it would apply the
 override to the head as it is at the re-run; comment `/pr-hero override` again.
 
 **A failed final write.** In gate mode, when the review itself finished, the job fails with an `::error::`

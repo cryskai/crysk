@@ -90,6 +90,10 @@ export interface Observation {
   // When the trigger comment of the phase was created, in epoch ms. Only set for a
   // phase that waits on a comment run; a run it started was created after this.
   triggeredAt?: number;
+  // The reactions on that trigger comment, by content (`eyes`, `-1`, `confused`).
+  // Absent on a phase with no trigger comment, so a check can tell "no reaction"
+  // from "not observed".
+  reactions?: readonly string[];
 }
 
 export type SmokePath =
