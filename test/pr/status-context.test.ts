@@ -59,9 +59,12 @@ describe("S7: only the files that own a CI-scoped write or grade name the gate c
   //                 the CI admission gate's default read.
   //   admission.ts  the size and budget skip status, which is gate-only.
   //   teardown.ts   the final settle, which grades only the gate's own context.
+  //   pr-status.ts  `pr-hero status`, a read-only reader: it reads the gate's latest
+  //                 row to report it, and writes and grades nothing.
   // A new file that names the gate must be added here on purpose.
   const ALLOWED = [
     "pr/admission.ts",
+    "pr/pr-status.ts",
     "pr/preflight.ts",
     "pr/teardown.ts",
   ].sort();

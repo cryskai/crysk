@@ -591,6 +591,190 @@ describe("runTriageReplyCommand", () => {
     }
   });
 
+  // The outside channel: the finding is a top-level issue comment (id 555), with no review
+  // thread. The reply's link is the only thing that binds it, so every test below reads the
+  // body the POST carries. The caller scripts the gh reads that can name a web URL.
+  function outsideChannelScript(urlReads: ScriptEntry[]): ScriptEntry[] {
+    const finding = findingMarker({
+      path: F001_PATH,
+      line: 144,
+      headSha: RUN_HEAD,
+      claim: F001_CLAIM,
+    });
+    return [
+      ...urlReads,
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            { id: 555, user: "pr-hero", body: `${finding}\n${F001_CLAIM}` },
+          ]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ];
+  }
+
+  function postedBody(calls: RecordedCall[]): string | undefined {
+    return calls.find((c) => c.argv.includes("--method"))?.stdin;
+  }
+
+  test("an outside-channel reply keeps its #issuecomment link when the repo web URL lookup fails, through the PR's own URL", async () => {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    try {
+      const { spawnFn, calls } = makeFakeGh(
+        outsideChannelScript([
+          {
+            match: ["repo", "view", "--json", "url"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+          {
+            match: ["pr", "view", "42", "--json", "url"],
+            response: { stdout: "https://github.com/musive/musive/pull/42\n" },
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        findingId: "F001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(postedBody(calls)).toContain(
+        "In reply to: https://github.com/musive/musive/pull/42#issuecomment-555",
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("with the repo web URL and the PR URL both unreadable, the repo's nameWithOwner builds the link", async () => {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    const previousHost = process.env.GITHUB_SERVER_URL;
+    process.env.GITHUB_SERVER_URL = "https://github.com";
+    try {
+      const { spawnFn, calls } = makeFakeGh(
+        outsideChannelScript([
+          {
+            match: ["repo", "view", "--json", "url"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+          {
+            match: ["pr", "view", "42", "--json", "url"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+          {
+            match: ["repo", "view", "--json", "nameWithOwner"],
+            response: { stdout: "musive/musive\n" },
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        findingId: "F001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(postedBody(calls)).toContain(
+        "In reply to: https://github.com/musive/musive/pull/42#issuecomment-555",
+      );
+    } finally {
+      if (previousHost === undefined) delete process.env.GITHUB_SERVER_URL;
+      else process.env.GITHUB_SERVER_URL = previousHost;
+      await cleanup();
+    }
+  });
+
+  test("an empty GITHUB_SERVER_URL falls back to github.com, never to a host-less link", async () => {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    const previousHost = process.env.GITHUB_SERVER_URL;
+    process.env.GITHUB_SERVER_URL = "";
+    try {
+      const { spawnFn, calls } = makeFakeGh(
+        outsideChannelScript([
+          {
+            match: ["repo", "view", "--json", "url"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+          {
+            match: ["pr", "view", "42", "--json", "url"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+          {
+            match: ["repo", "view", "--json", "nameWithOwner"],
+            response: { stdout: "musive/musive\n" },
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        findingId: "F001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(postedBody(calls)).toContain(
+        "In reply to: https://github.com/musive/musive/pull/42#issuecomment-555",
+      );
+    } finally {
+      if (previousHost === undefined) delete process.env.GITHUB_SERVER_URL;
+      else process.env.GITHUB_SERVER_URL = previousHost;
+      await cleanup();
+    }
+  });
+
+  test("with no web URL of any kind readable, the reply posts without a link, as before", async () => {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    try {
+      const { spawnFn, calls } = makeFakeGh(
+        outsideChannelScript([
+          {
+            match: ["repo", "view", "--json", "url"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+          {
+            match: ["pr", "view", "42", "--json", "url"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+          {
+            match: ["repo", "view", "--json", "nameWithOwner"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        findingId: "F001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      const body = postedBody(calls);
+      expect(body).toBeDefined();
+      expect(body).not.toContain("In reply to:");
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("refuses when diff.patch is missing", async () => {
     const { dir, bodyFile, cleanup } = await writeReplyRunDir();
     await rm(path.join(dir, "diff.patch"));

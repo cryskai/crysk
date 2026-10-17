@@ -4,7 +4,7 @@ description: "Triage pr-hero findings posted as PR comments — for each one, re
 license: Apache-2.0
 metadata:
   author: juanmaagd
-  version: "1.3"
+  version: "1.4"
 ---
 
 ## When to Use
@@ -55,6 +55,25 @@ it**. The four tags are peers. None is the default.
   not verify is the failure this section exists to prevent.
 
 ## The loop, end to end
+
+0. **Read the PR's state first.** Run `pr-hero status --pr <n> --json`. It is read-only: it reads
+   GitHub through `gh` and writes nothing. Act on its `next_action`:
+   - `wait`: a review is in flight on this head. Do not triage yet; wait for it to finish.
+   - `review`: no review has run on this head, or the last one did not finish. Ask the operator to
+     comment `/pr-hero review` on the PR, or wait for the watcher.
+   - `triage`: a live blocking finding on this head has no triage reply at the head it was posted
+     on, or the gate is green and a finding posted on this head has no reply yet (advisory findings
+     need one too). Run the loop below.
+   - `fix`: a blocking finding is tagged `applied`. Push the fix; the next review verifies it.
+   - `override-or-fix`: the gate is red and every blocking finding is already answered. Fix and push,
+     or ask a maintainer to override. Never override it yourself.
+   - `done`: nothing is owed on this head. The gate passed (or an override unlocked it) and every
+     finding posted on this head has a reply.
+
+   `findings[]` lists each posted finding with its `id`, `path`, `line`, `head`, `live_on_head`, and
+   its newest `triage` (`null` when none). `triage` is only the newest reply, so a finding can be
+   answered at its own head and then re-answered at a later head. The thread (step 2 below) settles
+   the per-head question, and the escalation count still reads the thread's prior markers.
 
 For EVERY `<!-- pr-hero-finding ` comment on this PR that has not already been triaged for the
 current head:

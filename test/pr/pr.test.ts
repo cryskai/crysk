@@ -64,6 +64,7 @@ import {
 import type { Finding } from "#review/findings";
 import { renderIssueFindingComment } from "#review/report";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
+import { CliError } from "../../src/errors";
 
 // ---------------------------------------------------------------------------
 // FakeSpawn: scripted {stdout, stderr, exitCode} per call, in call order.
@@ -1948,6 +1949,134 @@ describe("fetchCommitStatuses", () => {
     await expect(
       fetchCommitStatuses(OPERATOR_ROOT, "abc", { spawnFn }),
     ).resolves.toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  // `pr-hero status` reads the gate's target_url for its own output. The jq is pinned
+  // because a fake that echoed the field would pass against a filter that drops it.
+  test("the request asks for each status's target_url, and a row carries it", async () => {
+    const url = "https://github.com/MusiveTech/musive/actions/runs/9";
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: ndjson([
+            {
+              state: "success",
+              context: COMMIT_STATUS_CONTEXT,
+              created_at: "2026-08-18T16:30:00Z",
+              target_url: url,
+            },
+          ]),
+        },
+      },
+    ]);
+    const statuses = await fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    const argv = calls[0]?.argv ?? [];
+    const jq = argv[argv.indexOf("--jq") + 1] ?? "";
+    expect(jq).toContain("target_url: .target_url");
+    expect(statuses[0]?.target_url).toBe(url);
+  });
+
+  // The default keeps the swallowing contract every watch and admission caller depends on.
+  // `failClosed` is the status command's reading: an unreadable gate is an error, never
+  // an empty list that reads as "no pr-hero status", which would send a review out blind.
+  test("failClosed: a failed read throws a CliError, the default still returns empty", async () => {
+    const failing = () =>
+      makeFakeGh([
+        {
+          match: [`commits/${HEAD}/status`],
+          response: {
+            stdout: "",
+            stderr: "Resource not accessible (HTTP 403)",
+            exitCode: 1,
+          },
+        },
+      ]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+        spawnFn: failing().spawnFn,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+        spawnFn: failing().spawnFn,
+        failClosed: true,
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+  });
+
+  test("failClosed: an unparseable line throws, where the default drops it", async () => {
+    const garbage = () =>
+      makeFakeGh([
+        {
+          match: [`commits/${HEAD}/status`],
+          response: {
+            stdout:
+              "not-json\n" +
+              ndjson([
+                {
+                  state: "pending",
+                  context: COMMIT_STATUS_CONTEXT,
+                  created_at: "2026-08-18T16:30:00Z",
+                },
+              ]),
+          },
+        },
+      ]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+        spawnFn: garbage().spawnFn,
+        failClosed: true,
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, { spawnFn: garbage().spawnFn }),
+    ).resolves.toHaveLength(1);
+  });
+
+  test("a line that is valid JSON but not a status is skipped by default, and the rest are kept", async () => {
+    const pending = {
+      state: "pending",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: "2026-08-18T16:30:00Z",
+    };
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: `null\n${ndjson([pending])}\nnot-json`,
+        },
+      },
+    ]);
+    const statuses = await fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.state).toBe("pending");
+  });
+
+  test("failClosed: a line that is valid JSON but not a status throws", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: "null",
+        },
+      },
+    ]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, { spawnFn, failClosed: true }),
+    ).rejects.toBeInstanceOf(CliError);
+  });
+
+  test("failClosed: an abbreviated sha throws, where the default is empty", async () => {
+    const { spawnFn, calls } = makeFakeGh([]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, "abc", { spawnFn, failClosed: true }),
+    ).rejects.toBeInstanceOf(CliError);
     expect(calls).toHaveLength(0);
   });
 });
