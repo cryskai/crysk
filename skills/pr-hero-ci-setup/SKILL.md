@@ -4,7 +4,7 @@ description: "Trigger: setup CI, add pr-hero to CI, GitHub Actions review, OpenC
 license: Apache-2.0
 metadata:
   author: juanmaagd
-  version: "3.0"
+  version: "3.1"
 ---
 
 ## Activation Contract
@@ -19,7 +19,8 @@ Load when the user asks to:
 
 - **Zero secret leakage:** NEVER print, `cat`, commit, or log API keys, tokens, or `OPENCODE_AUTH_JSON`. Reference `${{ secrets.* }}` names only. Inspect `auth.json` **keys and `type` only**.
 - **No per-provider GitHub secrets:** Do not create `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`. One secret `OPENCODE_AUTH_JSON` (whole store or a CI-only subset) + public variable `PRHERO_ROUTING`. Cap 48 KB each.
-- **Deterministic scaffolding:** Run `pr-hero setup --ci` (or `pr-hero ci init`). It writes the one workflow file, `.github/workflows/pr-hero.yml`. Do not fabricate it from memory. Fallback: copy `assets/workflow.yml`. Never scaffold a `pr-hero-force.yml`; it is retired.
+- **No install needed:** run every pr-hero command as `npx -y pr-hero <command>` (Node is enough; the package brings its own Bun). A global `pr-hero` on PATH is the same command. CI itself needs no local CLI at all: the workflow runs the action. `npx -y pr-hero skills install` installs the triage and CI-setup skills into every detected coding agent, with no TTY and no MCP or launchd registration (neither is needed for the CI loop, and npx's temporary cache refuses them).
+- **Deterministic scaffolding:** Run `npx -y pr-hero setup --ci` (or `npx -y pr-hero ci init`). It writes the one workflow file, `.github/workflows/pr-hero.yml`. Do not fabricate it from memory. Fallback: copy `assets/workflow.yml`. Never scaffold a `pr-hero-force.yml`; it is retired.
 - **`fetch-depth: 0` is mandatory** on `actions/checkout@v4`.
 - **Gate mode:** the `pr-hero` commit status is the required check. The scaffold writes `mode: gate` explicitly: blocking findings, a size or budget skip, and a crash set it red. `mode: advisory` keeps it green for a finished review. The job's exit code stays `0` on findings either way, so do not gate on the job.
 - **Required permissions:** `contents: read`, `pull-requests: write`, `issues: write`, `statuses: write`, **`checks: write`**, **`actions: read`** (the admission gate lists past runs; a private repo 403s without it). Template in `assets/workflow.yml` includes all six.
@@ -57,6 +58,11 @@ Load when the user asks to:
 | CI skipped (size, admission, or budget) | `gh pr comment <n> --body "/pr-hero review"`. The review runs on GitHub Actions. Do not run `pr-hero review --force` locally for this. Legacy scaffold (no `issue_comment` trigger): `gh workflow run pr-hero-force.yml -f pr=<n>`. |
 | Gate is red with blocking findings the team accepts | `gh pr comment <n> --body "/pr-hero override"` (write access, same-repo PRs only, valid for that head only; a same-head `/pr-hero review` keeps it red). |
 | Prior review of the same head was hollow or wrong; re-runs say "No changes to discover" | `gh pr comment <n> --body "/pr-hero review --full"`. A plain `/pr-hero review` keeps the narrowed discovery. |
+| Gate red: `pr-hero: review partial (N of M hunters failed) — /pr-hero review retries it` | Some hunters failed and nothing blocking was found. `gh pr comment <n> --body "/pr-hero review"`. If the same hunters fail every run, fix their route (model, credential) or override. |
+| Gate error: `PRH-CANCELLED: not reviewed — /pr-hero review reviews this head` | The review run was cancelled (a newer push, or by hand). Comment `/pr-hero review` to review the head. |
+| `PRH-MODEL-UNAVAILABLE` (lead "Provider <name>:") | Every hunter's route names a model the provider does not serve. Fix the model id in `PRHERO_ROUTING` (check `opencode models`). |
+| `PRH-CRED-UNUSABLE` ("The route <provider>/<model> has no usable credential record") | `OPENCODE_AUTH_JSON` has no record for that provider. Add it to the blob, or route that model elsewhere. |
+| Blocking findings answered `dismissed`, gate still red | `gh pr comment <n> --body "/pr-hero recheck"`: the CI adjudicator rules on each dismissal (at most 5 per run). On `upheld`, comment `/pr-hero review`: that next review stops counting it. `deferred` / `misclassified` never clear the gate. |
 | A `/pr-hero review` comment did nothing | The workflow is not on the default branch yet, the comment is not exact, the author lacks write access, or the workflow predates the comment trigger (re-scaffold with `--force`). |
 
 ## Admission Interview (ask before writing config)
@@ -76,9 +82,9 @@ Use `assets/admission-config.example.json`. Details: `references/ci-admission.md
 1. **Inspect repo:** `git rev-parse --is-inside-work-tree`, `git remote get-url origin`, `gh auth status`.
 2. **Credential path:** Claude-only → skip OpenCode. OpenCode or mix → **read `references/opencode-ci.md`** and execute it (metadata inspect, CI-only blob, secret, routing with `modelSnapshot`).
 3. **Claude secret (if used):** `gh secret set CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (secure input, never print).
-4. **Workflow:** `pr-hero setup --ci`. It writes `.github/workflows/pr-hero.yml` only. Confirm `checks: write` and `actions: read`, both `pull_request` and `issue_comment` triggers, quoted `routing` / `opencode-auth`. `--force` if an old template lacks them (an old `credentials` job or a missing `issue_comment` trigger means it predates the single workflow).
-5. **Admission config:** Interview above. `.prhero/config.json` on the default branch. **No `routing` key.** `pr-hero config` to verify.
-6. **Verify:** `pr-hero doctor`. `git status`. Confirm no openai `type:"api"` blob, no echoed auth, `modelSnapshot` matches `opencode models` when OpenCode is on.
+4. **Workflow:** `npx -y pr-hero setup --ci`. It writes `.github/workflows/pr-hero.yml` only. Confirm `checks: write` and `actions: read`, both `pull_request` and `issue_comment` triggers, quoted `routing` / `opencode-auth`. `--force` if an old template lacks them (an old `credentials` job or a missing `issue_comment` trigger means it predates the single workflow).
+5. **Admission config:** Interview above. `.prhero/config.json` on the default branch. **No `routing` key.** `npx -y pr-hero config` to verify.
+6. **Verify:** `npx -y pr-hero doctor`. `git status`. Confirm no openai `type:"api"` blob, no echoed auth, `modelSnapshot` matches `opencode models` when OpenCode is on.
 7. **Deploy:** Offer commit. Open a **same-repo** test PR (forks skip).
 
 ## Output Contract
@@ -88,7 +94,7 @@ Report:
 - OpenCode (if in scope): `OPENCODE_AUTH_JSON` set; blob providers **names + type only**; whether the blob was stripped to one CI provider; `PRHERO_ROUTING` JSON (no credentials); `modelSnapshot` vs `opencode models`.
 - Workflow path (`pr-hero.yml`) and whether `checks: write`, `actions: read`, the `issue_comment` trigger, and quoted `routing` / `opencode-auth` are present.
 - Admission policy (mode, attempts, observe-only). Confirm repo `.prhero/config.json` has no `routing` key.
-- `pr-hero doctor` / `pr-hero config` outcome.
+- `npx -y pr-hero doctor` / `npx -y pr-hero config` outcome.
 - Next steps: merge the workflow to the default branch (the comment trigger needs it there), open a same-repo test PR, when to turn off observe-only. If CI skipped, the override is `gh pr comment <n> --body "/pr-hero review"`.
 
 ## References
