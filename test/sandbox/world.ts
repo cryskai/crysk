@@ -27,6 +27,7 @@ import type { GhResult, GitResult } from "../../scripts/sandbox/ports";
 import { SANDBOX_REMOTE_URL, SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import {
   GOTCHAS_PATH,
+  MUTE_PATH,
   sandboxFiles,
   WORKFLOW_PATH,
 } from "../../scripts/sandbox/seed";
@@ -195,6 +196,9 @@ export interface WorldOptions {
   // The mutation the consistency check must catch: with blockingFindings on, the
   // gate's status stays success anyway.
   statusIgnoresFindings?: boolean;
+  // D3: a report on a head whose branch carries src/mute.ts gets a state block that
+  // names it. This drops that block, the mutation the state-row check must catch.
+  omitStateRows?: boolean;
 }
 
 // The gate's own status texts, from the product's request builders, so the fake
@@ -235,6 +239,8 @@ export class FakeGithub {
   private readonly pushedWorkflow = new Map<string, string>();
   // The gotchas file each pushed head carries, for the CLI's gate (decide).
   private readonly pushedGotchas = new Map<string, string>();
+  // The heads whose branch carries the D3 mute file, for the state block of their report.
+  private readonly muteHeads = new Set<string>();
   // The reactions on each comment, by comment id: what the trigger gave it.
   private readonly reactions = new Map<number, string[]>();
   private readonly queued: Outcome[];
@@ -411,6 +417,14 @@ export class FakeGithub {
     this.clock += RUN_DURATION_MS;
   }
 
+  // The state block a report on this head carries when its branch has the D3 mute
+  // file: one finding at that file, the shape the product writes (observe.ts).
+  private stateBlock(sha: string): string {
+    if (!this.muteHeads.has(sha) || this.options.omitStateRows === true)
+      return "";
+    return `\n<!-- pr-hero-state v=1 head=${sha} -->\n<!-- {"findings":[{"id":"R001","locs":["src/mute.ts:3"]}],"reviews":2,"hw":1} -->`;
+  }
+
   private comment(body: string): CommentRow {
     return { id: this.nextId++, body, createdAt: this.stamp() };
   }
@@ -421,7 +435,7 @@ export class FakeGithub {
     if (outcome === "near-miss") return;
     const list = this.comments.get(prNumber) ?? [];
     if (outcome === "review" || outcome === "review-advisory") {
-      const report = `${REPORT_PREFIX} head=${sha} -->\n\n# pr-hero review`;
+      const report = `${REPORT_PREFIX} head=${sha} -->\n\n# pr-hero review${this.stateBlock(sha)}`;
       const at = list.findIndex((c) =>
         c.body.startsWith(`${REPORT_PREFIX} head=${sha}`),
       );
@@ -724,6 +738,9 @@ export class FakeGithub {
       this.pushedWorkflow.set(sha, workflow);
       const gotchas = h.workspace.dirs.get(cwd)?.get(GOTCHAS_PATH);
       if (gotchas !== undefined) this.pushedGotchas.set(sha, gotchas);
+      if (h.workspace.dirs.get(cwd)?.has(MUTE_PATH) === true) {
+        this.muteHeads.add(sha);
+      }
       this.branches.set(branch, sha);
       this.events.push(`push ${sha}`);
       const pr = [...this.prs.values()].find(

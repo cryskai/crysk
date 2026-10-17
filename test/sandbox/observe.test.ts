@@ -703,3 +703,32 @@ describe("the hunters-failed family", () => {
     expect(classifyPath(obs)).toBe("error:PRH-CRED-REJECTED");
   });
 });
+
+// D3: a report's state block names the paths its rows remember.
+describe("classifyComment: the state-block paths of a report (D3)", () => {
+  const STATE_BODY = [
+    `<!-- pr-hero-report head=${SHA} -->`,
+    "",
+    "body",
+    `<!-- pr-hero-state v=1 head=${SHA} -->`,
+    `<!-- {"findings":[{"id":"R001","locs":["src/mute.ts:3"]},{"id":"R002","locs":["src/a.ts:3-5"]}],"reviews":2,"hw":2} -->`,
+  ].join("\n");
+
+  test("a report with a state block carries the path of each row's first loc", () => {
+    expect(classifyComment(STATE_BODY, "issue")).toEqual({
+      source: "issue",
+      kind: "report",
+      head: SHA,
+      statePaths: ["src/mute.ts", "src/a.ts"],
+    });
+  });
+
+  test("a report without a state block has no statePaths key", () => {
+    expect("statePaths" in classifyComment(REPORT, "issue")).toBe(false);
+  });
+
+  test("a malformed state JSON line gives no statePaths key", () => {
+    const bad = STATE_BODY.replace('"reviews":2', '"reviews":');
+    expect("statePaths" in classifyComment(bad, "issue")).toBe(false);
+  });
+});

@@ -99,6 +99,8 @@ export interface CommentFact {
   // the findings the PR shows with no inline anchor. Set only when there is at
   // least one, so a report without one keeps the shape it always had.
   outsideDiffBlocking?: number;
+  // D3: the paths of a report's state-block rows (the first loc of each row), so a check can read what the PR's state remembers. Set only on a report that carries a state block.
+  statePaths?: string[];
 }
 
 export interface RunFact {
@@ -166,6 +168,36 @@ export function outsideDiffBlockingCount(body: string): number {
   return count;
 }
 
+// D3: the state block a report carries (report.ts writes it after the body): the line
+// after `<!-- pr-hero-state v=1 `, a `<!-- {json} -->` comment. Its findings' first locs
+// name the paths the PR's state remembers; the line number after the last colon is dropped.
+const STATE_LINE_PREFIX = "<!-- pr-hero-state v=1 ";
+
+export function statePathsOf(body: string): string[] | undefined {
+  const lines = body.split("\n");
+  const at = lines.findIndex((line) => line.startsWith(STATE_LINE_PREFIX));
+  const json = lines[at + 1];
+  if (at === -1 || json === undefined) return undefined;
+  if (!json.startsWith("<!-- ") || !json.endsWith(" -->")) return undefined;
+  let state: unknown;
+  try {
+    state = JSON.parse(json.slice("<!-- ".length, -" -->".length));
+  } catch {
+    return undefined;
+  }
+  const findings = (state as { findings?: unknown } | null)?.findings;
+  if (!Array.isArray(findings)) return undefined;
+  const paths: string[] = [];
+  for (const row of findings) {
+    const loc = (row as { locs?: unknown } | null)?.locs;
+    const first = Array.isArray(loc) ? loc[0] : undefined;
+    if (typeof first !== "string") continue;
+    const colon = first.lastIndexOf(":");
+    paths.push(colon === -1 ? first : first.slice(0, colon));
+  }
+  return paths;
+}
+
 export function classifyComment(
   body: string,
   source: "issue" | "inline",
@@ -174,11 +206,13 @@ export function classifyComment(
   if (first.startsWith(REPORT_MARKER_PREFIX)) {
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     const outside = outsideDiffBlockingCount(body);
+    const statePaths = statePathsOf(body);
     return {
       source,
       kind: "report",
       ...(head === undefined ? {} : { head }),
       ...(outside === 0 ? {} : { outsideDiffBlocking: outside }),
+      ...(statePaths === undefined ? {} : { statePaths }),
     };
   }
   if (first.startsWith(FINDING_MARKER_PREFIX)) {

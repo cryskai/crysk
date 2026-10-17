@@ -77,6 +77,7 @@ import {
   type Scenario,
 } from "./scenarios";
 import {
+  MUTE_COMMIT_MESSAGE,
   PLANTED_COMMIT_MESSAGE,
   plantedVolume,
   VOLUME_PATH,
@@ -607,7 +608,21 @@ async function perform(
   if (action.kind === "push") {
     // A push with nothing new would be an empty commit, which the rails do not
     // make. A scenario that pushes must change the workflow, and says so if not.
-    if (!(await pinVariant(deps, live, action.variant, ref))) {
+    // A push that adds files is never empty.
+    const files = action.files ?? [];
+    const pinned = await pinVariant(deps, live, action.variant, ref);
+    for (const file of files) {
+      await deps.workspace.write(live.dir, file.path, file.contents);
+    }
+    if (files.length > 0) {
+      await commitPaths(
+        deps,
+        live.dir,
+        files.map((file) => file.path),
+        MUTE_COMMIT_MESSAGE,
+      );
+    }
+    if (!pinned && files.length === 0) {
       throw new Error(
         `the ${action.variant} workflow is already on ${live.branch}, so the push would be empty`,
       );
