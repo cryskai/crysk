@@ -38,6 +38,7 @@ import {
   PR_FINDING_MARKER_PREFIX,
   PR_REREVIEW_CLOSED_MARKER_PREFIX,
   parseFindingMarker,
+  partialReviewDescription,
   prCommentMarker,
   prHtmlUrl,
   prRunDirCandidate,
@@ -1619,5 +1620,88 @@ describe("findMarkedCommentId — the re-review closing comment is never the sum
       },
     ];
     expect(findMarkedCommentId(comments)).toBe(1);
+  });
+});
+
+describe("commitStatusCompletion — a partial review is red in gate mode (S1, S2)", () => {
+  const gate = (over: {
+    blockingCount?: number | null;
+    hunterCount?: number;
+    hunterFailures?: number;
+    ciMode?: "gate" | "advisory";
+    sessionFailed?: boolean;
+    noReviewerRan?: boolean;
+  }) =>
+    commitStatusCompletion({
+      ...(over.noReviewerRan === undefined
+        ? {}
+        : { noReviewerRan: over.noReviewerRan }),
+      pipelineFinished: true,
+      sessionFailed: over.sessionFailed ?? false,
+      ciMode: over.ciMode ?? "gate",
+      blockingCount: over.blockingCount === undefined ? 0 : over.blockingCount,
+      ...(over.hunterCount === undefined
+        ? {}
+        : { hunterCount: over.hunterCount }),
+      ...(over.hunterFailures === undefined
+        ? {}
+        : { hunterFailures: over.hunterFailures }),
+    });
+
+  test("some hunters failed, none blocking: failure, carrying N and M", () => {
+    expect(gate({ hunterCount: 4, hunterFailures: 1 })).toEqual({
+      phase: "partial",
+      failed: 1,
+      total: 4,
+    });
+  });
+
+  test("the exact partial text names N of M and the retry", () => {
+    expect(partialReviewDescription(1, 4)).toBe(
+      "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+    );
+  });
+
+  test("a blocking count wins over a partial review: the blocking verdict stays", () => {
+    expect(
+      gate({ blockingCount: 2, hunterCount: 4, hunterFailures: 1 }),
+    ).toEqual({ phase: "failure", blockingCount: 2 });
+  });
+
+  test("no hunter counts at all means no partial: success, as before", () => {
+    expect(gate({})).toEqual({ phase: "success" });
+  });
+
+  test("zero failed hunters stays success, a skipped discovery too, but no reviewer run is error in gate mode", () => {
+    // A re-review that skipped discovery: zero hunters, and a finished review.
+    expect(gate({ hunterCount: 0, hunterFailures: 0 })).toEqual({
+      phase: "success",
+    });
+    expect(
+      gate({ hunterCount: 0, hunterFailures: 0, noReviewerRan: true }),
+    ).toEqual({ phase: "error" });
+    expect(
+      gate({
+        ciMode: "advisory",
+        hunterCount: 0,
+        hunterFailures: 0,
+        noReviewerRan: true,
+      }),
+    ).toEqual({ phase: "success" });
+    expect(gate({ hunterCount: 4, hunterFailures: 0 })).toEqual({
+      phase: "success",
+    });
+  });
+
+  test("a partial review is still a session failure when every hunter failed", () => {
+    expect(
+      gate({ sessionFailed: true, hunterCount: 4, hunterFailures: 4 }),
+    ).toEqual({ phase: "error" });
+  });
+
+  test("advisory mode keeps a partial review green (S3)", () => {
+    expect(
+      gate({ ciMode: "advisory", hunterCount: 4, hunterFailures: 1 }),
+    ).toEqual({ phase: "success" });
   });
 });

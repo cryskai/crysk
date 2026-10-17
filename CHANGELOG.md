@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Gate: a partial review is red**: in gate mode a finished review where some hunters failed, and no blocking
+  finding survived, sets `failure` with `pr-hero: review partial (N of M hunters failed) — /pr-hero review retries it`
+  instead of `success`. A blocking count still wins. A skip carries a partial verdict red, and `pr-hero status`
+  answers `review` for it. Advisory mode is unchanged.
+
 ### Fixed
 - **A re-review's fresh findings reach the state block.** From the second review on, the summary's `pr-hero-state` block holds this run's findings as well as the earlier ones. Before, it held only the earlier findings, so a blocking finding first raised by a re-review was forgotten by the next review, and a same-head forced re-review could read green. Known gap: the first review writes no state block, so its outside-diff findings are not persisted; its inline findings are recovered from their markers on the second review.
 - **A run whose every hunter failed for one cause no longer shows placeholders.** The hunters-failed path renders a

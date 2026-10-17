@@ -522,6 +522,16 @@ export interface PipelineResult {
   // hunter failure is a partial run (prose Step 4: "proceed with whatever
   // hunters did complete"), never a session failure.
   sessionFailed: boolean;
+  // M: the hunters that ran (trigger-skipped hunters are not in it), and N: how many of
+  // them failed. The gate reads both for its partial verdict (commitStatusCompletion).
+  // Optional so a caller's fake result without them reads as "no partial review".
+  hunterCount?: number;
+  hunterFailedCount?: number;
+  // True when the run was meant to review and no hunter ran: the unusable-gotchas early
+  // return, or a ceiling that fired before hunter admission. A re-review that skipped
+  // discovery on purpose (skipDiscovery) also has zero hunters, and is NOT this: it is a
+  // finished review of nothing new. The gate reads this, never hunterCount === 0 alone.
+  noReviewerRan?: boolean;
   // Only when the run had failed hunters: one entry per failed hunter step, the
   // cause its transport reported (when it did), and the provider and model its route
   // named (when it did). The CLI record reads it (src/pr/review-pr.ts).
@@ -1234,6 +1244,7 @@ async function execute(
       perAgent: {},
       usage: zeroUsage(),
       sessionFailed: false,
+      noReviewerRan: true,
       unresolved: [],
       // The early return ran no check, so every prior phase B left open stays
       // open here. The gate reads them, and nothing retires them.
@@ -2688,6 +2699,9 @@ async function finish(
       : { usageV2: state.usageTotalV2 }),
     sessionFailed:
       state.hunterCount > 0 && state.hunterFailures === state.hunterCount,
+    hunterCount: state.hunterCount,
+    hunterFailedCount: state.hunterFailures,
+    noReviewerRan: input.skipDiscovery !== true && state.hunterCount === 0,
     ...(state.failedHunters.length === 0
       ? {}
       : { hunterFailures: state.failedHunters }),

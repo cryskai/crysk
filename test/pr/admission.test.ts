@@ -599,6 +599,62 @@ describe("publishCiSkip: the outcome record", () => {
         ]);
       });
 
+      // S5: a partial review is a red review verdict. A skip inherits it red, never the older green under it.
+      const PARTIAL_1_OF_4 =
+        "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it";
+      const PARTIAL_CARRIED =
+        "pr-hero: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it";
+
+      test("the matcher admits the partial text and its carried form as a review verdict", () => {
+        expect(
+          isReviewVerdictStatus({
+            state: "failure",
+            description: PARTIAL_1_OF_4,
+          }),
+        ).toBe(true);
+        expect(
+          isReviewVerdictStatus({
+            state: "failure",
+            description: PARTIAL_CARRIED,
+          }),
+        ).toBe(true);
+        // A partial text with a wrong count shape, or the retry sentence removed, is no verdict.
+        expect(
+          isReviewVerdictStatus({
+            state: "failure",
+            description:
+              "pr-hero: review partial (one of four) — /pr-hero review retries it",
+          }),
+        ).toBe(false);
+      });
+
+      test("a low-risk skip carries the reviewed head's partial failure, red, onto the new head", async () => {
+        const { calls } = await skipWith(
+          [row("failure", PARTIAL_1_OF_4, T1)],
+          "low-risk-delta",
+        );
+        expect(calls).toEqual([
+          {
+            sha: STATUS_HEAD,
+            state: "failure",
+            description: PARTIAL_CARRIED,
+            targetUrl: `${REPO_WEB_URL}/pull/${PR}`,
+          },
+        ]);
+      });
+
+      test("a partial failure newer than an older green is carried red, never the green", async () => {
+        const { calls } = await skipWith(
+          [
+            row("success", "pr-hero: review complete", T1),
+            row("failure", PARTIAL_1_OF_4, T2),
+          ],
+          "below-threshold",
+        );
+        expect(calls[0]?.state).toBe("failure");
+        expect(calls[0]?.description).toBe(PARTIAL_CARRIED);
+      });
+
       test("a below-threshold skip carries the reviewed head's success as no review needed", async () => {
         const { calls } = await skipWith(
           [row("success", "review posted", T1)],

@@ -683,6 +683,45 @@ describe("hunter fan-out", () => {
     expect(result.perAgent.resilience?.status).toBe("failed");
   });
 
+  // S4: the gate's partial verdict reads these two counts off the result. M is the
+  // hunters that ran, N the ones that failed; a trigger-skipped hunter is in neither.
+  test("the result counts the hunters that ran (M) and the ones that failed (N)", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, { findings: [draft()] }),
+      "hunter-resilience": (spec) => failed(spec),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.hunterCount).toBe(2);
+    expect(result.hunterFailedCount).toBe(1);
+  });
+
+  test("noReviewerRan: false on a review whose hunters ran", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, { findings: [draft()] }),
+      "hunter-resilience": (spec) => ok(spec, { findings: [] }),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.noReviewerRan).toBe(false);
+  });
+
+  test("noReviewerRan: false on a re-review that skipped discovery, though it ran zero hunters", async () => {
+    const runner = new FakeStepRunner({});
+    const result = await runPipeline(await makeInput({ skipDiscovery: true }), {
+      runner,
+    });
+    expect(result.hunterCount).toBe(0);
+    expect(result.noReviewerRan).toBe(false);
+  });
+
+  test("noReviewerRan: true when an unusable gotchas file stops the run before any hunter", async () => {
+    const runner = new FakeStepRunner({});
+    const result = await runPipeline(await makeInput({}, { gotchas: "" }), {
+      runner,
+    });
+    expect(result.sessionFailed).toBe(false);
+    expect(result.noReviewerRan).toBe(true);
+  });
+
   test("ALL hunters failing sets sessionFailed", async () => {
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) => failed(spec),
