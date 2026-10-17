@@ -98,6 +98,9 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
 interface CatalogVariant {
   // Replaces the entry's `what` for this sub-class.
   readonly what?: string;
+  // Replaces `what` when no model is given, so the sentence never names a placeholder
+  // (PRH-MODEL-UNAVAILABLE's every_hunter variant). Filled like `what`.
+  readonly whatWithoutModel?: string;
   // Replaces the entry's owner for this sub-class.
   readonly owner?: OwnerRule;
   readonly why: string;
@@ -143,6 +146,8 @@ export interface ErrorParams {
   runId?: string;
   runUrl?: string;
   detail?: string;
+  // The model a provider does not serve, when the record names it (PRH-MODEL-UNAVAILABLE).
+  model?: string;
 }
 
 export interface RenderedError {
@@ -263,6 +268,67 @@ export interface CliRecord {
   // and never re-derives it. Absent on a record without one, and then the publisher reposts as
   // before.
   override_cutoff_ms?: number;
+  // Only for outcome "hunters-failed": one entry per failed hunter step, in the order
+  // they settled, and never an empty list. Each entry names what its transport
+  // reported and the route it ran on, when it knows them. An entry with no cause is a
+  // failure the CLI did not classify, so the publisher keeps the generic code for it.
+  hunter_failures?: HunterFailureRecord[];
+}
+
+export interface HunterFailureRecord {
+  cause?: TransportFailureCause;
+  // The route's provider and model, as short safe strings (see safeProviderName).
+  provider?: string;
+  model?: string;
+}
+
+// Every TransportFailureCause, as a runtime lookup the record reader can check a
+// cause against. The `satisfies` clause fails tsc when the union gains or loses a
+// cause this list does not match (the record reads the same vocabulary the transport
+// writes). This file cannot import the runtime list from execution/contracts.
+const TRANSPORT_CAUSE_LOOKUP = {
+  auth_invalid: true,
+  quota_exhausted: true,
+  rate_limit: true,
+  network_transient: true,
+  protocol_truncation: true,
+  protocol_mismatch: true,
+  protocol_overflow: true,
+  output_limit_exceeded: true,
+  context_window_exceeded: true,
+  safety_refusal: true,
+  provider_configuration_invalid: true,
+  model_unavailable: true,
+  runtime_unavailable: true,
+  remote_abort_unconfirmed: true,
+} satisfies Record<TransportFailureCause, true>;
+
+// The cause when it is a transport cause, otherwise undefined.
+export function knownTransportCause(
+  value: unknown,
+): TransportFailureCause | undefined {
+  return typeof value === "string" &&
+    Object.hasOwn(TRANSPORT_CAUSE_LOOKUP, value)
+    ? (value as TransportFailureCause)
+    : undefined;
+}
+
+// A provider name or a model name, as the record may carry it. Both are configuration
+// the operator wrote, never provider text, but the record is a file the publisher
+// reads back, so a value that could carry a control character or a path is refused.
+const PROVIDER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const MODEL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,95}$/;
+
+export function safeProviderName(value: unknown): string | undefined {
+  return typeof value === "string" && PROVIDER_NAME_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+export function safeModelName(value: unknown): string | undefined {
+  return typeof value === "string" && MODEL_NAME_PATTERN.test(value)
+    ? value
+    : undefined;
 }
 
 const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
@@ -530,6 +596,40 @@ function parseUnsettledStatus(value: unknown): UnsettledStatus | undefined {
   return { state, description };
 }
 
+// The per-hunter entries of a hunters-failed record. Each entry carries only the three
+// keys, and each value is checked: a cause against the transport vocabulary, a provider
+// and a model against their safe-string patterns. An empty list is refused, since the
+// writer never writes one.
+function parseHunterFailures(
+  value: unknown,
+): HunterFailureRecord[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const failures: HunterFailureRecord[] = [];
+  for (const entry of value) {
+    if (!isRecordObject(entry)) return undefined;
+    const failure: HunterFailureRecord = {};
+    for (const [key, field] of Object.entries(entry)) {
+      if (key === "cause") {
+        const cause = knownTransportCause(field);
+        if (cause === undefined) return undefined;
+        failure.cause = cause;
+      } else if (key === "provider") {
+        const provider = safeProviderName(field);
+        if (provider === undefined) return undefined;
+        failure.provider = provider;
+      } else if (key === "model") {
+        const model = safeModelName(field);
+        if (model === undefined) return undefined;
+        failure.model = model;
+      } else {
+        return undefined;
+      }
+    }
+    failures.push(failure);
+  }
+  return failures;
+}
+
 // Returns undefined for anything the publisher must not act on. The rules mirror
 // the writer's: `skip` is present exactly for a skipped outcome, `cls` exactly
 // for an error, `params` only for an error, carrying only the keys a record
@@ -585,6 +685,12 @@ export function parseCliRecord(text: string): CliRecord | undefined {
     const unsettled = parseUnsettledStatus(value.unsettled_status);
     if (unsettled === undefined) return undefined;
     record.unsettled_status = unsettled;
+  }
+  if (value.hunter_failures !== undefined) {
+    if (outcome !== "hunters-failed") return undefined;
+    const failures = parseHunterFailures(value.hunter_failures);
+    if (failures === undefined) return undefined;
+    record.hunter_failures = failures;
   }
   if (value.override_cutoff_ms !== undefined) {
     if (outcome !== "reviewed") return undefined;
@@ -726,6 +832,7 @@ function transportCode(
     case "safety_refusal":
       return "PRH-PROVIDER-REFUSED";
     case "provider_configuration_invalid":
+    case "model_unavailable":
       return "PRH-MODEL-UNAVAILABLE";
     case "protocol_truncation":
     case "protocol_mismatch":
@@ -842,6 +949,7 @@ function transportOwner(
     case "network_transient":
     case "remote_abort_unconfirmed":
     case "safety_refusal":
+    case "model_unavailable":
       return "provider";
     case "protocol_truncation":
     case "protocol_mismatch":
@@ -887,6 +995,7 @@ const NEUTRAL: Record<keyof ErrorParams, string> = {
   runId: "<run-id>",
   runUrl: "<run-url>",
   detail: "no further detail",
+  model: "<model>",
 };
 
 // The human phrase a failure's detail renders as. A raw identifier never reaches
@@ -934,6 +1043,7 @@ const TRANSPORT_PHRASE: Record<
   remote_abort_unconfirmed: "the remote abort could not be confirmed",
   safety_refusal: "the provider's safety system declined the input",
   provider_configuration_invalid: "the provider configuration is invalid",
+  model_unavailable: "the provider does not serve the configured model",
   protocol_truncation: "the reply was cut short",
   protocol_mismatch: "the reply did not match the expected protocol",
   protocol_overflow: "the reply overflowed the protocol limit",
@@ -971,6 +1081,17 @@ const OPENCODE_SUBSCRIPTION_FIXES = [
 function isOpencodeRoute(params: ErrorParams): boolean {
   return params.backend?.trim() === "opencode";
 }
+const MODEL_NOT_SERVED: CatalogVariant = {
+  why: "the routing names a model this provider does not offer",
+  fixes: [
+    "Fix the `modelSnapshot` for this step in PRHERO_ROUTING.",
+    "List the models this provider serves:",
+    "$ opencode models {provider}",
+  ],
+  annotationFix:
+    "fix the `modelSnapshot` for {step} in PRHERO_ROUTING to a model that {provider} serves",
+};
+
 const ROUTE_WHY = "every agent needs exactly one backend, provider and model";
 const PROVIDER_REFUSED_WHY = "the provider's safety system declined this input";
 const UNCLASSIFIED_FIXES = [
@@ -1194,19 +1315,25 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       default: ROUTE_UNMAPPED,
     },
   },
+  // WHY provider-owned: the provider refused the model, so the lead reads
+  // "Provider <name>:". provider_configuration_invalid shares this code and keeps
+  // its own owner (config) through its variant, so its rendering is unchanged.
   "PRH-MODEL-UNAVAILABLE": {
     level: "error",
-    owner: "config",
+    owner: "provider",
     what: "Provider {provider} does not serve the model configured for {step}",
-    variants: single(
-      "the routing names a model this provider does not offer",
-      [
-        "Fix the `modelSnapshot` for this step in PRHERO_ROUTING.",
-        "List the models this provider serves:",
-        "$ opencode models {provider}",
-      ],
-      "fix the `modelSnapshot` for {step} in PRHERO_ROUTING to a model that {provider} serves",
-    ),
+    variants: {
+      default: MODEL_NOT_SERVED,
+      // Every failed hunter was refused for one model (the CLI record names it): the lead
+      // already names the provider, so the sentence names the model, and only when known.
+      // A transport model_unavailable keeps the default wording (renderError picks by cause).
+      every_hunter: {
+        ...MODEL_NOT_SERVED,
+        what: "the configured model {model} is not served by this provider",
+        whatWithoutModel: "the configured model is not served by this provider",
+      },
+      provider_configuration_invalid: { ...MODEL_NOT_SERVED, owner: "config" },
+    },
   },
   "PRH-PROMPTSET-INVALID": {
     level: "error",
@@ -1496,7 +1623,12 @@ export function renderCode(
   const providerName = entry.providerName ?? cleanName(params.provider);
   const lead = entry.lead ?? ownerLead(owner, providerName);
   const link = `${DOCS_BASE}${code.toLowerCase()}`;
-  const what = picked.what ?? whatOf(entry, params);
+  const what =
+    picked.what === undefined
+      ? whatOf(entry, params)
+      : isBlank(params.model) && picked.whatWithoutModel !== undefined
+        ? picked.whatWithoutModel
+        : picked.what;
   const sentence = capitalized(fill(what, params, "annotation"));
   const message =
     `${lead} ${sentence}. ` +
@@ -1579,6 +1711,12 @@ function variantOf(cls: ErrorClass): string | undefined {
       return cls.reason;
     case "github":
       return githubVariant(cls);
+    // The transport cause picks its own sub-class where the code shares one:
+    // PRH-MODEL-UNAVAILABLE serves provider_configuration_invalid (config) and
+    // model_unavailable (provider). Other codes have no such variant and fall
+    // back to their default.
+    case "transport":
+      return cls.cause;
     default:
       return undefined;
   }

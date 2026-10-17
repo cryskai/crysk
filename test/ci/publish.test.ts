@@ -293,6 +293,92 @@ describe("decidePublication — the pure table", () => {
       expect(plan.status?.description).toStartWith("PRH-HUNTERS-FAILED: ");
     });
 
+    test("every failed hunter model_unavailable renders PRH-MODEL-UNAVAILABLE with the provider and model", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            {
+              cause: "model_unavailable",
+              provider: "opencode",
+              model: "gpt-4o",
+            },
+            {
+              cause: "model_unavailable",
+              provider: "opencode",
+              model: "gpt-4o",
+            },
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+      expect(plan.rendered.annotation).toContain("Provider opencode: ");
+      expect(plan.rendered.annotation).toContain("gpt-4o");
+      expect(plan.status?.description).toStartWith("PRH-MODEL-UNAVAILABLE: ");
+    });
+
+    test("a model_unavailable with no provider or model names neither, and still renders the code", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          hunter_failures: [{ cause: "model_unavailable" }],
+        },
+      });
+      if (plan.kind !== "remote") throw new Error("expected a remote plan");
+      expect(plan.rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+      expect(plan.rendered.annotation).toContain("Provider: ");
+    });
+
+    test("a mix of model_unavailable and another cause stays PRH-HUNTERS-FAILED", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          hunter_failures: [
+            { cause: "model_unavailable", provider: "opencode" },
+            { cause: "network_transient", provider: "opencode" },
+          ],
+        },
+      });
+      if (plan.kind !== "remote") throw new Error("expected a remote plan");
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+    });
+
+    test("an entry with no cause keeps PRH-HUNTERS-FAILED even beside model_unavailable entries", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          hunter_failures: [{ cause: "model_unavailable" }, {}],
+        },
+      });
+      if (plan.kind !== "remote") throw new Error("expected a remote plan");
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+    });
+
+    test("a record without the new fields renders PRH-HUNTERS-FAILED, unchanged", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: { v: 1, outcome: "hunters-failed" },
+      });
+      if (plan.kind !== "remote") throw new Error("expected a remote plan");
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+    });
+
     test("a CLI error is rendered from its class: a route class names the route code and its owner", () => {
       const plan = decidePublication({
         record: record(),

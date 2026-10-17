@@ -41,13 +41,15 @@ import {
   BucketBreakerTrippedError,
   ConcurrencyAdmissionAbortedError,
 } from "./concurrency-limiter";
-import type {
-  AsyncEventSink,
-  AuthEvent,
-  ProviderTransport,
-  StepAdmissionGate,
-  TransportOutcome,
-  TransportRequest,
+import {
+  type AsyncEventSink,
+  type AuthEvent,
+  isTransportFailureCause,
+  type ProviderTransport,
+  type StepAdmissionGate,
+  type TransportFailureCause,
+  type TransportOutcome,
+  type TransportRequest,
 } from "./contracts";
 import type { FailureClass } from "./failure-classification";
 import {
@@ -1588,6 +1590,9 @@ export class StepExecutionHarness implements StepRunner {
     let totalUsageV2: NormalizedUsage | undefined;
     let attempts = 0;
     let lastOutcome: TransportOutcome | undefined;
+    // The transport cause of the most recent failed attempt. Reset by every attempt
+    // that fails without one, so the step reports only the cause it ended on.
+    let lastFailureCause: TransportFailureCause | undefined;
     let cancelHit = false;
     // D1-08 PR5b (§9.1): every attempt that reached the reserve step, in
     // order, each already finalized to a terminal reservation state by the
@@ -1730,6 +1735,11 @@ export class StepExecutionHarness implements StepRunner {
       }
 
       // attemptResult.kind === "failed"
+      lastFailureCause =
+        attemptResult.resolution.kind === "cause" &&
+        isTransportFailureCause(attemptResult.resolution.cause)
+          ? attemptResult.resolution.cause
+          : undefined;
       if (attemptResult.resolution.kind === "legacy_terminal") {
         break;
       }
@@ -1830,6 +1840,9 @@ export class StepExecutionHarness implements StepRunner {
       ...(totalUsageV2 === undefined ? {} : { usageV2: totalUsageV2 }),
       attempts,
       ...(reservations.length === 0 ? {} : { reservations }),
+      ...(lastFailureCause === undefined
+        ? {}
+        : { failureCause: lastFailureCause }),
       stderrTail: lastOutcome?.stderrTail ?? "",
       resultText: lastOutcome?.finalText.slice(-8192) ?? "",
     };

@@ -42,7 +42,11 @@ import {
   CLI_RECORD_FILE,
   type CliErrorClass,
   type CliRecord,
+  type HunterFailureRecord,
+  knownTransportCause,
   parseCliRecord,
+  safeModelName,
+  safeProviderName,
   type UnsettledStatus,
 } from "./outcome";
 import { NODE_FS, writeRecordAtomically } from "./trigger";
@@ -104,6 +108,30 @@ export function recordReviewing(
 // parses when the head is not one. The pipeline record and the delivery record share it.
 export function cliHeadField(headSha: string): { head_sha?: string } {
   return /^[0-9a-f]{40}$/.test(headSha) ? { head_sha: headSha } : {};
+}
+
+// The per-hunter entries of a hunters-failed record. WHY each field is checked here and
+// not left to the reader: a value the reader would refuse makes the whole record
+// unreadable, and the publisher then reports no outcome at all. So a cause outside the
+// vocabulary, or a provider or model that is not a safe short string, is left out of its
+// entry, and the entry still says that its hunter failed.
+export function hunterFailureRecords(
+  failures: readonly {
+    readonly cause?: string;
+    readonly provider?: string;
+    readonly model?: string;
+  }[],
+): HunterFailureRecord[] {
+  return failures.map((failure) => {
+    const entry: HunterFailureRecord = {};
+    const cause = knownTransportCause(failure.cause);
+    if (cause !== undefined) entry.cause = cause;
+    const provider = safeProviderName(failure.provider);
+    if (provider !== undefined) entry.provider = provider;
+    const model = safeModelName(failure.model);
+    if (model !== undefined) entry.model = model;
+    return entry;
+  });
 }
 
 // The delivery writer: publishRunOutcome calls it once the review is delivered (see the

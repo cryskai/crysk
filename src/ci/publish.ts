@@ -322,11 +322,7 @@ function decideCliOutcome(
     case "hunters-failed":
       return remoteOrLocal(
         record,
-        renderCode(
-          "PRH-HUNTERS-FAILED",
-          { ...runParams, step: REVIEW_STEP, detail: HUNTERS_DETAIL },
-          "action",
-        ),
+        huntersFailedRendering(cliRecord, runParams),
         cliRecord.head_sha ?? record.head_sha,
       );
     case "error":
@@ -369,6 +365,49 @@ function unsettledStatusOf(
       targetUrl: record.run_url,
     },
   };
+}
+
+// The rendering of a hunters-failed run. WHY every hunter and not any: a run whose
+// hunters failed on the provider's side for one model has nothing else to fix, so the
+// provider and the model are named. A single hunter that failed another way, or one
+// with no classified cause, keeps the generic code, since that failure is not the
+// model's. The provider and model are named only when every entry agrees on them; a
+// mixed list names neither, and the lead reads "Provider:".
+function huntersFailedRendering(
+  cliRecord: CliRecord,
+  runParams: ErrorParams,
+): RenderedError {
+  const failures = cliRecord.hunter_failures ?? [];
+  if (
+    failures.length > 0 &&
+    failures.every((failure) => failure.cause === "model_unavailable")
+  ) {
+    return renderCode(
+      "PRH-MODEL-UNAVAILABLE",
+      {
+        ...runParams,
+        provider: sharedValue(failures.map((failure) => failure.provider)),
+        model: sharedValue(failures.map((failure) => failure.model)),
+      },
+      "action",
+      "every_hunter",
+    );
+  }
+  return renderCode(
+    "PRH-HUNTERS-FAILED",
+    { ...runParams, step: REVIEW_STEP, detail: HUNTERS_DETAIL },
+    "action",
+  );
+}
+
+// The one value every entry names, or undefined when they name none or differ.
+function sharedValue(
+  values: readonly (string | undefined)[],
+): string | undefined {
+  const distinct = new Set(values);
+  if (distinct.size !== 1) return undefined;
+  const [only] = distinct;
+  return only;
 }
 
 // The one place an outcome becomes a plan: the annotation and summary always, and

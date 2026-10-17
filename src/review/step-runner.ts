@@ -13,6 +13,7 @@ import type {
   ExecutableAllowlistEntry,
   ResolvedModelRoute,
   StepAdmissionGate,
+  TransportFailureCause,
 } from "../execution/contracts";
 import type { FailureClass } from "../execution/failure-classification";
 import { StepExecutionHarness } from "../execution/harness";
@@ -101,6 +102,10 @@ export interface StepResult {
   // harness (the ledger-free PR5a shape) or no attempt ever reserved.
   reservations?: SpendReservation[];
   attempts: number;
+  // The transport cause of the step's final failed attempt, when the harness
+  // resolved one (a transport cause, never a harness cause). Absent on success,
+  // and on a failure with no transport cause. The CLI record names it per hunter.
+  failureCause?: TransportFailureCause;
   stderrTail: string;
   resultText: string;
 }

@@ -1066,7 +1066,7 @@ Keep one OpenCode provider per review in PRHERO_ROUTING.
 
 ### PRH-MODEL-UNAVAILABLE
 
-**Owner:** your configuration
+**Owner:** provider
 
 **What:** Provider {provider} does not serve the model configured for {step}
 
@@ -1081,6 +1081,18 @@ List the models this provider serves:
 ```bash
 opencode models {provider}
 ```
+
+#### `every_hunter`
+
+**What:** the configured model {model} is not served by this provider
+
+Every hunter of the run was refused for the same model, so the lead names the provider and the sentence names the model. When the model is not known, the sentence says "the configured model" and nothing else. A run where any hunter failed another way keeps `PRH-HUNTERS-FAILED`.
+
+#### `provider_configuration_invalid`
+
+**Owner:** your configuration
+
+The `provider_configuration_invalid` cause shares this code. Its lead stays `Your configuration:`, and the fix is the one above.
 
 ### PRH-PROMPTSET-INVALID
 

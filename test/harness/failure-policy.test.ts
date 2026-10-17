@@ -58,6 +58,7 @@ const TABLE: ReadonlyArray<readonly [FailureCause, RetryDisposition]> = [
   ["output_limit_exceeded", { action: "terminal" }],
   ["safety_refusal", { action: "terminal" }],
   ["provider_configuration_invalid", { action: "terminal" }],
+  ["model_unavailable", { action: "terminal" }],
   ["runtime_unavailable", { action: "terminal" }],
   // "terminal and transport conformance failure unless explicitly allowlisted"
   ["protocol_mismatch", { action: "terminal" }],
@@ -92,7 +93,7 @@ describe("§7 cause vocabulary", () => {
     ]
       .map((m) => m[1])
       .sort();
-    expect(declared.length).toBe(18);
+    expect(declared.length).toBe(19);
     const covered: string[] = TABLE.map(([cause]) => cause);
     expect(covered.sort()).toEqual(declared);
   });
@@ -390,6 +391,7 @@ describe("legacyClassificationFromCause", () => {
       "output_limit_exceeded",
       "safety_refusal",
       "provider_configuration_invalid",
+      "model_unavailable",
       "runtime_unavailable",
       "protocol_mismatch",
       "protocol_overflow",

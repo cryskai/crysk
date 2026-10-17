@@ -385,6 +385,7 @@ export type TransportFailureCause =
   | "context_window_exceeded"
   | "safety_refusal"
   | "provider_configuration_invalid"
+  | "model_unavailable"
   | "runtime_unavailable"
   | "remote_abort_unconfirmed";
 

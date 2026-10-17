@@ -439,6 +439,21 @@ function providerRefusalRetries(witness: string): boolean | undefined {
   return undefined;
 }
 
+// The provider's HTTP status, read from the fixed `status=` slot inside the
+// `(<name> status=<code>)` group that follows the retryable flag. The name is
+// the provider's own text, so the match is anchored right after the flag and
+// stops at the group's close paren: a message that says "status=404" cannot
+// reach this slot. "unknown" (no status was reported) returns undefined.
+function providerRefusalStatus(witness: string): string | undefined {
+  const at = witness.indexOf(MARKER_PROVIDER_REFUSAL);
+  if (at < 0) return undefined;
+  const rest = witness.slice(at + MARKER_PROVIDER_REFUSAL.length);
+  const slot = rest.match(
+    /^ retryable=(?:yes|no) \([^()]* status=(\d+|unknown)\): /,
+  );
+  return slot?.[1] === "unknown" ? undefined : slot?.[1];
+}
+
 // #157 (pr-157-8df2fca3-6): a hunter's tool call for a path OUTSIDE the
 // reviewed worktree tripped `permission.asked` for `external_directory`
 // twice in one run, and pr-hero never answered OpenCode's permission prompt
@@ -2136,6 +2151,15 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     // not spend the format-reminder budget on an empty draft. isRetryable
     // true is the provider asking for another attempt; that is the transient
     // budget, never the format one.
+    // A refusal whose slot reports HTTP 404 names a model the provider does not
+    // serve: no retry can make it exist, and PRH-MODEL-UNAVAILABLE says so with
+    // the provider's name. Only the status slot decides, never the message.
+    if (
+      witness.includes(MARKER_PROVIDER_REFUSAL) &&
+      providerRefusalStatus(witness) === "404"
+    ) {
+      return "model_unavailable";
+    }
     if (witness.includes(MARKER_PROVIDER_REFUSAL)) {
       return providerRefusalRetries(witness) === true
         ? "network_transient"

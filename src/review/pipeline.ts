@@ -103,6 +103,7 @@ import {
   recordDiversityHunterResult,
 } from "../diversity/pipeline-integration";
 import { writeJsonAtomically } from "../execution/atomic-write";
+import type { TransportFailureCause } from "../execution/contracts";
 // One predicate, owned beside the appends it recognizes. Already in this
 // module's graph through step-runner's value import of the harness, so it
 // adds no weight (the atomic-write WHY above is about a NEW dependency).
@@ -521,6 +522,10 @@ export interface PipelineResult {
   // hunter failure is a partial run (prose Step 4: "proceed with whatever
   // hunters did complete"), never a session failure.
   sessionFailed: boolean;
+  // Only when the run had failed hunters: one entry per failed hunter step, the
+  // cause its transport reported (when it did), and the provider and model its route
+  // named (when it did). The CLI record reads it (src/pr/review-pr.ts).
+  hunterFailures?: HunterFailure[];
   // D1-08 PR5b (D8): every step's `unresolved_remote` reservation, surfaced
   // at the RETURN boundary — not only in pipeline.json — so the cross-run
   // fencing gap (design decision D7: breaker state does not survive a
@@ -982,6 +987,9 @@ interface RunState {
   parityFired: boolean;
   hunterCount: number;
   hunterFailures: number;
+  // One entry per failed hunter step, in the order they settled. The CLI record
+  // names each one (hunterFailureOf).
+  failedHunters: HunterFailure[];
   drafts: DraftFinding[];
   survivors?: DedupedSurvivor[];
   deduped?: DedupeLoser[];
@@ -1055,6 +1063,7 @@ export async function runPipeline(
     parityFired: false,
     hunterCount: 0,
     hunterFailures: 0,
+    failedHunters: [],
     drafts: [],
     verdicts: new Map(),
     verifyVerdicts: new Map(),
@@ -1718,6 +1727,7 @@ async function execute(
           : "hunter step produced no result",
       );
       state.hunterFailures++;
+      state.failedHunters.push(hunterFailureOf(entry.spec, undefined));
       state.partial = true;
       if (diversityCtx.enabled && diversityCtx.plan) {
         diversityCtx = {
@@ -1755,6 +1765,7 @@ async function execute(
     }
     if (result.status !== "ok") {
       state.hunterFailures++;
+      state.failedHunters.push(hunterFailureOf(entry.spec, result));
       state.partial = true;
       continue;
     }
@@ -2677,6 +2688,9 @@ async function finish(
       : { usageV2: state.usageTotalV2 }),
     sessionFailed:
       state.hunterCount > 0 && state.hunterFailures === state.hunterCount,
+    ...(state.failedHunters.length === 0
+      ? {}
+      : { hunterFailures: state.failedHunters }),
     unresolved: collectUnresolvedSpend(state),
     ...(state.gatePriors === undefined ? {} : { gatePriors: state.gatePriors }),
     ...(state.routePlan === undefined
@@ -2685,6 +2699,29 @@ async function finish(
           routePlan: state.routePlan,
           routeFingerprint: state.routePlan.routeFingerprint,
         }),
+  };
+}
+
+// One failed hunter step, as the CLI record names it. The provider and the model come
+// from the step's route; a step with no route, or one that did not report a transport
+// cause, leaves that field out.
+export interface HunterFailure {
+  readonly cause?: TransportFailureCause;
+  readonly provider?: string;
+  readonly model?: string;
+}
+
+function hunterFailureOf(
+  spec: StepSpec,
+  result: StepResult | undefined,
+): HunterFailure {
+  const cause = result?.failureCause;
+  const provider = spec.route?.provider.trim();
+  const model = spec.route?.modelSnapshot.trim();
+  return {
+    ...(cause === undefined ? {} : { cause }),
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
   };
 }
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A model the provider does not serve is named after the provider.** A provider refusal whose `status=` slot
+  reports HTTP 404 now classifies as `model_unavailable`, a terminal cause that is never retried. Its CI outcome is
+  `PRH-MODEL-UNAVAILABLE` with the lead `Provider <name>:` instead of `Unclassified:`, and the code's owner is now
+  the provider. The `provider_configuration_invalid` cause keeps its `Your configuration:` lead. Other refusal
+  statuses classify as before.
+- **A run whose every hunter hit the same unserved model says so.** The CLI record of a `hunters-failed` run now
+  names each failed hunter's transport cause, provider and model (`hunter_failures`). When every hunter failed with
+  `model_unavailable`, the publisher renders `PRH-MODEL-UNAVAILABLE` with the lead `Provider <name>:` and the model,
+  instead of `PRH-HUNTERS-FAILED`. Any other mix, and a record without the field, render as before.
+
 ### Added
 - **`pr-hero status --pr <n> [--json]`**: a read-only command that reads one PR's pr-hero gate, its posted
   findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `override-or-fix`, `done`) through `gh` alone. With
