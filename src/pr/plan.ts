@@ -20,11 +20,7 @@
 // fabricating values nothing produced. Same intent as
 // CiAdmissionGateResult's `exitCode: number | undefined` sentinel
 // (src/pr/ci-admission-gate.ts), expressed so the type checker enforces it.
-import {
-  recordPendingCreatedAt,
-  recordPendingPosting,
-  recordReviewing,
-} from "#ci/cli-record";
+import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
 import type { ResolvedRoutePlan } from "#model/routing";
 import {
@@ -295,7 +291,6 @@ export async function resolvePrPlanAndConfirm(params: {
   // it (the override rule, src/ci/override.ts).
   const runStartedMs = Date.now();
   recordReviewing(params.headSha);
-  recordPendingPosting();
   const pendingLanded = await tryPublishCommitStatus(
     params.operatorRoot,
     params.headSha,

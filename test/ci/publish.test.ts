@@ -15,6 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -23,7 +24,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { classifyCliError } from "#ci/classify-error";
-import { PENDING_POSTING_PREFIX, writeFatalCliRecord } from "#ci/cli-record";
+import { writeFatalCliRecord } from "#ci/cli-record";
 import {
   CLI_RECORD_FILE,
   type CliRecord,
@@ -35,7 +36,6 @@ import {
   CANCELLED_STATUS_DESCRIPTION,
   decideCancelSettle,
   decidePublication,
-  PENDING_POSTING_MARK,
   runCancelSettle,
   runPublish,
 } from "#ci/publish";
@@ -2861,31 +2861,6 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
     }
   });
 
-  // #347 round 4: the cancel landed inside the POST, before its answer was recorded.
-  test("a posting placeholder settles a pending created within seconds of it, not later", () => {
-    const placeholder = `${PENDING_POSTING_MARK}${WRITTEN_MS}`;
-    expect(
-      decideCancelSettle({
-        record: reviewingRecord(),
-        latest: pendingAt(WRITTEN_MS + 2_000),
-        pendingAt: placeholder,
-      }),
-    ).toEqual({ settle: true, headSha: CANCEL_HEAD });
-    for (const offset of [-10_000, 60_000]) {
-      expect(
-        decideCancelSettle({
-          record: reviewingRecord(),
-          latest: pendingAt(WRITTEN_MS + offset),
-          pendingAt: placeholder,
-        }).settle,
-      ).toBe(false);
-    }
-  });
-
-  test("the placeholder mark is the cli-record writer's prefix", () => {
-    expect(PENDING_POSTING_MARK).toBe(PENDING_POSTING_PREFIX);
-  });
-
   test("no record of this run's pending (it never landed) settles nothing", () => {
     for (const pending of [undefined, "not a time"]) {
       expect(
@@ -2969,6 +2944,34 @@ describe("runCancelSettle — the shell (SB3)", () => {
       "target_url=https://github.com/acme/widgets/actions/runs/4242",
     );
     expect(run.stdout).toContain("the pr-hero status is now PRH-CANCELLED");
+  });
+
+  test("an unreadable pending-at still exits 0 and writes nothing", () => {
+    const dir = mkdtempSync(
+      path.join(os.tmpdir(), "prhero-cancel-unreadable-"),
+    );
+    try {
+      writeFileSync(
+        path.join(dir, CLI_RECORD_FILE),
+        JSON.stringify(reviewingRecord()),
+      );
+      mkdirSync(path.join(dir, PENDING_AT_FILE));
+      const calls: Call[] = [];
+      const exitCode = runCancelSettle({
+        env: { PRHERO_OUTCOME_DIR: dir, GITHUB_REPOSITORY: REPO },
+        gh: (args) => {
+          calls.push({ args: [...args], stdin: undefined });
+          return statusRows(["pr-hero", "pending", PENDING_ISO]);
+        },
+        sleep: () => {},
+        stdout: () => {},
+        appendSummary: () => {},
+      });
+      expect(exitCode).toBe(0);
+      expect(statusCalls(calls)).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a settled head status gets no write", () => {
