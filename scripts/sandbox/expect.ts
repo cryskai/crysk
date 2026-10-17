@@ -111,6 +111,11 @@ function headReports(obs: Observation): number {
   ).length;
 }
 
+// The partial-review verdict's text, finished or carried. Spelled out here because the sandbox
+// harness does not import the engine.
+const PARTIAL_REVIEW =
+  /^pr-hero: review partial \(\d+ of \d+ hunters failed\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$/;
+
 export function evaluateCheck(check: Check, obs: Observation): CheckResult {
   const label = describeCheck(check);
   const pass = (ok: boolean, detail?: string): CheckResult =>
@@ -214,6 +219,18 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         return verdict(
           true,
           `no visible blocking finding; failure counts ${counted} carried prior blocking finding(s)`,
+        );
+      }
+      // D2: a gate-mode review where some hunters failed and nothing blocked is red with its own
+      // text (src/pr/preflight.ts partialReviewDescription, or the carried form from admission.ts).
+      // It counts nothing because nothing blocks, so it agrees with no visible blocking finding.
+      if (
+        status.state === "failure" &&
+        PARTIAL_REVIEW.test(status.description ?? "")
+      ) {
+        return verdict(
+          true,
+          "no visible blocking finding; failure is a partial review",
         );
       }
       return verdict(
