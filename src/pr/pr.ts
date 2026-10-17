@@ -45,8 +45,16 @@ import { renderComparison } from "#compare/report";
 import { THREAD_PAGE_SIZE } from "#corpus/preflight";
 import { git } from "#git/git";
 import { isFullCommitId } from "#git/refs";
+import type { FindingChannel } from "#rereview/classify";
 import { collapseTargets, type RereviewProvenance } from "#rereview/prepare";
-import { parseStateBlock, renderStateBlock } from "#rereview/state";
+import {
+  droppedStateNote,
+  type FreshStateFinding,
+  mergeStateFindings,
+  parseStateBlock,
+  renderStateBlock,
+  stateBlockBudget,
+} from "#rereview/state";
 import type { Finding, FindingsDocument, RunStatus } from "#review/findings";
 import {
   type PrCommentDelta,
@@ -2793,9 +2801,11 @@ export async function postInlineFindings(input: {
     findingRefs,
     posted,
   } = await resolveInlinePostPlan(input);
+  const previousState =
+    summaryBody === null ? null : parseStateBlock(summaryBody);
   const postedReviewCount = nextStateReviewCount({
     existingSummaryId,
-    state: summaryBody === null ? null : parseStateBlock(summaryBody),
+    state: previousState,
     summaryBody,
   });
 
@@ -2872,30 +2882,6 @@ export async function postInlineFindings(input: {
       : rereviewDeltaFromProvenance(framing, doc.findings.length);
   const overlayDelta = (delta: PrCommentDelta): PrCommentDelta =>
     rereviewDelta === undefined ? delta : { ...delta, rereview: rereviewDelta };
-  const renderBody = (
-    delta: PrCommentDelta,
-    outside: readonly Finding[],
-    moved: string | undefined,
-    urls?: ReadonlyMap<string, string>,
-  ): string => {
-    const body = renderPrComment(
-      doc,
-      webUrl,
-      overlayDelta(delta),
-      outside,
-      moved,
-      urls,
-      input.ciMode,
-    );
-    if (framing === undefined) {
-      const counts = tierCountsFromFindings(
-        canonicalAdmissionFindings(doc.findings),
-      );
-      return `${body}${renderCiAdmissionBlock(doc.head_sha, counts, postedReviewCount)}`;
-    }
-    return `${body}${renderStateBlock(doc.head_sha, framing.live, postedReviewCount)}`;
-  };
-
   const byId = new Map(doc.findings.map((f) => [f.id, f]));
   const findingsFor = (refs: PrHeroFindingRef[]): Finding[] =>
     refs
@@ -2915,6 +2901,78 @@ export async function postInlineFindings(input: {
   // the create-first POST already includes it — after the review, the
   // closing PATCH may grow it with 422-demoted findings.
   const plannedOutsideDiff = findingsFor(plan.issueComments);
+
+  // The state block is merged ONCE, here, and both writes append the same
+  // string, so the create-first POST and the closing PATCH cannot disagree
+  // about which rows exist or what their ids are. Its budget is derived from
+  // the POST-shaped body, the one body known before any write (see
+  // stateBlockBudget). The findings are read off the same resolved refs the
+  // plan posted from, so a fresh row's locs name the line the comment sits on.
+  const lineById = new Map(findingRefs.map((ref) => [ref.id, ref.line]));
+  const freshChannel = (id: string): FindingChannel =>
+    plan.issueComments.some((f) => f.id === id) ||
+    plan.persisting.some(
+      (match) => match.finding.id === id && match.posted.channel === "issue",
+    )
+      ? "outside"
+      : "inline";
+  const freshFindings: FreshStateFinding[] = doc.findings.map((f) => ({
+    path: f.path,
+    line: lineById.get(f.id) ?? f.line,
+    proof_refs: f.proof_refs,
+    tier: f.tier,
+    severity: f.severity,
+    claim: f.claim,
+    channel: freshChannel(f.id),
+  }));
+  const referenceBody = renderPrComment(
+    doc,
+    webUrl,
+    overlayDelta({ ...plan.delta, previousHeadSha }),
+    plannedOutsideDiff,
+    undefined,
+    undefined,
+    input.ciMode,
+  );
+  const merged =
+    framing === undefined
+      ? undefined
+      : mergeStateFindings({
+          headSha: doc.head_sha,
+          reviews: postedReviewCount,
+          live: framing.live,
+          previous: previousState,
+          fresh: freshFindings,
+          stateBudget: stateBlockBudget(referenceBody.length),
+        });
+
+  const renderBody = (
+    delta: PrCommentDelta,
+    outside: readonly Finding[],
+    moved: string | undefined,
+    urls?: ReadonlyMap<string, string>,
+  ): string => {
+    const body = renderPrComment(
+      doc,
+      webUrl,
+      overlayDelta(delta),
+      outside,
+      moved,
+      urls,
+      input.ciMode,
+    );
+    if (merged === undefined) {
+      const counts = tierCountsFromFindings(
+        canonicalAdmissionFindings(doc.findings),
+      );
+      return `${body}${renderCiAdmissionBlock(doc.head_sha, counts, postedReviewCount)}`;
+    }
+    // The drop line sits right above the state block it accounts for. Empty
+    // when the cap dropped nothing.
+    const note = droppedStateNote(merged.dropped);
+    const noteLine = note === "" ? "" : `${note}\n`;
+    return `${body}${noteLine}${renderStateBlock(doc.head_sha, merged.rows, postedReviewCount, merged.hw)}`;
+  };
 
   // The id this run's own creation just returned, if any — threaded to the
   // closing PATCH below so it updates THIS comment directly rather than
