@@ -22,6 +22,10 @@ import {
   spawnModelForClaudeCli,
 } from "#model/routing";
 import {
+  composeAdjudicationPrompt,
+  parseAdjudicationResult,
+} from "#rereview/adjudicate";
+import {
   applyWorsening,
   type GateStatus,
   type PhaseBResult,
@@ -91,7 +95,9 @@ import {
 import type {
   AdjudicationOutcome,
   AdjudicationSubject,
+  AdjudicationVerdict,
 } from "#triage/adjudication";
+import { resolveEngineAssets } from "../assets";
 import type { InternalCapabilityReport } from "../diversity/admission";
 import type { BenchmarkTarget } from "../diversity/identity";
 import {
@@ -1015,6 +1021,9 @@ interface RunState {
   deduped?: DedupeLoser[];
   verdicts: Map<string, RefuterOutcome>;
   verifyVerdicts: Map<string, GateStatus>;
+  // T5b: one entry per adjudicated subject, in queue order. Absent when the run
+  // queued no adjudication.
+  adjudications?: AdjudicationOutcome[];
   verificationCapped: number;
   verificationSpawned: number;
   verificationTriggers: {
@@ -1881,6 +1890,23 @@ async function execute(
     }
   }
 
+  // T5b — the adjudication leg rules on each pending dismissal the
+  // `/pr-hero recheck` run queued. Its own namespaced caller, like runVerify:
+  // adjudicate-<priorId> steps, steps/adjudicate/, per_agent.adjudicator. With
+  // no refuter configured there is nothing to ask, so every subject stays
+  // inconclusive and the dismissal stays counted.
+  const adjudicationQueue = input.adjudicationQueue ?? [];
+  if (adjudicationQueue.length > 0 && !ceilingAborted(deps, state)) {
+    state.adjudications = refuterAgent
+      ? await runAdjudicate(input, deps, state, adjudicationQueue, {
+          stepsDir,
+          stepTimeoutMs,
+          agent: refuterAgent,
+          nonce: boundaryNonce,
+        })
+      : adjudicationQueue.map((subject) => inconclusiveOutcome(subject));
+  }
+
   // Step 6 — one refuter batch: every BLOCKER/CRITICAL survivor, whatever its
   // evidence_class. Severity alone is the test, because severity alone decides
   // whether a finding can reach blocking tier, and the refuter is what earns
@@ -2371,6 +2397,155 @@ async function runVerify(
   if (anyFailed) state.partial = true;
 }
 
+// The adjudicator's agent key in per_agent, like VERIFIER_AGENT for the verifier.
+const ADJUDICATOR_AGENT = "adjudicator";
+
+function inconclusiveOutcome(
+  subject: AdjudicationSubject,
+): AdjudicationOutcome {
+  return {
+    priorId: subject.priorId,
+    threadId: subject.threadId,
+    replyId: subject.replyId,
+    verdict: "inconclusive",
+    evidence: [],
+  };
+}
+
+// One isolated adjudicator step per queued dismissal, sharing the refuter's
+// model, effort, tools and route. The verdict is read from the step's parsed
+// output; a failed step, a rejected promise, or a forged nonce is inconclusive,
+// which keeps the finding counted. Only a failed step sets `partial`: an
+// inconclusive ruling is a ruling, and a forged prompt is a guard, not a fault.
+async function runAdjudicate(
+  input: PipelineInput,
+  deps: PipelineDeps,
+  state: RunState,
+  queue: AdjudicationSubject[],
+  options: {
+    stepsDir: string;
+    stepTimeoutMs: number;
+    agent: AgentSpec;
+    nonce: string;
+  },
+): Promise<AdjudicationOutcome[]> {
+  const outcomes = queue.map((subject) => inconclusiveOutcome(subject));
+  const adjudicatorPrompt =
+    resolveEngineAssets().triageSkillFiles["adjudicator.md"];
+  if (adjudicatorPrompt === undefined) {
+    throw new Error("bundled adjudicator prompt is missing from the engine");
+  }
+  const body = await Bun.file(adjudicatorPrompt).text();
+  // The refuter's frontmatter supplies tools, model and effort: the adjudicator
+  // runs as the refuter's agent, with the adjudicator body as its system prompt.
+  const agent = await parseAgentFile(
+    agentPromptPath(input, options.agent.file),
+  );
+  const systemPromptPath = path.join(options.stepsDir, "adjudicator.system.md");
+  await writeSystemPrompt(systemPromptPath, body);
+  const model = resolveModel(
+    input,
+    options.agent.model,
+    agent.model,
+    options.agent.file,
+  );
+  const effort = resolveEffort(agent.effort, "refuter");
+  const specs: Array<{
+    index: number;
+    subject: AdjudicationSubject;
+    spec: StepSpec;
+    meta: StepMeta;
+  }> = [];
+  for (const [index, subject] of queue.entries()) {
+    const prompt = composeAdjudicationPrompt(subject, options.nonce);
+    // A forged argument never reaches the model: the subject keeps its
+    // inconclusive outcome, and no step is spent on it.
+    if (prompt === null) continue;
+    const dir = path.join(options.stepsDir, "adjudicate", subject.priorId);
+    await mkdir(dir, { recursive: true });
+    const spec: StepSpec = {
+      name: `adjudicate-${subject.priorId}`,
+      systemPromptPath,
+      prompt,
+      tools: agent.tools,
+      mcpConfigPath: input.mcpConfigPath,
+      model,
+      effort,
+      cwd: input.worktree,
+      outPath: path.join(dir, "result.json"),
+      timeoutMs: options.stepTimeoutMs,
+      maxAttempts: DEFAULT_STEP_MAX_ATTEMPTS,
+      ...(routeForStepKey(state.routePlan, agentStepKey(options.agent)) ===
+      undefined
+        ? {}
+        : {
+            route: routeForStepKey(
+              state.routePlan,
+              agentStepKey(options.agent),
+            ),
+          }),
+      parse: parseAdjudicationResult,
+      onRetry: (info) => emit(deps, { kind: "step-retry", ...info }),
+    };
+    specs.push({ index, subject, spec, meta: stepMeta(spec) });
+  }
+  if (specs.length === 0) return outcomes;
+  for (const { meta } of specs) state.steps.push(meta);
+  const legStartedAt = Date.now();
+  const settled = await Promise.allSettled(
+    specs.map(({ spec }) => deps.runner.run(spec)),
+  );
+  const legElapsedMs = Date.now() - legStartedAt;
+  let usage: SessionUsage | undefined;
+  let attempts = 0;
+  let anyFailed = false;
+  for (const [i, entry] of specs.entries()) {
+    const outcome = settled[i];
+    const result = outcome?.status === "fulfilled" ? outcome.value : undefined;
+    const { subject } = entry;
+    if (result) {
+      usage = usage ? sumUsage(usage, result.usage) : result.usage;
+      attempts += result.attempts;
+      recordSettlement(entry.meta, result, input.runDir);
+      state.usageTotal = sumUsage(state.usageTotal, result.usage);
+      accumulateUsageV2(state, result);
+    } else {
+      recordStepFailure(
+        entry.meta,
+        outcome?.status === "rejected"
+          ? outcome.reason
+          : "adjudicator step produced no result",
+      );
+    }
+    if (result?.status === "ok") {
+      const ruling = result.output as {
+        verdict: AdjudicationVerdict;
+        evidence: string[];
+      };
+      outcomes[entry.index] = {
+        ...inconclusiveOutcome(subject),
+        verdict: ruling.verdict,
+        evidence: ruling.evidence,
+      };
+      continue;
+    }
+    anyFailed = true;
+  }
+  state.perAgent[ADJUDICATOR_AGENT] = usage
+    ? {
+        tokens_total: usage.tokens_total,
+        duration_ms: legElapsedMs,
+        tokens_in: usage.tokens_in,
+        tokens_out: usage.tokens_out,
+        cost_usd_est: usage.cost_usd_est,
+        attempts,
+        status: anyFailed ? "failed" : "ok",
+      }
+    : failedAgentEntry();
+  if (anyFailed) state.partial = true;
+  return outcomes;
+}
+
 // The scout's non-hunter budgets (§3.5 mechanism 4), and the one number here
 // that departs from the ratified design: §3.5 says "a 5-minute watchdog",
 // copying the summarizer. M4 then MEASURED the stage at 86-600s across 60
@@ -2716,6 +2891,9 @@ async function finish(
       ? {}
       : { hunterFailures: state.failedHunters }),
     unresolved: collectUnresolvedSpend(state),
+    ...(state.adjudications === undefined || state.adjudications.length === 0
+      ? {}
+      : { adjudications: state.adjudications }),
     ...(state.gatePriors === undefined ? {} : { gatePriors: state.gatePriors }),
     ...(state.routePlan === undefined
       ? {}
@@ -2876,6 +3054,15 @@ async function writePipelinePlan(
   }
 }
 
+// The priors whose author dismissal the adjudicator upheld this run.
+function upheldAdjudicationIds(state: RunState): Set<string> {
+  return new Set(
+    (state.adjudications ?? [])
+      .filter((outcome) => outcome.verdict === "upheld")
+      .map((outcome) => outcome.priorId),
+  );
+}
+
 function fillRereviewProvenance(
   input: PipelineInput,
   state: RunState,
@@ -2902,7 +3089,15 @@ function fillRereviewProvenance(
           reTiered: base.re_tiered ?? 0,
         }
       : assembleLive({
-          settled: input.phaseB.settled,
+          // WHY an upheld CI verdict is applied here, in-run: like the
+          // verifier's `refuted`, the gate trusts it when it is produced. The
+          // bot reply posted afterwards is the persisted record; if that post
+          // fails, the next run counts the finding again.
+          settled: input.phaseB.settled.map((row) =>
+            upheldAdjudicationIds(state).has(row.id)
+              ? { ...row, status: "ci-dismissed" as const }
+              : row,
+          ),
           priors: input.phaseB.priors,
           verifyVerdicts: state.verifyVerdicts,
         });

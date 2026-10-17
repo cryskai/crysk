@@ -251,6 +251,20 @@ describe("parseArgs", () => {
     );
   });
 
+  test("--adjudicate is OFF unless asked for, and needs --pr", () => {
+    expect(parseArgs(["review", "--pr", "7"]).options.adjudicate).toBeFalsy();
+    expect(
+      parseArgs(["review", "--pr", "7", "--adjudicate"]).options.adjudicate,
+    ).toBe(true);
+    expect(() => parseArgs(["review", "--adjudicate"])).toThrow(
+      "--adjudicate runs the CI adjudicator against a PR, so it requires --pr",
+    );
+  });
+
+  test("--adjudicate is documented in the help text next to --full", () => {
+    expect(HELP_TEXT).toContain("--adjudicate        with --pr --ci:");
+  });
+
   test("--scout-model without --scout is a loud no-op, not a quiet one", () => {
     expect(() => parseArgs(["review", "--scout-model", "haiku"])).toThrow(
       "requires --scout",

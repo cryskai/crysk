@@ -1367,3 +1367,43 @@ describe("Packaging & distribution configuration", () => {
     expect(existsSync(distCliPath)).toBe(true);
   });
 });
+
+// `/pr-hero recheck` reaches the CI adjudicator through action.yml's review args
+// and the three workflow copies, which must all accept the command.
+describe("/pr-hero recheck wiring", () => {
+  const rootDir = path.resolve(__dirname, "..");
+  const recheckClause =
+    "startsWith(github.event.comment.body, '/pr-hero recheck')";
+  const copies = [
+    ".github/workflows/pr-hero.yml",
+    "skills/pr-hero-ci-setup/assets/workflow.yml",
+  ];
+
+  test("action.yml passes TRIGGER_ADJUDICATE as --adjudicate", () => {
+    const action = readFileSync(path.join(rootDir, "action.yml"), "utf-8");
+    expect(action).toContain(
+      "TRIGGER_ADJUDICATE: " + "$" + "{{ steps.trigger.outputs.adjudicate }}",
+    );
+    expect(action).toContain(
+      'if [ "$TRIGGER_ADJUDICATE" = "true" ]; then set -- "$@" --adjudicate; fi',
+    );
+  });
+
+  test.each(copies)(
+    "%s accepts the recheck command in if and concurrency",
+    (file) => {
+      const content = readFileSync(path.join(rootDir, file), "utf-8");
+      const review =
+        content.split(
+          "startsWith(github.event.comment.body, '/pr-hero review')",
+        ).length - 1;
+      expect(review).toBeGreaterThan(0);
+      expect(content.split(recheckClause).length - 1).toBe(review);
+      if (file.startsWith(".github")) {
+        expect(content).toContain(
+          "/pr-hero review, /pr-hero recheck or /pr-hero override",
+        );
+      }
+    },
+  );
+});

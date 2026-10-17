@@ -159,6 +159,10 @@ export function classifyPrior(
   }
 
   const triage = prior.triage;
+  // D5: only a dismissal the CI adjudicator upheld leaves the count.
+  if (triage?.tag === "dismissed" && triage.ciVerdict === "upheld") {
+    return { id: prior.id, status: "ci-dismissed", locs, renamed };
+  }
   if (triage?.tag === "dismissed" && triage.verdict === "upheld") {
     return { id: prior.id, status: "suppressed", locs, renamed };
   }

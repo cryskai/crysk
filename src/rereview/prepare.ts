@@ -7,7 +7,12 @@ import { normalizePath } from "#compare/compare";
 import { claimFingerprint } from "#pr/preflight";
 import type { Severity } from "#review/findings";
 import { parseFindingCommentBadge } from "#review/report";
-import type { AdjudicationSubject } from "#triage/adjudication";
+import {
+  type AdjudicationSubject,
+  CI_ADJUDICATOR_LOGIN,
+  MAX_ADJUDICATIONS_PER_RUN,
+  parseAdjudicationMarker,
+} from "#triage/adjudication";
 import { parseTriageMarker } from "#triage/triage";
 import {
   classifyPrior,
@@ -881,17 +886,44 @@ function resolveRowTie<T extends PostedForPrior>(
 }
 
 // T5b: the pending dismissals of blocking priors, at most MAX_ADJUDICATIONS_PER_RUN.
-// Contract stub, filled in by the T5b wave-1 unit A.
+// WHY advisory priors never cost an adjudicator call: only a blocking prior's
+// dismissal can leave the gate count, so nothing else is worth a ruling.
 export function adjudicationQueue(
-  _priors: readonly PriorRecord[],
+  priors: readonly PriorRecord[],
 ): AdjudicationSubject[] {
-  return [];
+  const subjects: AdjudicationSubject[] = [];
+  for (const prior of priors) {
+    if (prior.tier !== "blocking" && prior.tier !== TIER_UNRECOVERABLE) {
+      continue;
+    }
+    const triage = prior.triage;
+    if (
+      triage?.tag !== "dismissed" ||
+      triage.replyId === undefined ||
+      triage.threadId === undefined ||
+      triage.ciVerdict != null
+    ) {
+      continue;
+    }
+    subjects.push({
+      priorId: prior.id,
+      threadId: triage.threadId,
+      replyId: triage.replyId,
+      sev: prior.sev,
+      locs: prior.locs,
+      claim: prior.claim,
+      argument: triage.argument ?? "",
+    });
+  }
+  return subjects.slice(0, MAX_ADJUDICATIONS_PER_RUN);
 }
 
 export function enrichPriorsFromThreads(input: {
   priors: readonly PriorRecord[];
   posted: readonly PostedForPrior[];
   replies: readonly {
+    id?: number;
+    user?: string;
     in_reply_to_id: number | null;
     body: string;
     created_at?: string;
@@ -913,7 +945,24 @@ export function enrichPriorsFromThreads(input: {
         tag: marker.tag,
         verdict: marker.verdict ?? null,
         createdAt: reply.created_at ?? null,
+        ...(reply.id === undefined ? {} : { replyId: reply.id }),
+        threadId: parent.id,
+        argument: reply.body.split("\n").slice(1).join("\n").trim(),
+        ciVerdict: null,
       };
+    }
+    // WHY only GitHub's author field is trusted: the marker text is typed by
+    // anyone, so a verdict from any other login is ignored. The LAST match
+    // in thread order wins, and only for the latest triage reply.
+    if (triage?.replyId !== undefined) {
+      for (const reply of thread) {
+        if (reply.user !== CI_ADJUDICATOR_LOGIN) continue;
+        const adjudication = parseAdjudicationMarker(reply.body);
+        if (adjudication === null || adjudication.reply !== triage.replyId) {
+          continue;
+        }
+        triage = { ...triage, ciVerdict: adjudication.verdict };
+      }
     }
     const newThreadReply = thread.some(
       (reply) =>

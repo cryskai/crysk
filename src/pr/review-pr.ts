@@ -56,6 +56,7 @@ import {
   fetchPrComments,
   fetchPrReviewComments,
   ghPrFiles,
+  postReviewCommentReply,
 } from "#pr/pr";
 import { createPrRunDir, resolveCiPosture } from "#pr/preflight";
 import { publishRunOutcome } from "#pr/publish-outcome";
@@ -87,6 +88,10 @@ import {
 } from "#review/run";
 import { sizeGateConfigFor, sizeGateLine } from "#review/size-gate";
 import { registerActiveRun, unregisterActiveRun } from "#store/activity";
+import {
+  type AdjudicationOutcome,
+  adjudicationMarker,
+} from "#triage/adjudication";
 import { dryRunHunterCount, reviewingLine } from "#ui/plan";
 import { log, styleEnabled, terminalWidth } from "#ui/primitives";
 import { applySizeGate, startProgressRenderer } from "#ui/progress";
@@ -130,6 +135,57 @@ export function recordPipelineOutcome(
     },
     env,
   );
+}
+
+// T5b: one reply per adjudication, on the finding's own thread. Posted after the
+// review is published. WHY a failed post only warns: the in-run verdict already
+// settled this run's gate, and a missing reply makes the next run count the
+// finding again, which fails closed.
+const ADJUDICATION_REPLY_TIMEOUT_MS = 30_000;
+
+const ADJUDICATION_BADGES = {
+  upheld:
+    "✅ **CI adjudication: upheld** — the dismissal stands; this finding no longer counts toward the gate.",
+  rejected:
+    "❌ **CI adjudication: rejected** — the finding stands and still counts.",
+  inconclusive:
+    "❔ **CI adjudication: inconclusive** — the repository did not settle it; the finding still counts.",
+} as const;
+
+export async function postAdjudicationReplies(input: {
+  operatorRoot: string;
+  pr: number;
+  headSha: string;
+  adjudications: readonly AdjudicationOutcome[];
+  spawnFn?: typeof Bun.spawn;
+}): Promise<void> {
+  for (const entry of input.adjudications) {
+    const marker = adjudicationMarker({
+      verdict: entry.verdict,
+      reply: entry.replyId,
+      head: input.headSha,
+    });
+    const evidence =
+      entry.evidence.length > 0
+        ? `\n\nEvidence:\n${entry.evidence.map((e) => `- \`${e}\``).join("\n")}`
+        : "";
+    const body = `${marker}\n\n${ADJUDICATION_BADGES[entry.verdict]}${evidence}`;
+    try {
+      await postReviewCommentReply({
+        operatorRoot: input.operatorRoot,
+        pr: input.pr,
+        inReplyTo: entry.threadId,
+        body,
+        spawnFn: input.spawnFn,
+        timeoutMs: ADJUDICATION_REPLY_TIMEOUT_MS,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stdout.write(
+        `::warning::pr-hero: could not post the CI adjudication for ${entry.priorId}: ${message}\n`,
+      );
+    }
+  }
 }
 
 export async function reviewPr(
@@ -314,6 +370,7 @@ export async function reviewPr(
       rereview,
       verifyQueue,
       overlapCandidates,
+      adjudicationQueue,
       phaseB,
       diffStat,
       sizeGate,
@@ -321,6 +378,7 @@ export async function reviewPr(
       diffFromSha,
       headSha,
       full: options.full,
+      adjudicate: options.adjudicate === true,
       baseRef: target.baseRef,
       headLabel,
       isCi,
@@ -621,6 +679,7 @@ export async function reviewPr(
               ...(rereview === undefined ? {} : { rereview }),
               ...(verifyQueue.length > 0 ? { verifyQueue } : {}),
               ...(overlapCandidates.length > 0 ? { overlapCandidates } : {}),
+              ...(adjudicationQueue.length > 0 ? { adjudicationQueue } : {}),
               maxVerificationSteps,
               ...(phaseB === undefined ? {} : { phaseB }),
             },
@@ -647,7 +706,7 @@ export async function reviewPr(
       // inside publishRunOutcome itself), so the callback assigns it the
       // instant the posting stage resolves — never only at the end.
       //
-      // `return await`, never a bare `return publishRunOutcome(...)`: this
+      // `await`, never a bare `return publishRunOutcome(...)`: this
       // sits inside a try/finally, and a bare `return` hands back the
       // pending promise WITHOUT suspending here, so the `finally` below runs
       // synchronously right away — before publishRunOutcome has done
@@ -655,7 +714,7 @@ export async function reviewPr(
       // status (and read `posted`) against pre-run state on every call, not
       // just on a throw. The `await` is what makes this function actually
       // wait for publishRunOutcome to settle before the finally can run.
-      return await publishRunOutcome({
+      const exitCode = await publishRunOutcome({
         result,
         started,
         indexMs,
@@ -689,6 +748,17 @@ export async function reviewPr(
           blockingCount = count;
         },
       });
+      // T5b: the verdicts are posted only after the review itself published.
+      // Only a `--ci` run with posting on writes them to the PR.
+      if (postEnabled && options.ci === true) {
+        await postAdjudicationReplies({
+          operatorRoot,
+          pr: prNumber,
+          headSha,
+          adjudications: result?.adjudications ?? [],
+        });
+      }
+      return exitCode;
     } catch (error) {
       bodyFailed = true;
       throw error;

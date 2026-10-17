@@ -30,6 +30,8 @@ import {
   type GhResult,
   type OutcomeFs,
   parseReviewCommand,
+  RECHECK_COMMAND,
+  REVIEW_COMMAND,
   resolvePrNumber,
   runCiTrigger,
   runnerCredentialPaths,
@@ -102,6 +104,7 @@ describe("decideCiTrigger — the comment commands", () => {
         kind: "review",
         force: true,
         full: false,
+        adjudicate: false,
       });
     },
   );
@@ -116,6 +119,7 @@ describe("decideCiTrigger — the comment commands", () => {
         kind: "review",
         force: true,
         full: true,
+        adjudicate: false,
       });
     },
   );
@@ -522,7 +526,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
     const run = outcomeRun(commentEnv("/pr-hero review"), (args) => {
       if (args[0] === "api") return ok("write");
       // The fork answer is for the override's combined lookup only.
-      return args.includes("isCrossRepository")
+      return args.some((arg) => arg.includes("isCrossRepository"))
         ? overrideHead(HEAD_SHA, true)
         : ok(HEAD_SHA);
     });
@@ -565,6 +569,7 @@ describe("decideCiTrigger — the pull_request filter", () => {
       kind: "review",
       force: false,
       full: false,
+      adjudicate: false,
     });
   });
 
@@ -598,7 +603,7 @@ describe("decideCiTrigger — the pull_request filter", () => {
       decideCiTrigger(
         pullRequest({ eventName: "pull_request_target", prHeadRepo: head }),
       ),
-    ).toEqual({ kind: "review", force: false, full: false });
+    ).toEqual({ kind: "review", force: false, full: false, adjudicate: false });
   });
 
   test("a fork's pull_request_target still has to pass the credential check", () => {
@@ -792,7 +797,7 @@ describe("decideCiTrigger — the legacy force workflow still works", () => {
     (_label, full) => {
       expect(
         decideCiTrigger(dispatch({ forceInput: true, fullInput: full })),
-      ).toEqual({ kind: "review", force: true, full });
+      ).toEqual({ kind: "review", force: true, full, adjudicate: false });
     },
   );
 
@@ -801,6 +806,7 @@ describe("decideCiTrigger — the legacy force workflow still works", () => {
       kind: "review",
       force: false,
       full: false,
+      adjudicate: false,
     });
   });
 
@@ -811,6 +817,7 @@ describe("decideCiTrigger — the legacy force workflow still works", () => {
       kind: "review",
       force: true,
       full: true,
+      adjudicate: false,
     });
   });
 });
@@ -1069,6 +1076,7 @@ describe("runCiTrigger — the shell", () => {
       run: "true",
       force: "false",
       full: "false",
+      adjudicate: "false",
       pr: "7",
       head_sha: HEAD_SHA,
       publish: "true",
@@ -1086,6 +1094,7 @@ describe("runCiTrigger — the shell", () => {
       run: "true",
       force: "true",
       full: "true",
+      adjudicate: "false",
       pr: "21",
       head_sha: OTHER_SHA,
       publish: "true",
@@ -1202,6 +1211,7 @@ describe("runCiTrigger — the shell", () => {
       run: "true",
       force: "true",
       full: "false",
+      adjudicate: "false",
       pr: "21",
       head_sha: OTHER_SHA,
       publish: "true",
@@ -1379,6 +1389,7 @@ describe("runCiTrigger — the shell", () => {
       run: "true",
       force: "true",
       full: "true",
+      adjudicate: "false",
       pr: "305",
       head_sha: OTHER_SHA,
       publish: "true",
@@ -1843,7 +1854,15 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     expect(run.outputs.run).toBe("true");
     expect(run.outputs.publish).toBe("true");
     expect(Object.keys(run.outputs).sort()).toEqual(
-      ["force", "full", "head_sha", "pr", "publish", "run"].sort(),
+      [
+        "adjudicate",
+        "force",
+        "full",
+        "head_sha",
+        "pr",
+        "publish",
+        "run",
+      ].sort(),
     );
   });
 });
@@ -1861,6 +1880,7 @@ describe("runCiTrigger — a fork's pull_request_target", () => {
       run: "true",
       force: "false",
       full: "false",
+      adjudicate: "false",
       pr: "7",
       head_sha: HEAD_SHA,
       publish: "true",
@@ -2086,8 +2106,14 @@ describe("trigger.ts runs before `bun install`", () => {
 // that silently does nothing, so the two are pinned to each other here.
 describe("the hint and the trigger agree on the command", () => {
   test("every command the skip-comment hint names is one the trigger accepts", () => {
-    expect(parseReviewCommand(CI_REVIEW_COMMENT)).toEqual({ full: false });
-    expect(parseReviewCommand(CI_REVIEW_FULL_COMMENT)).toEqual({ full: true });
+    expect(parseReviewCommand(CI_REVIEW_COMMENT)).toEqual({
+      full: false,
+      adjudicate: false,
+    });
+    expect(parseReviewCommand(CI_REVIEW_FULL_COMMENT)).toEqual({
+      full: true,
+      adjudicate: false,
+    });
   });
 });
 
@@ -2379,5 +2405,140 @@ describe("the no-credentials head lookup (T2e)", () => {
     );
     expect(heads).toBe(1);
     expect(run.sleeps).toEqual([]);
+  });
+});
+
+// `/pr-hero recheck` is `/pr-hero review` plus the CI adjudicator: the same
+// permission check, the same reaction and the same forced review of the head,
+// with `adjudicate` set. A fork is refused, because the adjudicator needs this
+// repository's checkout of the head.
+describe("decideCiTrigger — /pr-hero recheck", () => {
+  test("from a writer it reviews with force and adjudicate, like the review command", () => {
+    expect(decideCiTrigger(comment(RECHECK_COMMAND))).toEqual({
+      kind: "review",
+      force: true,
+      full: false,
+      adjudicate: true,
+    });
+    expect(decideCiTrigger(comment(`  ${RECHECK_COMMAND}\n`))).toEqual({
+      kind: "review",
+      force: true,
+      full: false,
+      adjudicate: true,
+    });
+  });
+
+  test("from a read-only user it is refused like the review command", () => {
+    const decision = decideCiTrigger(
+      comment(RECHECK_COMMAND, {
+        commenterPermission: { kind: "resolved", permission: "read" },
+      }),
+    );
+    expect(decision.kind).toBe("denied");
+    const review = decideCiTrigger(
+      comment(REVIEW_COMMAND, {
+        commenterPermission: { kind: "resolved", permission: "read" },
+      }),
+    );
+    expect(review.kind).toBe("denied");
+  });
+
+  test("the permission is needed for the exact recheck command only", () => {
+    expect(commenterPermissionNeeded(comment(RECHECK_COMMAND))).toBe(true);
+    expect(commenterPermissionNeeded(comment("/pr-hero recheck please"))).toBe(
+      false,
+    );
+  });
+
+  test.each([
+    "/pr-hero recheck please",
+    "/pr-hero recheck --full",
+    "/pr-hero rechecking",
+  ])("a near miss is ignored and flagged: %j", (body) => {
+    expect(decideCiTrigger(comment(body))).toEqual({
+      kind: "ignore",
+      reason: expect.any(String),
+      nearMiss: true,
+    });
+  });
+
+  test("the rejection lists /pr-hero recheck among the valid commands", () => {
+    const decision = decideCiTrigger(comment("/pr-hero recheck please"));
+    expect((decision as { reason: string }).reason).toContain(RECHECK_COMMAND);
+  });
+
+  test("the review command keeps adjudicate false", () => {
+    expect(decideCiTrigger(comment(REVIEW_COMMAND))).toMatchObject({
+      adjudicate: false,
+    });
+    expect(parseReviewCommand(REVIEW_COMMAND)).toEqual({
+      full: false,
+      adjudicate: false,
+    });
+    expect(parseReviewCommand(RECHECK_COMMAND)).toEqual({
+      full: false,
+      adjudicate: true,
+    });
+  });
+});
+
+describe("runCiTrigger — /pr-hero recheck", () => {
+  // The recheck looks the head up twice: the fork answer, then the bare sha a review reads.
+  const recheckGh =
+    (head: string) =>
+    (args: readonly string[]): GhResult =>
+      args[0] === "api"
+        ? ok("write\n")
+        : args.some((arg) => arg.includes("isCrossRepository"))
+          ? overrideHead(head, false)
+          : ok(`${head}\n`);
+  const RECHECK_FORK_REFUSAL =
+    "/pr-hero recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
+
+  test("a writer's recheck reviews the head with adjudicate true and force", () => {
+    const run = outcomeRun(commentEnv(RECHECK_COMMAND), recheckGh(OTHER_SHA));
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs).toMatchObject({
+      run: "true",
+      force: "true",
+      full: "false",
+      adjudicate: "true",
+      pr: "21",
+      head_sha: OTHER_SHA,
+      publish: "true",
+    });
+  });
+
+  test("the review command's outputs carry adjudicate false", () => {
+    const run = outcomeRun(
+      commentEnv(REVIEW_COMMAND),
+      scriptedGh(ok("write\n"), ok(`${OTHER_SHA}\n`)),
+    );
+    expect(run.outputs).toMatchObject({ adjudicate: "false" });
+  });
+
+  test("a recheck on a fork pull request is refused with the reason, a 👎 and no review", () => {
+    const run = outcomeRun(
+      commentEnv(RECHECK_COMMAND),
+      scriptedGh(ok("write"), overrideHead(HEAD_SHA, true)),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs).toMatchObject({
+      run: "false",
+      publish: "false",
+      head_sha: "",
+    });
+    expect(run.stdout).toContain(RECHECK_FORK_REFUSAL);
+    expect(run.ghCalls).toContainEqual(reactionArgv("-1"));
+  });
+
+  test("a recheck whose lookup cannot tell a fork is refused too", () => {
+    const run = outcomeRun(
+      commentEnv(RECHECK_COMMAND),
+      scriptedGh(ok("write"), ok("not json")),
+    );
+    expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
+    expect(run.stdout).toContain("/pr-hero recheck could not confirm");
+    expect(run.ghCalls).toContainEqual(reactionArgv("-1"));
   });
 });

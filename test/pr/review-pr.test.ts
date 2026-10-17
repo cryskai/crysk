@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
-import { recordPipelineOutcome } from "#pr/review-pr";
+import { postAdjudicationReplies, recordPipelineOutcome } from "#pr/review-pr";
 
 const SHA = "a".repeat(40);
 
@@ -103,7 +103,7 @@ describe("reviewPr's call site for the pipeline record", () => {
     );
     const pipelineAt = source.indexOf("result = await runPipeline(");
     const recordAt = source.search(/^\s*recordPipelineOutcome\(/m);
-    const publishAt = source.indexOf("return await publishRunOutcome({");
+    const publishAt = source.indexOf("await publishRunOutcome({");
     expect(pipelineAt).toBeGreaterThan(-1);
     expect(recordAt).toBeGreaterThan(pipelineAt);
     expect(publishAt).toBeGreaterThan(recordAt);
@@ -204,5 +204,100 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
       head_sha: SHA,
       hunter_failures: [{}],
     });
+  });
+});
+
+// T5b: each adjudication verdict is posted as a reply on its finding's thread.
+// The in-run verdict already settled this run's gate, so a failed post is a
+// warning, never a failed run: the next run then counts the finding again,
+// which fails closed.
+describe("postAdjudicationReplies", () => {
+  const HEAD = "d".repeat(40);
+  const ADJUDICATION = {
+    priorId: "R001",
+    threadId: 100,
+    replyId: 200,
+    verdict: "upheld" as const,
+    evidence: ["src/a.ts:10"],
+  };
+
+  // Same gh double shape pr.test.ts uses: one spawn per call, stdin recorded.
+  function fakeGh(exitCode: number, stderr = "") {
+    const calls: { argv: string[]; stdin: string | undefined }[] = [];
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const spawnFn = ((argv: string[], opts?: { stdin?: Uint8Array }) => {
+      calls.push({
+        argv,
+        stdin:
+          opts?.stdin === undefined ? undefined : decoder.decode(opts.stdin),
+      });
+      const stream = (text: string) =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (text) controller.enqueue(encoder.encode(text));
+            controller.close();
+          },
+        });
+      return {
+        stdout: stream(exitCode === 0 ? JSON.stringify({ id: 300 }) : ""),
+        stderr: stream(stderr),
+        exited: Promise.resolve(exitCode),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, calls };
+  }
+
+  test("POSTs one reply on the thread, carrying the marker, badge and evidence", async () => {
+    const { spawnFn, calls } = fakeGh(0);
+    await postAdjudicationReplies({
+      operatorRoot: "/repo",
+      pr: 42,
+      headSha: HEAD,
+      adjudications: [ADJUDICATION],
+      spawnFn,
+    });
+    expect(calls).toHaveLength(1);
+    const argv = calls[0]?.argv.join(" ") ?? "";
+    expect(argv).toContain("--method POST");
+    expect(argv).toContain("pulls/42/comments");
+    expect(argv).toContain("in_reply_to=100");
+    const body = calls[0]?.stdin ?? "";
+    expect(
+      body.startsWith(
+        `<!-- pr-hero-adjudication verdict=upheld reply=200 head=${HEAD} -->`,
+      ),
+    ).toBe(true);
+    expect(body).toContain("✅ **CI adjudication: upheld**");
+    expect(body).toContain("Evidence:\n- `src/a.ts:10`");
+  });
+
+  test("a failed post prints a ::warning:: line and does not throw", async () => {
+    const { spawnFn } = fakeGh(1, "boom");
+    const lines: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      lines.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await postAdjudicationReplies({
+        operatorRoot: "/repo",
+        pr: 42,
+        headSha: HEAD,
+        adjudications: [ADJUDICATION],
+        spawnFn,
+      });
+    } finally {
+      process.stdout.write = original;
+    }
+    expect(
+      lines.some((line) =>
+        line.includes(
+          "::warning::pr-hero: could not post the CI adjudication for R001:",
+        ),
+      ),
+    ).toBe(true);
   });
 });

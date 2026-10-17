@@ -483,3 +483,73 @@ describe("resolvePrDiscovery — #206 body recovery keys by comment kind", () =>
     );
   });
 });
+
+// T5b: `--adjudicate` makes discovery hand back the pending dismissals of
+// blocking priors. The queue is empty unless the flag is set, so a normal run
+// never spends an adjudicator call.
+describe("resolvePrDiscovery — T5b adjudication queue", () => {
+  const INLINE_BLOCKING =
+    `<!-- pr-hero-finding path=src%2Fa.ts line=10 head=${L} c=abc -->\n` +
+    "\n" +
+    "🔴 blocking · BLOCKER · introduced · reliability\n" +
+    "`src/a.ts:10`\n" +
+    "\n" +
+    "the retry loop never clears the prior timer\n";
+  const DISMISSED_REPLY =
+    `<!-- pr-hero-triage tag=dismissed head=${H} actor=agent verdict=upheld -->\n` +
+    "\n" +
+    "the timer is cleared in the caller\n";
+
+  function run(adjudicate: boolean | undefined) {
+    return resolvePrDiscovery({
+      diffFromSha: B,
+      headSha: H,
+      full: false,
+      baseRef: B,
+      headLabel: "PR #1 head",
+      isCi: true,
+      sizeGateOverrides: {},
+      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      prIgnore: { rules: [], found: false },
+      issueComments: [markerCommentForHead(L, true)],
+      postedFindings: [POSTED_FINDING],
+      reviewComments: [
+        {
+          id: POSTED_FINDING.id,
+          user: "pr-hero",
+          body: INLINE_BLOCKING,
+          path: "src/a.ts",
+          line: 10,
+          original_line: 10,
+          in_reply_to_id: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: 200,
+          user: "author",
+          body: DISMISSED_REPLY,
+          path: "src/a.ts",
+          line: 10,
+          original_line: 10,
+          in_reply_to_id: POSTED_FINDING.id,
+          created_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+      git: baseGit(),
+      log: () => {},
+      ...(adjudicate === undefined ? {} : { adjudicate }),
+    });
+  }
+
+  test("without --adjudicate the queue is empty", async () => {
+    const result = await run(false);
+    expect(result.adjudicationQueue).toEqual([]);
+  });
+
+  test("with --adjudicate a pending dismissal of a blocking prior is queued", async () => {
+    const result = await run(true);
+    expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
+    expect(result.adjudicationQueue[0]?.threadId).toBe(POSTED_FINDING.id);
+    expect(result.adjudicationQueue[0]?.replyId).toBe(200);
+  });
+});
