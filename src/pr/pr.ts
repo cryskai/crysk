@@ -472,24 +472,120 @@ export async function postCommitStatus(
 // an override from a review's own status by it. The in-flight readers ignore it. The
 // target_url rides along for `pr-hero status`, which names the run that wrote the gate.
 //
-// Never throws by default: a 403, a hung gh (timeout), or garbage jq must not take
-// the watch tick down. Unreadable reads as not in-flight.
+// The head's full status history, every row, newest first, for the CI admission carry-forward
+// (src/pr/admission.ts) and the skip's override check. It reads the paginated list (`/statuses`),
+// not the combined endpoint: the combined one keeps only the newest row per context, so an override
+// would show in place of the review's own verdict under it. Null on any failure, a malformed row
+// included, so the caller can fail closed; an empty array means the head has no rows at all.
 //
-// WHY failClosed exists: `pr-hero status` is the skill's only reading of the gate, and
-// an empty list reads as "no pr-hero status on this head", which sends a review out
-// blind. So the status command asks for a throw on any unreadable row or failed read,
-// and the default keeps the empty answer every watch and admission caller relies on.
+// WHY --paginate: a head with more than 100 rows keeps its older rows on page 2, and the carry reads
+// the newest verdict. Page 1 alone would miss it and carry a false red. The call stays bounded by
+// its timeout, and --paginate runs the --jq projection on every page, so the output is still one
+// row per line.
+export async function fetchCommitStatusList(
+  operatorRoot: string,
+  sha: string,
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<CommitStatusFact[] | null> {
+  if (!isFullCommitId(sha)) return null;
+  try {
+    const result = await gh(
+      operatorRoot,
+      [
+        "api",
+        "--paginate",
+        `repos/{owner}/{repo}/commits/${sha}/statuses?per_page=100`,
+        "--jq",
+        ".[]? | {state: .state, context: .context, created_at: .created_at, description: .description}",
+      ],
+      undefined,
+      options?.spawnFn,
+      COMMIT_STATUS_TIMEOUT_MS,
+    );
+    if (!result.ok) return null;
+    const statuses: CommitStatusFact[] = [];
+    for (const line of result.stdout.split("\n")) {
+      if (line.trim() === "") continue;
+      const parsed = JSON.parse(line) as CommitStatusFact;
+      if (
+        typeof parsed.state !== "string" ||
+        typeof parsed.context !== "string" ||
+        typeof parsed.created_at !== "string"
+      ) {
+        return null;
+      }
+      statuses.push(parsed);
+    }
+    return statuses;
+  } catch {
+    return null;
+  }
+}
+
+// The PR's commit shas, OLDEST first (GitHub's order for pulls/<n>/commits). The CI admission
+// carry-forward walks them newest-first from the head (src/pr/admission.ts). WHY --paginate: a PR
+// above 100 commits keeps its newest commits on page 2, which a single page would never reach. GitHub
+// lists at most 250 commits per pull request, so the call is at most three requests, and it stays
+// bounded by its timeout. Null on any failure or a malformed sha, so the caller can fail closed; an
+// empty array means the list has no commits.
+export async function fetchPrCommitShas(
+  operatorRoot: string,
+  pr: number,
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<string[] | null> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      [
+        "api",
+        "--paginate",
+        `repos/{owner}/{repo}/pulls/${pr}/commits?per_page=100`,
+        "--jq",
+        ".[]?.sha",
+      ],
+      undefined,
+      options?.spawnFn,
+      COMMIT_STATUS_TIMEOUT_MS,
+    );
+    if (!result.ok) return null;
+    const shas: string[] = [];
+    for (const line of result.stdout.split("\n")) {
+      const sha = line.trim();
+      if (sha === "") continue;
+      if (!isFullCommitId(sha)) return null;
+      shas.push(sha);
+    }
+    return shas;
+  } catch {
+    return null;
+  }
+}
+
+// Never throws by default: a 403, a hung gh (timeout), or garbage jq must not take the watch tick
+// down. Unreadable reads as no rows, which the watch reads as not in-flight.
+//
+// WHY failClosed: two readers must tell a failed read from a head with no status rows, because an
+// empty answer for an unreadable head reads as "no status". The CI override check
+// (src/pr/admission.ts) would then write over a human's decision, and `pr-hero status`, the skill's
+// only reading of the gate (src/commands/status.ts), would send a review out blind. With failClosed
+// a failed read throws, and so does a row that does not parse, because the row it would drop could
+// be the override the check is looking for. The default keeps the empty answer every watch and
+// admission caller relies on.
 export async function fetchCommitStatuses(
   operatorRoot: string,
   sha: string,
   options?: { spawnFn?: typeof Bun.spawn; failClosed?: boolean },
 ): Promise<CommitStatusFact[]> {
-  if (!isFullCommitId(sha)) {
-    if (options?.failClosed) {
-      throw new CliError(`commit status needs a full commit sha, got: ${sha}`);
+  const failClosed = options?.failClosed === true;
+  const unreadable = (why: string): CommitStatusFact[] => {
+    if (failClosed) {
+      throw new CliError(
+        `could not read the statuses of ${sha.slice(0, 7)}: ${why}`,
+      );
     }
     return [];
-  }
+  };
+  if (!isFullCommitId(sha)) return unreadable("not a full commit id");
   try {
     const result = await gh(
       operatorRoot,
@@ -503,40 +599,31 @@ export async function fetchCommitStatuses(
       options?.spawnFn,
       COMMIT_STATUS_TIMEOUT_MS,
     );
-    if (!result.ok) {
-      if (options?.failClosed) {
-        throw new CliError(
-          `gh api commit statuses for ${sha} failed: ${result.stderr.trim()}`,
-        );
-      }
-      return [];
-    }
+    if (!result.ok) return unreadable(result.stderr.trim() || "gh failed");
     const statuses: CommitStatusFact[] = [];
     for (const line of result.stdout.split("\n")) {
       if (line.trim() === "") continue;
-      // Every bad line takes one of two paths, decided per line: a line that
-      // does not parse, and a line that parses to something other than a
-      // status (`null`, a bare string, a row missing a field). Both are
-      // skipped by default and both throw under failClosed. The shape check
-      // sits inside this per-line handling on purpose: outside it, a `null`
-      // throws a TypeError into the outer catch, which returns [] and drops
-      // every status, not just the bad line.
+      // Every bad line takes one of two paths, decided per line: a line that does not parse, and a line
+      // that parses to something other than a status (`null`, a bare string, a row missing a field). Both
+      // are skipped by default and both throw under failClosed. The shape check sits inside this per-line
+      // handling on purpose: outside it, a `null` throws a TypeError into the outer catch, which returns []
+      // and drops every status, not just the bad line.
       const parsed = parseStatusLine(line);
       if (parsed === null) {
-        if (options?.failClosed) {
-          throw new CliError(
+        if (failClosed) {
+          return unreadable(
             `unreadable commit status line from gh api: ${line.slice(0, 120)}`,
           );
         }
-        // Drop the bad line; keep whatever parsed. One garbage object must
-        // not hide a real pending on the next line.
+        // Drop the bad line; keep whatever parsed. One garbage object must not hide a real pending on
+        // the next line.
         continue;
       }
       statuses.push(parsed);
     }
     return statuses;
   } catch (error) {
-    if (options?.failClosed) throw error;
+    if (failClosed) throw error;
     return [];
   }
 }

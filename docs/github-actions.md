@@ -560,11 +560,33 @@ The table shows the status and the job exit for each case:
 | Finished review with unresolved blocking findings (see below) | `failure`: `pr-hero: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
 | Size or budget skip (`/pr-hero review` reviews it anyway) | `failure`: `pr-hero skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
-| Admission skip (coverage, same head, low risk, below threshold) or a manual re-review required | none | none | `0` |
+| Admission skip for a low-risk or below-threshold delta, or once per PR | inherits the verdict of the pull request's last reviewed commit (see below): `success` `pr-hero: no review needed (<reason>); carried from <sha>`, or `failure` `pr-hero: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`; with no readable verdict, `failure` `pr-hero skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
+| Same head, already reviewed | none (that head's own status already exists) | none | `0` |
+| Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `pr-hero: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
 Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
 below keep their own status and exit, as they did before the gate.
+
+**A skipped head inherits the verdict of the last reviewed commit of its pull request.** When the admission gate
+skips a new head as a low-risk or below-threshold delta, or once per PR, the head takes the newest review verdict from
+this pull request's own commit statuses: a `pr-hero` success or failure that a finished review wrote, or a verdict
+carried from this pull request. The gate walks the pull request's commits newest-first from the head, skips each commit
+that carries no verdict, and stops at the first one that does, within the last 20 commits before the head. A skip's
+failure, a fail-closed, budget or manual-only failure, an error, a pending status, and an override are not verdicts, so
+the walk passes over them. The verdict never comes from comment content: a comment, a summary marker included, can name a head,
+but only a write-access actor can set a commit's status, so a comment naming a green head carries nothing. A verdict
+carried onto a skipped head may be carried again onto a later one, because it came from a real review. A red verdict
+stays red, with its count, until the head is reviewed (`/pr-hero review`) or overridden. A green one reads as no review
+needed. An override is never carried: it is a human's decision for the code at the head it names, and the skipped head
+was never reviewed, so carrying it would turn a new head green with no review behind it. With no readable verdict (no
+reviewed head, a failed read, a head missing from the pull request's commits, or no verdict within the last 20 commits),
+the head is `failure` and says so: a trivial push must not pass the gate without a verdict behind it. A manual
+re-review required is always `failure`, because its code was never reviewed, and carrying a green verdict over it would
+let an unreviewed push pass the gate. A head whose newest `pr-hero` status is an override keeps it: a re-run of the gate
+on that head writes no skip status over the override, when the head's statuses can be read. When they cannot, the skip's
+status is written as planned and the run logs a warning, because a head that reads as nothing decided is the original
+bug; that write can replace an override the run could not see. Advisory mode writes no status on a skipped head, as before.
 
 **What counts as unresolved.** The count behind a blocking `failure` is every blocking finding that is still
 open: this run's blocking findings, plus each blocking finding from an earlier review of the PR that has not

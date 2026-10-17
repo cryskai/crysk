@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   isOverrideStatus,
+  newestStatusInContext,
   OVERRIDE_DESCRIPTION_PREFIX,
   overrideActorOf,
   overrideCutoffMs,
@@ -113,6 +114,46 @@ describe("override rule: the cutoff", () => {
     expect(
       overrideStandsOverRun([override(RUN_START - 10_000)], RUN_START - 5_000),
     ).toBe(false);
+  });
+});
+
+// GitHub's status LIST is newest-first. Two rows in the same second must resolve to the first
+// (newest) one, because the carry-forward and the publisher both read the list.
+describe("newestStatusInContext: a same-second tie goes to the newest row", () => {
+  const SAME_SECOND = "2026-10-16T10:00:00Z";
+  const row = (state: string, description: string) => ({
+    state,
+    context: "pr-hero",
+    created_at: SAME_SECOND,
+    description,
+  });
+
+  test("[success@t, failure@t], newest first, selects success", () => {
+    const rows = [
+      row("success", "pr-hero: review posted"),
+      row("failure", "pr-hero: 2 blocking finding(s)"),
+    ];
+    expect(newestStatusInContext(rows, "pr-hero")?.state).toBe("success");
+  });
+
+  test("a tie does not reorder the rows: the first array element wins, not the last", () => {
+    const rows = [
+      row("failure", "pr-hero: 2 blocking finding(s)"),
+      row("success", "pr-hero: review posted"),
+    ];
+    expect(newestStatusInContext(rows, "pr-hero")?.state).toBe("failure");
+  });
+
+  test("an older row never displaces a newer one, whatever the array order", () => {
+    const rows = [
+      {
+        state: "failure",
+        context: "pr-hero",
+        created_at: "2026-10-16T09:00:00Z",
+      },
+      { state: "success", context: "pr-hero", created_at: SAME_SECOND },
+    ];
+    expect(newestStatusInContext(rows, "pr-hero")?.state).toBe("success");
   });
 });
 

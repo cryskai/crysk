@@ -848,7 +848,7 @@ export interface CommitStatusRequest {
   targetUrl: string | undefined;
 }
 
-function clipStatusDescription(text: string): string {
+export function clipStatusDescription(text: string): string {
   if (text.length <= COMMIT_STATUS_DESCRIPTION_MAX) return text;
   return text.slice(0, COMMIT_STATUS_DESCRIPTION_MAX);
 }

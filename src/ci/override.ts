@@ -57,6 +57,17 @@ export interface OverrideStatusFact {
   description?: string | null;
 }
 
+// Whether one status is an override: a success whose description carries the override
+// prefix. This is the single test both writers and the status reader use, so none of them
+// can recognise an override by a different rule. A status without a description is never one.
+export function isOverrideStatus(status: OverrideStatusFact): boolean {
+  return (
+    status.state === "success" &&
+    typeof status.description === "string" &&
+    status.description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)
+  );
+}
+
 // Whether an override stands over a review, given the review's override cutoff. The override
 // stands when the newest OVERRIDE_STATUS_CONTEXT status is a successful override created at or
 // after cutoffMs. A later review has posted its own status since, which is then the newest, so
@@ -85,17 +96,6 @@ export function overrideStandsOverRun(
   return createdMs >= cutoffMs;
 }
 
-// Whether one status is an override: a success whose description carries the override
-// prefix. This is the single test both writers and the status reader use, so none of them
-// can recognise an override by a different rule. A status without a description is never one.
-export function isOverrideStatus(status: OverrideStatusFact): boolean {
-  return (
-    status.state === "success" &&
-    typeof status.description === "string" &&
-    status.description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)
-  );
-}
-
 // The login an override was written by: the text after the prefix up to the first space. The
 // publisher writes `pr-hero: overridden by @<login> — no review on this head`, and a GitHub
 // login has no space, so this is the login exactly. Null when the description is not an
@@ -108,10 +108,12 @@ export function overrideActorOf(description: string): string | null {
   return actor === undefined || actor === "" ? null : actor;
 }
 
-// The newest status of one context by created_at: a tie goes to the later row, and a row
-// whose time does not parse is skipped. This is preflight.ts's latestStatusInContext,
-// which this builtins-only module cannot import. The publisher's reads use it too, so the
-// two selections cannot drift.
+// The newest status of one context by created_at: a row whose time does not parse is skipped.
+// A tie goes to the row that comes first in the array. GitHub's status LIST is newest-first, so
+// the first of two same-second rows is the newer one: `[success@t, failure@t]` reads as success.
+// The combined endpoint has one row per context, so it never ties. This is the same selection
+// as preflight.ts's latestStatusInContext except on a tie, where that one takes the later row
+// (`>=`). This builtins-only module cannot import it. The publisher's reads use this one too.
 export function newestStatusInContext(
   statuses: readonly OverrideStatusFact[],
   context: string,
@@ -122,7 +124,7 @@ export function newestStatusInContext(
     if (status.context !== context) continue;
     const createdMs = Date.parse(status.created_at);
     if (Number.isNaN(createdMs)) continue;
-    if (createdMs >= latestMs) {
+    if (createdMs > latestMs) {
       latest = status;
       latestMs = createdMs;
     }

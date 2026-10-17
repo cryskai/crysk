@@ -36,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential is retried once, so a transient failure no longer leaves that run without its status.
 
 ### Fixed
+- **A skipped head no longer leaves the gate silent**: in gate mode, a head the admission gate skips (low-risk or
+  below-threshold delta, or once per PR) inherits the verdict of the pull request's last reviewed commit, read from
+  that commit's own statuses (the newest earlier commit with a review's verdict, within the last 20), never from
+  comment content, so a comment naming a green head carries nothing. A skip's failure is not a verdict, so one skip no
+  longer hides a green review on an older commit. A red review stays red and a clean one reads as
+  no review needed. An override is never carried, and a head whose newest status is an override keeps it, when that
+  head's statuses can be read: a re-run writes no skip status over it. When they cannot be read, the skip's status is
+  written as planned and the run logs a warning. With no readable verdict, or when the attempt budget is used up, the head is
+  `failure` with the way to review it. Before this, an admission skip posted no status, so a required check could
+  block with no explanation, or pass a head nobody decided about.
 - **An outside-channel triage reply keeps its `#issuecomment` link when the repo's web URL cannot be read**: the link
   is what binds the reply to its finding, and a failed `gh repo view` used to post the reply with no link at all. The
   reply now falls back to the PR's own URL, then to the repo's `nameWithOwner` on the GitHub host. It posts without a
@@ -47,8 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count only when the re-review verifies it gone or its files were deleted. Known gap: a blocking finding first
   raised by a re-review, rather than by the first review, is not yet carried to the reviews after it. An advisory
   finding from this run never clears a blocking one at the same spot.
-- **An override holds against every verdict write of the review (`success` or `failure`)**: the check covers a body that
-  failed after delivery, and the publisher step's repost of a status the CLI could not write. An `error` write, such as a
+- **An override holds against every verdict write of the review (`success` or `failure`), when the head's statuses can be
+  read**: the check covers a body that failed after delivery, and the publisher step's repost of a status the CLI could
+  not write. An `error` write, such as a
   review whose hunters all failed, is not a verdict and may replace the override. The run's start is stamped before its
   pending status is posted, with a 5-second clock-skew allowance, so an override posted while that post was slow stands;
   when that pending did not land, the allowance is dropped. The CLI's head-status read asks for 100 contexts per page, as
