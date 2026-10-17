@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does, and keeps every override record.
 
 ### Fixed
+- **A skipped head no longer leaves the gate silent**: in gate mode, a head the admission gate skips (low-risk or
+  below-threshold delta, or once per PR) inherits the verdict of the last reviewed head, so a red review stays red
+  and a clean one reads as no review needed. An override is never carried. With no readable verdict, or when the
+  attempt budget is used up, the head is `failure` with the way to review it. Before this, an admission skip posted
+  no status, so a required check could block with no explanation, or pass a head nobody decided about.
 - **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left
   open stays counted through a re-review that carries it, through a same-head `/pr-hero review` that runs no
   hunters, through a triage reply on its own, and through later pushes after a rejected dismissal or a

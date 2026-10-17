@@ -15,13 +15,15 @@ import {
   shouldWriteStepSummary,
 } from "#ci/gates";
 import type { CliRecord } from "#ci/outcome";
+import { isOverrideStatus, newestStatusInContext } from "#ci/override";
 import {
   appendCiOutputs,
   appendStepSummary,
   formatWorkflowCommand,
 } from "#ci/reporter";
-import type { CiReviewPolicy } from "#ci/review-admission";
+import { type CiReviewPolicy, ciReviewSkipLabel } from "#ci/review-admission";
 import {
+  fetchCommitStatusList,
   ghRepoWebUrl,
   repostMarkedPrComment,
   upsertAdmissionCheckRun,
@@ -29,6 +31,8 @@ import {
 import {
   type CiMode,
   COMMIT_STATUS_CONTEXT,
+  type CommitStatusFact,
+  clipStatusDescription,
   prHtmlUrl,
   skipCommitStatusRequest,
 } from "#pr/preflight";
@@ -234,6 +238,175 @@ export async function recordCiAdmissionGateSkip(input: {
   }
 }
 
+// S4 carry-forward (the owner's decision). A head an admission gate skips inherits the verdict of
+// the last reviewed head, so the required check reads what that review decided, never a green the
+// review did not earn. The verdict is the newest pr-hero success or failure on the reviewed head
+// that is not an override.
+//
+// WHY an override is not carried: an override is a human's decision for the code at that head only.
+// The skipped head was never reviewed, so an override carried onto it would turn green with no review.
+// WHY fail closed: a head with no readable verdict (no reviewed head, a failed read, only pending or
+// error rows) writes failure, so a trivial push cannot pass the gate without a verdict behind it.
+// WHY manual-required is always failure: its code was never reviewed, so carrying a green verdict over it
+// would be a bypass. Same-head writes nothing, because that head's own status already exists.
+export type AdmissionStatusReason =
+  | "same-head"
+  | "once-per-pr"
+  | "below-threshold"
+  | "low-risk-delta"
+  | "max-attempts-exhausted"
+  | "manual-only-policy";
+
+export interface AdmissionStatusInput {
+  reason: AdmissionStatusReason;
+  // The head the summary names as reviewed; null when no summary names one.
+  reviewedHead: string | null;
+  // The admission's own blocking-tier count for the reviewed head. It stands in only when the carried
+  // failure's description does not name a count.
+  priorBlocking: number;
+}
+
+export interface AdmissionStatusDecision {
+  state: "success" | "failure";
+  description: string;
+}
+
+type CarriedReason = "once-per-pr" | "below-threshold" | "low-risk-delta";
+
+function isCarriedReason(
+  reason: AdmissionStatusReason,
+): reason is CarriedReason {
+  return (
+    reason === "once-per-pr" ||
+    reason === "below-threshold" ||
+    reason === "low-risk-delta"
+  );
+}
+
+const BLOCKING_COUNT = /^pr-hero: (\d+) blocking finding\(s\)/;
+
+function blockingCountIn(
+  description: string | null | undefined,
+): number | null {
+  const match = BLOCKING_COUNT.exec(description ?? "");
+  if (match === null) return null;
+  const count = Number(match[1]);
+  return count > 0 ? count : null;
+}
+
+// The newest verdict on the head: a success or failure, never an override, of the gate's own context.
+// Newest by created_at, the rule every other reader of this context uses (newestStatusInContext).
+function newestCarriedVerdict(statuses: readonly CommitStatusFact[]) {
+  return newestStatusInContext(
+    statuses.filter(
+      (status) =>
+        (status.state === "success" || status.state === "failure") &&
+        !isOverrideStatus(status),
+    ),
+    COMMIT_STATUS_CONTEXT,
+  );
+}
+
+function failClosed(label: string): AdmissionStatusDecision {
+  return {
+    state: "failure",
+    description: clipStatusDescription(
+      `pr-hero skipped the review (${label}) and found no earlier verdict — /pr-hero review reviews it`,
+    ),
+  };
+}
+
+// What the gate's skip writes on the new head, or null for no write. `statuses` is the reviewed head's
+// status history, or null when it could not be read (or was not read: no reviewed head, or a reason
+// that never carries).
+export function admissionSkipDecision(
+  input: AdmissionStatusInput & {
+    statuses: readonly CommitStatusFact[] | null;
+  },
+): AdmissionStatusDecision | null {
+  switch (input.reason) {
+    case "same-head":
+      return null;
+    case "max-attempts-exhausted":
+      return {
+        state: "failure",
+        description: clipStatusDescription(
+          "pr-hero: review budget for this PR is used up — /pr-hero review reviews this head",
+        ),
+      };
+    case "manual-only-policy":
+      return {
+        state: "failure",
+        description: clipStatusDescription(
+          "pr-hero: review needs a manual trigger (ci_review_policy is manual_only) — /pr-hero review reviews this head",
+        ),
+      };
+    case "once-per-pr":
+    case "below-threshold":
+    case "low-risk-delta":
+      break;
+  }
+  const label = ciReviewSkipLabel(input.reason);
+  if (input.reviewedHead === null || input.statuses === null) {
+    return failClosed(label);
+  }
+  const verdict = newestCarriedVerdict(input.statuses);
+  if (verdict === undefined) return failClosed(label);
+  const sha = input.reviewedHead.slice(0, 7);
+  if (verdict.state === "success") {
+    return {
+      state: "success",
+      description: clipStatusDescription(
+        `pr-hero: no review needed (${label}); carried from ${sha}`,
+      ),
+    };
+  }
+  const blocking =
+    blockingCountIn(verdict.description) ??
+    (input.priorBlocking > 0 ? input.priorBlocking : null);
+  if (blocking === null) return failClosed(label);
+  return {
+    state: "failure",
+    description: clipStatusDescription(
+      `pr-hero: ${blocking} blocking finding(s) carried from ${sha} — fix and push, or /pr-hero override`,
+    ),
+  };
+}
+
+// The status a gate-mode skip writes, or null for none. A size or budget skip is a fixed failure.
+// An admission skip or manual-required is decided by admissionSkipDecision; the reviewed head's history
+// is read only when the verdict carries forward, so same-head and manual-required make no read.
+async function gateSkipDecision(
+  input: {
+    operatorRoot: string;
+    spawnFn?: typeof Bun.spawn;
+    admission?: AdmissionStatusInput;
+    readStatuses?: typeof fetchCommitStatusList;
+  },
+  skip: CliRecord["skip"],
+): Promise<AdmissionStatusDecision | null> {
+  if (skip === "size" || skip === "budget") {
+    const request = skipCommitStatusRequest({
+      kind: skip,
+      targetUrl: undefined,
+      context: COMMIT_STATUS_CONTEXT,
+    });
+    // skipCommitStatusRequest only ever builds a failure; the literal narrows its type.
+    return { state: "failure", description: request.description };
+  }
+  if (input.admission === undefined) return null;
+  const { reason, reviewedHead } = input.admission;
+  const statuses =
+    isCarriedReason(reason) && reviewedHead !== null
+      ? await (input.readStatuses ?? fetchCommitStatusList)(
+          input.operatorRoot,
+          reviewedHead,
+          { spawnFn: input.spawnFn },
+        )
+      : null;
+  return admissionSkipDecision({ ...input.admission, statuses });
+}
+
 // The skip kind a plan stands for, read from the status its outputs carry. The
 // status is a plain string in CiOutputs, so an unknown one yields no kind and no
 // record: a skip the publisher cannot name is not a skip it may report.
@@ -264,11 +437,17 @@ export async function publishCiSkip(input: {
   // status. Absent means no status, which is every caller but the two gates.
   ciMode?: CiMode;
   headSha?: string;
-  // Test-only seams (defaults: the real repostMarkedPrComment and
-  // publishFinalCommitStatus).
+  // The gate's admission skip or manual-required verdict (S4 carry-forward, gate mode only).
+  // Absent means no status: advisory, a non-CI run, and every caller but the gate's two admission skips.
+  admission?: AdmissionStatusInput;
+  // The run's spawnFn, threaded to the status read, the status write and the repo lookup.
+  spawnFn?: typeof Bun.spawn;
+  // Test-only seams (defaults: the real repostMarkedPrComment, publishFinalCommitStatus,
+  // fetchCommitStatusList).
   repost?: typeof repostMarkedPrComment;
   postStatus?: typeof publishFinalCommitStatus;
   repoWebUrl?: typeof ghRepoWebUrl;
+  readStatuses?: typeof fetchCommitStatusList;
 }): Promise<number> {
   log(formatWorkflowCommand("notice", input.noticeMessage));
   // The record names the skip kind only. The plan carries no head, so none is
@@ -298,20 +477,23 @@ export async function publishCiSkip(input: {
   }
   // S4: the head's status is part of "this skip reached the PR", so it is
   // written before the record. A failed write rethrows, leaving no skipped
-  // record behind. Admission skips (coverage, same-head, low-risk,
-  // below-threshold) and manual-required post no status in either mode: an
-  // open decision, not a verdict on the diff.
-  if (
-    input.ciMode === "gate" &&
-    input.headSha !== undefined &&
-    (skip === "size" || skip === "budget")
-  ) {
+  // record behind. Gate mode only: a size or budget skip is a fixed failure, and
+  // an admission skip or manual-required writes the verdict admissionSkipDecision
+  // reaches (the carry-forward above).
+  const decision =
+    input.ciMode === "gate" && input.headSha !== undefined
+      ? await gateSkipDecision(input, skip)
+      : null;
+  if (decision !== null && input.headSha !== undefined) {
     // The run's pull URL, like every other status the CLI writes (T3 advisory
     // 3): a skip is a red check, and the link is how a reader reaches the PR.
     // Best effort: ghRepoWebUrl answers undefined when it cannot, and the status
     // still lands, without a link.
     const targetUrl = prHtmlUrl(
-      await (input.repoWebUrl ?? ghRepoWebUrl)(input.operatorRoot),
+      await (
+        input.repoWebUrl ??
+        ((root: string) => ghRepoWebUrl(root, { spawnFn: input.spawnFn }))
+      )(input.operatorRoot),
       input.prNumber,
     );
     // Gate-only, and gate implies `--ci` (resolveCiPosture), so this is the gate's
@@ -319,11 +501,13 @@ export async function publishCiSkip(input: {
     await (input.postStatus ?? publishFinalCommitStatus)(
       input.operatorRoot,
       input.headSha,
-      skipCommitStatusRequest({
-        kind: skip,
-        targetUrl,
+      {
+        state: decision.state,
+        description: decision.description,
         context: COMMIT_STATUS_CONTEXT,
-      }),
+        targetUrl,
+      },
+      input.spawnFn,
     );
   }
   // Written only once the notice is on the PR, or once the log line is out when

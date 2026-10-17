@@ -422,6 +422,50 @@ export async function postCommitStatus(
 // The description rides along for the override check (src/pr/teardown.ts), which tells
 // an override from a review's own status by it. The in-flight readers ignore it.
 //
+// The head's full status history, every row, newest first, for the CI admission carry-forward
+// (src/pr/admission.ts). It reads the paginated list (`/statuses`), not the combined endpoint:
+// the combined one keeps only the newest row per context, so an override would show in place of
+// the review's own verdict under it. Null on any failure, a malformed row included, so the caller
+// can fail closed; an empty array means the head has no rows at all.
+export async function fetchCommitStatusList(
+  operatorRoot: string,
+  sha: string,
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<CommitStatusFact[] | null> {
+  if (!isFullCommitId(sha)) return null;
+  try {
+    const result = await gh(
+      operatorRoot,
+      [
+        "api",
+        `repos/{owner}/{repo}/commits/${sha}/statuses?per_page=100`,
+        "--jq",
+        ".[]? | {state: .state, context: .context, created_at: .created_at, description: .description}",
+      ],
+      undefined,
+      options?.spawnFn,
+      COMMIT_STATUS_TIMEOUT_MS,
+    );
+    if (!result.ok) return null;
+    const statuses: CommitStatusFact[] = [];
+    for (const line of result.stdout.split("\n")) {
+      if (line.trim() === "") continue;
+      const parsed = JSON.parse(line) as CommitStatusFact;
+      if (
+        typeof parsed.state !== "string" ||
+        typeof parsed.context !== "string" ||
+        typeof parsed.created_at !== "string"
+      ) {
+        return null;
+      }
+      statuses.push(parsed);
+    }
+    return statuses;
+  } catch {
+    return null;
+  }
+}
+
 // Never throws: a 403, a hung gh (timeout), or garbage jq must not take
 // the watch tick down. Unreadable reads as not in-flight.
 export async function fetchCommitStatuses(

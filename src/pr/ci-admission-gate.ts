@@ -301,7 +301,8 @@ export async function evaluateCiAdmissionGate(input: {
         blockingCount: admissionVerdict.prior.blocking,
         advisoryCount: admissionVerdict.prior.advisory,
       });
-      // S4: an admission skip posts no commit status in either mode (open decision).
+      // S4: in gate mode the head inherits the reviewed head's verdict (publishCiSkip,
+      // admissionSkipDecision): a skipped head never reads as one nobody decided about.
       const plan = planCiReviewSkip({
         prNumber,
         verdict: admissionVerdict,
@@ -316,6 +317,14 @@ export async function evaluateCiAdmissionGate(input: {
         stepSummaryFlag: options.stepSummary,
         plan,
         noticeMessage: `pr-hero review skipped — ${skipReason}`,
+        ciMode: input.ciMode,
+        headSha,
+        spawnFn,
+        admission: {
+          reason: admissionVerdict.reason,
+          reviewedHead: summaryHead,
+          priorBlocking: admissionVerdict.prior.blocking,
+        },
       });
       return { ciPolicy, ciPolicyHash, ledgerRecords, exitCode };
     }
@@ -333,7 +342,7 @@ export async function evaluateCiAdmissionGate(input: {
         blockingCount: admissionVerdict.prior.blocking,
         advisoryCount: admissionVerdict.prior.advisory,
       });
-      // S4: manual-required posts no commit status in either mode (open decision).
+      // S4: manual-required is a failure in gate mode: its code was never reviewed.
       const plan = planCiReviewManualRequired({
         prNumber,
         verdict: admissionVerdict,
@@ -348,6 +357,14 @@ export async function evaluateCiAdmissionGate(input: {
         stepSummaryFlag: options.stepSummary,
         plan,
         noticeMessage: `pr-hero review requires manual override — ${manualReason}`,
+        ciMode: input.ciMode,
+        headSha,
+        spawnFn,
+        admission: {
+          reason: admissionVerdict.reason,
+          reviewedHead: summaryHead,
+          priorBlocking: admissionVerdict.prior.blocking,
+        },
       });
       return { ciPolicy, ciPolicyHash, ledgerRecords, exitCode };
     }

@@ -550,11 +550,24 @@ The table shows the status and the job exit for each case:
 | Finished review with unresolved blocking findings (see below) | `failure`: `pr-hero: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
 | Size or budget skip (`/pr-hero review` reviews it anyway) | `failure`: `pr-hero skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
-| Admission skip (coverage, same head, low risk, below threshold) or a manual re-review required | none | none | `0` |
+| Admission skip for a low-risk or below-threshold delta, or once per PR | inherits the reviewed head's verdict (see below): `success` `pr-hero: no review needed (<reason>); carried from <sha>`, or `failure` `pr-hero: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`; with no readable verdict, `failure` `pr-hero skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
+| Same head, already reviewed | none (that head's own status already exists) | none | `0` |
+| Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `pr-hero: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
 Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
 below keep their own status and exit, as they did before the gate.
+
+**A skipped head inherits the verdict of the last reviewed head.** When the admission gate skips a new head as
+a low-risk or below-threshold delta, or once per PR, the head takes the newest `pr-hero` success or failure on
+the reviewed head, read from its full status list. A red verdict stays red, with its count, until the head is
+reviewed (`/pr-hero review`) or overridden. A green one reads as no review needed. An override is never carried:
+it is a human's decision for the code at the head it names, and the skipped head was never reviewed, so carrying
+it would turn a new head green with no review behind it. With no readable verdict (no reviewed head, a failed
+read, or only pending or error rows), the head is `failure` and says so: a trivial push must not pass the gate
+without a verdict behind it. A manual re-review required is always `failure`, because its code was never
+reviewed, and carrying a green verdict over it would let an unreviewed push pass the gate. Advisory mode
+writes no status on a skipped head, as before.
 
 **What counts as unresolved.** The count behind a blocking `failure` is every blocking finding that is still
 open: this run's blocking findings, plus each blocking finding from an earlier review of the PR that has not

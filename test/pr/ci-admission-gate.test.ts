@@ -12,7 +12,9 @@
 // `publishCiSkip` is exercised FOR REAL (no seam): with `options.post` left
 // unset it never touches gh, only the two env-path files GITHUB_STEP_SUMMARY
 // and GITHUB_OUTPUT, so their content is asserted as the real observable
-// instead of a fake's captured args.
+// instead of a fake's captured args. The exception is gate mode, which reads the
+// reviewed head's status history and posts the carried verdict through the same
+// spawnFn (the last describe in this file asserts those calls).
 //
 // Every test runs through withGateEnv, which snapshots and restores all four
 // GitHub Actions env vars this gate reads. bun:test shares one process.env
@@ -1196,5 +1198,145 @@ describe("yieldToInFlightReview", () => {
     expect(logged).toBe("");
     expect(ledger.record.status).toBe("reserved");
     expect(checkRunCalls(calls)).toEqual([]);
+  });
+});
+
+// Carry-forward in gate mode (the owner's decision): a head the admission gate
+// skips inherits the verdict of the last reviewed head, so the required check
+// never reads green on a push nobody reviewed. These run the real gate and
+// publishCiSkip; the only gh boundary is the fake.
+describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the reviewed verdict", () => {
+  const T1 = "2026-10-16T10:00:00Z";
+  const T2 = "2026-10-16T11:00:00Z";
+
+  // HEAD_A was reviewed (summary marker) and a docs-only push HEAD_B arrived. The
+  // risk-aware policy skips HEAD_B as a low-risk delta.
+  function gateScript(statusesEntry: ScriptEntry): ScriptEntry[] {
+    return [
+      EMPTY_CHECK_RUNS,
+      {
+        match: ["issues", "comments"],
+        response: {
+          stdout: `${JSON.stringify(summaryComment(1, HEAD_A, { blocking: 0, advisory: 1 }, 1))}\n`,
+        },
+      },
+      EMPTY_REVIEW_COMMENTS,
+      REPO_VIEW,
+      compareResponse("docs/readme.md"),
+      statusesEntry,
+    ];
+  }
+
+  const statusRows = (rows: Array<Record<string, string>>): ScriptEntry => ({
+    match: [`commits/${HEAD_A}/statuses`],
+    response: {
+      stdout: rows.map((r) => `${JSON.stringify(r)}\n`).join(""),
+    },
+  });
+
+  // Every status write this run made: the POST to the statuses endpoint.
+  function statusWrites(calls: string[][]): string[][] {
+    return calls.filter((argv) =>
+      argv.some((token) => token.startsWith("repos/{owner}/{repo}/statuses/")),
+    );
+  }
+
+  async function runGate(
+    script: ScriptEntry[],
+    ciMode: "gate" | "advisory",
+    calls: string[][],
+  ) {
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    return withGateEnv(
+      { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
+      () =>
+        evaluateCiAdmissionGate({
+          ciMode,
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_B,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions(),
+          spawnFn: makeFakeGh(script, calls),
+          recordSkip: async () => {},
+        }),
+    );
+  }
+
+  test("a docs-only push after a red review posts the red verdict on the new head", async () => {
+    const calls: string[][] = [];
+    const result = await runGate(
+      gateScript(
+        statusRows([
+          {
+            state: "success",
+            context: "pr-hero",
+            created_at: T2,
+            description: "pr-hero: overridden by @alice",
+          },
+          {
+            state: "failure",
+            context: "pr-hero",
+            created_at: T1,
+            description:
+              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          },
+        ]),
+      ),
+      "gate",
+      calls,
+    );
+    expect(result.exitCode).toBe(0);
+    const writes = statusWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
+    expect(writes[0]).toContain("state=failure");
+    expect(writes[0]).toContain("context=pr-hero");
+    expect(writes[0]).toContain(
+      "description=pr-hero: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+    );
+  });
+
+  test("an unreadable reviewed-head history posts a fail-closed failure on the new head", async () => {
+    const calls: string[][] = [];
+    await runGate(
+      gateScript({
+        match: [`commits/${HEAD_A}/statuses`],
+        response: { stdout: "", exitCode: 1 },
+      }),
+      "gate",
+      calls,
+    );
+    const writes = statusWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
+    expect(writes[0]).toContain("state=failure");
+    expect(writes[0]).toContain(
+      "description=pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+    );
+  });
+
+  test("advisory mode reads no history and posts no status on the new head", async () => {
+    const calls: string[][] = [];
+    await runGate(
+      gateScript(
+        statusRows([
+          {
+            state: "failure",
+            context: "pr-hero",
+            created_at: T1,
+            description:
+              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          },
+        ]),
+      ),
+      "advisory",
+      calls,
+    );
+    expect(statusWrites(calls)).toEqual([]);
+    expect(
+      calls.some((argv) => argv.some((t) => t.includes("/statuses?"))),
+    ).toBe(false);
   });
 });

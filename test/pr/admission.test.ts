@@ -16,6 +16,7 @@ import {
 import { ciGateSkipOutputs } from "#ci/gates";
 import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
 import {
+  type AdmissionStatusInput,
   type CiAdmissionLedgerState,
   holdCiAdmissionLedger,
   publishCiSkip,
@@ -23,7 +24,7 @@ import {
   settleCiAdmissionLedger,
   settleHeldAdmissionLedgerOnSignal,
 } from "#pr/admission";
-import type { repostMarkedPrComment } from "#pr/pr";
+import type { fetchCommitStatusList, repostMarkedPrComment } from "#pr/pr";
 import type { publishFinalCommitStatus } from "#pr/status";
 import { CliError } from "../../src/errors";
 
@@ -263,8 +264,9 @@ describe("publishCiSkip: the outcome record", () => {
   );
 
   // S4: in gate mode a size or budget skip is a red head, so the skip posts a
-  // failure status. Admission skips and manual-required post none in either
-  // mode: they are an open decision, not a verdict on the diff.
+  // failure status. An admission skip or a manual-required verdict in gate mode
+  // gets a status too (the decision is in admission.ts, admissionSkipDecision's
+  // WHY): a skipped head must never read as a head nobody decided about.
   describe("commit status in gate mode (S4)", () => {
     const STATUS_HEAD = "d".repeat(40);
     let dir: string;
@@ -309,7 +311,13 @@ describe("publishCiSkip: the outcome record", () => {
     function gateInput(
       status: Parameters<typeof ciGateSkipOutputs>[0],
       postStatus: typeof publishFinalCommitStatus,
-      over: { ciMode?: "gate" | "advisory"; headSha?: string } = {},
+      over: {
+        ciMode?: "gate" | "advisory";
+        headSha?: string;
+        isCi?: boolean;
+        admission?: AdmissionStatusInput;
+        readStatuses?: typeof fetchCommitStatusList;
+      } = {},
     ) {
       return {
         operatorRoot: "/unused",
@@ -374,7 +382,7 @@ describe("publishCiSkip: the outcome record", () => {
       expect(calls).toEqual([]);
     });
 
-    test("an admission skip (coverage) in gate mode posts no status: an open decision", async () => {
+    test("an admission skip without an admission verdict posts no status (other callers)", async () => {
       const calls: StatusCall[] = [];
       await publishCiSkip(
         gateInput("skipped-coverage", recordingStatus(calls)),
@@ -382,10 +390,288 @@ describe("publishCiSkip: the outcome record", () => {
       expect(calls).toEqual([]);
     });
 
-    test("manual-required in gate mode posts no status", async () => {
-      const calls: StatusCall[] = [];
-      await publishCiSkip(gateInput("manual-required", recordingStatus(calls)));
-      expect(calls).toEqual([]);
+    // Carry-forward (the owner's decision): a skipped head inherits the verdict
+    // of the last reviewed head. The reviewed head is read from the summary, the
+    // verdict from its own status list (never the combined endpoint, which would
+    // show an override in place of the failure under it).
+    describe("an admission skip carries the reviewed head's verdict", () => {
+      const REVIEWED_HEAD = "a".repeat(40);
+      const CARRIED_FROM = "carried from aaaaaaa";
+      const T1 = "2026-10-16T10:00:00Z";
+      const T2 = "2026-10-16T11:00:00Z";
+      const BLOCKING_2 =
+        "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override";
+      const OVERRIDE = "pr-hero: overridden by @alice";
+
+      type Row = {
+        state: string;
+        context: string;
+        created_at: string;
+        description?: string | null;
+      };
+      const row = (
+        state: string,
+        description: string,
+        created_at: string,
+        context = "pr-hero",
+      ): Row => ({ state, context, created_at, description });
+
+      // A status reader that records each call and answers with the rows given.
+      function readerWith(rows: Row[] | null) {
+        const reads: string[] = [];
+        const read = async (_root: string, sha: string) => {
+          reads.push(sha);
+          return rows;
+        };
+        return { read, reads };
+      }
+
+      function admissionInput(
+        reason: AdmissionStatusInput["reason"],
+        over: { reviewedHead?: string | null; priorBlocking?: number } = {},
+      ): AdmissionStatusInput {
+        return {
+          reason,
+          reviewedHead:
+            over.reviewedHead === undefined ? REVIEWED_HEAD : over.reviewedHead,
+          priorBlocking: over.priorBlocking ?? 0,
+        };
+      }
+
+      async function skipWith(
+        rows: Row[] | null,
+        reason: AdmissionStatusInput["reason"],
+        over: {
+          reviewedHead?: string | null;
+          priorBlocking?: number;
+          ciMode?: "gate" | "advisory";
+          isCi?: boolean;
+        } = {},
+      ): Promise<{ calls: StatusCall[]; reads: string[] }> {
+        const calls: StatusCall[] = [];
+        const { read, reads } = readerWith(rows);
+        await publishCiSkip(
+          gateInput("skipped-coverage", recordingStatus(calls), {
+            ciMode: over.ciMode ?? "gate",
+            isCi: over.isCi ?? true,
+            admission: admissionInput(reason, over),
+            readStatuses: read,
+          }),
+        );
+        return { calls, reads };
+      }
+
+      test("a low-risk skip carries the reviewed head's failure, with its count, onto the new head", async () => {
+        const { calls } = await skipWith(
+          [row("failure", BLOCKING_2, T1)],
+          "low-risk-delta",
+        );
+        expect(calls).toEqual([
+          {
+            sha: STATUS_HEAD,
+            state: "failure",
+            description: `pr-hero: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+            targetUrl: `${REPO_WEB_URL}/pull/${PR}`,
+          },
+        ]);
+      });
+
+      test("a below-threshold skip carries the reviewed head's success as no review needed", async () => {
+        const { calls } = await skipWith(
+          [row("success", "pr-hero: review posted", T1)],
+          "below-threshold",
+        );
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "success",
+            `pr-hero: no review needed (prior findings below the re-review score floor); ${CARRIED_FROM}`,
+          ],
+        ]);
+      });
+
+      test("an override on the reviewed head is never carried: the failure under it is", async () => {
+        const { calls } = await skipWith(
+          [row("success", OVERRIDE, T2), row("failure", BLOCKING_2, T1)],
+          "low-risk-delta",
+        );
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            `pr-hero: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+          ],
+        ]);
+      });
+
+      test("the newest non-override verdict wins over an older one", async () => {
+        const { calls } = await skipWith(
+          [
+            row("failure", BLOCKING_2, T1),
+            row(
+              "failure",
+              "pr-hero: 3 blocking finding(s) — fix and push, or /pr-hero override",
+              T2,
+            ),
+          ],
+          "low-risk-delta",
+        );
+        expect(calls.map((c) => c.description)).toEqual([
+          `pr-hero: 3 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+        ]);
+      });
+
+      test("a pending or error row, or a row on another context, is no verdict: fail closed", async () => {
+        const { calls } = await skipWith(
+          [
+            row("pending", "pr-hero reviewing", T2),
+            row("error", "review did not finish", T2),
+            row("failure", BLOCKING_2, T1, "pr-hero/local"),
+          ],
+          "low-risk-delta",
+        );
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+          ],
+        ]);
+      });
+
+      test("no reviewed head fails closed, and nothing is read", async () => {
+        const { calls, reads } = await skipWith([], "once-per-pr", {
+          reviewedHead: null,
+        });
+        expect(reads).toEqual([]);
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            "pr-hero skipped the review (once_per_pr policy allows one automatic review) and found no earlier verdict — /pr-hero review reviews it",
+          ],
+        ]);
+      });
+
+      test("a failed status read fails closed rather than inheriting nothing", async () => {
+        const { calls, reads } = await skipWith(null, "low-risk-delta");
+        expect(reads).toEqual([REVIEWED_HEAD]);
+        expect(calls.map((c) => c.state)).toEqual(["failure"]);
+        expect(calls[0]?.description).toContain("found no earlier verdict");
+      });
+
+      test("a reviewed head with no status rows fails closed", async () => {
+        const { calls } = await skipWith([], "low-risk-delta");
+        expect(calls.map((c) => c.state)).toEqual(["failure"]);
+        expect(calls[0]?.description).toContain("found no earlier verdict");
+      });
+
+      test("a carried failure with no count takes the admission's blocking count", async () => {
+        const { calls } = await skipWith(
+          [
+            row(
+              "failure",
+              "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway",
+              T1,
+            ),
+          ],
+          "low-risk-delta",
+          { priorBlocking: 3 },
+        );
+        expect(calls.map((c) => c.description)).toEqual([
+          `pr-hero: 3 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+        ]);
+      });
+
+      test("a carried failure with no count and no blocking count fails closed", async () => {
+        const { calls } = await skipWith(
+          [
+            row(
+              "failure",
+              "pr-hero skipped the review: diff over the size gate. /pr-hero review reviews it anyway",
+              T1,
+            ),
+          ],
+          "low-risk-delta",
+          { priorBlocking: 0 },
+        );
+        expect(calls.map((c) => c.description)).toEqual([
+          "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+        ]);
+      });
+
+      test("an exhausted budget is a failure naming the budget, never a carried green", async () => {
+        const calls: StatusCall[] = [];
+        const { read, reads } = readerWith([
+          row("success", "pr-hero: review posted", T1),
+        ]);
+        await publishCiSkip(
+          gateInput("manual-required", recordingStatus(calls), {
+            admission: admissionInput("max-attempts-exhausted"),
+            readStatuses: read,
+          }),
+        );
+        expect(reads).toEqual([]);
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            "pr-hero: review budget for this PR is used up — /pr-hero review reviews this head",
+          ],
+        ]);
+      });
+
+      test("a manual-only policy is a failure that names the manual trigger", async () => {
+        const calls: StatusCall[] = [];
+        const { read } = readerWith([]);
+        await publishCiSkip(
+          gateInput("manual-required", recordingStatus(calls), {
+            admission: admissionInput("manual-only-policy"),
+            readStatuses: read,
+          }),
+        );
+        expect(calls.map((c) => c.state)).toEqual(["failure"]);
+        expect(calls[0]?.description).toContain("manual_only");
+        expect(calls[0]?.description).toContain(
+          "/pr-hero review reviews this head",
+        );
+      });
+
+      test("a same-head skip writes nothing: its status already exists", async () => {
+        const { calls, reads } = await skipWith(
+          [row("failure", BLOCKING_2, T1)],
+          "same-head",
+        );
+        expect(calls).toEqual([]);
+        expect(reads).toEqual([]);
+      });
+
+      test("advisory mode writes nothing, as today", async () => {
+        const { calls } = await skipWith(
+          [row("failure", BLOCKING_2, T1)],
+          "low-risk-delta",
+          { ciMode: "advisory" },
+        );
+        expect(calls).toEqual([]);
+      });
+
+      test("a run without --ci writes nothing", async () => {
+        const { calls } = await skipWith(
+          [row("failure", BLOCKING_2, T1)],
+          "low-risk-delta",
+          { ciMode: "advisory", isCi: false },
+        );
+        expect(calls).toEqual([]);
+      });
+
+      test("every fail-closed description names the unlock and fits the status limit", async () => {
+        const carried: AdmissionStatusInput["reason"][] = [
+          "once-per-pr",
+          "below-threshold",
+          "low-risk-delta",
+        ];
+        for (const reason of carried) {
+          const { calls } = await skipWith([], reason);
+          const description = calls[0]?.description ?? "";
+          expect(description.endsWith("/pr-hero review reviews it")).toBe(true);
+          expect(description.length).toBeLessThanOrEqual(140);
+        }
+      });
     });
 
     test("a size skip with no known head posts no status, even in gate mode", async () => {

@@ -57,6 +57,17 @@ export interface OverrideStatusFact {
   description?: string | null;
 }
 
+// Whether a status is an override: a successful status whose description carries the override
+// prefix. The override check below and the CI admission carry-forward (src/pr/admission.ts) both
+// read overrides through this one predicate, so they cannot disagree about what an override is.
+export function isOverrideStatus(status: OverrideStatusFact): boolean {
+  return (
+    status.state === "success" &&
+    typeof status.description === "string" &&
+    status.description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)
+  );
+}
+
 // Whether an override stands over a review, given the review's override cutoff. The override
 // stands when the newest OVERRIDE_STATUS_CONTEXT status is a successful override created at or
 // after cutoffMs. A later review has posted its own status since, which is then the newest, so
@@ -80,14 +91,7 @@ export function overrideStandsOverRun(
 ): boolean {
   const latest = newestStatusInContext(statuses, OVERRIDE_STATUS_CONTEXT);
   if (latest === undefined) return false;
-  if (latest.state !== "success") return false;
-  const description = latest.description;
-  if (
-    typeof description !== "string" ||
-    !description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)
-  ) {
-    return false;
-  }
+  if (!isOverrideStatus(latest)) return false;
   const createdMs = Date.parse(latest.created_at);
   if (Number.isNaN(createdMs)) return false;
   return createdMs >= cutoffMs;
