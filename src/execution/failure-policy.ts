@@ -190,6 +190,12 @@ export function resolveFailureCause(
     return { kind: "cause", cause: "watchdog_timeout" };
   }
 
+  // A cause the transport holds as a typed fact beats its witness patterns: the
+  // witness can only spell it, and a generic witness would lose it.
+  if (outcome.failureCause !== undefined) {
+    return { kind: "cause", cause: outcome.failureCause };
+  }
+
   const transportCause = classifyFailure(outcome);
   if (transportCause !== undefined) {
     return { kind: "cause", cause: transportCause };

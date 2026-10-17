@@ -189,9 +189,9 @@ export async function settleCommitStatusAndLedger(input: {
     ...(input.result?.hunterCount === undefined
       ? {}
       : { hunterCount: input.result.hunterCount }),
-    ...(input.result?.hunterFailures === undefined
+    ...(input.result?.hunterFailedCount === undefined
       ? {}
-      : { hunterFailures: input.result.hunterFailures }),
+      : { hunterFailures: input.result.hunterFailedCount }),
   });
   const request =
     completion.phase === "failure"

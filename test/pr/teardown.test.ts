@@ -303,7 +303,7 @@ describe("settleCommitStatusAndLedger — a partial review is red in gate mode (
     ({
       sessionFailed,
       hunterCount: 4,
-      hunterFailures,
+      hunterFailedCount: hunterFailures,
     }) as unknown as PipelineResult;
 
   const PARTIAL_DESCRIPTION =

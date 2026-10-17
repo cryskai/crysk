@@ -66,6 +66,7 @@ import {
   parseTriggerRecord,
   renderCode,
   renderError,
+  renderHunterCause,
   STATUS_DESCRIPTION_MAX,
 } from "./outcome";
 import {
@@ -322,11 +323,7 @@ function decideCliOutcome(
     case "hunters-failed":
       return remoteOrLocal(
         record,
-        renderCode(
-          "PRH-HUNTERS-FAILED",
-          { ...runParams, step: REVIEW_STEP, detail: HUNTERS_DETAIL },
-          "action",
-        ),
+        huntersFailedRendering(cliRecord, runParams),
         cliRecord.head_sha ?? record.head_sha,
       );
     case "error":
@@ -369,6 +366,47 @@ function unsettledStatusOf(
       targetUrl: record.run_url,
     },
   };
+}
+
+// The rendering of a hunters-failed run. WHY every hunter and not any: a run whose
+// hunters failed for one known cause on the provider's or the configuration's side has
+// nothing else to fix, so that cause's own code and owner are rendered. The provider
+// and the model are named only when every entry agrees on them. A mix of causes, an
+// entry with no cause, or a cause with no code of its own (runtime_unavailable) keeps
+// the generic code, since no single cause explains the run.
+function huntersFailedRendering(
+  cliRecord: CliRecord,
+  runParams: ErrorParams,
+): RenderedError {
+  const failures = cliRecord.hunter_failures ?? [];
+  const cause = sharedValue(failures.map((failure) => failure.cause));
+  if (cause !== undefined) {
+    const rendered = renderHunterCause(
+      cause,
+      {
+        ...runParams,
+        step: REVIEW_STEP,
+        detail: HUNTERS_DETAIL,
+        provider: sharedValue(failures.map((failure) => failure.provider)),
+        model: sharedValue(failures.map((failure) => failure.model)),
+      },
+      "action",
+    );
+    if (rendered !== undefined) return rendered;
+  }
+  return renderCode(
+    "PRH-HUNTERS-FAILED",
+    { ...runParams, step: REVIEW_STEP, detail: HUNTERS_DETAIL },
+    "action",
+  );
+}
+
+// The one value every entry names, or undefined when they name none or differ.
+function sharedValue<T>(values: readonly (T | undefined)[]): T | undefined {
+  const distinct = new Set(values);
+  if (distinct.size !== 1) return undefined;
+  const [only] = distinct;
+  return only;
 }
 
 // The one place an outcome becomes a plan: the annotation and summary always, and

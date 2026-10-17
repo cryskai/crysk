@@ -692,7 +692,7 @@ describe("hunter fan-out", () => {
     });
     const result = await runPipeline(await makeInput(), { runner });
     expect(result.hunterCount).toBe(2);
-    expect(result.hunterFailures).toBe(1);
+    expect(result.hunterFailedCount).toBe(1);
   });
 
   test("ALL hunters failing sets sessionFailed", async () => {
