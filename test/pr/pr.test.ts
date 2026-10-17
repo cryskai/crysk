@@ -1643,6 +1643,27 @@ describe("resolveReviewThreadForComment", () => {
 });
 
 describe("postCommitStatus", () => {
+  test("returns the created_at GitHub answered with, for the cancel settle's identity (SB3)", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["statuses", HEAD],
+        response: {
+          stdout: '{"id":1,"created_at":"2026-10-17T10:00:00Z"}',
+          exitCode: 0,
+        },
+      },
+    ]);
+    const request = commitStatusRequest({
+      phase: "pending",
+      posted: false,
+      targetUrl: undefined,
+      context: COMMIT_STATUS_CONTEXT,
+    });
+    expect(await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn)).toBe(
+      "2026-10-17T10:00:00Z",
+    );
+  });
+
   test("POSTs state, context, description and target_url as -f fields, not argv prose", async () => {
     const { spawnFn, calls } = makeFakeGh([
       {

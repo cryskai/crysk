@@ -94,6 +94,7 @@ one observation of the PR. S7 invariants are checked on every observation.
 | `override` | A red gate on a reviewed head is unlocked by `/pr-hero override` (S8): the status turns `success` with the actor's name, and an audit comment is posted on that head, with no review and no cost. | Phase 1 (`normal` variant): path `reviewed`; the run's review step succeeded; the status matches the blocking findings; a report; no outcome comment. Phase 2 (`/pr-hero override`): the comment run completed; the head's status is `success` with a description that starts `pr-hero: overridden by @`; the run posted an `<!-- pr-hero-override` comment on that head, after its trigger. | $0 (phase 1 on the claude route; phase 2 reaches no model) |
 | `size-skip` | In gate mode, a diff over the size gate sets a red head, and `/pr-hero review` reviews that same head. | Phase 1 (`size-skip` variant, `max-changed-lines: 1`): path `skipped:size`; status `failure` with a description that starts `pr-hero skipped the review`; no report. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own evidence; path `reviewed`. | $0 (phase 1 reaches no model; phase 2 on the claude route) |
 | `recheck-dismissal` | A false dismissal does not turn the gate green: `/pr-hero recheck` has the CI adjudicator rule on the dismissal, and the finding still counts (T5b, D5). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings. Phase 2 (a `dismissed` reply on the first blocking finding's thread, then `/pr-hero recheck`): the comment run completed; its review step succeeded; the head's status is still `failure`; this run posted a CI adjudication reply (`<!-- pr-hero-adjudication`) whose verdict is `rejected` or `inconclusive`. | $0 (claude route, subscription quota) |
+| `cancel` | A review run cancelled mid-review leaves the `pr-hero` status settled, not pending (SB3). | Phase 1 (normal): the run is cancelled while the head's `pr-hero` status is pending; the run concluded `cancelled`; the status is not pending. | Up to one cancelled review (cost not measured) |
 
 **Gate status.** `review-free` and `cleanup` do not pin the status to one state, because the free model
 finds different things from run to run. Their check, `status matches the blocking findings`, requires
@@ -174,6 +175,5 @@ once, so a scaffold change fails the run loudly instead of testing a different w
 
 ## Pending
 
-SB3 is not built yet: a `cancel` probe (what the `pr-hero` status shows when a run is
-cancelled, which answers the #162 question), `stale-tmp`, and `rerun-after-push`. The
-`timeout` scenario waits for the cancel probe's answer.
+SB3 is not built yet: `stale-tmp` and `rerun-after-push`. The `timeout` scenario can now
+build on the `cancel` probe.

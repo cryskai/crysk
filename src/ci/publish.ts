@@ -49,7 +49,7 @@
 // repostMarkedPrComment in src/pr/pr.ts, which made the same choice for the skip
 // notice on #315). Posting first means a failed POST deletes nothing.
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type {
   CliRecord,
@@ -61,6 +61,7 @@ import type {
 import {
   CLI_RECORD_FILE,
   OUTCOME_MARKER_PREFIX,
+  PENDING_AT_FILE,
   parseCliRecord,
   parseSetupRecord,
   parseTriggerRecord,
@@ -482,10 +483,60 @@ function renderRecordOutcome(
 
 // One line, `<CODE>: <what>`, clipped to the status limit.
 function statusDescription(rendered: RenderedError): string {
-  const line = `${rendered.code}: ${rendered.what}`.replace(/\s+/g, " ");
+  return clipStatusDescription(`${rendered.code}: ${rendered.what}`);
+}
+
+// The one clipping rule of a status description: one line, at most the status limit.
+function clipStatusDescription(text: string): string {
+  const line = text.replace(/\s+/g, " ");
   return line.length > STATUS_DESCRIPTION_MAX
     ? line.slice(0, STATUS_DESCRIPTION_MAX)
     : line;
+}
+
+// The status a cancelled review settles its own pending on (SB3). A cancel kills the CLI
+// before its signal settle lands, so the publisher writes this instead of leaving the head
+// pending. It names the cancel and the way to review the head again.
+export const CANCELLED_STATUS_DESCRIPTION =
+  "PRH-CANCELLED: not reviewed — /pr-hero review reviews this head";
+
+// WHY an exact match (review #347 rounds 1-3): the CLI records the created_at GitHub returned
+// for its own pending (PENDING_AT_FILE, written once the pending landed). The settle
+// overwrites the head's newest pending only when its created_at is exactly that time, so
+// another run's pending (a Force Review beside a push run on the same head) is never
+// touched, however close in time it was posted. No record of the pending means this run's
+// pending never landed, or the CLI died first, and there is nothing of this run's to settle.
+// Known residual (Juanma chose B on #347): a cancel that lands in the milliseconds between
+// the pending committing on GitHub and this record being written leaves the head pending,
+// as every cancel did before this step existed; and created_at has whole-second precision,
+// so two pendings posted in one second on one head are not told apart. A run-specific
+// identity on the pending status (its target_url) is the follow-up that closes both.
+// Any CLI record that names a head is this run's lock on it: the CLI rewrites its record
+// (reviewing, then reviewed or hunters-failed) before its final status.
+export function decideCancelSettle(input: {
+  record: CliRecord | undefined;
+  latest: { state: string; created_at: string } | undefined;
+  pendingAt: string | undefined;
+}): { settle: true; headSha: string } | { settle: false; reason: string } {
+  const record = input.record;
+  if (record === undefined || record.head_sha === undefined) {
+    return { settle: false, reason: "no review lock in this run" };
+  }
+  if (input.latest?.state !== "pending") {
+    return {
+      settle: false,
+      reason: "the head's pr-hero status is not pending",
+    };
+  }
+  const own = input.pendingAt;
+  if (
+    own === undefined ||
+    Date.parse(input.latest.created_at) !== Date.parse(own) ||
+    !Number.isFinite(Date.parse(own))
+  ) {
+    return { settle: false, reason: "the pending status is not this run's" };
+  }
+  return { settle: true, headSha: record.head_sha };
 }
 
 // ---------------------------------------------------------------------------
@@ -1284,10 +1335,84 @@ export function runPublish(deps: PublishDeps): number {
   return exitCode;
 }
 
+// The settle of a cancelled review (SB3). It runs in the cancelled job only, after publish,
+// and it never fails the job: a cancel is not a failure, and a status it cannot write is a
+// warning. Its only write is this run's own pending on the head the CLI locked.
+export function runCancelSettle(deps: PublishDeps): number {
+  const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
+  if (dir === "") return 0;
+  const record = readCliRecord(dir);
+  // Guarded like readCliRecord: this step must exit 0 whatever the file system does.
+  let pendingAt: string | undefined;
+  try {
+    pendingAt = readIfExists(path.join(dir, PENDING_AT_FILE))?.trim();
+  } catch {
+    pendingAt = undefined;
+  }
+  const repository = deps.env.GITHUB_REPOSITORY ?? "";
+  const head = record?.head_sha;
+  let latest: { state: string; created_at: string } | undefined;
+  if (head !== undefined) {
+    const read = readHeadStatuses(deps, repository, head);
+    if (!read.ok) {
+      deps.stdout(
+        workflowCommand(
+          "warning",
+          "could not read the head's status after the cancel; the pr-hero status may stay pending",
+        ),
+      );
+      return 0;
+    }
+    latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
+  }
+  const decision = decideCancelSettle({
+    record,
+    latest,
+    pendingAt: pendingAt === "" ? undefined : pendingAt,
+  });
+  if (!decision.settle) {
+    deps.stdout(
+      workflowCommand(
+        "notice",
+        `cancel: nothing to settle (${decision.reason})`,
+      ),
+    );
+    return 0;
+  }
+  const serverUrl = deps.env.GITHUB_SERVER_URL || "https://github.com";
+  const runUrl = `${serverUrl}/${repository}/actions/runs/${deps.env.GITHUB_RUN_ID ?? ""}`;
+  const status = postStatus(deps, repository, decision.headSha, {
+    state: "error",
+    context: STATUS_CONTEXT,
+    description: clipStatusDescription(CANCELLED_STATUS_DESCRIPTION),
+    targetUrl: runUrl,
+  });
+  if (status.ok) {
+    deps.stdout(
+      workflowCommand(
+        "notice",
+        "the review was cancelled; the pr-hero status is now PRH-CANCELLED",
+      ),
+    );
+  } else {
+    deps.stdout(
+      workflowCommand(
+        "warning",
+        "could not settle the cancelled review's pr-hero status; it may stay pending",
+      ),
+    );
+  }
+  return 0;
+}
+
 if (import.meta.main) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY ?? "";
+  const run =
+    process.env.PRHERO_PUBLISH_MODE === "cancelled"
+      ? runCancelSettle
+      : runPublish;
   process.exit(
-    runPublish({
+    run({
       env: process.env,
       gh: (args, stdin) => {
         // WHY the catch: Bun throws, rather than returning, when gh is not on

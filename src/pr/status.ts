@@ -114,9 +114,16 @@ export async function tryPublishCommitStatus(
   sha: string,
   request: ReturnType<typeof commitStatusRequest>,
   spawnFn?: typeof Bun.spawn,
+  onCreatedAt?: (createdAt: string) => void,
 ): Promise<boolean> {
   try {
-    await postCommitStatus(operatorRoot, sha, request, spawnFn);
+    const createdAt = await postCommitStatus(
+      operatorRoot,
+      sha,
+      request,
+      spawnFn,
+    );
+    if (createdAt !== undefined) onCreatedAt?.(createdAt);
     return true;
   } catch (error) {
     log(

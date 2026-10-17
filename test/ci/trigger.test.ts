@@ -20,7 +20,11 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { CI_REVIEW_COMMENT, CI_REVIEW_FULL_COMMENT } from "#ci/force-comment";
-import { parseTriggerRecord, type TriggerRecord } from "#ci/outcome";
+import {
+  PENDING_AT_FILE,
+  parseTriggerRecord,
+  type TriggerRecord,
+} from "#ci/outcome";
 import {
   type CiTriggerDecision,
   type CiTriggerInput,
@@ -1627,7 +1631,10 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, "cli-started"), "");
       writeFileSync(path.join(dir, "setup.json"), "{}");
+      // SB3: an older run's pending identity would let the cancel settle trust its pending.
+      writeFileSync(path.join(dir, PENDING_AT_FILE), "2026-10-17T10:00:00Z\n");
       runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      expect(existsSync(path.join(dir, PENDING_AT_FILE))).toBe(false);
       expect(existsSync(path.join(dir, "cli-started"))).toBe(false);
       expect(existsSync(path.join(dir, "setup.json"))).toBe(false);
       expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);

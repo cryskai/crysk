@@ -316,6 +316,26 @@ runs:
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
+    # WHY a separate step: the publish step is !cancelled() on purpose (a
+    # superseded run must not report a failure it never had), and a cancelled
+    # run kills the CLI before its own signal settle lands, which left the
+    # pr-hero status pending forever (sandbox `cancel` probe, SB3). This step
+    # runs only on a cancel, and settles only this run's own pending on the head
+    # the CLI locked, as PRH-CANCELLED.
+    - name: Settle a cancelled review
+      id: cancel-settle
+      if: ${{ cancelled() && steps.trigger.outputs.run == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        # The run id builds the status's target URL. The lock is this run's
+        # because the trigger clears the outcome directory at job start.
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        PRHERO_PUBLISH_MODE: cancelled
+      run: bun "${{ github.action_path }}/src/ci/publish.ts"
+
     # Without this step the triage half of the review loop has no input.
     # `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N` is the
     # ONLY supported way to answer a posted finding, and `--from` REQUIRES a

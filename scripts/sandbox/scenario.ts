@@ -55,6 +55,7 @@ import {
   type ScenarioResult,
 } from "./report";
 import {
+  cancelRun,
   cancelTiming,
   findLiveRuns,
   Interrupted,
@@ -875,6 +876,8 @@ async function waitForRun(
   options: RunOptions,
   stop: Stop,
 ): Promise<{ completed: boolean; run?: RunListItem }> {
+  // SB3: the cancel is sent once per phase, while the head's gate reads pending.
+  let cancelSent = false;
   const polled = await pollUntil(
     deps,
     stop,
@@ -889,6 +892,36 @@ async function waitForRun(
           databaseId: run.databaseId,
           completed: run.status === "completed",
         };
+        if (
+          phase.cancelWhenPending === true &&
+          run.status !== "completed" &&
+          !cancelSent
+        ) {
+          const headSha = live.headSha;
+          if (headSha !== undefined) {
+            let gateState: string | undefined;
+            try {
+              const combined = await ghJson<{
+                statuses: { context: string; state: string }[];
+              }>(deps, [
+                "api",
+                `repos/${SANDBOX_REPO}/commits/${headSha}/status`,
+              ]);
+              gateState = combined.statuses.find(
+                (s) => s.context === STATUS_CONTEXT,
+              )?.state;
+            } catch {
+              // A failed status read is retried on the next tick.
+            }
+            if (gateState === "pending") {
+              await cancelRun(deps, run.databaseId);
+              cancelSent = true;
+              deps.log(
+                `cancel sent to run ${run.databaseId} while the gate was pending`,
+              );
+            }
+          }
+        }
       }
       return run;
     },

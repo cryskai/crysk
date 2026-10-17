@@ -669,12 +669,20 @@ function runIdentity(deps: CiTriggerDeps): RunIdentity {
 const CLI_STARTED_MARKER = "cli-started";
 const SETUP_RECORD = "setup.json";
 const CLI_RECORD = "cli.json";
+// The CLI's pending identity (src/ci/outcome.ts PENDING_AT_FILE, pinned equal by a test). A
+// stale one would let the cancel settle trust an older run's pending.
+const PENDING_AT = "pending-at";
 
 function clearStaleMarkers(dir: string, fs: OutcomeFs): void {
   // The markers the publisher reads stay strict: a stale one would mislead it.
   // Temp files are not cleared here: each write's temp name is unique, so no
   // stale one can collide with it (see recordTempPath).
-  for (const name of [CLI_STARTED_MARKER, SETUP_RECORD, CLI_RECORD]) {
+  for (const name of [
+    CLI_STARTED_MARKER,
+    SETUP_RECORD,
+    CLI_RECORD,
+    PENDING_AT,
+  ]) {
     fs.remove(path.join(dir, name));
   }
 }

@@ -48,6 +48,10 @@ export type Check =
   | { kind: "no-run-evidence" }
   // D3: this head's report carries a state-block row located in `path`.
   | { kind: "state-row-at"; path: string }
+  // SB3: the phase's run concluded this way.
+  | { kind: "run-conclusion"; conclusion: string }
+  // SB3: the head's pr-hero status exists and is not pending, so a cancelled run leaves no stuck gate.
+  | { kind: "status-settled" }
   // T5b: this run posted a CI adjudication reply whose verdict is one of `accept`.
   | { kind: "adjudication-reply"; accept: readonly string[] };
 
@@ -101,6 +105,10 @@ export function describeCheck(check: Check): string {
       return "the run left no review evidence of its own";
     case "state-row-at":
       return `state row at ${check.path}`;
+    case "run-conclusion":
+      return `run concluded ${check.conclusion}`;
+    case "status-settled":
+      return "pr-hero status is settled (not pending)";
     case "adjudication-reply":
       return `CI adjudication reply is one of ${check.accept.join("/")}`;
   }
@@ -349,6 +357,22 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       return pass(
         rows.includes(check.path),
         `no state row at ${check.path} (state rows: ${rows.join(", ") || "none"})`,
+      );
+    }
+    case "run-conclusion": {
+      const concluded = obs.run?.conclusion;
+      return pass(
+        concluded === check.conclusion,
+        `concluded ${obs.run?.conclusion ?? "none"}`,
+      );
+    }
+    case "status-settled": {
+      const status = obs.status;
+      return pass(
+        status !== undefined && status.state !== "pending",
+        status === undefined
+          ? "no pr-hero status"
+          : `${status.state}: ${status.description}`,
       );
     }
     case "adjudication-reply": {

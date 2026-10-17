@@ -56,6 +56,8 @@ export interface Phase {
   // finding comment, such as a re-run on the same head that must keep a red gate
   // red. Otherwise they are not asserted, and the runner says why.
   afterPriorBlocking?: readonly Check[];
+  // SB3: once this phase's run is in progress and the head's pr-hero status is pending, cancel the run, then wait for it to complete as usual.
+  cancelWhenPending?: true;
 }
 
 export interface Scenario {
@@ -409,6 +411,22 @@ export const SCENARIOS: readonly Scenario[] = [
         afterPriorBlocking: [
           { kind: "status", state: "failure" },
           { kind: "adjudication-reply", accept: ["rejected", "inconclusive"] },
+        ],
+      },
+    ],
+  },
+  {
+    name: "cancel",
+    description:
+      "a review run cancelled mid-review leaves the pr-hero status settled, not pending (SB3)",
+    phases: [
+      {
+        action: { kind: "open", variant: "normal" },
+        wait: "pull_request",
+        cancelWhenPending: true,
+        checks: [
+          { kind: "run-conclusion", conclusion: "cancelled" },
+          { kind: "status-settled" },
         ],
       },
     ],

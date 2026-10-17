@@ -4,6 +4,7 @@
 // fact the runner cannot observe fails here rather than in a live run.
 
 import { describe, expect, test } from "bun:test";
+import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
 import { evaluateCheck, evaluateChecks } from "../../scripts/sandbox/expect";
 import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
 import {
@@ -614,6 +615,35 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
         },
         { source: "inline", kind: "finding", blocking: true, head: NEW },
       ],
+    }),
+  },
+  // SB3: a review run cancelled mid-review concludes cancelled, and the settle writes
+  // the head's status as error, not pending.
+  "cancel/0": {
+    pass: obs({
+      run: {
+        id: 42,
+        event: "pull_request",
+        status: "completed",
+        conclusion: "cancelled",
+        steps: [],
+      },
+      status: { state: "error", description: CANCELLED_STATUS_DESCRIPTION },
+      comments: [],
+      artifacts: [],
+    }),
+    // The run was cancelled but its status was left pending: the stuck gate SB3 looks for.
+    fail: obs({
+      run: {
+        id: 42,
+        event: "pull_request",
+        status: "completed",
+        conclusion: "cancelled",
+        steps: [],
+      },
+      status: { state: "pending", description: "pr-hero reviewing" },
+      comments: [],
+      artifacts: [],
     }),
   },
   // T5b: a blocking finding the reviewer posted; the scenario's reply dismisses it, and
@@ -1253,5 +1283,70 @@ describe("adjudication-reply: this run posted a CI adjudication reply with an ac
       commented(comment("rejected", "2026-10-16T12:00:00Z")),
     );
     expect(result.pass).toBe(false);
+  });
+});
+
+describe("SB3: run-conclusion and status-settled (cancel probe)", () => {
+  const cancelled = {
+    kind: "run-conclusion",
+    conclusion: "cancelled",
+  } as const;
+  const settled = { kind: "status-settled" } as const;
+  const cancelledRun = {
+    id: 42,
+    event: "pull_request",
+    status: "completed",
+    conclusion: "cancelled",
+    steps: [] as { name: string; conclusion: string | null }[],
+  };
+
+  test("run-conclusion passes on the concluded value and fails on another", () => {
+    expect(
+      evaluateCheck(cancelled, obs({ run: { ...cancelledRun } })).pass,
+    ).toBe(true);
+    const succeeded = evaluateCheck(
+      cancelled,
+      obs({ run: { ...cancelledRun, conclusion: "success" } }),
+    );
+    expect(succeeded.pass).toBe(false);
+    expect(succeeded.detail).toBe("concluded success");
+  });
+
+  test("run-conclusion names the missing run when there is none", () => {
+    const result = evaluateCheck(cancelled, obs({ run: undefined }));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("concluded none");
+  });
+
+  test("status-settled passes on a non-pending status and fails on pending", () => {
+    expect(
+      evaluateCheck(
+        settled,
+        obs({
+          status: { state: "error", description: "review did not finish" },
+        }),
+      ).pass,
+    ).toBe(true);
+    const pending = evaluateCheck(
+      settled,
+      obs({ status: { state: "pending", description: "pr-hero reviewing" } }),
+    );
+    expect(pending.pass).toBe(false);
+    expect(pending.detail).toBe("pending: pr-hero reviewing");
+  });
+
+  test("status-settled fails when no pr-hero status exists", () => {
+    const result = evaluateCheck(settled, obs({ status: undefined }));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("no pr-hero status");
+  });
+
+  test("their labels name what is asserted", () => {
+    expect(evaluateCheck(cancelled, obs()).label).toBe(
+      "run concluded cancelled",
+    );
+    expect(evaluateCheck(settled, obs()).label).toBe(
+      "pr-hero status is settled (not pending)",
+    );
   });
 });

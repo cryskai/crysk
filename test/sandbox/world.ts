@@ -12,6 +12,7 @@
 // outcome comments of earlier runs. Live runs are the proof of the product; this
 // fake is the proof of the runner's sequencing and its reads.
 
+import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
 import {
   blockingCommitStatusRequest,
   skipCommitStatusRequest,
@@ -68,6 +69,8 @@ interface RunRow {
   // gh's displayTitle: a PR-triggered run shows its PR's title, and so does a
   // comment run started on that PR (checked against GitHub, pr-hero-sandbox).
   displayTitle: string;
+  // SB3: stays in progress until a cancel, with the head's status pending.
+  pendingUntilCancel?: boolean;
   createdAt: string;
   // A near miss's trigger decided it runs nothing, so its run uploads no artifact.
   // Its step conclusion is success, as GitHub reports the composite step.
@@ -181,6 +184,13 @@ export interface WorldOptions {
   stuckCommentRuns?: boolean;
   // A cancel is accepted but the run keeps going: a run that outlives the cancel too.
   ignoreCancel?: boolean;
+  // SB3: a pull_request run stays in progress with the head's pr-hero status pending
+  // until a `run cancel` arrives; the cancel completes it as cancelled and the head's
+  // status becomes error PRH-CANCELLED (the publisher's cancel settle, runCancelSettle).
+  pendingThenCancellable?: boolean;
+  // SB3: with pendingThenCancellable, the cancel completes the run but leaves the head's
+  // status pending: the stuck gate the cancel probe must catch.
+  cancelLeavesPending?: boolean;
   // An issue_comment run that skips on size: it posts the skip marker, and nothing
   // else (no report, no outcome, no artifact).
   commentRunsSkipSize?: boolean;
@@ -383,8 +393,11 @@ export class FakeGithub {
       failed ||
       (outcome === "review" && this.options.stepFailsOnReview === true);
     const displayTitle = this.prs.get(prNumber)?.title ?? "";
+    const pendingUntilCancel =
+      event === "pull_request" && this.options.pendingThenCancellable === true;
     const stuck =
-      event === "issue_comment" && this.options.stuckCommentRuns === true;
+      (event === "issue_comment" && this.options.stuckCommentRuns === true) ||
+      pendingUntilCancel;
     this.runs.push({
       displayTitle,
       createdAt: this.stamp(),
@@ -403,7 +416,14 @@ export class FakeGithub {
       prNumber,
       reviewSha,
       ...(outcome === "near-miss" ? { nearMiss: true as const } : {}),
+      ...(pendingUntilCancel ? { pendingUntilCancel: true } : {}),
     });
+    if (pendingUntilCancel) {
+      this.statuses.set(headSha, {
+        state: "pending",
+        description: "pr-hero reviewing",
+      });
+    }
     if (stuck) {
       this.events.push(`run ${id} ${event} in_progress`);
       return;
@@ -658,6 +678,15 @@ export class FakeGithub {
       if (this.options.ignoreCancel === true) return ok();
       run.status = "completed";
       run.conclusion = "cancelled";
+      if (
+        run.pendingUntilCancel === true &&
+        this.options.cancelLeavesPending !== true
+      ) {
+        this.statuses.set(run.headSha, {
+          state: "error",
+          description: CANCELLED_STATUS_DESCRIPTION,
+        });
+      }
       return ok();
     }
     if (verb === "run" && sub === "view") {

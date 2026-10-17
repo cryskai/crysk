@@ -44,6 +44,7 @@ import {
   type CliRecord,
   type HunterFailureRecord,
   knownTransportCause,
+  PENDING_AT_FILE,
   parseCliRecord,
   safeModelName,
   safeProviderName,
@@ -132,6 +133,24 @@ export function hunterFailureRecords(
     if (model !== undefined) entry.model = model;
     return entry;
   });
+}
+
+// SB3: the pending's own identity, written once it landed. The cancel settle compares the
+// head's newest pending with this exact time, so it never overwrites another run's pending.
+// Never throws, and writes nothing outside action mode.
+export function recordPendingCreatedAt(
+  createdAt: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  if (dir === "") return;
+  try {
+    writeRecordAtomically(dir, PENDING_AT_FILE, `${createdAt}\n`, NODE_FS);
+  } catch (error) {
+    process.stderr.write(
+      `pr-hero: could not write the pending record: ${errnoCode(error)}\n`,
+    );
+  }
 }
 
 // The delivery writer: publishRunOutcome calls it once the review is delivered (see the
