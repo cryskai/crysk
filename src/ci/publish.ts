@@ -869,49 +869,72 @@ const SETTLED_STATES: ReadonlySet<string> = new Set([
   "failure",
 ]);
 
+// The result of reading the head's statuses. A failed read and an empty answer are different
+// things: an empty answer says the head has no statuses, a failed read says nothing about them.
+type HeadStatusRead =
+  | { ok: true; statuses: OverrideStatusFact[] }
+  | { ok: false };
+
 // The head's statuses, as the combined-status endpoint returns them, read through this step's
-// own gh seam in one attempt. A failed read is undefined. WHY per_page=100: the combined
+// own gh seam in one attempt. A failed gh call is { ok: false }. WHY per_page=100: the combined
 // endpoint pages at 30 contexts by default, and a busy head's pr-hero row can sit past the
-// first page. A row the parse cannot read is skipped. The description is read too, for the
-// override rule.
+// first page. The description is read too, for the override rule.
+//
+// The two callers differ on a row the parse cannot read, so the caller names the mode:
+// - "fail" (the override check before a repost): that row could be the override the check is
+//   looking for, so dropping it would read a head with an override as one without. A corrupt
+//   answer is a failed read, not a partial one.
+// - "skip" (the reviewing path): the row is dropped and the rest read, as before. A corrupt row
+//   must never turn a settled head into an error overwrite; only a failed gh call is unknown.
 function readHeadStatuses(
   deps: PublishDeps,
   repo: string,
   sha: string,
-): OverrideStatusFact[] | undefined {
+  malformedRows: "fail" | "skip",
+): HeadStatusRead {
   const read = deps.gh([
     "api",
     `repos/${repo}/commits/${sha}/status?per_page=100`,
     "--jq",
     ".statuses[]? | [.context, .state, .created_at, .description] | @json",
   ]);
-  if (read.exitCode !== 0) return undefined;
+  if (read.exitCode !== 0) return { ok: false };
   const statuses: OverrideStatusFact[] = [];
   for (const line of read.stdout.split("\n")) {
     if (line.trim() === "") continue;
-    let value: unknown;
-    try {
-      value = JSON.parse(line);
-    } catch {
+    const row = parseStatusRow(line);
+    if (row === undefined) {
+      if (malformedRows === "fail") return { ok: false };
       continue;
     }
-    if (!Array.isArray(value)) continue;
-    const [context, state, createdAt, description] = value;
-    if (
-      typeof context !== "string" ||
-      typeof state !== "string" ||
-      typeof createdAt !== "string"
-    ) {
-      continue;
-    }
-    statuses.push({
-      context,
-      state,
-      created_at: createdAt,
-      description: typeof description === "string" ? description : undefined,
-    });
+    statuses.push(row);
   }
-  return statuses;
+  return { ok: true, statuses };
+}
+
+// One --jq row as an override fact, or undefined when the line does not parse to one.
+function parseStatusRow(line: string): OverrideStatusFact | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(value)) return undefined;
+  const [context, state, createdAt, description] = value;
+  if (
+    typeof context !== "string" ||
+    typeof state !== "string" ||
+    typeof createdAt !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    context,
+    state,
+    created_at: createdAt,
+    description: typeof description === "string" ? description : undefined,
+  };
 }
 
 // The head's newest pr-hero status, as the three states the table needs. The newest row is
@@ -922,9 +945,9 @@ function readLatestCliStatusState(
   repo: string,
   sha: string,
 ): LatestStatusState {
-  const statuses = readHeadStatuses(deps, repo, sha);
-  if (statuses === undefined) return "unknown";
-  const latest = newestStatusInContext(statuses, STATUS_CONTEXT);
+  const read = readHeadStatuses(deps, repo, sha, "skip");
+  if (!read.ok) return "unknown";
+  const latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
   if (latest === undefined) return "unknown";
   if (latest.state === "pending") return "pending";
   return SETTLED_STATES.has(latest.state) ? "settled" : "unknown";
@@ -933,9 +956,11 @@ function readLatestCliStatusState(
 // Whether an override posted during the run stands over the repost of the CLI's unsettled
 // status (overrideStandsOverRun, src/ci/override.ts). WHY it is read here: the CLI's final
 // write failed, so its own status reads may have failed too, and the override may not have
-// been seen by the CLI. A failed read, or a record with no cutoff to judge against, is no
-// evidence of an override, so the repost goes ahead as before. The status reposted is the
-// review's own verdict, so a failed review's failure is reposted as a failure.
+// been seen by the CLI. A record with no cutoff to judge against is no evidence of an override,
+// so the repost goes ahead as before. A failed or corrupt read is also no evidence, so the repost
+// goes ahead too, but it is logged as a warning: the override check could not read the head.
+// WHY the warning: a repost over a head we could not read is the tradeoff, and it must be visible.
+// The status reposted is the review's own verdict, so a failed review's failure is reposted as a failure.
 //
 // WHY the cutoff is the CLI's and not re-derived here: the CLI computed it once for the run,
 // and it knows whether its own pending landed, which decides the clock-skew allowance (the
@@ -948,9 +973,17 @@ function overrideStandsBeforeRepost(
   overrideCutoffMs: number | undefined,
 ): boolean {
   if (overrideCutoffMs === undefined) return false;
-  const statuses = readHeadStatuses(deps, repo, sha);
-  if (statuses === undefined) return false;
-  return overrideStandsOverRun(statuses, overrideCutoffMs);
+  const read = readHeadStatuses(deps, repo, sha, "fail");
+  if (!read.ok) {
+    deps.stdout(
+      workflowCommand(
+        "warning",
+        `pr-hero: could not read the statuses of ${sha.slice(0, 7)}, so an override on it cannot be checked; the review's status is reposted as planned`,
+      ),
+    );
+    return false;
+  }
+  return overrideStandsOverRun(read.statuses, overrideCutoffMs);
 }
 
 // The override's reporter: the shared rendering (statusWriteFailure), reported.

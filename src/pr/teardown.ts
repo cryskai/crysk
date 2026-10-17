@@ -7,6 +7,7 @@
 
 import { recordUnsettledStatus } from "#ci/cli-record";
 import { overrideCutoffMs, overrideStandsOverRun } from "#ci/override";
+import { formatWorkflowCommand } from "#ci/reporter";
 import type { CiAdmissionLedgerState } from "#pr/admission";
 import { settleCiAdmissionLedger } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
@@ -77,9 +78,15 @@ function thisRunOverrideCutoff(): number | null {
 }
 
 // Whether an override posted during this run stands over its final write. The rule itself
-// is overrideStandsOverRun (src/ci/override.ts), applied to the cutoff the CLI computed. A
-// failed read is no evidence of an override, so the write goes ahead, as before (fail open to
-// the review's verdict).
+// is overrideStandsOverRun (src/ci/override.ts), applied to the cutoff the CLI computed.
+//
+// WHY the read is strict: the reader is asked with failClosed, so a failed read throws instead of
+// looking like a head with no override (fetchCommitStatuses, src/pr/pr.ts).
+// WHY a failed read still writes the verdict: on a failed read we cannot tell whether an override
+// stands, so the verdict is written as planned. That is a tradeoff, not a guarantee: this write can
+// replace an override on the head that we could not read. Holding the verdict back would leave the
+// head with no status, the same gap the override rule exists to prevent elsewhere, so we take the
+// rarer overwrite and log a warning that says so.
 async function overrideStandsOverThisRun(
   operatorRoot: string,
   headSha: string,
@@ -90,8 +97,17 @@ async function overrideStandsOverThisRun(
   if (cutoffMs === null) return false;
   let statuses: readonly CommitStatusFact[];
   try {
-    statuses = await readStatuses(operatorRoot, headSha, { spawnFn });
+    statuses = await readStatuses(operatorRoot, headSha, {
+      spawnFn,
+      failClosed: true,
+    });
   } catch {
+    log(
+      formatWorkflowCommand(
+        "warning",
+        `pr-hero: could not read the statuses of ${headSha.slice(0, 7)}, so the override check could not read the head and the verdict is written`,
+      ),
+    );
     return false;
   }
   return overrideStandsOverRun(statuses, cutoffMs);
