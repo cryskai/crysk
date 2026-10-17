@@ -23,7 +23,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { classifyCliError } from "#ci/classify-error";
-import { writeFatalCliRecord } from "#ci/cli-record";
+import { PENDING_POSTING_PREFIX, writeFatalCliRecord } from "#ci/cli-record";
 import {
   CLI_RECORD_FILE,
   type CliRecord,
@@ -35,6 +35,7 @@ import {
   CANCELLED_STATUS_DESCRIPTION,
   decideCancelSettle,
   decidePublication,
+  PENDING_POSTING_MARK,
   runCancelSettle,
   runPublish,
 } from "#ci/publish";
@@ -2858,6 +2859,31 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
         reason: "the pending status is not this run's",
       });
     }
+  });
+
+  // #347 round 4: the cancel landed inside the POST, before its answer was recorded.
+  test("a posting placeholder settles a pending created within seconds of it, not later", () => {
+    const placeholder = `${PENDING_POSTING_MARK}${WRITTEN_MS}`;
+    expect(
+      decideCancelSettle({
+        record: reviewingRecord(),
+        latest: pendingAt(WRITTEN_MS + 2_000),
+        pendingAt: placeholder,
+      }),
+    ).toEqual({ settle: true, headSha: CANCEL_HEAD });
+    for (const offset of [-10_000, 60_000]) {
+      expect(
+        decideCancelSettle({
+          record: reviewingRecord(),
+          latest: pendingAt(WRITTEN_MS + offset),
+          pendingAt: placeholder,
+        }).settle,
+      ).toBe(false);
+    }
+  });
+
+  test("the placeholder mark is the cli-record writer's prefix", () => {
+    expect(PENDING_POSTING_MARK).toBe(PENDING_POSTING_PREFIX);
   });
 
   test("no record of this run's pending (it never landed) settles nothing", () => {

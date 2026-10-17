@@ -508,6 +508,13 @@ export const CANCELLED_STATUS_DESCRIPTION =
 // pending never landed, or the CLI died first, and there is nothing of this run's to settle.
 // Any CLI record that names a head is this run's lock on it: the CLI rewrites its record
 // (reviewing, then reviewed or hunters-failed) before its final status.
+// The CLI's placeholder before its pending POST answered (src/ci/cli-record.ts
+// PENDING_POSTING_PREFIX; a literal here, since this module imports builtins and outcome.ts
+// only). A test pins the two equal.
+export const PENDING_POSTING_MARK = "posting ";
+const CANCEL_POSTING_SKEW_MS = 5_000;
+const CANCEL_POSTING_WINDOW_MS = 30_000;
+
 export function decideCancelSettle(input: {
   record: CliRecord | undefined;
   latest: { state: string; created_at: string } | undefined;
@@ -524,10 +531,25 @@ export function decideCancelSettle(input: {
     };
   }
   const own = input.pendingAt;
+  const createdMs = Date.parse(input.latest.created_at);
+  // The CLI wrote "posting <ms>" just before its POST and had not yet recorded the answer:
+  // the cancel landed inside the POST. Its pending, if it landed, was created within
+  // seconds of that time (review #347 round 4).
+  if (own?.startsWith(PENDING_POSTING_MARK) === true) {
+    const postingMs = Number(own.slice(PENDING_POSTING_MARK.length));
+    if (
+      Number.isFinite(postingMs) &&
+      createdMs >= postingMs - CANCEL_POSTING_SKEW_MS &&
+      createdMs <= postingMs + CANCEL_POSTING_WINDOW_MS
+    ) {
+      return { settle: true, headSha: record.head_sha };
+    }
+    return { settle: false, reason: "the pending status is not this run's" };
+  }
   if (
     own === undefined ||
-    Date.parse(input.latest.created_at) !== Date.parse(own) ||
-    !Number.isFinite(Date.parse(own))
+    !Number.isFinite(Date.parse(own)) ||
+    createdMs !== Date.parse(own)
   ) {
     return { settle: false, reason: "the pending status is not this run's" };
   }
@@ -1337,7 +1359,13 @@ export function runCancelSettle(deps: PublishDeps): number {
   const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
   if (dir === "") return 0;
   const record = readCliRecord(dir);
-  const pendingAt = readIfExists(path.join(dir, PENDING_AT_FILE))?.trim();
+  // Guarded like readCliRecord: this step must exit 0 whatever the file system does.
+  let pendingAt: string | undefined;
+  try {
+    pendingAt = readIfExists(path.join(dir, PENDING_AT_FILE))?.trim();
+  } catch {
+    pendingAt = undefined;
+  }
   const repository = deps.env.GITHUB_REPOSITORY ?? "";
   const head = record?.head_sha;
   let latest: { state: string; created_at: string } | undefined;
