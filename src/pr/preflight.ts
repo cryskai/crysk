@@ -15,6 +15,7 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
 import type {
   Bucket,
   ComparisonResult,
@@ -954,15 +955,21 @@ export function settleRequestForCancellation(
   lock: HeldCommitStatusLock | null,
 ): { operatorRoot: string; sha: string; request: CommitStatusRequest } | null {
   if (lock === null) return null;
+  // WHY PRH-CANCELLED and not "review did not finish": a signal is a cancel, and the
+  // action's cancel-settle step writes the same text when this settle does not land
+  // first (src/ci/publish.ts runCancelSettle). Either writer leaves one coded status.
   return {
     operatorRoot: lock.operatorRoot,
     sha: lock.sha,
-    request: commitStatusRequest({
-      phase: "error",
-      posted: false,
-      targetUrl: lock.targetUrl,
-      context: lock.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
-    }),
+    request: {
+      ...commitStatusRequest({
+        phase: "error",
+        posted: false,
+        targetUrl: lock.targetUrl,
+        context: lock.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
+      }),
+      description: clipStatusDescription(CANCELLED_STATUS_DESCRIPTION),
+    },
   };
 }
 

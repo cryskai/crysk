@@ -920,9 +920,13 @@ describe("Packaging & distribution configuration", () => {
       const env = step?.env as Record<string, string> | undefined;
       expect(env?.PRHERO_PUBLISH_MODE).toBe("cancelled");
       const publishEnv = (all[publish]?.env ?? {}) as Record<string, string>;
+      // Every value it reads is bound as the publish step binds it. It reads no
+      // run attempt: its lock is the outcome directory the trigger cleared.
       for (const key of Object.keys(publishEnv)) {
+        if (key === "GITHUB_RUN_ATTEMPT") continue;
         expect(env?.[key]).toBe(publishEnv[key]);
       }
+      expect(env?.GITHUB_RUN_ATTEMPT).toBeUndefined();
     });
 
     test("the publish step runs the publisher, binds every value through env:, and names no input in its script", () => {

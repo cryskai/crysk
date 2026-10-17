@@ -328,10 +328,9 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}
+        # The run id builds the status's target URL. The lock is this run's
+        # because the trigger clears the outcome directory at job start.
         GITHUB_RUN_ID: ${{ github.run_id }}
-        # Bound like the run id: a record of another attempt of this run is
-        # refused, since gh run rerun keeps the run id.
-        GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         PRHERO_PUBLISH_MODE: cancelled
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
 

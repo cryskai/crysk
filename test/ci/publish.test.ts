@@ -2789,7 +2789,7 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
       decideCancelSettle({
         record: reviewingRecord(),
         latest: pendingAt(WRITTEN_MS + 3_000),
-        recordWrittenMs: WRITTEN_MS,
+        cliStartedMs: WRITTEN_MS,
       }),
     ).toEqual({ settle: true, headSha: CANCEL_HEAD });
   });
@@ -2799,7 +2799,7 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
       decideCancelSettle({
         record: reviewingRecord(),
         latest: pendingAt(WRITTEN_MS + 3_000),
-        recordWrittenMs: WRITTEN_MS,
+        cliStartedMs: WRITTEN_MS,
       }).settle,
     ).toBe(true);
   });
@@ -2809,27 +2809,42 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
       decideCancelSettle({
         record: undefined,
         latest: pendingAt(WRITTEN_MS),
-        recordWrittenMs: WRITTEN_MS,
+        cliStartedMs: WRITTEN_MS,
       }),
     ).toEqual({ settle: false, reason: "no review lock in this run" });
   });
 
-  test("a reviewed record is not a lock in this run", () => {
+  test("a reviewed record that names no head is not a lock in this run", () => {
     expect(
       decideCancelSettle({
         record: REVIEWED,
         latest: pendingAt(WRITTEN_MS),
-        recordWrittenMs: WRITTEN_MS,
+        cliStartedMs: WRITTEN_MS,
       }),
     ).toEqual({ settle: false, reason: "no review lock in this run" });
   });
+
+  // #347 F001: the CLI rewrites its record to reviewed or hunters-failed just before
+  // its final status, so a cancel in that window still holds the lock on the head.
+  test.each(["reviewed", "hunters-failed"])(
+    "a %s record that names the head still settles this run's pending",
+    (outcome) => {
+      expect(
+        decideCancelSettle({
+          record: { v: 1, outcome, head_sha: CANCEL_HEAD } as CliRecord,
+          latest: pendingAt(WRITTEN_MS + 3_000),
+          cliStartedMs: WRITTEN_MS,
+        }),
+      ).toEqual({ settle: true, headSha: CANCEL_HEAD });
+    },
+  );
 
   test("a reviewing record that names no head is not a lock in this run", () => {
     expect(
       decideCancelSettle({
         record: reviewingRecord(null),
         latest: pendingAt(WRITTEN_MS),
-        recordWrittenMs: WRITTEN_MS,
+        cliStartedMs: WRITTEN_MS,
       }),
     ).toEqual({ settle: false, reason: "no review lock in this run" });
   });
@@ -2842,7 +2857,7 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
           state: "success",
           created_at: new Date(WRITTEN_MS).toISOString(),
         },
-        recordWrittenMs: WRITTEN_MS,
+        cliStartedMs: WRITTEN_MS,
       }),
     ).toEqual({
       settle: false,
@@ -2855,7 +2870,7 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
       decideCancelSettle({
         record: reviewingRecord(),
         latest: undefined,
-        recordWrittenMs: WRITTEN_MS,
+        cliStartedMs: WRITTEN_MS,
       }),
     ).toEqual({
       settle: false,
@@ -2863,25 +2878,22 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
     });
   });
 
-  test("a pending 10 minutes after the record belongs to another run", () => {
+  test("a pending posted long after the CLI started is still this run's", () => {
     expect(
       decideCancelSettle({
         record: reviewingRecord(),
         latest: pendingAt(WRITTEN_MS + 600_000),
-        recordWrittenMs: WRITTEN_MS,
+        cliStartedMs: WRITTEN_MS,
       }),
-    ).toEqual({
-      settle: false,
-      reason: "the pending status is not this run's",
-    });
+    ).toEqual({ settle: true, headSha: CANCEL_HEAD });
   });
 
-  test("a pending 10 seconds before the record belongs to another run", () => {
+  test("a pending posted before this run's CLI started belongs to an older run", () => {
     expect(
       decideCancelSettle({
         record: reviewingRecord(),
         latest: pendingAt(WRITTEN_MS - 10_000),
-        recordWrittenMs: WRITTEN_MS,
+        cliStartedMs: WRITTEN_MS,
       }),
     ).toEqual({
       settle: false,
@@ -2889,12 +2901,12 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
     });
   });
 
-  test("an unknown record write time settles nothing", () => {
+  test("an unknown CLI start time settles nothing", () => {
     expect(
       decideCancelSettle({
         record: reviewingRecord(),
         latest: pendingAt(WRITTEN_MS),
-        recordWrittenMs: undefined,
+        cliStartedMs: undefined,
       }),
     ).toEqual({
       settle: false,
@@ -2911,6 +2923,8 @@ function runCancelSettleIn(options: {
   const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-cancel-"));
   try {
     if (options.cliRecord !== undefined) {
+      // The trigger's cli-started marker, written when the CLI starts: the settle's anchor.
+      writeFileSync(path.join(dir, "cli-started"), "");
       writeFileSync(
         path.join(dir, CLI_RECORD_FILE),
         typeof options.cliRecord === "string"

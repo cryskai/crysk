@@ -499,27 +499,25 @@ function clipStatusDescription(text: string): string {
 export const CANCELLED_STATUS_DESCRIPTION =
   "PRH-CANCELLED: not reviewed — /pr-hero review reviews this head";
 
-// WHY the window: the CLI writes the reviewing record just before it posts its pending
-// (src/ci/cli-record.ts recordReviewing), so this run's pending lands within seconds of the
-// record. A pending outside that window belongs to another run, which settles it itself.
-// Overwriting only this run's own pending can never hide another run's verdict.
-const CANCEL_SETTLE_BEFORE_MS = 5_000;
-const CANCEL_SETTLE_AFTER_MS = 120_000;
+// WHY the anchor is the cli-started marker: the trigger writes it when the CLI starts, before
+// the CLI posts its pending, and nothing rewrites it. The CLI's own record moves (reviewing,
+// then reviewed or hunters-failed just before the final status), so a cancel in that last
+// window must still find the lock: any record that names a head is this run's lock on it.
+// This run's pending was posted after the marker; an older run's pending was posted before
+// it, and is not this run's to settle. A newer run cannot have posted yet: concurrency starts
+// it only after this cancel, and it installs before its CLI posts anything.
+const CANCEL_SETTLE_SKEW_MS = 5_000;
 
-// The pure table of a cancelled run's settle. It settles only when the record is this run's
-// reviewing lock on a head, the head's newest pr-hero status is pending, and that pending was
-// created within the window around the record's write.
+// The pure table of a cancelled run's settle. It settles only when this run's CLI record
+// names a head, the head's newest pr-hero status is pending, and that pending was created
+// after this run's CLI started.
 export function decideCancelSettle(input: {
   record: CliRecord | undefined;
   latest: { state: string; created_at: string } | undefined;
-  recordWrittenMs: number | undefined;
+  cliStartedMs: number | undefined;
 }): { settle: true; headSha: string } | { settle: false; reason: string } {
   const record = input.record;
-  if (
-    record === undefined ||
-    record.outcome !== "reviewing" ||
-    record.head_sha === undefined
-  ) {
+  if (record === undefined || record.head_sha === undefined) {
     return { settle: false, reason: "no review lock in this run" };
   }
   if (input.latest?.state !== "pending") {
@@ -529,12 +527,11 @@ export function decideCancelSettle(input: {
     };
   }
   const createdMs = Date.parse(input.latest.created_at);
-  const written = input.recordWrittenMs;
+  const started = input.cliStartedMs;
   if (
-    written === undefined ||
+    started === undefined ||
     !Number.isFinite(createdMs) ||
-    createdMs < written - CANCEL_SETTLE_BEFORE_MS ||
-    createdMs > written + CANCEL_SETTLE_AFTER_MS
+    createdMs < started - CANCEL_SETTLE_SKEW_MS
   ) {
     return { settle: false, reason: "the pending status is not this run's" };
   }
@@ -1344,14 +1341,14 @@ export function runCancelSettle(deps: PublishDeps): number {
   const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
   if (dir === "") return 0;
   const record = readCliRecord(dir);
-  let recordWrittenMs: number | undefined;
+  let cliStartedMs: number | undefined;
   try {
-    recordWrittenMs = statSync(path.join(dir, CLI_RECORD_FILE)).mtimeMs;
+    cliStartedMs = statSync(path.join(dir, CLI_STARTED_FILE)).mtimeMs;
   } catch {
-    recordWrittenMs = undefined;
+    cliStartedMs = undefined;
   }
   const repository = deps.env.GITHUB_REPOSITORY ?? "";
-  const head = record?.outcome === "reviewing" ? record.head_sha : undefined;
+  const head = record?.head_sha;
   let latest: { state: string; created_at: string } | undefined;
   if (head !== undefined) {
     const read = readHeadStatuses(deps, repository, head);
@@ -1366,7 +1363,7 @@ export function runCancelSettle(deps: PublishDeps): number {
     }
     latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
   }
-  const decision = decideCancelSettle({ record, latest, recordWrittenMs });
+  const decision = decideCancelSettle({ record, latest, cliStartedMs });
   if (!decision.settle) {
     deps.stdout(
       workflowCommand(

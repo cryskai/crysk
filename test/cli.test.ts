@@ -25,6 +25,7 @@ import {
   type AdmissionRecord,
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
+import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
 import {
   evaluateCiReviewAdmission,
   resolveCiAdmissionAttemptCount,
@@ -833,7 +834,7 @@ describe("settleHeldCommitStatusOnSignal", () => {
     expect(calls[0]?.operatorRoot).toBe(lock.operatorRoot);
     expect(calls[0]?.sha).toBe(lock.sha);
     expect(calls[0]?.request.state).toBe("error");
-    expect(calls[0]?.request.description).toBe("review did not finish");
+    expect(calls[0]?.request.description).toBe(CANCELLED_STATUS_DESCRIPTION);
     expect(calls[0]?.options).toEqual({
       attempts: 1,
       timeoutMs: CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,

@@ -15,6 +15,7 @@ import {
   SKIP_COVERAGE_COMMENT_MARKER,
   SKIP_SIZE_COMMENT_MARKER,
 } from "#ci/gates";
+import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
 import type { ComparisonResult, PrHeroFindingRef } from "#compare/compare";
 import type { GreptileFinding } from "#compare/greptile";
 import {
@@ -1202,6 +1203,14 @@ describe("settleRequestForCancellation", () => {
     expect(settleRequestForCancellation(null)).toBeNull();
   });
 
+  // #347 F003: the signal settle and the action's cancel-settle step write one coded text.
+  test("a cancelled run settles as PRH-CANCELLED, the same text the action's cancel step writes", () => {
+    expect(settleRequestForCancellation(lock)?.request).toMatchObject({
+      state: "error",
+      description: CANCELLED_STATUS_DESCRIPTION,
+    });
+  });
+
   test("settles the exact sha the lock was taken on, as error", () => {
     // The sha is load-bearing: PR #162's cancelled run posted its pending on
     // 1b57c92 and the settle has to land on THAT head, not on whatever the
@@ -1212,9 +1221,9 @@ describe("settleRequestForCancellation", () => {
       request: {
         state: "error",
         context: COMMIT_STATUS_CONTEXT,
-        // "review did not finish" is honest for a cancelled run, so the
-        // cancellation path needs no description of its own.
-        description: "review did not finish",
+        // #347 F003: a cancel is coded, so the S7 invariant (an error status
+        // carries a PRH- code) holds whichever of the two cancel writers lands.
+        description: CANCELLED_STATUS_DESCRIPTION,
         targetUrl: lock.targetUrl,
       },
     });
