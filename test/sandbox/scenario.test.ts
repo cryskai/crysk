@@ -301,6 +301,93 @@ describe("run: the scenarios against the fake repository", () => {
     ).toBe(true);
   });
 
+  // The fake posts an outcome comment and an error status together. These tests take
+  // the comment away, so the head's status alone carries PRH-HUNTERS-FAILED (the
+  // publisher's status write lands before its comment POST, so a failed POST leaves
+  // exactly this), and stamp the status with the created_at the test picks: a time
+  // after any trigger the fake hands out for this run's post, or one long before it.
+  function statusOnlyHarness(world: FakeGithub, createdAt: string) {
+    const h = world.harness();
+    const inner = h.deps.gh;
+    h.deps = {
+      ...h.deps,
+      gh: async (args) => {
+        const result = await inner(args);
+        if (result.exitCode !== 0) return result;
+        if (args.some((a) => /\/commits\/[0-9a-f]{40}\/status$/.test(a))) {
+          const body = JSON.parse(result.stdout) as {
+            statuses: { created_at?: string }[];
+          };
+          body.statuses = body.statuses.map((s) => ({
+            ...s,
+            created_at: createdAt,
+          }));
+          return { ...result, stdout: JSON.stringify(body) };
+        }
+        if (args.some((a) => /\/issues\/\d+\/comments/.test(a))) {
+          const list = JSON.parse(result.stdout) as { body: string }[];
+          return {
+            ...result,
+            stdout: JSON.stringify(
+              list.filter((c) => !c.body.startsWith("<!-- pr-hero-outcome")),
+            ),
+          };
+        }
+        return result;
+      },
+    };
+    return h;
+  }
+
+  test("an own-run status-only hunters-failed (no outcome comment) is the flake and is re-run", async () => {
+    // Far future: this run posted the status after its comment trigger.
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "hunters-failed"],
+    });
+    const h = statusOnlyHarness(world, "2999-01-01T00:00:00.000Z");
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+    expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(true);
+  });
+
+  test("a phase-1 status-only hunters-failed from an earlier run is not this phase's flake: phase 2 fails for another reason, no re-run, exit 1", async () => {
+    // Long before the trigger: the status was posted by an earlier run, not this one.
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "near-miss"],
+    });
+    const h = statusOnlyHarness(world, "2000-01-01T00:00:00.000Z");
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(false);
+    expect(
+      h.logs.includes(
+        "  FAIL  comment-trigger: [2] path is reviewed (got hunters-failed)",
+      ),
+    ).toBe(true);
+  });
+
+  test("a later phase whose review step fails with no outcome of its own is not the flake: no re-run, exit 1", async () => {
+    // Phase 1 hunters-failed, and its outcome stays on the PR. Phase 2's review step
+    // fails for another reason (stepFailsOnReview) and posts no outcome of its own, so
+    // its path reads phase 1's outcome. Its head is failure (blockingFindings), so the
+    // only thing that could make it the flake is the step failure this test denies.
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "review"],
+      keepOutcomeComments: true,
+      stepFailsOnReview: true,
+      blockingFindings: true,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(false);
+    expect(
+      h.logs.includes(
+        "  FAIL  comment-trigger: [2] path is reviewed (got hunters-failed)",
+      ),
+    ).toBe(true);
+  });
+
   test("a phase-2 run that hunters-failed itself is the flake and is re-run once", async () => {
     const world = new FakeGithub({
       ref: REF,
