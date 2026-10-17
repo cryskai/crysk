@@ -2512,3 +2512,37 @@ describe("parseArgs status", () => {
     expect(() => parseArgs(["statu"])).toThrow(/"status"/);
   });
 });
+
+describe("skills install (non-interactive skill sync)", () => {
+  test("skills install parses to command skills with the install subcommand", () => {
+    const parsed = parseArgs(["skills", "install"]);
+    expect(parsed.command).toBe("skills");
+    expect(parsed.options.skills).toBe("install");
+    expect(parsed.options.force).toBe(false);
+  });
+
+  test("skills install --force sets force", () => {
+    const parsed = parseArgs(["skills", "install", "--force"]);
+    expect(parsed.options.skills).toBe("install");
+    expect(parsed.options.force).toBe(true);
+  });
+
+  test("skills without a subcommand, or with another one, is a usage error", () => {
+    const text = "pr-hero skills needs a subcommand: install";
+    expect(() => parseArgs(["skills"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["skills"])).toThrow(text);
+    expect(() => parseArgs(["skills", "remove"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["skills", "remove"])).toThrow(text);
+  });
+
+  test("help lists skills install next to setup", () => {
+    expect(HELP_TEXT).toContain("pr-hero skills install");
+    expect(HELP_TEXT).toContain(
+      "Install the triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
+    );
+  });
+
+  test("skills is in the command list the unknown-command error names", () => {
+    expect(() => parseArgs(["skilz"])).toThrow(/"skills"/);
+  });
+});

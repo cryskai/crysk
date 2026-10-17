@@ -143,6 +143,10 @@ export interface CliOptions {
   // watcher: it runs `pr-hero gc` (no reviews, no watch.json, no window/cap).
   // Unset means the collector itself.
   gc?: "install" | "uninstall" | "status";
+  // `skills install` (src/commands/skills.ts): the non-interactive install of
+  // pr-hero's agent skills into every detected coding agent. Its only
+  // subcommand; anything else after `skills` is a usage error.
+  skills?: "install";
   // watch install and gc install: launchd StartInterval, in minutes.
   interval?: number;
   // watch add only: record on_push: true for the repo, so every new push
@@ -292,6 +296,7 @@ export interface ParsedCli {
     | "upgrade"
     | "uninstall"
     | "ci"
+    | "skills"
     | "help";
   options: CliOptions;
 }
@@ -308,6 +313,8 @@ Usage:
                              Scaffold .github/workflows/pr-hero.yml instead
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed
+  pr-hero skills install [--force]
+                             Install the triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
   pr-hero ci init [--force]  Same scaffolding as "setup --ci", as its own
                              command
   pr-hero doctor [options]   Check system tools and environment readiness
@@ -641,6 +648,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     | "upgrade"
     | "uninstall"
     | "ci"
+    | "skills"
     | "help"
     | undefined;
   // --head carries a baked-in default, so "was it explicitly given" cannot
@@ -877,6 +885,19 @@ export function parseArgs(argv: string[]): ParsedCli {
       continue;
     }
     if (
+      command === "skills" &&
+      options.skills === undefined &&
+      arg === "install"
+    ) {
+      options.skills = "install";
+      continue;
+    }
+    // `skills` has exactly one subcommand, `install`; any other word in that
+    // slot is a usage error, not a generic unexpected argument.
+    if (command === "skills" && options.skills === undefined) {
+      throw new CliUsageError("pr-hero skills needs a subcommand: install");
+    }
+    if (
       command === "triage" &&
       options.triage === undefined &&
       arg === "reply"
@@ -920,12 +941,13 @@ export function parseArgs(argv: string[]): ParsedCli {
       arg !== "upgrade" &&
       arg !== "update" &&
       arg !== "uninstall" &&
-      arg !== "ci"
+      arg !== "ci" &&
+      arg !== "skills"
     ) {
       throw new CliUsageError(
         `unknown command: ${arg} (the commands are "menu", "review", "init", "setup", "doctor", ` +
           '"activity", "ledger", "watch", "post", "triage", "status", "gc", "usage", ' +
-          '"reverts", "corpus", "config", "mcp", "upgrade", "uninstall" and "ci")',
+          '"reverts", "corpus", "config", "mcp", "upgrade", "uninstall", "ci" and "skills")',
       );
     }
     command = arg === "update" ? "upgrade" : arg;
@@ -934,6 +956,9 @@ export function parseArgs(argv: string[]): ParsedCli {
     throw new CliUsageError(
       'no command given (did you mean "pr-hero review"?)',
     );
+  }
+  if (command === "skills" && options.skills === undefined) {
+    throw new CliUsageError("pr-hero skills needs a subcommand: install");
   }
   // --pr derives the whole range from the PR record — head from GitHub, base
   // from the merge commit's parent or the base branch — so a hand-picked
