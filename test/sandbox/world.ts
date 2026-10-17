@@ -185,6 +185,10 @@ export interface WorldOptions {
   // A review run whose review step fails, though the head still reads as reviewed
   // from the status and report it left behind.
   stepFailsOnReview?: boolean;
+  // A hunters-failed run rendered with its hunters' shared cause instead of
+  // PRH-HUNTERS-FAILED (publish.ts huntersFailedRendering): the code and the sentence
+  // its outcome and status carry.
+  huntersFailedAs?: { code: string; sentence: string };
   // S4: a review posts one blocking finding comment. Under the gate (no
   // `mode: advisory`) its status is failure, the way the product's gate writes it.
   blockingFindings?: boolean;
@@ -460,9 +464,13 @@ export class FakeGithub {
         description: `pr-hero: overridden by @${FAKE_ACTOR} — no review on this head`,
       });
     } else {
-      const code = OUTCOME_CODE[outcome];
+      const as =
+        outcome === "hunters-failed" ? this.options.huntersFailedAs : undefined;
+      const code = as?.code ?? OUTCOME_CODE[outcome];
       const lead = OUTCOME_LEAD[outcome];
-      const body = lead === undefined ? "fake outcome" : `${lead} fake outcome`;
+      const body =
+        as?.sentence ??
+        (lead === undefined ? "fake outcome" : `${lead} fake outcome`);
       list.push(
         this.comment(
           `${OUTCOME_PREFIX} v=1 head=${sha} run=${runId} attempt=1 -->\n\n## ${code}\n\n${body}`,
@@ -470,7 +478,7 @@ export class FakeGithub {
       );
       this.statuses.set(sha, {
         state: "error",
-        description: `${code}: fake outcome`,
+        description: `${code}: ${as?.sentence ?? "fake outcome"}`.slice(0, 140),
       });
     }
     this.comments.set(prNumber, list);

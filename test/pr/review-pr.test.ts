@@ -3,7 +3,7 @@
 // is tested through recordPipelineOutcome, and the call site is pinned by reading
 // the source the way test/architecture/gate-skip-settlement.test.ts does.
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -128,5 +128,81 @@ describe("reviewPr's commit-status settle knows whether the body threw", () => {
     );
     expect(settle).not.toBeNull();
     expect(settle?.[1]).toMatch(/\bbodyFailed,/);
+  });
+});
+
+describe("recordPipelineOutcome carries each failed hunter's cause", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function outcomeDir(): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-hunter-causes-"));
+    dirs.push(dir);
+    return dir;
+  }
+
+  test("the record names each hunter's cause, provider and model", () => {
+    const dir = outcomeDir();
+    recordPipelineOutcome(
+      {
+        sessionFailed: true,
+        hunterFailures: [
+          { cause: "model_unavailable", provider: "opencode", model: "gpt-4o" },
+          { cause: "model_unavailable", provider: "opencode", model: "gpt-4o" },
+        ],
+      },
+      SHA,
+      { PRHERO_OUTCOME_DIR: dir },
+    );
+    expect(
+      parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
+    ).toEqual({
+      v: 1,
+      outcome: "hunters-failed",
+      head_sha: SHA,
+      hunter_failures: [
+        { cause: "model_unavailable", provider: "opencode", model: "gpt-4o" },
+        { cause: "model_unavailable", provider: "opencode", model: "gpt-4o" },
+      ],
+    });
+  });
+
+  test("a provider that is not a safe short string is left out, and the record still parses", () => {
+    const dir = outcomeDir();
+    recordPipelineOutcome(
+      {
+        sessionFailed: true,
+        hunterFailures: [
+          { cause: "model_unavailable", provider: "bad\nprovider" },
+        ],
+      },
+      SHA,
+      { PRHERO_OUTCOME_DIR: dir },
+    );
+    expect(
+      parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
+    ).toEqual({
+      v: 1,
+      outcome: "hunters-failed",
+      head_sha: SHA,
+      hunter_failures: [{ cause: "model_unavailable" }],
+    });
+  });
+
+  test("a failure with no transport cause is recorded as an entry without one", () => {
+    const dir = outcomeDir();
+    recordPipelineOutcome({ sessionFailed: true, hunterFailures: [{}] }, SHA, {
+      PRHERO_OUTCOME_DIR: dir,
+    });
+    expect(
+      parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
+    ).toEqual({
+      v: 1,
+      outcome: "hunters-failed",
+      head_sha: SHA,
+      hunter_failures: [{}],
+    });
   });
 });

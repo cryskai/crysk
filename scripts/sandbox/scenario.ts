@@ -20,6 +20,8 @@ import {
   classifyComment,
   classifyPath,
   invariantViolations,
+  isHuntersFailed,
+  isHuntersFailedStatus,
   type Observation,
   postedByThisRun,
   type RunFact,
@@ -260,11 +262,12 @@ export function isFreeModelFlake(result: ScenarioResult): boolean {
 // PRH-HUNTERS-FAILED outcome on the observed head. A failed review step is not enough:
 // a later phase whose step fails for another reason posts no outcome of its own, and
 // the path it reads is an earlier phase's outcome, which is no flake of this phase.
-// The code is spelled out because observe.ts keeps its constant private. Any outcome
+// The code family is observe.ts's own (isHuntersFailed), so a run rendered with its
+// shared hunter cause (PRH-MODEL-UNAVAILABLE, a hunter-route PRH-CRED-UNUSABLE) is the
+// same flake as PRH-HUNTERS-FAILED, exactly as classifyPath reads it. Any outcome
 // of this run with that code counts, not only the first one on the head, because an
 // earlier phase's outcome may still sit on the PR above it. A phase with no trigger
 // has no window, so its outcome counts (postedByThisRun reads it as this run's).
-const HUNTERS_FAILED_OUTCOME = "PRH-HUNTERS-FAILED";
 // The head's status carries the same code when the publisher's comment POST failed:
 // it writes the status first. Its created_at is judged against the same window a
 // comment is (postedByThisRun), so a status an earlier run left on the head is no
@@ -278,16 +281,16 @@ function isOwnHuntersFailed(
     obs.comments.some(
       (c) =>
         c.kind === "outcome" &&
-        c.code === HUNTERS_FAILED_OUTCOME &&
+        isHuntersFailed(c.code, c.hunterRoute === true) &&
         (c.head === undefined || c.head === obs.headSha) &&
         postedByThisRun(c, obs),
     )
   )
     return true;
-  const statusCode = /^PRH-[A-Z]+(?:-[A-Z]+)*/.exec(
-    obs.status?.description ?? "",
-  )?.[0];
-  if (obs.status?.state !== "error" || statusCode !== HUNTERS_FAILED_OUTCOME)
+  if (
+    obs.status?.state !== "error" ||
+    !isHuntersFailedStatus(obs.status.description)
+  )
     return false;
   if (obs.triggeredAt === undefined) return true;
   if (statusCreatedAt === undefined) return false;

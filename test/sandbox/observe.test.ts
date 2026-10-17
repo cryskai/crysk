@@ -597,3 +597,109 @@ describe("exit code (adapted from exitCodeFor)", () => {
     ).toBe(1);
   });
 });
+
+// WHY these tests name the codes: the hunters-failed path renders PRH-MODEL-UNAVAILABLE and
+// the hunter-route PRH-CRED-UNUSABLE (src/ci/outcome.ts renderHunterCause), so a run that
+// the flake tolerance accepts shows those codes, not PRH-HUNTERS-FAILED. Read as `error:`,
+// the sandbox would take an all-hunters-dead run for a different path.
+function hunterRouteOutcomeBody(): string {
+  const publication = decidePublication({
+    record: {
+      v: 1,
+      decision: "review",
+      params: { pr: 7 },
+      pr: 7,
+      head_sha: SHA,
+      repository: SANDBOX_REPO,
+      run_id: "1",
+      run_attempt: 1,
+      run_url: "https://example.invalid/run/1",
+    },
+    cliStarted: true,
+    cliRecord: {
+      v: 1,
+      outcome: "hunters-failed",
+      head_sha: SHA,
+      hunter_failures: [
+        {
+          cause: "missing_provider_record",
+          provider: "opencode",
+          model: "gpt-4o",
+        },
+        {
+          cause: "missing_provider_record",
+          provider: "opencode",
+          model: "gpt-4o",
+        },
+      ],
+    },
+  });
+  if (publication.kind !== "remote")
+    throw new Error("expected a remote publication");
+  return publication.commentBody;
+}
+
+describe("the hunters-failed family", () => {
+  test("PRH-MODEL-UNAVAILABLE on an outcome comment is hunters-failed", () => {
+    const obs = observation({
+      comments: [
+        { source: "issue", kind: "outcome", code: "PRH-MODEL-UNAVAILABLE" },
+      ],
+      status: {
+        state: "error",
+        description:
+          "PRH-MODEL-UNAVAILABLE: the configured model is not served",
+      },
+    });
+    expect(classifyPath(obs)).toBe("hunters-failed");
+  });
+
+  test("PRH-MODEL-UNAVAILABLE on the status alone is hunters-failed", () => {
+    const obs = observation({
+      comments: [],
+      status: {
+        state: "error",
+        description:
+          "PRH-MODEL-UNAVAILABLE: Provider opencode: the configured model",
+      },
+    });
+    expect(classifyPath(obs)).toBe("hunters-failed");
+  });
+
+  test("a PRH-CRED-UNUSABLE that names a hunter route is hunters-failed, from the real publisher's comment", () => {
+    const obs = observation({
+      comments: [classifyComment(hunterRouteOutcomeBody(), "issue")],
+      status: {
+        state: "error",
+        description:
+          "PRH-CRED-UNUSABLE: The route opencode/gpt-4o has no usable credential record",
+      },
+    });
+    expect(classifyPath(obs)).toBe("hunters-failed");
+  });
+
+  test("a PRH-CRED-UNUSABLE outcome without a hunter route stays error:PRH-CRED-UNUSABLE", () => {
+    const obs = observation({
+      comments: [
+        { source: "issue", kind: "outcome", code: "PRH-CRED-UNUSABLE" },
+      ],
+      status: {
+        state: "error",
+        description:
+          "PRH-CRED-UNUSABLE: The credential store is not usable: the auth store is not a JSON object",
+      },
+    });
+    expect(classifyPath(obs)).toBe("error:PRH-CRED-UNUSABLE");
+  });
+
+  test("a PRH-CRED-REJECTED is not in the family", () => {
+    const obs = observation({
+      comments: [],
+      status: {
+        state: "error",
+        description: "PRH-CRED-REJECTED: the provider rejected the credential",
+      },
+    });
+    expect(classifyPath(obs)).toBe("error:PRH-CRED-REJECTED");
+  });
+});

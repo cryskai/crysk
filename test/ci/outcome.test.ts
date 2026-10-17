@@ -73,6 +73,8 @@ const TRANSPORT_EXPECTED: Record<
     code: "PRH-MODEL-UNAVAILABLE",
     owner: "config",
   },
+  model_unavailable: { code: "PRH-MODEL-UNAVAILABLE", owner: "provider" },
+  missing_provider_record: { code: "PRH-CRED-UNUSABLE", owner: "config" },
   protocol_truncation: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
   protocol_mismatch: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
   protocol_overflow: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
@@ -482,8 +484,17 @@ describe("codeOf and ownerOf: every class variant", () => {
     for (const cls of classes) {
       const entry = entryOf(codeOf(cls));
       for (const ctx of CONTEXTS) {
+        // WHY an explicit exception: provider_configuration_invalid shares
+        // PRH-MODEL-UNAVAILABLE with model_unavailable, whose owner is provider.
+        // The shared code's catalog owner is the provider's; the cause keeps
+        // config through the code's variant (see ERROR_CATALOG).
+        const expected =
+          cls.kind === "transport" &&
+          cls.cause === "provider_configuration_invalid"
+            ? "config"
+            : ownerIn(entry, ctx);
         expect(ownerOf(cls, ctx), `${JSON.stringify(cls)} ${ctx}`).toBe(
-          ownerIn(entry, ctx),
+          expected,
         );
       }
     }
@@ -2090,5 +2101,125 @@ describe("parseOutcomeCode", () => {
         `${OUTCOME_MARKER_PREFIX}v=1 head=unknown -->\n\n### PRH-NOT-A-CODE`,
       ),
     ).toBeNull();
+  });
+});
+
+describe("a model the provider does not serve", () => {
+  const modelUnavailable: ErrorClass = {
+    kind: "transport",
+    cause: "model_unavailable",
+  };
+
+  test("renders PRH-MODEL-UNAVAILABLE, owned by the provider", () => {
+    expect(codeOf(modelUnavailable)).toBe("PRH-MODEL-UNAVAILABLE");
+    expect(ownerOf(modelUnavailable, "action")).toBe("provider");
+  });
+
+  test("leads with the provider's name, never Unclassified", () => {
+    const rendered = renderError(
+      modelUnavailable,
+      { provider: "openai", step: "the hunter" },
+      "action",
+    );
+    expect(rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+    expect(rendered.owner).toBe("provider");
+    expect(rendered.annotation).toContain("Provider openai: ");
+    expect(rendered.annotation).not.toContain("Unclassified");
+    expect(rendered.what).toStartWith("Provider openai does not serve");
+  });
+
+  test("provider_configuration_invalid keeps its own owner, config", () => {
+    const rendered = renderError(
+      { kind: "transport", cause: "provider_configuration_invalid" },
+      { provider: "openai", step: "the hunter" },
+      "action",
+    );
+    expect(rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+    expect(rendered.owner).toBe("config");
+    expect(rendered.annotation).toContain("Your configuration: ");
+  });
+});
+
+describe("parseCliRecord — the hunter_failures field", () => {
+  const HEAD = "a".repeat(40);
+  const base = { v: 1, outcome: "hunters-failed", head_sha: HEAD };
+  const text = (value: unknown) => JSON.stringify(value);
+
+  test("round-trips each failed hunter's cause, provider and model", () => {
+    const value = {
+      ...base,
+      hunter_failures: [
+        { cause: "model_unavailable", provider: "opencode", model: "gpt-4o" },
+        { cause: "network_transient" },
+        {},
+      ],
+    };
+    expect(parseCliRecord(text(value))).toEqual(value as CliRecord);
+  });
+
+  test("an old record without the field still parses, unchanged", () => {
+    expect(parseCliRecord(text(base))).toEqual(base as CliRecord);
+  });
+
+  test("a cause outside the transport vocabulary is refused", () => {
+    expect(
+      parseCliRecord(
+        text({ ...base, hunter_failures: [{ cause: "not_a_cause" }] }),
+      ),
+    ).toBeUndefined();
+    expect(
+      parseCliRecord(
+        text({ ...base, hunter_failures: [{ cause: "format_violation" }] }),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("a provider or model that is not a short safe string is refused", () => {
+    for (const bad of [
+      { provider: "open code" },
+      { provider: "line\nbreak" },
+      { provider: "x".repeat(65) },
+      { provider: "" },
+      { model: "gpt 4o\u0007" },
+      { model: "m".repeat(97) },
+      { provider: 3 },
+    ]) {
+      expect(
+        parseCliRecord(text({ ...base, hunter_failures: [bad] })),
+      ).toBeUndefined();
+    }
+  });
+
+  test("an entry that is not an object, or a field that is not an array, is refused", () => {
+    expect(
+      parseCliRecord(text({ ...base, hunter_failures: ["model_unavailable"] })),
+    ).toBeUndefined();
+    expect(
+      parseCliRecord(text({ ...base, hunter_failures: {} })),
+    ).toBeUndefined();
+  });
+
+  test("an unknown key inside an entry is refused, so a wider writer shows up here", () => {
+    expect(
+      parseCliRecord(
+        text({
+          ...base,
+          hunter_failures: [{ cause: "network_transient", step: "x" }],
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("the field belongs to hunters-failed only", () => {
+    expect(
+      parseCliRecord(
+        text({
+          v: 1,
+          outcome: "reviewed",
+          head_sha: HEAD,
+          hunter_failures: [{ cause: "network_transient" }],
+        }),
+      ),
+    ).toBeUndefined();
   });
 });

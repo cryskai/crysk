@@ -150,6 +150,10 @@ export interface DiagnosticEvidence {
 
 export interface TransportOutcome {
   readonly diagnosticEvidence?: DiagnosticEvidence;
+  // A cause the transport holds as a typed fact, not as witness text. resolveFailureCause
+  // consults it before the witness classifier, so a fact the stderr witness could only
+  // spell keeps its own cause instead of the runtime's generic one.
+  readonly failureCause?: TransportFailureCause;
   readonly completion: "success" | "failed" | "cancelled";
   readonly protocolIntegrity:
     | "verified"
@@ -219,8 +223,39 @@ export type TransportFailureCause =
   | "context_window_exceeded"
   | "safety_refusal"
   | "provider_configuration_invalid"
+  | "model_unavailable"
+  | "missing_provider_record"
   | "runtime_unavailable"
   | "remote_abort_unconfirmed";
+
+// Every TransportFailureCause as a runtime lookup. The `satisfies` clause fails tsc
+// when a cause joins the union and is missing here, and when a key is not a cause.
+const TRANSPORT_FAILURE_CAUSE_LOOKUP = {
+  auth_invalid: true,
+  quota_exhausted: true,
+  rate_limit: true,
+  network_transient: true,
+  protocol_truncation: true,
+  protocol_mismatch: true,
+  protocol_overflow: true,
+  output_limit_exceeded: true,
+  context_window_exceeded: true,
+  safety_refusal: true,
+  provider_configuration_invalid: true,
+  model_unavailable: true,
+  missing_provider_record: true,
+  runtime_unavailable: true,
+  remote_abort_unconfirmed: true,
+} satisfies Record<TransportFailureCause, true>;
+
+export function isTransportFailureCause(
+  value: unknown,
+): value is TransportFailureCause {
+  return (
+    typeof value === "string" &&
+    Object.hasOwn(TRANSPORT_FAILURE_CAUSE_LOOKUP, value)
+  );
+}
 
 // #150 (built on #149's server-lifetime OpenCode credential fix). Declares
 // whether a `ProviderTransport` consumes `StepExecutionHarness.run`'s

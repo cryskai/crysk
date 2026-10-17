@@ -350,6 +350,59 @@ describe("run: the scenarios against the fake repository", () => {
     expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(true);
   });
 
+  // A run whose hunters all failed on one shared cause is rendered with that cause's
+  // code (publish.ts huntersFailedRendering), and is the same flake. The long route
+  // pushes the credential sentence past the status's 140-character clip.
+  const LONG_ROUTE = `opencode/${"m".repeat(96)}`;
+  const SHARED_CAUSES = [
+    {
+      code: "PRH-MODEL-UNAVAILABLE",
+      sentence: "Provider opencode: the model is not available.",
+    },
+    {
+      code: "PRH-CRED-UNUSABLE",
+      sentence: `The route ${LONG_ROUTE} has no usable credential record`,
+    },
+  ];
+  for (const as of SHARED_CAUSES) {
+    test(`an own-run ${as.code} hunters-failed outcome is the flake and is re-run`, async () => {
+      const world = new FakeGithub({
+        ref: REF,
+        runOutcomes: ["hunters-failed", "hunters-failed"],
+        huntersFailedAs: as,
+      });
+      const h = world.harness();
+      expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+      expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(true);
+    });
+
+    test(`an own-run status-only ${as.code} hunters-failed is the flake and is re-run`, async () => {
+      const world = new FakeGithub({
+        ref: REF,
+        runOutcomes: ["hunters-failed", "hunters-failed"],
+        huntersFailedAs: as,
+      });
+      const h = statusOnlyHarness(world, "2999-01-01T00:00:00.000Z");
+      expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+      expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(true);
+    });
+  }
+
+  test("the credential preflight's PRH-CRED-UNUSABLE is no hunters-failed flake: no re-run, exit 1", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "hunters-failed"],
+      huntersFailedAs: {
+        code: "PRH-CRED-UNUSABLE",
+        sentence:
+          "The claude/opencode route for this step has no usable credential.",
+      },
+    });
+    const h = statusOnlyHarness(world, "2999-01-01T00:00:00.000Z");
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(false);
+  });
+
   test("a phase-1 status-only hunters-failed from an earlier run is not this phase's flake: phase 2 fails for another reason, no re-run, exit 1", async () => {
     // Long before the trigger: the status was posted by an earlier run, not this one.
     const world = new FakeGithub({

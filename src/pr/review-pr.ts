@@ -19,7 +19,11 @@
 //     stay outside of.
 
 import path from "node:path";
-import { cliHeadField, writeCliRecord } from "#ci/cli-record";
+import {
+  cliHeadField,
+  hunterFailureRecords,
+  writeCliRecord,
+} from "#ci/cli-record";
 import { planCiSizeSkip } from "#ci/gates";
 import { withCiWorkflowGroup } from "#ci/reporter";
 import { pipelineConfigInput } from "#config/config";
@@ -65,7 +69,11 @@ import {
 } from "#pr/target";
 import { finalizePrReviewRun, settleCommitStatusAndLedger } from "#pr/teardown";
 import { setupPrWorktree } from "#pr/worktree-setup";
-import { type PipelineResult, runPipeline } from "#review/pipeline";
+import {
+  type HunterFailure,
+  type PipelineResult,
+  runPipeline,
+} from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import {
@@ -97,13 +105,29 @@ import type { ProductionRuntime } from "../production-runtime";
 // posting therefore never leaves reviewed behind. A pipeline that never returned
 // writes nothing either: its throw reaches the fatal record instead.
 export function recordPipelineOutcome(
-  result: { readonly sessionFailed: boolean } | undefined,
+  result:
+    | {
+        readonly sessionFailed: boolean;
+        readonly hunterFailures?: readonly HunterFailure[];
+      }
+    | undefined,
   headSha: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
   if (result?.sessionFailed !== true) return;
+  // WHY the causes ride on the record: the publisher names the provider and the model
+  // when every hunter failed on the provider's side (PRH-MODEL-UNAVAILABLE). A run with
+  // no failed hunter list keeps the record as it was before the field existed.
+  const failures = result.hunterFailures ?? [];
   writeCliRecord(
-    { v: 1, outcome: "hunters-failed", ...cliHeadField(headSha) },
+    {
+      v: 1,
+      outcome: "hunters-failed",
+      ...cliHeadField(headSha),
+      ...(failures.length === 0
+        ? {}
+        : { hunter_failures: hunterFailureRecords(failures) }),
+    },
     env,
   );
 }

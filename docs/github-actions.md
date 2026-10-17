@@ -922,6 +922,10 @@ gh run rerun {runId}
 
 #### `missing_provider_record`
 
+**What:** The route {provider}/{model} has no usable credential record
+
+Every hunter of the run failed on the missing record, so the lead names the route. When the route is not known, the sentence reads "The {backend}/{provider} route for {step} has no usable credential ({detail})".
+
 Add {provider} to the OpenCode store, then re-set the secret:
 
 ```bash
@@ -1066,7 +1070,7 @@ Keep one OpenCode provider per review in PRHERO_ROUTING.
 
 ### PRH-MODEL-UNAVAILABLE
 
-**Owner:** your configuration
+**Owner:** provider
 
 **What:** Provider {provider} does not serve the model configured for {step}
 
@@ -1081,6 +1085,18 @@ List the models this provider serves:
 ```bash
 opencode models {provider}
 ```
+
+#### `every_hunter`
+
+**What:** the configured model {model} is not served by this provider
+
+Every hunter of the run was refused for the same model, so the lead names the provider and the sentence names the model. When the model is not known, the sentence says "the configured model" and nothing else. A run where any hunter failed another way keeps `PRH-HUNTERS-FAILED`.
+
+#### `provider_configuration_invalid`
+
+**Owner:** your configuration
+
+The `provider_configuration_invalid` cause shares this code. Its lead stays `Your configuration:`, and the fix is the one above.
 
 ### PRH-PROMPTSET-INVALID
 
@@ -1395,6 +1411,8 @@ gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body
 **What:** Every review hunter failed in {step}: {detail}
 
 **Why:** no hunter returned a result, so there is no finding to report
+
+When every failed hunter shares a `model_unavailable` cause with its provider known, the run renders `PRH-MODEL-UNAVAILABLE` instead; when every failed hunter shares a `missing_provider_record` cause with its provider and model known, it renders `PRH-CRED-UNUSABLE`. Any other cause, a missing provider or model, a mix of causes, a hunter with no cause, or a `runtime_unavailable` cause keeps this code.
 
 **Fix:**
 
