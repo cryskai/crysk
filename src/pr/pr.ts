@@ -566,19 +566,27 @@ export async function fetchPrCommitShas(
 //
 // WHY failClosed: two readers must tell a failed read from a head with no status rows, because an
 // empty answer for an unreadable head reads as "no status". The CI override check
-// (src/pr/admission.ts) would then write over a human's decision, and `pr-hero status`, the skill's
-// only reading of the gate (src/commands/status.ts), would send a review out blind. With failClosed
-// a failed read throws, and so does a row that does not parse, because the row it would drop could
-// be the override the check is looking for. The default keeps the empty answer every watch and
-// admission caller relies on.
+// (src/ci/publish.ts, src/pr/teardown.ts) would then write over a human's decision, and `pr-hero status`,
+// the skill's only reading of the gate (src/commands/status.ts), would send a review out blind. The
+// default keeps the empty answer every watch and admission caller relies on.
+//
+// Three modes, because the readers need different things from a bad row:
+// - false (default): a failed read returns [], and a bad row is dropped.
+// - "read": a failed read throws, and so does an abbreviated sha, which is a head that cannot be read.
+//   A bad row is still dropped, so one garbage line cannot hide a valid override on the same head.
+//   This is the mode the override checks use: the only unknown is whether gh answered at all.
+// - true: a failed read throws, and so does a bad row, because the row it would drop could be the
+//   override. Used by `pr-hero status` and admission, which must not read past a row they cannot parse.
 export async function fetchCommitStatuses(
   operatorRoot: string,
   sha: string,
-  options?: { spawnFn?: typeof Bun.spawn; failClosed?: boolean },
+  options?: { spawnFn?: typeof Bun.spawn; failClosed?: boolean | "read" },
 ): Promise<CommitStatusFact[]> {
-  const failClosed = options?.failClosed === true;
+  const failClosed = options?.failClosed;
+  const strictRead = failClosed === true || failClosed === "read";
+  const strictRows = failClosed === true;
   const unreadable = (why: string): CommitStatusFact[] => {
-    if (failClosed) {
+    if (strictRead) {
       throw new CliError(
         `could not read the statuses of ${sha.slice(0, 7)}: ${why}`,
       );
@@ -605,12 +613,12 @@ export async function fetchCommitStatuses(
       if (line.trim() === "") continue;
       // Every bad line takes one of two paths, decided per line: a line that does not parse, and a line
       // that parses to something other than a status (`null`, a bare string, a row missing a field). Both
-      // are skipped by default and both throw under failClosed. The shape check sits inside this per-line
-      // handling on purpose: outside it, a `null` throws a TypeError into the outer catch, which returns []
-      // and drops every status, not just the bad line.
+      // are skipped by default and in "read" mode, and both throw under true. The shape check sits inside
+      // this per-line handling on purpose: outside it, a `null` throws a TypeError into the outer catch,
+      // which returns [] and drops every status, not just the bad line.
       const parsed = parseStatusLine(line);
       if (parsed === null) {
-        if (failClosed) {
+        if (strictRows) {
           return unreadable(
             `unreadable commit status line from gh api: ${line.slice(0, 120)}`,
           );
@@ -623,7 +631,7 @@ export async function fetchCommitStatuses(
     }
     return statuses;
   } catch (error) {
-    if (failClosed) throw error;
+    if (strictRead) throw error;
     return [];
   }
 }

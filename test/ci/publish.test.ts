@@ -2397,3 +2397,78 @@ function runtimeImportViolations(
   }
   return violations;
 }
+
+// The head's status read, as the --jq filter prints it: [context, state, created_at, description].
+// A failed read and a read with a corrupt row are both failed reads, and neither is an empty answer.
+describe("runPublish — the override read before a repost is strict and logged", () => {
+  const RUN_START = Date.parse("2026-10-17T12:00:00Z");
+  const OVERRIDE =
+    "pr-hero: overridden by @maintainer — no review on this head";
+  const UNSETTLED = { state: "success", description: "review complete" };
+  const overrideRow = JSON.stringify([
+    "pr-hero",
+    "success",
+    new Date(RUN_START + 30_000).toISOString(),
+    OVERRIDE,
+  ]);
+  const withCutoff = {
+    ...REVIEWED,
+    head_sha: REVIEWED_HEAD,
+    unsettled_status: UNSETTLED,
+    override_cutoff_ms: RUN_START,
+  };
+  const runWith = (latestStatus: GhResult) =>
+    runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: withCutoff,
+      status: [ok()],
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+      latestStatus,
+    });
+
+  test("a failed head read reposts the unsettled status, and logs one warning", () => {
+    const run = runWith(fail("gh: Server Error (HTTP 500)"));
+    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(run.exitCode).toBe(0);
+    const warnings = run.stdout
+      .split("\n")
+      .filter((line) => line.startsWith("::warning"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("could not read the statuses");
+  });
+
+  // A malformed row is skipped and the valid rows decide. The fresh override is a valid row, so it
+  // stands: no repost, and no warning, because the head was read.
+  test("a malformed row next to a valid fresh override: the override stands, no repost, and no warning", () => {
+    const run = runWith(ok(`not a status row\n${overrideRow}`));
+    expect(statusCalls(run.calls)).toHaveLength(0);
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).not.toContain("::warning");
+    expect(run.stdout).toContain("an override on this head stands");
+  });
+});
+
+// The reviewing path reads the head's status to decide whether the CLI's lock must be replaced. It
+// keeps its previous reading: a malformed row is dropped and the rest is read, so a corrupt row can
+// never turn a settled head into an error overwrite. Only a failed gh call reads as unknown.
+describe("runPublish — the reviewing path's status read drops a malformed row", () => {
+  test("a malformed row next to a settled pr-hero row reads as settled: no status is written on the head", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+      latestStatus: ok(
+        `not a status row\n${JSON.stringify(["pr-hero", "success", "2026-10-16T10:00:00Z"])}`,
+      ),
+      list: listing(),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusReadEndpoints(run.calls)).toEqual([
+      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
+    ]);
+    expect(statusCalls(run.calls)).toEqual([]);
+    expect(commentPost(run.calls)).toBeDefined();
+  });
+});
