@@ -13,13 +13,14 @@
 
 import { type CheckResult, describeCheck, evaluateChecks } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
-import { STATUS_CONTEXT } from "./markers";
+import { RUN_STEP_NAME, STATUS_CONTEXT } from "./markers";
 import {
   type CommentFact,
   classifyComment,
   classifyPath,
   invariantViolations,
   type Observation,
+  postedByThisRun,
   type RunFact,
   type SmokePath,
 } from "./observe";
@@ -85,6 +86,19 @@ import { type VariantName, workflowVariant } from "./variants";
 export interface RunOptions extends RunTiming {
   ref: string;
   keep: boolean;
+  // `--no-retry`: a free-model flake is reported and not re-run.
+  noRetry?: boolean;
+}
+
+// The row name of a scenario's re-run. The table shows both attempts, and this is the
+// mark that tells the second one apart.
+const RERUN_NOTE = "(re-run after a hunters-failed flake)";
+
+// One attempt in the run's queue. A re-run is an attempt too, so it passes the same
+// serialization gate and signal check as the scenarios do.
+interface Attempt {
+  scenario: Scenario;
+  rerun?: boolean;
 }
 
 // What a running scenario knows so far. Named Live, not Scenario, because the
@@ -133,6 +147,9 @@ interface Ran {
   result: ScenarioResult;
   cleanup: Cleanup;
   interruptedBy?: Signal;
+  // Set on a flake attempt that its re-run replaced. Its row stays in the table, but the
+  // exit code is the re-run's.
+  superseded?: boolean;
 }
 
 function utcStamp(date: Date): string {
@@ -146,7 +163,9 @@ function utcStamp(date: Date): string {
 // S7 check passed, and 1 otherwise, including a refused or failed scenario. A
 // refused start (the lock is held, or a scenario PR is still open) runs nothing.
 // A SIGINT or SIGTERM ends the scenario it lands in, after that scenario's cleanup,
-// and starts no further scenario.
+// and starts no further scenario. A scenario whose only failures are the free model's
+// hunters-failed flake is re-run once, on a fresh PR, unless --no-retry (see
+// isFreeModelFlake).
 export async function runScenarios(
   input: SandboxDeps,
   names: readonly string[],
@@ -183,32 +202,33 @@ export async function runScenarios(
   let skippedBy: Signal | undefined;
   // Installed for the whole invocation, so a signal between scenarios stops it too.
   const interrupts = watchInterrupts(deps.signals, deps.log);
+  const queue: Attempt[] = scenarios.map((scenario) => ({ scenario }));
   try {
-    for (const [index, scenario] of scenarios.entries()) {
-      const blocked = await serializationBlock(deps, options.keep ? kept : []);
-      if (blocked !== undefined) {
-        ran.push({
-          result: {
-            name: scenario.name,
-            path: "not run",
-            checks: [],
-            s7: [],
-            error: blocked,
-            refused: true,
-            exitCode: 1,
-          },
-          cleanup: { outcome: "done", kept: false },
-        });
-        logNotRun(deps, scenarios.slice(index + 1));
+    for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+      const outcome = await runAttempt(deps, next, options, kept, interrupts);
+      ran.push(outcome);
+      const rest = queue.map((pending) => pending.scenario);
+      if (outcome.result.refused === true) {
+        logNotRun(deps, rest);
         break;
       }
-      ran.push(await runOne(deps, scenario, options, kept, interrupts));
       const signal = interrupts.received();
       if (signal !== undefined) {
-        const rest = scenarios.slice(index + 1);
         logNotRun(deps, rest);
         if (rest.length > 0) skippedBy = signal;
         break;
+      }
+      // Once only: a re-run that flakes again is reported as it is.
+      if (
+        options.noRetry !== true &&
+        next.rerun !== true &&
+        isFreeModelFlake(outcome.result)
+      ) {
+        deps.log(
+          `${next.scenario.name}: its only failed checks are the free model's hunters-failed flake; re-running it once`,
+        );
+        outcome.superseded = true;
+        queue.unshift({ scenario: next.scenario, rerun: true });
       }
     }
   } finally {
@@ -219,6 +239,78 @@ export async function runScenarios(
     deps.log(line);
   }
   return exitCodeFor(ran, skippedBy);
+}
+
+// The one failure a re-run is for: every failed check carries the free model's flake
+// cause, and nothing else went wrong. No error (a timeout or a cleanup failure is one),
+// and no S7 violation. Any other failure is a finding, and stands as it is.
+export function isFreeModelFlake(result: ScenarioResult): boolean {
+  const failed = result.checks.filter((check) => !check.pass);
+  return (
+    result.exitCode === 1 &&
+    result.error === undefined &&
+    result.s7.length === 0 &&
+    failed.length > 0 &&
+    failed.every((check) => check.cause === "free-model-hunters-failed")
+  );
+}
+
+// The hunters-failed flake belongs to this phase only when its own run is the failed
+// one: its review step failed, or the outcome that names it was posted by this run.
+// A phase-1 outcome left on the PR is no flake of a later phase, so a check of that
+// phase is not re-run away. A phase with no trigger has no window, so its outcome counts.
+function isOwnHuntersFailed(obs: Observation): boolean {
+  const reviewFailed =
+    obs.run?.steps.some(
+      (step) => step.name === RUN_STEP_NAME && step.conclusion === "failure",
+    ) === true;
+  const outcome = obs.comments.find(
+    (c) =>
+      c.kind === "outcome" && (c.head === undefined || c.head === obs.headSha),
+  );
+  return (
+    reviewFailed || (outcome !== undefined && postedByThisRun(outcome, obs))
+  );
+}
+
+// One attempt: the serialization gate, then the scenario. A refused attempt runs
+// nothing and comes back as a REFUSED row. A re-run passes the same gate as the first
+// attempt, so the lock, the rails and the kept PRs apply to it unchanged.
+async function runAttempt(
+  deps: SandboxDeps,
+  attempt: Attempt,
+  options: RunOptions,
+  kept: number[],
+  interrupts: Interrupts,
+): Promise<Ran> {
+  const blocked = await serializationBlock(deps, options.keep ? kept : []);
+  if (blocked !== undefined) {
+    return {
+      result: {
+        name: rowName(attempt.scenario, attempt.rerun === true),
+        path: "not run",
+        checks: [],
+        s7: [],
+        error: blocked,
+        refused: true,
+        exitCode: 1,
+      },
+      cleanup: { outcome: "done", kept: false },
+    };
+  }
+  return runOne(
+    deps,
+    attempt.scenario,
+    options,
+    kept,
+    interrupts,
+    attempt.rerun === true,
+  );
+}
+
+// The scenario's name as its table row shows it: a re-run carries the flake's mark.
+function rowName(scenario: Scenario, rerun: boolean): string {
+  return rerun ? `${scenario.name} ${RERUN_NOTE}` : scenario.name;
 }
 
 function logNotRun(deps: SandboxDeps, rest: readonly Scenario[]): void {
@@ -232,7 +324,8 @@ function logNotRun(deps: SandboxDeps, rest: readonly Scenario[]): void {
 // exits with its signal's code. Then a signal that interrupted a scenario, or stopped
 // the scenarios after it, gives its code: a signal never turns a failed scenario into
 // a clean-looking exit, and a run that did not start every scenario is not a pass.
-// Only otherwise does each scenario's own result stand.
+// Only otherwise does each scenario's own result stand, and a flake that a re-run
+// replaced does not count.
 function exitCodeFor(
   ran: readonly Ran[],
   skippedBy: Signal | undefined,
@@ -248,7 +341,11 @@ function exitCodeFor(
     return SIGNAL_EXIT_CODES[interrupted.interruptedBy];
   }
   if (skippedBy !== undefined) return SIGNAL_EXIT_CODES[skippedBy];
-  return ran.every((r) => r.result.exitCode === 0) ? 0 : 1;
+  return ran
+    .filter((r) => r.superseded !== true)
+    .every((r) => r.result.exitCode === 0)
+    ? 0
+    : 1;
 }
 
 // The lock is released whether the invocation ended well, failed, or was signalled.
@@ -289,6 +386,7 @@ async function runOne(
   options: RunOptions,
   kept: number[],
   interrupts: Interrupts,
+  rerun: boolean,
 ): Promise<Ran> {
   const branch = `${SCENARIO_BRANCH_PREFIX}${scenario.name}-${utcStamp(deps.clock.now())}`;
   assertScenarioBranch(branch);
@@ -379,8 +477,11 @@ async function runOne(
       // A failed check of a run whose hunters failed is the free model's flake. It
       // keeps its failure and exit code; only its label says why. A head that posted
       // success was reviewed, whatever an outcome comment still says, so it is no flake.
+      // Only this phase's own hunters-failed run counts (see isOwnHuntersFailed).
       const freeModelFlake =
-        observed === "hunters-failed" && obs.status?.state !== "success";
+        observed === "hunters-failed" &&
+        obs.status?.state !== "success" &&
+        isOwnHuntersFailed(obs);
       const phaseChecks = evaluateChecks(asserted, obs).map(
         (r): CheckResult =>
           freeModelFlake && !r.pass
@@ -425,7 +526,7 @@ async function runOne(
   const failure = error ?? cleanupFailure(cleanup);
   return {
     result: {
-      name: scenario.name,
+      name: rowName(scenario, rerun),
       prUrl: live.pr?.url,
       path,
       checks,

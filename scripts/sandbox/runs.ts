@@ -11,7 +11,11 @@ import { SANDBOX_REPO } from "./rails";
 import { ghJson } from "./repo";
 
 export const DEFAULT_POLL_INTERVAL_MS = 15_000;
-export const DEFAULT_TIMEOUT_MS = 25 * 60_000;
+// How long a phase waits for its run (2700 s). WHY 45 minutes: a live free-model review
+// once took 24m36s, and at the old 25-minute ceiling it was cancelled just before it
+// finished. The workflow's own ceiling is 90 minutes, so 45 still leaves room for a slow
+// review; a run still going at this deadline is cancelled and reported as timed out.
+export const DEFAULT_TIMEOUT_MS = 45 * 60_000;
 // How long cleanup waits for a cancelled run to report completed. The workflow's
 // own ceiling is 90 minutes, so a run still going past this is left to finish
 // on its own, and its PR stays open until it does.

@@ -8,25 +8,36 @@ import { runClean, runList } from "./pr";
 import { SANDBOX_REPO } from "./rails";
 import { runScenarios } from "./scenario";
 import { findScenario, SCENARIOS, scenarioNames } from "./scenarios";
+import { DEFAULT_ROUTE, parseRoute, type Route } from "./seed";
 import { runSmoke } from "./smoke";
 
 export const USAGE = `usage: bun scripts/sandbox.ts <command> [options]
 
-  init --ref <ref>                        idempotent: repo, seeded main, pinned workflow, OpenCode secret, routing variable
-  run <scenario...> --ref <ref> [--keep]  run scenarios in order, one PR each; exit 1 on any failed expectation or S7 check
-  smoke --ref <ref> [--keep]              alias of \`run review-free\`
-  list                                    open sandbox/ PRs, then the scenario names
-  clean                                   close open sandbox/ PRs and delete their branches
+  init --ref <ref> [--route claude|opencode:<modelSnapshot>]
+                          idempotent: repo, seeded main, pinned workflow, secrets, routing (default route: claude)
+  run <scenario...> --ref <ref> [--keep] [--no-retry]
+                          run scenarios in order, one PR each; a free-model flake is re-run once; exit 1 on any failed expectation or S7 check
+  smoke --ref <ref> [--keep] [--no-retry]
+                          alias of \`run review-free\`
+  list                    open sandbox/ PRs, then the scenario names
+  clean                   close open sandbox/ PRs and delete their branches
 
 scenarios: ${scenarioNames().join(", ")}
 <ref> is a tag or branch of juanmaagd/pr-hero, pinned into the sandbox workflow.
+--route claude runs reviews on the subscription token (CLAUDE_CODE_OAUTH_TOKEN); opencode:<modelSnapshot> runs them on one OpenCode model.
 Only ${SANDBOX_REPO} is ever touched.`;
 
 export type ParsedArgs =
   | { command: "help" }
-  | { command: "init"; ref: string }
-  | { command: "smoke"; ref: string; keep: boolean }
-  | { command: "run"; scenarios: string[]; ref: string; keep: boolean }
+  | { command: "init"; ref: string; route: Route }
+  | { command: "smoke"; ref: string; keep: boolean; noRetry: boolean }
+  | {
+      command: "run";
+      scenarios: string[];
+      ref: string;
+      keep: boolean;
+      noRetry: boolean;
+    }
   | { command: "list" }
   | { command: "clean" };
 
@@ -44,6 +55,8 @@ export function parseCliArgs(
   }
   let ref: string | undefined;
   let keep = false;
+  let noRetry = false;
+  let route: Route = DEFAULT_ROUTE;
   const positional: string[] = [];
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i] ?? "";
@@ -53,8 +66,23 @@ export function parseCliArgs(
         return { error: "--ref needs a value" };
       ref = value;
       i += 1;
+    } else if (arg === "--route" && command === "init") {
+      const value = rest[i + 1];
+      if (value === undefined || value.startsWith("--"))
+        return {
+          error: "--route needs a value: claude or opencode:<modelSnapshot>",
+        };
+      const parsedRoute = parseRoute(value);
+      if ("error" in parsedRoute) return parsedRoute;
+      route = parsedRoute.route;
+      i += 1;
     } else if (arg === "--keep" && (command === "smoke" || command === "run")) {
       keep = true;
+    } else if (
+      arg === "--no-retry" &&
+      (command === "smoke" || command === "run")
+    ) {
+      noRetry = true;
     } else if (command === "run" && !arg.startsWith("--") && arg !== "") {
       positional.push(arg);
     } else {
@@ -65,11 +93,11 @@ export function parseCliArgs(
     case "init":
       return ref === undefined
         ? { error: "init needs --ref <ref>" }
-        : { command, ref };
+        : { command, ref, route };
     case "smoke":
       return ref === undefined
         ? { error: "smoke needs --ref <ref>" }
-        : { command, ref, keep };
+        : { command, ref, keep, noRetry };
     case "run": {
       if (ref === undefined) return { error: "run needs --ref <ref>" };
       if (positional.length === 0) {
@@ -81,7 +109,7 @@ export function parseCliArgs(
       if (unknown.length > 0) {
         return { error: `unknown scenario: ${unknown.join(", ")}` };
       }
-      return { command, scenarios: positional, ref, keep };
+      return { command, scenarios: positional, ref, keep, noRetry };
     }
     case "list":
     case "clean":
@@ -109,14 +137,19 @@ export async function runCli(
         deps.log(USAGE);
         return 0;
       case "init":
-        await runInit(deps, parsed.ref);
+        await runInit(deps, parsed.ref, parsed.route);
         return 0;
       case "smoke":
-        return await runSmoke(deps, { ref: parsed.ref, keep: parsed.keep });
+        return await runSmoke(deps, {
+          ref: parsed.ref,
+          keep: parsed.keep,
+          noRetry: parsed.noRetry,
+        });
       case "run":
         return await runScenarios(deps, parsed.scenarios, {
           ref: parsed.ref,
           keep: parsed.keep,
+          noRetry: parsed.noRetry,
         });
       case "list": {
         const code = await runList(deps);

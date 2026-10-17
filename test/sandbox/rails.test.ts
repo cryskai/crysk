@@ -15,6 +15,10 @@ import {
   RailViolation,
   SANDBOX_REPO,
 } from "../../scripts/sandbox/rails";
+import {
+  CLAUDE_TOKEN_SECRET,
+  ROUTING_VARIABLE,
+} from "../../scripts/sandbox/seed";
 import { runSmoke } from "../../scripts/sandbox/smoke";
 import { type GhScript, harness, ok } from "./fakes";
 
@@ -184,6 +188,86 @@ describe("gh rail: short-flag clusters", () => {
     for (const args of sent) {
       expect(() => assertGhArgs(args)).not.toThrow();
     }
+  });
+});
+
+// The claude route deletes the routing variable, and only that one. The rail names it
+// as a literal, so widening it means editing this allowlist, not the seed.
+describe("gh rail: the routing variable is the only variable deleted", () => {
+  test("accepts exactly the delete the claude route makes, in either repo spelling", () => {
+    expect(() =>
+      assertGhArgs([
+        "variable",
+        "delete",
+        ROUTING_VARIABLE,
+        "--repo",
+        SANDBOX_REPO,
+      ]),
+    ).not.toThrow();
+    expect(() =>
+      assertGhArgs([
+        "variable",
+        "delete",
+        ROUTING_VARIABLE,
+        "-R",
+        SANDBOX_REPO,
+      ]),
+    ).not.toThrow();
+    expect(() =>
+      assertGhArgs([
+        "variable",
+        "delete",
+        ROUTING_VARIABLE,
+        `--repo=${SANDBOX_REPO}`,
+      ]),
+    ).not.toThrow();
+  });
+
+  test("refuses a delete of any other variable name, or of no name", () => {
+    const refused: string[][] = [
+      ["variable", "delete", "OTHER_VARIABLE", "--repo", SANDBOX_REPO],
+      ["variable", "delete", "PRHERO_ROUTING_V2", "--repo", SANDBOX_REPO],
+      ["variable", "delete", "--repo", SANDBOX_REPO],
+      ["variable", "delete", "--repo", SANDBOX_REPO, ROUTING_VARIABLE],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+
+  test("refuses the routing variable's delete in any other repo, or with no repo, or with a widening flag", () => {
+    const refused: string[][] = [
+      ["variable", "delete", ROUTING_VARIABLE, "--repo", "juanmaagd/pr-hero"],
+      ["variable", "delete", ROUTING_VARIABLE, "-R", "juanmaagd/pr-hero"],
+      ["variable", "delete", ROUTING_VARIABLE],
+      [
+        "variable",
+        "delete",
+        ROUTING_VARIABLE,
+        "--env",
+        "production",
+        "-R",
+        SANDBOX_REPO,
+      ],
+      [
+        "variable",
+        "delete",
+        ROUTING_VARIABLE,
+        "--org",
+        "juanmaagd",
+        "-R",
+        SANDBOX_REPO,
+      ],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+
+  test("refuses the other variable verbs the claude route does not need", () => {
+    expect(() =>
+      assertGhArgs(["variable", "list", "--repo", SANDBOX_REPO]),
+    ).toThrow(RailViolation);
   });
 });
 
@@ -511,7 +595,10 @@ const happyGh: GhScript = (args, world) => {
   if (args[0] === "variable" && args[1] === "get") {
     return { exitCode: 1, stdout: "", stderr: "HTTP 404: Not Found" };
   }
-  if (args[0] === "secret" && args[1] === "list") return ok("[]");
+  // The claude route's default init needs the subscription token to be listed.
+  if (args[0] === "secret" && args[1] === "list") {
+    return ok(JSON.stringify([{ name: CLAUDE_TOKEN_SECRET }]));
+  }
   if (args[0] === "pr" && args[1] === "list") return ok("[]");
   if (args[0] === "pr" && args[1] === "create") {
     return ok("https://github.com/juanmaagd/pr-hero-sandbox/pull/7\n");

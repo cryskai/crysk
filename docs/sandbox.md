@@ -12,9 +12,9 @@ under fakes. Run them with `bun test test/sandbox`.
 ## Commands
 
 ```bash
-bun scripts/sandbox.ts init --ref <ref>                 # idempotent bootstrap of the sandbox repo
-bun scripts/sandbox.ts run <scenario...> --ref <ref> [--keep]  # run scenarios in order, one PR each
-bun scripts/sandbox.ts smoke --ref <ref> [--keep]       # alias of `run review-free`
+bun scripts/sandbox.ts init --ref <ref> [--route claude|opencode:<modelSnapshot>]  # idempotent bootstrap; route defaults to claude
+bun scripts/sandbox.ts run <scenario...> --ref <ref> [--keep] [--no-retry]  # run scenarios in order, one PR each
+bun scripts/sandbox.ts smoke --ref <ref> [--keep] [--no-retry]  # alias of `run review-free`
 bun scripts/sandbox.ts list                             # open sandbox/ PRs, then the scenarios
 bun scripts/sandbox.ts clean                            # close open sandbox/ PRs, delete their branches
 ```
@@ -23,14 +23,30 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   Letters, digits, `.`, `_`, `/`, `-`.
 - `init` creates the public repo if it is absent, seeds `main` with the fixture's correct
   sources, the product's scaffolded workflow, the repo config and the gotchas, and sets the
-  `OPENCODE_AUTH_JSON` secret to `{}` and the `PRHERO_ROUTING` variable to the free route.
-  The planted bug is not on `main`; each scenario commits it on its own branch. A second run with the same ref
+  `OPENCODE_AUTH_JSON` secret to `{}` (harmless while routing is unset). The planted bug is
+  not on `main`; each scenario commits it on its own branch. A second run with the same ref
   writes nothing. A present secret is left alone, because GitHub never returns its value.
+- `--route` sets the model route of every review in the sandbox. The default, `claude`,
+  needs the repo secret `CLAUDE_CODE_OAUTH_TOKEN`: `init` checks that it is present, and
+  refuses before it changes the routing when it is not, with the command the owner runs:
+  `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo juanmaagd/pr-hero-sandbox`. Under `claude`,
+  `init` deletes the `PRHERO_ROUTING` variable if it is set, so the scaffolded workflow runs
+  the engine's default stack (sonnet hunters, opus refuter, haiku summarizer), which is
+  production's. `opencode:<modelSnapshot>` sets `PRHERO_ROUTING` to that OpenCode model
+  instead. The snapshot takes letters, digits, `.` and `-`; anything else is refused.
 - `run` exits 1 on any failed expectation, any S7 violation, or a refused run. The table
-  at the end names each scenario's path and prints every expectation as PASS or FAIL.
+  at the end names each scenario's path and prints every expectation as PASS or FAIL. Run
+  does not take `--route`: it runs on the route `init` set.
+- A scenario whose only failures are the free model's hunters-failed flake is re-run once,
+  on a fresh PR. The table shows both attempts, and the second row is marked
+  `(re-run after a hunters-failed flake)`. The exit code is the re-run's. A flake that
+  repeats is reported as it is, not re-run again. `--no-retry` turns the re-run off.
 - `--keep` leaves each scenario PR open and prints where it is. `clean` closes them. A run
   still going when a phase ends (a timeout, or a signal) is cancelled first, with or without
   `--keep`; the PR is kept only once that run has stopped.
+- A phase waits up to 2700 s (45 minutes) for its run: `DEFAULT_TIMEOUT_MS` in
+  `scripts/sandbox/runs.ts`. A live free-model review once took 24m36s, and at the old
+  25-minute ceiling it was cancelled just before it finished.
 - One invocation runs at a time on this machine. It takes `~/.prhero/sandbox.lock` exclusively
   and records its pid there. A second invocation is refused while the lock's process is alive;
   a lock whose process is gone is taken over. A lock that names no pid is refused, and is
@@ -40,14 +56,22 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
 
 - The pre-model scenarios, `no-credential`, `bad-routing`, and the first phase of `size-skip`, cost $0.
   No model is reached.
-- Reviews use the OpenCode free route `opencode/big-pickle`, which the OpenCode catalog
-  lists at cost 0. It was proven live on 2026-10-16 with `OPENCODE_AUTH_JSON` set to `{}`.
-  `init` sets no Anthropic or Claude secret, so no scenario can spend on a paid model.
+- The default `claude` route is subscription-backed, $0 cash, and uses subscription quota.
+  Reviews run on the `CLAUDE_CODE_OAUTH_TOKEN` subscription. `init` never sets an Anthropic
+  API key, so no review is billed per token. `init` refuses the `claude` route while
+  `ANTHROPIC_API_KEY` is set on the sandbox, before it writes anything; remove it with
+  `gh secret delete ANTHROPIC_API_KEY --repo juanmaagd/pr-hero-sandbox`.
+- The `opencode:<modelSnapshot>` route runs reviews on one OpenCode model at cost 0. The
+  sandbox used `opencode/big-pickle` until 2026-10-17: it leaks its reasoning into its
+  answers, and in about half of its live runs every hunter failed. `deepseek-v4.1-flash-free`
+  and `glm-5.3-flash-free` answered cleanly in a probe.
 - Free-model hunters can fail. When they do, the run posts `PRH-HUNTERS-FAILED`, and
   the expectations of that run that fail are printed as
-  `FAIL (free-model hunters failed: re-run)`. The exit code stays 1. Re-run the
-  scenario. Only that label marks a flake; a plain `FAIL` is a finding until a re-run
-  shows otherwise. The hunters-failed tolerance and this label need an action ref at or after T2c (`98569d1`), where the publisher renders `PRH-HUNTERS-FAILED`; on an older ref an all-hunters-failed run shows `review did not finish` with no PRH code, and S7 reports it.
+  `FAIL (free-model hunters failed: re-run)`. Only that label marks a flake; a plain `FAIL`
+  is a finding until a re-run shows otherwise. A flake is re-run once automatically (see
+  Commands). The label names the free model, but the re-run rule keys on the cause alone, so
+  a hunters-failed run on the claude route is re-run the same way. The hunters-failed
+  tolerance and this label need an action ref at or after T2c (`98569d1`), where the publisher renders `PRH-HUNTERS-FAILED`; on an older ref an all-hunters-failed run shows `review did not finish` with no PRH code, and S7 reports it.
 
 ## Scenarios
 
@@ -59,15 +83,15 @@ one observation of the PR. S7 invariants are checked on every observation.
 | `no-credential` | With no model credential input, the action stops before any model. | Outcome comment `PRH-CRED-MISSING`; status `error` with that code; no report on the head. | $0 |
 | `bad-routing` | A malformed routing input is refused before any model runs. | Outcome comment `PRH-ROUTING-INVALID`; status `error` with that code; no report on the head. | $0 |
 | `bad-gotchas` | A scaffold `.prhero/gotchas.md` on the branch is refused before admission and spend, and the outcome names its owner. | Outcome comment `PRH-GOTCHAS-MISSING` with the owner lead `Your configuration:`; status `error` with that code; no report on the head. The branch commits the scaffold on top of the planted volume (the scenario's file override). | $0 |
-| `review-free` | The normal workflow on the free route reviews the planted bug end to end, and its gate status agrees with the findings it posted. | Path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings on the PR (see Gate status below); at least one report on the head; no outcome comment. | $0 (free route) |
-| `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings; a report; no outcome comment. | $0 (phase 2 on the free route) |
-| `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own artifact (`pr-hero-run-<pr>-<sha>`); path `reviewed`; the triggering comment has the `eyes` reaction. Only the run's own review passes: a skip is a failure, because a forced run bypasses admission and budget. Status and report are not asserted here, since phase 1 left them on the same head. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (free route) |
-| `near-miss` | A `/pr-hero review` comment that is not the exact command runs no review: it gets the `confused` reaction and no text reply. | Phase 1 (normal): path `reviewed` or `hunters-failed`; a precondition, as in `comment-trigger`. Phase 2 (`/pr-hero review please`): the comment run completed; the triggering comment has the `confused` reaction; the run left no review evidence of its own (no `pr-hero-run-<pr>-<sha>` artifact, and no skip marker posted after its trigger), although its `Run pr-hero` step concludes `success`; this run posted no outcome comment (a `PRH-HUNTERS-FAILED` outcome that phase 1 left may remain). | $0 (phase 1 on the free route; phase 2 reaches no model) |
+| `review-free` | The normal workflow on the claude route reviews the planted bug end to end, and its gate status agrees with the findings it posted. | Path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings on the PR (see Gate status below); at least one report on the head; no outcome comment. | $0 (claude route, subscription quota) |
+| `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings; a report; no outcome comment. | $0 (phase 2 on the claude route) |
+| `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own artifact (`pr-hero-run-<pr>-<sha>`); path `reviewed`; the triggering comment has the `eyes` reaction. Only the run's own review passes: a skip is a failure, because a forced run bypasses admission and budget. Status and report are not asserted here, since phase 1 left them on the same head. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (claude route, subscription quota) |
+| `near-miss` | A `/pr-hero review` comment that is not the exact command runs no review: it gets the `confused` reaction and no text reply. | Phase 1 (normal): path `reviewed` or `hunters-failed`; a precondition, as in `comment-trigger`. Phase 2 (`/pr-hero review please`): the comment run completed; the triggering comment has the `confused` reaction; the run left no review evidence of its own (no `pr-hero-run-<pr>-<sha>` artifact, and no skip marker posted after its trigger), although its `Run pr-hero` step concludes `success`; this run posted no outcome comment (a `PRH-HUNTERS-FAILED` outcome that phase 1 left may remain). | $0 (phase 1 on the claude route; phase 2 reaches no model) |
 
-| `same-head-rereview` | A blocking finding survives `/pr-hero review` on the same head, so the gate stays red and the author cannot re-run its way to green (S7). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings on the PR. Phase 2 (`/pr-hero review`, same head): the comment run completed and its review step succeeded. Its status must still be `failure`, but only when phase 1 posted a blocking finding to carry; otherwise that check is printed as `not asserted: no blocking finding to carry`, because the free model may find nothing to carry. | $0 (free route) |
-| `review-advisory` | With `mode: advisory`, the status stays `success` for a finished review, whatever it finds. | Path `reviewed`; the run's review step succeeded; status `success`; at least one report on the head; no outcome comment. | $0 (free route) |
-| `override` | A red gate on a reviewed head is unlocked by `/pr-hero override` (S8): the status turns `success` with the actor's name, and an audit comment is posted on that head, with no review and no cost. | Phase 1 (`normal` variant): path `reviewed`; the run's review step succeeded; the status matches the blocking findings; a report; no outcome comment. Phase 2 (`/pr-hero override`): the comment run completed; the head's status is `success` with a description that starts `pr-hero: overridden by @`; the run posted an `<!-- pr-hero-override` comment on that head, after its trigger. | $0 (phase 1 on the free route; phase 2 reaches no model) |
-| `size-skip` | In gate mode, a diff over the size gate sets a red head, and `/pr-hero review` reviews that same head. | Phase 1 (`size-skip` variant, `max-changed-lines: 1`): path `skipped:size`; status `failure` with a description that starts `pr-hero skipped the review`; no report. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own evidence; path `reviewed`. | $0 (phase 1 reaches no model; phase 2 on the free route) |
+| `same-head-rereview` | A blocking finding survives `/pr-hero review` on the same head, so the gate stays red and the author cannot re-run its way to green (S7). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings on the PR. Phase 2 (`/pr-hero review`, same head): the comment run completed and its review step succeeded. Its status must still be `failure`, but only when phase 1 posted a blocking finding to carry; otherwise that check is printed as `not asserted: no blocking finding to carry`, because the free model may find nothing to carry. | $0 (claude route, subscription quota) |
+| `review-advisory` | With `mode: advisory`, the status stays `success` for a finished review, whatever it finds. | Path `reviewed`; the run's review step succeeded; status `success`; at least one report on the head; no outcome comment. | $0 (claude route, subscription quota) |
+| `override` | A red gate on a reviewed head is unlocked by `/pr-hero override` (S8): the status turns `success` with the actor's name, and an audit comment is posted on that head, with no review and no cost. | Phase 1 (`normal` variant): path `reviewed`; the run's review step succeeded; the status matches the blocking findings; a report; no outcome comment. Phase 2 (`/pr-hero override`): the comment run completed; the head's status is `success` with a description that starts `pr-hero: overridden by @`; the run posted an `<!-- pr-hero-override` comment on that head, after its trigger. | $0 (phase 1 on the claude route; phase 2 reaches no model) |
+| `size-skip` | In gate mode, a diff over the size gate sets a red head, and `/pr-hero review` reviews that same head. | Phase 1 (`size-skip` variant, `max-changed-lines: 1`): path `skipped:size`; status `failure` with a description that starts `pr-hero skipped the review`; no report. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own evidence; path `reviewed`. | $0 (phase 1 reaches no model; phase 2 on the claude route) |
 
 **Gate status.** `review-free` and `cleanup` do not pin the status to one state, because the free model
 finds different things from run to run. Their check, `status matches the blocking findings`, requires
@@ -94,8 +118,9 @@ The runner can reach one repository, and nothing else.
 
 - The target is hardcoded to `juanmaagd/pr-hero-sandbox`. Every `gh` and `git` call goes
   through an allowlist (`scripts/sandbox/rails.ts`). A verb that is not listed is refused.
-- `gh` may view, create or clone only the sandbox repo, manage its secret and variable,
-  list, create, view, close and comment on its PRs, and list and view its runs. `gh api`
+- `gh` may view, create or clone only the sandbox repo, list and set its secrets, read and
+  set its variables, delete exactly `PRHERO_ROUTING` (the claude route's one delete, in
+  `--repo <sandbox>` form), list, create, view, close and comment on its PRs, and list and view its runs. `gh api`
   is GET under the sandbox (the reactions read of a comment phase included), plus one DELETE
   of a `sandbox/` branch ref. Field flags are refused, and so is a POST to a reactions path.
 - `git` pushes only `origin <branch>`, where the branch is `main` or a `sandbox/` branch,

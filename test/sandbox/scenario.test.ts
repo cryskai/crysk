@@ -15,6 +15,7 @@ import {
   renderScenarioTable,
   type ScenarioResult,
 } from "../../scripts/sandbox/report";
+import { DEFAULT_TIMEOUT_MS } from "../../scripts/sandbox/runs";
 import { runScenarios } from "../../scripts/sandbox/scenario";
 import { findScenario } from "../../scripts/sandbox/scenarios";
 import {
@@ -261,10 +262,15 @@ describe("run: the scenarios against the fake repository", () => {
     ).toBe(true);
   });
 
-  test("a failed expectation of a run that hunters-failed is labelled as the free model's flake, and still exits 1", async () => {
+  test("a failed expectation of a run that hunters-failed is labelled as the free model's flake, and still exits 1 with --no-retry", async () => {
     const world = new FakeGithub({ ref: REF, runOutcomes: ["hunters-failed"] });
     const h = world.harness();
-    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+    expect(
+      await runScenarios(h.deps, ["review-free"], {
+        ...OPTIONS,
+        noRetry: true,
+      }),
+    ).toBe(1);
     expect(
       h.logs.includes(
         "  FAIL (free-model hunters failed: re-run)  review-free: path is reviewed (got hunters-failed)",
@@ -277,18 +283,147 @@ describe("run: the scenarios against the fake repository", () => {
     ).toBe(false);
   });
 
+  test("a phase-2 check that fails is not the flake when phase 1 hunters-failed: no re-run, exit 1", async () => {
+    // Phase 1 hunters-failed, and its outcome stays on the PR. Phase 2 is a near miss
+    // that reviews nothing, so it reads phase 1's outcome as its path. Its checks fail
+    // for reasons that are not the free model's flake, so the scenario must not re-run.
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "near-miss"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(false);
+    expect(
+      h.logs.includes(
+        "  FAIL  comment-trigger: [2] path is reviewed (got hunters-failed)",
+      ),
+    ).toBe(true);
+  });
+
+  test("a phase-2 run that hunters-failed itself is the flake and is re-run once", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "hunters-failed"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(0);
+    expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(true);
+  });
+
   test("cleanup: a second run that hunters-failed is labelled as the flake, and its checks still fail the run", async () => {
     const world = new FakeGithub({
       ref: REF,
       runOutcomes: ["credential", "hunters-failed"],
     });
     const h = world.harness();
-    expect(await runScenarios(h.deps, ["cleanup"], OPTIONS)).toBe(1);
+    expect(
+      await runScenarios(h.deps, ["cleanup"], { ...OPTIONS, noRetry: true }),
+    ).toBe(1);
     expect(
       h.logs.includes(
         "  FAIL (free-model hunters failed: re-run)  cleanup: [2] path is reviewed (got hunters-failed)",
       ),
     ).toBe(true);
+  });
+
+  // A free-model flake is re-run once, on a fresh PR, through the same gate as any
+  // scenario: the table keeps both attempts, and the exit code is the re-run's.
+  describe("a hunters-failed flake is re-run once", () => {
+    const RERUN_NAME = "review-free (re-run after a hunters-failed flake)";
+
+    test("the flake attempt is re-run on a fresh PR, which passes, so the invocation exits 0 and both attempts are reported", async () => {
+      const world = new FakeGithub({
+        ref: REF,
+        runOutcomes: ["hunters-failed"],
+      });
+      const h = world.harness();
+      expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(0);
+      expect(world.prs.size).toBe(2);
+      expect(
+        h.logs.some((l) =>
+          /^review-free\s+hunters-failed\s+ok\s+1\s+\S+$/.test(l),
+        ),
+      ).toBe(true);
+      expect(
+        h.logs.some(
+          (l) => l.includes(RERUN_NAME) && /\sreviewed\s+ok\s+0\s/.test(l),
+        ),
+      ).toBe(true);
+      expect(
+        h.logs.some((l) =>
+          l.startsWith(`  PASS  ${RERUN_NAME}: path is reviewed`),
+        ),
+      ).toBe(true);
+    });
+
+    test("a failure of another kind is not re-run", async () => {
+      const world = new FakeGithub({ ref: REF, forceCredentialOutcome: true });
+      const h = world.harness();
+      expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+      expect(world.prs.size).toBe(1);
+      expect(h.logs.some((l) => l.includes("(re-run after"))).toBe(false);
+    });
+
+    test("--no-retry does not re-run the flake", async () => {
+      const world = new FakeGithub({
+        ref: REF,
+        runOutcomes: ["hunters-failed"],
+      });
+      const h = world.harness();
+      expect(
+        await runScenarios(h.deps, ["review-free"], {
+          ...OPTIONS,
+          noRetry: true,
+        }),
+      ).toBe(1);
+      expect(world.prs.size).toBe(1);
+    });
+
+    test("the re-run is only once: a flake that repeats is reported, not re-run a second time", async () => {
+      const world = new FakeGithub({
+        ref: REF,
+        runOutcomes: ["hunters-failed", "hunters-failed"],
+      });
+      const h = world.harness();
+      expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+      expect(world.prs.size).toBe(2);
+      expect(
+        h.logs.some(
+          (l) =>
+            l.includes(RERUN_NAME) && /\shunters-failed\s+ok\s+1\s/.test(l),
+        ),
+      ).toBe(true);
+    });
+
+    test("a timed-out phase is not a flake and is not re-run", async () => {
+      const world = new FakeGithub({ ref: REF, stuckCommentRuns: true });
+      const h = world.harness();
+      expect(
+        await runScenarios(h.deps, ["comment-trigger"], {
+          ...OPTIONS,
+          timeoutMs: 60_000,
+        }),
+      ).toBe(1);
+      expect(world.prs.size).toBe(1);
+    });
+  });
+
+  // The poll's ceiling is named in runs.ts, with the free-model review that once took
+  // 24m36s: a phase that never completes waits the whole of it on the fake clock.
+  test("a phase whose run never completes waits the 2700 s default, not a shorter one", async () => {
+    expect(DEFAULT_TIMEOUT_MS).toBe(2_700_000);
+    const world = new FakeGithub({ ref: REF, stuckCommentRuns: true });
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["comment-trigger"], {
+        ref: REF,
+        keep: false,
+      }),
+    ).toBe(1);
+    expect(h.logs).toContain(
+      "timed out after 2700s waiting for the run; collecting what is visible",
+    );
   });
 
   test("a failed expectation exits 1, and the table names the check with what was seen", async () => {
