@@ -281,7 +281,7 @@ describe("priorScoreForAdmission precedence", () => {
   test("state findings beat admission and posted comments", () => {
     expect(
       priorScoreForAdmission({
-        state: { headSha: HEAD_A, findings: [finding("advisory")] },
+        state: { headSha: HEAD_A, hw: 0, findings: [finding("advisory")] },
         admission: { headSha: HEAD_A, blocking: 9, advisory: 0, reviews: 1 },
         postedFindings: {
           blocking: 9,
@@ -599,6 +599,7 @@ describe("evaluateCiReviewAdmission", () => {
           reviewCount: 1,
           state: {
             headSha: HEAD_A,
+            hw: 0,
             findings: [
               finding("advisory"),
               finding("advisory"),
@@ -622,6 +623,7 @@ describe("evaluateCiReviewAdmission", () => {
         reviewCount: 2,
         state: {
           headSha: HEAD_A,
+          hw: 0,
           findings: [finding("blocking"), finding("blocking")],
           reviews: 2,
         },
@@ -641,7 +643,10 @@ describe("evaluateCiReviewAdmission", () => {
 describe("stateReviewCount", () => {
   test("reads reviews from state when present", () => {
     expect(
-      stateReviewCount({ headSha: HEAD_A, findings: [], reviews: 2 }, true),
+      stateReviewCount(
+        { headSha: HEAD_A, hw: 0, findings: [], reviews: 2 },
+        true,
+      ),
     ).toBe(2);
   });
 
@@ -966,7 +971,7 @@ describe("validateAdmissionAuthority", () => {
       validateAdmissionAuthority({
         summaryHead: HEAD_A,
         reportMarkerHead: HEAD_A,
-        state: { headSha: HEAD_A, findings: [] },
+        state: { headSha: HEAD_A, hw: 0, findings: [] },
         admission: { headSha: HEAD_A, blocking: 0, advisory: 1, reviews: 1 },
       }),
     ).toEqual({ ok: true, authoritativeHead: HEAD_A });
@@ -992,7 +997,7 @@ describe("validateAdmissionAuthority", () => {
       validateAdmissionAuthority({
         summaryHead: HEAD_A,
         reportMarkerHead: HEAD_A,
-        state: { headSha: HEAD_B, findings: [] },
+        state: { headSha: HEAD_B, hw: 0, findings: [] },
         admission: null,
       }),
     ).toMatchObject({

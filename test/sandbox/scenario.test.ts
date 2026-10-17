@@ -1169,3 +1169,50 @@ describe("T2e: the reactions and the near miss, end to end", () => {
     );
   });
 });
+
+// D3: a blocking finding first found by a re-review keeps its state row, so the next
+// re-review still counts it. The second push adds a file, and the forced review on
+// that head must write the state row at that file.
+describe("rereview-fresh-finding: the state row of a finding first found by a re-review", () => {
+  test("rereview-fresh-finding exits 0: the report carries a state row at src/mute.ts", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["rereview-fresh-finding"], OPTIONS),
+    ).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}rereview-fresh-finding: \[3\] state row at src\/mute\.ts/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("rereview-fresh-finding exits 1 when the report carries no state row at src/mute.ts", async () => {
+    const world = new FakeGithub({ ref: REF, omitStateRows: true });
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["rereview-fresh-finding"], OPTIONS),
+    ).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        /FAIL {2}rereview-fresh-finding: \[3\] state row at src\/mute\.ts/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("a push that adds files on an unchanged variant is not empty, and does not throw", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["rereview-fresh-finding"], OPTIONS),
+    ).toBe(0);
+    expect(h.logs.some((l) => l.includes("the push would be empty"))).toBe(
+      false,
+    );
+    expect(world.events.some((e) => e.startsWith("push "))).toBe(true);
+  });
+});

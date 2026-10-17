@@ -541,6 +541,81 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       },
     }),
   },
+  // D3: review 1, a push that adds the second bug, then a forced re-review whose
+  // report must carry a state row for that bug's file.
+  "rereview-fresh-finding/0": {
+    pass: obs(),
+    fail: obs({
+      status: {
+        state: "error",
+        description: "PRH-HUNTERS-FAILED: every hunter failed",
+      },
+      comments: [outcome("PRH-HUNTERS-FAILED")],
+    }),
+  },
+  "rereview-fresh-finding/1": {
+    pass: obs(),
+    // The run never finished.
+    fail: obs({
+      run: {
+        id: 42,
+        event: "pull_request",
+        status: "in_progress",
+        conclusion: null,
+        steps: [],
+      },
+    }),
+  },
+  "rereview-fresh-finding/2": {
+    pass: obs({
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      status: {
+        state: "failure",
+        description:
+          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+      comments: [
+        {
+          source: "issue",
+          kind: "report",
+          head: NEW,
+          statePaths: ["src/volume.ts", "src/mute.ts"],
+        },
+        { source: "inline", kind: "finding", blocking: true, head: NEW },
+      ],
+    }),
+    // T5c: the state block holds only review 1's rows, so the re-review's own
+    // finding is forgotten.
+    fail: obs({
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+      status: {
+        state: "failure",
+        description:
+          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+      comments: [
+        {
+          source: "issue",
+          kind: "report",
+          head: NEW,
+          statePaths: ["src/volume.ts"],
+        },
+        { source: "inline", kind: "finding", blocking: true, head: NEW },
+      ],
+    }),
+  },
 };
 
 describe("override-comment: only this run's override, on this head", () => {
@@ -994,5 +1069,51 @@ describe("no-run-evidence: the comment's run left no review evidence of its own 
     expect(evaluateCheck(check, nearMissRun()).label).toBe(
       "the run left no review evidence of its own",
     );
+  });
+});
+
+// D3: this head's report carries a state-block row located in the path.
+describe("state-row-at: this head's report carries a state row in the path (D3)", () => {
+  const check = { kind: "state-row-at", path: "src/mute.ts" } as const;
+  const report = (head: string, statePaths?: string[]) => ({
+    source: "issue" as const,
+    kind: "report" as const,
+    head,
+    ...(statePaths === undefined ? {} : { statePaths }),
+  });
+
+  test("passes when this head's report has a state row at the path", () => {
+    const result = evaluateCheck(
+      check,
+      obs({ comments: [report(NEW, ["src/mute.ts", "src/a.ts"])] }),
+    );
+    expect(result.pass).toBe(true);
+    expect(result.label).toBe("state row at src/mute.ts");
+  });
+
+  test("fails when the state rows of this head's report are elsewhere", () => {
+    const result = evaluateCheck(
+      check,
+      obs({ comments: [report(NEW, ["src/a.ts"])] }),
+    );
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe(
+      "no state row at src/mute.ts (state rows: src/a.ts)",
+    );
+  });
+
+  test("fails when the report with the state row is for another head", () => {
+    const result = evaluateCheck(
+      check,
+      obs({ comments: [report(OLD, ["src/mute.ts"])] }),
+    );
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("no state block on this head's report");
+  });
+
+  test("fails with the no-state-block detail when this head's report has no state block", () => {
+    const result = evaluateCheck(check, obs({ comments: [report(NEW)] }));
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe("no state block on this head's report");
   });
 });

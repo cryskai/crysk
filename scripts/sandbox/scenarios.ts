@@ -8,7 +8,7 @@
 
 import { GOTCHAS_TEMPLATE } from "#review/preflight";
 import type { Check } from "./expect";
-import { GOTCHAS_PATH } from "./seed";
+import { GOTCHAS_PATH, MUTE_BUGGY, MUTE_PATH } from "./seed";
 import type { VariantName } from "./variants";
 
 // A file the scenario branch commits on top of the planted volume. The path is a
@@ -20,6 +20,13 @@ export interface FileOverride {
   contents: string;
 }
 
+// D3: a file a later push adds. The path is a seed constant, so a scenario can only
+// add a file the seed names.
+export interface NewFile {
+  path: typeof MUTE_PATH;
+  contents: string;
+}
+
 export type Action =
   // The first phase: the branch, its first commit and the PR. `overrides` are
   // committed with that first commit.
@@ -28,8 +35,8 @@ export type Action =
       variant: VariantName;
       overrides?: readonly FileOverride[];
     }
-  // A later commit on the same branch, a plain fast-forward push.
-  | { kind: "push"; variant: VariantName }
+  // A later commit on the same branch, a plain fast-forward push. `files` are committed with it.
+  | { kind: "push"; variant: VariantName; files?: readonly NewFile[] }
   // A PR comment, posted as the authenticated user.
   | { kind: "comment"; body: string };
 
@@ -341,6 +348,38 @@ export const SCENARIOS: readonly Scenario[] = [
           STEP_SUCCEEDED,
         ],
         afterPriorBlocking: [{ kind: "status", state: "failure" }],
+      },
+    ],
+  },
+  {
+    name: "rereview-fresh-finding",
+    description:
+      "a blocking finding first found by a re-review is kept in the state block, so the next re-review still counts it (D3, T5c)",
+    phases: [
+      {
+        action: { kind: "open", variant: "normal" },
+        wait: "pull_request",
+        checks: [REVIEWED],
+      },
+      {
+        action: {
+          kind: "push",
+          variant: "normal",
+          files: [{ path: MUTE_PATH, contents: MUTE_BUGGY }],
+        },
+        wait: "pull_request",
+        // Admission may skip this head; the forced review below is the one under test.
+        checks: [{ kind: "run-completed", event: "pull_request" }],
+      },
+      {
+        action: { kind: "comment", body: "/pr-hero review" },
+        wait: "issue_comment",
+        checks: [
+          { kind: "run-completed", event: "issue_comment" },
+          STEP_SUCCEEDED,
+          STATUS_MATCHES_FINDINGS,
+          { kind: "state-row-at", path: MUTE_PATH },
+        ],
       },
     ],
   },
