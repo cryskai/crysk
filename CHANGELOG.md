@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`npx pr-hero` without Bun**: `bin/pr-hero.js` now starts under Node too. It runs the CLI in-process under Bun,
+  and under Node it starts Bun on `src/cli.ts`: the bundled `bun` dependency (pinned to 1.3.14, an
+  `optionalDependency`) first, then `bun` on PATH. It forwards SIGINT, SIGTERM and SIGHUP and the exit code, and
+  exits 127 with an install hint when no Bun is found. `@opencode-ai/sdk` moves to `dependencies`, and the action
+  installs with `--omit=optional`, so CI does not download the bundled Bun. MCP and launchd registration refuse a
+  run from npx's temporary cache: "install pr-hero (npm i -g pr-hero) to register".
+
 ### Fixed
 - **A run whose every hunter failed for one cause no longer shows placeholders.** The hunters-failed path renders a
   shared cause only when its sentence is complete with the params that path has: `model_unavailable` with the provider
