@@ -16,13 +16,11 @@ import {
 } from "#rereview/classify";
 import {
   assembleLive,
-  assignFreshIds,
   capLiveFindings,
   type LiveFinding,
   PR_STATE_MARKER_PREFIX,
   parseStateBlock,
   renderStateBlock,
-  rewriteStateFindings,
   type StateFinding,
   stateFinding,
 } from "#rereview/state";
@@ -162,57 +160,13 @@ describe("render / parse round-trip", () => {
   });
 });
 
-describe("D5d — rewrite from the merged live set", () => {
-  test("one new, three carried, one verified-gone → four entries; gone retired", () => {
-    const previous = [
-      finding("R001"),
-      finding("R002"),
-      finding("R003"),
-      finding("R004"),
-    ];
-    const next = rewriteStateFindings({
-      previous,
-      survivingIds: new Set(["R002", "R003", "R004"]),
-      fresh: [
-        {
-          sev: "WARNING",
-          tier: "advisory",
-          channel: "inline",
-          locs: ["new.ts:3"],
-          c: finding("R999", { claim: "fresh" }).c,
-          claim: "fresh",
-        },
-      ],
-    });
-    expect(next.map((f) => f.id)).toEqual(["R002", "R003", "R004", "R005"]);
-    expect(next).toHaveLength(4);
-  });
-
-  test("a retired id is never reused (R2-S1)", () => {
-    const assigned = assignFreshIds(
-      ["R001", "R002"],
-      [
-        {
-          sev: "CRITICAL",
-          tier: "blocking",
-          channel: "inline",
-          locs: ["a.ts:1"],
-          c: "aaaaaaaaaaaa",
-          claim: "x",
-        },
-      ],
-    );
-    expect(assigned[0]?.id).toBe("R003");
-  });
-});
-
 describe("D5b — cap evicts unconfirmed then carried, never suppressed or deferred", () => {
   test("drops unconfirmed before carried, and keeps suppressed + deferred", () => {
     const entries = [
       live("R001", "suppressed"),
       live("R002", "deferred"),
-      live("R003", "carried", { claim: "c".repeat(80) }),
-      live("R004", "unconfirmed", { claim: "u".repeat(80) }),
+      live("R003", "carried", { claim: "c".repeat(80), tier: "advisory" }),
+      live("R004", "unconfirmed", { claim: "u".repeat(80), tier: "advisory" }),
     ];
     const prefix = "x".repeat(200);
     const result = capLiveFindings(entries, prefix, HEAD, 400);

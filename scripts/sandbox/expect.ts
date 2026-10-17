@@ -45,7 +45,9 @@ export type Check =
   // so it leaves neither. WHY not the review step: the composite `Run pr-hero` step has
   // no `if:` and always concludes, so a near miss's step reads success and its
   // conclusion cannot show that no review ran. This is the inverse of own-evidence.
-  | { kind: "no-run-evidence" };
+  | { kind: "no-run-evidence" }
+  // D3: this head's report carries a state-block row located in `path`.
+  | { kind: "state-row-at"; path: string };
 
 export interface CheckResult {
   label: string;
@@ -95,6 +97,8 @@ export function describeCheck(check: Check): string {
       return `the triggering comment has the ${check.content} reaction`;
     case "no-run-evidence":
       return "the run left no review evidence of its own";
+    case "state-row-at":
+      return `state row at ${check.path}`;
   }
 }
 
@@ -310,6 +314,21 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         (c) => c.kind === "skip" && postedByThisRun(c, obs),
       );
       return pass(!skipped, "this run posted a skip marker");
+    }
+    case "state-row-at": {
+      // Only this head's reports are read: an earlier head's state rows describe that head.
+      const reports = obs.comments.filter(
+        (c) => c.kind === "report" && c.head === obs.headSha,
+      );
+      const blocks = reports.filter((c) => c.statePaths !== undefined);
+      if (blocks.length === 0) {
+        return pass(false, "no state block on this head's report");
+      }
+      const rows = blocks.flatMap((c) => c.statePaths ?? []);
+      return pass(
+        rows.includes(check.path),
+        `no state row at ${check.path} (state rows: ${rows.join(", ") || "none"})`,
+      );
     }
   }
 }

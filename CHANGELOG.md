@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run from npx's temporary cache: "install pr-hero (npm i -g pr-hero) to register".
 
 ### Fixed
+- **A re-review's fresh findings reach the state block.** From the second review on, the summary's `pr-hero-state` block holds this run's findings as well as the earlier ones. Before, it held only the earlier findings, so a blocking finding first raised by a re-review was forgotten by the next review, and a same-head forced re-review could read green. Known gap: the first review writes no state block, so its outside-diff findings are not persisted; its inline findings are recovered from their markers on the second review.
 - **A run whose every hunter failed for one cause no longer shows placeholders.** The hunters-failed path renders a
   shared cause only when its sentence is complete with the params that path has: `model_unavailable` with the provider
   known, and `missing_provider_record` with the provider and model known. Every other cause keeps `PRH-HUNTERS-FAILED`.

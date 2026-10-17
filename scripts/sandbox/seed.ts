@@ -19,6 +19,14 @@ export const REPO_CONFIG_PATH = ".prhero/config.json";
 export const GOTCHAS_PATH = ".prhero/gotchas.md";
 export const VOLUME_PATH = "src/volume.ts";
 
+// D3: the second planted bug, added by a later push of the rereview-fresh-finding
+// scenario. `Boolean((volume = 0))` assigns instead of comparing, so isMuted is never
+// true. It is a new file, so main does not define it.
+export const MUTE_PATH = "src/mute.ts";
+export const MUTE_BUGGY =
+  "export function isMuted(volume: number): boolean {\n  // Muted means the volume is zero.\n  return Boolean((volume = 0));\n}\n";
+export const MUTE_COMMIT_MESSAGE = "feat: add a mute check";
+
 // The secret the scaffold wires to the action's `opencode-auth` input
 // (src/ci/setup.ts, the `opencode-auth:` line of the Run pr-hero step), and the
 // variable it wires to `routing` (the `routing:` line of the same step).
