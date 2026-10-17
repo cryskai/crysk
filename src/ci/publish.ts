@@ -504,9 +504,12 @@ export const CANCELLED_STATUS_DESCRIPTION =
 // then reviewed or hunters-failed just before the final status), so a cancel in that last
 // window must still find the lock: any record that names a head is this run's lock on it.
 // This run's pending was posted after the marker; an older run's pending was posted before
-// it, and is not this run's to settle. A newer run cannot have posted yet: concurrency starts
-// it only after this cancel, and it installs before its CLI posts anything.
+// it, and is not this run's to settle. The CLI posts its pending right after it starts,
+// before any review work, so a pending created more than CANCEL_SETTLE_WINDOW_MS after the
+// marker belongs to another run on the same head (one in another concurrency group), which
+// settles it itself (review #347 round 2).
 const CANCEL_SETTLE_SKEW_MS = 5_000;
+const CANCEL_SETTLE_WINDOW_MS = 300_000;
 
 // The pure table of a cancelled run's settle. It settles only when this run's CLI record
 // names a head, the head's newest pr-hero status is pending, and that pending was created
@@ -531,7 +534,8 @@ export function decideCancelSettle(input: {
   if (
     started === undefined ||
     !Number.isFinite(createdMs) ||
-    createdMs < started - CANCEL_SETTLE_SKEW_MS
+    createdMs < started - CANCEL_SETTLE_SKEW_MS ||
+    createdMs > started + CANCEL_SETTLE_WINDOW_MS
   ) {
     return { settle: false, reason: "the pending status is not this run's" };
   }

@@ -2878,14 +2878,29 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
     });
   });
 
-  test("a pending posted long after the CLI started is still this run's", () => {
+  test("a pending posted 4 minutes after the CLI started is this run's", () => {
+    expect(
+      decideCancelSettle({
+        record: reviewingRecord(),
+        latest: pendingAt(WRITTEN_MS + 240_000),
+        cliStartedMs: WRITTEN_MS,
+      }),
+    ).toEqual({ settle: true, headSha: CANCEL_HEAD });
+  });
+
+  // #347 round 2: another run on the same head, in another concurrency group, posts its
+  // own pending later; this run's cancel must not overwrite it.
+  test("a pending posted 10 minutes after the CLI started belongs to another run", () => {
     expect(
       decideCancelSettle({
         record: reviewingRecord(),
         latest: pendingAt(WRITTEN_MS + 600_000),
         cliStartedMs: WRITTEN_MS,
       }),
-    ).toEqual({ settle: true, headSha: CANCEL_HEAD });
+    ).toEqual({
+      settle: false,
+      reason: "the pending status is not this run's",
+    });
   });
 
   test("a pending posted before this run's CLI started belongs to an older run", () => {
