@@ -255,21 +255,22 @@ export function isFreeModelFlake(result: ScenarioResult): boolean {
   );
 }
 
-// The hunters-failed flake belongs to this phase only when its own run is the failed
-// one: its review step failed, or the outcome that names it was posted by this run.
-// A phase-1 outcome left on the PR is no flake of a later phase, so a check of that
-// phase is not re-run away. A phase with no trigger has no window, so its outcome counts.
+// The hunters-failed flake belongs to this phase only when this run posted the
+// PRH-HUNTERS-FAILED outcome on the observed head. A failed review step is not enough:
+// a later phase whose step fails for another reason posts no outcome of its own, and
+// the path it reads is an earlier phase's outcome, which is no flake of this phase.
+// The code is spelled out because observe.ts keeps its constant private. Any outcome
+// of this run with that code counts, not only the first one on the head, because an
+// earlier phase's outcome may still sit on the PR above it. A phase with no trigger
+// has no window, so its outcome counts (postedByThisRun reads it as this run's).
+const HUNTERS_FAILED_OUTCOME = "PRH-HUNTERS-FAILED";
 function isOwnHuntersFailed(obs: Observation): boolean {
-  const reviewFailed =
-    obs.run?.steps.some(
-      (step) => step.name === RUN_STEP_NAME && step.conclusion === "failure",
-    ) === true;
-  const outcome = obs.comments.find(
+  return obs.comments.some(
     (c) =>
-      c.kind === "outcome" && (c.head === undefined || c.head === obs.headSha),
-  );
-  return (
-    reviewFailed || (outcome !== undefined && postedByThisRun(outcome, obs))
+      c.kind === "outcome" &&
+      c.code === HUNTERS_FAILED_OUTCOME &&
+      (c.head === undefined || c.head === obs.headSha) &&
+      postedByThisRun(c, obs),
   );
 }
 

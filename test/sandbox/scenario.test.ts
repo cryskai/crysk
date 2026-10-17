@@ -301,6 +301,28 @@ describe("run: the scenarios against the fake repository", () => {
     ).toBe(true);
   });
 
+  test("a later phase whose review step fails with no outcome of its own is not the flake: no re-run, exit 1", async () => {
+    // Phase 1 hunters-failed, and its outcome stays on the PR. Phase 2's review step
+    // fails for another reason (stepFailsOnReview) and posts no outcome of its own, so
+    // its path reads phase 1's outcome. Its head is failure (blockingFindings), so the
+    // only thing that could make it the flake is the step failure this test denies.
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["hunters-failed", "review"],
+      keepOutcomeComments: true,
+      stepFailsOnReview: true,
+      blockingFindings: true,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["comment-trigger"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.includes("re-running it once"))).toBe(false);
+    expect(
+      h.logs.includes(
+        "  FAIL  comment-trigger: [2] path is reviewed (got hunters-failed)",
+      ),
+    ).toBe(true);
+  });
+
   test("a phase-2 run that hunters-failed itself is the flake and is re-run once", async () => {
     const world = new FakeGithub({
       ref: REF,
