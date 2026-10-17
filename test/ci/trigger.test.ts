@@ -466,10 +466,12 @@ describe("decideCiTrigger — the override command (S8)", () => {
     expect(run.record).not.toHaveProperty("actor");
     expect(run.stdout).toContain(FORK_OVERRIDE_REFUSAL);
     expect(run.stdout).not.toContain(UNKNOWN_FORK_OVERRIDE_REFUSAL);
-    // The only gh API call is the permission lookup: the shell posts no status,
-    // and the publisher, which would, never runs for a refused override.
-    expect(run.ghCalls.filter((args) => args[0] === "api")).toHaveLength(1);
+    // The gh API calls are the permission lookup and the refusal's reaction (T2e,
+    // -1), one more than before the reaction existed. The shell still posts no
+    // status, and the publisher, which would, never runs for a refused override.
+    expect(run.ghCalls.filter((args) => args[0] === "api")).toHaveLength(2);
     expect(run.ghCalls.filter((args) => args[0] === "pr")).toHaveLength(1);
+    expect(run.ghCalls).toContainEqual(reactionArgv("-1"));
     expect(run.sleeps).toEqual([]);
   });
 
@@ -903,6 +905,9 @@ function baseEnv(
   };
 }
 
+// The triggering comment's id, as a real issue_comment event always carries it.
+const COMMENT_ID = "9001";
+
 function commentEnv(body: string, overrides: Record<string, string> = {}) {
   return baseEnv({
     EVENT_NAME: "issue_comment",
@@ -911,6 +916,7 @@ function commentEnv(body: string, overrides: Record<string, string> = {}) {
     EVENT_PR_HEAD_SHA: "",
     EVENT_ISSUE_NUMBER: "21",
     EVENT_ISSUE_PR_URL: `https://api.github.com/repos/${REPO}/pulls/21`,
+    EVENT_COMMENT_ID: COMMENT_ID,
     COMMENT_BODY: body,
     COMMENTER_LOGIN: "maintainer",
     ...overrides,
@@ -1102,15 +1108,18 @@ describe("runCiTrigger — the shell", () => {
         "--jq",
         ".headRefOid",
       ],
+      // The accepted command's reaction (T2e), the last call of the run.
+      reactionArgv("eyes"),
     ]);
   });
 
-  test("a near-miss comment is a notice and calls no gh at all", () => {
+  test("a near-miss comment is a notice, and its only gh call is the confused reaction (T2e)", () => {
     const run = runShell(commentEnv("/pr-hero review please"));
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("false");
     expect(run.stdout).toStartWith("::notice title=pr-hero::");
-    expect(run.ghCalls).toEqual([]);
+    // Before T2e this was no call at all. A near miss runs no permission lookup.
+    expect(run.ghCalls).toEqual([reactionArgv("confused")]);
   });
 
   test.each<[string, GhResult]>([
@@ -1130,8 +1139,9 @@ describe("runCiTrigger — the shell", () => {
       expect(run.outputs.run).toBe("false");
       expect(run.stdout).toStartWith("::notice title=pr-hero::");
       // A definitive answer: one lookup, no retry, and denied before the
-      // head is resolved.
-      expect(run.ghCalls.length).toBe(1);
+      // head is resolved. The second call is the denial's reaction (T2e, -1).
+      expect(run.ghCalls.length).toBe(2);
+      expect(run.ghCalls[1]).toEqual(reactionArgv("-1"));
       expect(run.sleeps).toEqual([]);
     },
   );
@@ -1180,6 +1190,7 @@ describe("runCiTrigger — the shell", () => {
   test("a lookup that fails once and then answers `write` reviews", () => {
     let lookups = 0;
     const run = runShell(commentEnv("/pr-hero review"), (args) => {
+      if (args.includes("POST")) return ok("{}");
       if (args[0] !== "api") return ok(`${OTHER_SHA}\n`);
       lookups += 1;
       return lookups === 1
@@ -1195,7 +1206,14 @@ describe("runCiTrigger — the shell", () => {
       head_sha: OTHER_SHA,
       publish: "true",
     });
-    expect(run.ghCalls.map((call) => call[0])).toEqual(["api", "api", "pr"]);
+    // Two permission lookups and one head lookup, then the accepted reaction (T2e).
+    expect(run.ghCalls.map((call) => call[0])).toEqual([
+      "api",
+      "api",
+      "pr",
+      "api",
+    ]);
+    expect(run.ghCalls[3]).toEqual(reactionArgv("eyes"));
     expect(run.sleeps).toHaveLength(1);
   });
 
@@ -2070,5 +2088,296 @@ describe("the hint and the trigger agree on the command", () => {
   test("every command the skip-comment hint names is one the trigger accepts", () => {
     expect(parseReviewCommand(CI_REVIEW_COMMENT)).toEqual({ full: false });
     expect(parseReviewCommand(CI_REVIEW_FULL_COMMENT)).toEqual({ full: true });
+  });
+});
+
+// T2e: a best-effort reaction on the comment that triggered the run. 👀 an
+// accepted command, 👎 a refused one (no write access, or an override that was
+// refused), 😕 a near miss. Each reaction is one exact gh call.
+type Answer = (args: readonly string[]) => GhResult;
+
+const REACTION_PATH = `repos/${REPO}/issues/comments/${COMMENT_ID}/reactions`;
+
+function reactionArgv(content: string): string[] {
+  return ["api", "-X", "POST", REACTION_PATH, "-f", `content=${content}`];
+}
+
+function reactionCalls(run: { ghCalls: string[][] }): string[][] {
+  return run.ghCalls.filter((args) => args.includes("POST"));
+}
+
+// Answers each call by its shape: the reaction POST, then the permission
+// lookup (an `api` call), then the head lookup (a `pr` call).
+function routed(
+  permission: GhResult,
+  head: GhResult,
+  reaction: GhResult = ok("{}"),
+): Answer {
+  return (args) => {
+    if (args.includes("POST")) return reaction;
+    return args[0] === "api" ? permission : head;
+  };
+}
+
+const REACTION_FAILED: GhResult = {
+  exitCode: 1,
+  stdout: "",
+  stderr: "gh: Validation Failed (HTTP 422)",
+};
+
+function warningLines(stdout: string): string[] {
+  return stdout.split("\n").filter((line) => line.startsWith("::warning"));
+}
+
+describe("the reaction on the triggering comment (T2e)", () => {
+  // Each row: the reaction, what the comment is, its env, and its answers.
+  test.each<[string, string, Record<string, string>, Answer]>([
+    [
+      "eyes",
+      "an accepted review by a writer",
+      commentEnv("/pr-hero review"),
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "eyes",
+      "an accepted full review by an admin",
+      commentEnv("/pr-hero review --full"),
+      routed(ok("admin\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "eyes",
+      "an accepted override",
+      commentEnv("/pr-hero override"),
+      routed(ok("write\n"), overrideHead(HEAD_SHA, false)),
+    ],
+    [
+      "eyes",
+      "an authorised review with no credential",
+      commentEnv("/pr-hero review", { HAS_CLAUDE_TOKEN: "false" }),
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "-1",
+      "a review by a read-only commenter",
+      commentEnv("/pr-hero review"),
+      routed(ok("read\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "-1",
+      "a review by a commenter who is not a collaborator (404)",
+      commentEnv("/pr-hero review"),
+      routed(
+        { exitCode: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" },
+        ok(`${HEAD_SHA}\n`),
+      ),
+    ],
+    [
+      "-1",
+      "an override on a fork",
+      commentEnv("/pr-hero override"),
+      routed(ok("write\n"), overrideHead(HEAD_SHA, true)),
+    ],
+    [
+      "-1",
+      "an override the lookup cannot place",
+      commentEnv("/pr-hero override"),
+      routed(ok("write\n"), ok(HEAD_SHA)),
+    ],
+    [
+      "confused",
+      "a near miss",
+      commentEnv("/pr-hero review please"),
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "eyes",
+      "an accepted review on run attempt 1",
+      commentEnv("/pr-hero review", { GITHUB_RUN_ATTEMPT: "1" }),
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+  ])(
+    "reaction %s for %s, as one exact gh call",
+    (content, _label, env, answer) => {
+      const run = runShell(env, answer);
+      expect(reactionCalls(run)).toEqual([reactionArgv(content)]);
+    },
+  );
+
+  // WHY only attempt 1 reacts: GitHub replays the comment event on a re-run, so a re-run
+  // would stack its own reaction on the comment its first attempt already answered (👀 and
+  // then 👎). The re-run's decision, notices and exit code are the same as attempt 1's.
+  test.each<[string, string, Record<string, string>, Answer]>([
+    [
+      "an accepted review",
+      "/pr-hero review",
+      { GITHUB_RUN_ATTEMPT: "2" },
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "a refused review",
+      "/pr-hero review",
+      { GITHUB_RUN_ATTEMPT: "2" },
+      routed(ok("read\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+    [
+      "a near miss",
+      "/pr-hero review please",
+      { GITHUB_RUN_ATTEMPT: "2" },
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    ],
+  ])(
+    "a re-run (attempt 2) of %s makes no reaction call, and keeps the decision of attempt 1",
+    (_label, body, attempt, answer) => {
+      const rerun = runShell(commentEnv(body, attempt), answer);
+      const first = runShell(
+        commentEnv(body, { GITHUB_RUN_ATTEMPT: "1" }),
+        answer,
+      );
+      expect(reactionCalls(rerun)).toEqual([]);
+      expect(rerun.exitCode).toBe(first.exitCode);
+      expect(rerun.outputs).toEqual(first.outputs);
+      expect(rerun.stdout).toBe(first.stdout);
+    },
+  );
+
+  test("an override re-run (attempt 2) is refused with its notice, and makes no reaction call", () => {
+    const run = runShell(
+      commentEnv("/pr-hero override", { GITHUB_RUN_ATTEMPT: "2" }),
+      routed(ok("write\n"), overrideHead(HEAD_SHA, false)),
+    );
+    expect(reactionCalls(run)).toEqual([]);
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs.run).toBe("false");
+    expect(run.stdout).toContain(
+      "an override applies to the head at the time of the comment; comment `/pr-hero override` again",
+    );
+  });
+
+  test.each<[string, string]>([
+    ["an empty id", ""],
+    ["a word", "abc"],
+    ["digits with a letter", "12a"],
+    ["a negative number", "-7"],
+    ["a decimal", "1.5"],
+    ["padded digits", " 42 "],
+  ])("%s gets no reaction, and the review still runs", (_label, id) => {
+    const run = runShell(
+      commentEnv("/pr-hero review", { EVENT_COMMENT_ID: id }),
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`)),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs.run).toBe("true");
+    expect(reactionCalls(run)).toEqual([]);
+  });
+
+  test("an absent id gets no reaction", () => {
+    const env = commentEnv("/pr-hero review");
+    delete env.EVENT_COMMENT_ID;
+    const run = runShell(env, routed(ok("write\n"), ok(`${HEAD_SHA}\n`)));
+    expect(reactionCalls(run)).toEqual([]);
+  });
+
+  test("a pull_request event never reacts, even with an id", () => {
+    const run = runShell(baseEnv({ EVENT_COMMENT_ID: COMMENT_ID }));
+    expect(run.exitCode).toBe(0);
+    expect(run.ghCalls).toEqual([]);
+  });
+
+  test("an unverifiable lookup gets no reaction: its error comment explains it", () => {
+    const run = runShell(commentEnv("/pr-hero review"), () => {
+      throw new Error("spawn gh ENOENT");
+    });
+    expect(run.exitCode).toBe(1);
+    expect(reactionCalls(run)).toEqual([]);
+  });
+
+  test("a failed reaction prints one warning, and the accepted review keeps its decision and exit", () => {
+    const run = runShell(
+      commentEnv("/pr-hero review"),
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`), REACTION_FAILED),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs).toMatchObject({
+      run: "true",
+      pr: "21",
+      head_sha: HEAD_SHA,
+    });
+    expect(warningLines(run.stdout)).toHaveLength(1);
+  });
+
+  test("a failed reaction on a refused command keeps the refusal and its notice", () => {
+    const run = runShell(
+      commentEnv("/pr-hero review"),
+      routed(ok("read\n"), ok(`${HEAD_SHA}\n`), REACTION_FAILED),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs.run).toBe("false");
+    expect(run.stdout).toStartWith("::notice title=pr-hero::");
+    expect(warningLines(run.stdout)).toHaveLength(1);
+  });
+
+  test("a failed reaction on a no-credentials comment keeps its red exit", () => {
+    const run = runShell(
+      commentEnv("/pr-hero review", { HAS_CLAUDE_TOKEN: "false" }),
+      routed(ok("write\n"), ok(`${HEAD_SHA}\n`), REACTION_FAILED),
+    );
+    expect(run.exitCode).toBe(1);
+    expect(warningLines(run.stdout)).toHaveLength(1);
+  });
+});
+
+describe("the no-credentials head lookup (T2e)", () => {
+  test("a first failed head lookup is retried once, and the second answer is recorded", () => {
+    let heads = 0;
+    const answer: Answer = (args) => {
+      if (args.includes("POST")) return ok("{}");
+      if (args[0] === "api") return ok("write\n");
+      heads += 1;
+      return heads === 1
+        ? { exitCode: 1, stdout: "", stderr: "gh: i/o timeout" }
+        : ok(`${HEAD_SHA}\n`);
+    };
+    const run = outcomeRun(
+      commentEnv("/pr-hero review", { HAS_CLAUDE_TOKEN: "false" }),
+      answer,
+    );
+    expect(run.exitCode).toBe(1);
+    expect(heads).toBe(2);
+    expect(run.sleeps).toHaveLength(1);
+    expect(run.record).toMatchObject({
+      decision: "no-credentials",
+      head_sha: HEAD_SHA,
+    });
+  });
+
+  test("two failed head lookups leave the head unknown, after exactly one retry", () => {
+    let heads = 0;
+    const answer: Answer = (args) => {
+      if (args.includes("POST")) return ok("{}");
+      if (args[0] === "api") return ok("write\n");
+      heads += 1;
+      return { exitCode: 1, stdout: "", stderr: "gh: i/o timeout" };
+    };
+    const run = runShell(
+      commentEnv("/pr-hero review", { HAS_CLAUDE_TOKEN: "false" }),
+      answer,
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.outputs.head_sha).toBe("");
+    expect(heads).toBe(2);
+    expect(run.sleeps).toHaveLength(1);
+  });
+
+  test("a pull_request without a head sha does not retry its lookup", () => {
+    let heads = 0;
+    const run = runShell(
+      baseEnv({ HAS_CLAUDE_TOKEN: "false", EVENT_PR_HEAD_SHA: "" }),
+      () => {
+        heads += 1;
+        return { exitCode: 1, stdout: "", stderr: "gh: i/o timeout" };
+      },
+    );
+    expect(heads).toBe(1);
+    expect(run.sleeps).toEqual([]);
   });
 });

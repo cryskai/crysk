@@ -122,6 +122,9 @@ export interface CliOptions {
   // off disk) applied to publishing/triaging instead of aggregating.
   // Required by both; parseArgs enforces it.
   from?: string;
+  // `status` only (ROADMAP S9): print one JSON object on stdout instead of the human lines.
+  // Refused on every other command, so the flag never parses and then does nothing.
+  json?: boolean;
   // The escape hatch for change 3's default. See resolveDiffRange's WHY: the
   // three-dot (merge-base) range is right almost always, and this flag exists
   // for the rare caller who genuinely wants the literal two-point diff.
@@ -275,6 +278,7 @@ export interface ParsedCli {
     | "watch"
     | "post"
     | "triage"
+    | "status"
     | "gc"
     | "usage"
     | "reverts"
@@ -337,6 +341,14 @@ Usage:
                              badge, posts, and resolves the inline review
                              thread. --body-file is reasoning prose only.
                              --dry-run prints the parent and posts nothing
+  pr-hero status --pr <n> [--json]
+                             Read the PR's pr-hero gate, posted findings and
+                             next action, through gh only and read-only. With
+                             --json, one JSON object on stdout (schema
+                             pr-hero.status/v1); without it, a few lines on
+                             stderr. Exits 1 with no stdout when any read
+                             fails. Skills drive review -> reply -> fix -> wait
+                             from its next_action
   pr-hero reverts [options]  Mine the repo's default branch for PRs that were
                              later reverted or hotfixed, and write them as
                              markdown CANDIDATES for human confirmation. Runs
@@ -450,6 +462,8 @@ Options:
                       case-sensitive). Default: bug
   --runs <dir>        ledger only: the runs root to scan for comparison.json
                       files (default: ~/.prhero/repos/<origin>/runs)
+  --json              status only: print the status as one JSON object on
+                      stdout (schema pr-hero.status/v1)
   --from <dir>        post/triage only: the run dir to read findings.json and
                       diff.patch (post and triage reply) or comparison.json
                       (triage bind) from (required). triage reply maps
@@ -609,6 +623,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     | "watch"
     | "post"
     | "triage"
+    | "status"
     | "gc"
     | "usage"
     | "reverts"
@@ -665,6 +680,10 @@ export function parseArgs(argv: string[]): ParsedCli {
       if (arg === "--head") headExplicit = true;
       if (arg === "--repo") options.repoExplicit = true;
       applyValueFlag(options, arg, value);
+      continue;
+    }
+    if (arg === "--json") {
+      options.json = true;
       continue;
     }
     if (arg === "--dry-run") {
@@ -879,6 +898,7 @@ export function parseArgs(argv: string[]): ParsedCli {
       arg !== "watch" &&
       arg !== "post" &&
       arg !== "triage" &&
+      arg !== "status" &&
       arg !== "gc" &&
       arg !== "usage" &&
       arg !== "reverts" &&
@@ -892,7 +912,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     ) {
       throw new CliUsageError(
         `unknown command: ${arg} (the commands are "menu", "review", "init", "setup", "doctor", ` +
-          '"activity", "ledger", "watch", "post", "triage", "gc", "usage", ' +
+          '"activity", "ledger", "watch", "post", "triage", "status", "gc", "usage", ' +
           '"reverts", "corpus", "config", "mcp", "upgrade", "uninstall" and "ci")',
       );
     }
@@ -1011,6 +1031,24 @@ export function parseArgs(argv: string[]): ParsedCli {
     throw new CliUsageError(
       "--scout-model sets the model for the scout stage, so it requires --scout",
     );
+  }
+  // `status` (ROADMAP S9) reads one PR and writes nothing, so its whole surface is --pr <n>
+  // and --json. Every other flag is refused here, not ignored: a flag that parses and then
+  // does nothing is an operator believing they changed a read they did not (the --from
+  // guard's reasoning below). --json belongs to status alone.
+  if (command === "status") {
+    if (options.pr === undefined || options.pr === "current") {
+      throw new CliUsageError("status requires --pr <n> (a PR number)");
+    }
+    for (const arg of argv) {
+      if (arg.startsWith("-") && arg !== "--pr" && arg !== "--json") {
+        throw new CliUsageError(
+          `status takes only --pr <n> and --json, not ${arg}`,
+        );
+      }
+    }
+  } else if (options.json) {
+    throw new CliUsageError("--json only applies to the status command");
   }
   // `post` (ROADMAP B6) and `triage` (ROADMAP B6c) share the same shape:
   // both read a PRIOR run's artifacts, named by --from, and act on the PR

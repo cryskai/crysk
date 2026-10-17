@@ -91,6 +91,7 @@ describe("per-function size guard on extracted modules", () => {
     "src/ui/plan.ts",
     "src/ui/progress.ts",
     "src/pr/status.ts",
+    "src/pr/pr-status.ts",
     "src/pr/admission.ts",
     "src/review/route-preflight.ts",
   ];

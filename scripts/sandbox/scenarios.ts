@@ -285,10 +285,37 @@ export const SCENARIOS: readonly Scenario[] = [
           STEP_SUCCEEDED,
           { kind: "own-evidence" },
           REVIEWED,
+          // The accepted command is answered with eyes on the comment (T2e).
+          { kind: "reaction", content: "eyes" },
         ],
         // The cleanup of phase 1's outcome comment. Only meaningful when phase 1
         // left one, so it is not asserted otherwise.
         afterPriorOutcome: [{ kind: "no-outcome" }],
+      },
+    ],
+  },
+  {
+    name: "near-miss",
+    description:
+      "a /pr-hero review comment that is not the exact command runs no review: it gets the confused reaction, no review evidence of its own and no outcome comment of its own (T2e)",
+    phases: [
+      {
+        action: { kind: "open", variant: "normal" },
+        wait: "pull_request",
+        // A precondition, as in comment-trigger: the free route may hunters-fail here.
+        checks: [{ kind: "path", accept: ["reviewed", "hunters-failed"] }],
+      },
+      {
+        action: { kind: "comment", body: "/pr-hero review please" },
+        wait: "issue_comment",
+        checks: [
+          { kind: "run-completed", event: "issue_comment" },
+          { kind: "reaction", content: "confused" },
+          // The comment's own run: it left no review evidence of its own. Phase 1's
+          // outcome, when it hunters-failed, stays on the PR: only this run's count.
+          { kind: "no-run-evidence" },
+          { kind: "no-own-outcome" },
+        ],
       },
     ],
   },

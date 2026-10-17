@@ -834,6 +834,9 @@ export interface CommitStatusFact {
   // a review's own status (teardown.ts overrideStandsOverRun). Absent when the
   // reader did not return it, which is never taken as an override.
   description?: string | null;
+  // The run URL the status links to. Read only by `pr-hero status`, which names the run
+  // that wrote the gate. Absent when the reader did not return it.
+  target_url?: string | null;
 }
 
 export interface CommitStatusRequest {

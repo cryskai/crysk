@@ -8,7 +8,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  isOverrideStatus,
   newestStatusInContext,
+  OVERRIDE_DESCRIPTION_PREFIX,
+  overrideActorOf,
   overrideCutoffMs,
   overrideStandsOverRun,
 } from "#ci/override";
@@ -185,3 +188,59 @@ function runtimeImportViolations(source: string): string[] {
   }
   return violations;
 }
+
+// The status command reads the gate's override the same way the CLI and the publisher do:
+// one predicate (isOverrideStatus), and the login the publisher wrote into the description.
+describe("isOverrideStatus and overrideActorOf", () => {
+  const description =
+    "pr-hero: overridden by @maintainer — no review on this head";
+
+  test("a success carrying the override prefix is an override", () => {
+    expect(
+      isOverrideStatus({
+        state: "success",
+        context: "pr-hero",
+        created_at: "2026-10-17T10:00:00Z",
+        description,
+      }),
+    ).toBe(true);
+  });
+
+  test("a failure or pending carrying the prefix is not an override", () => {
+    for (const state of ["failure", "pending", "error"]) {
+      expect(
+        isOverrideStatus({
+          state,
+          context: "pr-hero",
+          created_at: "2026-10-17T10:00:00Z",
+          description,
+        }),
+        state,
+      ).toBe(false);
+    }
+  });
+
+  test("a success without the prefix, or with no description, is not an override", () => {
+    expect(
+      isOverrideStatus({
+        state: "success",
+        context: "pr-hero",
+        created_at: "2026-10-17T10:00:00Z",
+        description: "pr-hero: review posted",
+      }),
+    ).toBe(false);
+    expect(
+      isOverrideStatus({
+        state: "success",
+        context: "pr-hero",
+        created_at: "2026-10-17T10:00:00Z",
+      }),
+    ).toBe(false);
+  });
+
+  test("overrideActorOf reads the login the publisher wrote, and null for a non-override", () => {
+    expect(overrideActorOf(description)).toBe("maintainer");
+    expect(overrideActorOf("pr-hero: review posted")).toBeNull();
+    expect(overrideActorOf(`${OVERRIDE_DESCRIPTION_PREFIX}`)).toBeNull();
+  });
+});

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`pr-hero status --pr <n> [--json]`**: a read-only command that reads one PR's pr-hero gate, its posted
+  findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `override-or-fix`, `done`) through `gh` alone. With
+  `--json` it prints one `pr-hero.status/v1` object on stdout. It fails closed: a failed read or a truncated comment
+  list, or a read that never answers within its bound, exits 1 with nothing on stdout. A green gate with a finding
+  on this head that has no reply is `triage`, not `done`, because the triage skill answers advisory findings too. A
+  green gate over a partial review of this head (some reviewers failed) is `review`. Each finding carries `blocking`,
+  which is true for an unrecoverable tier as it is for a blocking one, so such a finding is never read as clear. A
+  finding whose badge and state row both fail to give a tier reads as `tier: "unrecoverable"`, never `null`. The
+  triage skill runs it as step 0. `docs/github-actions.md` has the shape.
 - **Gate mode for CI**: the action's `mode` input (`gate` or `advisory`, default `gate`) decides what the
   `pr-hero` commit status says. `gate` sets `failure` on unresolved blocking findings, on a size or budget
   skip, and on a crash, and `success` otherwise. `advisory` keeps the previous posture: a finished review is
@@ -20,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/pr-hero override` unlocks a red gate for the head it names, and is refused on a pull request from a fork. When the
   override's status is written, it also removes earlier outcome comments from the pull request, as a completed review
   does, and keeps every override record.
+- **Reactions answer a `/pr-hero` comment the trigger does not review**: a refused or near-miss comment gets a
+  reaction on the comment and no text reply. 👀 marks an accepted command, 👎 a refused one (no write access, or a
+  refused override), and 😕 a near miss, which runs nothing. A reaction is best effort: when GitHub refuses it, the run
+  prints one warning and its outcome does not change. Only a comment's first attempt reacts: a re-run keeps its decision and adds no reaction. A comment run's head lookup for an authorised commenter with no
+  credential is retried once, so a transient failure no longer leaves that run without its status.
 
 ### Fixed
 - **A skipped head no longer leaves the gate silent**: in gate mode, a head the admission gate skips (low-risk or
@@ -32,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written as planned and the run logs a warning. With no readable verdict, or when the attempt budget is used up, the head is
   `failure` with the way to review it. Before this, an admission skip posted no status, so a required check could
   block with no explanation, or pass a head nobody decided about.
+- **An outside-channel triage reply keeps its `#issuecomment` link when the repo's web URL cannot be read**: the link
+  is what binds the reply to its finding, and a failed `gh repo view` used to post the reply with no link at all. The
+  reply now falls back to the PR's own URL, then to the repo's `nameWithOwner` on the GitHub host. It posts without a
+  link only when none of the three is known.
 - **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left
   open stays counted through a re-review that carries it, through a same-head `/pr-hero review` that runs no
   hunters, through a triage reply on its own, and through later pushes after a rejected dismissal or a

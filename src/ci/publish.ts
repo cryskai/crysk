@@ -60,6 +60,7 @@ import type {
 } from "./outcome";
 import {
   CLI_RECORD_FILE,
+  OUTCOME_MARKER_PREFIX,
   parseCliRecord,
   parseSetupRecord,
   parseTriggerRecord,
@@ -77,7 +78,8 @@ import {
 // The commit status context. The required check reads this name, so it must
 // equal COMMIT_STATUS_CONTEXT in src/pr/preflight.ts (a test pins the two).
 const STATUS_CONTEXT = "pr-hero";
-const MARKER_PREFIX = "<!-- pr-hero-outcome";
+// The outcome marker's spelling is outcome.ts's, shared with the status reader.
+const MARKER_PREFIX = OUTCOME_MARKER_PREFIX.trimEnd();
 const CLI_STARTED_FILE = "cli-started";
 const RECORD_FILE = "trigger.json";
 const SETUP_RECORD_FILE = "setup.json";
@@ -198,7 +200,8 @@ export function decidePublication(input: {
   const record = input.record;
   if (record === undefined) return { kind: "none" };
   if (record.decision === "ignore" || record.decision === "denied") {
-    // Denied and ignored commands publish nothing, by design (T2e adds reactions).
+    // Denied and ignored commands publish nothing: the trigger answers them with a
+    // reaction on the comment instead (T2e), so the PR gets no text reply.
     return { kind: "none" };
   }
   // WHY before the outcome fallthrough below: an override is not an error, and

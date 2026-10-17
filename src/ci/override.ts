@@ -57,9 +57,9 @@ export interface OverrideStatusFact {
   description?: string | null;
 }
 
-// Whether a status is an override: a successful status whose description carries the override
-// prefix. The override check below and the CI admission carry-forward (src/pr/admission.ts) both
-// read overrides through this one predicate, so they cannot disagree about what an override is.
+// Whether one status is an override: a success whose description carries the override
+// prefix. This is the single test both writers and the status reader use, so none of them
+// can recognise an override by a different rule. A status without a description is never one.
 export function isOverrideStatus(status: OverrideStatusFact): boolean {
   return (
     status.state === "success" &&
@@ -90,19 +90,30 @@ export function overrideStandsOverRun(
   cutoffMs: number,
 ): boolean {
   const latest = newestStatusInContext(statuses, OVERRIDE_STATUS_CONTEXT);
-  if (latest === undefined) return false;
-  if (!isOverrideStatus(latest)) return false;
+  if (latest === undefined || !isOverrideStatus(latest)) return false;
   const createdMs = Date.parse(latest.created_at);
   if (Number.isNaN(createdMs)) return false;
   return createdMs >= cutoffMs;
 }
 
+// The login an override was written by: the text after the prefix up to the first space. The
+// publisher writes `pr-hero: overridden by @<login> — no review on this head`, and a GitHub
+// login has no space, so this is the login exactly. Null when the description is not an
+// override or names no one.
+export function overrideActorOf(description: string): string | null {
+  if (!description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)) return null;
+  const actor = description
+    .slice(OVERRIDE_DESCRIPTION_PREFIX.length)
+    .split(" ")[0];
+  return actor === undefined || actor === "" ? null : actor;
+}
+
 // The newest status of one context by created_at: a row whose time does not parse is skipped.
 // A tie goes to the row that comes first in the array. GitHub's status LIST is newest-first, so
 // the first of two same-second rows is the newer one: `[success@t, failure@t]` reads as success.
-// The combined endpoint has one row per context, so it never ties. This is preflight.ts's
-// latestStatusInContext, which this builtins-only module cannot import. The publisher's reads use
-// it too, so the two selections cannot drift.
+// The combined endpoint has one row per context, so it never ties. This is the same selection
+// as preflight.ts's latestStatusInContext except on a tie, where that one takes the later row
+// (`>=`). This builtins-only module cannot import it. The publisher's reads use this one too.
 export function newestStatusInContext(
   statuses: readonly OverrideStatusFact[],
   context: string,

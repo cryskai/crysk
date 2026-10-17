@@ -125,8 +125,18 @@ does, when the CLI reports an error or every review hunter fails; if the CLI tak
 stops before it reports an outcome, pr-hero posts the comment, and its `error` status on the head that lock is on, when that head's `pr-hero` status is still `pending` or cannot be read. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
 or unclassified) and the command that fixes it.
 A newer comment replaces the older one from the same author. pr-hero removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/pr-hero review`
-comment posts nothing. A review that ran keeps its own status. A size or budget skip sets a `failure`
+comment posts no comment: the trigger reacts to it instead ([Reactions on a command](#reactions-on-a-command)). A review that ran keeps its own status. A size or budget skip sets a `failure`
 status in gate mode and none in advisory (see [Gate mode](#gate-mode-the-status-is-the-check)).
+
+### Reactions on a command
+
+The trigger answers a `/pr-hero` comment it does not review with a reaction on that comment, and no text reply:
+
+- 👀 (`eyes`): the command is accepted. That is a writer's `/pr-hero review`, an override that unlocks its gate, and an authorised review on a repository with no credential, which then fails for the credential and says why.
+- 👎 (`-1`): the command is refused. The commenter has no write or admin access, or the override is refused: on a fork, or when the lookup cannot say whether the pull request is a fork.
+- 😕 (`confused`): a near miss, a comment that starts like a command but is not one, such as `/pr-hero review please` or `/pr-hero override --force`. A near miss runs nothing: no permission lookup, no review and no override. Only an exact command runs.
+
+A commenter whose permission cannot be verified gets no reaction: its run is red, and its error comment explains why. A reaction is best effort. When GitHub refuses one, the run prints one warning, and its decision and exit code do not change. Only the first attempt of the comment's job reacts: a re-run (attempt 2 or later) keeps the decision, notices and exit code of the first attempt and adds no reaction, so the comment keeps the one the first attempt gave.
 
 ### Why `fetch-depth: 0`
 
@@ -595,7 +605,7 @@ turns the status green for that head with no new review. The re-review does not 
 
 **Overriding a red gate.** Comment exactly `/pr-hero override` on the pull request. The same rule as
 `/pr-hero review` applies: a user with write or admin access may do it, and the pull request's author may too
-when they have that access. Anyone else is refused with a notice, and nothing is posted. The override turns the `pr-hero` status on the head it names
+when they have that access. Anyone else is refused with a notice and a 👎 reaction on the comment, and nothing is posted. The override turns the `pr-hero` status on the head it names
 into `success`, with the description `pr-hero: overridden by @<login> — no review on this head`. It runs no
 review and spends nothing, and it needs no credential, so a repository without one can still unlock its gate.
 
@@ -617,14 +627,14 @@ is zero, because nothing else on the head shows when the review started. The rev
 A review that fails (for example, every hunter failed), is cancelled, or crashes can replace the override with its own
 `error` status; comment `/pr-hero override` again.
 
-Two limits. First, a fork pull request cannot be overridden: `/pr-hero override` is refused there with a notice,
+Two limits. First, a fork pull request cannot be overridden: `/pr-hero override` is refused there with a notice and a 👎 reaction,
 because a fork's head can change after the comment, so the override would not be bound to the code you saw. Second, GitHub keeps one pending run per
 concurrency group, and that applies to an override from an `OWNER`, `MEMBER` or `COLLABORATOR`: such an
 override that is queued behind a running review is replaced if another comment on the same pull request
 arrives before it starts, and then no override comment appears. Comment `/pr-hero override` again when that
 happens. If the pull request lookup fails twice, the override is refused, since it cannot tell whether the
 pull request comes from a fork; comment again. A
-re-run of the comment's job (run attempt 2 or later) is refused with a notice, because it would apply the
+re-run of the comment's job (run attempt 2 or later) is refused with a notice and no reaction, because it would apply the
 override to the head as it is at the re-run; comment `/pr-hero override` again.
 
 **A failed final write.** In gate mode, when the review itself finished, the job fails with an `::error::`
@@ -763,6 +773,61 @@ Three properties of the action's upload step are load-bearing:
 > `run-dir` on those paths — an open follow-up in the CLI, not something to work around in the workflow.
 > `always()` still earns its place for a review that ran but could not post, and for a later step in the
 > job failing.
+
+## Reading a PR with `pr-hero status`
+
+`pr-hero status --pr <n> [--json]` reads one PR's state through `gh`. It is read-only and writes nothing to
+GitHub, so a skill can drive review, reply, fix and wait from it instead of reading comments by hand. Without
+`--json` it prints a few lines on stderr. With `--json` it prints one object on stdout, and nothing else:
+
+```json
+{
+  "schema": "pr-hero.status/v1",
+  "pr": 12,
+  "head": "<40-hex headRefOid>",
+  "gate": { "state": "failure", "description": "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override", "target_url": "<run url>", "created_at": "<ISO time>", "pending_in_flight": false, "override": { "active": false, "by": null } },
+  "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null },
+  "findings": [
+    { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
+      "severity": "CRITICAL", "tier": "blocking", "blocking": true, "live_on_head": true,
+      "triage": { "tag": "dismissed", "verdict": "upheld", "actor": "agent", "head": "<40-hex>" } }
+  ],
+  "unresolved_blocking": 1,
+  "next_action": "triage",
+  "reason": "1 live blocking finding(s) on this head have no triage reply at the head they were posted on; triage them first."
+}
+```
+
+- `gate` is pr-hero's own commit status on the head. `state: "none"` means no `pr-hero` status is on it.
+- `findings` covers every posted `<!-- pr-hero-finding` comment, on every head. `channel` is `inline` for a review
+  thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread only.
+- A finding joins its state-block row the way the engine binds a prior to its comment: the comment's anchor must land
+  within the row's locations, and the claim fingerprint breaks only a tie. The anchor is the marker's path and line,
+  and the review comment's live path and line when GitHub has moved them (a rename, or a re-anchored line), so a row
+  the re-review rewrote to a new path still joins. A finding with no such row has `id: null`, and `live_on_head` is
+  true only when it was posted on the current head. A row that is found keeps the finding live, so a carried finding
+  from an older head stays live.
+- `tier` is the tier the comment's header badge or the state row reports: `blocking` or `advisory`, or `unrecoverable`
+  when neither can give one (the engine's own sentinel). It is never `null`. `blocking` is true for every tier but
+  `advisory`, because the gate counts an unrecoverable row as blocking too: a finding that cannot be read as advisory
+  is never read as clear. `unresolved_blocking` and `next_action` read `blocking`, never `tier`.
+- `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
+  live blocking findings in `findings`.
+- `report.outcome_code` is the `PRH-*` code of the newest outcome comment, when that comment has one.
+
+`next_action` is decided in this order, and the first match wins:
+
+| `next_action` | When |
+| --- | --- |
+| `wait` | The gate is pending and in flight (less than 90 minutes old). |
+| `review` | No `pr-hero` status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
+| `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. |
+| `triage` | The gate is red and a live blocking finding on this head has no triage reply at the head it was posted on. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
+| `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. |
+| `override-or-fix` | The gate is red, every live blocking finding is answered, and none is `applied`. A skipped review (size or budget) also lands here. Fix and push, or run `/pr-hero override`. |
+
+The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list, or a
+gate status it cannot read exits 1 with nothing on stdout, so a partial answer never looks like a clean PR.
 
 ## Optional inputs
 

@@ -177,14 +177,17 @@ export const PR_VIEW_JSON_FIELDS =
 export async function ghPrView(
   operatorRoot: string,
   pr: number,
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<string> {
-  const result = await gh(operatorRoot, [
-    "pr",
-    "view",
-    String(pr),
-    "--json",
-    PR_VIEW_JSON_FIELDS,
-  ]);
+  // Unbounded unless the caller names a bound, as before: a caller that must not hang passes
+  // one (pr-hero status does, with GH_PR_VIEW_TIMEOUT_MS).
+  const result = await gh(
+    operatorRoot,
+    ["pr", "view", String(pr), "--json", PR_VIEW_JSON_FIELDS],
+    undefined,
+    options?.spawnFn,
+    options?.timeoutMs,
+  );
   if (!result.ok) {
     throw new CliError(`gh pr view ${pr} failed: ${result.stderr.trim()}`);
   }
@@ -356,6 +359,52 @@ export async function ghRepoWebUrl(
   }
 }
 
+// The PR's own web URL, the fallback an outside-channel triage reply links its finding through
+// when the repo's web URL cannot be read. Bounded like ghRepoWebUrl, and undefined on any
+// failure, so the caller can fall through to the next source.
+export async function ghPrWebUrl(
+  operatorRoot: string,
+  pr: number,
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
+): Promise<string | undefined> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      ["pr", "view", String(pr), "--json", "url", "-q", ".url"],
+      undefined,
+      options?.spawnFn,
+      options?.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
+    );
+    if (!result.ok) return undefined;
+    const url = result.stdout.trim();
+    return url === "" ? undefined : url;
+  } catch {
+    return undefined;
+  }
+}
+
+// The repo's owner/name (`owner/repo`), the last source an outside-channel triage reply's link
+// is built from. Bounded like ghRepoWebUrl; undefined on any failure.
+export async function ghRepoNameWithOwner(
+  operatorRoot: string,
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
+): Promise<string | undefined> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+      undefined,
+      options?.spawnFn,
+      options?.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
+    );
+    if (!result.ok) return undefined;
+    const name = result.stdout.trim();
+    return name === "" ? undefined : name;
+  } catch {
+    return undefined;
+  }
+}
+
 // In-flight / completed signal on the head SHA. Fail-loud here: the CLI
 // catches and warns, because a missing `repo:status` scope must not abort a
 // review that already cost hunter money. The context is the request's own
@@ -420,7 +469,8 @@ export async function postCommitStatus(
 // only add contexts they would otherwise miss.
 //
 // The description rides along for the override check (src/pr/teardown.ts), which tells
-// an override from a review's own status by it. The in-flight readers ignore it.
+// an override from a review's own status by it. The in-flight readers ignore it. The
+// target_url rides along for `pr-hero status`, which names the run that wrote the gate.
 //
 // The head's full status history, every row, newest first, for the CI admission carry-forward
 // (src/pr/admission.ts) and the skip's override check. It reads the paginated list (`/statuses`),
@@ -511,13 +561,16 @@ export async function fetchPrCommitShas(
   }
 }
 
-// Never throws by default: a 403, a hung gh (timeout), or garbage jq must not take the watch tick down.
-// Unreadable reads as no rows, which the watch reads as not in-flight.
+// Never throws by default: a 403, a hung gh (timeout), or garbage jq must not take the watch tick
+// down. Unreadable reads as no rows, which the watch reads as not in-flight.
 //
-// WHY failClosed: the CI override check (src/pr/admission.ts) must tell a failed read from a head with no
-// status rows. An empty answer for an unreadable head reads as "no override", and the skip would then write
-// over a human's decision. With failClosed a failed read throws, and so does a row that does not parse,
-// because the row it would drop could be the override the check is looking for.
+// WHY failClosed: two readers must tell a failed read from a head with no status rows, because an
+// empty answer for an unreadable head reads as "no status". The CI override check
+// (src/pr/admission.ts) would then write over a human's decision, and `pr-hero status`, the skill's
+// only reading of the gate (src/commands/status.ts), would send a review out blind. With failClosed
+// a failed read throws, and so does a row that does not parse, because the row it would drop could
+// be the override the check is looking for. The default keeps the empty answer every watch and
+// admission caller relies on.
 export async function fetchCommitStatuses(
   operatorRoot: string,
   sha: string,
@@ -540,7 +593,7 @@ export async function fetchCommitStatuses(
         "api",
         `repos/{owner}/{repo}/commits/${sha}/status?per_page=100`,
         "--jq",
-        ".statuses[]? | {state: .state, context: .context, created_at: .created_at, description: .description}",
+        ".statuses[]? | {state: .state, context: .context, created_at: .created_at, description: .description, target_url: .target_url}",
       ],
       undefined,
       options?.spawnFn,
@@ -550,14 +603,23 @@ export async function fetchCommitStatuses(
     const statuses: CommitStatusFact[] = [];
     for (const line of result.stdout.split("\n")) {
       if (line.trim() === "") continue;
-      const parsed = parseStatusRow(line);
-      if (parsed !== null) {
-        statuses.push(parsed);
-      } else if (failClosed) {
-        return unreadable("a status row could not be read");
+      // Every bad line takes one of two paths, decided per line: a line that does not parse, and a line
+      // that parses to something other than a status (`null`, a bare string, a row missing a field). Both
+      // are skipped by default and both throw under failClosed. The shape check sits inside this per-line
+      // handling on purpose: outside it, a `null` throws a TypeError into the outer catch, which returns []
+      // and drops every status, not just the bad line.
+      const parsed = parseStatusLine(line);
+      if (parsed === null) {
+        if (failClosed) {
+          return unreadable(
+            `unreadable commit status line from gh api: ${line.slice(0, 120)}`,
+          );
+        }
+        // Drop the bad line; keep whatever parsed. One garbage object must not hide a real pending on
+        // the next line.
+        continue;
       }
-      // Otherwise the bad line is dropped and the rest kept, so one garbage object does not hide a real
-      // pending on the next line.
+      statuses.push(parsed);
     }
     return statuses;
   } catch (error) {
@@ -566,8 +628,10 @@ export async function fetchCommitStatuses(
   }
 }
 
-// One row of the combined status projection, or null when it does not parse into a status fact.
-function parseStatusRow(line: string): CommitStatusFact | null {
+// One line of the commit-status stream as a status fact, or null when the line is not one:
+// unparseable JSON, or JSON that is not an object with the three string fields a status
+// read needs. Pure, so both modes of fetchCommitStatuses judge a line the same way.
+function parseStatusLine(line: string): CommitStatusFact | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -575,12 +639,15 @@ function parseStatusRow(line: string): CommitStatusFact | null {
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  const fact = parsed as CommitStatusFact;
-  return typeof fact.state === "string" &&
-    typeof fact.context === "string" &&
-    typeof fact.created_at === "string"
-    ? fact
-    : null;
+  const fact = parsed as Partial<CommitStatusFact>;
+  if (
+    typeof fact.state !== "string" ||
+    typeof fact.context !== "string" ||
+    typeof fact.created_at !== "string"
+  ) {
+    return null;
+  }
+  return fact as CommitStatusFact;
 }
 
 // WHY this exact refspec pair (paid-for): a merged PR's branch is usually

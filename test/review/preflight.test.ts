@@ -2419,3 +2419,71 @@ describe("parse errors carry their record class (T2d-1)", () => {
     ).toBe(true);
   });
 });
+
+// `pr-hero status` (ROADMAP S9): a read-only command with one numeric --pr and one --json.
+// Everything else is refused rather than ignored, because a flag that parses and then does
+// nothing is an operator believing they changed a read they did not.
+describe("parseArgs status", () => {
+  test("reads the command, its PR and --json", () => {
+    const { command, options } = parseArgs(["status", "--pr", "12", "--json"]);
+    expect(command).toBe("status");
+    expect(options.pr).toBe(12);
+    expect(options.json).toBe(true);
+  });
+
+  test("--json is optional", () => {
+    const { command, options } = parseArgs(["status", "--pr", "12"]);
+    expect(command).toBe("status");
+    expect(options.json).toBeUndefined();
+  });
+
+  test("--pr is required", () => {
+    expect(() => parseArgs(["status"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["status", "--json"])).toThrow(
+      /status requires --pr/,
+    );
+  });
+
+  test("--pr must be numeric: a bare flag, or a non-number, is refused", () => {
+    expect(() => parseArgs(["status", "--pr"])).toThrow(/status requires --pr/);
+    expect(() => parseArgs(["status", "--pr", "12abc"])).toThrow(CliUsageError);
+  });
+
+  test("an unknown flag throws", () => {
+    expect(() => parseArgs(["status", "--pr", "12", "--bogus"])).toThrow(
+      /unknown option: --bogus/,
+    );
+  });
+
+  test("a flag that another command owns throws on status, rather than being ignored", () => {
+    expect(() => parseArgs(["status", "--pr", "12", "--post"])).toThrow(
+      CliUsageError,
+    );
+    expect(() =>
+      parseArgs(["status", "--pr", "12", "--from", "/tmp/run"]),
+    ).toThrow(CliUsageError);
+  });
+
+  test("--json is refused on every other command", () => {
+    expect(() => parseArgs(["review", "--pr", "12", "--json"])).toThrow(
+      /--json only applies to the status command/,
+    );
+  });
+
+  test("a second word after status is an unexpected argument", () => {
+    expect(() => parseArgs(["status", "status", "--pr", "12"])).toThrow(
+      /unexpected argument/,
+    );
+  });
+
+  test("watch status and gc status still parse as their own sub-words", () => {
+    expect(parseArgs(["watch", "status"]).options.watch).toBe("status");
+    expect(parseArgs(["gc", "status"]).options.gc).toBe("status");
+    expect(parseArgs(["watch", "status"]).command).toBe("watch");
+    expect(parseArgs(["gc", "status"]).command).toBe("gc");
+  });
+
+  test("status is in the command list the unknown-command error names", () => {
+    expect(() => parseArgs(["statu"])).toThrow(/"status"/);
+  });
+});
