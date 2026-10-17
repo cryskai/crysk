@@ -230,11 +230,13 @@ describe("cli arguments", () => {
     expect(parseCliArgs(["init", "--ref", "v0.2.0"])).toEqual({
       command: "init",
       ref: "v0.2.0",
+      route: { kind: "claude" },
     });
     expect(parseCliArgs(["smoke", "--ref", "v0.2.0", "--keep"])).toEqual({
       command: "smoke",
       ref: "v0.2.0",
       keep: true,
+      noRetry: false,
     });
     expect(parseCliArgs(["list"])).toEqual({ command: "list" });
     expect(parseCliArgs(["clean"])).toEqual({ command: "clean" });
@@ -259,6 +261,7 @@ describe("cli arguments", () => {
       scenarios: ["no-credential", "review-free"],
       ref: "v0.2.0",
       keep: true,
+      noRetry: false,
     });
     expect("error" in parseCliArgs(["run", "--ref", "v0.2.0"])).toBe(true);
     expect("error" in parseCliArgs(["run", "review-free"])).toBe(true);
@@ -269,6 +272,76 @@ describe("cli arguments", () => {
     expect("error" in parseCliArgs(["init", "--ref", "v0.2.0", "--keep"])).toBe(
       true,
     );
+  });
+
+  test("init takes --route: claude by default, or opencode:<snapshot>; a bad value is a usage error", () => {
+    expect(
+      parseCliArgs([
+        "init",
+        "--ref",
+        "v0.2.0",
+        "--route",
+        "opencode:deepseek-v4.1-flash-free",
+      ]),
+    ).toEqual({
+      command: "init",
+      ref: "v0.2.0",
+      route: { kind: "opencode", modelSnapshot: "deepseek-v4.1-flash-free" },
+    });
+    expect(
+      parseCliArgs(["init", "--ref", "v0.2.0", "--route", "claude"]),
+    ).toEqual({ command: "init", ref: "v0.2.0", route: { kind: "claude" } });
+    for (const bad of [
+      "opencode:",
+      "opencode:bad snapshot",
+      "opencode:a/b",
+      "gemini",
+    ]) {
+      expect(
+        "error" in parseCliArgs(["init", "--ref", "v0.2.0", "--route", bad]),
+      ).toBe(true);
+    }
+    expect(
+      "error" in parseCliArgs(["init", "--ref", "v0.2.0", "--route"]),
+    ).toBe(true);
+    // --route is an init flag; a run has its route from init.
+    expect(
+      "error" in
+        parseCliArgs([
+          "run",
+          "review-free",
+          "--ref",
+          "v0.2.0",
+          "--route",
+          "claude",
+        ]),
+    ).toBe(true);
+  });
+
+  test("--no-retry is a run and smoke flag, and means nothing to init", () => {
+    expect(
+      parseCliArgs(["run", "review-free", "--ref", "v0.2.0", "--no-retry"]),
+    ).toEqual({
+      command: "run",
+      scenarios: ["review-free"],
+      ref: "v0.2.0",
+      keep: false,
+      noRetry: true,
+    });
+    expect(parseCliArgs(["smoke", "--ref", "v0.2.0", "--no-retry"])).toEqual({
+      command: "smoke",
+      ref: "v0.2.0",
+      keep: false,
+      noRetry: true,
+    });
+    expect(
+      "error" in parseCliArgs(["init", "--ref", "v0.2.0", "--no-retry"]),
+    ).toBe(true);
+  });
+
+  test("the usage names --route and --no-retry, and the claude default", () => {
+    expect(USAGE).toContain("--route claude|opencode:<modelSnapshot>");
+    expect(USAGE).toContain("--no-retry");
   });
 
   test("an unknown scenario is a usage error that names it, and touches nothing", async () => {

@@ -27,21 +27,60 @@ export const OPENCODE_AUTH_SECRET = "OPENCODE_AUTH_JSON";
 // is the minimum that passes the trigger's credential check (src/ci/trigger.ts).
 export const OPENCODE_AUTH_VALUE = "{}";
 export const ROUTING_VARIABLE = "PRHERO_ROUTING";
+// The subscription token the claude route runs on. The scaffold wires it to the
+// action's `claude-token` input (src/ci/setup.ts). init checks its presence only.
+export const CLAUDE_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN";
 
-// The routing object, not the whole config (docs/github-actions.md, the
-// PRHERO_ROUTING row). A `default` route covers every role: the sonnet hunters,
-// the opus refuter and the haiku summarizer. `big-pickle` is the model the
-// 2026-10-16 `opencode models opencode --verbose` catalog lists at cost 0.
-// `modelSnapshot` is required here: big-pickle is not a catalog alias, and a
-// route without one on an OpenCode backend throws UnmappedRouteError.
-export const ROUTING_VALUE = JSON.stringify({
-  default: {
-    backend: "opencode",
-    provider: "opencode",
-    gateway: "configured",
-    modelSnapshot: "big-pickle",
-  },
-});
+// The route a sandbox runs its reviews on, chosen by `init --route`. `claude` (the
+// default) leaves PRHERO_ROUTING unset, so the workflow runs the engine's default
+// stack on the CLAUDE_CODE_OAUTH_TOKEN subscription: sonnet hunters, opus refuter,
+// haiku summarizer, which is the production stack. `opencode:<snapshot>` routes every
+// role to one OpenCode model, the free route the sandbox ran on before.
+export type Route =
+  | { kind: "claude" }
+  | { kind: "opencode"; modelSnapshot: string };
+export const DEFAULT_ROUTE: Route = { kind: "claude" };
+
+const MODEL_SNAPSHOT_SHAPE = /^[A-Za-z0-9.-]+$/;
+
+// The routing object for an OpenCode model, not the whole config (docs/github-actions.md,
+// the PRHERO_ROUTING row). A `default` route covers every role: the sonnet hunters,
+// the opus refuter and the haiku summarizer. `modelSnapshot` is required: a model
+// that is not a catalog alias throws UnmappedRouteError on an OpenCode backend
+// without one. The snapshot is validated because it is written into the routing JSON
+// the workflow reads.
+export function routingValueFor(modelSnapshot: string): string {
+  if (!MODEL_SNAPSHOT_SHAPE.test(modelSnapshot)) {
+    throw new Error(
+      `model snapshot ${JSON.stringify(modelSnapshot)} is not valid (letters, digits, . and -)`,
+    );
+  }
+  return JSON.stringify({
+    default: {
+      backend: "opencode",
+      provider: "opencode",
+      gateway: "configured",
+      modelSnapshot,
+    },
+  });
+}
+
+// The value of `init --route`: `claude`, or `opencode:<snapshot>`.
+export function parseRoute(
+  value: string,
+): { route: Route } | { error: string } {
+  if (value === "claude") return { route: { kind: "claude" } };
+  const prefix = "opencode:";
+  if (value.startsWith(prefix)) {
+    const modelSnapshot = value.slice(prefix.length);
+    if (MODEL_SNAPSHOT_SHAPE.test(modelSnapshot)) {
+      return { route: { kind: "opencode", modelSnapshot } };
+    }
+  }
+  return {
+    error: `--route ${value} is not claude or opencode:<modelSnapshot> (the snapshot uses letters, digits, . and -)`,
+  };
+}
 
 // The repo config, read from the checkout (not the person layer). every_push
 // admits every push and never skips for risk; ci_max_attempts is high enough

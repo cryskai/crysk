@@ -138,7 +138,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "review-free",
     description:
-      "the normal workflow on the free route: a reviewed head, a report, and a status that agrees with the blocking findings",
+      "the normal workflow on the sandbox route: a reviewed head, a report, and a status that agrees with the blocking findings",
     phases: [
       {
         action: { kind: "open", variant: "normal" },

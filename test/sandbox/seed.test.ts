@@ -19,8 +19,9 @@ import {
   actionRefFor,
   GOTCHAS_PATH,
   OPENCODE_AUTH_VALUE,
+  parseRoute,
   REPO_CONFIG_JSON,
-  ROUTING_VALUE,
+  routingValueFor,
   sandboxFiles,
   WORKFLOW_PATH,
   workflowFor,
@@ -85,7 +86,9 @@ describe("repo config", () => {
 
   test("routing is person-layer only, so the repo file must not carry it", () => {
     expect(() =>
-      parseLocalConfig(JSON.stringify({ routing: JSON.parse(ROUTING_VALUE) })),
+      parseLocalConfig(
+        JSON.stringify({ routing: JSON.parse(routingValueFor("big-pickle")) }),
+      ),
     ).toThrow();
   });
 });
@@ -98,22 +101,45 @@ describe("gotchas", () => {
 });
 
 describe("routing value", () => {
-  test("parses through the real parser and resolves every role to opencode/big-pickle", () => {
-    const routing = parseRoutingConfig(
-      JSON.parse(ROUTING_VALUE),
-      "~/.prhero/config.json",
-    );
-    for (const logical of ["sonnet", "opus", "haiku", "opencode/big-pickle"]) {
-      const route = resolveModelRoute(logical, routing);
-      expect({
-        backend: route.backend,
-        provider: route.provider,
-        model: route.modelSnapshot,
-      }).toEqual({
-        backend: "opencode",
-        provider: "opencode",
-        model: "big-pickle",
-      });
+  test("parses through the real parser and resolves every role to the snapshot it names", () => {
+    for (const snapshot of ["big-pickle", "deepseek-v4.1-flash-free"]) {
+      const routing = parseRoutingConfig(
+        JSON.parse(routingValueFor(snapshot)),
+        "~/.prhero/config.json",
+      );
+      for (const logical of [
+        "sonnet",
+        "opus",
+        "haiku",
+        `opencode/${snapshot}`,
+      ]) {
+        const route = resolveModelRoute(logical, routing);
+        expect({
+          backend: route.backend,
+          provider: route.provider,
+          model: route.modelSnapshot,
+        }).toEqual({
+          backend: "opencode",
+          provider: "opencode",
+          model: snapshot,
+        });
+      }
+    }
+  });
+
+  test("refuses a snapshot outside letters, digits, . and -, since it is written into the routing JSON", () => {
+    for (const bad of ["", "a b", "a/b", "x;y", 'a"b']) {
+      expect(() => routingValueFor(bad)).toThrow(/not valid/);
+    }
+  });
+
+  test("--route parses to claude, or to an OpenCode snapshot, and anything else is an error", () => {
+    expect(parseRoute("claude")).toEqual({ route: { kind: "claude" } });
+    expect(parseRoute("opencode:glm-5.3-flash-free")).toEqual({
+      route: { kind: "opencode", modelSnapshot: "glm-5.3-flash-free" },
+    });
+    for (const bad of ["", "opencode:", "opencode:a b", "Claude", "gemini"]) {
+      expect("error" in parseRoute(bad)).toBe(true);
     }
   });
 
@@ -121,7 +147,7 @@ describe("routing value", () => {
     home = await mkdtemp(path.join(tmpdir(), "pr-hero-sandbox-seed-"));
     const env = { HOME: home };
     await materializeCiOpenCodeData({
-      routing: ROUTING_VALUE,
+      routing: routingValueFor("big-pickle"),
       opencodeAuth: OPENCODE_AUTH_VALUE,
       home,
       env,

@@ -72,8 +72,8 @@ bun run scripts/m6.ts score  # $0: the floor table, re-runnable from artifacts f
 bun run scripts/m6.ts run    # LIVE and the big one: 56 serial reviews, ~$174-374, ~4h44m
 bun run scripts/martian-cal.ts plan|check|run|score   # Martian Cal.com slice (never --pr)
 bun run scripts/martian-judge.ts     # LIVE: Martian Surface A judge on existing runs
-bun scripts/sandbox.ts run <scenario...> --ref <ref>   # LIVE in juanmaagd/pr-hero-sandbox, $0 on the free route
-bun scripts/sandbox.ts init --ref <ref>
+bun scripts/sandbox.ts run <scenario...> --ref <ref>   # LIVE in juanmaagd/pr-hero-sandbox, on the route init set (claude: subscription quota, $0 cash)
+bun scripts/sandbox.ts init --ref <ref> [--route claude|opencode:<modelSnapshot>]   # route defaults to claude
 ```
 
 ## Project skills
