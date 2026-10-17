@@ -10,7 +10,11 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { EngineAssets } from "./assets";
+import {
+  type EngineAssets,
+  isNpxCacheInvocation,
+  NPX_REGISTRATION_REFUSED,
+} from "./assets";
 
 export type AgentEnvId =
   | "claude"
@@ -432,6 +436,13 @@ export async function registerMcpServer(
       registered: false,
       configFile: "",
       error: "No MCP configuration file path resolved for environment",
+    };
+  }
+  if (isNpxCacheInvocation({ command: reg.command, args: reg.args })) {
+    return {
+      registered: false,
+      configFile: env.mcpConfigFile,
+      error: NPX_REGISTRATION_REFUSED,
     };
   }
 

@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
 } from "node:fs";
@@ -56,11 +57,47 @@ describe("Packaging & distribution configuration", () => {
     expect(ENGINE_VERSION).toBe(pkg.version);
   });
 
+  // An npm install ships only `files`. A static import from src/ that leaves src/ for a
+  // root directory the list omits crashes the installed CLI at startup, which is how
+  // config/models/anthropic.json went missing from the package.
+  test("every root path a src/ module imports is in package.json files", () => {
+    const pkg = JSON.parse(
+      readFileSync(path.join(rootDir, "package.json"), "utf-8"),
+    );
+    const files: string[] = pkg.files;
+    const srcDir = path.join(rootDir, "src");
+    const missing: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".ts")) {
+          const text = readFileSync(full, "utf-8");
+          for (const match of text.matchAll(/from "(\.\.?\/[^"]+)"/g)) {
+            const target = path.relative(
+              rootDir,
+              path.resolve(dir, match[1] ?? ""),
+            );
+            if (target.startsWith("src/") || target.startsWith("..")) continue;
+            const covered = files.some(
+              (f) => target === f || target.startsWith(`${f}/`),
+            );
+            if (!covered)
+              missing.push(`${path.relative(rootDir, full)} -> ${target}`);
+          }
+        }
+      }
+    };
+    walk(srcDir);
+    expect(missing).toEqual([]);
+  });
+
   test("bin/pr-hero.js exists and is an executable wrapper", () => {
     const binPath = path.join(rootDir, "bin", "pr-hero.js");
     expect(existsSync(binPath)).toBe(true);
     const content = readFileSync(binPath, "utf-8");
-    expect(content).toContain("#!/usr/bin/env bun");
+    // A Node shebang: npx runs it on a machine with no Bun, and it starts Bun itself.
+    expect(content.startsWith("#!/usr/bin/env node\n")).toBe(true);
     expect(content).toContain("cli.ts");
   });
 

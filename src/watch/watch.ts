@@ -55,7 +55,11 @@ import {
   styleEnabled,
   terminalWidth,
 } from "#ui/primitives";
-import { selfInvocation } from "../assets";
+import {
+  isNpxCacheInvocation,
+  NPX_REGISTRATION_REFUSED,
+  selfInvocation,
+} from "../assets";
 import { CliError, CliUsageError } from "../errors";
 import { resolveRepoHome } from "../home";
 import type { IgnoreRule } from "../ignore-file";
@@ -1007,11 +1011,16 @@ async function watchInstall(intervalMin: number): Promise<number> {
         "`pr-hero watch --once` from cron — the lockfile covers overlap.",
     );
   }
+  // Checked before any write, so a refused install leaves nothing on disk.
+  const invocation = selfInvocation();
+  if (isNpxCacheInvocation(invocation)) {
+    throw new CliError(NPX_REGISTRATION_REFUSED);
+  }
   const paths = prheroHomePaths(os.homedir());
   await mkdir(paths.dir, { recursive: true });
   await mkdir(path.dirname(paths.plistPath), { recursive: true });
   const plist = renderWatchPlist({
-    invocation: selfInvocation(),
+    invocation,
     intervalSeconds: intervalMin * 60,
     logPath: paths.launchdLogPath,
     pathEnv: process.env.PATH ?? "",

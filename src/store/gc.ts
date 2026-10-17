@@ -19,7 +19,11 @@ import {
 import { type CliOptions, DEFAULT_GC_INTERVAL_MIN } from "#review/preflight";
 import { log } from "#ui/primitives";
 import { parsePlistInterval } from "#watch/preflight";
-import { selfInvocation } from "../assets";
+import {
+  isNpxCacheInvocation,
+  NPX_REGISTRATION_REFUSED,
+  selfInvocation,
+} from "../assets";
 import { CliError } from "../errors";
 import {
   acquirePidLock,
@@ -327,16 +331,21 @@ async function gcInstall(intervalMin: number): Promise<number> {
         "`pr-hero gc` from cron.",
     );
   }
+  // selfInvocation(), not a hand-built runtime + src/cli.ts pair: the pair
+  // is only correct for a source checkout, and the compiled binary it was
+  // wrong for is the one users install. Checked before any write, so a refused
+  // install leaves nothing on disk.
+  const invocation = selfInvocation();
+  if (isNpxCacheInvocation(invocation)) {
+    throw new CliError(NPX_REGISTRATION_REFUSED);
+  }
   const home = os.homedir();
   const plistPath = gcPlistPath(home);
   const logPath = gcLaunchdLogPath(home);
   await mkdir(prheroLayout(home).dir, { recursive: true });
   await mkdir(path.dirname(plistPath), { recursive: true });
   const plist = renderGcPlist({
-    // selfInvocation(), not a hand-built runtime + src/cli.ts pair: the pair
-    // is only correct for a source checkout, and the compiled binary it was
-    // wrong for is the one users install.
-    invocation: selfInvocation(),
+    invocation,
     intervalSeconds: intervalMin * 60,
     logPath,
     pathEnv: process.env.PATH ?? "",

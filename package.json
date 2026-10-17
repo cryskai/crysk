@@ -44,6 +44,7 @@
   "preferGlobal": true,
   "files": [
     "bin",
+    "config",
     "dist",
     "prompts",
     "skills/pr-hero-triage",
@@ -64,6 +65,9 @@
     "refuter-probe": "bun run scripts/refuter-probe.ts",
     "check": "biome check src test"
   },
+  "dependencies": {
+    "@opencode-ai/sdk": "1.18.25"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2",
     "@types/bun": "latest"
@@ -72,7 +76,6 @@
     "typescript": "^5"
   },
   "optionalDependencies": {
-    "@opencode-ai/sdk": "1.18.25"
+    "bun": "1.3.14"
   }
 }
-

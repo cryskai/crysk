@@ -108,6 +108,18 @@ export function selfInvocation(): SelfInvocation {
   };
 }
 
+// WHY: `npx pr-hero` runs from npm's temporary cache (~/.npm/_npx/<hash>/), which npm
+// may delete at any time. An MCP config or a launchd plist that records that path
+// breaks silently once it is gone, so registration refuses it and names the fix.
+export const NPX_REGISTRATION_REFUSED =
+  "pr-hero is running from npx's temporary cache; install pr-hero (npm i -g pr-hero) to register";
+const NPX_CACHE_SEGMENT = /[\\/]_npx[\\/]/;
+export function isNpxCacheInvocation(invocation: SelfInvocation): boolean {
+  return [invocation.command, ...invocation.args].some((part) =>
+    NPX_CACHE_SEGMENT.test(part),
+  );
+}
+
 // Read through resolveEngineAssets() rather than the constants in index.ts:
 // the version a run is stamped with must be the one that would be published,
 // and a hand-maintained duplicate drifts. That one resolver also covers the
