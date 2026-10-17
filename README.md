@@ -52,10 +52,17 @@ pr-hero from: that single step is what moves a run from quota to invoice.
 # Option A: Standalone binary (macOS / Linux, bundles its own Bun — still needs claude and git)
 curl -fsSL https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh | bash
 
-# Option B: Global npm install (requires Bun >= 1.3 already on PATH)
+# Option B: Global npm install (brings Bun 1.3.14 as an optional dependency, or uses
+# the Bun >= 1.3 on PATH when npm skips optional dependencies)
 npm install -g pr-hero
 
-# Option C: From source / development
+# Option D: No install, for an agent or a one-off run (needs only Node). It cannot
+# register the MCP server or the launchd agents: npx's cache is temporary, so those
+# refuse and ask for option B.
+npx pr-hero doctor
+
+# Option C: From source / development (the bin runs on Node; on a machine with Bun
+# and no Node, run `bun bin/pr-hero.js` or use option A)
 git clone https://github.com/juanmaagd/pr-hero.git && cd pr-hero
 bun install && bun link
 ```

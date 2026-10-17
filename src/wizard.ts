@@ -512,6 +512,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         args: [...self.args, "mcp"],
       };
 
+      let mcpRegistered = true;
       for (const env of state.envDetections) {
         if (env.skillsDir) {
           await syncSkills(env, assets, {
@@ -521,14 +522,22 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           });
         }
         if (env.mcpConfigFile) {
-          await registerMcpServer(env, mcpReg, {
+          const registration = await registerMcpServer(env, mcpReg, {
             exists: deps.exists,
             readFile: deps.readFile,
             writeFile: deps.writeFile,
           });
+          // A refused or failed registration is not a registered one: under npx the
+          // refusal names the global install, and the step must not report success.
+          if (!registration.registered) {
+            mcpRegistered = false;
+            process.stderr.write(
+              `pr-hero: MCP not registered for ${env.displayName}: ${registration.error ?? "unknown error"}\n`,
+            );
+          }
         }
       }
-      return { skillsSynced: true, mcpRegistered: true };
+      return { skillsSynced: true, mcpRegistered };
     },
     render(
       _state: WizardState,

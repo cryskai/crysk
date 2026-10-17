@@ -158,9 +158,11 @@ runs:
     - name: Install dependencies
       if: steps.trigger.outputs.run == 'true'
       shell: bash
+      # --omit=optional skips the `bun` npm package (the npx launcher's Bun, about 85 MiB):
+      # setup-bun already put Bun on PATH, and the engine's own dependencies are not optional.
       run: |
         if [ -f "${{ github.action_path }}/package.json" ]; then
-          cd "${{ github.action_path }}" && bun install --frozen-lockfile
+          cd "${{ github.action_path }}" && bun install --frozen-lockfile --omit=optional
         fi
 
     - name: Install Claude Code CLI

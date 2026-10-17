@@ -7,7 +7,11 @@ import {
   registerMcpServer,
   syncSkills,
 } from "../src/agent-env";
-import { resolveEngineAssets, selfInvocation } from "../src/assets";
+import {
+  NPX_REGISTRATION_REFUSED,
+  resolveEngineAssets,
+  selfInvocation,
+} from "../src/assets";
 
 describe("Agent environment detector and sync", () => {
   const fakeAssets = {
@@ -314,6 +318,37 @@ describe("Agent environment detector and sync", () => {
           }),
       });
       expect(registered).toBe(true);
+    });
+
+    test("registerMcpServer refuses an npx-cache registration before any read or write", async () => {
+      const env: AgentEnvDetection = {
+        id: "cursor",
+        displayName: "Cursor",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        mcpConfigFile: "/home/user/.cursor/mcp.json",
+      };
+      const reg = {
+        command: "/home/x/.npm/_npx/ab12/node_modules/bun/bin/bun",
+        args: ["/home/x/.npm/_npx/ab12/node_modules/pr-hero/src/cli.ts", "mcp"],
+      };
+      let touched = false;
+      const result = await registerMcpServer(env, reg, {
+        readFile: () => {
+          touched = true;
+          return undefined;
+        },
+        writeFile: async () => {
+          touched = true;
+        },
+      });
+      expect(result).toEqual({
+        registered: false,
+        configFile: "/home/user/.cursor/mcp.json",
+        error: NPX_REGISTRATION_REFUSED,
+      });
+      expect(touched).toBe(false);
     });
   });
 

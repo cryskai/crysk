@@ -5,6 +5,8 @@ import { engineIdentity } from "#git/identity";
 import { localReviewSpec } from "#review/preflight";
 import {
   deriveEngineIdentity,
+  isNpxCacheInvocation,
+  NPX_REGISTRATION_REFUSED,
   resolveEngineAssets,
   selfInvocation,
 } from "../src/assets";
@@ -105,6 +107,59 @@ describe("selfInvocation", () => {
     expect(inv.args).toHaveLength(1);
     expect(inv.args[0]).toBe(path.resolve(import.meta.dir, "../src/cli.ts"));
     expect(existsSync(inv.args[0])).toBe(true);
+  });
+});
+
+describe("isNpxCacheInvocation", () => {
+  test("is true for a bun binary under npx's _npx cache", () => {
+    expect(
+      isNpxCacheInvocation({
+        command: "/Users/x/.npm/_npx/ab12/node_modules/bun/bin/bun.exe",
+        args: [],
+      }),
+    ).toBe(true);
+  });
+
+  test("is true when an argument points into npx's _npx cache", () => {
+    expect(
+      isNpxCacheInvocation({
+        command: "/usr/local/bin/bun",
+        args: ["/home/x/.npm/_npx/ab12/node_modules/pr-hero/src/cli.ts"],
+      }),
+    ).toBe(true);
+  });
+
+  test("is true for a Windows npm cache path", () => {
+    expect(
+      isNpxCacheInvocation({
+        command: "bun.exe",
+        args: [
+          "C:\\Users\\x\\AppData\\Local\\npm-cache\\_npx\\ab12\\node_modules\\pr-hero\\src\\cli.ts",
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  test("is false for a global install", () => {
+    expect(
+      isNpxCacheInvocation({
+        command: "/usr/local/bin/bun",
+        args: ["/usr/local/lib/node_modules/pr-hero/src/cli.ts"],
+      }),
+    ).toBe(false);
+  });
+
+  test("is false for a directory that only starts with _npx", () => {
+    expect(
+      isNpxCacheInvocation({
+        command: "/opt/_npxfoo/bin/bun",
+        args: ["/opt/_npxfoo/pr-hero/src/cli.ts"],
+      }),
+    ).toBe(false);
+  });
+
+  test("the refusal message names the fix", () => {
+    expect(NPX_REGISTRATION_REFUSED).toContain("npm i -g pr-hero");
   });
 });
 
