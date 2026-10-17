@@ -183,6 +183,9 @@ test.skipIf(process.platform === "win32")(
     expect(existsSync(mark)).toBe(true);
     expect(readFileSync(mark, "utf8")).toContain("got-term");
   },
+  // The handshake may wait up to 10 s and the exit up to 5 s; Bun's 5 s default would cut
+  // it first (review #348 F003).
+  20_000,
 );
 
 test("under Bun, the launcher runs the CLI in-process and prints its usage", () => {

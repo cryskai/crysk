@@ -1402,6 +1402,36 @@ describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
     expect(status.reason).toMatch(/upheld every dismissal/);
   });
 
+  // #348 F002: the gate counts a blocking finding this read cannot see (one only in the summary).
+  test("(j) every visible dismissal upheld, but the gate counts more: not review again", () => {
+    const upheld = ruling({
+      id: 3,
+      user: CI_ADJUDICATOR_LOGIN,
+      reply: 2,
+      verdict: "upheld",
+    });
+    const status = buildPrStatus({
+      ...dismissed([upheld]),
+      statuses: [gate("failure", BLOCKING_DESCRIPTION(2))],
+    });
+    expect(status.next_action).toBe("override-or-fix");
+  });
+
+  // #348 F001: an upheld dismissal left the gate's count, so the fallback count leaves it too.
+  test("(k) a green gate after the review that consumed an upheld dismissal reports 0 unresolved", () => {
+    const upheld = ruling({
+      id: 3,
+      user: CI_ADJUDICATOR_LOGIN,
+      reply: 2,
+      verdict: "upheld",
+    });
+    const status = buildPrStatus({
+      ...dismissed([upheld]),
+      statuses: [gate("success", "review posted")],
+    });
+    expect(status.unresolved_blocking).toBe(0);
+  });
+
   test("(c) the same marker posted by another login is not the adjudicator's ruling", () => {
     const status = buildPrStatus(
       dismissed([

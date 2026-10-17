@@ -170,7 +170,12 @@ export function buildPrStatus(input: PrStatusInput): PrStatusJson {
       outcome_code: outcomeCodeOf(input.issueComments),
     },
     findings: analyzed.map((a) => a.finding),
-    unresolved_blocking: unresolvedBlocking(gate, liveBlocking.length),
+    // A dismissal the CI adjudicator upheld on this head leaves the gate's count (review #348
+    // F001), so the fallback count leaves it out too.
+    unresolved_blocking: unresolvedBlocking(
+      gate,
+      liveBlocking.filter((a) => !upheldDismissal(a)).length,
+    ),
     next_action: decision.next_action,
     reason: decision.reason,
   };
@@ -447,13 +452,23 @@ function unresolvedBlocking(
   gate: PrStatusGate,
   liveBlockingCount: number,
 ): number {
-  if (gate.state === "failure" && gate.description !== null) {
-    const counted = /^pr-hero: (\d+) blocking finding\(s\)/.exec(
-      gate.description,
-    );
-    if (counted?.[1] !== undefined) return Number(counted[1]);
-  }
-  return liveBlockingCount;
+  return gateBlockingCount(gate) ?? liveBlockingCount;
+}
+
+// The count a red gate's own description names, or null when it names none.
+function gateBlockingCount(gate: PrStatusGate): number | null {
+  if (gate.state !== "failure" || gate.description === null) return null;
+  const counted = /^pr-hero: (\d+) blocking finding\(s\)/.exec(
+    gate.description,
+  );
+  return counted?.[1] === undefined ? null : Number(counted[1]);
+}
+
+// A blocking finding whose newest reply is a dismissal the CI adjudicator upheld on this head.
+function upheldDismissal(a: AnalyzedFinding): boolean {
+  return (
+    a.finding.triage?.tag === "dismissed" && a.finding.ci_verdict === "upheld"
+  );
 }
 
 // The next action, first match wins. The branches are in the order the skill must act on
@@ -568,10 +583,15 @@ function decideNext(
       reason: `${pendingRulings.length} live blocking finding(s) are answered dismissed with no CI ruling on this head (or an inconclusive one); comment /pr-hero recheck so the CI adjudicator rules on them.`,
     };
   }
+  // WHY the gate's own count is checked too (review #348 F002): the gate can count a blocking
+  // finding this read cannot see (one rendered only in the summary). A review that already
+  // consumed the rulings leaves that one counted, and answering review again would loop.
+  const gateCount = gateBlockingCount(gate);
   if (
     dismissed.length > 0 &&
     dismissed.length === liveBlocking.length &&
-    dismissed.every((a) => a.finding.ci_verdict === "upheld")
+    dismissed.every(upheldDismissal) &&
+    (gateCount === null || gateCount <= dismissed.length)
   ) {
     return {
       next_action: "review",
