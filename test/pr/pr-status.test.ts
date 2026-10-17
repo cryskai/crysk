@@ -9,6 +9,7 @@ import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
 import {
   buildPrStatus,
   type PrStatusInput,
+  type PrStatusReviewComment,
   renderPrStatusLines,
 } from "#pr/pr-status";
 import {
@@ -22,6 +23,7 @@ import {
   type StateFinding,
   stateFinding,
 } from "#rereview/state";
+import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import {
   type TriageTag,
   type TriageVerdict,
@@ -221,7 +223,7 @@ describe("buildPrStatus: next_action, first match wins", () => {
       state: "failure",
     },
     {
-      name: "a red gate whose blocking finding is triaged at its head, none applied, needs override or fix",
+      name: "a red gate whose dismissed blocking finding has no CI ruling needs a recheck",
       input: input({
         statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
         reviewComments: [
@@ -245,7 +247,7 @@ describe("buildPrStatus: next_action, first match wins", () => {
           },
         ],
       }),
-      action: "override-or-fix",
+      action: "recheck",
       state: "failure",
     },
     {
@@ -537,6 +539,7 @@ describe("buildPrStatus: findings", () => {
         blocking: true,
         live_on_head: false,
         triage: null,
+        ci_verdict: null,
       },
     ]);
   });
@@ -1302,7 +1305,7 @@ describe("buildPrStatus: a green gate still owes a reply on this head", () => {
     expect(status.next_action).toBe("triage");
   });
 
-  test("a red gate whose blocking outside-channel finding is answered at this head is override-or-fix, not triage", () => {
+  test("a red gate whose blocking outside-channel finding is answered at this head is override-or-fix, never a recheck that cannot settle it", () => {
     const status = buildPrStatus(
       input({
         statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
@@ -1321,6 +1324,273 @@ describe("buildPrStatus: a green gate still owes a reply on this head", () => {
         ],
       }),
     );
+    // An outside-channel finding has no review thread, so the CI adjudicator never rules on it:
+    // a recheck could not settle it, and only a fix or an override can.
     expect(status.next_action).toBe("override-or-fix");
+  });
+});
+
+describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
+  const CLAIM_TWO = "a second claim the author dismissed on another line";
+  const NEW_REASON =
+    "The gate is red with 1 live blocking finding(s), all triaged and none applied or pending a CI ruling (a rejected dismissal, or a deferred or misclassified tag, never leaves the count): fix and push, or override the gate.";
+
+  // One blocking inline finding whose newest reply is a dismissed, upheld triage at CURRENT.
+  function dismissed(extra: PrStatusReviewComment[] = []): PrStatusInput {
+    return input({
+      statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+      reviewComments: [
+        {
+          id: 1,
+          body: findingBody({ head: CURRENT, claim: CLAIM }),
+          in_reply_to_id: null,
+        },
+        triageReply({
+          id: 2,
+          parent: 1,
+          head: CURRENT,
+          tag: "dismissed",
+          verdict: "upheld",
+        }),
+        ...extra,
+      ],
+      issueComments: [
+        { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+      ],
+    });
+  }
+
+  function ruling(options: {
+    id: number;
+    user: string;
+    reply: number;
+    verdict: "upheld" | "rejected" | "inconclusive";
+    head?: string;
+  }): PrStatusReviewComment {
+    return {
+      id: options.id,
+      user: options.user,
+      body: `${adjudicationMarker({
+        verdict: options.verdict,
+        reply: options.reply,
+        head: options.head ?? CURRENT,
+      })}\n\nruling`,
+      in_reply_to_id: 1,
+    };
+  }
+
+  test("(a) a dismissal with no bot reply has no ruling and needs a recheck", () => {
+    const status = buildPrStatus(dismissed());
+    expect(status.findings[0]?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+    expect(status.reason).toMatch(/comment \/pr-hero recheck/);
+  });
+
+  test("(b) a bot ruling upheld on the newest reply and this head counts, and the review no longer waits on it", () => {
+    const status = buildPrStatus(
+      dismissed([
+        ruling({
+          id: 3,
+          user: CI_ADJUDICATOR_LOGIN,
+          reply: 2,
+          verdict: "upheld",
+        }),
+      ]),
+    );
+    expect(status.findings[0]?.ci_verdict).toBe("upheld");
+    expect(status.next_action).toBe("review");
+    expect(status.reason).toMatch(/upheld every dismissal/);
+  });
+
+  test("(c) the same marker posted by another login is not the adjudicator's ruling", () => {
+    const status = buildPrStatus(
+      dismissed([
+        ruling({ id: 3, user: "mallory", reply: 2, verdict: "upheld" }),
+      ]),
+    );
+    expect(status.findings[0]?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(d) a bot ruling on another head is not counted", () => {
+    const status = buildPrStatus(
+      dismissed([
+        ruling({
+          id: 3,
+          user: CI_ADJUDICATOR_LOGIN,
+          reply: 2,
+          verdict: "upheld",
+          head: EARLIER,
+        }),
+      ]),
+    );
+    expect(status.findings[0]?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(e) a bot ruling on an older triage reply does not rule on a newer dismissal", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+          triageReply({
+            id: 4,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+          ruling({
+            id: 5,
+            user: CI_ADJUDICATOR_LOGIN,
+            reply: 2,
+            verdict: "upheld",
+          }),
+        ],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+      }),
+    );
+    expect(status.findings[0]?.ci_verdict).toBeNull();
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(f) an inconclusive bot ruling still needs a recheck", () => {
+    const status = buildPrStatus(
+      dismissed([
+        ruling({
+          id: 3,
+          user: CI_ADJUDICATOR_LOGIN,
+          reply: 2,
+          verdict: "inconclusive",
+        }),
+      ]),
+    );
+    expect(status.findings[0]?.ci_verdict).toBe("inconclusive");
+    expect(status.next_action).toBe("recheck");
+  });
+
+  test("(g) a bot ruling rejected leaves the dismissal counted, with the new reason text", () => {
+    const status = buildPrStatus(
+      dismissed([
+        ruling({
+          id: 3,
+          user: CI_ADJUDICATOR_LOGIN,
+          reply: 2,
+          verdict: "rejected",
+        }),
+      ]),
+    );
+    expect(status.findings[0]?.ci_verdict).toBe("rejected");
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason).toBe(NEW_REASON);
+  });
+
+  test("(h) a live deferred finding keeps the gate red even when the dismissal was upheld", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(2))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+          ruling({
+            id: 3,
+            user: CI_ADJUDICATOR_LOGIN,
+            reply: 2,
+            verdict: "upheld",
+          }),
+          {
+            id: 4,
+            body: findingBody({ head: CURRENT, claim: CLAIM_TWO, line: 20 }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 5,
+            parent: 4,
+            head: CURRENT,
+            tag: "deferred",
+            verdict: "upheld",
+          }),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM),
+              stateRow("R002", CLAIM_TWO),
+            ]),
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).not.toBe("review");
+    expect(status.next_action).toBe("override-or-fix");
+  });
+
+  test("(i) an applied finding still wins over a ruled dismissal", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(2))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+          ruling({
+            id: 3,
+            user: CI_ADJUDICATOR_LOGIN,
+            reply: 2,
+            verdict: "upheld",
+          }),
+          {
+            id: 4,
+            body: findingBody({ head: CURRENT, claim: CLAIM_TWO, line: 20 }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 5, parent: 4, head: CURRENT, tag: "applied" }),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM),
+              stateRow("R002", CLAIM_TWO),
+            ]),
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
   });
 });

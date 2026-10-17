@@ -31,6 +31,10 @@ import { bindPriorsToPosted } from "#rereview/prepare";
 import { parseStateBlock, type StateFinding } from "#rereview/state";
 import { parseFindingCommentBadge } from "#review/report";
 import {
+  CI_ADJUDICATOR_LOGIN,
+  parseAdjudicationMarker,
+} from "#triage/adjudication";
+import {
   type ParsedTriageMarker,
   parseTriageMarker,
   type TriageActor,
@@ -48,6 +52,7 @@ export type PrNextAction =
   | "triage"
   | "fix"
   | "override-or-fix"
+  | "recheck"
   | "done";
 
 export interface PrStatusGate {
@@ -91,6 +96,8 @@ export interface PrStatusFinding {
   blocking: boolean;
   live_on_head: boolean;
   triage: PrStatusTriage | null;
+  // The CI adjudicator's ruling on the newest triage reply, counted only when github-actions[bot] posted it on the head being read (src/triage/adjudication.ts). Null when there is none.
+  ci_verdict: "upheld" | "rejected" | "inconclusive" | null;
 }
 
 export interface PrStatusJson {
@@ -117,6 +124,8 @@ export interface PrStatusComment {
 // shape has them (rereview/prepare.ts PostedForPrior): without them the marker's anchor stands.
 export interface PrStatusReviewComment extends PrStatusComment {
   in_reply_to_id: number | null;
+  // The GitHub login that posted it. The CI adjudicator's ruling is trusted only from CI_ADJUDICATOR_LOGIN.
+  user?: string;
   path?: string;
   line?: number | null;
 }
@@ -305,7 +314,8 @@ function readFindings(
     const row = rowByComment.get(source.id);
     const badge = parseFindingCommentBadge(source.body);
     const replies = repliesTo(source, input);
-    const triage = newestReply(replies)?.marker ?? null;
+    const newest = newestReply(replies);
+    const triage = newest?.marker ?? null;
     // The badge's tier, else the row's, else the engine's unrecoverable sentinel: the same fallback
     // priorsFromPostedMarkers (rereview/prepare.ts) applies to a comment it cannot read.
     const tier: RecoveredTier = badge?.tier ?? row?.tier ?? TIER_UNRECOVERABLE;
@@ -338,6 +348,10 @@ function readFindings(
                 actor: triage.actor,
                 head: triage.headSha,
               },
+        ci_verdict:
+          source.channel === "inline"
+            ? ciVerdictOf(source.id, newest?.id ?? null, input)
+            : null,
       },
       // A reply at another head does not answer the finding, so only a reply carrying the
       // posted head counts.
@@ -347,6 +361,32 @@ function readFindings(
     });
   }
   return out;
+}
+
+// The CI adjudicator's ruling on the newest triage reply of one inline finding. Only a reply
+// github-actions[bot] posted, on the head under review, that names this newest reply counts; the
+// highest comment id wins. Null when there is no such ruling.
+function ciVerdictOf(
+  threadId: number,
+  newestTriageId: number | null,
+  input: PrStatusInput,
+): "upheld" | "rejected" | "inconclusive" | null {
+  if (newestTriageId === null) return null;
+  let best: {
+    id: number;
+    verdict: "upheld" | "rejected" | "inconclusive";
+  } | null = null;
+  for (const comment of input.reviewComments) {
+    if (comment.in_reply_to_id !== threadId) continue;
+    if (comment.user !== CI_ADJUDICATOR_LOGIN) continue;
+    const marker = parseAdjudicationMarker(comment.body);
+    if (marker === null) continue;
+    if (marker.reply !== newestTriageId || marker.head !== input.head) continue;
+    if (best === null || comment.id > best.id) {
+      best = { id: comment.id, verdict: marker.verdict };
+    }
+  }
+  return best?.verdict ?? null;
 }
 
 interface TriageReplyRow {
@@ -509,6 +549,36 @@ function decideNext(
         "A live blocking finding is tagged applied; push the fix, and the next review verifies it.",
     };
   }
+  // A dismissal leaves the count only on a CI ruling of "upheld" (src/triage/adjudication.ts). A
+  // dismissal with no ruling on this head, or an inconclusive one, is pending: recheck rules on it.
+  const dismissed = liveBlocking.filter(
+    (a) => a.finding.triage?.tag === "dismissed",
+  );
+  // Only an inline finding can get a CI ruling: the adjudicator answers on the finding's own review
+  // thread, and an outside-diff finding has none, so recheck would never settle it.
+  const pendingRulings = dismissed.filter(
+    (a) =>
+      a.finding.channel === "inline" &&
+      (a.finding.ci_verdict === null ||
+        a.finding.ci_verdict === "inconclusive"),
+  );
+  if (pendingRulings.length > 0) {
+    return {
+      next_action: "recheck",
+      reason: `${pendingRulings.length} live blocking finding(s) are answered dismissed with no CI ruling on this head (or an inconclusive one); comment /pr-hero recheck so the CI adjudicator rules on them.`,
+    };
+  }
+  if (
+    dismissed.length > 0 &&
+    dismissed.length === liveBlocking.length &&
+    dismissed.every((a) => a.finding.ci_verdict === "upheld")
+  ) {
+    return {
+      next_action: "review",
+      reason:
+        "The CI adjudicator upheld every dismissal on this head; run /pr-hero review, and that review no longer counts them.",
+    };
+  }
   if (gate.description?.startsWith("pr-hero skipped the review") === true) {
     return {
       next_action: "override-or-fix",
@@ -527,7 +597,7 @@ function decideNext(
   if (liveBlocking.length > 0) {
     return {
       next_action: "override-or-fix",
-      reason: `The gate is red with ${liveBlocking.length} live blocking finding(s), all triaged and none applied: fix and push, or override the gate.`,
+      reason: `The gate is red with ${liveBlocking.length} live blocking finding(s), all triaged and none applied or pending a CI ruling (a rejected dismissal, or a deferred or misclassified tag, never leaves the count): fix and push, or override the gate.`,
     };
   }
   return {
