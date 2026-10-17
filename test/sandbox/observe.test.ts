@@ -732,3 +732,12 @@ describe("classifyComment: the state-block paths of a report (D3)", () => {
     expect("statePaths" in classifyComment(bad, "issue")).toBe(false);
   });
 });
+
+test("statePathsOf reads every loc of a row, so a finding whose proof_ref sorts first still names its file", () => {
+  const head = "a".repeat(40);
+  const body = `<!-- pr-hero-report head=${head} -->\n\nbody\n<!-- pr-hero-state v=1 head=${head} -->\n<!-- {"findings":[{"id":"R001","locs":["src/format.ts:4","src/mute.ts:3"]}],"reviews":2,"hw":1} -->`;
+  expect(classifyComment(body, "issue").statePaths).toEqual([
+    "src/format.ts",
+    "src/mute.ts",
+  ]);
+});

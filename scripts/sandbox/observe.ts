@@ -99,7 +99,7 @@ export interface CommentFact {
   // the findings the PR shows with no inline anchor. Set only when there is at
   // least one, so a report without one keeps the shape it always had.
   outsideDiffBlocking?: number;
-  // D3: the paths of a report's state-block rows (the first loc of each row), so a check can read what the PR's state remembers. Set only on a report that carries a state block.
+  // D3: the paths of a report's state-block rows (every loc of every row, once each), so a check can read what the PR's state remembers. Set only on a report that carries a state block.
   statePaths?: string[];
 }
 
@@ -188,12 +188,17 @@ export function statePathsOf(body: string): string[] | undefined {
   const findings = (state as { findings?: unknown } | null)?.findings;
   if (!Array.isArray(findings)) return undefined;
   const paths: string[] = [];
+  // Every loc, not the first: formatLocs sorts a row's locs by path, so the first one
+  // can be a proof_ref's file rather than the finding's own.
   for (const row of findings) {
-    const loc = (row as { locs?: unknown } | null)?.locs;
-    const first = Array.isArray(loc) ? loc[0] : undefined;
-    if (typeof first !== "string") continue;
-    const colon = first.lastIndexOf(":");
-    paths.push(colon === -1 ? first : first.slice(0, colon));
+    const locs = (row as { locs?: unknown } | null)?.locs;
+    if (!Array.isArray(locs)) continue;
+    for (const loc of locs) {
+      if (typeof loc !== "string") continue;
+      const colon = loc.lastIndexOf(":");
+      const path = colon === -1 ? loc : loc.slice(0, colon);
+      if (!paths.includes(path)) paths.push(path);
+    }
   }
   return paths;
 }

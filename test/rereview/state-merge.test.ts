@@ -222,6 +222,21 @@ describe("S5 — the high-water id mark", () => {
     }
   });
 
+  test("an id this run retired is never reissued, even with no earlier state block", () => {
+    // Review 2: no state block yet; R003 was verified gone in this run, so live holds R001-R002.
+    const merged = merge({
+      live: [
+        live("R001", "carried", { locs: ["src/a.ts:1"] }),
+        live("R002", "carried", { locs: ["src/b.ts:1"] }),
+      ],
+      previous: null,
+      retiredIds: ["R003"],
+      fresh: [fresh(40, "blocking")],
+    });
+    expect(merged.rows.map((r) => r.id)).toEqual(["R001", "R002", "R004"]);
+    expect(merged.hw).toBe(4);
+  });
+
   test("a retired max id is never reused, even when its row is gone", () => {
     const previous: StateFinding[] = [
       stateFinding({

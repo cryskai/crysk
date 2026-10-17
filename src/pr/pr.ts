@@ -2942,6 +2942,10 @@ export async function postInlineFindings(input: {
           reviews: postedReviewCount,
           live: framing.live,
           previous: previousState,
+          retiredIds: [
+            ...(framing.resolved_ids ?? []),
+            ...(framing.worsened ?? []).map((w) => w.priorId),
+          ],
           fresh: freshFindings,
           stateBudget: stateBlockBudget(referenceBody.length),
         });

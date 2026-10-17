@@ -602,6 +602,10 @@ export interface MergeStateInput {
   reviews: number;
   live: readonly LiveFinding[];
   previous: { findings: readonly StateFinding[]; hw: number } | null;
+  // Ids this run retired (verified gone, or returned by worsening) that `live` no
+  // longer holds. On review 2 no state block exists yet, so they are the only record
+  // that those ids were ever issued.
+  retiredIds?: readonly string[];
   fresh: readonly FreshStateFinding[];
   stateBudget: number;
 }
@@ -629,6 +633,7 @@ export function mergeStateFindings(input: MergeStateInput): MergedState {
   const priorIds = [
     ...(input.previous?.findings ?? []).map((f) => f.id),
     ...input.live.map((row) => row.id),
+    ...(input.retiredIds ?? []),
   ];
   let hw = Math.max(input.previous?.hw ?? 0, highestStableNumber(priorIds));
   const rows: LiveFinding[] = input.live.map((row) => ({ ...row }));
