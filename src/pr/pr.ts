@@ -423,10 +423,15 @@ export async function postCommitStatus(
 // an override from a review's own status by it. The in-flight readers ignore it.
 //
 // The head's full status history, every row, newest first, for the CI admission carry-forward
-// (src/pr/admission.ts). It reads the paginated list (`/statuses`), not the combined endpoint:
-// the combined one keeps only the newest row per context, so an override would show in place of
-// the review's own verdict under it. Null on any failure, a malformed row included, so the caller
-// can fail closed; an empty array means the head has no rows at all.
+// (src/pr/admission.ts) and the skip's override check. It reads the paginated list (`/statuses`),
+// not the combined endpoint: the combined one keeps only the newest row per context, so an override
+// would show in place of the review's own verdict under it. Null on any failure, a malformed row
+// included, so the caller can fail closed; an empty array means the head has no rows at all.
+//
+// WHY --paginate: a head with more than 100 rows keeps its older rows on page 2, and the carry reads
+// the newest verdict. Page 1 alone would miss it and carry a false red. The call stays bounded by
+// its timeout, and --paginate runs the --jq projection on every page, so the output is still one
+// row per line.
 export async function fetchCommitStatusList(
   operatorRoot: string,
   sha: string,
@@ -438,6 +443,7 @@ export async function fetchCommitStatusList(
       operatorRoot,
       [
         "api",
+        "--paginate",
         `repos/{owner}/{repo}/commits/${sha}/statuses?per_page=100`,
         "--jq",
         ".[]? | {state: .state, context: .context, created_at: .created_at, description: .description}",
@@ -461,6 +467,45 @@ export async function fetchCommitStatusList(
       statuses.push(parsed);
     }
     return statuses;
+  } catch {
+    return null;
+  }
+}
+
+// The PR's commit shas, OLDEST first (GitHub's order for pulls/<n>/commits). The CI admission
+// carry-forward walks them newest-first from the head (src/pr/admission.ts). WHY --paginate: a PR
+// above 100 commits keeps its newest commits on page 2, which a single page would never reach. GitHub
+// lists at most 250 commits per pull request, so the call is at most three requests, and it stays
+// bounded by its timeout. Null on any failure or a malformed sha, so the caller can fail closed; an
+// empty array means the list has no commits.
+export async function fetchPrCommitShas(
+  operatorRoot: string,
+  pr: number,
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<string[] | null> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      [
+        "api",
+        "--paginate",
+        `repos/{owner}/{repo}/pulls/${pr}/commits?per_page=100`,
+        "--jq",
+        ".[]?.sha",
+      ],
+      undefined,
+      options?.spawnFn,
+      COMMIT_STATUS_TIMEOUT_MS,
+    );
+    if (!result.ok) return null;
+    const shas: string[] = [];
+    for (const line of result.stdout.split("\n")) {
+      const sha = line.trim();
+      if (sha === "") continue;
+      if (!isFullCommitId(sha)) return null;
+      shas.push(sha);
+    }
+    return shas;
   } catch {
     return null;
   }

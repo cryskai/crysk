@@ -301,8 +301,9 @@ export async function evaluateCiAdmissionGate(input: {
         blockingCount: admissionVerdict.prior.blocking,
         advisoryCount: admissionVerdict.prior.advisory,
       });
-      // S4: in gate mode the head inherits the reviewed head's verdict (publishCiSkip,
-      // admissionSkipDecision): a skipped head never reads as one nobody decided about.
+      // S4: in gate mode the head inherits the verdict of the PR's own last reviewed commit, read from
+      // that commit's statuses (publishCiSkip, admissionSkipDecision): a skipped head never reads as one
+      // nobody decided about.
       const plan = planCiReviewSkip({
         prNumber,
         verdict: admissionVerdict,

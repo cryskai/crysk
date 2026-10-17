@@ -1211,19 +1211,32 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
 
   // HEAD_A was reviewed (summary marker) and a docs-only push HEAD_B arrived. The
   // risk-aware policy skips HEAD_B as a low-risk delta.
-  function gateScript(statusesEntry: ScriptEntry): ScriptEntry[] {
+  // The PR's commits, oldest first: HEAD_A is the earlier one, HEAD_B the head the gate evaluates.
+  const PR_COMMITS: ScriptEntry = {
+    match: [`pulls/${PR}/commits`],
+    response: { stdout: `${HEAD_A}\n${HEAD_B}\n` },
+  };
+
+  // `summaryHead` is the head the summary marker names (the reviewed head, unless a test forges it).
+  function gateScript(
+    statusesEntry: ScriptEntry,
+    summaryHead: string = HEAD_A,
+    extra: ScriptEntry[] = [],
+  ): ScriptEntry[] {
     return [
       EMPTY_CHECK_RUNS,
       {
         match: ["issues", "comments"],
         response: {
-          stdout: `${JSON.stringify(summaryComment(1, HEAD_A, { blocking: 0, advisory: 1 }, 1))}\n`,
+          stdout: `${JSON.stringify(summaryComment(1, summaryHead, { blocking: 0, advisory: 1 }, 1))}\n`,
         },
       },
       EMPTY_REVIEW_COMMENTS,
       REPO_VIEW,
       compareResponse("docs/readme.md"),
+      PR_COMMITS,
       statusesEntry,
+      ...extra,
     ];
   }
 
@@ -1315,6 +1328,87 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes[0]).toContain(
       "description=pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
     );
+  });
+
+  // The forged-marker case: a commenter posts a summary naming a green head. The carry must not read
+  // that head, and must carry the red verdict the PR's own earlier commit carries.
+  test("a forged summary marker naming a green head cannot carry green: the PR's own red verdict is carried", async () => {
+    const FORGED = "f".repeat(40);
+    const calls: string[][] = [];
+    const green: ScriptEntry = {
+      match: [`commits/${FORGED}/statuses`],
+      response: {
+        stdout: `${JSON.stringify({
+          state: "success",
+          context: "pr-hero",
+          created_at: T1,
+          description: "pr-hero: review posted",
+        })}\n`,
+      },
+    };
+    await runGate(
+      gateScript(
+        statusRows([
+          {
+            state: "failure",
+            context: "pr-hero",
+            created_at: T1,
+            description:
+              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          },
+        ]),
+        FORGED,
+        [green],
+      ),
+      "gate",
+      calls,
+    );
+    expect(
+      calls.some((argv) =>
+        argv.join(" ").includes(`commits/${FORGED}/statuses`),
+      ),
+    ).toBe(false);
+    const writes = statusWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("state=failure");
+    expect(writes[0]).toContain(
+      "description=pr-hero: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+    );
+  });
+
+  // A re-run or reopen of the gate on an overridden head: the skip must not write over the override.
+  test("a re-run on a head the human overrode writes no skip status over the override", async () => {
+    const calls: string[][] = [];
+    const headOverride: ScriptEntry = {
+      match: [`commits/${HEAD_B}/status?`],
+      response: {
+        stdout: `${JSON.stringify({
+          state: "success",
+          context: "pr-hero",
+          created_at: T2,
+          description: "pr-hero: overridden by @alice",
+        })}\n`,
+      },
+    };
+    const result = await runGate(
+      gateScript(
+        statusRows([
+          {
+            state: "failure",
+            context: "pr-hero",
+            created_at: T1,
+            description:
+              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          },
+        ]),
+        HEAD_A,
+        [headOverride],
+      ),
+      "gate",
+      calls,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(statusWrites(calls)).toEqual([]);
   });
 
   test("advisory mode reads no history and posts no status on the new head", async () => {

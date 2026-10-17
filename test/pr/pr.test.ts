@@ -30,8 +30,10 @@ import type { PrHeroFindingRef } from "#compare/compare";
 import {
   CommentsTruncatedError,
   fetchCommitStatuses,
+  fetchCommitStatusList,
   fetchPostedFindingComments,
   fetchPrComments,
+  fetchPrCommitShas,
   fetchPrReviewComments,
   GRAPHQL_COMMENT_MAX_PAGES,
   ghPrFiles,
@@ -1802,6 +1804,129 @@ describe("ghPrFiles bounds", () => {
     // Not merely "some number": an unbounded call records `undefined`, which
     // is exactly the defect this pins.
     expect(timeouts[0]).not.toBeUndefined();
+  });
+});
+
+// gh's own paging, as far as these tests need it: without --paginate the call answers the first page
+// only; with it, every page, in order, on one stdout (the --jq projection runs per page).
+function pagedFakeGh(pages: unknown[][]): {
+  spawnFn: typeof Bun.spawn;
+  calls: string[][];
+} {
+  const calls: string[][] = [];
+  const encoder = new TextEncoder();
+  const spawnFn = ((argv: string[]) => {
+    calls.push(argv);
+    const rows = argv.includes("--paginate") ? pages.flat() : (pages[0] ?? []);
+    const text = rows.map((row) => `${JSON.stringify(row)}\n`).join("");
+    const stream = (value: string) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (value) controller.enqueue(encoder.encode(value));
+          controller.close();
+        },
+      });
+    return {
+      stdout: stream(text),
+      stderr: stream(""),
+      exited: Promise.resolve(0),
+      kill() {},
+    };
+  }) as unknown as typeof Bun.spawn;
+  return { spawnFn, calls };
+}
+
+describe("fetchCommitStatusList: every page of the head's status list", () => {
+  const T_OLD = "2026-10-16T10:00:00Z";
+  const T_NEW = "2026-10-17T10:00:00Z";
+  const VERDICT = {
+    state: "failure",
+    context: COMMIT_STATUS_CONTEXT,
+    created_at: T_OLD,
+    description:
+      "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+  };
+
+  test("a verdict on page 2, behind 100 newer rows on page 1, is found", async () => {
+    const newer = Array.from({ length: 100 }, (_, i) => ({
+      state: "success",
+      context: "ci",
+      created_at: T_NEW,
+      description: `build ${i}`,
+    }));
+    const { spawnFn, calls } = pagedFakeGh([newer, [VERDICT]]);
+    const statuses = await fetchCommitStatusList(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    expect(calls[0]?.includes("--paginate")).toBe(true);
+    expect(statuses?.length).toBe(101);
+    expect(statuses?.find((s) => s.context === COMMIT_STATUS_CONTEXT)).toEqual(
+      VERDICT,
+    );
+  });
+
+  test("the list call keeps the --paginate read on the statuses endpoint, bounded by its timeout", async () => {
+    const { spawnFn, calls } = pagedFakeGh([[VERDICT]]);
+    await fetchCommitStatusList(OPERATOR_ROOT, HEAD, { spawnFn });
+    const argv = calls[0] ?? [];
+    expect(argv.join(" ")).toContain(
+      `repos/{owner}/{repo}/commits/${HEAD}/statuses?per_page=100`,
+    );
+    expect(argv.indexOf("--paginate")).toBeLessThan(argv.indexOf("--jq"));
+  });
+
+  test("a failed page read fails closed (null), never a partial list", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/statuses`],
+        response: { stdout: "", stderr: "gh: HTTP 502", exitCode: 1 },
+      },
+    ]);
+    expect(
+      await fetchCommitStatusList(OPERATOR_ROOT, HEAD, { spawnFn }),
+    ).toBeNull();
+  });
+});
+
+describe("fetchPrCommitShas: the PR's commits, oldest first", () => {
+  const SHA_1 = "1".repeat(40);
+  const SHA_2 = "2".repeat(40);
+  const SHA_3 = "3".repeat(40);
+
+  test("lists every page of pulls/<n>/commits, in GitHub's oldest-first order", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["pulls/7/commits"],
+        response: { stdout: `${SHA_1}\n${SHA_2}\n${SHA_3}\n` },
+      },
+    ]);
+    const shas = await fetchPrCommitShas(OPERATOR_ROOT, 7, { spawnFn });
+    expect(shas).toEqual([SHA_1, SHA_2, SHA_3]);
+    const argv = calls[0]?.argv ?? [];
+    expect(argv).toContain("--paginate");
+    expect(argv.join(" ")).toContain(
+      "repos/{owner}/{repo}/pulls/7/commits?per_page=100",
+    );
+  });
+
+  test("a failed call fails closed (null)", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["pulls/7/commits"],
+        response: { stdout: "", stderr: "gh: Not Found", exitCode: 1 },
+      },
+    ]);
+    expect(await fetchPrCommitShas(OPERATOR_ROOT, 7, { spawnFn })).toBeNull();
+  });
+
+  test("a malformed row fails closed (null), never a partial walk", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["pulls/7/commits"],
+        response: { stdout: `${SHA_1}\nnot-a-sha\n` },
+      },
+    ]);
+    expect(await fetchPrCommitShas(OPERATOR_ROOT, 7, { spawnFn })).toBeNull();
   });
 });
 

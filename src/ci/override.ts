@@ -97,10 +97,12 @@ export function overrideStandsOverRun(
   return createdMs >= cutoffMs;
 }
 
-// The newest status of one context by created_at: a tie goes to the later row, and a row
-// whose time does not parse is skipped. This is preflight.ts's latestStatusInContext,
-// which this builtins-only module cannot import. The publisher's reads use it too, so the
-// two selections cannot drift.
+// The newest status of one context by created_at: a row whose time does not parse is skipped.
+// A tie goes to the row that comes first in the array. GitHub's status LIST is newest-first, so
+// the first of two same-second rows is the newer one: `[success@t, failure@t]` reads as success.
+// The combined endpoint has one row per context, so it never ties. This is preflight.ts's
+// latestStatusInContext, which this builtins-only module cannot import. The publisher's reads use
+// it too, so the two selections cannot drift.
 export function newestStatusInContext(
   statuses: readonly OverrideStatusFact[],
   context: string,
@@ -111,7 +113,7 @@ export function newestStatusInContext(
     if (status.context !== context) continue;
     const createdMs = Date.parse(status.created_at);
     if (Number.isNaN(createdMs)) continue;
-    if (createdMs >= latestMs) {
+    if (createdMs > latestMs) {
       latest = status;
       latestMs = createdMs;
     }

@@ -23,7 +23,9 @@ import {
 } from "#ci/reporter";
 import { type CiReviewPolicy, ciReviewSkipLabel } from "#ci/review-admission";
 import {
+  fetchCommitStatuses,
   fetchCommitStatusList,
+  fetchPrCommitShas,
   ghRepoWebUrl,
   repostMarkedPrComment,
   upsertAdmissionCheckRun,
@@ -238,15 +240,25 @@ export async function recordCiAdmissionGateSkip(input: {
   }
 }
 
-// S4 carry-forward (the owner's decision). A head an admission gate skips inherits the verdict of
-// the last reviewed head, so the required check reads what that review decided, never a green the
-// review did not earn. The verdict is the newest pr-hero success or failure on the reviewed head
-// that is not an override.
+// S4 carry-forward (the owner's decision). A head an admission gate skips inherits the verdict of the
+// last reviewed commit of this PR, so the required check reads what that review decided, never a green
+// the review did not earn. The source is the PR's own commit statuses, never comment content: the walk
+// (findCarriedVerdict) reads this PR's commits newest-first from the head, and takes the first commit
+// whose status list carries a pr-hero success or failure that is not an override.
+//
+// WHY the commit statuses and not the summary marker: a marker is a comment, and any commenter can post
+// one naming a green head. Only a write-access actor can write a commit status, so a verdict read from
+// the statuses is one a review wrote. The summary's head is never read for the carry.
+// WHY the walk: a multi-commit push statuses only its tip, so the commits before it may carry no status.
+// The walk skips those and stops at the first commit with a verdict, within CARRY_WALK_CAP commits.
+// WHY a carried verdict may be carried again: a carried status on an earlier skipped head is a verdict a
+// gate wrote from a real review, so chaining it keeps the verdict honest.
 //
 // WHY an override is not carried: an override is a human's decision for the code at that head only.
 // The skipped head was never reviewed, so an override carried onto it would turn green with no review.
-// WHY fail closed: a head with no readable verdict (no reviewed head, a failed read, only pending or
-// error rows) writes failure, so a trivial push cannot pass the gate without a verdict behind it.
+// WHY fail closed: no verdict within the cap, a failed read, a head missing from the PR's commits (a
+// force-push, or a list cut short by GitHub's cap), or no reviewed head writes failure, so a trivial push
+// cannot pass the gate without a verdict behind it.
 // WHY manual-required is always failure: its code was never reviewed, so carrying a green verdict over it
 // would be a bypass. Same-head writes nothing, because that head's own status already exists.
 export type AdmissionStatusReason =
@@ -259,7 +271,9 @@ export type AdmissionStatusReason =
 
 export interface AdmissionStatusInput {
   reason: AdmissionStatusReason;
-  // The head the summary names as reviewed; null when no summary names one.
+  // The head the summary names as reviewed; null when no summary names one, and a null here fails the
+  // carry closed with no read. The carry never reads this head's verdict: it comes from the PR's own
+  // commit statuses (findCarriedVerdict).
   reviewedHead: string | null;
   // The admission's own blocking-tier count for the reviewed head. It stands in only when the carried
   // failure's description does not name a count.
@@ -269,6 +283,12 @@ export interface AdmissionStatusInput {
 export interface AdmissionStatusDecision {
   state: "success" | "failure";
   description: string;
+}
+
+// The verdict a carried skip inherits: the commit it was found on, and that commit's status list.
+export interface CarriedVerdict {
+  sha: string;
+  statuses: readonly CommitStatusFact[];
 }
 
 type CarriedReason = "once-per-pr" | "below-threshold" | "low-risk-delta";
@@ -316,13 +336,10 @@ function failClosed(label: string): AdmissionStatusDecision {
   };
 }
 
-// What the gate's skip writes on the new head, or null for no write. `statuses` is the reviewed head's
-// status history, or null when it could not be read (or was not read: no reviewed head, or a reason
-// that never carries).
+// What the gate's skip writes on the new head, or null for no write. `carried` is the verdict the skip
+// inherits (findCarriedVerdict), or null when none was read or found. A reason that never carries reads none.
 export function admissionSkipDecision(
-  input: AdmissionStatusInput & {
-    statuses: readonly CommitStatusFact[] | null;
-  },
+  input: AdmissionStatusInput & { carried: CarriedVerdict | null },
 ): AdmissionStatusDecision | null {
   switch (input.reason) {
     case "same-head":
@@ -347,12 +364,10 @@ export function admissionSkipDecision(
       break;
   }
   const label = ciReviewSkipLabel(input.reason);
-  if (input.reviewedHead === null || input.statuses === null) {
-    return failClosed(label);
-  }
-  const verdict = newestCarriedVerdict(input.statuses);
+  if (input.carried === null) return failClosed(label);
+  const verdict = newestCarriedVerdict(input.carried.statuses);
   if (verdict === undefined) return failClosed(label);
-  const sha = input.reviewedHead.slice(0, 7);
+  const sha = input.carried.sha.slice(0, 7);
   if (verdict.state === "success") {
     return {
       state: "success",
@@ -373,15 +388,76 @@ export function admissionSkipDecision(
   };
 }
 
+// The most earlier commits the carry reads for a verdict. A push on top of a longer run of commits with
+// no verdict fails closed rather than walking the whole PR.
+const CARRY_WALK_CAP = 20;
+
+// The carry's verdict source: the newest earlier commit of this PR whose status list carries a verdict,
+// or null. GitHub lists the commits oldest first; the walk takes the commits before the head, newest first.
+// WHY the head's index, not the list's last element: the walk starts from the head this gate evaluates, so
+// a head that moved on, or one missing from the list, cannot send the walk to the wrong commits. A head
+// missing from the list fails closed.
+// WHY a failed read ends the walk: a commit whose statuses did not read is not a commit with no verdict,
+// so skipping it would carry an older verdict across a read that never happened.
+async function findCarriedVerdict(input: {
+  operatorRoot: string;
+  prNumber: number;
+  headSha: string;
+  spawnFn?: typeof Bun.spawn;
+  listCommits: typeof fetchPrCommitShas;
+  readStatuses: typeof fetchCommitStatusList;
+}): Promise<CarriedVerdict | null> {
+  const shas = await input.listCommits(input.operatorRoot, input.prNumber, {
+    spawnFn: input.spawnFn,
+  });
+  if (shas === null) return null;
+  const headIndex = shas.indexOf(input.headSha);
+  if (headIndex < 0) return null;
+  const earlier = shas.slice(0, headIndex).reverse().slice(0, CARRY_WALK_CAP);
+  for (const sha of earlier) {
+    const statuses = await input.readStatuses(input.operatorRoot, sha, {
+      spawnFn: input.spawnFn,
+    });
+    if (statuses === null) return null;
+    if (newestCarriedVerdict(statuses) !== undefined) return { sha, statuses };
+  }
+  return null;
+}
+
+// WHY the head's override holds: a human's `/pr-hero override` on this head is the decision for it. A
+// re-run or reopen of the gate on that unchanged head would otherwise write the skip's verdict over it.
+// So where the newest pr-hero status on the head is an override, the skip writes nothing. A failed read
+// is not an override, so the status is written as planned.
+async function overrideStandsOnHead(input: {
+  operatorRoot: string;
+  headSha: string;
+  spawnFn?: typeof Bun.spawn;
+  readHeadStatus: typeof fetchCommitStatuses;
+}): Promise<boolean> {
+  let statuses: readonly CommitStatusFact[];
+  try {
+    statuses = await input.readHeadStatus(input.operatorRoot, input.headSha, {
+      spawnFn: input.spawnFn,
+    });
+  } catch {
+    return false;
+  }
+  const newest = newestStatusInContext(statuses, COMMIT_STATUS_CONTEXT);
+  return newest !== undefined && isOverrideStatus(newest);
+}
+
 // The status a gate-mode skip writes, or null for none. A size or budget skip is a fixed failure.
-// An admission skip or manual-required is decided by admissionSkipDecision; the reviewed head's history
-// is read only when the verdict carries forward, so same-head and manual-required make no read.
+// An admission skip or manual-required is decided by admissionSkipDecision; the carry's walk runs only
+// when the verdict carries forward, so same-head and manual-required make no read.
 async function gateSkipDecision(
   input: {
     operatorRoot: string;
+    prNumber: number;
+    headSha: string;
     spawnFn?: typeof Bun.spawn;
     admission?: AdmissionStatusInput;
     readStatuses?: typeof fetchCommitStatusList;
+    listCommits?: typeof fetchPrCommitShas;
   },
   skip: CliRecord["skip"],
 ): Promise<AdmissionStatusDecision | null> {
@@ -396,15 +472,20 @@ async function gateSkipDecision(
   }
   if (input.admission === undefined) return null;
   const { reason, reviewedHead } = input.admission;
-  const statuses =
+  // WHY the summary's presence still gates the walk: a skip whose summary names no reviewed head fails
+  // closed with no read, as it always has. The carried head is never taken from the summary.
+  const carried =
     isCarriedReason(reason) && reviewedHead !== null
-      ? await (input.readStatuses ?? fetchCommitStatusList)(
-          input.operatorRoot,
-          reviewedHead,
-          { spawnFn: input.spawnFn },
-        )
+      ? await findCarriedVerdict({
+          operatorRoot: input.operatorRoot,
+          prNumber: input.prNumber,
+          headSha: input.headSha,
+          spawnFn: input.spawnFn,
+          listCommits: input.listCommits ?? fetchPrCommitShas,
+          readStatuses: input.readStatuses ?? fetchCommitStatusList,
+        })
       : null;
-  return admissionSkipDecision({ ...input.admission, statuses });
+  return admissionSkipDecision({ ...input.admission, carried });
 }
 
 // The skip kind a plan stands for, read from the status its outputs carry. The
@@ -443,11 +524,14 @@ export async function publishCiSkip(input: {
   // The run's spawnFn, threaded to the status read, the status write and the repo lookup.
   spawnFn?: typeof Bun.spawn;
   // Test-only seams (defaults: the real repostMarkedPrComment, publishFinalCommitStatus,
-  // fetchCommitStatusList).
+  // fetchCommitStatusList for each commit's statuses, fetchPrCommitShas for the PR's commits, and
+  // fetchCommitStatuses for the head's override check).
   repost?: typeof repostMarkedPrComment;
   postStatus?: typeof publishFinalCommitStatus;
   repoWebUrl?: typeof ghRepoWebUrl;
   readStatuses?: typeof fetchCommitStatusList;
+  listCommits?: typeof fetchPrCommitShas;
+  readHeadStatus?: typeof fetchCommitStatuses;
 }): Promise<number> {
   log(formatWorkflowCommand("notice", input.noticeMessage));
   // The record names the skip kind only. The plan carries no head, so none is
@@ -482,9 +566,26 @@ export async function publishCiSkip(input: {
   // reaches (the carry-forward above).
   const decision =
     input.ciMode === "gate" && input.headSha !== undefined
-      ? await gateSkipDecision(input, skip)
+      ? await gateSkipDecision({ ...input, headSha: input.headSha }, skip)
       : null;
-  if (decision !== null && input.headSha !== undefined) {
+  // WHY the override is read before the write: a re-run or reopen of the gate on an overridden head would
+  // otherwise write this skip's verdict over the human's decision. The notice, record and outputs still
+  // write; only the status is held back, and one line says why.
+  const headOverridden =
+    decision !== null && input.headSha !== undefined
+      ? await overrideStandsOnHead({
+          operatorRoot: input.operatorRoot,
+          headSha: input.headSha,
+          spawnFn: input.spawnFn,
+          readHeadStatus: input.readHeadStatus ?? fetchCommitStatuses,
+        })
+      : false;
+  if (headOverridden && input.headSha !== undefined) {
+    log(
+      `pr-hero: the override on ${input.headSha.slice(0, 7)} stands; no status is written over it`,
+    );
+  }
+  if (decision !== null && input.headSha !== undefined && !headOverridden) {
     // The run's pull URL, like every other status the CLI writes (T3 advisory
     // 3): a skip is a red check, and the link is how a reader reaches the PR.
     // Best effort: ghRepoWebUrl answers undefined when it cannot, and the status
