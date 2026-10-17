@@ -1216,3 +1216,24 @@ describe("rereview-fresh-finding: the state row of a finding first found by a re
     expect(world.events.some((e) => e.startsWith("push "))).toBe(true);
   });
 });
+
+describe("cancel: a review run cancelled mid-review leaves its status settled (SB3)", () => {
+  test("the cancel is sent while the gate is pending, the run is cancelled, and the scenario exits 0", async () => {
+    const world = new FakeGithub({ ref: REF, pendingThenCancellable: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["cancel"], OPTIONS)).toBe(0);
+    expect(h.logs.some((l) => l.includes("cancel sent to run"))).toBe(true);
+    expect(world.events.some((e) => e.startsWith("run cancel"))).toBe(true);
+  });
+
+  test("a cancel that leaves the status pending fails the scenario with exit 1", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      pendingThenCancellable: true,
+      cancelLeavesPending: true,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["cancel"], OPTIONS)).toBe(1);
+    expect(h.logs.some((l) => l.includes("cancel sent to run"))).toBe(true);
+  });
+});

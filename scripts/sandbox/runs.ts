@@ -240,7 +240,10 @@ export async function stopRun(
 // Sends the cancel. gh refuses to cancel a run that has completed, which is the
 // outcome cleanup was after, so that refusal is not an error. Any other refusal is,
 // and the caller's poll retries it.
-async function cancelRun(deps: SandboxDeps, runId: number): Promise<void> {
+export async function cancelRun(
+  deps: SandboxDeps,
+  runId: number,
+): Promise<void> {
   const result = await deps.gh([
     "run",
     "cancel",
