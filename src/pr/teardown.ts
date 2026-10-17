@@ -192,6 +192,7 @@ export async function settleCommitStatusAndLedger(input: {
     ...(input.result?.hunterFailedCount === undefined
       ? {}
       : { hunterFailures: input.result.hunterFailedCount }),
+    ...(input.result?.noReviewerRan === true ? { noReviewerRan: true } : {}),
   });
   const request =
     completion.phase === "failure"

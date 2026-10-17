@@ -1630,8 +1630,12 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
     hunterFailures?: number;
     ciMode?: "gate" | "advisory";
     sessionFailed?: boolean;
+    noReviewerRan?: boolean;
   }) =>
     commitStatusCompletion({
+      ...(over.noReviewerRan === undefined
+        ? {}
+        : { noReviewerRan: over.noReviewerRan }),
       pipelineFinished: true,
       sessionFailed: over.sessionFailed ?? false,
       ciMode: over.ciMode ?? "gate",
@@ -1668,12 +1672,21 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
     expect(gate({})).toEqual({ phase: "success" });
   });
 
-  test("zero failed hunters stays success, but no hunter at all is error in gate mode", () => {
+  test("zero failed hunters stays success, a skipped discovery too, but no reviewer run is error in gate mode", () => {
+    // A re-review that skipped discovery: zero hunters, and a finished review.
     expect(gate({ hunterCount: 0, hunterFailures: 0 })).toEqual({
-      phase: "error",
+      phase: "success",
     });
     expect(
-      gate({ ciMode: "advisory", hunterCount: 0, hunterFailures: 0 }),
+      gate({ hunterCount: 0, hunterFailures: 0, noReviewerRan: true }),
+    ).toEqual({ phase: "error" });
+    expect(
+      gate({
+        ciMode: "advisory",
+        hunterCount: 0,
+        hunterFailures: 0,
+        noReviewerRan: true,
+      }),
     ).toEqual({ phase: "success" });
     expect(gate({ hunterCount: 4, hunterFailures: 0 })).toEqual({
       phase: "success",
