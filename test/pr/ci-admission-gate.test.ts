@@ -1342,7 +1342,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
           state: "success",
           context: "pr-hero",
           created_at: T1,
-          description: "pr-hero: review posted",
+          description: "review posted",
         })}\n`,
       },
     };

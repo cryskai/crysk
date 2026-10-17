@@ -31,10 +31,12 @@ import {
   upsertAdmissionCheckRun,
 } from "#pr/pr";
 import {
+  blockingCommitStatusRequest,
   type CiMode,
   COMMIT_STATUS_CONTEXT,
   type CommitStatusFact,
   clipStatusDescription,
+  commitStatusRequest,
   prHtmlUrl,
   skipCommitStatusRequest,
 } from "#pr/preflight";
@@ -244,7 +246,8 @@ export async function recordCiAdmissionGateSkip(input: {
 // last reviewed commit of this PR, so the required check reads what that review decided, never a green
 // the review did not earn. The source is the PR's own commit statuses, never comment content: the walk
 // (findCarriedVerdict) reads this PR's commits newest-first from the head, and takes the first commit
-// whose status list carries a pr-hero success or failure that is not an override.
+// whose status list carries a review's verdict (isReviewVerdictStatus). A skip, a fail-closed, a budget
+// or a manual-only failure is not a verdict, so the walk passes over it.
 //
 // WHY the commit statuses and not the summary marker: a marker is a comment, and any commenter can post
 // one naming a green head. Only a write-access actor can write a commit status, so a verdict read from
@@ -276,7 +279,8 @@ export interface AdmissionStatusInput {
   // commit statuses (findCarriedVerdict).
   reviewedHead: string | null;
   // The admission's own blocking-tier count for the reviewed head. It stands in only when the carried
-  // failure's description does not name a count.
+  // failure's description does not name a count. Every text isReviewVerdictStatus admits names one, so this
+  // is unreachable through the walk today; it stays because ci-admission-gate.ts still supplies it.
   priorBlocking: number;
 }
 
@@ -314,15 +318,114 @@ function blockingCountIn(
   return count > 0 ? count : null;
 }
 
-// The newest verdict on the head: a success or failure, never an override, of the gate's own context.
-// Newest by created_at, the rule every other reader of this context uses (newestStatusInContext).
+const CARRIED_FROM = "carried from ";
+// Reads the carried sha out of a carried text. It only proposes the sha: the builders below must then
+// reproduce the whole text, so a prefix or a suffix alone never qualifies.
+const CARRIED_SHA = new RegExp(`${CARRIED_FROM}([0-9a-f]{7})`);
+
+// The text a skip writes when it inherits a finished review's success, for the review's label and the
+// carried-from sha. The carry writes it, and isReviewVerdictStatus rebuilds it, so the two cannot drift.
+export function carriedSuccessDescription(label: string, sha: string): string {
+  return clipStatusDescription(
+    `pr-hero: no review needed (${label}); ${CARRIED_FROM}${sha.slice(0, 7)}`,
+  );
+}
+
+// The text a skip writes when it inherits a finished review's blocking failure, with that review's count.
+export function carriedBlockingDescription(count: number, sha: string): string {
+  return clipStatusDescription(
+    `pr-hero: ${count} blocking finding(s) ${CARRIED_FROM}${sha.slice(0, 7)} — fix and push, or /pr-hero override`,
+  );
+}
+
+const CARRY_REASONS: readonly CarriedReason[] = [
+  "once-per-pr",
+  "below-threshold",
+  "low-risk-delta",
+];
+
+function finishedSuccessMatches(description: string): boolean {
+  return [true, false].some(
+    (posted) =>
+      commitStatusRequest({
+        phase: "success",
+        posted,
+        targetUrl: undefined,
+        context: COMMIT_STATUS_CONTEXT,
+      }).description === description,
+  );
+}
+
+function finishedBlockingMatches(description: string): boolean {
+  const count = blockingCountIn(description);
+  return (
+    count !== null &&
+    blockingCommitStatusRequest({
+      blockingCount: count,
+      targetUrl: undefined,
+      context: COMMIT_STATUS_CONTEXT,
+    }).description === description
+  );
+}
+
+function carriedSha(description: string): string | null {
+  return CARRIED_SHA.exec(description)?.[1] ?? null;
+}
+
+function carriedSuccessMatches(description: string): boolean {
+  const sha = carriedSha(description);
+  return (
+    sha !== null &&
+    CARRY_REASONS.some(
+      (reason) =>
+        carriedSuccessDescription(ciReviewSkipLabel(reason), sha) ===
+        description,
+    )
+  );
+}
+
+function carriedBlockingMatches(description: string): boolean {
+  const sha = carriedSha(description);
+  const count = blockingCountIn(description);
+  return (
+    sha !== null &&
+    count !== null &&
+    carriedBlockingDescription(count, sha) === description
+  );
+}
+
+// WHY the walk takes only these: a skip, a fail-closed, a budget or a manual-only failure is written with
+// no review behind it. Counting it as a verdict would stop the walk on it, so a green review on an older
+// commit would be lost, and one skip would turn the gate red until a human acts. Overrides need no check of
+// their own: an override's text is none of the texts below.
+// WHY each text is rebuilt rather than matched by a pattern: the writer of a verdict is the only authority
+// on its exact text. The variable parts (a count, a carried sha) are read first, then the same builder must
+// reproduce the whole description.
+// WHY no context check here: the walk reads only the gate's own context (newestCarriedVerdict).
+export function isReviewVerdictStatus(
+  status: Pick<CommitStatusFact, "state" | "description">,
+): boolean {
+  const description = status.description;
+  if (typeof description !== "string") return false;
+  if (status.state === "success") {
+    return (
+      finishedSuccessMatches(description) || carriedSuccessMatches(description)
+    );
+  }
+  if (status.state === "failure") {
+    return (
+      finishedBlockingMatches(description) ||
+      carriedBlockingMatches(description)
+    );
+  }
+  return false;
+}
+
+// The newest verdict on the head: a review's verdict of the gate's own context (isReviewVerdictStatus),
+// newest by created_at, the rule every other reader of this context uses (newestStatusInContext).
 function newestCarriedVerdict(statuses: readonly CommitStatusFact[]) {
   return newestStatusInContext(
-    statuses.filter(
-      (status) =>
-        (status.state === "success" || status.state === "failure") &&
-        !isOverrideStatus(status),
-    ),
+    statuses.filter((status) => isReviewVerdictStatus(status)),
     COMMIT_STATUS_CONTEXT,
   );
 }
@@ -367,13 +470,10 @@ export function admissionSkipDecision(
   if (input.carried === null) return failClosed(label);
   const verdict = newestCarriedVerdict(input.carried.statuses);
   if (verdict === undefined) return failClosed(label);
-  const sha = input.carried.sha.slice(0, 7);
   if (verdict.state === "success") {
     return {
       state: "success",
-      description: clipStatusDescription(
-        `pr-hero: no review needed (${label}); carried from ${sha}`,
-      ),
+      description: carriedSuccessDescription(label, input.carried.sha),
     };
   }
   const blocking =
@@ -382,9 +482,7 @@ export function admissionSkipDecision(
   if (blocking === null) return failClosed(label);
   return {
     state: "failure",
-    description: clipStatusDescription(
-      `pr-hero: ${blocking} blocking finding(s) carried from ${sha} — fix and push, or /pr-hero override`,
-    ),
+    description: carriedBlockingDescription(blocking, input.carried.sha),
   };
 }
 
@@ -426,8 +524,14 @@ async function findCarriedVerdict(input: {
 
 // WHY the head's override holds: a human's `/pr-hero override` on this head is the decision for it. A
 // re-run or reopen of the gate on that unchanged head would otherwise write the skip's verdict over it.
-// So where the newest pr-hero status on the head is an override, the skip writes nothing. A failed read
-// is not an override, so the status is written as planned.
+// So where the newest pr-hero status on the head is an override, the skip writes nothing. This holds when
+// the head's statuses can be read.
+// WHY the read is strict: the reader is asked with failClosed, so a failed read throws instead of looking
+// like a head with no rows (fetchCommitStatuses, src/pr/pr.ts).
+// WHY a failed read still writes the status: on a failed read we cannot tell whether an override stands, so
+// the skip's status is written as planned. That is a tradeoff, not a guarantee: this write can replace an
+// override on the head that we could not read. Leaving a fresh head with no status is the original bug, a
+// head that reads as nothing decided, so we take the rarer overwrite and log a warning that says so.
 async function overrideStandsOnHead(input: {
   operatorRoot: string;
   headSha: string;
@@ -438,8 +542,15 @@ async function overrideStandsOnHead(input: {
   try {
     statuses = await input.readHeadStatus(input.operatorRoot, input.headSha, {
       spawnFn: input.spawnFn,
+      failClosed: true,
     });
   } catch {
+    log(
+      formatWorkflowCommand(
+        "warning",
+        `pr-hero: could not read the statuses of ${input.headSha.slice(0, 7)}, so an override on it cannot be checked; the skip's status is written as planned`,
+      ),
+    );
     return false;
   }
   const newest = newestStatusInContext(statuses, COMMIT_STATUS_CONTEXT);

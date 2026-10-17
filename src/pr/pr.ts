@@ -511,14 +511,28 @@ export async function fetchPrCommitShas(
   }
 }
 
-// Never throws: a 403, a hung gh (timeout), or garbage jq must not take
-// the watch tick down. Unreadable reads as not in-flight.
+// Never throws by default: a 403, a hung gh (timeout), or garbage jq must not take the watch tick down.
+// Unreadable reads as no rows, which the watch reads as not in-flight.
+//
+// WHY failClosed: the CI override check (src/pr/admission.ts) must tell a failed read from a head with no
+// status rows. An empty answer for an unreadable head reads as "no override", and the skip would then write
+// over a human's decision. With failClosed a failed read throws, and so does a row that does not parse,
+// because the row it would drop could be the override the check is looking for.
 export async function fetchCommitStatuses(
   operatorRoot: string,
   sha: string,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; failClosed?: boolean },
 ): Promise<CommitStatusFact[]> {
-  if (!isFullCommitId(sha)) return [];
+  const failClosed = options?.failClosed === true;
+  const unreadable = (why: string): CommitStatusFact[] => {
+    if (failClosed) {
+      throw new CliError(
+        `could not read the statuses of ${sha.slice(0, 7)}: ${why}`,
+      );
+    }
+    return [];
+  };
+  if (!isFullCommitId(sha)) return unreadable("not a full commit id");
   try {
     const result = await gh(
       operatorRoot,
@@ -532,28 +546,41 @@ export async function fetchCommitStatuses(
       options?.spawnFn,
       COMMIT_STATUS_TIMEOUT_MS,
     );
-    if (!result.ok) return [];
+    if (!result.ok) return unreadable(result.stderr.trim() || "gh failed");
     const statuses: CommitStatusFact[] = [];
     for (const line of result.stdout.split("\n")) {
       if (line.trim() === "") continue;
-      try {
-        const parsed = JSON.parse(line) as CommitStatusFact;
-        if (
-          typeof parsed.state === "string" &&
-          typeof parsed.context === "string" &&
-          typeof parsed.created_at === "string"
-        ) {
-          statuses.push(parsed);
-        }
-      } catch {
-        // Drop the bad line; keep whatever parsed. One garbage object must
-        // not hide a real pending on the next line.
+      const parsed = parseStatusRow(line);
+      if (parsed !== null) {
+        statuses.push(parsed);
+      } else if (failClosed) {
+        return unreadable("a status row could not be read");
       }
+      // Otherwise the bad line is dropped and the rest kept, so one garbage object does not hide a real
+      // pending on the next line.
     }
     return statuses;
-  } catch {
+  } catch (error) {
+    if (failClosed) throw error;
     return [];
   }
+}
+
+// One row of the combined status projection, or null when it does not parse into a status fact.
+function parseStatusRow(line: string): CommitStatusFact | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const fact = parsed as CommitStatusFact;
+  return typeof fact.state === "string" &&
+    typeof fact.context === "string" &&
+    typeof fact.created_at === "string"
+    ? fact
+    : null;
 }
 
 // WHY this exact refspec pair (paid-for): a merged PR's branch is usually

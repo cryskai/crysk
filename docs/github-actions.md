@@ -559,10 +559,12 @@ Fatal failures (missing or invalid credentials, a crashed process, a malformed a
 below keep their own status and exit, as they did before the gate.
 
 **A skipped head inherits the verdict of the last reviewed commit of its pull request.** When the admission gate
-skips a new head as a low-risk or below-threshold delta, or once per PR, the head takes the newest `pr-hero` success
-or failure from this pull request's own commit statuses. The gate walks the pull request's commits newest-first from
-the head, skips each commit that carries no verdict, and stops at the first one that does, within the last 20 commits
-before the head. The verdict never comes from comment content: a comment, a summary marker included, can name a head,
+skips a new head as a low-risk or below-threshold delta, or once per PR, the head takes the newest review verdict from
+this pull request's own commit statuses: a `pr-hero` success or failure that a finished review wrote, or a verdict
+carried from this pull request. The gate walks the pull request's commits newest-first from the head, skips each commit
+that carries no verdict, and stops at the first one that does, within the last 20 commits before the head. A skip's
+failure, a fail-closed, budget or manual-only failure, an error, a pending status, and an override are not verdicts, so
+the walk passes over them. The verdict never comes from comment content: a comment, a summary marker included, can name a head,
 but only a write-access actor can set a commit's status, so a comment naming a green head carries nothing. A verdict
 carried onto a skipped head may be carried again onto a later one, because it came from a real review. A red verdict
 stays red, with its count, until the head is reviewed (`/pr-hero review`) or overridden. A green one reads as no review
@@ -572,7 +574,9 @@ reviewed head, a failed read, a head missing from the pull request's commits, or
 the head is `failure` and says so: a trivial push must not pass the gate without a verdict behind it. A manual
 re-review required is always `failure`, because its code was never reviewed, and carrying a green verdict over it would
 let an unreviewed push pass the gate. A head whose newest `pr-hero` status is an override keeps it: a re-run of the gate
-on that head writes no skip status over the override. Advisory mode writes no status on a skipped head, as before.
+on that head writes no skip status over the override, when the head's statuses can be read. When they cannot, the skip's
+status is written as planned and the run logs a warning, because a head that reads as nothing decided is the original
+bug; that write can replace an override the run could not see. Advisory mode writes no status on a skipped head, as before.
 
 **What counts as unresolved.** The count behind a blocking `failure` is every blocking finding that is still
 open: this run's blocking findings, plus each blocking finding from an earlier review of the PR that has not

@@ -18,18 +18,27 @@ import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
 import {
   type AdmissionStatusInput,
   type CiAdmissionLedgerState,
+  carriedBlockingDescription,
+  carriedSuccessDescription,
   holdCiAdmissionLedger,
+  isReviewVerdictStatus,
   publishCiSkip,
   releaseCiAdmissionLedger,
   settleCiAdmissionLedger,
   settleHeldAdmissionLedgerOnSignal,
 } from "#pr/admission";
-import type {
+import {
   fetchCommitStatuses,
-  fetchCommitStatusList,
-  fetchPrCommitShas,
-  repostMarkedPrComment,
+  type fetchCommitStatusList,
+  type fetchPrCommitShas,
+  type repostMarkedPrComment,
 } from "#pr/pr";
+import {
+  blockingCommitStatusRequest,
+  COMMIT_STATUS_CONTEXT,
+  commitStatusRequest,
+  skipCommitStatusRequest,
+} from "#pr/preflight";
 import type { publishFinalCommitStatus } from "#pr/status";
 import { CliError } from "../../src/errors";
 
@@ -324,6 +333,7 @@ describe("publishCiSkip: the outcome record", () => {
         readStatuses?: typeof fetchCommitStatusList;
         listCommits?: typeof fetchPrCommitShas;
         readHeadStatus?: typeof fetchCommitStatuses;
+        spawnFn?: typeof Bun.spawn;
       } = {},
     ) {
       return {
@@ -466,16 +476,30 @@ describe("publishCiSkip: the outcome record", () => {
         expect(calls.map((c) => c.state)).toEqual(["failure"]);
       });
 
-      test("a failed head read writes the status as planned", async () => {
+      // The production reader, not a throwing seam: a non-zero gh exit is a failed read. The status is
+      // written as planned, and one warning says the override could not be checked.
+      test("a failed head read through the real reader writes the status as planned, and warns", async () => {
         const calls: StatusCall[] = [];
-        await publishCiSkip(
-          gateInput("skipped-size", recordingStatus(calls), {
-            readHeadStatus: async () => {
-              throw new CliError("gh timed out");
-            },
-          }),
+        const gh = ghSpawn({ exitCode: 1, stdout: "" });
+        const { result: code, stderr } = await captureStderr(() =>
+          publishCiSkip(
+            gateInput("skipped-size", recordingStatus(calls), {
+              readHeadStatus: undefined,
+              spawnFn: gh.spawnFn,
+            }),
+          ),
         );
-        expect(calls.map((c) => c.state)).toEqual(["failure"]);
+        expect(code).toBe(0);
+        expect(
+          gh.calls.some((argv) =>
+            argv.join(" ").includes(`commits/${STATUS_HEAD}/status`),
+          ),
+        ).toBe(true);
+        expect(calls.map((c) => [c.sha, c.state])).toEqual([
+          [STATUS_HEAD, "failure"],
+        ]);
+        expect(stderr).toContain("::warning::");
+        expect(stderr).toContain(STATUS_HEAD.slice(0, 7));
       });
     });
 
@@ -577,7 +601,7 @@ describe("publishCiSkip: the outcome record", () => {
 
       test("a below-threshold skip carries the reviewed head's success as no review needed", async () => {
         const { calls } = await skipWith(
-          [row("success", "pr-hero: review posted", T1)],
+          [row("success", "review posted", T1)],
           "below-threshold",
         );
         expect(calls.map((c) => [c.state, c.description])).toEqual([
@@ -661,7 +685,9 @@ describe("publishCiSkip: the outcome record", () => {
         expect(calls[0]?.description).toContain("found no earlier verdict");
       });
 
-      test("a carried failure with no count takes the admission's blocking count", async () => {
+      // A size-skip failure is written with no review behind it, so it is no verdict. The admission's own
+      // count (priorBlocking 3) must not rescue it into a carried "3 blocking finding(s)".
+      test("a size-skip failure is no verdict, even with the admission's blocking count: fail closed", async () => {
         const { calls } = await skipWith(
           [
             row(
@@ -674,11 +700,11 @@ describe("publishCiSkip: the outcome record", () => {
           { priorBlocking: 3 },
         );
         expect(calls.map((c) => c.description)).toEqual([
-          `pr-hero: 3 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+          "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
         ]);
       });
 
-      test("a carried failure with no count and no blocking count fails closed", async () => {
+      test("a size-skip failure with no admission count either: fail closed", async () => {
         const { calls } = await skipWith(
           [
             row(
@@ -698,7 +724,7 @@ describe("publishCiSkip: the outcome record", () => {
       test("an exhausted budget is a failure naming the budget, never a carried green", async () => {
         const calls: StatusCall[] = [];
         const { read, reads } = readerWith([
-          row("success", "pr-hero: review posted", T1),
+          row("success", "review posted", T1),
         ]);
         await publishCiSkip(
           gateInput("manual-required", recordingStatus(calls), {
@@ -767,7 +793,14 @@ describe("publishCiSkip: the outcome record", () => {
         const LOW_RISK = "delta touches only low-risk paths";
         // The i-th commit of a synthetic PR, a distinct full sha for each i below 256.
         const shaAt = (i: number) => i.toString(16).padStart(2, "0").repeat(20);
-        const GREEN = [row("success", "pr-hero: review posted", T1)];
+        const GREEN = [row("success", "review posted", T1)];
+        // Writers' own descriptions, so a drift in them fails these tests too.
+        const SIZE_SKIP = skipCommitStatusRequest({
+          kind: "size",
+          targetUrl: undefined,
+        }).description;
+        const FAIL_CLOSED_LOW_RISK =
+          "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it";
 
         // `commits` is the PR's list, oldest first, the head last; `bySha` answers each commit's
         // status list (a missing sha reads as no rows, a null entry as a failed read).
@@ -777,6 +810,7 @@ describe("publishCiSkip: the outcome record", () => {
           over: {
             reviewedHead?: string | null;
             reason?: AdmissionStatusInput["reason"];
+            priorBlocking?: number;
           } = {},
         ) {
           const calls: StatusCall[] = [];
@@ -785,6 +819,7 @@ describe("publishCiSkip: the outcome record", () => {
             gateInput("skipped-coverage", recordingStatus(calls), {
               admission: admissionInput(over.reason ?? "low-risk-delta", {
                 reviewedHead: over.reviewedHead,
+                priorBlocking: over.priorBlocking,
               }),
               listCommits: async () => commits,
               readStatuses: async (_root, sha) => {
@@ -820,7 +855,7 @@ describe("publishCiSkip: the outcome record", () => {
             [COMMIT_OLD, COMMIT_MID, STATUS_HEAD],
             {
               [COMMIT_MID]: [],
-              [COMMIT_OLD]: [row("success", "pr-hero: review posted", T1)],
+              [COMMIT_OLD]: [row("success", "review posted", T1)],
             },
           );
           expect(reads).toEqual([COMMIT_MID, COMMIT_OLD]);
@@ -834,7 +869,7 @@ describe("publishCiSkip: the outcome record", () => {
             [COMMIT_OLD, COMMIT_MID, STATUS_HEAD],
             {
               [COMMIT_MID]: null,
-              [COMMIT_OLD]: [row("success", "pr-hero: review posted", T1)],
+              [COMMIT_OLD]: [row("success", "review posted", T1)],
             },
           );
           expect(reads).toEqual([COMMIT_MID]);
@@ -922,6 +957,106 @@ describe("publishCiSkip: the outcome record", () => {
           });
           expect(calls.map((c) => c.description)).toEqual([
             "pr-hero: 2 blocking finding(s) carried from ccccccc — fix and push, or /pr-hero override",
+          ]);
+        });
+
+        // The walk takes only a review's verdict (a finished review, or a verdict carried from this PR).
+        // A skip, a fail-closed, a budget or a manual-only failure is not one, so the walk passes over it.
+        test("a green on an earlier commit is carried past a size-skip failure on the commit after it", async () => {
+          const { calls } = await walk([COMMIT_OLD, COMMIT_MID, STATUS_HEAD], {
+            [COMMIT_OLD]: GREEN,
+            [COMMIT_MID]: [row("failure", SIZE_SKIP, T2)],
+          });
+          expect(calls.map((c) => [c.state, c.description])).toEqual([
+            [
+              "success",
+              `pr-hero: no review needed (${LOW_RISK}); carried from ccccccc`,
+            ],
+          ]);
+        });
+
+        test("a red count on an earlier commit is carried past a fail-closed failure on the commit after it", async () => {
+          const { calls } = await walk([COMMIT_OLD, COMMIT_MID, STATUS_HEAD], {
+            [COMMIT_OLD]: [row("failure", BLOCKING_2, T1)],
+            [COMMIT_MID]: [row("failure", FAIL_CLOSED_LOW_RISK, T2)],
+          });
+          expect(calls.map((c) => [c.state, c.description])).toEqual([
+            [
+              "failure",
+              "pr-hero: 2 blocking finding(s) carried from ccccccc — fix and push, or /pr-hero override",
+            ],
+          ]);
+        });
+
+        // priorBlocking is 3 here on purpose: a skip counted as a verdict would carry "3 blocking", so
+        // a fail-closed result proves the skip was passed over, not that it had no count.
+        test("the walk reads past a skip failure to the next commit, and fails closed when only skips remain", async () => {
+          const { calls, reads } = await walk(
+            [COMMIT_OLD, COMMIT_MID, STATUS_HEAD],
+            {
+              [COMMIT_MID]: [row("failure", SIZE_SKIP, T2)],
+              [COMMIT_OLD]: [row("failure", SIZE_SKIP, T1)],
+            },
+            { priorBlocking: 3 },
+          );
+          expect(reads).toEqual([COMMIT_MID, COMMIT_OLD]);
+          expect(calls.map((c) => [c.state, c.description])).toEqual([
+            [
+              "failure",
+              "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+            ],
+          ]);
+        });
+
+        test("skip failures on every commit within the cap fail closed, and a verdict beyond the cap is not reached", async () => {
+          const commits = [
+            ...Array.from({ length: 21 }, (_, i) => shaAt(i + 1)),
+            STATUS_HEAD,
+          ];
+          const bySha: Record<string, Row[] | null> = {
+            [shaAt(1)]: GREEN,
+          };
+          for (let i = 2; i <= 21; i++) {
+            bySha[shaAt(i)] = [row("failure", SIZE_SKIP, T1)];
+          }
+          const { calls, reads } = await walk(commits, bySha, {
+            priorBlocking: 3,
+          });
+          expect(reads).toHaveLength(20);
+          expect(reads).not.toContain(shaAt(1));
+          expect(calls.map((c) => c.description)).toEqual([
+            "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+          ]);
+        });
+
+        // The writers' own description families are the verdicts the walk takes; a skip, budget, or manual
+        // failure is not. Each is built by the writer it names, so the test cannot drift from the code.
+        test("a built finished review's success is taken as the verdict to carry", async () => {
+          const posted = commitStatusRequest({
+            phase: "success",
+            posted: true,
+            targetUrl: undefined,
+            context: COMMIT_STATUS_CONTEXT,
+          }).description;
+          const { calls } = await walk([COMMIT_OLD, STATUS_HEAD], {
+            [COMMIT_OLD]: [row("success", posted, T1)],
+          });
+          expect(calls.map((c) => c.description)).toEqual([
+            `pr-hero: no review needed (${LOW_RISK}); carried from ccccccc`,
+          ]);
+        });
+
+        test("a built finished review's blocking failure is taken with its count", async () => {
+          const blocking = blockingCommitStatusRequest({
+            blockingCount: 4,
+            targetUrl: undefined,
+            context: COMMIT_STATUS_CONTEXT,
+          }).description;
+          const { calls } = await walk([COMMIT_OLD, STATUS_HEAD], {
+            [COMMIT_OLD]: [row("failure", blocking, T1)],
+          });
+          expect(calls.map((c) => c.description)).toEqual([
+            "pr-hero: 4 blocking finding(s) carried from ccccccc — fix and push, or /pr-hero override",
           ]);
         });
       });
@@ -1055,6 +1190,132 @@ describe("publishCiSkip: the outcome record", () => {
       restoreOutcomeDir(saved);
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// The verdict allowlist: a status is a review's verdict only when a writer of a verdict built its text.
+// The positives are built by the writers themselves, so a drift in a writer fails here, not silently.
+describe("isReviewVerdictStatus: a review's verdict, by the writers that build it", () => {
+  const CARRIED_SHA = "c".repeat(40);
+  const finished = (posted: boolean) =>
+    commitStatusRequest({
+      phase: "success",
+      posted,
+      targetUrl: undefined,
+      context: COMMIT_STATUS_CONTEXT,
+    }).description;
+  const blocking = (blockingCount: number) =>
+    blockingCommitStatusRequest({
+      blockingCount,
+      targetUrl: undefined,
+      context: COMMIT_STATUS_CONTEXT,
+    }).description;
+  const skip = (kind: "size" | "budget") =>
+    skipCommitStatusRequest({ kind, targetUrl: undefined }).description;
+
+  test.each([
+    ["review posted", "success", finished(true)],
+    ["review complete", "success", finished(false)],
+    ["one blocking finding", "failure", blocking(1)],
+    ["twelve blocking findings", "failure", blocking(12)],
+    [
+      "a carried success",
+      "success",
+      carriedSuccessDescription(
+        "delta touches only low-risk paths",
+        CARRIED_SHA,
+      ),
+    ],
+    [
+      "a carried failure",
+      "failure",
+      carriedBlockingDescription(2, CARRIED_SHA),
+    ],
+  ])("%s is a verdict", (_name, state, description) => {
+    expect(isReviewVerdictStatus({ state, description })).toBe(true);
+  });
+
+  test.each([
+    ["a size skip", "failure", skip("size")],
+    ["a budget skip", "failure", skip("budget")],
+    [
+      "a fail-closed failure",
+      "failure",
+      "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+    ],
+    [
+      "a budget used up",
+      "failure",
+      "pr-hero: review budget for this PR is used up — /pr-hero review reviews this head",
+    ],
+    [
+      "a manual-only policy",
+      "failure",
+      "pr-hero: review needs a manual trigger (ci_review_policy is manual_only) — /pr-hero review reviews this head",
+    ],
+    ["an override", "success", "pr-hero: overridden by @alice"],
+    ["a pending review", "pending", "pr-hero reviewing"],
+    ["a crashed review", "error", "review did not finish"],
+    ["zero blocking findings", "failure", blocking(0)],
+    ["a success with no text", "success", null],
+    ["a failure with no text", "failure", undefined],
+    [
+      "a carried success with the reason cut off",
+      "success",
+      "pr-hero: no review needed (delta touches only low-risk paths)",
+    ],
+    ["a verdict with a word added", "success", `${finished(true)} twice`],
+  ])("%s is not a verdict", (_name, state, description) => {
+    expect(isReviewVerdictStatus({ state, description })).toBe(false);
+  });
+});
+
+// The override check's read (fetchCommitStatuses with failClosed). Through the real reader and a fake gh:
+// a failed read must not look like a head with no status rows, a dropped row must not hide an override,
+// and an empty successful read is still no rows.
+describe("fetchCommitStatuses with failClosed", () => {
+  test("a failed read throws, instead of answering no rows", async () => {
+    const gh = ghSpawn({ exitCode: 1, stdout: "" });
+    await expect(
+      fetchCommitStatuses("/unused", HEAD, {
+        spawnFn: gh.spawnFn,
+        failClosed: true,
+      }),
+    ).rejects.toThrow(CliError);
+  });
+
+  test("a row that does not parse throws, because the row it drops could be the override", async () => {
+    const gh = ghSpawn({
+      exitCode: 0,
+      stdout: `not-json\n${JSON.stringify({ state: "success", context: "pr-hero", created_at: "2026-10-17T11:00:00Z" })}\n`,
+    });
+    await expect(
+      fetchCommitStatuses("/unused", HEAD, {
+        spawnFn: gh.spawnFn,
+        failClosed: true,
+      }),
+    ).rejects.toThrow(CliError);
+  });
+
+  test("a head with no status rows reads as no rows, not as a failure", async () => {
+    const gh = ghSpawn({ exitCode: 0, stdout: "" });
+    await expect(
+      fetchCommitStatuses("/unused", HEAD, {
+        spawnFn: gh.spawnFn,
+        failClosed: true,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  test("an abbreviated sha throws, rather than answering no rows", async () => {
+    const gh = ghSpawn({ exitCode: 0, stdout: "" });
+    await expect(
+      fetchCommitStatuses("/unused", "abc", {
+        spawnFn: gh.spawnFn,
+        failClosed: true,
+      }),
+    ).rejects.toThrow(CliError);
+    expect(gh.calls).toHaveLength(0);
   });
 });
 
