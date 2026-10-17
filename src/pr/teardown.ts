@@ -20,6 +20,7 @@ import {
   type CommitStatusFact,
   commitStatusCompletion,
   commitStatusRequest,
+  partialReviewCommitStatusRequest,
 } from "#pr/preflight";
 import {
   heldCommitStatusPendingLanded,
@@ -178,11 +179,20 @@ export async function settleCommitStatusAndLedger(input: {
   // production; this keeps the write safe if they ever diverge.
   const effectiveMode: CiMode =
     input.statusContext === COMMIT_STATUS_CONTEXT ? input.ciMode : "advisory";
+  // S4: the hunter counts ride on the pipeline result, the same object the run's other
+  // verdict inputs come from. No separate parameter could disagree with it.
   const completion = commitStatusCompletion({
     pipelineFinished: input.result !== undefined,
     sessionFailed: input.result?.sessionFailed === true,
     ciMode: effectiveMode,
     blockingCount: input.blockingCount,
+    ...(input.result?.hunterCount === undefined
+      ? {}
+      : { hunterCount: input.result.hunterCount }),
+    ...(input.result?.hunterFailedCount === undefined
+      ? {}
+      : { hunterFailures: input.result.hunterFailedCount }),
+    ...(input.result?.noReviewerRan === true ? { noReviewerRan: true } : {}),
   });
   const request =
     completion.phase === "failure"
@@ -191,12 +201,19 @@ export async function settleCommitStatusAndLedger(input: {
           targetUrl: input.statusTargetUrl,
           context: input.statusContext,
         })
-      : commitStatusRequest({
-          phase: completion.phase,
-          posted: input.posted !== null,
-          targetUrl: input.statusTargetUrl,
-          context: input.statusContext,
-        });
+      : completion.phase === "partial"
+        ? partialReviewCommitStatusRequest({
+            failed: completion.failed,
+            total: completion.total,
+            targetUrl: input.statusTargetUrl,
+            context: input.statusContext,
+          })
+        : commitStatusRequest({
+            phase: completion.phase,
+            posted: input.posted !== null,
+            targetUrl: input.statusTargetUrl,
+            context: input.statusContext,
+          });
   // The cutoff is read once, while the lock is still held. The check below and both unsettled
   // records use this value, so the CLI and the publisher judge an override by the same instant.
   const overrideCutoff = thisRunOverrideCutoff();

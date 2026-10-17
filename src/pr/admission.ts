@@ -37,6 +37,7 @@ import {
   type CommitStatusFact,
   clipStatusDescription,
   commitStatusRequest,
+  partialReviewDescription,
   prHtmlUrl,
   skipCommitStatusRequest,
 } from "#pr/preflight";
@@ -338,6 +339,17 @@ export function carriedBlockingDescription(count: number, sha: string): string {
   );
 }
 
+// The text a skip writes when it inherits a finished review's partial verdict (some hunters failed).
+export function carriedPartialDescription(
+  failed: number,
+  total: number,
+  sha: string,
+): string {
+  return clipStatusDescription(
+    `pr-hero: review partial (${failed} of ${total} hunters failed) ${CARRIED_FROM}${sha.slice(0, 7)} — /pr-hero review retries it`,
+  );
+}
+
 const CARRY_REASONS: readonly CarriedReason[] = [
   "once-per-pr",
   "below-threshold",
@@ -394,6 +406,37 @@ function carriedBlockingMatches(description: string): boolean {
   );
 }
 
+// S5: a partial review is a red verdict with its own text (N of M hunters failed). Its counts are read
+// first, then the builder must reproduce the whole text, the same rule as the blocking verdict.
+const PARTIAL_COUNTS =
+  /^pr-hero: review partial \((\d+) of (\d+) hunters failed\)/;
+
+function partialCountsIn(
+  description: string | null | undefined,
+): { failed: number; total: number } | null {
+  const match = PARTIAL_COUNTS.exec(description ?? "");
+  if (match === null) return null;
+  return { failed: Number(match[1]), total: Number(match[2]) };
+}
+
+function finishedPartialMatches(description: string): boolean {
+  const counts = partialCountsIn(description);
+  return (
+    counts !== null &&
+    partialReviewDescription(counts.failed, counts.total) === description
+  );
+}
+
+function carriedPartialMatches(description: string): boolean {
+  const sha = carriedSha(description);
+  const counts = partialCountsIn(description);
+  return (
+    sha !== null &&
+    counts !== null &&
+    carriedPartialDescription(counts.failed, counts.total, sha) === description
+  );
+}
+
 // WHY the walk takes only these: a skip, a fail-closed, a budget or a manual-only failure is written with
 // no review behind it. Counting it as a verdict would stop the walk on it, so a green review on an older
 // commit would be lost, and one skip would turn the gate red until a human acts. Overrides need no check of
@@ -415,7 +458,9 @@ export function isReviewVerdictStatus(
   if (status.state === "failure") {
     return (
       finishedBlockingMatches(description) ||
-      carriedBlockingMatches(description)
+      carriedBlockingMatches(description) ||
+      finishedPartialMatches(description) ||
+      carriedPartialMatches(description)
     );
   }
   return false;
@@ -474,6 +519,19 @@ export function admissionSkipDecision(
     return {
       state: "success",
       description: carriedSuccessDescription(label, input.carried.sha),
+    };
+  }
+  // S5: a partial verdict is red, and it is never read as a blocking count (it has none). Taking the
+  // admission's own priorBlocking here would turn a partial review into a count it never had.
+  const partial = partialCountsIn(verdict.description);
+  if (partial !== null) {
+    return {
+      state: "failure",
+      description: carriedPartialDescription(
+        partial.failed,
+        partial.total,
+        input.carried.sha,
+      ),
     };
   }
   const blocking =

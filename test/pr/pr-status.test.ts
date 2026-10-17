@@ -1036,6 +1036,37 @@ function issueReply(options: {
 // triage skill answers every finding, advisory included, so `done` needs every finding posted
 // on the current head to be answered at that head. An override is a human's unlock, so it stays
 // `done` whatever the findings say.
+describe("buildPrStatus: a red partial review is run again (S6)", () => {
+  const PARTIAL =
+    "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it";
+  const PARTIAL_CARRIED =
+    "pr-hero: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it";
+
+  test("a red gate that is a partial review is review, naming the partial review and the retry", () => {
+    const status = buildPrStatus(
+      input({ statuses: [gate("failure", PARTIAL)] }),
+    );
+    expect(status.next_action).toBe("review");
+    expect(status.reason).toBe(
+      "The last review of this head was partial (some reviewers failed); run /pr-hero review, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
+    );
+  });
+
+  test("the carried form of the partial review reads the same way", () => {
+    const status = buildPrStatus(
+      input({ statuses: [gate("failure", PARTIAL_CARRIED)] }),
+    );
+    expect(status.next_action).toBe("review");
+  });
+
+  test("a red partial review names no blocking count: unresolved_blocking is the live count, zero here", () => {
+    const status = buildPrStatus(
+      input({ statuses: [gate("failure", PARTIAL)] }),
+    );
+    expect(status.unresolved_blocking).toBe(0);
+  });
+});
+
 describe("buildPrStatus: a partial review of this head is run again", () => {
   // The engine's own admission re-runs a partial review of the same head (partialSameHead in
   // ci/review-admission.ts). A green gate over such a review must read as review, not done, or

@@ -392,6 +392,12 @@ function newestReply(
   return newest;
 }
 
+// The red partial-review verdict (preflight.ts partialReviewDescription) and its carried form
+// (admission.ts carriedPartialDescription). The prefix is what this reader needs: the full text is
+// written by those builders, and the gate's own state already says the review is red.
+const PARTIAL_REVIEW_GATE =
+  /^pr-hero: review partial \(\d+ of \d+ hunters failed\)/;
+
 // unresolved_blocking has two sources, and the description wins when it has one. A red
 // gate's description names the count its own rule counted (rereview/state.ts
 // unresolvedBlockingCount), which can include a carried row that no comment in this read
@@ -507,6 +513,15 @@ function decideNext(
     return {
       next_action: "override-or-fix",
       reason: `The review on this head was skipped (${gate.description}); run /pr-hero review to review it anyway, or override the gate.`,
+    };
+  }
+  // S6: a red gate that is a partial review (its own text, or the carried form) is not a finding to fix.
+  // Nothing blocking was found, so the retry is the unlock. Its text is the gate's own, so no count is read.
+  if (PARTIAL_REVIEW_GATE.test(gate.description ?? "")) {
+    return {
+      next_action: "review",
+      reason:
+        "The last review of this head was partial (some reviewers failed); run /pr-hero review, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
     };
   }
   if (liveBlocking.length > 0) {

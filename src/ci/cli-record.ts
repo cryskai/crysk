@@ -24,7 +24,7 @@
 //   or writeFatalCliRecord for anything else.
 // The pipeline finishing is not the review being delivered, and the commit status does
 // not say delivery: its success phase means the pipeline finished without every hunter
-// failing (its description is "review posted" or "review complete"). So the status and
+// failing (its description is "review posted" or "review complete", or in gate mode a blocking count or a partial review). So the status and
 // the record can differ. A posting that throws after a finished pipeline leaves the
 // status success and the record error, and the publisher reports that error. The
 // publisher posts its own status later under the same context ("pr-hero") when it

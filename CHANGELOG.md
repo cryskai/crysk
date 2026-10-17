@@ -10,10 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **`npx pr-hero` without Bun**: `bin/pr-hero.js` now starts under Node too. It runs the CLI in-process under Bun,
   and under Node it starts Bun on `src/cli.ts`: the bundled `bun` dependency (pinned to 1.3.14, an
-  `optionalDependency`) first, then `bun` on PATH. It forwards SIGINT, SIGTERM and SIGHUP and the exit code, and
+  `optionalDependency`) first, then `bun` on PATH. It forwards SIGTERM, SIGHUP and the exit code (Ctrl+C reaches Bun from the terminal), and
   exits 127 with an install hint when no Bun is found. `@opencode-ai/sdk` moves to `dependencies`, and the action
   installs with `--omit=optional`, so CI does not download the bundled Bun. MCP and launchd registration refuse a
   run from npx's temporary cache: "install pr-hero (npm i -g pr-hero) to register".
+
+### Changed
+- **Gate: a partial review is red**: in gate mode a finished review where some hunters failed, and no blocking
+  finding survived, sets `failure` with `pr-hero: review partial (N of M hunters failed) — /pr-hero review retries it`
+  instead of `success`. A blocking count still wins. A skip carries a partial verdict red, and `pr-hero status`
+  answers `review` for it. Advisory mode is unchanged.
 
 ### Fixed
 - **A re-review's fresh findings reach the state block.** From the second review on, the summary's `pr-hero-state` block holds this run's findings as well as the earlier ones. Before, it held only the earlier findings, so a blocking finding first raised by a re-review was forgotten by the next review, and a same-head forced re-review could read green. Known gap: the first review writes no state block, so its outside-diff findings are not persisted; its inline findings are recovered from their markers on the second review.

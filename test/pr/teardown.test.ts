@@ -297,6 +297,88 @@ describe("settleCommitStatusAndLedger — commit status lock lifecycle", () => {
   });
 });
 
+describe("settleCommitStatusAndLedger — a partial review is red in gate mode (S1, S4)", () => {
+  // The hunter counts ride on the pipeline result; a partial review had some hunters fail.
+  const partialResult = (hunterFailures: number, sessionFailed = false) =>
+    ({
+      sessionFailed,
+      hunterCount: 4,
+      hunterFailedCount: hunterFailures,
+    }) as unknown as PipelineResult;
+
+  const PARTIAL_DESCRIPTION =
+    "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it";
+
+  test.each([
+    [
+      "some hunters failed, nothing blocking: failure, with the retry",
+      partialResult(1),
+      0,
+      "pr-hero",
+      "ciGate",
+      { state: "failure", description: PARTIAL_DESCRIPTION },
+    ],
+    [
+      "a blocking count still wins over the partial review",
+      partialResult(1),
+      2,
+      "pr-hero",
+      "ciGate",
+      {
+        state: "failure",
+        description:
+          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+    ],
+    [
+      "advisory mode keeps a partial review green",
+      partialResult(1),
+      0,
+      "pr-hero/local",
+      "advisory",
+      { state: "success", description: "review complete" },
+    ],
+    [
+      "every hunter failed is still error, never the partial verdict",
+      partialResult(4, true),
+      0,
+      "pr-hero",
+      "ciGate",
+      { state: "error", description: "review did not finish" },
+    ],
+  ] as const)(
+    "%s",
+    async (_name, result, blockingCount, context, mode, expected) => {
+      const { spawnFn, calls } = makeStatusSpawn();
+      await settleCommitStatusAndLedger({
+        result,
+        posted: null,
+        operatorRoot: "/repo",
+        headSha: HEAD,
+        statusTargetUrl: "https://runs.example/1",
+        ciAdmissionLedger: null,
+        spawnFn,
+        ciMode: mode === "ciGate" ? "gate" : "advisory",
+        statusContext:
+          context === "pr-hero"
+            ? COMMIT_STATUS_CONTEXT
+            : LOCAL_COMMIT_STATUS_CONTEXT,
+        blockingCount,
+      });
+      expect(calls).toHaveLength(1);
+      expect(parseStatusFlags(calls[0] as string[])).toEqual({
+        state: expected.state,
+        context:
+          context === "pr-hero"
+            ? COMMIT_STATUS_CONTEXT
+            : LOCAL_COMMIT_STATUS_CONTEXT,
+        description: expected.description,
+        target_url: "https://runs.example/1",
+      });
+    },
+  );
+});
+
 describe("settleCommitStatusAndLedger — gate mode (S4)", () => {
   const BLOCKING_DESCRIPTION =
     "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override";

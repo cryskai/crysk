@@ -860,6 +860,32 @@ describe("status-matches-findings: the status agrees with the blocking findings 
     expect(result.detail).toContain("no visible blocking finding");
   });
 
+  test("no blocking finding and a partial-review failure pass, finished or carried", () => {
+    for (const description of [
+      "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+      "pr-hero: review partial (1 of 4 hunters failed) carried from abc1234 — /pr-hero review retries it",
+    ]) {
+      const result = evaluateCheck(
+        check,
+        withFindings([], "failure", description),
+      );
+      expect(result.pass).toBe(true);
+      expect(result.detail).toContain("partial review");
+    }
+  });
+
+  test("a visible blocking finding and a partial-review failure fail: the gate does not count it", () => {
+    const result = evaluateCheck(
+      check,
+      withFindings(
+        [BLOCKING],
+        "failure",
+        "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+      ),
+    );
+    expect(result.pass).toBe(false);
+  });
+
   test("a visible blocking finding and a failure that counts it pass", () => {
     expect(
       evaluateCheck(check, withFindings([BLOCKING], "failure", COUNTS_ONE))
