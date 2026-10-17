@@ -35,8 +35,19 @@ const HUNTERS_FAILED_FAMILY: ReadonlySet<string> = new Set([
 ]);
 const HUNTER_ROUTE_SENTENCE =
   /The route [^\s/]+\/\S+ has no usable credential record/;
+// The status description is clipped to 140 characters (publish.ts statusDescription), and a
+// long provider and model push the sentence's tail past the cut. Only its opening is read
+// there: the preflight's own PRH-CRED-UNUSABLE sentence opens "The <backend>/opencode route",
+// never "The route <provider>/", so the opening alone still tells the two apart.
+const HUNTER_ROUTE_STATUS = /^PRH-CRED-UNUSABLE: The route [^\s/]+\//;
 
-function isHuntersFailed(
+// The error-status half of the hunters-failed path, shared with scenario.ts's flake gate.
+export function isHuntersFailedStatus(description: string): boolean {
+  const code = /^PRH-[A-Z]+(?:-[A-Z]+)*/.exec(description)?.[0];
+  return isHuntersFailed(code, HUNTER_ROUTE_STATUS.test(description));
+}
+
+export function isHuntersFailed(
   code: string | undefined,
   hunterRoute: boolean,
 ): boolean {
@@ -276,10 +287,7 @@ export function classifyPath(obs: Observation): SmokePath {
   // Without either, a failed step is no-outcome.
   if (
     obs.status?.state === "error" &&
-    isHuntersFailed(
-      statusCode,
-      HUNTER_ROUTE_SENTENCE.test(obs.status.description),
-    )
+    isHuntersFailedStatus(obs.status.description)
   )
     return "hunters-failed";
   if (obs.status?.state === "error" && statusCode !== undefined)
