@@ -978,19 +978,59 @@ export function settleRequestForCancellation(
 // gate: a gate cannot call a review it never read clean.
 export type CommitStatusCompletion =
   | { phase: "success" | "error" }
-  | { phase: "failure"; blockingCount: number };
+  | { phase: "failure"; blockingCount: number }
+  | { phase: "partial"; failed: number; total: number };
+
+// S1, gate mode: a finished review where some hunters failed but not all, and no blocking
+// finding survived. The gate cannot call that green: a reviewer that never ran may have been
+// the one that would have blocked. `/pr-hero review` runs the head again, which is the unlock.
+// The variable parts are the failed count (N) and the hunters that ran (M).
+export function partialReviewDescription(
+  failed: number,
+  total: number,
+): string {
+  return clipStatusDescription(
+    `pr-hero: review partial (${failed} of ${total} hunters failed) — /pr-hero review retries it`,
+  );
+}
+
+export function partialReviewCommitStatusRequest(input: {
+  failed: number;
+  total: number;
+  targetUrl: string | undefined;
+  context: CommitStatusContext;
+}): CommitStatusRequest {
+  return {
+    state: "failure",
+    context: input.context,
+    description: partialReviewDescription(input.failed, input.total),
+    targetUrl: input.targetUrl,
+  };
+}
 
 export function commitStatusCompletion(input: {
   pipelineFinished: boolean;
   sessionFailed: boolean;
   ciMode: CiMode;
   blockingCount: number | null;
+  // S4: M and N. Absent means no hunter counts were read, which is never a partial review.
+  hunterCount?: number;
+  hunterFailures?: number;
 }): CommitStatusCompletion {
   if (!input.pipelineFinished || input.sessionFailed) return { phase: "error" };
   if (input.ciMode === "advisory") return { phase: "success" };
   if (input.blockingCount === null) return { phase: "error" };
+  // WHY a blocking count wins over a partial review: a blocking finding is more actionable
+  // than a retry. The author has a concrete fix to push, and the description keeps that text.
   if (input.blockingCount > 0) {
     return { phase: "failure", blockingCount: input.blockingCount };
+  }
+  // A missing count on either side reads as no partial review: a failed count without its M
+  // is not a verdict the gate can word.
+  const failed = input.hunterFailures ?? 0;
+  const total = input.hunterCount ?? 0;
+  if (failed >= 1 && total >= failed) {
+    return { phase: "partial", failed, total };
   }
   return { phase: "success" };
 }

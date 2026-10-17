@@ -521,6 +521,11 @@ export interface PipelineResult {
   // hunter failure is a partial run (prose Step 4: "proceed with whatever
   // hunters did complete"), never a session failure.
   sessionFailed: boolean;
+  // M: the hunters that ran (trigger-skipped hunters are not in it), and N: how many of
+  // them failed. The gate reads both for its partial verdict (commitStatusCompletion).
+  // Optional so a caller's fake result without them reads as "no partial review".
+  hunterCount?: number;
+  hunterFailures?: number;
   // D1-08 PR5b (D8): every step's `unresolved_remote` reservation, surfaced
   // at the RETURN boundary — not only in pipeline.json — so the cross-run
   // fencing gap (design decision D7: breaker state does not survive a
@@ -2677,6 +2682,8 @@ async function finish(
       : { usageV2: state.usageTotalV2 }),
     sessionFailed:
       state.hunterCount > 0 && state.hunterFailures === state.hunterCount,
+    hunterCount: state.hunterCount,
+    hunterFailures: state.hunterFailures,
     unresolved: collectUnresolvedSpend(state),
     ...(state.gatePriors === undefined ? {} : { gatePriors: state.gatePriors }),
     ...(state.routePlan === undefined

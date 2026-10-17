@@ -683,6 +683,18 @@ describe("hunter fan-out", () => {
     expect(result.perAgent.resilience?.status).toBe("failed");
   });
 
+  // S4: the gate's partial verdict reads these two counts off the result. M is the
+  // hunters that ran, N the ones that failed; a trigger-skipped hunter is in neither.
+  test("the result counts the hunters that ran (M) and the ones that failed (N)", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, { findings: [draft()] }),
+      "hunter-resilience": (spec) => failed(spec),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.hunterCount).toBe(2);
+    expect(result.hunterFailures).toBe(1);
+  });
+
   test("ALL hunters failing sets sessionFailed", async () => {
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) => failed(spec),

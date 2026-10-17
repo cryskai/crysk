@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Gate: a partial review is red**: in gate mode a finished review where some hunters failed, and no blocking
+  finding survived, sets `failure` with `pr-hero: review partial (N of M hunters failed) — /pr-hero review retries it`
+  instead of `success`. A blocking count still wins. A skip carries a partial verdict red, and `pr-hero status`
+  answers `review` for it. Advisory mode is unchanged.
+
 ### Added
 - **`pr-hero status --pr <n> [--json]`**: a read-only command that reads one PR's pr-hero gate, its posted
   findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `override-or-fix`, `done`) through `gh` alone. With
