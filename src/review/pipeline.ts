@@ -88,6 +88,10 @@ import {
   resolveSpecialty,
   validateReviewSpec,
 } from "#review/spec";
+import type {
+  AdjudicationOutcome,
+  AdjudicationSubject,
+} from "#triage/adjudication";
 import type { InternalCapabilityReport } from "../diversity/admission";
 import type { BenchmarkTarget } from "../diversity/identity";
 import {
@@ -289,6 +293,9 @@ export interface PipelineInput {
   // caller that has not classified priors). The queue CLOSES after dedupe
   // (W-order): overlapCandidates are priors that may still be appended.
   verifyQueue?: VerifyQueueEntry[];
+  // T5b: the pending dismissals a `/pr-hero recheck` run adjudicates, at most
+  // MAX_ADJUDICATIONS_PER_RUN. Absent or empty on every other run.
+  adjudicationQueue?: AdjudicationSubject[];
   overlapCandidates?: VerifyQueueEntry[];
   // Default 8 matches DEFAULT_MAX_VERIFICATION_STEPS in review/preflight.ts.
   // CLI always passes the resolved config value; this default is the
@@ -542,6 +549,9 @@ export interface PipelineResult {
   // process restart) stays visible to whatever reads this result, not just
   // to a reader of the artifact. Always an array, empty on the common case.
   unresolved: UnresolvedSpend[];
+  // T5b: one entry per adjudicated subject, in queue order. Absent when nothing
+  // was adjudicated. The CLI posts each as a reply on its thread.
+  adjudications?: AdjudicationOutcome[];
   // The re-review's gate rows (rereview/state.ts): every prior the re-review did
   // not verify gone. Handed to the publish step in memory only. They never reach
   // pipeline.json, so the persisted `rereview` block keeps its shape. Absent when

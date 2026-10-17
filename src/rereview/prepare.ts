@@ -7,6 +7,7 @@ import { normalizePath } from "#compare/compare";
 import { claimFingerprint } from "#pr/preflight";
 import type { Severity } from "#review/findings";
 import { parseFindingCommentBadge } from "#review/report";
+import type { AdjudicationSubject } from "#triage/adjudication";
 import { parseTriageMarker } from "#triage/triage";
 import {
   classifyPrior,
@@ -877,6 +878,14 @@ function resolveRowTie<T extends PostedForPrior>(
       contender.row.marker.c === claimFingerprint(contender.claim),
   );
   return matching.length === 1 ? matching[0] : undefined;
+}
+
+// T5b: the pending dismissals of blocking priors, at most MAX_ADJUDICATIONS_PER_RUN.
+// Contract stub, filled in by the T5b wave-1 unit A.
+export function adjudicationQueue(
+  _priors: readonly PriorRecord[],
+): AdjudicationSubject[] {
+  return [];
 }
 
 export function enrichPriorsFromThreads(input: {
