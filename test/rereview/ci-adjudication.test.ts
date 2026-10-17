@@ -22,6 +22,7 @@ import {
 import { triageMarker } from "#triage/triage";
 
 const HEAD = "a".repeat(40);
+const OTHER_HEAD = "c".repeat(40);
 const FINDING = 22;
 const claim = "a live defect";
 
@@ -89,12 +90,14 @@ function adjudicatorReply(
 
 function enrich(
   replies: Parameters<typeof enrichPriorsFromThreads>[0]["replies"],
+  headSha: { headSha?: string } = { headSha: HEAD },
 ) {
   return enrichPriorsFromThreads({
     priors: [prior()],
     posted,
     replies,
     summaryUpdatedAt: null,
+    ...headSha,
   });
 }
 
@@ -113,6 +116,18 @@ describe("enrichPriorsFromThreads — CI adjudication", () => {
       dismissedReply,
       adjudicatorReply({ user: "mallory" }),
     ]);
+    expect(out?.triage?.ciVerdict).toBeNull();
+  });
+
+  test("a bot verdict on another head does not count (ciVerdict null)", () => {
+    const [out] = enrich([dismissedReply, adjudicatorReply()], {
+      headSha: OTHER_HEAD,
+    });
+    expect(out?.triage?.ciVerdict).toBeNull();
+  });
+
+  test("with no input headSha no bot verdict counts (ciVerdict null)", () => {
+    const [out] = enrich([dismissedReply, adjudicatorReply()], {});
     expect(out?.triage?.ciVerdict).toBeNull();
   });
 
@@ -245,6 +260,21 @@ describe("adjudicationQueue", () => {
       prior({ id: "A", tier: "advisory", triage: triage() }),
       prior({ id: "B", triage: triage({ ciVerdict: "upheld" }) }),
       prior({ id: "C", triage: triage({ tag: "deferred", verdict: null }) }),
+    ]);
+    expect(queue).toEqual([]);
+  });
+
+  test("includes a dismissal whose CI ruling was inconclusive (a later recheck may retry it)", () => {
+    const queue = adjudicationQueue([
+      dismissedBlocking("R001", { ciVerdict: "inconclusive" }),
+    ]);
+    expect(queue.map((s) => s.priorId)).toEqual(["R001"]);
+  });
+
+  test("excludes a dismissal the CI ruling rejected or upheld", () => {
+    const queue = adjudicationQueue([
+      dismissedBlocking("R001", { ciVerdict: "rejected" }),
+      dismissedBlocking("R002", { ciVerdict: "upheld" }),
     ]);
     expect(queue).toEqual([]);
   });

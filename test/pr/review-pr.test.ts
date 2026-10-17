@@ -250,7 +250,7 @@ describe("postAdjudicationReplies", () => {
   }
 
   test("POSTs one reply on the thread, carrying the marker, badge and evidence", async () => {
-    const { spawnFn, calls } = fakeGh(0);
+    const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
     await postAdjudicationReplies({
       operatorRoot: "/repo",
       pr: 42,
@@ -258,7 +258,9 @@ describe("postAdjudicationReplies", () => {
       adjudications: [ADJUDICATION],
       spawnFn,
     });
-    expect(calls).toHaveLength(1);
+    // The upheld reply is then read back once: the POST, then the author GET.
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.argv.includes("--jq")).toBe(true);
     const argv = calls[0]?.argv.join(" ") ?? "";
     expect(argv).toContain("--method POST");
     expect(argv).toContain("pulls/42/comments");
@@ -299,5 +301,147 @@ describe("postAdjudicationReplies", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  // The author read (GET pulls/comments/<id>, the only argv with --jq) answers
+  // `login`; a POST answers the new comment's id, or fails with exit 1.
+  function fakeAuthorGh(login: string, postFails = false) {
+    const calls: { argv: string[]; stdin: string | undefined }[] = [];
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const spawnFn = ((argv: string[], opts?: { stdin?: Uint8Array }) => {
+      calls.push({
+        argv,
+        stdin:
+          opts?.stdin === undefined ? undefined : decoder.decode(opts.stdin),
+      });
+      const isRead = argv.includes("--jq");
+      const failed = !isRead && postFails;
+      const stream = (text: string) =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (text) controller.enqueue(encoder.encode(text));
+            controller.close();
+          },
+        });
+      return {
+        stdout: stream(
+          failed ? "" : isRead ? `${login}\n` : JSON.stringify({ id: 300 }),
+        ),
+        stderr: stream(failed ? "boom" : ""),
+        exited: Promise.resolve(failed ? 1 : 0),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, calls };
+  }
+
+  async function captureStdout<T>(
+    run: () => Promise<T>,
+  ): Promise<{ out: string; value: T }> {
+    const lines: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      lines.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      const value = await run();
+      return { out: lines.join(""), value };
+    } finally {
+      process.stdout.write = original;
+    }
+  }
+
+  const UNLANDED_WARNING =
+    "::warning::pr-hero: the CI adjudication for R001 was not recorded under github-actions[bot]; the finding still counts toward the gate";
+
+  test("a failed adjudication posts nothing and prints the pending notice", async () => {
+    const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
+    const { out, value } = await captureStdout(() =>
+      postAdjudicationReplies({
+        operatorRoot: "/repo",
+        pr: 42,
+        headSha: HEAD,
+        adjudications: [
+          {
+            ...ADJUDICATION,
+            verdict: "inconclusive",
+            evidence: [],
+            failed: true,
+          },
+        ],
+        spawnFn,
+      }),
+    );
+    expect(calls).toHaveLength(0);
+    expect(value.unlandedUpheld).toBe(0);
+    expect(out).toContain(
+      "::notice::pr-hero: the CI adjudicator could not rule on R001; it stays pending for the next /pr-hero recheck",
+    );
+  });
+
+  test("an upheld reply whose author is not the CI adjudicator did not land: counted and warned", async () => {
+    const { spawnFn, calls } = fakeAuthorGh("someone-else");
+    const { out, value } = await captureStdout(() =>
+      postAdjudicationReplies({
+        operatorRoot: "/repo",
+        pr: 42,
+        headSha: HEAD,
+        adjudications: [ADJUDICATION],
+        spawnFn,
+      }),
+    );
+    expect(calls.some((c) => c.argv.includes("--jq"))).toBe(true);
+    expect(value.unlandedUpheld).toBe(1);
+    expect(out).toContain(UNLANDED_WARNING);
+  });
+
+  test("an upheld post that throws did not land: counted and warned", async () => {
+    const { spawnFn } = fakeAuthorGh("github-actions[bot]", true);
+    const { out, value } = await captureStdout(() =>
+      postAdjudicationReplies({
+        operatorRoot: "/repo",
+        pr: 42,
+        headSha: HEAD,
+        adjudications: [ADJUDICATION],
+        spawnFn,
+      }),
+    );
+    expect(value.unlandedUpheld).toBe(1);
+    expect(out).toContain(UNLANDED_WARNING);
+  });
+
+  test("an upheld reply recorded under github-actions[bot] landed: not counted", async () => {
+    const { spawnFn } = fakeAuthorGh("github-actions[bot]");
+    const { out, value } = await captureStdout(() =>
+      postAdjudicationReplies({
+        operatorRoot: "/repo",
+        pr: 42,
+        headSha: HEAD,
+        adjudications: [ADJUDICATION],
+        spawnFn,
+      }),
+    );
+    expect(value.unlandedUpheld).toBe(0);
+    expect(out).not.toContain("was not recorded under");
+  });
+
+  test("rejected and inconclusive replies never count, whoever wrote them", async () => {
+    const { spawnFn } = fakeAuthorGh("someone-else");
+    const { out, value } = await captureStdout(() =>
+      postAdjudicationReplies({
+        operatorRoot: "/repo",
+        pr: 42,
+        headSha: HEAD,
+        adjudications: [
+          { ...ADJUDICATION, verdict: "rejected" },
+          { ...ADJUDICATION, priorId: "R002", verdict: "inconclusive" },
+        ],
+        spawnFn,
+      }),
+    );
+    expect(value.unlandedUpheld).toBe(0);
+    expect(out).not.toContain("was not recorded under");
   });
 });

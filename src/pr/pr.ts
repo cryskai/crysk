@@ -1333,7 +1333,7 @@ const PR_REVIEW_COMMENTS_QUERY =
   `reviewThreads(first:${THREAD_PAGE_SIZE},after:$cursor){` +
   "pageInfo{endCursor hasNextPage}" +
   "nodes{comments(first:100){nodes{" +
-  "fullDatabaseId body createdAt author{login} path line originalLine " +
+  "fullDatabaseId body createdAt author{login __typename} path line originalLine " +
   "replyTo{fullDatabaseId}}}}}}}}";
 
 // Parses `gh api repos/.../compare/{base}...{head}` — filenames only.
@@ -1522,6 +1522,18 @@ function graphqlLogin(value: unknown): string {
   if (typeof value !== "object" || value === null) return "";
   const login = (value as { login?: unknown }).login;
   return typeof login === "string" ? login : "";
+}
+
+// WHY a bot gets the REST spelling: REST reports a GitHub App as
+// `github-actions[bot]`, while GraphQL reports the bare login. Without this the
+// CI adjudicator's login would differ between the two read paths.
+function graphqlReviewLogin(value: unknown): string {
+  const login = graphqlLogin(value);
+  const typename =
+    typeof value === "object" && value !== null
+      ? (value as { __typename?: unknown }).__typename
+      : undefined;
+  return typename === "Bot" && login !== "" ? `${login}[bot]` : login;
 }
 
 function issueCommentsFromNodes(nodes: unknown[]): {
@@ -1772,7 +1784,7 @@ function reviewCommentsFromThreadNodes(
       const replyToId = graphqlDatabaseId(record.replyTo?.fullDatabaseId);
       comments.push({
         id,
-        user: graphqlLogin(record.author),
+        user: graphqlReviewLogin(record.author),
         body: typeof record.body === "string" ? record.body : "",
         path: typeof record.path === "string" ? record.path : "",
         line,

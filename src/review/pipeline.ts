@@ -1904,7 +1904,7 @@ async function execute(
           agent: refuterAgent,
           nonce: boundaryNonce,
         })
-      : adjudicationQueue.map((subject) => inconclusiveOutcome(subject));
+      : adjudicationQueue.map((subject) => failedOutcome(subject));
   }
 
   // Step 6 — one refuter batch: every BLOCKER/CRITICAL survivor, whatever its
@@ -2412,6 +2412,13 @@ function inconclusiveOutcome(
   };
 }
 
+// No ruling exists at all: the step failed, its output did not parse, the prompt
+// was forged, or no refuter ran it. `failed` is what tells that apart from a
+// parsed "inconclusive", which is a real ruling and carries no such key.
+function failedOutcome(subject: AdjudicationSubject): AdjudicationOutcome {
+  return { ...inconclusiveOutcome(subject), failed: true };
+}
+
 // One isolated adjudicator step per queued dismissal, sharing the refuter's
 // model, effort, tools and route. The verdict is read from the step's parsed
 // output; a failed step, a rejected promise, or a forged nonce is inconclusive,
@@ -2429,7 +2436,7 @@ async function runAdjudicate(
     nonce: string;
   },
 ): Promise<AdjudicationOutcome[]> {
-  const outcomes = queue.map((subject) => inconclusiveOutcome(subject));
+  const outcomes = queue.map((subject) => failedOutcome(subject));
   const adjudicatorPrompt =
     resolveEngineAssets().triageSkillFiles["adjudicator.md"];
   if (adjudicatorPrompt === undefined) {
@@ -3093,8 +3100,16 @@ function fillRereviewProvenance(
           // verifier's `refuted`, the gate trusts it when it is produced. The
           // bot reply posted afterwards is the persisted record; if that post
           // fails, the next run counts the finding again.
+          // WHY only these three statuses are rewritten: they are the ones an
+          // author's dismissal can take off the count. "verified-gone" is the
+          // verifier's collapse, which must still happen, and "returned" is a
+          // worsening rediscovery, which must stay counted; rewriting either
+          // would hide a result the adjudication never ruled on.
           settled: input.phaseB.settled.map((row) =>
-            upheldAdjudicationIds(state).has(row.id)
+            upheldAdjudicationIds(state).has(row.id) &&
+            (row.status === "suppressed" ||
+              row.status === "carried" ||
+              row.status === "unconfirmed")
               ? { ...row, status: "ci-dismissed" as const }
               : row,
           ),

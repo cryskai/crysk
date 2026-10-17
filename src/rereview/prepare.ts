@@ -888,6 +888,8 @@ function resolveRowTie<T extends PostedForPrior>(
 // T5b: the pending dismissals of blocking priors, at most MAX_ADJUDICATIONS_PER_RUN.
 // WHY advisory priors never cost an adjudicator call: only a blocking prior's
 // dismissal can leave the gate count, so nothing else is worth a ruling.
+// WHY an "inconclusive" ruling stays pending: it counts as not upheld, and a
+// later recheck may retry the same dismissal and get a ruling.
 export function adjudicationQueue(
   priors: readonly PriorRecord[],
 ): AdjudicationSubject[] {
@@ -901,7 +903,7 @@ export function adjudicationQueue(
       triage?.tag !== "dismissed" ||
       triage.replyId === undefined ||
       triage.threadId === undefined ||
-      triage.ciVerdict != null
+      (triage.ciVerdict != null && triage.ciVerdict !== "inconclusive")
     ) {
       continue;
     }
@@ -921,6 +923,9 @@ export function adjudicationQueue(
 export function enrichPriorsFromThreads(input: {
   priors: readonly PriorRecord[];
   posted: readonly PostedForPrior[];
+  // The head under review. A bot verdict counts only when its `head=` is this
+  // head; when it is undefined no bot verdict counts.
+  headSha?: string;
   replies: readonly {
     id?: number;
     user?: string;
@@ -954,11 +959,18 @@ export function enrichPriorsFromThreads(input: {
     // WHY only GitHub's author field is trusted: the marker text is typed by
     // anyone, so a verdict from any other login is ignored. The LAST match
     // in thread order wins, and only for the latest triage reply.
-    if (triage?.replyId !== undefined) {
+    // WHY the head must match too: a push may change the code the ruling read,
+    // so a verdict on an earlier head is stale and a later head needs a new
+    // recheck. With no headSha, no bot verdict can be shown current.
+    if (triage?.replyId !== undefined && input.headSha !== undefined) {
       for (const reply of thread) {
         if (reply.user !== CI_ADJUDICATOR_LOGIN) continue;
         const adjudication = parseAdjudicationMarker(reply.body);
-        if (adjudication === null || adjudication.reply !== triage.replyId) {
+        if (
+          adjudication === null ||
+          adjudication.reply !== triage.replyId ||
+          adjudication.head !== input.headSha
+        ) {
           continue;
         }
         triage = { ...triage, ciVerdict: adjudication.verdict };

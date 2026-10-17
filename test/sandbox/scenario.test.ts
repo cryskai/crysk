@@ -1218,6 +1218,18 @@ describe("rereview-fresh-finding: the state row of a finding first found by a re
 });
 
 describe("recheck-dismissal: a false dismissal does not turn the gate green (T5b)", () => {
+  test("refuses to start when main is not pinned to the ref, and pushes nothing", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      blockingFindings: true,
+      mainWorkflow: sandboxFiles("v0.1.0").get(WORKFLOW_PATH),
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["recheck-dismissal"], OPTIONS)).toBe(1);
+    expect(h.gitCalls.some((c) => c.args[0] === "push")).toBe(false);
+    expect(h.logs.some((l) => l.includes(`init --ref ${REF}`))).toBe(true);
+  });
+
   test("exits 0: the dismissal is posted, the recheck keeps the gate red, and the adjudicator rejects the dismissal", async () => {
     const world = new FakeGithub({ ref: REF, blockingFindings: true });
     const h = world.harness();

@@ -254,11 +254,22 @@ describe("parseArgs", () => {
   test("--adjudicate is OFF unless asked for, and needs --pr", () => {
     expect(parseArgs(["review", "--pr", "7"]).options.adjudicate).toBeFalsy();
     expect(
-      parseArgs(["review", "--pr", "7", "--adjudicate"]).options.adjudicate,
+      parseArgs(["review", "--pr", "7", "--ci", "--adjudicate"]).options
+        .adjudicate,
     ).toBe(true);
     expect(() => parseArgs(["review", "--adjudicate"])).toThrow(
       "--adjudicate runs the CI adjudicator against a PR, so it requires --pr",
     );
+  });
+
+  test("--adjudicate requires review --ci, not just --pr", () => {
+    expect(() => parseArgs(["review", "--pr", "1", "--adjudicate"])).toThrow(
+      "--adjudicate only applies with review --ci",
+    );
+    expect(
+      parseArgs(["review", "--pr", "1", "--ci", "--adjudicate"]).options
+        .adjudicate,
+    ).toBe(true);
   });
 
   test("--adjudicate is documented in the help text next to --full", () => {

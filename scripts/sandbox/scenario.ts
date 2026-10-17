@@ -432,7 +432,14 @@ async function runOne(
   const work = stopAfterInterrupt(deps, interrupts.scenario);
   try {
     await cloneSandbox(work, live.dir);
-    if (scenario.phases.some((p) => p.action.kind === "comment")) {
+    // A recheck comment starts main's workflow exactly as a plain comment does.
+    if (
+      scenario.phases.some(
+        (p) =>
+          p.action.kind === "comment" ||
+          p.action.kind === "dismiss-and-recheck",
+      )
+    ) {
       await requirePinnedMain(work, live.dir, options.ref);
     }
     let previous: Observation | undefined;
@@ -454,8 +461,10 @@ async function runOne(
       }
       const collected = await collect(work, live);
       // Only a comment phase has a triggering comment whose reactions a check can read.
+      // A recheck phase posts its own triggering comment, so it counts too.
       const obs: Observation =
-        phase.action.kind === "comment"
+        phase.action.kind === "comment" ||
+        phase.action.kind === "dismiss-and-recheck"
           ? {
               ...collected,
               reactions: await triggerReactions(work, live),

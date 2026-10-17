@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { discoveryHunters, resolvePrDiscovery } from "#pr/discovery";
 import { skippedDiscoveryMessage } from "#rereview/plan";
 import type { AgentSpec } from "#review/spec";
+import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { parseIgnoreFile } from "../../src/ignore-file";
 
 const HUNTER_A: AgentSpec = {
@@ -500,7 +501,18 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
     "\n" +
     "the timer is cleared in the caller\n";
 
+  type ReviewComment = NonNullable<
+    Parameters<typeof resolvePrDiscovery>[0]["reviewComments"]
+  >[number];
+
   function run(adjudicate: boolean | undefined) {
+    return runWithReplies(adjudicate, []);
+  }
+
+  function runWithReplies(
+    adjudicate: boolean | undefined,
+    extraReplies: readonly ReviewComment[],
+  ) {
     return resolvePrDiscovery({
       diffFromSha: B,
       headSha: H,
@@ -534,6 +546,7 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
           in_reply_to_id: POSTED_FINDING.id,
           created_at: "2026-01-02T00:00:00Z",
         },
+        ...extraReplies,
       ],
       git: baseGit(),
       log: () => {},
@@ -544,6 +557,27 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
   test("without --adjudicate the queue is empty", async () => {
     const result = await run(false);
     expect(result.adjudicationQueue).toEqual([]);
+  });
+
+  test("a CI verdict on another head does not take the dismissal out of the queue", async () => {
+    const otherHead = "c".repeat(40);
+    const result = await runWithReplies(true, [
+      {
+        id: 201,
+        user: CI_ADJUDICATOR_LOGIN,
+        body: adjudicationMarker({
+          verdict: "upheld",
+          reply: 200,
+          head: otherHead,
+        }),
+        path: "src/a.ts",
+        line: 10,
+        original_line: 10,
+        in_reply_to_id: POSTED_FINDING.id,
+        created_at: "2026-01-03T00:00:00Z",
+      },
+    ]);
+    expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
   });
 
   test("with --adjudicate a pending dismissal of a blocking prior is queued", async () => {

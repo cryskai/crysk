@@ -611,7 +611,7 @@ the same write-access check and the same forced review of the head, and then the
 to a blocking finding, at most 5 per run. Only a dismissal the adjudicator upholds leaves the gate count. A `deferred` or
 `misclassified` reply never does, and a rejected or inconclusive verdict keeps the finding counted. The verdict is posted as a reply
 on the finding's thread by `github-actions[bot]`, and only replies from that login count, so a run with a custom token fails closed.
-A new dismissal reply is pending again. Not on fork pull requests: the adjudicator needs this repository's checkout of the head,
+A new dismissal reply is pending again. A verdict counts only on the head it was given, so a push needs a new recheck. An adjudicator step that fails posts nothing for that dismissal: it prints a notice and stays pending for the next recheck. An upheld verdict lowers the count only when its reply is recorded under `github-actions[bot]`; if the reply did not land under that login, the run warns and the finding still counts, and the run's status stays red. Not on fork pull requests: the adjudicator needs this repository's checkout of the head,
 so the comment is refused with a notice and a 👎 reaction.
 
 **Overriding a red gate.** Comment exactly `/pr-hero override` on the pull request. The same rule as

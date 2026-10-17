@@ -326,6 +326,7 @@ export async function resolvePrDiscovery(params: {
       posted: postedFindings,
       replies: reviewComments,
       summaryUpdatedAt,
+      headSha,
     });
     const classified = buildPhaseBQueue({
       case: prepared.case,

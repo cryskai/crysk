@@ -182,6 +182,17 @@ const ADJUDICATOR_OK: StepScript = {
     ),
 };
 
+const SUBJECT_PRIOR: PriorRecord = {
+  id: "R001",
+  sev: "BLOCKER",
+  tier: "blocking",
+  channel: "inline",
+  locs: ["src/app.ts:10"],
+  claim: "the loop never checks the empty-input case",
+  triage: null,
+  newThreadReply: false,
+};
+
 function rereviewBlock(): RereviewProvenance {
   return {
     case: "C",
@@ -238,6 +249,7 @@ describe("runAdjudicate wiring", () => {
         replyId: 777,
         verdict: "inconclusive",
         evidence: [],
+        failed: true,
       },
     ]);
   });
@@ -254,9 +266,10 @@ describe("runAdjudicate wiring", () => {
 
     expect(result.adjudications?.[0]?.verdict).toBe("inconclusive");
     expect(result.adjudications?.[0]?.evidence).toEqual([]);
+    expect(result.adjudications?.[0]?.failed).toBe(true);
   });
 
-  test("prose instead of a JSON object is inconclusive", async () => {
+  test("prose instead of a JSON object is inconclusive and failed", async () => {
     const runner = new FakeStepRunner({
       ...HUNTERS_EMPTY,
       "adjudicate-R001": (spec) =>
@@ -267,6 +280,20 @@ describe("runAdjudicate wiring", () => {
 
     expect(result.adjudications?.[0]?.verdict).toBe("inconclusive");
     expect(result.adjudications?.[0]?.evidence).toEqual([]);
+    expect(result.adjudications?.[0]?.failed).toBe(true);
+  });
+
+  test("a parsed inconclusive verdict is a ruling, not a failure: no failed key", async () => {
+    const runner = new FakeStepRunner({
+      ...HUNTERS_EMPTY,
+      "adjudicate-R001": (spec) =>
+        parsed(spec, JSON.stringify({ verdict: "inconclusive", evidence: [] })),
+    });
+    const input = await makeInput({ adjudicationQueue: [SUBJECT] });
+    const result = await runPipeline(input, { runner });
+
+    expect(result.adjudications?.[0]?.verdict).toBe("inconclusive");
+    expect("failed" in (result.adjudications?.[0] ?? {})).toBe(false);
   });
 
   test("no adjudication queue: no result field and no adjudicate step", async () => {
@@ -313,6 +340,59 @@ describe("runAdjudicate wiring", () => {
 
     expect(result.gatePriors?.find((row) => row.id === "R001")?.status).toBe(
       "ci-dismissed",
+    );
+  });
+
+  test("an upheld verdict leaves a verified-gone row verified-gone", async () => {
+    const runner = new FakeStepRunner({ ...HUNTERS_EMPTY, ...ADJUDICATOR_OK });
+    const rereview = rereviewBlock();
+    const input = await makeInput({
+      adjudicationQueue: [SUBJECT],
+      rereview,
+      phaseB: {
+        priors: [SUBJECT_PRIOR],
+        settled: [
+          {
+            id: "R001",
+            status: "verified-gone",
+            locs: ["src/app.ts:10"],
+            renamed: false,
+          },
+        ],
+      },
+    });
+    const result = await runPipeline(input, { runner });
+
+    // The verifier's collapse still happens: R001 is counted as verified-gone
+    // (provenance is filled onto the input's rereview block), and it is not
+    // re-labelled ci-dismissed in the gate rows.
+    expect(rereview.resolved_ids).toEqual(["R001"]);
+    expect(
+      result.gatePriors?.some((row) => row.status === "ci-dismissed"),
+    ).toBe(false);
+  });
+
+  test("an upheld verdict leaves a returned row returned", async () => {
+    const runner = new FakeStepRunner({ ...HUNTERS_EMPTY, ...ADJUDICATOR_OK });
+    const input = await makeInput({
+      adjudicationQueue: [SUBJECT],
+      rereview: rereviewBlock(),
+      phaseB: {
+        priors: [SUBJECT_PRIOR],
+        settled: [
+          {
+            id: "R001",
+            status: "returned",
+            locs: ["src/app.ts:10"],
+            renamed: false,
+          },
+        ],
+      },
+    });
+    const result = await runPipeline(input, { runner });
+
+    expect(result.gatePriors?.find((row) => row.id === "R001")?.status).toBe(
+      "returned",
     );
   });
 

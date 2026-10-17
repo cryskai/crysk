@@ -994,6 +994,11 @@ export function parseArgs(argv: string[]): ParsedCli {
       "--adjudicate runs the CI adjudicator against a PR, so it requires --pr",
     );
   }
+  // The adjudicator's verdicts are posted only by the CI shell, so the flag is a
+  // no-op anywhere else. Same reasoning as --budget-usd below.
+  if (options.adjudicate && !(options.ci && command === "review")) {
+    throw new CliUsageError("--adjudicate only applies with review --ci");
+  }
   // Same "silently dropped intention" reasoning as --post/--pr above: a
   // spend ceiling or a summary toggle for a mode that never turns on would
   // be a flag the operator believes changed a run it did not. Scoped to
