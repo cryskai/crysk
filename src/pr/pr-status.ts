@@ -22,7 +22,11 @@ import {
   type ParsedFindingMarker,
   parseFindingMarker,
 } from "#pr/preflight";
-import { SEVERITY_UNRECOVERABLE, TIER_UNRECOVERABLE } from "#rereview/classify";
+import {
+  type RecoveredTier,
+  SEVERITY_UNRECOVERABLE,
+  TIER_UNRECOVERABLE,
+} from "#rereview/classify";
 import { bindPriorsToPosted } from "#rereview/prepare";
 import { parseStateBlock, type StateFinding } from "#rereview/state";
 import { parseFindingCommentBadge } from "#review/report";
@@ -77,12 +81,13 @@ export interface PrStatusFinding {
   comment_id: number;
   channel: "inline" | "outside";
   severity: string | null;
-  // The tier as reported: "blocking", "advisory", or null when none can be read, including an
-  // unrecoverable tier. `blocking` is the field every blocking decision reads.
-  tier: "blocking" | "advisory" | null;
-  // True for a blocking tier and for an unrecoverable one. An unrecoverable tier counts as
-  // blocking because the gate counts it that way (rereview/state.ts unresolvedBlockingCount):
-  // fail closed, so a finding that cannot be read as advisory is never waved through.
+  // The tier the badge or the state row reports: "blocking" or "advisory". "unrecoverable" (the
+  // engine's sentinel, rereview/classify.ts) when neither can give one. Never null.
+  // `blocking` is the field every blocking decision reads.
+  tier: RecoveredTier;
+  // True for every tier but advisory. An unrecoverable tier counts as blocking because the gate
+  // counts it that way (rereview/state.ts unresolvedBlockingCount): fail closed, so a finding
+  // that cannot be read as advisory is never waved through.
   blocking: boolean;
   live_on_head: boolean;
   triage: PrStatusTriage | null;
@@ -107,8 +112,13 @@ export interface PrStatusComment {
   body: string;
 }
 
+// A review comment's live projection (pr/pr.ts PrReviewComment) carries the path and line
+// GitHub shows now, which follow a rename or a re-anchor. Optional, as the engine's own posted
+// shape has them (rereview/prepare.ts PostedForPrior): without them the marker's anchor stands.
 export interface PrStatusReviewComment extends PrStatusComment {
   in_reply_to_id: number | null;
+  path?: string;
+  line?: number | null;
 }
 
 export interface PrStatusInput {
@@ -245,9 +255,23 @@ function readFindings(
     id: number;
     body: string;
     channel: "inline" | "outside";
+    // A review comment's live path and line, as pr/discovery.ts reads them. An outside comment
+    // has no live projection, so its marker's anchor is the only one.
+    livePath?: string;
+    liveLine?: number;
   }[] = [
-    ...input.reviewComments.map((c) => ({ ...c, channel: "inline" as const })),
-    ...input.issueComments.map((c) => ({ ...c, channel: "outside" as const })),
+    ...input.reviewComments.map((c) => ({
+      id: c.id,
+      body: c.body,
+      channel: "inline" as const,
+      livePath: c.path,
+      liveLine: c.line ?? undefined,
+    })),
+    ...input.issueComments.map((c) => ({
+      id: c.id,
+      body: c.body,
+      channel: "outside" as const,
+    })),
   ].sort((a, b) => a.id - b.id);
   const posted: {
     source: (typeof sources)[number];
@@ -264,7 +288,12 @@ function readFindings(
   // row. The binding is one-to-one, so it runs once over every posted finding.
   const bound = bindPriorsToPosted(
     rows,
-    posted.map(({ source, marker }) => ({ id: source.id, marker })),
+    posted.map(({ source, marker }) => ({
+      id: source.id,
+      marker,
+      livePath: source.livePath,
+      liveLine: source.liveLine,
+    })),
   );
   const rowByComment = new Map<number, StateFinding>();
   for (const row of rows) {
@@ -277,9 +306,9 @@ function readFindings(
     const badge = parseFindingCommentBadge(source.body);
     const replies = repliesTo(source, input);
     const triage = newestReply(replies)?.marker ?? null;
-    // The tier the badge or the state row records, unrecoverable included. `tier` below
-    // drops an unrecoverable tier to null; `blocking` keeps it, as the gate's rule does.
-    const recoveredTier = badge?.tier ?? row?.tier ?? null;
+    // The badge's tier, else the row's, else the engine's unrecoverable sentinel: the same fallback
+    // priorsFromPostedMarkers (rereview/prepare.ts) applies to a comment it cannot read.
+    const tier: RecoveredTier = badge?.tier ?? row?.tier ?? TIER_UNRECOVERABLE;
     out.push({
       finding: {
         id: row?.id ?? null,
@@ -293,12 +322,9 @@ function readFindings(
           (row !== undefined && row.sev !== SEVERITY_UNRECOVERABLE
             ? row.sev
             : null),
-        tier:
-          recoveredTier === "blocking" || recoveredTier === "advisory"
-            ? recoveredTier
-            : null,
-        blocking:
-          recoveredTier === "blocking" || recoveredTier === TIER_UNRECOVERABLE,
+        tier,
+        // Fail closed: only an advisory tier clears a finding, so an unrecoverable one blocks.
+        blocking: tier !== "advisory",
         // A finding is live when the summary's state block still carries its row, or when
         // it was posted on the head being read. A row is the gate's own memory of a live
         // finding, so a carried finding from an older head stays live.

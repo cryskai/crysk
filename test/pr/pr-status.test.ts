@@ -792,10 +792,51 @@ describe("buildPrStatus: findings", () => {
   });
 });
 
+describe("buildPrStatus: a renamed file still joins its state row", () => {
+  // The re-review rewrites a row's locs to the new path, while the posted comment's marker keeps
+  // the path it was posted on. GitHub's live review comment follows the rename, so its live path
+  // binds the row, as the engine's own callers do (pr/discovery.ts passes livePath and liveLine).
+  test("a row on the new path binds through the live path, so the finding is live and owes triage", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", "pr-hero: gate red, see the findings")],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM, "blocking", "src/new.ts:10"),
+            ]),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({
+              head: EARLIER,
+              claim: CLAIM,
+              path: "src/old.ts",
+              line: 10,
+              tier: "blocking",
+            }),
+            in_reply_to_id: null,
+            path: "src/new.ts",
+            line: 10,
+          },
+        ],
+      }),
+    );
+    const [finding] = status.findings;
+    expect(finding?.id).toBe("R001");
+    expect(finding?.live_on_head).toBe(true);
+    expect(status.next_action).toBe("triage");
+  });
+});
+
 describe("buildPrStatus: an unrecoverable tier still blocks", () => {
   // The gate's own rule counts a row whose tier cannot be read as blocking (rereview/state.ts
-  // unresolvedBlockingCount), so this read must count it too. Its tier stays as reported, which
-  // is null: an unreadable tier is not a tier this read may invent.
+  // unresolvedBlockingCount), and a finding with no readable tier at all is unrecoverable too
+  // (priorsFromPostedMarkers), so this read counts both. The tier reads as unrecoverable, never null:
+  // an unreadable tier is named, not dropped.
   test("an unrecoverable live finding with no reply on a red gate is triage, not override-or-fix", () => {
     const status = buildPrStatus(
       input({
@@ -867,10 +908,35 @@ describe("buildPrStatus: an unrecoverable tier still blocks", () => {
       }),
     );
     const [unrecoverable, advisory] = status.findings;
-    expect(unrecoverable?.tier).toBeNull();
+    expect(unrecoverable?.tier).toBe(TIER_UNRECOVERABLE);
     expect(unrecoverable?.blocking).toBe(true);
     expect(advisory?.tier).toBe("advisory");
     expect(advisory?.blocking).toBe(false);
+  });
+
+  test("an unparseable badge with no state row blocks: tier is unrecoverable and the finding is counted", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", "pr-hero: gate red, see the findings")],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              withHeader: false,
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const [finding] = status.findings;
+    expect(finding?.id).toBeNull();
+    expect(finding?.tier).toBe(TIER_UNRECOVERABLE);
+    expect(finding?.blocking).toBe(true);
+    expect(status.unresolved_blocking).toBe(1);
+    expect(status.next_action).toBe("triage");
   });
 });
 

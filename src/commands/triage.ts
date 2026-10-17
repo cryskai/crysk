@@ -185,7 +185,9 @@ async function outsidePullUrl(
   if (prUrl !== undefined) return prUrl;
   const nameWithOwner = await ghRepoNameWithOwner(operatorRoot, { spawnFn });
   if (nameWithOwner === undefined) return undefined;
-  const host = process.env.GITHUB_SERVER_URL ?? "https://github.com";
+  // `||`, not `??`: an empty GITHUB_SERVER_URL counts as unset here (as in ci/trigger.ts),
+  // or the link would have no host.
+  const host = process.env.GITHUB_SERVER_URL || "https://github.com";
   return `${host}/${nameWithOwner}/pull/${prNumber}`;
 }
 

@@ -695,6 +695,48 @@ describe("runTriageReplyCommand", () => {
     }
   });
 
+  test("an empty GITHUB_SERVER_URL falls back to github.com, never to a host-less link", async () => {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    const previousHost = process.env.GITHUB_SERVER_URL;
+    process.env.GITHUB_SERVER_URL = "";
+    try {
+      const { spawnFn, calls } = makeFakeGh(
+        outsideChannelScript([
+          {
+            match: ["repo", "view", "--json", "url"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+          {
+            match: ["pr", "view", "42", "--json", "url"],
+            response: { stderr: "HTTP 500", exitCode: 1 },
+          },
+          {
+            match: ["repo", "view", "--json", "nameWithOwner"],
+            response: { stdout: "musive/musive\n" },
+          },
+        ]),
+      );
+      const exitCode = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        findingId: "F001",
+        tag: "applied",
+        bodyFile,
+        dryRun: false,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(postedBody(calls)).toContain(
+        "In reply to: https://github.com/musive/musive/pull/42#issuecomment-555",
+      );
+    } finally {
+      if (previousHost === undefined) delete process.env.GITHUB_SERVER_URL;
+      else process.env.GITHUB_SERVER_URL = previousHost;
+      await cleanup();
+    }
+  });
+
   test("with no web URL of any kind readable, the reply posts without a link, as before", async () => {
     const { dir, bodyFile, cleanup } = await writeReplyRunDir();
     try {

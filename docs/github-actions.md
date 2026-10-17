@@ -769,13 +769,16 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 - `gate` is pr-hero's own commit status on the head. `state: "none"` means no `pr-hero` status is on it.
 - `findings` covers every posted `<!-- pr-hero-finding` comment, on every head. `channel` is `inline` for a review
   thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread only.
-- A finding joins its state-block row the way the engine binds a prior to its comment: the comment's path and line
-  must land within the row's locations, and the claim fingerprint breaks only a tie. A finding with no such row has
-  `id: null`, and `live_on_head` is true only when it was posted on the current head. A row that is found keeps the
-  finding live, so a carried finding from an older head stays live.
-- `tier` is the tier as the comment or the state row reports it, or `null` when none can be read. `blocking` is true
-  for a blocking tier and for an unrecoverable one, because the gate counts an unrecoverable row as blocking too.
-  `unresolved_blocking` and `next_action` read `blocking`, never `tier`.
+- A finding joins its state-block row the way the engine binds a prior to its comment: the comment's anchor must land
+  within the row's locations, and the claim fingerprint breaks only a tie. The anchor is the marker's path and line,
+  and the review comment's live path and line when GitHub has moved them (a rename, or a re-anchored line), so a row
+  the re-review rewrote to a new path still joins. A finding with no such row has `id: null`, and `live_on_head` is
+  true only when it was posted on the current head. A row that is found keeps the finding live, so a carried finding
+  from an older head stays live.
+- `tier` is the tier the comment's header badge or the state row reports: `blocking` or `advisory`, or `unrecoverable`
+  when neither can give one (the engine's own sentinel). It is never `null`. `blocking` is true for every tier but
+  `advisory`, because the gate counts an unrecoverable row as blocking too: a finding that cannot be read as advisory
+  is never read as clear. `unresolved_blocking` and `next_action` read `blocking`, never `tier`.
 - `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
   live blocking findings in `findings`.
 - `report.outcome_code` is the `PRH-*` code of the newest outcome comment, when that comment has one.

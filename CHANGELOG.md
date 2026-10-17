@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list, or a read that never answers within its bound, exits 1 with nothing on stdout. A green gate with a finding
   on this head that has no reply is `triage`, not `done`, because the triage skill answers advisory findings too. A
   green gate over a partial review of this head (some reviewers failed) is `review`. Each finding carries `blocking`,
-  which is true for an unrecoverable tier as it is for a blocking one, so such a finding is never read as clear. The
+  which is true for an unrecoverable tier as it is for a blocking one, so such a finding is never read as clear. A
+  finding whose badge and state row both fail to give a tier reads as `tier: "unrecoverable"`, never `null`. The
   triage skill runs it as step 0. `docs/github-actions.md` has the shape.
 - **Gate mode for CI**: the action's `mode` input (`gate` or `advisory`, default `gate`) decides what the
   `pr-hero` commit status says. `gate` sets `failure` on unresolved blocking findings, on a size or budget
