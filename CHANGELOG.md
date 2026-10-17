@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names each failed hunter's transport cause, provider and model (`hunter_failures`). When every hunter failed with
   `model_unavailable`, the publisher renders `PRH-MODEL-UNAVAILABLE` with the lead `Provider <name>:` and the model,
   instead of `PRH-HUNTERS-FAILED`. Any other mix, and a record without the field, render as before.
+- **A run whose every hunter lacks the route's credential record names it.** An OpenCode route whose provider has no
+  record in the auth store now carries the typed cause `missing_provider_record`, from the broker's own refusal and not
+  from its message text. When every failed hunter shares a cause with a code of its own, the publisher renders that
+  code and its owner: `PRH-CRED-UNUSABLE` with `Your configuration:` and the route (`route <provider>/<model> has no
+  usable credential record`). A mix of causes, or `runtime_unavailable`, still renders `PRH-HUNTERS-FAILED`.
 
 ### Added
 - **`pr-hero status --pr <n> [--json]`**: a read-only command that reads one PR's pr-hero gate, its posted

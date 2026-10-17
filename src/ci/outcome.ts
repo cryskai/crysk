@@ -299,6 +299,7 @@ const TRANSPORT_CAUSE_LOOKUP = {
   safety_refusal: true,
   provider_configuration_invalid: true,
   model_unavailable: true,
+  missing_provider_record: true,
   runtime_unavailable: true,
   remote_abort_unconfirmed: true,
 } satisfies Record<TransportFailureCause, true>;
@@ -834,6 +835,8 @@ function transportCode(
     case "provider_configuration_invalid":
     case "model_unavailable":
       return "PRH-MODEL-UNAVAILABLE";
+    case "missing_provider_record":
+      return "PRH-CRED-UNUSABLE";
     case "protocol_truncation":
     case "protocol_mismatch":
     case "protocol_overflow":
@@ -943,6 +946,9 @@ function transportOwner(
     // secret the user configured, and only the user can replace it (S2, L12).
     case "auth_invalid":
     case "provider_configuration_invalid":
+    // The auth store has no record for the route's provider: the user's secret is the
+    // thing to fix, the same owner as the credential class with this failure.
+    case "missing_provider_record":
       return "config";
     case "quota_exhausted":
     case "rate_limit":
@@ -1044,6 +1050,8 @@ const TRANSPORT_PHRASE: Record<
   safety_refusal: "the provider's safety system declined the input",
   provider_configuration_invalid: "the provider configuration is invalid",
   model_unavailable: "the provider does not serve the configured model",
+  missing_provider_record:
+    "the OpenCode auth store has no entry for this provider",
   protocol_truncation: "the reply was cut short",
   protocol_mismatch: "the reply did not match the expected protocol",
   protocol_overflow: "the reply overflowed the protocol limit",
@@ -1206,7 +1214,14 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     owner: "config",
     what: "The {backend}/{provider} route for {step} has no usable credential ({detail})",
     variants: {
+      // WHY the model is named when the run knows it: the hunter record carries the route's
+      // provider and model, and "route opencode/<model> has no usable credential record" is
+      // the sentence an operator can act on. The credential path has no model and keeps the
+      // generic sentence (whatWithoutModel), so its rendering is unchanged.
       missing_provider_record: {
+        what: "The route {provider}/{model} has no usable credential record",
+        whatWithoutModel:
+          "The {backend}/{provider} route for {step} has no usable credential ({detail})",
         why: CRED_STORE_WHY,
         fixes: [
           "Add {provider} to the OpenCode store, then re-set the secret:",
@@ -1607,6 +1622,23 @@ export function renderError(
     cls.kind === "install" && isBlank(params.step) ? cls.step : params.step;
   const merged: ErrorParams = { ...params, detail, step };
   return renderCode(codeOf(cls), merged, ctx, variantOf(cls));
+}
+
+// The rendering of a run whose every failed hunter shares one transport cause, or undefined
+// when that cause has no code of its own. WHY runtime_unavailable and legacy_terminal stay
+// undefined: their code is PRH-UNCLASSIFIED, and naming an unclassified owner would be the
+// guess this contract exists to avoid, so the caller keeps the generic hunters-failed code.
+export function renderHunterCause(
+  cause: TransportFailureCause,
+  params: ErrorParams,
+  ctx: OutcomeContext,
+): RenderedError | undefined {
+  // The provider's 404 names the model, so the every_hunter wording keeps it.
+  if (cause === "model_unavailable") {
+    return renderCode("PRH-MODEL-UNAVAILABLE", params, ctx, "every_hunter");
+  }
+  if (transportCode(cause) === "PRH-UNCLASSIFIED") return undefined;
+  return renderError({ kind: "transport", cause }, params, ctx);
 }
 
 // For a code the caller requests directly. `variant` picks the sub-class, which

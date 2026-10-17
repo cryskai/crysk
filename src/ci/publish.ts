@@ -66,6 +66,7 @@ import {
   parseTriggerRecord,
   renderCode,
   renderError,
+  renderHunterCause,
   STATUS_DESCRIPTION_MAX,
 } from "./outcome";
 import {
@@ -368,30 +369,28 @@ function unsettledStatusOf(
 }
 
 // The rendering of a hunters-failed run. WHY every hunter and not any: a run whose
-// hunters failed on the provider's side for one model has nothing else to fix, so the
-// provider and the model are named. A single hunter that failed another way, or one
-// with no classified cause, keeps the generic code, since that failure is not the
-// model's. The provider and model are named only when every entry agrees on them; a
-// mixed list names neither, and the lead reads "Provider:".
+// hunters failed for one known cause on the provider's or the configuration's side has
+// nothing else to fix, so that cause's own code and owner are rendered. The provider
+// and the model are named only when every entry agrees on them. A mix of causes, an
+// entry with no cause, or a cause with no code of its own (runtime_unavailable) keeps
+// the generic code, since no single cause explains the run.
 function huntersFailedRendering(
   cliRecord: CliRecord,
   runParams: ErrorParams,
 ): RenderedError {
   const failures = cliRecord.hunter_failures ?? [];
-  if (
-    failures.length > 0 &&
-    failures.every((failure) => failure.cause === "model_unavailable")
-  ) {
-    return renderCode(
-      "PRH-MODEL-UNAVAILABLE",
+  const cause = sharedValue(failures.map((failure) => failure.cause));
+  if (cause !== undefined) {
+    const rendered = renderHunterCause(
+      cause,
       {
         ...runParams,
         provider: sharedValue(failures.map((failure) => failure.provider)),
         model: sharedValue(failures.map((failure) => failure.model)),
       },
       "action",
-      "every_hunter",
     );
+    if (rendered !== undefined) return rendered;
   }
   return renderCode(
     "PRH-HUNTERS-FAILED",
@@ -401,9 +400,7 @@ function huntersFailedRendering(
 }
 
 // The one value every entry names, or undefined when they name none or differ.
-function sharedValue(
-  values: readonly (string | undefined)[],
-): string | undefined {
+function sharedValue<T>(values: readonly (T | undefined)[]): T | undefined {
   const distinct = new Set(values);
   if (distinct.size !== 1) return undefined;
   const [only] = distinct;

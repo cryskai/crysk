@@ -74,6 +74,7 @@ const TRANSPORT_EXPECTED: Record<
     owner: "config",
   },
   model_unavailable: { code: "PRH-MODEL-UNAVAILABLE", owner: "provider" },
+  missing_provider_record: { code: "PRH-CRED-UNUSABLE", owner: "config" },
   protocol_truncation: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
   protocol_mismatch: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
   protocol_overflow: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },

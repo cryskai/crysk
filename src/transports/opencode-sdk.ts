@@ -23,6 +23,7 @@ import {
   normalizeUnavailableUsage,
   UsageModeMismatchError,
 } from "../execution/usage-normalized";
+import { CredentialProjectionError } from "../security/credential-broker";
 import { redactDiagnostic } from "../security/redact";
 
 // WHY there is no @opencode-ai dependency here: production enablement over the
@@ -1109,6 +1110,14 @@ export class OpenCodeSdkTransport implements ProviderTransport {
             })
           : noSessionUsage(Date.now() - startedWall, this.usageBillingMode),
         stderrTail: `[pr-hero] opencode sdk: session creation failed: ${errorMessage(error)}`,
+        // WHY the typed error, not the message: the server launch projects the route's
+        // credential, and a provider with no record in the auth store is a typed broker
+        // refusal. Its witness text would classify as runtime_unavailable, the generic
+        // cause, so the instance carries the one class this transport can name.
+        ...(error instanceof CredentialProjectionError &&
+        error.failureClass === "missing_provider_record"
+          ? { failureCause: "missing_provider_record" as const }
+          : {}),
       };
     } finally {
       removeAbort?.();

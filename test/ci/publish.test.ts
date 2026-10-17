@@ -323,6 +323,89 @@ describe("decidePublication — the pure table", () => {
       expect(plan.status?.description).toStartWith("PRH-MODEL-UNAVAILABLE: ");
     });
 
+    test("every failed hunter with a missing provider record renders PRH-CRED-UNUSABLE, owned by the configuration", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            {
+              cause: "missing_provider_record",
+              provider: "opencode",
+              model: "no-such-model-free",
+            },
+            {
+              cause: "missing_provider_record",
+              provider: "opencode",
+              model: "no-such-model-free",
+            },
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+      expect(plan.rendered.owner).toBe("config");
+      expect(plan.rendered.annotation).toContain("Your configuration: ");
+      expect(plan.rendered.annotation).toContain(
+        "route opencode/no-such-model-free has no usable credential record",
+      );
+      expect(plan.status?.description).toStartWith("PRH-CRED-UNUSABLE: ");
+    });
+
+    test("a missing provider record with no provider or model still renders PRH-CRED-UNUSABLE without naming them", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          hunter_failures: [{ cause: "missing_provider_record" }],
+        },
+      });
+      if (plan.kind !== "remote") throw new Error("expected a remote plan");
+      expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+      expect(plan.rendered.annotation).toContain("has no usable credential (");
+      expect(plan.rendered.annotation).not.toContain("route opencode/");
+    });
+
+    test("a mix of a missing provider record and model_unavailable stays PRH-HUNTERS-FAILED", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          hunter_failures: [
+            { cause: "missing_provider_record", provider: "opencode" },
+            { cause: "model_unavailable", provider: "opencode" },
+          ],
+        },
+      });
+      if (plan.kind !== "remote") throw new Error("expected a remote plan");
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+    });
+
+    test("every failed hunter with an unclassified runtime cause stays PRH-HUNTERS-FAILED", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          hunter_failures: [
+            { cause: "runtime_unavailable", provider: "opencode" },
+            { cause: "runtime_unavailable", provider: "opencode" },
+          ],
+        },
+      });
+      if (plan.kind !== "remote") throw new Error("expected a remote plan");
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+    });
+
     test("a model_unavailable with no provider or model names neither, and still renders the code", () => {
       const plan = decidePublication({
         record: record(),

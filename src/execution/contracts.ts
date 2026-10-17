@@ -150,6 +150,10 @@ export interface DiagnosticEvidence {
 
 export interface TransportOutcome {
   readonly diagnosticEvidence?: DiagnosticEvidence;
+  // A cause the transport holds as a typed fact, not as witness text. resolveFailureCause
+  // consults it before the witness classifier, so a fact the stderr witness could only
+  // spell keeps its own cause instead of the runtime's generic one.
+  readonly failureCause?: TransportFailureCause;
   readonly completion: "success" | "failed" | "cancelled";
   readonly protocolIntegrity:
     | "verified"
@@ -220,6 +224,7 @@ export type TransportFailureCause =
   | "safety_refusal"
   | "provider_configuration_invalid"
   | "model_unavailable"
+  | "missing_provider_record"
   | "runtime_unavailable"
   | "remote_abort_unconfirmed";
 
@@ -238,6 +243,7 @@ const TRANSPORT_FAILURE_CAUSE_LOOKUP = {
   safety_refusal: true,
   provider_configuration_invalid: true,
   model_unavailable: true,
+  missing_provider_record: true,
   runtime_unavailable: true,
   remote_abort_unconfirmed: true,
 } satisfies Record<TransportFailureCause, true>;

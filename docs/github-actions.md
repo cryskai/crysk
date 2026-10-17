@@ -922,6 +922,10 @@ gh run rerun {runId}
 
 #### `missing_provider_record`
 
+**What:** The route {provider}/{model} has no usable credential record
+
+Every hunter of the run failed on the missing record, so the lead names the route. When the route is not known, the sentence reads "The {backend}/{provider} route for {step} has no usable credential ({detail})".
+
 Add {provider} to the OpenCode store, then re-set the secret:
 
 ```bash
@@ -1407,6 +1411,8 @@ gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body
 **What:** Every review hunter failed in {step}: {detail}
 
 **Why:** no hunter returned a result, so there is no finding to report
+
+When every failed hunter shares one cause that has a code of its own (for example `PRH-MODEL-UNAVAILABLE` or `PRH-CRED-UNUSABLE`), that code and its owner are rendered instead. A mix of causes, a hunter with no cause, or a `runtime_unavailable` cause keeps this code.
 
 **Fix:**
 
