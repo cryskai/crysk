@@ -616,6 +616,49 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
       ],
     }),
   },
+  // T5b: a blocking finding the reviewer posted; the scenario's reply dismisses it, and
+  // the recheck must not turn the gate green.
+  "recheck-dismissal/0": {
+    pass: obs({
+      status: {
+        state: "failure",
+        description:
+          "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+      comments: [
+        { source: "issue", kind: "report", head: NEW },
+        { source: "inline", kind: "finding", blocking: true, head: NEW },
+      ],
+    }),
+    // The gate ignored the blocking finding and went green.
+    fail: obs({
+      comments: [
+        { source: "issue", kind: "report", head: NEW },
+        { source: "inline", kind: "finding", blocking: true, head: NEW },
+      ],
+    }),
+  },
+  "recheck-dismissal/1": {
+    pass: obs({
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+    }),
+    // The recheck run never finished.
+    fail: obs({
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "in_progress",
+        conclusion: null,
+        steps: [],
+      },
+    }),
+  },
 };
 
 describe("override-comment: only this run's override, on this head", () => {
@@ -1141,5 +1184,74 @@ describe("state-row-at: this head's report carries a state row in the path (D3)"
     const result = evaluateCheck(check, obs({ comments: [report(NEW)] }));
     expect(result.pass).toBe(false);
     expect(result.detail).toBe("no state block on this head's report");
+  });
+});
+
+describe("adjudication-reply: this run posted a CI adjudication reply with an accepted verdict (T5b)", () => {
+  const adjudication = (verdict: string) =>
+    classifyComment(
+      `<!-- pr-hero-adjudication verdict=${verdict} reply=1 head=${NEW} -->\n\nReply.`,
+      "inline",
+    );
+  const triggeredAt = Date.parse("2026-10-16T12:10:00Z");
+  const comment = (verdict: string, createdAt: string) => ({
+    ...adjudication(verdict),
+    createdAt,
+  });
+  const commented = (...replies: ReturnType<typeof comment>[]) =>
+    obs({
+      triggeredAt,
+      comments: [{ source: "issue", kind: "report", head: NEW }, ...replies],
+    });
+  const check = {
+    kind: "adjudication-reply" as const,
+    accept: ["rejected", "inconclusive"],
+  };
+
+  test("passes on a reply this run posted whose verdict is accepted", () => {
+    const result = evaluateCheck(
+      check,
+      commented(comment("rejected", "2026-10-16T12:10:30Z")),
+    );
+    expect(result.pass).toBe(true);
+    expect(result.label).toBe(
+      "CI adjudication reply is one of rejected/inconclusive",
+    );
+  });
+
+  test("an accepted inconclusive verdict passes, and the detail names it", () => {
+    const result = evaluateCheck(
+      check,
+      commented(comment("inconclusive", "2026-10-16T12:10:30Z")),
+    );
+    expect(result.pass).toBe(true);
+    expect(result.detail).toBe("adjudication inconclusive");
+  });
+
+  test("fails on a reply whose verdict is not accepted, and lists the verdict it saw", () => {
+    const result = evaluateCheck(
+      check,
+      commented(comment("upheld", "2026-10-16T12:10:30Z")),
+    );
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe(
+      "no adjudication reply from this run (verdicts seen: upheld)",
+    );
+  });
+
+  test("fails with none seen when the PR has no adjudication reply", () => {
+    const result = evaluateCheck(check, commented());
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe(
+      "no adjudication reply from this run (verdicts seen: none)",
+    );
+  });
+
+  test("a reply an earlier run left, from before this run's trigger, does not count", () => {
+    const result = evaluateCheck(
+      check,
+      commented(comment("rejected", "2026-10-16T12:00:00Z")),
+    );
+    expect(result.pass).toBe(false);
   });
 });

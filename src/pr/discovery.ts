@@ -22,6 +22,7 @@ import type {
 } from "#pr/pr";
 import { findMarkedCommentId } from "#pr/preflight";
 import {
+  adjudicationQueue,
   buildPhaseBQueue,
   decideLastHeadDelta,
   enrichPriorsFromThreads,
@@ -58,6 +59,7 @@ import {
   sizeGateConfigFor,
 } from "#review/size-gate";
 import type { AgentSpec } from "#review/spec";
+import type { AdjudicationSubject } from "#triage/adjudication";
 import { parsePrCommentMarker, summaryMarkerFields } from "#watch/preflight";
 import { CliError } from "../errors";
 import type { IgnoreFileReadResult } from "../ignore-read";
@@ -106,6 +108,9 @@ export interface PrDiscoveryResult {
   rereview: RereviewProvenance | undefined;
   verifyQueue: VerifyQueueEntry[];
   overlapCandidates: VerifyQueueEntry[];
+  // T5b: the pending dismissals the CI adjudicator rules on. Empty unless
+  // `adjudicate` was set.
+  adjudicationQueue: AdjudicationSubject[];
   phaseB:
     | {
         settled: ReturnType<typeof buildPhaseBQueue>["settled"];
@@ -120,6 +125,8 @@ export async function resolvePrDiscovery(params: {
   diffFromSha: string;
   headSha: string;
   full: boolean;
+  // T5b: `--adjudicate`. Absent or false queues no adjudication.
+  adjudicate?: boolean;
   baseRef: string;
   headLabel: string;
   isCi: boolean;
@@ -136,6 +143,7 @@ export async function resolvePrDiscovery(params: {
     diffFromSha,
     headSha,
     full,
+    adjudicate,
     baseRef,
     headLabel,
     isCi,
@@ -243,6 +251,7 @@ export async function resolvePrDiscovery(params: {
     typeof buildPhaseBQueue
   >["overlapCandidates"] = [];
   let phaseB: PrDiscoveryResult["phaseB"];
+  let adjudicationSubjects: AdjudicationSubject[] = [];
   const lastHeadDelta = decideLastHeadDelta({
     case: prepared.case,
     L: prepared.last.L,
@@ -317,6 +326,7 @@ export async function resolvePrDiscovery(params: {
       posted: postedFindings,
       replies: reviewComments,
       summaryUpdatedAt,
+      headSha,
     });
     const classified = buildPhaseBQueue({
       case: prepared.case,
@@ -335,6 +345,10 @@ export async function resolvePrDiscovery(params: {
     verifyQueue = classified.queued;
     overlapCandidates = classified.overlapCandidates;
     phaseB = { settled: classified.settled, priors };
+    // T5b: only a `--adjudicate` run pays for adjudicator calls. The priors
+    // here are the enriched ones, so a dismissal's thread and CI verdict are
+    // already bound.
+    adjudicationSubjects = adjudicate === true ? adjudicationQueue(priors) : [];
     if (rereview !== undefined) {
       rereview.prior_findings = priors.length;
       rereview.settled_deterministically = classified.settled.filter(
@@ -386,6 +400,7 @@ export async function resolvePrDiscovery(params: {
     rereview,
     verifyQueue,
     overlapCandidates,
+    adjudicationQueue: adjudicationSubjects,
     phaseB,
     diffStat,
     sizeGate,

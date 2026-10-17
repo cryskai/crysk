@@ -408,6 +408,8 @@ export function assembleLive(input: {
       persisted = "carried";
     } else if (status === "re-tiered") {
       persisted = "carried";
+    } else if (status === "ci-dismissed") {
+      persisted = "suppressed";
     } else if (isLiveStatus(status)) {
       persisted = status;
     }
@@ -457,6 +459,7 @@ export function assembleLive(input: {
 // A prior leaves the count only when something outside the author cleared it:
 //   - verified-gone: the verifier refuted the finding, or every file it names
 //     was deleted (classifyPrior settles that as verified-gone).
+//   - ci-dismissed: the author's latest dismissal, upheld by the CI adjudicator (src/triage/adjudication.ts, D5).
 // Nothing this run concludes about a prior lowers it. An advisory survivor at a
 // blocking prior's spot does not clear that prior: identity matching is a
 // 5-line window, so a different issue can sit there, and the gate fails closed.
@@ -465,7 +468,7 @@ export function assembleLive(input: {
 // A self-asserted triage tag never leaves the count (S7). `misclassified`
 // lands as `re-tiered` (classifyPrior), and its tier is the author's claim,
 // not the pipeline's, so it is not evidence. A dismissal the adjudicator upheld
-// is `suppressed`, and it stays counted for the same reason.
+// is upheld only by the author's LOCAL adjudicator, it is `suppressed`, and it stays counted.
 // The next run's count reads the state block, so assembleLive keeps a
 // triage-returned prior there as `carried`. Dropping it let two pushes clear it (S7).
 //
@@ -561,7 +564,9 @@ export function unresolvedBlockingCount(
   const seen = new Set<string>();
   const open: GateRow[] = [];
   for (const row of rows) {
-    if (row.status === "verified-gone") continue;
+    if (row.status === "verified-gone" || row.status === "ci-dismissed") {
+      continue;
+    }
     if (seen.has(row.id)) continue;
     seen.add(row.id);
     open.push(row);

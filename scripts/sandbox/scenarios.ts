@@ -38,7 +38,9 @@ export type Action =
   // A later commit on the same branch, a plain fast-forward push. `files` are committed with it.
   | { kind: "push"; variant: VariantName; files?: readonly NewFile[] }
   // A PR comment, posted as the authenticated user.
-  | { kind: "comment"; body: string };
+  | { kind: "comment"; body: string }
+  // T5b: reply `dismissed` on the first blocking finding's thread, then comment /pr-hero recheck.
+  | { kind: "dismiss-and-recheck"; argument: string };
 
 export interface Phase {
   action: Action;
@@ -379,6 +381,34 @@ export const SCENARIOS: readonly Scenario[] = [
           STEP_SUCCEEDED,
           STATUS_MATCHES_FINDINGS,
           { kind: "state-row-at", path: MUTE_PATH },
+        ],
+      },
+    ],
+  },
+  {
+    name: "recheck-dismissal",
+    description:
+      "a false dismissal does not turn the gate green: /pr-hero recheck has the CI adjudicator rule on it, and it is rejected or inconclusive, so the finding still counts (T5b, D5)",
+    phases: [
+      {
+        action: { kind: "open", variant: "normal" },
+        wait: "pull_request",
+        checks: [REVIEWED, STATUS_MATCHES_FINDINGS],
+      },
+      {
+        action: {
+          kind: "dismiss-and-recheck",
+          argument:
+            "This scaling is intentional and correct; the volume is already clamped by the caller.",
+        },
+        wait: "issue_comment",
+        checks: [
+          { kind: "run-completed", event: "issue_comment" },
+          STEP_SUCCEEDED,
+        ],
+        afterPriorBlocking: [
+          { kind: "status", state: "failure" },
+          { kind: "adjudication-reply", accept: ["rejected", "inconclusive"] },
         ],
       },
     ],

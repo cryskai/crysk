@@ -167,6 +167,29 @@ function hasUnsafeSegment(path: string): boolean {
     .some((segment) => segment === "" || segment === "." || segment === "..");
 }
 
+// The second write the runner makes (T5b, recheck-dismissal): one reply on a
+// sandbox pull request's review thread, the way an author answers a finding. The
+// shape is exact: POST to that PR's comments, a `-f body=...` and an
+// `-F in_reply_to=<id>` and nothing else, so no other field and no other path can
+// ride along. It is no wider than `gh pr comment`, which the runner already sends.
+const THREAD_REPLY_PATH = new RegExp(
+  `^repos/${SANDBOX_REPO}/pulls/[1-9][0-9]*/comments$`,
+);
+function isThreadReply(endpoint: string, args: readonly string[]): boolean {
+  if (!THREAD_REPLY_PATH.test(endpoint)) return false;
+  const rest = args.slice(2);
+  if (rest.length !== 6) return false;
+  const [m, method, f, body, ff, reply] = rest;
+  return (
+    m === "--method" &&
+    method === "POST" &&
+    f === "-f" &&
+    (body ?? "").startsWith("body=") &&
+    ff === "-F" &&
+    /^in_reply_to=[1-9][0-9]*$/.test(reply ?? "")
+  );
+}
+
 function assertApi(args: readonly string[]): void {
   const endpoint = args[1];
   if (endpoint === undefined || endpoint.startsWith("-")) {
@@ -186,6 +209,7 @@ function assertApi(args: readonly string[]): void {
   ) {
     throw new RailViolation(`gh api ${endpoint} is outside ${SANDBOX_REPO}`);
   }
+  if (isThreadReply(endpoint, args)) return;
   if (
     args.some(
       (arg) =>

@@ -9,6 +9,7 @@
 // `resolved` is never inferred from absence (C1).
 
 import type { Severity, Tier } from "#review/findings";
+import type { AdjudicationVerdict } from "#triage/adjudication";
 import type { TriageTag, TriageVerdict } from "#triage/triage";
 import {
   type FindingIdentity,
@@ -69,7 +70,10 @@ export type GateStatus =
   | "deferred"
   | "returned"
   | "re-tiered"
-  | "queued";
+  | "queued"
+  // T5b: the author's latest dismissal, upheld by the CI adjudicator
+  // (src/triage/adjudication.ts). The one triage outcome that leaves the gate count.
+  | "ci-dismissed";
 
 export type VerifyTrigger =
   | "applied"
@@ -86,6 +90,14 @@ export interface PriorTriage {
   verdict: TriageVerdict | null;
   // ISO-8601 from GitHub. Null means we cannot prove newness (R2-S9).
   createdAt: string | null;
+  // T5b: the reply that carried this marker, the finding's thread it sits on, the
+  // author's argument (the reply body below the marker line), and the CI verdict on
+  // THIS reply, read only from a CI_ADJUDICATOR_LOGIN reply. Absent on a triage read
+  // from anywhere but a thread.
+  replyId?: number;
+  threadId?: number;
+  argument?: string;
+  ciVerdict?: AdjudicationVerdict | null;
 }
 
 export interface PriorRecord {
@@ -147,6 +159,10 @@ export function classifyPrior(
   }
 
   const triage = prior.triage;
+  // D5: only a dismissal the CI adjudicator upheld leaves the count.
+  if (triage?.tag === "dismissed" && triage.ciVerdict === "upheld") {
+    return { id: prior.id, status: "ci-dismissed", locs, renamed };
+  }
   if (triage?.tag === "dismissed" && triage.verdict === "upheld") {
     return { id: prior.id, status: "suppressed", locs, renamed };
   }

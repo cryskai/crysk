@@ -88,7 +88,7 @@ const own = () => generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
 const WRITER_ASSOCIATION = `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)`;
 // T6 (S8): the group also admits `/pr-hero override` from the same associations, so
 // an override queues behind an in-flight review and lands last.
-const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
+const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero recheck') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
 const PUSH_ONLY_CANCEL = `\${{ github.event_name == 'pull_request' }}`;
 
 describe("generateCiWorkflowTemplate (pure)", () => {
@@ -125,13 +125,14 @@ describe("generateCiWorkflowTemplate (pure)", () => {
   // so credential presence is the action's to detect, loudly, inside the
   // run. The `if` only routes events. Fork pull_request runs never receive
   // secrets, so they are skipped here; a maintainer's comment reviews them.
-  test("the review job skips fork pushes, starts only on a `/pr-hero review` or `/pr-hero override` comment, and never reads secrets", () => {
+  test("the review job skips fork pushes, starts only on a `/pr-hero review`, `/pr-hero recheck` or `/pr-hero override` comment, and never reads secrets", () => {
     const reviewIf = String(
       parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
     );
     expect(reviewIf).toBe(
       "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || " +
         "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) || " +
+        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero recheck')) || " +
         "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))",
     );
     expect(reviewIf).not.toContain("secrets.");
@@ -1411,5 +1412,19 @@ describe("scaffold writes the gate mode explicitly (S4)", () => {
 
   test("this repo's own options name gate explicitly", () => {
     expect(OWN_CI_WORKFLOW_OPTIONS.mode).toBe("gate");
+  });
+});
+
+// `/pr-hero recheck` is accepted wherever `/pr-hero review` is: the job's `if:`
+// and the concurrency group, so the scaffolded workflow starts the same run.
+describe("the scaffolded workflow accepts /pr-hero recheck", () => {
+  test("the if and concurrency clauses mirror the review clauses", () => {
+    const template = generateCiWorkflowTemplate();
+    const recheck = "startsWith(github.event.comment.body, '/pr-hero recheck')";
+    const review = "startsWith(github.event.comment.body, '/pr-hero review')";
+    expect(template.split(review).length - 1).toBeGreaterThan(0);
+    expect(template.split(recheck).length - 1).toBe(
+      template.split(review).length - 1,
+    );
   });
 });
