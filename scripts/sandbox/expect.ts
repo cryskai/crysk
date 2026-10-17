@@ -47,7 +47,9 @@ export type Check =
   // conclusion cannot show that no review ran. This is the inverse of own-evidence.
   | { kind: "no-run-evidence" }
   // D3: this head's report carries a state-block row located in `path`.
-  | { kind: "state-row-at"; path: string };
+  | { kind: "state-row-at"; path: string }
+  // T5b: this run posted a CI adjudication reply whose verdict is one of `accept`.
+  | { kind: "adjudication-reply"; accept: readonly string[] };
 
 export interface CheckResult {
   label: string;
@@ -99,6 +101,8 @@ export function describeCheck(check: Check): string {
       return "the run left no review evidence of its own";
     case "state-row-at":
       return `state row at ${check.path}`;
+    case "adjudication-reply":
+      return `CI adjudication reply is one of ${check.accept.join("/")}`;
   }
 }
 
@@ -345,6 +349,26 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       return pass(
         rows.includes(check.path),
         `no state row at ${check.path} (state rows: ${rows.join(", ") || "none"})`,
+      );
+    }
+    case "adjudication-reply": {
+      // Only replies this run posted count: an adjudication an earlier run left on the
+      // PR is that run's ruling, not this one's.
+      const replies = obs.comments.filter(
+        (c) => c.kind === "adjudication" && postedByThisRun(c, obs),
+      );
+      const verdict = replies.find(
+        (c) => c.verdict !== undefined && check.accept.includes(c.verdict),
+      )?.verdict;
+      if (verdict !== undefined) {
+        return { label, pass: true, detail: `adjudication ${verdict}` };
+      }
+      const seen = replies.flatMap((c) =>
+        c.verdict === undefined ? [] : [c.verdict],
+      );
+      return pass(
+        false,
+        `no adjudication reply from this run (verdicts seen: ${seen.join(", ") || "none"})`,
       );
     }
   }
