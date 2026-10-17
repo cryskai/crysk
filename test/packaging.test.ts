@@ -891,7 +891,10 @@ describe("Packaging & distribution configuration", () => {
         (step) => step.name === "Upload pr-hero run directory",
       );
       expect(publish).toBe(run + 1);
-      expect(upload).toBe(publish + 1);
+      // The cancel settle (SB3) sits between publish and the upload, right after publish.
+      const settle = all.findIndex((step) => step.id === "cancel-settle");
+      expect(settle).toBe(publish + 1);
+      expect(upload).toBe(settle + 1);
       const step = all[publish];
       // A cancelled job still reaches always() steps, so always() would publish
       // a false install failure on a superseded head. !cancelled() keeps the
@@ -899,6 +902,27 @@ describe("Packaging & distribution configuration", () => {
       expect(step?.if).toContain("!cancelled()");
       expect(step?.if).not.toContain("always()");
       expect(step?.if).toContain("steps.trigger.outputs.publish == 'true'");
+    });
+
+    // WHY: the publish step is !cancelled() on purpose, so a cancelled review (SB3) left
+    // its pr-hero status pending. The settle step runs only on a cancel, right after
+    // publish, in the publisher's cancelled mode, with the same bindings as publish.
+    test("the cancel-settle step follows publish, runs only on a cancel, and is in cancelled mode", () => {
+      const all = steps();
+      const publish = all.findIndex((step) => step.id === "publish");
+      const settle = all.findIndex((step) => step.id === "cancel-settle");
+      expect(settle).toBe(publish + 1);
+      const step = all[settle];
+      expect(step?.if).toBe(
+        `\${{ cancelled() && steps.trigger.outputs.run == 'true' }}`,
+      );
+      expect(step?.run).toContain("src/ci/publish.ts");
+      const env = step?.env as Record<string, string> | undefined;
+      expect(env?.PRHERO_PUBLISH_MODE).toBe("cancelled");
+      const publishEnv = (all[publish]?.env ?? {}) as Record<string, string>;
+      for (const key of Object.keys(publishEnv)) {
+        expect(env?.[key]).toBe(publishEnv[key]);
+      }
     });
 
     test("the publish step runs the publisher, binds every value through env:, and names no input in its script", () => {
