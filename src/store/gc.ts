@@ -331,18 +331,19 @@ async function gcInstall(intervalMin: number): Promise<number> {
         "`pr-hero gc` from cron.",
     );
   }
+  // selfInvocation(), not a hand-built runtime + src/cli.ts pair: the pair
+  // is only correct for a source checkout, and the compiled binary it was
+  // wrong for is the one users install. Checked before any write, so a refused
+  // install leaves nothing on disk.
+  const invocation = selfInvocation();
+  if (isNpxCacheInvocation(invocation)) {
+    throw new CliError(NPX_REGISTRATION_REFUSED);
+  }
   const home = os.homedir();
   const plistPath = gcPlistPath(home);
   const logPath = gcLaunchdLogPath(home);
   await mkdir(prheroLayout(home).dir, { recursive: true });
   await mkdir(path.dirname(plistPath), { recursive: true });
-  // selfInvocation(), not a hand-built runtime + src/cli.ts pair: the pair
-  // is only correct for a source checkout, and the compiled binary it was
-  // wrong for is the one users install.
-  const invocation = selfInvocation();
-  if (isNpxCacheInvocation(invocation)) {
-    throw new CliError(NPX_REGISTRATION_REFUSED);
-  }
   const plist = renderGcPlist({
     invocation,
     intervalSeconds: intervalMin * 60,

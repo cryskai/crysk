@@ -1011,13 +1011,14 @@ async function watchInstall(intervalMin: number): Promise<number> {
         "`pr-hero watch --once` from cron — the lockfile covers overlap.",
     );
   }
-  const paths = prheroHomePaths(os.homedir());
-  await mkdir(paths.dir, { recursive: true });
-  await mkdir(path.dirname(paths.plistPath), { recursive: true });
+  // Checked before any write, so a refused install leaves nothing on disk.
   const invocation = selfInvocation();
   if (isNpxCacheInvocation(invocation)) {
     throw new CliError(NPX_REGISTRATION_REFUSED);
   }
+  const paths = prheroHomePaths(os.homedir());
+  await mkdir(paths.dir, { recursive: true });
+  await mkdir(path.dirname(paths.plistPath), { recursive: true });
   const plist = renderWatchPlist({
     invocation,
     intervalSeconds: intervalMin * 60,

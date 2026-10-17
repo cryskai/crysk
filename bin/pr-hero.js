@@ -45,7 +45,12 @@ function launchOnBun() {
 
   // WHY: without forwarding, a Node parent killed by SIGTERM exits and orphans
   // the Bun child, which keeps running with nobody waiting on it.
-  const forwarded = ["SIGINT", "SIGTERM", "SIGHUP"];
+  // SIGINT is not forwarded: the child shares the terminal's process group, so
+  // Ctrl+C already reaches it, and a second SIGINT would cut short the CLI's own
+  // async cancellation (lock release, commit-status settle). The parent only
+  // ignores it, so it waits for the child's exit.
+  process.on("SIGINT", () => {});
+  const forwarded = ["SIGTERM", "SIGHUP"];
   const handlers = new Map();
   for (const sig of forwarded) {
     const handler = () => child.kill(sig);

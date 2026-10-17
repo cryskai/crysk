@@ -61,7 +61,8 @@ npm install -g pr-hero
 # refuse and ask for option B.
 npx pr-hero doctor
 
-# Option C: From source / development
+# Option C: From source / development (the bin runs on Node; on a machine with Bun
+# and no Node, run `bun bin/pr-hero.js` or use option A)
 git clone https://github.com/juanmaagd/pr-hero.git && cd pr-hero
 bun install && bun link
 ```
