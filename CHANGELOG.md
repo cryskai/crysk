@@ -11,9 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`pr-hero status --pr <n> [--json]`**: a read-only command that reads one PR's pr-hero gate, its posted
   findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `override-or-fix`, `done`) through `gh` alone. With
   `--json` it prints one `pr-hero.status/v1` object on stdout. It fails closed: a failed read or a truncated comment
-  list exits 1 with nothing on stdout. A green gate with a finding on this head that has no reply is `triage`, not
-  `done`, because the triage skill answers advisory findings too. The triage skill runs it as step 0.
-  `docs/github-actions.md` has the shape.
+  list, or a read that never answers within its bound, exits 1 with nothing on stdout. A green gate with a finding
+  on this head that has no reply is `triage`, not `done`, because the triage skill answers advisory findings too. A
+  green gate over a partial review of this head (some reviewers failed) is `review`. Each finding carries `blocking`,
+  which is true for an unrecoverable tier as it is for a blocking one, so such a finding is never read as clear. The
+  triage skill runs it as step 0. `docs/github-actions.md` has the shape.
 - **Gate mode for CI**: the action's `mode` input (`gate` or `advisory`, default `gate`) decides what the
   `pr-hero` commit status says. `gate` sets `failure` on unresolved blocking findings, on a size or budget
   skip, and on a crash, and `success` otherwise. `advisory` keeps the previous posture: a finished review is
@@ -28,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does, and keeps every override record.
 
 ### Fixed
+- **An outside-channel triage reply keeps its `#issuecomment` link when the repo's web URL cannot be read**: the link
+  is what binds the reply to its finding, and a failed `gh repo view` used to post the reply with no link at all. The
+  reply now falls back to the PR's own URL, then to the repo's `nameWithOwner` on the GitHub host. It posts without a
+  link only when none of the three is known.
 - **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left
   open stays counted through a re-review that carries it, through a same-head `/pr-hero review` that runs no
   hunters, through a triage reply on its own, and through later pushes after a rejected dismissal or a

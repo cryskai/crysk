@@ -757,7 +757,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null },
   "findings": [
     { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
-      "severity": "CRITICAL", "tier": "blocking", "live_on_head": true,
+      "severity": "CRITICAL", "tier": "blocking", "blocking": true, "live_on_head": true,
       "triage": { "tag": "dismissed", "verdict": "upheld", "actor": "agent", "head": "<40-hex>" } }
   ],
   "unresolved_blocking": 1,
@@ -768,8 +768,14 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 
 - `gate` is pr-hero's own commit status on the head. `state: "none"` means no `pr-hero` status is on it.
 - `findings` covers every posted `<!-- pr-hero-finding` comment, on every head. `channel` is `inline` for a review
-  thread and `outside` for a top-level comment. `live_on_head` is true when the summary's state block still carries
-  the finding, or when it was posted on the current head. `triage` is the newest triage reply in its thread only.
+  thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread only.
+- A finding joins its state-block row the way the engine binds a prior to its comment: the comment's path and line
+  must land within the row's locations, and the claim fingerprint breaks only a tie. A finding with no such row has
+  `id: null`, and `live_on_head` is true only when it was posted on the current head. A row that is found keeps the
+  finding live, so a carried finding from an older head stays live.
+- `tier` is the tier as the comment or the state row reports it, or `null` when none can be read. `blocking` is true
+  for a blocking tier and for an unrecoverable one, because the gate counts an unrecoverable row as blocking too.
+  `unresolved_blocking` and `next_action` read `blocking`, never `tier`.
 - `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
   live blocking findings in `findings`.
 - `report.outcome_code` is the `PRH-*` code of the newest outcome comment, when that comment has one.
@@ -779,14 +785,14 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | `next_action` | When |
 | --- | --- |
 | `wait` | The gate is pending and in flight (less than 90 minutes old). |
-| `review` | No `pr-hero` status is on the head, the gate errored, or a pending gate is older than 90 minutes and no run holds it. |
-| `done` | The gate passed and every finding posted on this head has a reply at that head. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. |
+| `review` | No `pr-hero` status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
+| `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. |
 | `triage` | The gate is red and a live blocking finding on this head has no triage reply at the head it was posted on. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
 | `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. |
 | `override-or-fix` | The gate is red, every live blocking finding is answered, and none is `applied`. A skipped review (size or budget) also lands here. Fix and push, or run `/pr-hero override`. |
 
-The command fails closed. A failed `gh` read, a truncated comment list, or a gate status it cannot read exits 1 with
-nothing on stdout, so a partial answer never looks like a clean PR.
+The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list, or a
+gate status it cannot read exits 1 with nothing on stdout, so a partial answer never looks like a clean PR.
 
 ## Optional inputs
 

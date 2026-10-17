@@ -50,6 +50,49 @@ function makeFakeGh(script: ScriptEntry[]): {
   return { spawnFn, calls };
 }
 
+// A gh call that never answers. Its streams stay open until the command's own bound kills
+// it, and kill() closes both streams and resolves exited, which is what gh() reads before it
+// can report the timeout. The safety net only makes a missing bound fail as an assertion
+// rather than as bun's test timeout: it kills the call after 2 s, well past the 50 ms bound.
+function hangingSpawn(
+  base: typeof Bun.spawn,
+  when: (argv: string[]) => boolean,
+): typeof Bun.spawn {
+  return ((argv: string[], opts?: unknown) => {
+    if (!when(argv)) {
+      return (base as unknown as (a: string[], o?: unknown) => unknown)(
+        argv,
+        opts,
+      );
+    }
+    const held: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const open = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          held.push(controller);
+        },
+      });
+    let resolveExit: (code: number) => void = () => {};
+    const exited = new Promise<number>((resolve) => {
+      resolveExit = resolve;
+    });
+    let safety: ReturnType<typeof setTimeout> | undefined;
+    const kill = () => {
+      if (safety !== undefined) clearTimeout(safety);
+      for (const controller of held) {
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      }
+      resolveExit(143);
+    };
+    safety = setTimeout(kill, 2_000);
+    return { stdout: open(), stderr: open(), exited, kill };
+  }) as unknown as typeof Bun.spawn;
+}
+
 const OPERATOR_ROOT = "/repo";
 const HEAD = "b".repeat(40);
 const NOW = Date.parse("2026-10-17T12:00:00Z");
@@ -249,6 +292,46 @@ describe("runStatusCommand --json", () => {
         out: (text) => written.push(text),
       }),
     ).rejects.toBeInstanceOf(CliError);
+    expect(written).toEqual([]);
+  });
+
+  test("a comment read that never answers is a timeout CliError, and nothing reaches stdout", async () => {
+    const { spawnFn } = makeFakeGh(happyScript);
+    const hanging = hangingSpawn(spawnFn, (argv) =>
+      argv.join(" ").includes("issues/12/comments"),
+    );
+    const written: string[] = [];
+    const run = runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn: hanging,
+      nowMs: NOW,
+      ghTimeoutMs: 50,
+      out: (text) => written.push(text),
+    });
+    await expect(run).rejects.toBeInstanceOf(CliError);
+    await expect(run).rejects.toThrow(/timed out after 50 ms/);
+    expect(written).toEqual([]);
+  });
+
+  test("a PR view that never answers is a timeout CliError, and nothing reaches stdout", async () => {
+    const { spawnFn } = makeFakeGh(happyScript);
+    const hanging = hangingSpawn(spawnFn, (argv) =>
+      argv.join(" ").includes("pr view 12"),
+    );
+    const written: string[] = [];
+    const run = runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn: hanging,
+      nowMs: NOW,
+      ghTimeoutMs: 50,
+      out: (text) => written.push(text),
+    });
+    await expect(run).rejects.toBeInstanceOf(CliError);
+    await expect(run).rejects.toThrow(/timed out after 50 ms/);
     expect(written).toEqual([]);
   });
 

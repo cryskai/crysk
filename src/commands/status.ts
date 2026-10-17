@@ -14,10 +14,12 @@ import {
   fetchPrComments,
   fetchPrReviewComments,
   ghPrView,
+  POSTING_GH_TIMEOUT_MS,
 } from "#pr/pr";
 import { buildPrStatus, renderPrStatusLines } from "#pr/pr-status";
 import { resolvePrTarget } from "#pr/preflight";
 import type { CliOptions } from "#review/preflight";
+import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { log } from "#ui/primitives";
 import { CliUsageError } from "../errors";
 
@@ -45,19 +47,34 @@ export async function runStatusCommand(input: {
   json: boolean;
   spawnFn?: typeof Bun.spawn;
   nowMs?: number;
+  // Overrides every bound below. The tests use it to see a timeout without waiting the real one.
+  ghTimeoutMs?: number;
   out?: (text: string) => void;
 }): Promise<number> {
   const { operatorRoot, pr, spawnFn } = input;
-  const target = resolvePrTarget(await ghPrView(operatorRoot, pr, { spawnFn }));
+  // Every gh call here is bounded, so a call that never answers is a timeout CliError and the
+  // command exits 1 with nothing on stdout, instead of parking the skill's only gate read. The
+  // PR view takes the bound the other PR-view reads take (GH_PR_VIEW_TIMEOUT_MS); the comment
+  // reads take the one the posting path's comment lookups take (POSTING_GH_TIMEOUT_MS). The
+  // commit statuses carry their own bound (COMMIT_STATUS_TIMEOUT_MS) inside fetchCommitStatuses.
+  const viewTimeoutMs = input.ghTimeoutMs ?? GH_PR_VIEW_TIMEOUT_MS;
+  const commentTimeoutMs = input.ghTimeoutMs ?? POSTING_GH_TIMEOUT_MS;
+  const target = resolvePrTarget(
+    await ghPrView(operatorRoot, pr, { spawnFn, timeoutMs: viewTimeoutMs }),
+  );
   const head = target.headSha;
   // Sequential on purpose: each read names its own failure, and a failed read stops the rest.
   const statuses = await fetchCommitStatuses(operatorRoot, head, {
     spawnFn,
     failClosed: true,
   });
-  const issueComments = await fetchPrComments(operatorRoot, pr, { spawnFn });
+  const issueComments = await fetchPrComments(operatorRoot, pr, {
+    spawnFn,
+    timeoutMs: commentTimeoutMs,
+  });
   const reviewComments = await fetchPrReviewComments(operatorRoot, pr, {
     spawnFn,
+    timeoutMs: commentTimeoutMs,
   });
   const status = buildPrStatus({
     pr,

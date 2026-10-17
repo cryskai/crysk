@@ -19,9 +19,11 @@ import {
   IN_FLIGHT_TTL_MS,
   isInFlightCommitStatus,
   latestStatusInContext,
+  type ParsedFindingMarker,
   parseFindingMarker,
 } from "#pr/preflight";
 import { SEVERITY_UNRECOVERABLE, TIER_UNRECOVERABLE } from "#rereview/classify";
+import { bindPriorsToPosted } from "#rereview/prepare";
 import { parseStateBlock, type StateFinding } from "#rereview/state";
 import { parseFindingCommentBadge } from "#review/report";
 import {
@@ -75,7 +77,13 @@ export interface PrStatusFinding {
   comment_id: number;
   channel: "inline" | "outside";
   severity: string | null;
+  // The tier as reported: "blocking", "advisory", or null when none can be read, including an
+  // unrecoverable tier. `blocking` is the field every blocking decision reads.
   tier: "blocking" | "advisory" | null;
+  // True for a blocking tier and for an unrecoverable one. An unrecoverable tier counts as
+  // blocking because the gate counts it that way (rereview/state.ts unresolvedBlockingCount):
+  // fail closed, so a finding that cannot be read as advisory is never waved through.
+  blocking: boolean;
   live_on_head: boolean;
   triage: PrStatusTriage | null;
 }
@@ -128,9 +136,9 @@ export function buildPrStatus(input: PrStatusInput): PrStatusJson {
   const summary = readSummary(input.issueComments);
   const analyzed = readFindings(input, summary.rows);
   const liveBlocking = analyzed.filter(
-    (a) => a.finding.tier === "blocking" && a.finding.live_on_head,
+    (a) => a.finding.blocking && a.finding.live_on_head,
   );
-  const decision = decideNext(gate, analyzed, input.head);
+  const decision = decideNext(gate, analyzed, input.head, summary);
   return {
     schema: PR_STATUS_SCHEMA,
     pr: input.pr,
@@ -241,16 +249,37 @@ function readFindings(
     ...input.reviewComments.map((c) => ({ ...c, channel: "inline" as const })),
     ...input.issueComments.map((c) => ({ ...c, channel: "outside" as const })),
   ].sort((a, b) => a.id - b.id);
-  const out: AnalyzedFinding[] = [];
+  const posted: {
+    source: (typeof sources)[number];
+    marker: ParsedFindingMarker;
+  }[] = [];
   for (const source of sources) {
     const marker = parseFindingMarker(source.body);
-    if (marker === null) continue;
-    // The join is by claim fingerprint. A claim-less row fingerprints its own id, so it
-    // never matches a posted finding, which carries a real claim.
-    const row = rows.find((r) => r.c === marker.c);
+    if (marker !== null) posted.push({ source, marker });
+  }
+  // The join is the engine's own prior-to-comment binding (bindPriorsToPosted, rereview/
+  // prepare.ts): a row binds a posted finding only when the comment's anchor lands within one
+  // of the row's locs on the same path, and the claim fingerprint `c` breaks a tie and nothing
+  // else. Keying on `c` alone let two findings with the same claim on different paths share one
+  // row. The binding is one-to-one, so it runs once over every posted finding.
+  const bound = bindPriorsToPosted(
+    rows,
+    posted.map(({ source, marker }) => ({ id: source.id, marker })),
+  );
+  const rowByComment = new Map<number, StateFinding>();
+  for (const row of rows) {
+    const comment = bound.get(row.id);
+    if (comment !== undefined) rowByComment.set(comment.id, row);
+  }
+  const out: AnalyzedFinding[] = [];
+  for (const { source, marker } of posted) {
+    const row = rowByComment.get(source.id);
     const badge = parseFindingCommentBadge(source.body);
     const replies = repliesTo(source, input);
     const triage = newestReply(replies)?.marker ?? null;
+    // The tier the badge or the state row records, unrecoverable included. `tier` below
+    // drops an unrecoverable tier to null; `blocking` keeps it, as the gate's rule does.
+    const recoveredTier = badge?.tier ?? row?.tier ?? null;
     out.push({
       finding: {
         id: row?.id ?? null,
@@ -265,10 +294,11 @@ function readFindings(
             ? row.sev
             : null),
         tier:
-          badge?.tier ??
-          (row !== undefined && row.tier !== TIER_UNRECOVERABLE
-            ? row.tier
-            : null),
+          recoveredTier === "blocking" || recoveredTier === "advisory"
+            ? recoveredTier
+            : null,
+        blocking:
+          recoveredTier === "blocking" || recoveredTier === TIER_UNRECOVERABLE,
         // A finding is live when the summary's state block still carries its row, or when
         // it was posted on the head being read. A row is the gate's own memory of a live
         // finding, so a carried finding from an older head stays live.
@@ -361,9 +391,10 @@ function decideNext(
   gate: PrStatusGate,
   analyzed: AnalyzedFinding[],
   head: string,
+  summary: { head: string | null; complete: boolean | null },
 ): { next_action: PrNextAction; reason: string } {
   const liveBlocking = analyzed.filter(
-    (a) => a.finding.tier === "blocking" && a.finding.live_on_head,
+    (a) => a.finding.blocking && a.finding.live_on_head,
   );
   if (gate.state === "pending") {
     if (gate.pending_in_flight) {
@@ -398,6 +429,16 @@ function decideNext(
       return {
         next_action: "done",
         reason: `The gate is green through an override by @${gate.override.by ?? "an unknown login"}; nothing is owed on this head.`,
+      };
+    }
+    // A partial review of this head (some reviewers failed) is not a finished review, and the
+    // engine's own admission runs the same head again (partialSameHead, ci/review-admission.ts).
+    // A green gate over it is therefore review. The same marker on an older head is history.
+    if (summary.head === head && summary.complete === false) {
+      return {
+        next_action: "review",
+        reason:
+          "The last review of this head was partial (some reviewers failed); run /pr-hero review.",
       };
     }
     // The triage skill answers every finding, advisory included, so a green gate is not the

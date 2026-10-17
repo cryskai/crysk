@@ -8,6 +8,8 @@ import {
   fetchPostedFindingComments,
   fetchPrReviewComments,
   ghCurrentBranchPr,
+  ghPrWebUrl,
+  ghRepoNameWithOwner,
   ghRepoWebUrl,
   postIssueTriageComment,
   postReviewCommentReply,
@@ -167,6 +169,26 @@ export async function runTriageCommand(input: {
   return 0;
 }
 
+// The PR's web URL, the base an outside-channel reply's `In reply to:` link is built on. The repo's
+// web URL is the first source, as it always was. When that lookup fails, the PR's own URL is
+// asked for, then the repo's nameWithOwner on the GitHub host. Only when none of them is known is
+// the reply posted without the link. The link is what binds a reply to its finding
+// (pr-status.ts repliesTo), so a missing link is the failure this chain exists to avoid.
+async function outsidePullUrl(
+  operatorRoot: string,
+  prNumber: number,
+  spawnFn: typeof Bun.spawn | undefined,
+): Promise<string | undefined> {
+  const repoUrl = await ghRepoWebUrl(operatorRoot, { spawnFn });
+  if (repoUrl !== undefined) return `${repoUrl}/pull/${prNumber}`;
+  const prUrl = await ghPrWebUrl(operatorRoot, prNumber, { spawnFn });
+  if (prUrl !== undefined) return prUrl;
+  const nameWithOwner = await ghRepoNameWithOwner(operatorRoot, { spawnFn });
+  if (nameWithOwner === undefined) return undefined;
+  const host = process.env.GITHUB_SERVER_URL ?? "https://github.com";
+  return `${host}/${nameWithOwner}/pull/${prNumber}`;
+}
+
 export async function runTriageReplyCommand(input: {
   operatorRoot: string;
   pr: number;
@@ -298,11 +320,11 @@ export async function runTriageReplyCommand(input: {
         spawnFn,
       });
     } else {
-      const webUrl = await ghRepoWebUrl(operatorRoot, { spawnFn });
+      const pullUrl = await outsidePullUrl(operatorRoot, prNumber, spawnFn);
       const withLink =
-        webUrl === undefined
+        pullUrl === undefined
           ? body
-          : `${body.trimEnd()}\n\nIn reply to: ${webUrl}/pull/${prNumber}#issuecomment-${parent.id}\n`;
+          : `${body.trimEnd()}\n\nIn reply to: ${pullUrl}#issuecomment-${parent.id}\n`;
       await postIssueTriageComment({
         operatorRoot,
         pr: prNumber,

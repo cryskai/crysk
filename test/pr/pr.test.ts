@@ -2037,6 +2037,41 @@ describe("fetchCommitStatuses", () => {
     ).resolves.toHaveLength(1);
   });
 
+  test("a line that is valid JSON but not a status is skipped by default, and the rest are kept", async () => {
+    const pending = {
+      state: "pending",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: "2026-08-18T16:30:00Z",
+    };
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: `null\n${ndjson([pending])}\nnot-json`,
+        },
+      },
+    ]);
+    const statuses = await fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.state).toBe("pending");
+  });
+
+  test("failClosed: a line that is valid JSON but not a status throws", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: "null",
+        },
+      },
+    ]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, { spawnFn, failClosed: true }),
+    ).rejects.toBeInstanceOf(CliError);
+  });
+
   test("failClosed: an abbreviated sha throws, where the default is empty", async () => {
     const { spawnFn, calls } = makeFakeGh([]);
     await expect(

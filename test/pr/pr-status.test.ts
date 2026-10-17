@@ -16,6 +16,7 @@ import {
   type CommitStatusFact,
   findingMarker,
 } from "#pr/preflight";
+import { type RecoveredTier, TIER_UNRECOVERABLE } from "#rereview/classify";
 import {
   renderStateBlock,
   type StateFinding,
@@ -76,14 +77,15 @@ function summary(
 function stateRow(
   id: string,
   claim: string,
-  tier: "blocking" | "advisory" = "blocking",
+  tier: RecoveredTier = "blocking",
+  loc = "src/a.ts:10",
 ): StateFinding {
   return stateFinding({
     id,
     sev: "CRITICAL",
     tier,
     channel: "inline",
-    locs: ["src/a.ts:10"],
+    locs: [loc],
     claim,
   });
 }
@@ -532,6 +534,7 @@ describe("buildPrStatus: findings", () => {
         channel: "inline",
         severity: "CRITICAL",
         tier: "blocking",
+        blocking: true,
         live_on_head: false,
         triage: null,
       },
@@ -622,7 +625,7 @@ describe("buildPrStatus: findings", () => {
     });
   });
 
-  test("a claim-less state row never joins, because its fingerprint is its own id's", () => {
+  test("a claim-less state row joins by its location, the way the engine binds a prior with no claim", () => {
     const status = buildPrStatus(
       input({
         issueComments: [
@@ -637,7 +640,72 @@ describe("buildPrStatus: findings", () => {
         ],
       }),
     );
+    expect(status.findings[0]?.id).toBe("R004");
+  });
+
+  test("two findings with the same claim on different paths join to different rows", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM, "blocking", "src/a.ts:10"),
+              stateRow("R002", CLAIM, "blocking", "src/b.ts:10"),
+            ]),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              path: "src/a.ts",
+            }),
+            in_reply_to_id: null,
+          },
+          {
+            id: 2,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              path: "src/b.ts",
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.findings.map((f) => f.id)).toEqual(["R001", "R002"]);
+  });
+
+  test("a finding whose row sits on another path does not join it, and is live only on its own head", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM, "blocking", "src/a.ts:10"),
+            ]),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              path: "src/b.ts",
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
     expect(status.findings[0]?.id).toBeNull();
+    expect(status.findings[0]?.live_on_head).toBe(true);
   });
 
   test("live_on_head is true for a state-block row or a finding posted on this head, and false otherwise", () => {
@@ -721,6 +789,88 @@ describe("buildPrStatus: findings", () => {
       }),
     );
     expect(status.findings[0]?.triage).toBeNull();
+  });
+});
+
+describe("buildPrStatus: an unrecoverable tier still blocks", () => {
+  // The gate's own rule counts a row whose tier cannot be read as blocking (rereview/state.ts
+  // unresolvedBlockingCount), so this read must count it too. Its tier stays as reported, which
+  // is null: an unreadable tier is not a tier this read may invent.
+  test("an unrecoverable live finding with no reply on a red gate is triage, not override-or-fix", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", "pr-hero: gate red, see the findings")],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM, TIER_UNRECOVERABLE),
+            ]),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              withHeader: false,
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+    expect(status.unresolved_blocking).toBe(1);
+  });
+
+  test("blocking is true for an unrecoverable tier and false for an advisory one, and tier stays as reported", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM, TIER_UNRECOVERABLE),
+              stateRow(
+                "R002",
+                "a second claim the reviewers raised as advisory",
+                "advisory",
+                "src/b.ts:20",
+              ),
+            ]),
+          },
+        ],
+        reviewComments: [
+          {
+            id: 41,
+            body: findingBody({
+              head: CURRENT,
+              claim: CLAIM,
+              withHeader: false,
+            }),
+            in_reply_to_id: null,
+          },
+          {
+            id: 42,
+            body: findingBody({
+              head: CURRENT,
+              claim: "a second claim the reviewers raised as advisory",
+              tier: "advisory",
+              path: "src/b.ts",
+              line: 20,
+            }),
+            in_reply_to_id: null,
+          },
+        ],
+      }),
+    );
+    const [unrecoverable, advisory] = status.findings;
+    expect(unrecoverable?.tier).toBeNull();
+    expect(unrecoverable?.blocking).toBe(true);
+    expect(advisory?.tier).toBe("advisory");
+    expect(advisory?.blocking).toBe(false);
   });
 });
 
@@ -820,6 +970,38 @@ function issueReply(options: {
 // triage skill answers every finding, advisory included, so `done` needs every finding posted
 // on the current head to be answered at that head. An override is a human's unlock, so it stays
 // `done` whatever the findings say.
+describe("buildPrStatus: a partial review of this head is run again", () => {
+  // The engine's own admission re-runs a partial review of the same head (partialSameHead in
+  // ci/review-admission.ts). A green gate over such a review must read as review, not done, or
+  // a partial run settles as complete. The same marker on an older head is that head's history.
+  test("a green gate over a partial review of this head is review, with the partial reason", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", "pr-hero: review passed")],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [], { complete: false }) },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("review");
+    expect(status.reason).toBe(
+      "The last review of this head was partial (some reviewers failed); run /pr-hero review.",
+    );
+  });
+
+  test("a green gate over a partial review of an older head keeps the normal rows", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", "pr-hero: review passed")],
+        issueComments: [
+          { id: 100, body: summary(EARLIER, [], { complete: false }) },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+  });
+});
+
 describe("buildPrStatus: a green gate still owes a reply on this head", () => {
   const green = (extra: Partial<PrStatusInput> = {}) =>
     input({ statuses: [gate("success", "review posted")], ...extra });
