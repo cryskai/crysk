@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A run whose every hunter failed for one cause no longer shows placeholders.** The hunters-failed path renders a
+  shared cause only when its sentence is complete with the params that path has: `model_unavailable` with the provider
+  known, and `missing_provider_record` with the provider and model known. Every other cause keeps `PRH-HUNTERS-FAILED`.
+  The sandbox reads `PRH-MODEL-UNAVAILABLE` and a hunter-route `PRH-CRED-UNUSABLE` as the same hunters-failed path.
 - **A model the provider does not serve is named after the provider.** A provider refusal whose `status=` slot
   reports HTTP 404 now classifies as `model_unavailable`, a terminal cause that is never retried. Its CI outcome is
   `PRH-MODEL-UNAVAILABLE` with the lead `Provider <name>:` instead of `Unclassified:`, and the code's owner is now

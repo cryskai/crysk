@@ -386,6 +386,7 @@ export type TransportFailureCause =
   | "safety_refusal"
   | "provider_configuration_invalid"
   | "model_unavailable"
+  | "missing_provider_record"
   | "runtime_unavailable"
   | "remote_abort_unconfirmed";
 

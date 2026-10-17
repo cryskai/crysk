@@ -22,6 +22,29 @@ import {
 // Both the outcome comment and the status carry it, and both read as the same path.
 const HUNTERS_FAILED_CODE = "PRH-HUNTERS-FAILED";
 
+// WHY this family: a run whose every failed hunter shares one cause with a code of its own
+// is rendered with that code (publish.ts huntersFailedRendering, outcome.ts renderHunterCause),
+// so an all-hunters-dead run can post PRH-MODEL-UNAVAILABLE instead of PRH-HUNTERS-FAILED. The
+// flake tolerance and its label are about the path, not the code, so the family is one path.
+// PRH-CRED-UNUSABLE is not in the set on its code alone: the credential preflight posts it on
+// a run that never reached a hunter. Only the sentence renderHunterCause writes, which names
+// the route's provider and model, marks it as the hunters-failed path.
+const HUNTERS_FAILED_FAMILY: ReadonlySet<string> = new Set([
+  HUNTERS_FAILED_CODE,
+  "PRH-MODEL-UNAVAILABLE",
+]);
+const HUNTER_ROUTE_SENTENCE =
+  /The route [^\s/]+\/\S+ has no usable credential record/;
+
+function isHuntersFailed(
+  code: string | undefined,
+  hunterRoute: boolean,
+): boolean {
+  if (code === undefined) return false;
+  if (HUNTERS_FAILED_FAMILY.has(code)) return true;
+  return code === "PRH-CRED-UNUSABLE" && hunterRoute;
+}
+
 // The owner lead an outcome's summary opens with (src/ci/outcome.ts ownerLead). It is
 // read off the body, so a check can name the owner the reader sees, not the code alone.
 const OWNER_LEAD =
@@ -44,6 +67,9 @@ export interface CommentFact {
   source: "issue" | "inline";
   kind: CommentKind;
   code?: string;
+  // An outcome that names a hunter route's credential record (PRH-CRED-UNUSABLE), so the
+  // hunters-failed path rendered it (see HUNTER_ROUTE_SENTENCE).
+  hunterRoute?: true;
   // An outcome's owner lead, when its summary names one (OWNER_LEAD).
   lead?: string;
   skip?: SkipReason;
@@ -168,6 +194,9 @@ export function classifyComment(
       code,
       ...(head === undefined ? {} : { head }),
       ...(lead === undefined ? {} : { lead }),
+      ...(code === "PRH-CRED-UNUSABLE" && HUNTER_ROUTE_SENTENCE.test(body)
+        ? { hunterRoute: true as const }
+        : {}),
     };
   }
   for (const [reason, marker] of Object.entries(SKIP_MARKERS)) {
@@ -212,7 +241,8 @@ export function classifyPath(obs: Observation): SmokePath {
       c.kind === "outcome" && (c.head === undefined || c.head === obs.headSha),
   );
   if (outcome !== undefined) {
-    if (outcome.code === HUNTERS_FAILED_CODE) return "hunters-failed";
+    if (isHuntersFailed(outcome.code, outcome.hunterRoute === true))
+      return "hunters-failed";
     return `error:${outcome.code ?? "no-code"}`;
   }
   const skip = obs.comments.find(
@@ -244,7 +274,13 @@ export function classifyPath(obs: Observation): SmokePath {
   // step plus an uploaded run directory also fits a finished pipeline whose post
   // threw, and a real all-hunters-dead run uploads nothing (review #332, F007).
   // Without either, a failed step is no-outcome.
-  if (obs.status?.state === "error" && statusCode === HUNTERS_FAILED_CODE)
+  if (
+    obs.status?.state === "error" &&
+    isHuntersFailed(
+      statusCode,
+      HUNTER_ROUTE_SENTENCE.test(obs.status.description),
+    )
+  )
     return "hunters-failed";
   if (obs.status?.state === "error" && statusCode !== undefined)
     return `error:${statusCode}`;

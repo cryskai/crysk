@@ -385,6 +385,8 @@ function huntersFailedRendering(
       cause,
       {
         ...runParams,
+        step: REVIEW_STEP,
+        detail: HUNTERS_DETAIL,
         provider: sharedValue(failures.map((failure) => failure.provider)),
         model: sharedValue(failures.map((failure) => failure.model)),
       },

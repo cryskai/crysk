@@ -1625,20 +1625,29 @@ export function renderError(
 }
 
 // The rendering of a run whose every failed hunter shares one transport cause, or undefined
-// when that cause has no code of its own. WHY runtime_unavailable and legacy_terminal stay
-// undefined: their code is PRH-UNCLASSIFIED, and naming an unclassified owner would be the
-// guess this contract exists to avoid, so the caller keeps the generic hunters-failed code.
+// when the cause is not on the allowlist below. WHY an allowlist, not "every cause with a
+// code": a shared cause's sentence and fixes name params that this path does not always
+// have (the secret, the backend, the step) and would ship a placeholder to the PR. A cause
+// is rendered only when its message is complete with the params the path has: provider,
+// model, pr, runId, runUrl, step and detail. Every other cause, or a missing param, keeps the
+// caller's generic PRH-HUNTERS-FAILED.
 export function renderHunterCause(
   cause: TransportFailureCause,
   params: ErrorParams,
   ctx: OutcomeContext,
 ): RenderedError | undefined {
-  // The provider's 404 names the model, so the every_hunter wording keeps it.
+  // The provider's 404 names the model, so the every_hunter wording keeps it. Its fixes name
+  // the provider, so the provider must be known; the model is optional (whatWithoutModel).
   if (cause === "model_unavailable") {
+    if (isBlank(params.provider)) return undefined;
     return renderCode("PRH-MODEL-UNAVAILABLE", params, ctx, "every_hunter");
   }
-  if (transportCode(cause) === "PRH-UNCLASSIFIED") return undefined;
-  return renderError({ kind: "transport", cause }, params, ctx);
+  // The credential sentence and its fixes name both the route's provider and model.
+  if (cause === "missing_provider_record") {
+    if (isBlank(params.provider) || isBlank(params.model)) return undefined;
+    return renderError({ kind: "transport", cause }, params, ctx);
+  }
+  return undefined;
 }
 
 // For a code the caller requests directly. `variant` picks the sub-class, which

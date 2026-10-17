@@ -1412,7 +1412,7 @@ gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body
 
 **Why:** no hunter returned a result, so there is no finding to report
 
-When every failed hunter shares one cause that has a code of its own (for example `PRH-MODEL-UNAVAILABLE` or `PRH-CRED-UNUSABLE`), that code and its owner are rendered instead. A mix of causes, a hunter with no cause, or a `runtime_unavailable` cause keeps this code.
+When every failed hunter shares a `model_unavailable` cause with its provider known, the run renders `PRH-MODEL-UNAVAILABLE` instead; when every failed hunter shares a `missing_provider_record` cause with its provider and model known, it renders `PRH-CRED-UNUSABLE`. Any other cause, a missing provider or model, a mix of causes, a hunter with no cause, or a `runtime_unavailable` cause keeps this code.
 
 **Fix:**
 

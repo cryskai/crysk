@@ -32,6 +32,7 @@ import {
 } from "#ci/outcome";
 import { decidePublication, runPublish } from "#ci/publish";
 import { CliError } from "../../src/errors";
+import type { TransportFailureCause } from "../../src/execution/contracts";
 
 const REPO = "acme/widgets";
 const SHA = "c".repeat(40);
@@ -356,7 +357,7 @@ describe("decidePublication — the pure table", () => {
       expect(plan.status?.description).toStartWith("PRH-CRED-UNUSABLE: ");
     });
 
-    test("a missing provider record with no provider or model still renders PRH-CRED-UNUSABLE without naming them", () => {
+    test("a missing provider record with no provider or model falls back to PRH-HUNTERS-FAILED, with no placeholder", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -367,9 +368,10 @@ describe("decidePublication — the pure table", () => {
         },
       });
       if (plan.kind !== "remote") throw new Error("expected a remote plan");
-      expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
-      expect(plan.rendered.annotation).toContain("has no usable credential (");
-      expect(plan.rendered.annotation).not.toContain("route opencode/");
+      // WHY the fallback: the credential sentence names the backend, provider and step, and
+      // this path knows none of them, so its own rendering would ship "<backend>/<provider>".
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.annotation).not.toMatch(/<[a-z][a-z-]*>/);
     });
 
     test("a mix of a missing provider record and model_unavailable stays PRH-HUNTERS-FAILED", () => {
@@ -406,7 +408,7 @@ describe("decidePublication — the pure table", () => {
       expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
     });
 
-    test("a model_unavailable with no provider or model names neither, and still renders the code", () => {
+    test("a model_unavailable with no provider or model falls back to PRH-HUNTERS-FAILED, since its fix names the provider", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -417,8 +419,10 @@ describe("decidePublication — the pure table", () => {
         },
       });
       if (plan.kind !== "remote") throw new Error("expected a remote plan");
-      expect(plan.rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
-      expect(plan.rendered.annotation).toContain("Provider: ");
+      // WHY the fallback: "$ opencode models {provider}" and "a model that {provider} serves"
+      // would name "<provider>" without a provider.
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.annotation).not.toMatch(/<[a-z][a-z-]*>/);
     });
 
     test("a mix of model_unavailable and another cause stays PRH-HUNTERS-FAILED", () => {
@@ -2566,3 +2570,119 @@ function runtimeImportViolations(
   }
   return violations;
 }
+
+// WHY every cause, not a sample: the hunters-failed path renders a shared cause only from
+// its allowlist, and any cause outside it falls back to PRH-HUNTERS-FAILED. A placeholder
+// (`<secret>`, `<provider>`, `{model}`) in the rendered text would ship to the PR, so the
+// check runs over the whole transport vocabulary, with and without the params the path
+// may or may not know.
+const TRANSPORT_CAUSES: readonly TransportFailureCause[] = [
+  "auth_invalid",
+  "quota_exhausted",
+  "rate_limit",
+  "network_transient",
+  "protocol_truncation",
+  "protocol_mismatch",
+  "protocol_overflow",
+  "output_limit_exceeded",
+  "context_window_exceeded",
+  "safety_refusal",
+  "provider_configuration_invalid",
+  "model_unavailable",
+  "missing_provider_record",
+  "runtime_unavailable",
+  "remote_abort_unconfirmed",
+];
+
+const KNOWN_PARAM_SETS: readonly {
+  readonly label: string;
+  readonly provider?: string;
+  readonly model?: string;
+}[] = [
+  { label: "provider and model", provider: "opencode", model: "gpt-4o" },
+  { label: "provider only", provider: "opencode" },
+  { label: "no provider and no model" },
+];
+
+function hunterFailedPlan(
+  cause: TransportFailureCause,
+  known: { readonly provider?: string; readonly model?: string },
+) {
+  return decidePublication({
+    record: record(),
+    cliStarted: true,
+    cliRecord: {
+      v: 1,
+      outcome: "hunters-failed",
+      head_sha: REVIEWED_HEAD,
+      hunter_failures: [
+        { cause, ...known },
+        { cause, ...known },
+      ],
+    },
+  });
+}
+
+describe("hunters-failed renders no placeholder for any cause", () => {
+  for (const cause of TRANSPORT_CAUSES) {
+    for (const known of KNOWN_PARAM_SETS) {
+      test(`${cause} with ${known.label}`, () => {
+        const plan = hunterFailedPlan(cause, known);
+        expect(plan.kind).toBe("remote");
+        if (plan.kind !== "remote") return;
+        const texts = [
+          plan.rendered.annotation,
+          plan.rendered.summary.join("\n"),
+          plan.rendered.what,
+          plan.status?.description ?? "",
+          plan.commentBody,
+        ];
+        for (const text of texts) {
+          expect(text).not.toMatch(/<[a-z][a-z-]*>/);
+          expect(text).not.toMatch(/[{}]/);
+        }
+      });
+    }
+  }
+});
+
+describe("hunters-failed allowlist", () => {
+  test("auth_invalid is not rendered from its own code, so no secret name is needed", () => {
+    const plan = hunterFailedPlan("auth_invalid", {
+      provider: "opencode",
+      model: "gpt-4o",
+    });
+    if (plan.kind !== "remote") throw new Error("expected a remote plan");
+    expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+    expect(plan.rendered.annotation).not.toContain("rejected the credential");
+  });
+
+  test("model_unavailable with a provider renders PRH-MODEL-UNAVAILABLE without a model", () => {
+    const plan = hunterFailedPlan("model_unavailable", {
+      provider: "opencode",
+    });
+    if (plan.kind !== "remote") throw new Error("expected a remote plan");
+    expect(plan.rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+    expect(plan.rendered.annotation).toContain(
+      "The configured model is not served by this provider",
+    );
+    expect(plan.rendered.annotation).toContain("Provider opencode: ");
+  });
+
+  test("missing_provider_record without a model falls back to PRH-HUNTERS-FAILED", () => {
+    const plan = hunterFailedPlan("missing_provider_record", {
+      provider: "opencode",
+    });
+    if (plan.kind !== "remote") throw new Error("expected a remote plan");
+    expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+  });
+
+  test("missing_provider_record with a model keeps PRH-CRED-UNUSABLE", () => {
+    const plan = hunterFailedPlan("missing_provider_record", {
+      provider: "opencode",
+      model: "gpt-4o",
+    });
+    if (plan.kind !== "remote") throw new Error("expected a remote plan");
+    expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+  });
+});
