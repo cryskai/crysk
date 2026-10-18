@@ -479,6 +479,8 @@ export function isCiConfigError(error: unknown): boolean {
 // counting, which is the behavior before this function existed.
 // WHY an active reservation is left alone: settling it would finish another
 // run's reservation on the same head as if it were ours.
+export const CONFIG_SKIP_RECORD_TIMEOUT_MS = 15_000;
+
 export async function recordCiConfigErrorSkip(input: {
   operatorRoot: string;
   prNumber: number;
@@ -486,34 +488,70 @@ export async function recordCiConfigErrorSkip(input: {
   resolveHeadSha: () => Promise<string>;
   reason: string;
   spawnFn?: typeof Bun.spawn;
+  // Test-only seam: the bound on the whole write (default: the check-run bound).
+  timeoutMs?: number;
 }): Promise<void> {
-  try {
-    const headSha = await input.resolveHeadSha();
-    const ciPolicy = resolveCiReviewPolicy(input.config);
-    const ciPolicyHash = ciReviewPolicyHash(ciPolicy);
-    const existing = await listAdmissionCheckRuns(input.operatorRoot, headSha, {
-      spawnFn: input.spawnFn,
-    });
-    const active = selectActiveReservation(
-      existing,
-      headSha,
-      ciPolicyHash,
-      ciPolicy.reservationTtlSeconds,
-      new Date(),
+  // WHY a bound: the caller rethrows the configuration error right after this
+  // returns, and a gh call that never answers would park the run before that
+  // error is raised. The whole write is bounded, not each gh call, so every
+  // step (head lookup, list, reserve, settle) shares one deadline. On timeout the
+  // row is skipped and the caller's error is raised as usual. The write that is
+  // still pending is abandoned, not cancelled: the run is exiting anyway.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(
+      () => resolve("timeout"),
+      input.timeoutMs ?? CONFIG_SKIP_RECORD_TIMEOUT_MS,
     );
-    if (active !== null) return;
-    const state = await reserveCiAdmissionLedger({
-      operatorRoot: input.operatorRoot,
-      prNumber: input.prNumber,
-      headSha,
-      policy: ciPolicy,
-      policyHash: ciPolicyHash,
-      existing,
-      decisionReason: input.reason,
-      spawnFn: input.spawnFn,
-    });
-    await settleCiGateSkip(state, input.reason, { spawnFn: input.spawnFn });
+  });
+  try {
+    const outcome = await Promise.race([
+      writeConfigErrorSkipRow(input).then(() => "done" as const),
+      deadline,
+    ]);
+    if (outcome === "timeout") {
+      log(
+        "config-error ledger row not recorded: GitHub did not answer in time",
+      );
+    }
   } catch {
     // Swallowed on purpose: see the WHY above.
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+async function writeConfigErrorSkipRow(input: {
+  operatorRoot: string;
+  prNumber: number;
+  config: LocalConfig;
+  resolveHeadSha: () => Promise<string>;
+  reason: string;
+  spawnFn?: typeof Bun.spawn;
+}): Promise<void> {
+  const headSha = await input.resolveHeadSha();
+  const ciPolicy = resolveCiReviewPolicy(input.config);
+  const ciPolicyHash = ciReviewPolicyHash(ciPolicy);
+  const existing = await listAdmissionCheckRuns(input.operatorRoot, headSha, {
+    spawnFn: input.spawnFn,
+  });
+  const active = selectActiveReservation(
+    existing,
+    headSha,
+    ciPolicyHash,
+    ciPolicy.reservationTtlSeconds,
+    new Date(),
+  );
+  if (active !== null) return;
+  const state = await reserveCiAdmissionLedger({
+    operatorRoot: input.operatorRoot,
+    prNumber: input.prNumber,
+    headSha,
+    policy: ciPolicy,
+    policyHash: ciPolicyHash,
+    existing,
+    decisionReason: input.reason,
+    spawnFn: input.spawnFn,
+  });
+  await settleCiGateSkip(state, input.reason, { spawnFn: input.spawnFn });
 }

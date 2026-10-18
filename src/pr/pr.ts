@@ -2994,17 +2994,30 @@ export async function postInlineFindings(input: {
       urls,
       input.ciMode,
     );
+    // WHY the admission block is written on BOTH paths: its `reviews` is the
+    // only count a summary keeps when the count is 0. renderStateBlock omits 0
+    // (parseStateBlock rejects < 1 on purpose), so a forced re-review rendered
+    // through the state block would read back as "a summary exists, so one
+    // review", charging an attempt that never happened. Its blocking/advisory
+    // counts are only read when the state block has no findings (see
+    // priorScoreForAdmission), and the first-review path already writes them
+    // this way.
+    const counts = tierCountsFromFindings(
+      canonicalAdmissionFindings(doc.findings),
+    );
+    const admissionBlock = renderCiAdmissionBlock(
+      doc.head_sha,
+      counts,
+      postedReviewCount,
+    );
     if (merged === undefined) {
-      const counts = tierCountsFromFindings(
-        canonicalAdmissionFindings(doc.findings),
-      );
-      return `${body}${renderCiAdmissionBlock(doc.head_sha, counts, postedReviewCount)}`;
+      return `${body}${admissionBlock}`;
     }
     // The drop line sits right above the state block it accounts for. Empty
     // when the cap dropped nothing.
     const note = droppedStateNote(merged.dropped);
     const noteLine = note === "" ? "" : `${note}\n`;
-    return `${body}${noteLine}${renderStateBlock(doc.head_sha, merged.rows, postedReviewCount, merged.hw)}`;
+    return `${body}${admissionBlock}${noteLine}${renderStateBlock(doc.head_sha, merged.rows, postedReviewCount, merged.hw)}`;
   };
 
   // The id this run's own creation just returned, if any — threaded to the

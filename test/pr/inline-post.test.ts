@@ -18,7 +18,7 @@
 // header made the same call before this move).
 
 import { describe, expect, test } from "bun:test";
-import { parseCiAdmissionBlock } from "#ci/review-admission";
+import { parseCiAdmissionBlock, stateReviewCount } from "#ci/review-admission";
 import type { PrHeroFindingRef } from "#compare/compare";
 import {
   computeDroppedFindingIds,
@@ -2311,5 +2311,121 @@ describe("postInlineFindings — the summary counter and a forced run", () => {
 
   test("a forced first review writes zero automatic reviews", async () => {
     expect(await postFirstReview(true)).toBe(0);
+  });
+});
+
+// Blocker: a forced run's count of 0 must survive the MERGED render path (a
+// re-review, which writes the state block). The state block omits 0, so the
+// admission block has to carry it, or the next read counts the summary as one.
+describe("postInlineFindings — a forced zero survives a merged re-review render", () => {
+  const FIRST_HEAD = OLD_HEAD;
+
+  function reviewProvenanceFor(): RereviewProvenance {
+    return {
+      case: "C",
+      last_reviewed_head: FIRST_HEAD,
+      last_head_source: "summary_marker",
+      discovery_range: `${FIRST_HEAD}..${HEAD}`,
+      discovery_restricted: true,
+      discovery_skipped_empty_delta: false,
+      prior_findings: 0,
+      settled_deterministically: 0,
+      verified: 0,
+      verification_capped: 0,
+      verification_triggers: {
+        applied: 0,
+        touched: 0,
+        overlap: 0,
+        verify_all: 0,
+      },
+      live: [],
+      resolved_verified: 0,
+      resolved_ids: [],
+      returned: 0,
+      re_tiered: 0,
+    } as RereviewProvenance;
+  }
+
+  // Posts one review on HEAD (the second head) over a prior summary body, and
+  // returns the body that run wrote.
+  async function reReview(
+    priorSummary: string,
+    force: boolean,
+  ): Promise<string> {
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: priorSummary }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenanceFor(),
+      rereviewPriors: [],
+      force,
+    });
+    const bodies = summaryStdins(calls);
+    return bodies[bodies.length - 1] ?? "";
+  }
+
+  async function firstReviewBody(force: boolean): Promise<string> {
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(FIRST_HEAD),
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: FIRST_HEAD,
+      doc: doc({
+        head_sha: FIRST_HEAD,
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      force,
+    });
+    const bodies = summaryStdins(calls);
+    return bodies[bodies.length - 1] ?? "";
+  }
+
+  function countAfter(body: string): number {
+    return stateReviewCount(
+      parseStateBlock(body),
+      true,
+      parseCiAdmissionBlock(body),
+    );
+  }
+
+  test("forced first review (0) then forced re-review through the merged path: still 0", async () => {
+    const first = await firstReviewBody(true);
+    expect(countAfter(first)).toBe(0);
+    const second = await reReview(first, true);
+    // The merged path really ran: it wrote a state block.
+    expect(second).toContain("<!-- pr-hero-state ");
+    expect(countAfter(second)).toBe(0);
+  });
+
+  test("automatic re-review after a forced zero: counts 1", async () => {
+    const first = await firstReviewBody(true);
+    const second = await reReview(first, false);
+    expect(second).toContain("<!-- pr-hero-state ");
+    expect(countAfter(second)).toBe(1);
   });
 });

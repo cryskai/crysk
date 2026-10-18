@@ -1508,3 +1508,26 @@ describe("isCiConfigError — only a classified configuration CliError qualifies
     ).toBe(false);
   });
 });
+
+// A gh call that never answers must not park the CI run: the caller is about to
+// rethrow the configuration error, and that error has to reach the operator.
+describe("recordCiConfigErrorSkip — a hung GitHub call is bounded", () => {
+  test("a head lookup that never answers gives up within the bound, writing nothing", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh([], calls);
+    const started = Date.now();
+
+    await recordCiConfigErrorSkip({
+      operatorRoot: "/repo",
+      prNumber: PR,
+      config: EMPTY_LOCAL_CONFIG,
+      resolveHeadSha: () => new Promise<string>(() => {}),
+      reason: "configuration error before the review",
+      spawnFn,
+      timeoutMs: 25,
+    });
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(calls).toEqual([]);
+  });
+});
