@@ -9,6 +9,7 @@ import path from "node:path";
 import type { EffectiveConfig } from "#config/config";
 import { exclusionLines } from "#git/git";
 import { isFullCommitId } from "#git/refs";
+import type { FreeRouteBilling } from "#model/free-discovery";
 import type { ResolvedRoutePlan } from "#model/routing";
 import type { PrTarget } from "#pr/preflight";
 import { DEFAULT_SCOUT_MODEL } from "#review/pipeline";
@@ -44,6 +45,7 @@ import {
   terminalWidth,
   yellow,
 } from "#ui/primitives";
+import { FREE_STEPS_NOTE, freeBillingMode } from "#ui/select";
 
 // C5 O-7's payload for both plan surfaces: everything the card and the
 // details view need to name a value the operator cannot see by opening their
@@ -238,6 +240,9 @@ export interface PlanContext {
   configProvenance?: ConfigProvenance;
   // D2 PR3: Optional resolved route plan for model routing display
   routePlan?: ResolvedRoutePlan;
+  // Free verdicts of the admitted route plan, read off the admission that already
+  // decided them. Absent means unknown, and the estimate line keeps its band.
+  freeRoute?: FreeRouteBilling;
   // The terminal width every row and card below is laid out against, carried
   // in exactly as ui/result.ts's ResultInput carries it. Optional so the shell
   // may leave the one sniff to the renderer's entry point; the tests ALWAYS
@@ -363,6 +368,7 @@ export function reviewingLine(
 // already given up on the plan never reached them.
 interface PlanDecision {
   sizeGate: SizeGateVerdict;
+  freeRoute?: FreeRouteBilling;
   // Set only where the verdict is an ESTIMATE rather than the gate's own
   // answer (the PR dry run's aggregate counters); printed beside it so
   // nobody reads a guess as the verdict.
@@ -422,15 +428,45 @@ function decisionLines(
   lines.push(
     ...markerRowLines(
       "$",
-      `estimate $${d.estimate.low.toFixed(2)} – ` +
-        `$${d.estimate.high.toFixed(2)} (${d.hunterCount} hunter(s) + refuter ` +
-        `${d.summarizer ? "+ summarizer" : "+ summarizer disabled"})`,
+      planEstimateLine({
+        estimate: d.estimate,
+        hunterCount: d.hunterCount,
+        summarizer: d.summarizer,
+        ...(d.freeRoute === undefined ? {} : { freeRoute: d.freeRoute }),
+      }),
       bold,
       styles,
       width,
     ),
   );
   return lines;
+}
+
+// The estimate row's text, shared by both plan cards. The band is token-derived
+// whatever the route; the free verdict changes only the claim made about it. A
+// free route bills nothing, so a dollar figure would read as a cost, and the
+// band is relabelled as token-derived instead. A mix keeps the band and names
+// the free share. No free step (metered or subscription) is today's line,
+// byte-identical. The band never reads $0 – $0 here: estimateCost clamps the
+// hunter seats (report.ts), so a free route is "not billed", never a zero estimate.
+export function planEstimateLine(input: {
+  estimate: { low: number; high: number };
+  hunterCount: number;
+  summarizer: boolean;
+  freeRoute?: FreeRouteBilling;
+}): string {
+  const low = `$${input.estimate.low.toFixed(2)}`;
+  const high = `$${input.estimate.high.toFixed(2)}`;
+  // The mode is the prompt's too (ui/select.ts freeBillingMode): the card and
+  // the confirm read one verdict, so they cannot disagree about what is billed.
+  const billing = freeBillingMode(input.freeRoute);
+  if (billing === "free") {
+    return `estimate: free route (token-derived ${low} – ${high}, not billed)`;
+  }
+  const line =
+    `estimate ${low} – ${high} (${input.hunterCount} hunter(s) + refuter ` +
+    `${input.summarizer ? "+ summarizer" : "+ summarizer disabled"})`;
+  return billing === "mixed" ? `${line} ${FREE_STEPS_NOTE}` : line;
 }
 
 // Both details views' rows, with a label column DERIVED from their own labels
@@ -602,6 +638,7 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
         estimate: ctx.estimate,
         hunterCount: ctx.hunterCount,
         summarizer: ctx.summary.enabled,
+        ...(ctx.freeRoute === undefined ? {} : { freeRoute: ctx.freeRoute }),
       },
       styles,
       width,
@@ -633,6 +670,9 @@ export interface PrPlanContext {
   configProvenance?: ConfigProvenance;
   // D2 PR3: Optional resolved route plan for model routing display
   routePlan?: ResolvedRoutePlan;
+  // Free verdicts of the admitted route plan, read off the admission that already
+  // decided them. Absent means unknown, and the estimate line keeps its band.
+  freeRoute?: FreeRouteBilling;
   // Set when this plan follows an interactive "Review anyway" at the
   // size-gate menu. Distinct from options.force so the decision block can
   // say "confirmed" rather than lie that --force was passed.
@@ -977,6 +1017,7 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
         estimate: ctx.estimate,
         hunterCount: ctx.hunterCount,
         summarizer: ctx.summary.enabled,
+        ...(ctx.freeRoute === undefined ? {} : { freeRoute: ctx.freeRoute }),
       },
       styles,
       width,

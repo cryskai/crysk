@@ -6,12 +6,19 @@
 // line per event. I/O by nature, untested by construction — formatElapsed
 // and the progress.ts halves are the pure, tested pieces.
 
+import type { FreeRouteBilling } from "#model/free-discovery";
 import type { PipelineProgressEvent } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
 import { formatElapsed } from "#review/report";
 import { type SizeGateVerdict, sizeGateDisposition } from "#review/size-gate";
 import { log, styleEnabled } from "#ui/primitives";
-import { type ConfirmResult, confirmReview, confirmSizeGate } from "#ui/select";
+import {
+  type ConfirmResult,
+  type ConfirmSpec,
+  confirmReview,
+  confirmSizeGate,
+  freeBillingMode,
+} from "#ui/select";
 import { CliError } from "../errors";
 import {
   applyProgressEvent,
@@ -230,17 +237,35 @@ export function startLineRenderer(startedAtMs: number): ProgressRenderer {
 // `canSkipPost` is what decides whether "Review, but don't post" exists at
 // all: offering it to a run that was never going to post is a no-op dressed
 // as a choice.
+// The spec without its styles: a pure function of the run, so the billing
+// wording it carries is testable offline. The free-route count is the same one
+// the plan card was printed with (callers pass the same object to both).
+export function confirmSpecFor(
+  low: number,
+  high: number,
+  canSkipPost: boolean,
+  details: () => string[],
+  freeRoute: FreeRouteBilling | undefined,
+): Omit<ConfirmSpec, "styles"> {
+  const billing = freeBillingMode(freeRoute);
+  return {
+    low,
+    high,
+    canSkipPost,
+    details,
+    ...(billing === undefined ? {} : { billing }),
+  };
+}
+
 export function confirm(
   low: number,
   high: number,
   canSkipPost: boolean,
   details: () => string[],
+  freeRoute?: FreeRouteBilling,
 ): Promise<ConfirmResult> {
   return confirmReview({
-    low,
-    high,
-    canSkipPost,
-    details,
+    ...confirmSpecFor(low, high, canSkipPost, details, freeRoute),
     styles: styleEnabled(),
   });
 }

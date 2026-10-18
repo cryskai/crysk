@@ -23,6 +23,7 @@
 import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
 import { actionsRunUrl } from "#ci/outcome";
+import { countFreeRouteSteps } from "#model/free-discovery";
 import type { ResolvedRoutePlan } from "#model/routing";
 import {
   type CiAdmissionLedgerState,
@@ -207,6 +208,15 @@ export async function resolvePrPlanAndConfirm(params: {
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
+  // Read off the admission above, which already decided every free verdict:
+  // this adds no probe. Absent without routing, so the band stays.
+  const freeRoute =
+    routePlan === undefined || productionAdmission === undefined
+      ? undefined
+      : await countFreeRouteSteps({
+          steps: routePlan.steps,
+          probe: productionAdmission.freeModelProbe,
+        });
   const runnerAuthority = await resolveRunnerAuthority({
     workspaceRoot: params.worktreePath,
   });
@@ -256,6 +266,7 @@ export async function resolvePrPlanAndConfirm(params: {
           },
         }),
     ...(routePlan === undefined ? {} : { routePlan }),
+    ...(freeRoute === undefined ? {} : { freeRoute }),
   };
   for (const line of renderPrPlan(planContext, styleEnabled())) log(line);
   // What this run will actually publish. `options` is never mutated: the plan
@@ -268,6 +279,7 @@ export async function resolvePrPlanAndConfirm(params: {
       estimate.high,
       params.options.post ?? false,
       () => prPlanDetails(planContext, styleEnabled()),
+      freeRoute,
     );
     if (choice.kind === "cancel") {
       log("aborted; nothing was spent.");
