@@ -476,7 +476,7 @@ Options:
   --json              status only: print the status as one JSON object on
                       stdout (schema pr-hero.status/v1)
   --from <dir>        post/triage only: the run dir to read findings.json and
-                      diff.patch (post and triage reply) or comparison.json
+                      anchor.patch or diff.patch (post and triage reply) or comparison.json
                       (triage bind) from (required). triage reply maps
                       --finding F00N onto the posted marker via the same
                       post-line remapping post uses

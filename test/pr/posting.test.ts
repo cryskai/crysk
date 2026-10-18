@@ -452,3 +452,53 @@ describe("postFindingsIfEnabled — the CI gate mode reaches the PR comment (S4)
     );
   });
 });
+
+// The anchoring diff decides inline vs outside: a finding on a line that only
+// the full PR diff contains (not the push delta) must post as a review thread.
+describe("postFindingsIfEnabled — findings anchor on the diff they are handed", () => {
+  test("a finding anchorable in the full PR diff is posted inline, not as an outside-diff comment", async () => {
+    const runDir = await tmpRunDir();
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["repo", "view", "url"],
+        response: { stdout: "https://github.com/acme/widgets\n" },
+      },
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
+      postEnabled: true,
+      sessionFailed: false,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          {
+            id: "F001",
+            category: 12,
+            path: "src/app.ts",
+            line: 3,
+            severity: "BLOCKER",
+            evidence_class: "deterministic",
+            refuter_verdict: "corroborated",
+            causal_disposition: "introduced",
+            claim: "the value is stored in seconds and read as milliseconds",
+            proof_refs: [],
+            hunter: "reliability",
+            tier: "blocking",
+            hops_used: 2,
+            hop_trail: [],
+            dedupe_key: "src/app.ts::12",
+          },
+        ],
+      }),
+      diffPatch: diffAddingLines("src/app.ts", 5),
+      runDir,
+      spawnFn,
+    });
+    expect(result.posted?.outsideDiffCount).toBe(0);
+    expect(result.posted?.reviewFindingCount).toBe(1);
+  });
+});

@@ -234,7 +234,12 @@ export async function runTriageReplyCommand(input: {
         "`<!-- pr-hero-triage`)",
     );
   }
-  const diffPath = path.join(runDir, "diff.patch");
+  // anchor.patch first, as in post --from: the diff the finding's line is
+  // matched against must be the one inline comments anchor on.
+  const anchorPath = path.join(runDir, "anchor.patch");
+  const diffPath = existsSync(anchorPath)
+    ? anchorPath
+    : path.join(runDir, "diff.patch");
   if (!existsSync(diffPath)) {
     throw new CliUsageError(
       `${runDir} is missing diff.patch — point --from at a completed ` +

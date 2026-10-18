@@ -1014,3 +1014,75 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
     }
   });
 });
+
+// anchor.patch is the full PR diff inline comments anchor against; diff.patch
+// is the push delta on an incremental re-review. post --from must anchor on
+// anchor.patch when the run dir has one, and fall back to diff.patch for run
+// dirs written before anchor.patch existed.
+describe("runPostCommand — anchor.patch is the anchoring diff", () => {
+  test("a finding anchorable only in anchor.patch is planned inline, not outside", async () => {
+    const { dir, cleanup } = await writeRunDir({
+      findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+    });
+    await Bun.write(
+      path.join(dir, "diff.patch"),
+      diffAddingLines("src/b.ts", 200),
+    );
+    await Bun.write(
+      path.join(dir, "anchor.patch"),
+      diffAddingLines("src/a.ts", 200),
+    );
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { spawnFn } = makeFakeGh(emptyCommentScript(RUN_HEAD));
+      const exitCode = await runPostCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        dryRun: true,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(chunks.join("")).not.toContain("outside src/a.ts:10 F001");
+    } finally {
+      process.stderr.write = origWrite;
+      await cleanup();
+    }
+  });
+
+  test("a run dir without anchor.patch falls back to diff.patch", async () => {
+    const { dir, cleanup } = await writeRunDir({
+      findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+    });
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { spawnFn } = makeFakeGh(emptyCommentScript(RUN_HEAD));
+      const exitCode = await runPostCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        dryRun: true,
+        spawnFn,
+      });
+      expect(exitCode).toBe(0);
+      expect(chunks.join("")).not.toContain("outside src/a.ts:10 F001");
+    } finally {
+      process.stderr.write = origWrite;
+      await cleanup();
+    }
+  });
+});

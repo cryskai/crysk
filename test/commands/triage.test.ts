@@ -892,3 +892,31 @@ describe("runTriageReplyCommand", () => {
     }
   });
 });
+
+describe("runTriageReplyCommand — anchor.patch is the anchoring diff", () => {
+  test("reads anchor.patch when diff.patch is absent", async () => {
+    const { dir, bodyFile, cleanup } = await writeReplyRunDir();
+    const diffPatch = await Bun.file(path.join(dir, "diff.patch")).text();
+    await rm(path.join(dir, "diff.patch"));
+    await Bun.write(path.join(dir, "anchor.patch"), diffPatch);
+    try {
+      const { spawnFn } = makeFakeGh([]);
+      const failure = await runTriageReplyCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        from: dir,
+        findingId: "F001",
+        tag: "applied",
+        bodyFile,
+        dryRun: true,
+        spawnFn,
+      }).then(
+        () => null,
+        (error: unknown) => String(error),
+      );
+      expect(failure ?? "").not.toMatch(/diff\.patch/);
+    } finally {
+      await cleanup();
+    }
+  });
+});

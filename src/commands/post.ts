@@ -72,7 +72,12 @@ export async function runPostCommand(input: {
   const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
   const runDir = path.resolve(input.from);
   const findingsPath = path.join(runDir, "findings.json");
-  const diffPath = path.join(runDir, "diff.patch");
+  // anchor.patch is the full PR diff inline comments anchor against; run dirs
+  // from before it existed only have diff.patch (the push delta on a re-review).
+  const anchorPath = path.join(runDir, "anchor.patch");
+  const diffPath = existsSync(anchorPath)
+    ? anchorPath
+    : path.join(runDir, "diff.patch");
   if (!existsSync(findingsPath) || !existsSync(diffPath)) {
     throw new CliUsageError(
       `${runDir} is missing findings.json or diff.patch — point --from at ` +

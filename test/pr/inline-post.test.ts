@@ -1075,6 +1075,63 @@ describe("postInlineFindings — idempotency, same head, drifted live line", () 
   });
 });
 
+// Incremental re-review: a finding the PREVIOUS head already posted inline
+// is carried into this run. Its line sits outside the push delta but inside
+// the full PR diff, which is what posting now receives as diffPatch. It must
+// match the existing thread, not be posted a second time.
+describe("postInlineFindings — carried finding already posted inline (incremental)", () => {
+  test("a carried finding in the full PR diff matches its existing thread: no second review comment", async () => {
+    const marker = findingMarker({
+      path: "src/a.ts",
+      line: 100,
+      headSha: OLD_HEAD, // posted by the previous review, before the push
+      claim: "carried claim",
+    });
+    const findings = [
+      finding({
+        id: "F001",
+        path: "src/a.ts",
+        line: 100,
+        claim: "carried claim",
+      }),
+    ];
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: { stdout: "" },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 9,
+              user: "pr-hero",
+              body: `${marker}\ncarried claim`,
+              path: "src/a.ts",
+              line: 100,
+              original_line: 100,
+              in_reply_to_id: null,
+            },
+          ]),
+        },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 200),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(outcome.reviewFindingCount).toBe(0);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    expect(calls.some((c) => c.argv.join(" ").includes("reviews"))).toBe(false);
+  });
+});
+
 // Juanma's PR #2 feedback: the summary's index links each line to its own
 // comment. Three sources feed `buildCommentUrlMap` (cli.ts) and none are
 // exercised by makeFakeGh's STATELESS script — a persisting match's url

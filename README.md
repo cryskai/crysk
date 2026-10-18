@@ -229,7 +229,7 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 | `pr-hero activity [--kill <pid>]` | Inspect running reviews (with elapsed time, PID, repo/PR), watcher spend against daily cap, and completed run history. `--kill <pid>` safely terminates a running review. |
 | `pr-hero post --pr <n> --from <run-dir>` | Replay-publish a previous run's findings onto the PR (same plan as `--pr --post`). `--dry-run` previews at $0. |
 | `pr-hero triage --pr <n> --from <run-dir>` | Read reply threads and bind triage markers onto that run's `comparison.json` ledger rows. |
-| `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N --tag <tag> --body-file <path>` | Post one triage reply. The driver picks the parent from the posted `<!-- pr-hero-finding` marker (never path/line), renders the marker + badge, posts, and resolves the inline review thread. Reads `diff.patch` from the run dir to remap post lines the same way `--post` does. `--body-file` is reasoning only. |
+| `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N --tag <tag> --body-file <path>` | Post one triage reply. The driver picks the parent from the posted `<!-- pr-hero-finding` marker (never path/line), renders the marker + badge, posts, and resolves the inline review thread. Reads `anchor.patch` (else `diff.patch`) from the run dir to remap post lines the same way `--post` does. `--body-file` is reasoning only. |
 | `pr-hero status --pr <n> [--json]` | Read-only, through `gh` only: the PR's pr-hero gate, its posted findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `recheck`, `override-or-fix`, `done`). `--json` prints one `pr-hero.status/v1` object on stdout. See [`docs/github-actions.md`](docs/github-actions.md#reading-a-pr-with-pr-hero-status). |
 | `pr-hero config` | Read-only, $0: every config key with its value and **which layer decided it** (`repo` / `global` / `capped` / `default`), plus both file paths whether or not they exist. |
 | `pr-hero config set <key> <val> [--person\|--team\|--watch]` | Set a scalar configuration value in the selected layer (defaults to `--person`). Capped team keys accept and annotate over-ceiling values. |
@@ -400,6 +400,7 @@ Run artifacts land **outside** the repo, in `~/.prhero/repos/<origin>/runs/<run>
 | `comparison.md` / `comparison.json` | PR mode only — the head-to-head against Greptile, three buckets. The JSON rows carry `verdict`/`reasoning` columns for triage; `pr-hero ledger` accumulates them. |
 | `diff.patch`, `pipeline.json`, `steps/` | The exact diff reviewed — after exclusions, so it is byte-for-byte what the hunters read — plus pipeline provenance (including the excluded paths), per-agent drafts and logs. |
 | `diff.raw.patch` | The unfiltered diff of the same range. Written **only** when exclusions actually dropped a file, since otherwise it would duplicate `diff.patch`. |
+| `anchor.patch` | The full PR diff (merge-base..head, after exclusions) that inline comments anchor against. On a first review it equals `diff.patch`; on an incremental re-review `diff.patch` is only the push delta, and this file still covers the whole PR, so a finding on an untouched line of the PR gets a review thread. |
 
 ## Cost and expectations
 
