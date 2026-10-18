@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { pendingStatusTargetUrl } from "../../src/pr/plan";
 
 const PLAN_SOURCE = path.join(import.meta.dir, "../../src/pr/plan.ts");
 
@@ -81,6 +82,37 @@ describe("resolvePrPlanAndConfirm records its progress on the head it posted", (
     expect(hold).toBeGreaterThan(landed);
     expect(body).toMatch(
       /holdCommitStatusLock\(\s*\{[\s\S]*?\},\s*runStartedMs,\s*pendingLanded,?\s*\);/,
+    );
+  });
+});
+
+// SB3 follow-up: the pending the CLI posts names its run in Actions, and the lock hold keeps the PR page.
+describe("pendingStatusTargetUrl — the pending names its run", () => {
+  const PR_URL = "https://github.com/acme/widgets/pull/7";
+  const IN_ACTIONS = {
+    GITHUB_ACTIONS: "true",
+    GITHUB_SERVER_URL: "https://github.com",
+    GITHUB_REPOSITORY: "acme/widgets",
+    GITHUB_RUN_ID: "4242",
+    GITHUB_RUN_ATTEMPT: "2",
+  };
+
+  test("in Actions the pending's target is this run's attempt", () => {
+    expect(pendingStatusTargetUrl(PR_URL, IN_ACTIONS)).toBe(
+      "https://github.com/acme/widgets/actions/runs/4242/attempts/2",
+    );
+  });
+
+  test("outside Actions the pending keeps the PR page", () => {
+    expect(pendingStatusTargetUrl(PR_URL, {})).toBe(PR_URL);
+  });
+
+  test("the pending post in plan.ts uses it, and the hold still takes the PR page", () => {
+    expect(body).toMatch(
+      /phase: "pending",\s*posted: false,\s*targetUrl: pendingStatusTargetUrl\(statusTargetUrl\),/,
+    );
+    expect(body).toMatch(
+      /holdCommitStatusLock\(\s*\{\s*operatorRoot: params\.operatorRoot,\s*sha: params\.headSha,\s*targetUrl: statusTargetUrl,/,
     );
   });
 });

@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  actionsRunUrl,
   type CatalogEntry,
   type CliRecord,
   codeOf,
@@ -2244,5 +2245,53 @@ describe("PRH-HUNTERS-FAILED lead", () => {
   test("other unclassified codes still lead with Unclassified", () => {
     const rendered = renderCode("PRH-UNCLASSIFIED", FULL, "action");
     expect(rendered.annotation.includes("::Unclassified: ")).toBe(true);
+  });
+});
+
+// The run's own URL, the target_url of the pending the CLI posts in Actions (SB3 follow-up).
+describe("actionsRunUrl — the run a pending belongs to", () => {
+  const IN_ACTIONS = {
+    GITHUB_ACTIONS: "true",
+    GITHUB_SERVER_URL: "https://github.com",
+    GITHUB_REPOSITORY: "acme/widgets",
+    GITHUB_RUN_ID: "4242",
+  };
+
+  test("names the run and its attempt, the first attempt when none is given", () => {
+    expect(actionsRunUrl(IN_ACTIONS)).toBe(
+      "https://github.com/acme/widgets/actions/runs/4242/attempts/1",
+    );
+  });
+
+  test("names the attempt the runner reports", () => {
+    expect(actionsRunUrl({ ...IN_ACTIONS, GITHUB_RUN_ATTEMPT: "3" })).toBe(
+      "https://github.com/acme/widgets/actions/runs/4242/attempts/3",
+    );
+  });
+
+  test("an attempt that is not a positive integer is the first attempt", () => {
+    for (const attempt of ["0", "x", "-2"]) {
+      expect(
+        actionsRunUrl({ ...IN_ACTIONS, GITHUB_RUN_ATTEMPT: attempt }),
+      ).toBe("https://github.com/acme/widgets/actions/runs/4242/attempts/1");
+    }
+  });
+
+  test("outside GitHub Actions there is no run URL", () => {
+    const { GITHUB_ACTIONS: _actions, ...outside } = IN_ACTIONS;
+    expect(actionsRunUrl(outside)).toBeUndefined();
+    expect(actionsRunUrl({ ...IN_ACTIONS, GITHUB_ACTIONS: "false" })).toBe(
+      undefined,
+    );
+  });
+
+  test("a run without its server, repository, or run id has no run URL", () => {
+    for (const key of [
+      "GITHUB_SERVER_URL",
+      "GITHUB_REPOSITORY",
+      "GITHUB_RUN_ID",
+    ] as const) {
+      expect(actionsRunUrl({ ...IN_ACTIONS, [key]: "" })).toBeUndefined();
+    }
   });
 });
