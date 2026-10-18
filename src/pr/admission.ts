@@ -435,7 +435,9 @@ export function partialCountsIn(
   };
 }
 
-function finishedPartialMatches(description: string): boolean {
+// Exported for the teardown's repeat check (teardown.ts previousPartialIsSame): the one rule for a finished
+// partial verdict, so a carried row never counts as a review's own verdict.
+export function finishedPartialMatches(description: string): boolean {
   const counts = partialCountsIn(description);
   if (counts === null) return false;
   const rebuilt = counts.again

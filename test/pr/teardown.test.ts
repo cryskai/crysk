@@ -1840,10 +1840,10 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
     "pr-hero: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it";
   const REPEAT_1_OF_4 =
     "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override";
-  const partialResult = (failures: number) =>
+  const partialResult = (failures: number, total = 4) =>
     ({
       sessionFailed: false,
-      hunterCount: 4,
+      hunterCount: total,
       hunterFailedCount: failures,
     }) as unknown as PipelineResult;
   const row = (state: string, description: string) => ({
@@ -1858,17 +1858,46 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
     releaseCommitStatusLock();
   });
 
+  // F002: the history read runs before the override read, and the override read sits right before the write.
+  test("the history read runs first, then the override read, then the status write (W3-PARTIAL F002)", async () => {
+    holdCommitStatusLock(LOCK, STAMP);
+    const order: string[] = [];
+    const { spawnFn } = makeStatusSpawn({ onCall: () => order.push("write") });
+    await settleCommitStatusAndLedger({
+      result: partialResult(1),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "gate",
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: 0,
+      readHistory: async () => {
+        order.push("history");
+        return [PENDING_ROW, row("failure", PARTIAL_1_OF_4)];
+      },
+      readStatuses: async () => {
+        order.push("override");
+        return [];
+      },
+    });
+    expect(order).toEqual(["history", "override", "write"]);
+  });
+
   // Runs one gate write over a partial review with the given history and returns the description posted.
   async function partialDescriptionWith(
     readHistory: NonNullable<
       Parameters<typeof settleCommitStatusAndLedger>[0]["readHistory"]
     >,
     failures = 1,
+    total = 4,
   ): Promise<string | undefined> {
     holdCommitStatusLock(LOCK, STAMP);
     const { spawnFn, calls } = makeStatusSpawn();
     await settleCommitStatusAndLedger({
-      result: partialResult(failures),
+      result: partialResult(failures, total),
       posted: null,
       operatorRoot: "/repo",
       headSha: HEAD,
@@ -1904,12 +1933,13 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
     expect(description).toBe(REPEAT_1_OF_4);
   });
 
-  test("a previous carried partial with the same N and M: the repeat text is written", async () => {
+  // F005: a carried row is not a finished review verdict, so it does not make this write a repeat.
+  test("a previous carried partial with the same N and M is not a finished verdict: today's text (F005)", async () => {
     const description = await partialDescriptionWith(async () => [
       PENDING_ROW,
       row("failure", PARTIAL_1_OF_4_CARRIED),
     ]);
-    expect(description).toBe(REPEAT_1_OF_4);
+    expect(description).toBe(PARTIAL_1_OF_4);
   });
 
   test("a previous partial with different counts: today's text (S3)", async () => {
@@ -1956,6 +1986,8 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
   });
 
   test("the repeat text of three-digit counts stays within 140 characters", async () => {
+    const REPEAT_999 =
+      "pr-hero: review partial again (999 of 999 hunters failed) — fix the failing route or /pr-hero override";
     const description = await partialDescriptionWith(
       async () => [
         PENDING_ROW,
@@ -1965,7 +1997,9 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
         ),
       ],
       999,
+      999,
     );
+    expect(description).toBe(REPEAT_999);
     expect(description?.length).toBeLessThanOrEqual(140);
   });
 });

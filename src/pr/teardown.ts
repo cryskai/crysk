@@ -9,7 +9,11 @@ import { recordUnsettledStatus } from "#ci/cli-record";
 import { overrideCutoffMs, overrideStandsOverRun } from "#ci/override";
 import { formatWorkflowCommand } from "#ci/reporter";
 import type { CiAdmissionLedgerState } from "#pr/admission";
-import { partialCountsIn, settleCiAdmissionLedger } from "#pr/admission";
+import {
+  finishedPartialMatches,
+  partialCountsIn,
+  settleCiAdmissionLedger,
+} from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
 import { fetchCommitStatuses, fetchCommitStatusList } from "#pr/pr";
 import {
@@ -158,7 +162,11 @@ async function previousPartialIsSame(
   const previous = history.find(
     (row) => row.context === COMMIT_STATUS_CONTEXT && row.state !== "pending",
   );
-  const counts = partialCountsIn(previous?.description);
+  const description = previous?.description;
+  if (typeof description !== "string" || !finishedPartialMatches(description)) {
+    return false;
+  }
+  const counts = partialCountsIn(description);
   return counts !== null && counts.failed === failed && counts.total === total;
 }
 
@@ -274,25 +282,13 @@ export async function settleCommitStatusAndLedger(input: {
     // a body threw or every hunter failed, and it may replace the override (the rule in
     // docs/github-actions.md, "Overriding a red gate"). The publisher applies the same rule
     // (src/ci/publish.ts). Advisory is left as it was: this rule is the gate's.
-    const verdictWrite =
-      request.state === "success" || request.state === "failure";
-    const overrideStands =
-      effectiveMode === "gate" &&
-      verdictWrite &&
-      (await overrideStandsOverThisRun(
-        input.operatorRoot,
-        input.headSha,
-        input.spawnFn,
-        input.readStatuses ?? fetchCommitStatuses,
-        overrideCutoff,
-        input.sleep,
-      ));
-    // W3-PARTIAL S1: a partial that repeats the head's previous partial (same N and M) is written as the
-    // repeat text. Only a partial write that is not overridden reads the history, and only where the run's
-    // start is known, the same precondition as the override read above.
+    // W3-PARTIAL S1 / F002: a partial that repeats the head's previous finished partial (same N and M) is
+    // written as the repeat text. The history read happens here, before the override read, so the override
+    // check stays immediately ahead of the write and no read widens the window where an override can land.
+    // Only a partial completion reads history, and only where the run's start is known (the same
+    // precondition as the override read).
     if (
       completion.phase === "partial" &&
-      !overrideStands &&
       overrideCutoff !== null &&
       (await previousPartialIsSame(
         input.operatorRoot,
@@ -311,6 +307,19 @@ export async function settleCommitStatusAndLedger(input: {
         repeat: true,
       });
     }
+    const verdictWrite =
+      request.state === "success" || request.state === "failure";
+    const overrideStands =
+      effectiveMode === "gate" &&
+      verdictWrite &&
+      (await overrideStandsOverThisRun(
+        input.operatorRoot,
+        input.headSha,
+        input.spawnFn,
+        input.readStatuses ?? fetchCommitStatuses,
+        overrideCutoff,
+        input.sleep,
+      ));
     if (overrideStands) {
       // WHY one line and no status: the override stays the head's status. This run's
       // findings and PR comments are not affected by this write.
