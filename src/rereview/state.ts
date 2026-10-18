@@ -621,6 +621,10 @@ export interface MergeStateInput {
   // longer holds. On review 2 no state block exists yet, so they are the only record
   // that those ids were ever issued.
   retiredIds?: readonly string[];
+  // The head the previous block was written for. WHY it is an input: a re-post
+  // of the same head (a retried PATCH, a re-run of the post step) must find the
+  // rows it already wrote, or each retry appends them again with a new id.
+  previousHead?: string | null;
   fresh: readonly FreshStateFinding[];
   stateBudget: number;
 }
@@ -652,6 +656,22 @@ export function mergeStateFindings(input: MergeStateInput): MergedState {
   ];
   let hw = Math.max(input.previous?.hw ?? 0, highestStableNumber(priorIds));
   const rows: LiveFinding[] = input.live.map((row) => ({ ...row }));
+  // S2 — same-head re-post: the previous block's rows join the candidates
+  // BEFORE pairing, so a fresh survivor re-pairs to its earlier id instead of
+  // appending a new one (no new id, no hw increment). A row this run already
+  // holds (live) or retired is not repeated. The status is "unconfirmed",
+  // the status every appended fresh row gets, because the block never
+  // persists status and that is the only value a re-read row can carry.
+  if (input.previousHead != null && input.previousHead === input.headSha) {
+    const held = new Set([
+      ...input.live.map((row) => row.id),
+      ...(input.retiredIds ?? []),
+    ]);
+    for (const row of input.previous?.findings ?? []) {
+      if (held.has(row.id)) continue;
+      rows.push({ ...row, status: "unconfirmed" });
+    }
+  }
   const touched = new Set<string>();
 
   const pairs = pairBlockingSurvivors(
