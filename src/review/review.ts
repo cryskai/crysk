@@ -67,6 +67,7 @@ import {
 import { log, styleEnabled } from "#ui/primitives";
 import { applySizeGate, confirm, startProgressRenderer } from "#ui/progress";
 import { renderResult } from "#ui/result";
+import { freeBillingMode } from "#ui/select";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
@@ -466,6 +467,7 @@ export async function review(options: CliOptions): Promise<number> {
     doc,
     costUsd: result.usage.cost_usd_est,
     ...notionalCostInput(result),
+    ...(freeRoute === undefined ? {} : { billing: freeBillingMode(freeRoute) }),
     wallMs,
     estimate: { low: estimate.low, high: estimate.high },
     runDir,

@@ -23,7 +23,10 @@
 import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
 import { actionsRunUrl } from "#ci/outcome";
-import { countFreeRouteSteps } from "#model/free-discovery";
+import {
+  countFreeRouteSteps,
+  type FreeRouteBilling,
+} from "#model/free-discovery";
 import type { ResolvedRoutePlan } from "#model/routing";
 import {
   type CiAdmissionLedgerState,
@@ -79,6 +82,9 @@ export type PrPlanAndConfirmResult =
       maxVerificationSteps: number;
       estimate: ReturnType<typeof estimateCost>;
       statusTargetUrl: string | undefined;
+      // W3-FOOTER: the count the plan card priced by, handed on so the end-of-run
+      // footer names a free route the same way the card did.
+      freeRoute: FreeRouteBilling | undefined;
     };
 
 // The pending's target_url (SB3 follow-up): in GitHub Actions it is this run's attempt, so the
@@ -353,5 +359,6 @@ export async function resolvePrPlanAndConfirm(params: {
     maxVerificationSteps,
     estimate,
     statusTargetUrl,
+    freeRoute,
   };
 }

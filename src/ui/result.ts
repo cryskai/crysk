@@ -39,6 +39,7 @@ import {
   wrapText,
   yellow,
 } from "./primitives";
+import { FREE_STEPS_NOTE, type FreeBillingMode } from "./select";
 
 interface ResultComparison {
   greptileFound: boolean;
@@ -91,7 +92,7 @@ export interface ResultInput {
   doc: FindingsDocument;
   // CASH, and only cash — the figure the header's `$X.XX` reports and the one
   // budget enforcement is allowed to read (§8: "Budget enforcement uses cash
-  // only"). On a Claude subscription route this is a truthful $0.00.
+  // only"). On a Claude subscription or a free route this is a truthful $0.00.
   costUsd: number;
   // #173 (§8: "Artifacts and reports show cash and notional totals
   // separately"). The list-basis figure a subscription run was NOT charged,
@@ -104,6 +105,10 @@ export interface ResultInput {
   // it never produced is the fabrication the whole usage slice exists to
   // prevent.
   notionalUsd?: number;
+  // W3-FOOTER: the route's billing, derived by freeBillingMode from the same
+  // free-step count the plan card prints. Absent means no free share, and the
+  // footer keeps its subscription wording byte for byte.
+  billing?: FreeBillingMode;
   wallMs: number;
   estimate: { low: number; high: number };
   // One directory plus the basenames written inside it. The full paths still
@@ -537,7 +542,9 @@ export function renderResult(input: ResultInput): string[] {
     // says every live run lands in a ledger.
     ...row(
       "estimate",
-      `$${input.estimate.low.toFixed(2)}–$${input.estimate.high.toFixed(2)}`,
+      input.billing === "mixed"
+        ? `$${input.estimate.low.toFixed(2)}–$${input.estimate.high.toFixed(2)} ${FREE_STEPS_NOTE}`
+        : `$${input.estimate.low.toFixed(2)}–$${input.estimate.high.toFixed(2)}`,
       footer,
     ),
   );
@@ -549,8 +556,11 @@ export function renderResult(input: ResultInput): string[] {
     lines.push(
       ...row(
         "notional",
-        `$${input.notionalUsd.toFixed(2)} at list price — not charged on a ` +
-          "subscription; budget limits read the cash figure above",
+        input.billing === "free"
+          ? `$${input.notionalUsd.toFixed(2)} at list price — not charged on a free route; ` +
+              "budget limits read the cash figure above"
+          : `$${input.notionalUsd.toFixed(2)} at list price — not charged on a ` +
+              "subscription; budget limits read the cash figure above",
         footer,
       ),
     );

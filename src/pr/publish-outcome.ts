@@ -35,6 +35,7 @@ import {
 } from "#config/config";
 import { gitRemoteWebUrl } from "#git/git";
 import { engineIdentity } from "#git/identity";
+import type { FreeRouteBilling } from "#model/free-discovery";
 import {
   type CiAdmissionLedgerState,
   settleCiAdmissionLedger,
@@ -58,6 +59,7 @@ import {
 import { buildTelemetry, writeRunFindings, writeRunReport } from "#review/run";
 import { log, styleEnabled } from "#ui/primitives";
 import { type ResultLinks, renderResult } from "#ui/result";
+import { freeBillingMode } from "#ui/select";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 
@@ -89,6 +91,9 @@ export interface PublishRunOutcomeInput {
   // summary comment and the step summary all name it; nothing re-resolves it.
   ciMode: CiMode;
   estimate: ReturnType<typeof estimateCost>;
+  // W3-FOOTER: the plan's free-route count. Absent means no free share, and the
+  // footer keeps its subscription wording.
+  freeRoute?: FreeRouteBilling;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   // Fired the instant `posted` would have been assigned inside reviewPr()
   // itself — see the header above.
@@ -294,6 +299,9 @@ export async function publishRunOutcome(
     doc,
     costUsd: result.usage.cost_usd_est,
     ...notionalCostInput(result),
+    ...(input.freeRoute === undefined
+      ? {}
+      : { billing: freeBillingMode(input.freeRoute) }),
     wallMs,
     estimate: { low: input.estimate.low, high: input.estimate.high },
     runDir: input.runDir,

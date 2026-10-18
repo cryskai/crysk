@@ -639,6 +639,7 @@ export async function reviewPr(
       maxVerificationSteps,
       estimate,
       statusTargetUrl,
+      freeRoute,
     } = planResult;
 
     let result: PipelineResult | undefined;
@@ -827,6 +828,7 @@ export async function reviewPr(
         isCi,
         ciMode,
         estimate,
+        freeRoute,
         ciAdmissionLedger,
         onPosted: (outcome) => {
           posted = outcome;
