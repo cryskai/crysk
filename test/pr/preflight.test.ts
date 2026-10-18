@@ -1256,6 +1256,34 @@ describe("CANCELLATION_COMMIT_STATUS_TIMEOUT_MS", () => {
 const gateTargetUrl = "https://github.com/org/repo/pull/7";
 
 describe("commitStatusCompletion — gate mode (S4)", () => {
+  test("a partial review with no failed-hunter names carries no set key, never the empty list's hash", () => {
+    const completion = commitStatusCompletion({
+      pipelineFinished: true,
+      sessionFailed: false,
+      ciMode: "gate",
+      blockingCount: 0,
+      hunterCount: 4,
+      hunterFailures: 1,
+    });
+    expect(completion).toEqual({ phase: "partial", failed: 1, total: 4 });
+    expect(
+      commitStatusCompletion({
+        pipelineFinished: true,
+        sessionFailed: false,
+        ciMode: "gate",
+        blockingCount: 0,
+        hunterCount: 4,
+        hunterFailures: 1,
+        hunterFailureNames: ["hunter-reliability"],
+      }),
+    ).toEqual({
+      phase: "partial",
+      failed: 1,
+      total: 4,
+      set: hunterFailureSetKey(["hunter-reliability"]),
+    });
+  });
+
   test("a finished review with blocking findings is failure, carrying the count", () => {
     expect(
       commitStatusCompletion({

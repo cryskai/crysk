@@ -987,7 +987,9 @@ export function settleRequestForCancellation(
 export type CommitStatusCompletion =
   | { phase: "success" | "error" }
   | { phase: "failure"; blockingCount: number }
-  | { phase: "partial"; failed: number; total: number; set: string };
+  // set is absent when no failed-hunter names were read: hashing an empty list would
+  // give every such verdict one shared key, and two of them would read as the same set.
+  | { phase: "partial"; failed: number; total: number; set?: string };
 
 // W4-R363 S1: the failed hunters' identity, not only their count. A different hunter failing with the same
 // N of M reads as a different partial verdict. Six hex of sha256 over the sorted unique names is enough to
@@ -1034,7 +1036,7 @@ export function partialReviewAgainDescription(
 export function partialReviewCommitStatusRequest(input: {
   failed: number;
   total: number;
-  set: string;
+  set?: string;
   targetUrl: string | undefined;
   context: CommitStatusContext;
   // W3-PARTIAL S1: the head's previous verdict was this same partial, so the repeat text is written.
@@ -1084,11 +1086,12 @@ export function commitStatusCompletion(input: {
   const failed = input.hunterFailures ?? 0;
   const total = input.hunterCount ?? 0;
   if (failed >= 1 && total >= failed) {
+    const names = input.hunterFailureNames ?? [];
     return {
       phase: "partial",
       failed,
       total,
-      set: hunterFailureSetKey(input.hunterFailureNames ?? []),
+      ...(names.length === 0 ? {} : { set: hunterFailureSetKey(names) }),
     };
   }
   return { phase: "success" };

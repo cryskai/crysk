@@ -151,7 +151,7 @@ async function previousPartialIsSame(
   readHistory: typeof fetchCommitStatusList,
   failed: number,
   total: number,
-  set: string,
+  set: string | undefined,
 ): Promise<boolean> {
   let history: readonly CommitStatusFact[] | null;
   try {
@@ -169,8 +169,10 @@ async function previousPartialIsSame(
   }
   const counts = partialCountsIn(description);
   // W4-R363 S1: the same counts are not the same verdict when another hunter failed. A previous text with no
-  // set key (written before the key) reads as not the same, so the plain text is written.
+  // set key (written before the key) reads as not the same, so the plain text is written; so does a run
+  // that read no failed-hunter names, since nothing then says which hunters failed.
   return (
+    set !== undefined &&
     counts !== null &&
     counts.failed === failed &&
     counts.total === total &&
