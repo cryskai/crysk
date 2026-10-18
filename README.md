@@ -58,7 +58,8 @@ npm install -g pr-hero
 
 # Option D: No install, for an agent or a one-off run (needs only Node). It cannot
 # register the MCP server or the launchd agents: npx's cache is temporary, so those
-# refuse and ask for option B.
+# refuse and ask for option B. The launcher uses the bundled Bun only when it runs
+# (`bun --version` is checked first), otherwise the Bun on PATH, and exits 127 naming both if neither works.
 npx pr-hero doctor
 
 # Option C: From source / development (the bin runs on Node; on a machine with Bun
