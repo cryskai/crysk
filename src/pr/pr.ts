@@ -20,6 +20,7 @@
 // worktree add` is bound to one git dir, the registered owner for that
 // origin, which may not be the operator cwd.
 
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
@@ -2499,10 +2500,17 @@ export async function listAdmissionCheckRuns(
 // fingerprint, shared by every attempt on this head and policy, so it alone
 // would adopt an earlier attempt's run. Any failure of the lookup reads as "no
 // match", which keeps the POST retry exactly as it was.
+//
+// The POST nonce is what names this call's run. A reused record shares its
+// external_id, attempt and createdAt with a run another workflow run wrote
+// (review #360 F001), so those three can never tell the two apart; only the
+// nonce this call wrote into its own record can. A run without a nonce never
+// matches.
 async function findAdmissionCheckRunForAttempt(
   operatorRoot: string,
   headSha: string,
   record: AdmissionRecord,
+  postNonce: string,
   spawnFn?: typeof Bun.spawn,
 ): Promise<{ id: number; status: string | undefined } | null> {
   try {
@@ -2532,7 +2540,8 @@ async function findAdmissionCheckRunForAttempt(
         typeof row.id === "number" &&
         row.external_id === record.reservationId &&
         parsedRecord.attemptNumber === record.attemptNumber &&
-        parsedRecord.createdAt === record.createdAt
+        parsedRecord.createdAt === record.createdAt &&
+        parsedRecord.postNonce === postNonce
       ) {
         return { id: row.id, status: row.status };
       }
@@ -2549,11 +2558,6 @@ export async function upsertAdmissionCheckRun(
     headSha: string;
     record: AdmissionRecord;
     checkRunId?: number;
-    // Set only by a caller whose record this run just created. WHY: a reused
-    // active record (reserveAdmissionAttempt's created:false) already has another
-    // run's check run with the same external_id, attempt and createdAt, and
-    // adopting it would make two workflow runs settle one row (review #360).
-    adoptOnFailedPost?: boolean;
   },
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<number> {
@@ -2562,7 +2566,15 @@ export async function upsertAdmissionCheckRun(
       `admission check run: head sha is not a full 40-char id: ${input.headSha.slice(0, 16)}`,
     );
   }
-  const serialized = serializeAdmissionRecord(input.record);
+  // WHY one nonce per call, minted before the retry loop: the POST writes it
+  // into the run's record, and a failed POST's lookup adopts only a run carrying
+  // it. That is why adoption is safe for a reused record too: a sibling run from
+  // another workflow run can never carry this call's nonce.
+  const postNonce = randomUUID();
+  const serialized = serializeAdmissionRecord({
+    ...input.record,
+    postNonce,
+  });
   const checkStatus = admissionCheckRunStatus(input.record.status);
   const args = [
     "api",
@@ -2615,18 +2627,19 @@ export async function upsertAdmissionCheckRun(
     lastStderr = result.stderr.trim();
     // Only a POST can have created a run the caller does not know about; a
     // PATCH already names its run. A match is adopted instead of retried.
-    if (input.checkRunId === undefined && input.adoptOnFailedPost === true) {
+    if (input.checkRunId === undefined) {
       const existing = await findAdmissionCheckRunForAttempt(
         operatorRoot,
         input.headSha,
         input.record,
+        postNonce,
         options?.spawnFn,
       );
       if (existing !== null) {
         if (existing.status === checkStatus) return existing.id;
         return upsertAdmissionCheckRun(
           operatorRoot,
-          { ...input, checkRunId: existing.id, adoptOnFailedPost: false },
+          { ...input, checkRunId: existing.id },
           options,
         );
       }

@@ -70,6 +70,20 @@ describe("parseAdmissionRecord / serializeAdmissionRecord", () => {
     expect(parseAdmissionRecord("not json")).toBeNull();
     expect(parseAdmissionRecord("{}")).toBeNull();
   });
+
+  test("a record written before postNonce existed still parses, without a nonce", () => {
+    const record = baseRecord({ status: "completed" });
+    const parsed = parseAdmissionRecord(serializeAdmissionRecord(record));
+    expect(parsed).toEqual(record);
+    expect(parsed).not.toHaveProperty("postNonce");
+  });
+
+  test("carries the POST nonce through a round-trip", () => {
+    const record = { ...baseRecord({ status: "reserved" }), postNonce: "n-1" };
+    expect(parseAdmissionRecord(serializeAdmissionRecord(record))).toEqual(
+      record,
+    );
+  });
 });
 
 describe("countTerminalAttempts", () => {
