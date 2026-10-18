@@ -454,6 +454,7 @@ export async function reviewPr(
       skipDiscovery,
       rawDiff,
       effectiveDiff,
+      anchorPatch,
       gateConfig,
       rereview,
       verifyQueue,
@@ -578,6 +579,10 @@ export async function reviewPr(
     // bytes, and only when the filter actually dropped something.
     const diffPath = path.join(runDir, "diff.patch");
     await Bun.write(diffPath, effectiveDiff.patch);
+    // anchor.patch is the full PR diff inline comments anchor against (see
+    // resolvePrDiscovery). post --from and triage read it, falling back to
+    // diff.patch for run dirs written before it existed.
+    await Bun.write(path.join(runDir, "anchor.patch"), anchorPatch);
     if (effectiveDiff.droppedPaths.length > 0) {
       await Bun.write(path.join(runDir, "diff.raw.patch"), rawDiff);
     }
@@ -818,7 +823,7 @@ export async function reviewPr(
         baseRef: target.baseRef,
         diffStat,
         droppedPaths: effectiveDiff.droppedPaths,
-        diffPatch: effectiveDiff.patch,
+        diffPatch: anchorPatch,
         home,
         repoId: repoHome.repoId,
         postEnabled,

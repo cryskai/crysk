@@ -587,3 +587,111 @@ describe("resolvePrDiscovery — T5b adjudication queue", () => {
     expect(result.adjudicationQueue[0]?.replyId).toBe(200);
   });
 });
+
+// Inline anchoring (the review payload's path/line) must see the FULL PR
+// diff, not the discovery diff. On an incremental re-review the discovery
+// range is last-reviewed-head..head, so a finding on a line the push did not
+// touch is outside the delta yet inside the PR: it was published as an
+// "outside diff" comment with no review thread. `anchorPatch` is the PR-range
+// diff for that anchoring; the discovery diff itself keeps its narrow range.
+const SESSION_HUNK =
+  "diff --git a/src/session.ts b/src/session.ts\n" +
+  "index 3333333..4444444 100644\n" +
+  "--- a/src/session.ts\n" +
+  "+++ b/src/session.ts\n" +
+  "@@ -50 +50 @@\n" +
+  "-old\n" +
+  "+new\n";
+
+function rangeGit(outputs: Record<string, string>, calls: string[][]) {
+  return {
+    commitExists: () => Promise.resolve(true),
+    isAncestor: () => Promise.resolve(true),
+    nameOnly: (from: string, to: string) =>
+      Promise.resolve(
+        from === B && to === H ? ["src/a.ts", "src/session.ts"] : ["src/a.ts"],
+      ),
+    nameStatus: () => Promise.resolve(""),
+    runGit: (args: string[]) => {
+      calls.push(args);
+      if (args.includes("--numstat")) {
+        return Promise.resolve({
+          ok: true,
+          stdout: "1\t1\tsrc/a.ts\n",
+          stderr: "",
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        stdout: outputs[args[1]] ?? "",
+        stderr: "",
+      });
+    },
+  };
+}
+
+function discoveryFor(
+  git: ReturnType<typeof rangeGit>,
+  overrides: Partial<Parameters<typeof resolvePrDiscovery>[0]>,
+) {
+  return resolvePrDiscovery({
+    diffFromSha: B,
+    headSha: H,
+    full: false,
+    baseRef: B,
+    headLabel: "PR #1 head",
+    isCi: false,
+    sizeGateOverrides: {},
+    config: { parity_trigger_paths: [], suspicion_priors: [] },
+    prIgnore: { rules: [], found: false },
+    issueComments: [markerCommentForHead(L, true)],
+    postedFindings: [],
+    reviewComments: [],
+    git,
+    log: () => {},
+    ...overrides,
+  });
+}
+
+describe("resolvePrDiscovery — anchorPatch is the full PR diff (inline anchoring)", () => {
+  test("an incremental re-review anchors against merge-base..head, not the push delta", async () => {
+    const calls: string[][] = [];
+    const git = rangeGit(
+      { [`${L}..${H}`]: PATCH, [`${B}..${H}`]: PATCH + SESSION_HUNK },
+      calls,
+    );
+    const result = await discoveryFor(git, {});
+    expect(result.prepared.discoveryFrom).toBe(L);
+    expect(result.effectiveDiff.patch).not.toContain("src/session.ts");
+    expect(result.anchorPatch).toContain("src/session.ts");
+    expect(result.anchorPatch).toContain("+new");
+  });
+
+  test("a full pass anchors on the discovery patch itself, with no extra git diff", async () => {
+    const calls: string[][] = [];
+    const git = rangeGit({ [`${B}..${H}`]: PATCH }, calls);
+    const result = await discoveryFor(git, {
+      full: true,
+      issueComments: [],
+    });
+    expect(result.prepared.discoveryFrom).toBe(B);
+    expect(result.anchorPatch).toBe(result.effectiveDiff.patch);
+    const diffCalls = calls.filter(
+      (args) => args[0] === "diff" && !args.includes("--numstat"),
+    );
+    expect(diffCalls.map((args) => args[1])).toEqual([`${B}..${H}`]);
+  });
+
+  test("an empty delta still anchors on the full PR diff", async () => {
+    const calls: string[][] = [];
+    const git = rangeGit({ [`${B}..${H}`]: PATCH + SESSION_HUNK }, calls);
+    // Same-head re-review (case B): discovery is skipped, the delta is empty.
+    const result = await discoveryFor(git, {
+      issueComments: [markerCommentForHead(H, true)],
+      postedFindings: [],
+    });
+    expect(result.skipDiscovery).toBe(true);
+    expect(result.effectiveDiff.patch).toBe("");
+    expect(result.anchorPatch).toContain("src/session.ts");
+  });
+});

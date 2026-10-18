@@ -772,7 +772,7 @@ into (`-D`), not at a `pr-<n>-<sha>-1` path inside it.
 
 ### What is in it, and how long it lives
 
-The run directory holds the reviewed diff (`diff.patch`), the rendered agent prompts, every hunter draft,
+The run directory holds the reviewed diff (`diff.patch`), the full PR diff that inline comments anchor against (`anchor.patch`; on an incremental re-review it is wider than `diff.patch`, which covers only the push delta), the rendered agent prompts, every hunter draft,
 `findings.json`, `pipeline.json`, `report.md`, and the per-attempt step logs. **On a public repository,
 workflow artifacts are downloadable by anyone** — which is why `retention-days: 7` is deliberately short:
 long enough to triage, short enough to bound exposure. Lengthen it only if you have weighed that.
