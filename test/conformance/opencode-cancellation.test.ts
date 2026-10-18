@@ -254,7 +254,8 @@ test("setup deadline aborts concrete SDK I/O and suppresses late prompt", async 
     clock,
   }).execute(request, { signal: new AbortController().signal, events: sink });
   await flush();
-  await clock.advance(10_000);
+  // The default setup deadline (opencode-sdk.ts DEFAULT_SETUP_DEADLINE_MS).
+  await clock.advance(45_000);
   const out = await pending;
   expect(out.completion).toBe("failed");
   expect(rig.signals.create?.aborted).toBe(true);

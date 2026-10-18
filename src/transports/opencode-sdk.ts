@@ -45,6 +45,14 @@ const MAX_STDERR_TAIL_BYTES = 64 * 1024;
 // the declared production default (injectable for offline tests).
 const DEFAULT_STALL_DEADLINE_MS = 10_000;
 
+// The setup deadline covers launch, qualification, mcp.status and
+// session.create, so it must outlast the layers it wraps or it fires first and
+// turns a recoverable slow start into a failure. Launch can take the server's
+// own 15 s startup timeout (opencode-server.ts), and qualification's worst case
+// is 19.5 s: health 3 x 2 s + /doc 3 x 4 s + 250 ms and 500 ms backoff. That
+// is 34.5 s before mcp.status and session.create. 45 s keeps headroom above it.
+const DEFAULT_SETUP_DEADLINE_MS = 45_000;
+
 // §5.2 line 272 (SDK row): session.abort() → provider-specific terminal
 // confirmation up to 5,000 ms → local cleanup up to 1,000 ms; the harness
 // deadline is 6,500 ms including margin and is declared via capabilities().
@@ -659,7 +667,7 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     this.clock = options.clock ?? systemClock;
     this.usefulProgressMs =
       options.usefulProgressMs ?? DEFAULT_USEFUL_PROGRESS_MS;
-    this.setupDeadlineMs = options.setupDeadlineMs ?? 10_000;
+    this.setupDeadlineMs = options.setupDeadlineMs ?? DEFAULT_SETUP_DEADLINE_MS;
     this.nowIso = options.nowIso ?? (() => new Date().toISOString());
     this.usageBillingMode = options.billingMode ?? "subscription";
   }
