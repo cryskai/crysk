@@ -2547,6 +2547,11 @@ export async function upsertAdmissionCheckRun(
     headSha: string;
     record: AdmissionRecord;
     checkRunId?: number;
+    // Set only by a caller whose record this run just created. WHY: a reused
+    // active record (reserveAdmissionAttempt's created:false) already has another
+    // run's check run with the same external_id, attempt and createdAt, and
+    // adopting it would make two workflow runs settle one row (review #360).
+    adoptOnFailedPost?: boolean;
   },
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<number> {
@@ -2608,7 +2613,7 @@ export async function upsertAdmissionCheckRun(
     lastStderr = result.stderr.trim();
     // Only a POST can have created a run the caller does not know about; a
     // PATCH already names its run. A match is adopted instead of retried.
-    if (input.checkRunId === undefined) {
+    if (input.checkRunId === undefined && input.adoptOnFailedPost === true) {
       const existing = await findAdmissionCheckRunForAttempt(
         operatorRoot,
         input.headSha,
@@ -2619,7 +2624,7 @@ export async function upsertAdmissionCheckRun(
         if (existing.status === checkStatus) return existing.id;
         return upsertAdmissionCheckRun(
           operatorRoot,
-          { ...input, checkRunId: existing.id },
+          { ...input, checkRunId: existing.id, adoptOnFailedPost: false },
           options,
         );
       }

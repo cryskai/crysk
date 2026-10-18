@@ -3096,7 +3096,7 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record },
+      { headSha: HEAD, record, adoptOnFailedPost: true },
       { spawnFn },
     );
     expect(id).toBe(812);
@@ -3128,7 +3128,7 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record },
+      { headSha: HEAD, record, adoptOnFailedPost: true },
       { spawnFn },
     );
     expect(id).toBe(613);
@@ -3150,7 +3150,7 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record },
+      { headSha: HEAD, record, adoptOnFailedPost: true },
       { spawnFn },
     );
     expect(id).toBe(614);
@@ -3175,7 +3175,7 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record },
+      { headSha: HEAD, record, adoptOnFailedPost: true },
       { spawnFn },
     );
     expect(id).toBe(815);
@@ -3186,6 +3186,26 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     expect(patches[0]?.join(" ")).toContain("conclusion=success");
   });
 
+  test("a failed POST without adoptOnFailedPost (a reused record) never looks up or adopts", async () => {
+    const record = admissionRecordFixture();
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(record, { id: 812 })}\n` };
+      }
+      if (isPost(argv)) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      return {};
+    });
+    await expect(
+      upsertAdmissionCheckRun(
+        OPERATOR_ROOT,
+        { headSha: HEAD, record },
+        { spawnFn },
+      ),
+    ).rejects.toThrow(TIMEOUT_STDERR);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.some(isLookup)).toBe(false);
+  });
+
   test("a POST that succeeds does no lookup", async () => {
     const record = admissionRecordFixture();
     const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
@@ -3194,7 +3214,7 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record },
+      { headSha: HEAD, record, adoptOnFailedPost: true },
       { spawnFn },
     );
     expect(id).toBe(501);
