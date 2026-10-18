@@ -10,6 +10,7 @@ import {
   evaluateCheck,
   evaluateChecks,
   ownBlockingGate,
+  ownBlockingSkipReason,
   ownBlockingUndecided,
 } from "../../scripts/sandbox/expect";
 import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
@@ -1859,5 +1860,30 @@ describe("ownBlockingUndecided: an unlocated outside-diff entry fails the closed
         "src/mute.ts",
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("ownBlockingSkipReason: the skip line of a closed ifOwnBlockingAt gate", () => {
+  test("an undecided gate says so instead of claiming no blocking finding", () => {
+    const o = obs({
+      comments: [
+        {
+          source: "issue",
+          kind: "report",
+          head: NEW,
+          outsideDiffBlocking: 1,
+          outsideDiffUnlocated: 1,
+        },
+      ],
+    });
+    expect(ownBlockingSkipReason(o, "src/mute.ts")).toBe(
+      "an unlocated outside-diff blocking entry leaves src/mute.ts undecided",
+    );
+  });
+
+  test("a gate closed with nothing unlocated keeps the previous line", () => {
+    expect(ownBlockingSkipReason(obs(), "src/mute.ts")).toBe(
+      "the re-review found no blocking finding at src/mute.ts",
+    );
   });
 });

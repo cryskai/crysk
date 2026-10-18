@@ -17,6 +17,7 @@ import {
   describeCheck,
   evaluateChecks,
   ownBlockingGate,
+  ownBlockingSkipReason,
   ownBlockingUndecided,
 } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
@@ -560,10 +561,16 @@ async function runOne(
       const ownAt = phase.ifOwnBlockingAt;
       const ownBlocking =
         ownAt === undefined || ownBlockingGate(obs, ownAt.path);
+      // S2: a closed gate that an unlocated outside-diff entry leaves undecided fails loud,
+      // once, instead of skipping the ifOwnBlockingAt checks silently. Its skip line must
+      // not claim the path is clear, since the unlocated entry may be about it.
+      const undecided =
+        ownAt === undefined ? undefined : ownBlockingUndecided(obs, ownAt.path);
       if (ownAt !== undefined && !ownBlocking) {
+        const why = ownBlockingSkipReason(obs, ownAt.path);
         for (const check of ownAt.checks) {
           deps.log(
-            `  not asserted: ${scenario.name} [${index + 1}] ${describeCheck(check)} (the re-review found no blocking finding at ${ownAt.path})`,
+            `  not asserted: ${scenario.name} [${index + 1}] ${describeCheck(check)} (${why})`,
           );
         }
       }
@@ -581,10 +588,6 @@ async function runOne(
         observed === "hunters-failed" &&
         obs.status?.state !== "success" &&
         isOwnHuntersFailed(obs, collected.statusCreatedAt);
-      // S2: a closed gate that an unlocated outside-diff entry leaves undecided fails loud,
-      // once, instead of skipping the ifOwnBlockingAt checks silently.
-      const undecided =
-        ownAt === undefined ? undefined : ownBlockingUndecided(obs, ownAt.path);
       const phaseChecks = [
         ...evaluateChecks(asserted, obs),
         ...(undecided === undefined ? [] : [undecided]),

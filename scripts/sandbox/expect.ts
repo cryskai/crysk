@@ -217,6 +217,14 @@ export function ownBlockingUndecided(
   };
 }
 
+// Why a closed gate's ifOwnBlockingAt checks are not asserted, for the skip line. An
+// undecided gate must not claim the path is clear: the unlocated entry may be about it.
+export function ownBlockingSkipReason(obs: Observation, path: string): string {
+  return ownBlockingUndecided(obs, path) === undefined
+    ? `the re-review found no blocking finding at ${path}`
+    : `an unlocated outside-diff blocking entry leaves ${path} undecided`;
+}
+
 export function evaluateCheck(check: Check, obs: Observation): CheckResult {
   const label = describeCheck(check);
   const pass = (ok: boolean, detail?: string): CheckResult =>
