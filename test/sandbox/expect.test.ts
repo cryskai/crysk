@@ -1013,6 +1013,20 @@ describe("status-matches-findings: the status agrees with the blocking findings 
     }
   });
 
+  // W3-PARTIAL S2: the repeat form passes the same way the partial does.
+  test("the repeat form of a partial-review failure passes, with no blocking finding", () => {
+    const result = evaluateCheck(
+      check,
+      withFindings(
+        [],
+        "failure",
+        "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override",
+      ),
+    );
+    expect(result.pass).toBe(true);
+    expect(result.detail).toContain("partial review");
+  });
+
   test("a visible blocking finding and a partial-review failure fail: the gate does not count it", () => {
     const result = evaluateCheck(
       check,

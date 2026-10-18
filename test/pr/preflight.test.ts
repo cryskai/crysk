@@ -39,6 +39,7 @@ import {
   PR_FINDING_MARKER_PREFIX,
   PR_REREVIEW_CLOSED_MARKER_PREFIX,
   parseFindingMarker,
+  partialReviewAgainDescription,
   partialReviewDescription,
   prCommentMarker,
   prHtmlUrl,
@@ -1712,5 +1713,29 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
     expect(
       gate({ ciMode: "advisory", hunterCount: 4, hunterFailures: 1 }),
     ).toEqual({ phase: "success" });
+  });
+});
+
+// W3-PARTIAL S1, S3: the repeat of a partial review says the same failure set failed again, and
+// names the unlock that fits a repeat (fix the route or override), not the retry.
+describe("partialReviewAgainDescription — a repeated partial review (W3-PARTIAL S1)", () => {
+  test("the repeat text names the counts and the unlock", () => {
+    expect(partialReviewAgainDescription(1, 4)).toBe(
+      "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override",
+    );
+  });
+
+  test("three-digit counts stay within the 140-character status description limit", () => {
+    const text = partialReviewAgainDescription(999, 999);
+    expect(text).toBe(
+      "pr-hero: review partial again (999 of 999 hunters failed) — fix the failing route or /pr-hero override",
+    );
+    expect(text.length).toBeLessThanOrEqual(140);
+  });
+
+  test("the first partial text stays byte-identical (S3)", () => {
+    expect(partialReviewDescription(1, 4)).toBe(
+      "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+    );
   });
 });

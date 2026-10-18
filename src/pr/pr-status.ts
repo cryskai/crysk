@@ -476,7 +476,7 @@ function newestReply(
 // (admission.ts carriedPartialDescription). The prefix is what this reader needs: the full text is
 // written by those builders, and the gate's own state already says the review is red.
 const PARTIAL_REVIEW_GATE =
-  /^pr-hero: review partial \(\d+ of \d+ hunters failed\)/;
+  /^pr-hero: review partial(?: again)? \(\d+ of \d+ hunters failed\)/;
 
 // unresolved_blocking has two sources, and the description wins when it has one. A red
 // gate's description names the count its own rule counted (rereview/state.ts

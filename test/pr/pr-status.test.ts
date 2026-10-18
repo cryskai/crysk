@@ -1066,6 +1066,19 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
     expect(status.next_action).toBe("review");
   });
 
+  // W3-PARTIAL S2: the repeat form means exactly what the partial means: review, with the same reason.
+  test("the repeat form of the partial review reads the same way", () => {
+    const REPEAT =
+      "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override";
+    const status = buildPrStatus(
+      input({ statuses: [gate("failure", REPEAT)] }),
+    );
+    expect(status.next_action).toBe("review");
+    expect(status.reason).toBe(
+      "The last review of this head was partial (some reviewers failed); run /pr-hero review, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
+    );
+  });
+
   test("a red partial review names no blocking count: unresolved_blocking is the live count, zero here", () => {
     const status = buildPrStatus(
       input({ statuses: [gate("failure", PARTIAL)] }),

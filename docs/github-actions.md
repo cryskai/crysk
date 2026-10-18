@@ -575,6 +575,7 @@ The table shows the status and the job exit for each case:
 |---|---|---|---|
 | Finished review with unresolved blocking findings (see below) | `failure`: `pr-hero: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
 | Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/pr-hero override`) | `failure`: `pr-hero: review partial (N of M hunters failed) — /pr-hero review retries it` | `success` | `0` |
+| Finished review where the same hunters failed as on the head's previous partial review (same N and M), none blocking | `failure`: `pr-hero: review partial again (N of M hunters failed) — fix the failing route or /pr-hero override` | `success` | `0` |
 | Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `0` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
 | Size or budget skip (`/pr-hero review` reviews it anyway) | `failure`: `pr-hero skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
@@ -847,7 +848,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | `next_action` | When |
 | --- | --- |
 | `wait` | The gate is pending and in flight (less than 90 minutes old). |
-| `review` | No `pr-hero` status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`pr-hero: review partial (N of M hunters failed)`, or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
+| `review` | No `pr-hero` status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`pr-hero: review partial (N of M hunters failed)`, its repeat form `pr-hero: review partial again (N of M hunters failed)`, or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
 | `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. |
 | `triage` | The gate is red and a live blocking finding on this head has no triage reply at the head it was posted on. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
 | `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. |

@@ -1001,16 +1001,32 @@ export function partialReviewDescription(
   );
 }
 
+// W3-PARTIAL S1: the repeat of a partial review, the same N of M failure set on the head's previous
+// verdict. The unlock names the route fix or the override, because a retry already ran and failed.
+export function partialReviewAgainDescription(
+  failed: number,
+  total: number,
+): string {
+  return clipStatusDescription(
+    `pr-hero: review partial again (${failed} of ${total} hunters failed) — fix the failing route or /pr-hero override`,
+  );
+}
+
 export function partialReviewCommitStatusRequest(input: {
   failed: number;
   total: number;
   targetUrl: string | undefined;
   context: CommitStatusContext;
+  // W3-PARTIAL S1: the head's previous verdict was this same partial, so the repeat text is written.
+  repeat?: boolean;
 }): CommitStatusRequest {
   return {
     state: "failure",
     context: input.context,
-    description: partialReviewDescription(input.failed, input.total),
+    description:
+      input.repeat === true
+        ? partialReviewAgainDescription(input.failed, input.total)
+        : partialReviewDescription(input.failed, input.total),
     targetUrl: input.targetUrl,
   };
 }
