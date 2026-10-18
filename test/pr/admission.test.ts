@@ -608,15 +608,15 @@ describe("publishCiSkip: the outcome record", () => {
 
       // S5: a partial review is a red review verdict. A skip inherits it red, never the older green under it.
       const PARTIAL_1_OF_4 =
-        "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it";
+        "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
       const PARTIAL_CARRIED =
-        "pr-hero: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it";
+        "pr-hero: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /pr-hero review retries it";
 
       // W3-PARTIAL S2: the repeat form is a review verdict, and it is a source for the carry: the skip
       // inherits today's carried text, because the carried form is generic and keeps its existing wording.
       test("the repeat form is a review verdict, and a skip carries it as the same carried text", async () => {
         const REPEAT_1_OF_4 =
-          "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override";
+          "pr-hero: review partial again (1 of 4 hunters failed, set 938084) — fix the failing route or /pr-hero override";
         expect(
           isReviewVerdictStatus({
             state: "failure",
@@ -658,6 +658,26 @@ describe("publishCiSkip: the outcome record", () => {
               "pr-hero: review partial (one of four) — /pr-hero review retries it",
           }),
         ).toBe(false);
+      });
+
+      // W4-R363 S1: a carry keeps the verdict's own failed-set key when it has one, and an earlier verdict
+      // without a key is carried as the same earlier text, never upgraded to a key it never had.
+      test("a skip carries an earlier partial verdict without a set key as that same text", async () => {
+        const OLD_PARTIAL =
+          "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it";
+        const { calls } = await skipWith(
+          [row("failure", OLD_PARTIAL, T1)],
+          "low-risk-delta",
+        );
+        expect(calls).toEqual([
+          {
+            sha: STATUS_HEAD,
+            state: "failure",
+            description:
+              "pr-hero: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it",
+            targetUrl: `${REPO_WEB_URL}/pull/${PR}`,
+          },
+        ]);
       });
 
       test("a low-risk skip carries the reviewed head's partial failure, red, onto the new head", async () => {

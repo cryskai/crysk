@@ -2914,8 +2914,10 @@ async function finish(
 
 // One failed hunter step, as the CLI record names it. The provider and the model come
 // from the step's route; a step with no route, or one that did not report a transport
-// cause, leaves that field out.
+// cause, leaves that field out. `name` is the step's name ("hunter-<key>"), stable across
+// runs, so a partial verdict can tell WHICH hunters failed, not only how many.
 export interface HunterFailure {
+  readonly name: string;
   readonly cause?: TransportFailureCause;
   readonly provider?: string;
   readonly model?: string;
@@ -2929,6 +2931,7 @@ function hunterFailureOf(
   const provider = spec.route?.provider.trim();
   const model = spec.route?.modelSnapshot.trim();
   return {
+    name: spec.name,
     ...(cause === undefined ? {} : { cause }),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),

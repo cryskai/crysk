@@ -151,6 +151,7 @@ async function previousPartialIsSame(
   readHistory: typeof fetchCommitStatusList,
   failed: number,
   total: number,
+  set: string | undefined,
 ): Promise<boolean> {
   let history: readonly CommitStatusFact[] | null;
   try {
@@ -167,7 +168,16 @@ async function previousPartialIsSame(
     return false;
   }
   const counts = partialCountsIn(description);
-  return counts !== null && counts.failed === failed && counts.total === total;
+  // W4-R363 S1: the same counts are not the same verdict when another hunter failed. A previous text with no
+  // set key (written before the key) reads as not the same, so the plain text is written; so does a run
+  // that read no failed-hunter names, since nothing then says which hunters failed.
+  return (
+    set !== undefined &&
+    counts !== null &&
+    counts.failed === failed &&
+    counts.total === total &&
+    counts.set === set
+  );
 }
 
 // The inner `finally`: the commit status must settle BEFORE the lock is
@@ -251,6 +261,11 @@ export async function settleCommitStatusAndLedger(input: {
     ...(input.result?.hunterFailedCount === undefined
       ? {}
       : { hunterFailures: input.result.hunterFailedCount }),
+    ...(input.result?.hunterFailures === undefined
+      ? {}
+      : {
+          hunterFailureNames: input.result.hunterFailures.map((f) => f.name),
+        }),
     ...(input.result?.noReviewerRan === true ? { noReviewerRan: true } : {}),
   });
   let request =
@@ -264,6 +279,7 @@ export async function settleCommitStatusAndLedger(input: {
         ? partialReviewCommitStatusRequest({
             failed: completion.failed,
             total: completion.total,
+            set: completion.set,
             targetUrl: input.statusTargetUrl,
             context: input.statusContext,
           })
@@ -297,11 +313,13 @@ export async function settleCommitStatusAndLedger(input: {
         input.readHistory ?? fetchCommitStatusList,
         completion.failed,
         completion.total,
+        completion.set,
       ))
     ) {
       request = partialReviewCommitStatusRequest({
         failed: completion.failed,
         total: completion.total,
+        set: completion.set,
         targetUrl: input.statusTargetUrl,
         context: input.statusContext,
         repeat: true,

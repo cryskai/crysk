@@ -149,8 +149,18 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
       {
         sessionFailed: true,
         hunterFailures: [
-          { cause: "model_unavailable", provider: "opencode", model: "gpt-4o" },
-          { cause: "model_unavailable", provider: "opencode", model: "gpt-4o" },
+          {
+            name: "hunter-reliability",
+            cause: "model_unavailable",
+            provider: "opencode",
+            model: "gpt-4o",
+          },
+          {
+            name: "hunter-reliability",
+            cause: "model_unavailable",
+            provider: "opencode",
+            model: "gpt-4o",
+          },
         ],
       },
       SHA,
@@ -163,8 +173,16 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
       outcome: "hunters-failed",
       head_sha: SHA,
       hunter_failures: [
-        { cause: "model_unavailable", provider: "opencode", model: "gpt-4o" },
-        { cause: "model_unavailable", provider: "opencode", model: "gpt-4o" },
+        {
+          cause: "model_unavailable",
+          provider: "opencode",
+          model: "gpt-4o",
+        },
+        {
+          cause: "model_unavailable",
+          provider: "opencode",
+          model: "gpt-4o",
+        },
       ],
     });
   });
@@ -175,7 +193,11 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
       {
         sessionFailed: true,
         hunterFailures: [
-          { cause: "model_unavailable", provider: "bad\nprovider" },
+          {
+            name: "hunter-reliability",
+            cause: "model_unavailable",
+            provider: "bad\nprovider",
+          },
         ],
       },
       SHA,
@@ -193,9 +215,13 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
 
   test("a failure with no transport cause is recorded as an entry without one", () => {
     const dir = outcomeDir();
-    recordPipelineOutcome({ sessionFailed: true, hunterFailures: [{}] }, SHA, {
-      PRHERO_OUTCOME_DIR: dir,
-    });
+    recordPipelineOutcome(
+      { sessionFailed: true, hunterFailures: [{ name: "hunter-reliability" }] },
+      SHA,
+      {
+        PRHERO_OUTCOME_DIR: dir,
+      },
+    );
     expect(
       parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
     ).toEqual({

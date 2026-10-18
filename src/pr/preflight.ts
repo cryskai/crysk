@@ -12,6 +12,7 @@
 //   - the REVIEW root: a detached worktree at the PR's head. The pipeline's
 //     cwd, the tree the codegraph index describes. Never trusted for config.
 
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -986,7 +987,25 @@ export function settleRequestForCancellation(
 export type CommitStatusCompletion =
   | { phase: "success" | "error" }
   | { phase: "failure"; blockingCount: number }
-  | { phase: "partial"; failed: number; total: number };
+  // set is absent when no failed-hunter names were read: hashing an empty list would
+  // give every such verdict one shared key, and two of them would read as the same set.
+  | { phase: "partial"; failed: number; total: number; set?: string };
+
+// W4-R363 S1: the failed hunters' identity, not only their count. A different hunter failing with the same
+// N of M reads as a different partial verdict. Six hex of sha256 over the sorted unique names is enough to
+// tell two failed sets apart on a status line; it is a comparison key, never a secret.
+export function hunterFailureSetKey(names: readonly string[]): string {
+  const sorted = [...new Set(names)].sort();
+  return createHash("sha256")
+    .update(sorted.join(","))
+    .digest("hex")
+    .slice(0, 6);
+}
+
+// The set key rides right after the counts. Absent only for a text written before the key existed.
+function partialCountsSuffix(set: string | undefined): string {
+  return set === undefined ? "" : `, set ${set}`;
+}
 
 // S1, gate mode: a finished review where some hunters failed but not all, and no blocking
 // finding survived. The gate cannot call that green: a reviewer that never ran may have been
@@ -995,9 +1014,10 @@ export type CommitStatusCompletion =
 export function partialReviewDescription(
   failed: number,
   total: number,
+  set?: string,
 ): string {
   return clipStatusDescription(
-    `pr-hero: review partial (${failed} of ${total} hunters failed) — /pr-hero review retries it`,
+    `pr-hero: review partial (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — /pr-hero review retries it`,
   );
 }
 
@@ -1006,15 +1026,17 @@ export function partialReviewDescription(
 export function partialReviewAgainDescription(
   failed: number,
   total: number,
+  set?: string,
 ): string {
   return clipStatusDescription(
-    `pr-hero: review partial again (${failed} of ${total} hunters failed) — fix the failing route or /pr-hero override`,
+    `pr-hero: review partial again (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — fix the failing route or /pr-hero override`,
   );
 }
 
 export function partialReviewCommitStatusRequest(input: {
   failed: number;
   total: number;
+  set?: string;
   targetUrl: string | undefined;
   context: CommitStatusContext;
   // W3-PARTIAL S1: the head's previous verdict was this same partial, so the repeat text is written.
@@ -1025,8 +1047,8 @@ export function partialReviewCommitStatusRequest(input: {
     context: input.context,
     description:
       input.repeat === true
-        ? partialReviewAgainDescription(input.failed, input.total)
-        : partialReviewDescription(input.failed, input.total),
+        ? partialReviewAgainDescription(input.failed, input.total, input.set)
+        : partialReviewDescription(input.failed, input.total, input.set),
     targetUrl: input.targetUrl,
   };
 }
@@ -1039,6 +1061,8 @@ export function commitStatusCompletion(input: {
   // S4: M and N. Absent means no hunter counts were read, which is never a partial review.
   hunterCount?: number;
   hunterFailures?: number;
+  // W4-R363 S1: the names of the failed hunters, which the partial verdict's set key is made of.
+  hunterFailureNames?: readonly string[];
   // The pipeline's own statement that no hunter ran on a run meant to review
   // (PipelineResult.noReviewerRan). Absent reads as false.
   noReviewerRan?: boolean;
@@ -1062,7 +1086,13 @@ export function commitStatusCompletion(input: {
   const failed = input.hunterFailures ?? 0;
   const total = input.hunterCount ?? 0;
   if (failed >= 1 && total >= failed) {
-    return { phase: "partial", failed, total };
+    const names = input.hunterFailureNames ?? [];
+    return {
+      phase: "partial",
+      failed,
+      total,
+      ...(names.length === 0 ? {} : { set: hunterFailureSetKey(names) }),
+    };
   }
   return { phase: "success" };
 }

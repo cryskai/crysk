@@ -1045,9 +1045,9 @@ function issueReply(options: {
 // `done` whatever the findings say.
 describe("buildPrStatus: a red partial review is run again (S6)", () => {
   const PARTIAL =
-    "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it";
+    "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
   const PARTIAL_CARRIED =
-    "pr-hero: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it";
+    "pr-hero: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /pr-hero review retries it";
 
   test("a red gate that is a partial review is review, naming the partial review and the retry", () => {
     const status = buildPrStatus(
@@ -1069,14 +1069,29 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
   // W3-PARTIAL F004: a retry already failed the same way, so the repeat form asks for a route fix or an override, not review.
   test("the repeat form of the partial review asks for a fix or an override", () => {
     const REPEAT =
-      "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override";
+      "pr-hero: review partial again (1 of 4 hunters failed, set 938084) — fix the failing route or /pr-hero override";
     const status = buildPrStatus(
       input({ statuses: [gate("failure", REPEAT)] }),
     );
     expect(status.next_action).toBe("override-or-fix");
     expect(status.reason).toBe(
-      "The review is partial again with the same failure counts: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /pr-hero override.",
+      "The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /pr-hero override.",
     );
+  });
+
+  // W4-R363 S1: a partial text from before the set key is still a partial verdict, so the gate reads it.
+  test("a partial text without a set key is still the partial review verdict", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+          ),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("review");
   });
 
   test("a red partial review names no blocking count: unresolved_blocking is the live count, zero here", () => {
