@@ -3168,51 +3168,43 @@ export async function postInlineFindings(input: {
 
   const delta: PrCommentDelta = { ...plan.delta, previousHeadSha };
   // S1 — the 422 demotion grew the Outside Diff after the POST-shaped merge,
-  // so the PATCH body is longer than the budget was sized for. Re-merge with
-  // the same inputs and a budget sized from the PATCH body without its state
-  // block: the ids and hw are budget-independent, and only advisory rows can
-  // be dropped (the cap never evicts blocking or touched rows).
-  const patchState =
-    outsideDiff.length > plannedOutsideDiff.length
-      ? mergeStateWithBudget(
-          stateBlockBudget(
-            renderWithState(
-              delta,
-              outsideDiff,
-              movedHeadSha,
-              commentUrlByFindingId,
-              undefined,
-            ).length,
-          ),
-        )
-      : merged;
-  // S1b — when the demotion made the PATCH too long, compact the demoted
-  // entries from the last one backwards (location and link only) until it
-  // fits. WHY only with a demotion: without one the body stays byte-identical
-  // to today's, whatever its length. The PATCH is never knowingly sent above
-  // the limit: when every entry is compacted and it still is, the warning
-  // names the size and the body is sent as is.
-  let patchBody = renderWithState(
-    delta,
-    outsideDiff,
-    movedHeadSha,
-    commentUrlByFindingId,
-    patchState,
-  );
-  if (
-    outsideDiff.length > plannedOutsideDiff.length &&
-    patchBody.length > GITHUB_ISSUE_COMMENT_MAX
-  ) {
+  // so the PATCH body can be longer than the budget was sized for. Compact
+  // first, with the POST merge's state: the demoted entries shrink from the
+  // last one backwards (location and link only) and the first fit wins. WHY
+  // compaction before re-merging: a re-merge sized from the uncompacted body
+  // can leave no room for the advisory rows, and those rows are then evicted
+  // for good even though compaction would have made room. Without a demotion
+  // the body stays byte-identical to today's, whatever its length. The PATCH
+  // is never knowingly sent above the limit.
+  const grew = outsideDiff.length > plannedOutsideDiff.length;
+  const renderPatch = (
+    state: MergedState | undefined,
+    compactFrom?: number,
+  ): string =>
+    renderWithState(
+      delta,
+      outsideDiff,
+      movedHeadSha,
+      commentUrlByFindingId,
+      state,
+      compactFrom,
+    );
+  let patchBody = renderPatch(merged);
+  if (grew && patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
     for (let from = outsideDiff.length - 1; from >= 0; from--) {
-      patchBody = renderWithState(
-        delta,
-        outsideDiff,
-        movedHeadSha,
-        commentUrlByFindingId,
-        patchState,
-        from,
-      );
+      patchBody = renderPatch(merged, from);
       if (patchBody.length <= GITHUB_ISSUE_COMMENT_MAX) break;
+    }
+    // S1b — only when every entry is compacted and the body still does not
+    // fit does the state shrink: re-merge with the same inputs and a budget
+    // sized from the fully compacted body without its state block. The ids
+    // and hw are budget-independent, and only advisory rows can be dropped.
+    if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
+      const bodyWithoutState = renderPatch(undefined, 0);
+      const reMerged = mergeStateWithBudget(
+        stateBlockBudget(bodyWithoutState.length),
+      );
+      patchBody = renderPatch(reMerged, 0);
     }
     if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
       process.stdout.write(

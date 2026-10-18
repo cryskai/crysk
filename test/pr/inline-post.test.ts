@@ -2450,6 +2450,69 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
     expect(state?.findings).toHaveLength(6);
     expect(state?.findings.every((f) => f.tier === "blocking")).toBe(true);
   });
+  // S1 — a demotion that compaction alone can fit must not evict the advisory
+  // priors the POST state held. The eight blocking claims put the Outside
+  // Diff bodies (and the state rows they also fill, protected) past the cap,
+  // so a re-merge sized from the uncompacted PATCH would leave no budget.
+  test("S1 — a demotion that compaction alone fits keeps every advisory prior row the POST state held", async () => {
+    const GITHUB_LIMIT = 65536;
+    const findings = Array.from({ length: 8 }, (_, i) =>
+      finding({
+        id: `F00${i + 1}`,
+        path: "src/a.ts",
+        line: 10 + i,
+        tier: "blocking",
+        severity: "BLOCKER",
+        claim: `claim ${i} ${"z".repeat(4000)}`,
+      }),
+    );
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: PRIOR_SUMMARY }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/reviews"],
+        response: {
+          stderr: "gh: Unprocessable Entity (HTTP 422)",
+          exitCode: 1,
+        },
+      },
+    ]);
+    const advisoryPrior = stateFinding({
+      id: "R001",
+      sev: "WARNING",
+      tier: "advisory",
+      channel: "inline",
+      locs: ["src/b.ts:5"],
+      claim: "advisory prior kept",
+    });
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenance([{ ...advisoryPrior, status: "carried" }]),
+      rereviewPriors: [],
+    });
+    expect(outcome.reviewOutcome).toBe("demoted");
+    const patch = summaryStdins(calls).at(-1) ?? "";
+    expect(patch.length).toBeLessThanOrEqual(GITHUB_LIMIT);
+    const state = parseStateBlock(patch);
+    expect(state?.findings.find((f) => f.id === "R001")?.claim).toBe(
+      "advisory prior kept",
+    );
+    expect(state?.findings.filter((f) => f.tier === "blocking")).toHaveLength(
+      8,
+    );
+  });
 });
 
 // The summary's own counter, end to end: postInlineFindings writes it into the
