@@ -29,6 +29,7 @@ import { SANDBOX_REMOTE_URL, SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import {
   GOTCHAS_PATH,
   MUTE_PATH,
+  PLANTED_SITE,
   sandboxFiles,
   WORKFLOW_PATH,
 } from "../../scripts/sandbox/seed";
@@ -51,8 +52,8 @@ const RUN_DURATION_MS = 5 * 60_000;
 // A posted blocking finding, shaped the way the product posts one: its marker,
 // then the header whose tier word the classifier reads (report.ts findingHeaderLine).
 // The head is the reviewed sha, as findingMarker writes it (src/pr/preflight.ts).
-const blockingFinding = (head: string): string =>
-  `<!-- pr-hero-finding id=F001 path=src/a.ts line=3 head=${head} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
+const blockingFinding = (head: string, path = "src/a.ts", line = 3): string =>
+  `<!-- pr-hero-finding id=F001 path=${path} line=${line} head=${head} -->\n\n🔴 blocking · BLOCKER · introduced · reliability`;
 
 interface RunRow {
   databaseId: number;
@@ -66,6 +67,8 @@ interface RunRow {
   stepConclusion: string;
   prNumber: number;
   reviewSha: string;
+  // The run's attempt: a rerun raises it and reuses the id (GitHub's run_attempt).
+  attempt?: number;
   // gh's displayTitle: a PR-triggered run shows its PR's title, and so does a
   // comment run started on that PR (checked against GitHub, pr-hero-sandbox).
   displayTitle: string;
@@ -214,13 +217,29 @@ export interface WorldOptions {
   // blockingFindings on. Unset, it is `rejected`; `upheld` is the mutation the
   // adjudication check must catch.
   adjudicationVerdict?: string;
+  // The review finds the planted bug: one blocking finding anchored in the planted
+  // volume file (PLANTED_SITE), which the gate counts like any other blocking finding.
+  plantedFinding?: true;
+  // The hunters that failed in every review run, as its log names them (`hunter <name>:
+  // failed`). A run with none has a log with no such line.
+  hunterFailures?: readonly string[];
+  // SB3 mutation: the rerun of an older head writes its status onto the newest head,
+  // the overwrite rerun-after-push must catch.
+  rerunWritesNewestHead?: true;
+  // SB3 mutation: a run whose workflow plants a fixed-name `trigger.json.tmp` (the
+  // stale-tmp variant) is refused at its first record write, the regression stale-tmp catches.
+  staleRecordsBreakRun?: true;
+  // GitHub has not served a run's log yet: the first this many `run view --log` reads fail
+  // as `log not found`, and runLogNeverServed fails every one of them.
+  runLogMissingReads?: number;
+  runLogNeverServed?: true;
 }
 
 // The gate's own status texts, from the product's request builders, so the fake
 // cannot drift from the words the runner's checks read.
-function blockingStatus(): { state: string; description: string } {
+function blockingStatus(count = 1): { state: string; description: string } {
   const request = blockingCommitStatusRequest({
-    blockingCount: 1,
+    blockingCount: count,
     targetUrl: undefined,
   });
   return { state: request.state, description: request.description };
@@ -262,6 +281,8 @@ export class FakeGithub {
   // The reactions on each comment, by comment id: what the trigger gave it.
   private readonly reactions = new Map<number, string[]>();
   private readonly queued: Outcome[];
+  // How many `run view --log` reads the fake has answered or refused, for the retry tests.
+  logReadCount = 0;
 
   constructor(options: WorldOptions) {
     this.options = options;
@@ -327,6 +348,14 @@ export class FakeGithub {
     return id;
   }
 
+  // The head of the branch's latest run: the newest push's.
+  private newestHeadOf(branch: string): string {
+    return (
+      [...this.runs].reverse().find((r) => r.headBranch === branch)?.headSha ??
+      ""
+    );
+  }
+
   private stamp(): string {
     this.clock += 1000;
     return new Date(this.clock).toISOString();
@@ -348,6 +377,12 @@ export class FakeGithub {
       return "credential";
     }
     if (/^\s+routing: "\{not json"$/m.test(workflow)) return "routing";
+    if (
+      this.options.staleRecordsBreakRun === true &&
+      /trigger\.json\.tmp/.test(workflow)
+    ) {
+      return "routing";
+    }
     // The CLI's gate reads the gotchas file (review-pr.ts validateGotchas), after
     // routing and before any spend.
     if (gotchas !== undefined && gotchasUnusableReason(gotchas) !== undefined) {
@@ -486,14 +521,24 @@ export class FakeGithub {
       if (this.options.blockingFindings === true) {
         this.inlineOf(prNumber).push(this.comment(blockingFinding(sha)));
       }
+      if (this.options.plantedFinding === true) {
+        this.inlineOf(prNumber).push(
+          this.comment(
+            blockingFinding(sha, PLANTED_SITE.path, PLANTED_SITE.lineMin),
+          ),
+        );
+      }
+      const blockingCount =
+        (this.options.blockingFindings === true ? 1 : 0) +
+        (this.options.plantedFinding === true ? 1 : 0);
       const gateFails =
         outcome === "review" &&
-        this.options.blockingFindings === true &&
+        blockingCount > 0 &&
         this.options.statusIgnoresFindings !== true;
       this.statuses.set(
         sha,
         gateFails
-          ? blockingStatus()
+          ? blockingStatus(blockingCount)
           : { state: "success", description: "review posted" },
       );
     } else if (outcome === "size-skip") {
@@ -689,6 +734,38 @@ export class FakeGithub {
       }
       return ok();
     }
+    if (verb === "run" && sub === "rerun") {
+      // A rerun reuses the run's id and starts its next attempt. It reviews the head the
+      // run was started on, and posts there, as the publisher does.
+      const run = this.runs.find((r) => r.databaseId === Number(args[2]));
+      if (run === undefined) return fail("run not found");
+      this.events.push(`run ${run.databaseId} rerun`);
+      run.attempt = (run.attempt ?? 1) + 1;
+      run.status = "completed";
+      run.conclusion = "success";
+      run.stepConclusion = "success";
+      const target =
+        this.options.rerunWritesNewestHead === true
+          ? this.newestHeadOf(run.headBranch)
+          : run.headSha;
+      this.post("review", run.prNumber, target, run.databaseId);
+      return ok();
+    }
+    if (verb === "run" && sub === "view" && args.includes("--log")) {
+      this.logReadCount += 1;
+      if (
+        this.options.runLogNeverServed === true ||
+        this.logReadCount <= (this.options.runLogMissingReads ?? 0)
+      ) {
+        return fail(`log not found: ${args[2]}`);
+      }
+      // The run's log as gh prints it: one line per event, the failed hunters' among them.
+      const lines = (this.options.hunterFailures ?? []).map(
+        (name) =>
+          `pr-hero Review\tRun pr-hero\t  [1.0s] hunter ${name}: failed (the run continues)`,
+      );
+      return ok(lines.join("\n") + (lines.length > 0 ? "\n" : ""));
+    }
     if (verb === "run" && sub === "view") {
       const run = this.runs.find((r) => r.databaseId === Number(args[2]));
       if (run === undefined) return fail("run not found");
@@ -779,6 +856,21 @@ export class FakeGithub {
       const found = this.prs.get(Number(pull[1]));
       if (found === undefined) return fail("pull request not found");
       return ok(JSON.stringify({ created_at: found.createdAt }));
+    }
+    const attempt = /\/actions\/runs\/(\d+)$/.exec(path);
+    if (attempt !== null) {
+      const run = this.runs.find((r) => r.databaseId === Number(attempt[1]));
+      if (run === undefined) return fail("run not found");
+      return ok(
+        JSON.stringify({
+          id: run.databaseId,
+          status: run.status,
+          conclusion: run.conclusion,
+          run_attempt: run.attempt ?? 1,
+          head_sha: run.headSha,
+          event: run.event,
+        }),
+      );
     }
     const artifacts = /\/actions\/runs\/(\d+)\/artifacts$/.exec(path);
     if (artifacts !== null) {

@@ -17,6 +17,9 @@ import { fail, type Harness, HEAD_SHA, harness, ok, START_ISO } from "./fakes";
 const PR_NUMBER = 7;
 const PR_URL = `https://github.com/${SANDBOX_REPO}/pull/${PR_NUMBER}`;
 const REPORT_COMMENT = `<!-- pr-hero-report head=${HEAD_SHA} -->\n\n# pr-hero review`;
+// The review finds the planted bug (review-free's planted-site check): one finding,
+// anchored in the planted volume file, on the head under review.
+const PLANTED_FINDING = `<!-- pr-hero-finding id=F001 path=src/volume.ts line=4 head=${HEAD_SHA} -->\n\n🟢 advisory · MINOR · introduced · reliability`;
 
 interface Run {
   databaseId: number;
@@ -66,7 +69,7 @@ function world(overrides: Partial<World> = {}): World {
     runStatus: "completed",
     statusState: { state: "success", description: "review posted" },
     issueComments: [REPORT_COMMENT],
-    inlineComments: [],
+    inlineComments: [PLANTED_FINDING],
     artifacts: [`pr-hero-run-${PR_NUMBER}-${HEAD_SHA}`],
     remoteFiles: sandboxFiles("v0.2.0"),
     statusFails: false,
@@ -815,7 +818,14 @@ describe("smoke: the cancel path's tolerance", () => {
     let views = 0;
     const h = harness({
       gh: (args, hh) => {
-        if (args[0] === "run" && args[1] === "view") {
+        // The log read of a review phase (`--log`), and its job lookup (`--json jobs`), are not
+        // status reads counted here.
+        if (
+          args[0] === "run" &&
+          args[1] === "view" &&
+          !args.includes("--log") &&
+          args[args.indexOf("--json") + 1] !== "jobs"
+        ) {
           views += 1;
           if (views === 2) return fail("HTTP 502: Bad Gateway");
         }

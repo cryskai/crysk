@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { GOTCHAS } from "../../fixtures/setup";
+import { GOTCHAS, VOLUME_BUGGY } from "../../fixtures/setup";
 import {
   OUTCOME_MARKER_PREFIX,
   OVERRIDE_MARKER_PREFIX,
@@ -19,10 +19,12 @@ import {
   actionRefFor,
   GOTCHAS_PATH,
   OPENCODE_AUTH_VALUE,
+  PLANTED_SITE,
   parseRoute,
   REPO_CONFIG_JSON,
   routingValueFor,
   sandboxFiles,
+  VOLUME_PATH,
   WORKFLOW_PATH,
   workflowFor,
 } from "../../scripts/sandbox/seed";
@@ -232,5 +234,17 @@ describe("markers pinned against the product's publisher", () => {
       true,
     );
     expect(publication.status?.context).toBe(STATUS_CONTEXT);
+  });
+});
+
+describe("PLANTED_SITE: the planted bug's answer-key range (review-free)", () => {
+  test("names the planted volume file, over the whole buggy file", () => {
+    expect(PLANTED_SITE.path).toBe(VOLUME_PATH);
+    expect(PLANTED_SITE.lineMin).toBe(1);
+    // The buggy file's line count, read from its fixture: 4 lines of code and the closing brace.
+    expect(PLANTED_SITE.lineMax).toBe(
+      VOLUME_BUGGY.trimEnd().split("\n").length,
+    );
+    expect(PLANTED_SITE.lineMax).toBe(5);
   });
 });

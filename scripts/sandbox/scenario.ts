@@ -19,6 +19,7 @@ import {
   type CommentFact,
   classifyComment,
   classifyPath,
+  hunterFailuresIn,
   invariantViolations,
   isHuntersFailed,
   isHuntersFailedStatus,
@@ -26,6 +27,7 @@ import {
   postedByThisRun,
   type RunFact,
   type SmokePath,
+  type StatusFact,
 } from "./observe";
 import {
   type Interrupts,
@@ -135,6 +137,14 @@ interface Live {
   // these: see runs.ts.
   pushedAt?: number;
   prCreatedAt?: number;
+  // SB3 rerun-after-push: the scenario's first run and the head it was started on, read
+  // after its phase. The rerun reuses that run's id.
+  firstRun?: RunListItem;
+  firstHeadSha?: string;
+  // The newer head's status before the rerun, and the run's attempt before it: a rerun
+  // starts a new attempt, so the wait reads the attempt, not only the status.
+  newerBefore?: { sha: string; status?: StatusFact };
+  rerunAttempt?: number;
 }
 
 // How a scenario's cleanup ended. `kept` is set when --keep left the PR open with no
@@ -455,15 +465,25 @@ async function runOne(
         interrupts.scenario,
       );
       live.run = polled.run;
+      if (index === 0) {
+        live.firstRun = polled.run;
+        live.firstHeadSha = live.headSha;
+      }
       if (!polled.completed) {
         deps.log(
           `timed out after ${Math.round(pollTiming(options).timeoutMs / 1000)}s waiting for the run; collecting what is visible`,
         );
       }
-      const collected = await collect(work, live);
+      // A rerun is read on the head it reviewed, the first run's; the newer head is read
+      // beside it, so the check can see that the rerun left it alone.
+      const rerunPhase = phase.action.kind === "rerun-first";
+      const collected = await collect(work, live, {
+        readLog: phase.checks.some((c) => c.kind === "no-hunter-failed"),
+        observedHead: rerunPhase ? live.firstHeadSha : undefined,
+      });
       // Only a comment phase has a triggering comment whose reactions a check can read.
       // A recheck phase posts its own triggering comment, so it counts too.
-      const obs: Observation =
+      const withReactions: Collected =
         phase.action.kind === "comment" ||
         phase.action.kind === "dismiss-and-recheck"
           ? {
@@ -471,6 +491,12 @@ async function runOne(
               reactions: await triggerReactions(work, live),
             }
           : collected;
+      const obs: Observation = rerunPhase
+        ? {
+            ...withReactions,
+            newerHead: await newerHeadOf(work, live),
+          }
+        : withReactions;
       // A run that did not complete has no path to read. It is reported as
       // timed-out and fails the scenario, whatever its partial evidence says.
       const observed: SmokePath = polled.completed
@@ -645,7 +671,74 @@ async function perform(
     await postComment(deps, live, "/pr-hero recheck");
     return;
   }
+  if (action.kind === "rerun-first") {
+    await rerunFirst(deps, live);
+    return;
+  }
   await postComment(deps, live, action.body);
+}
+
+// The status of one head, as the combined status of its commit reads it (the pr-hero
+// context only). Undefined when the head has none yet.
+async function statusOf(
+  deps: SandboxDeps,
+  sha: string,
+): Promise<StatusFact | undefined> {
+  const combined = await ghJson<{
+    statuses: { context: string; state: string; description: string }[];
+  }>(deps, ["api", `repos/${SANDBOX_REPO}/commits/${sha}/status`]);
+  const latest = combined.statuses.find((s) => s.context === STATUS_CONTEXT);
+  return latest === undefined
+    ? undefined
+    : { state: latest.state, description: latest.description };
+}
+
+// The newer head of a rerun phase: the head the scenario pushed last, its status
+// before the rerun (snapshotted by rerunFirst) and after it.
+async function newerHeadOf(
+  deps: SandboxDeps,
+  live: Live,
+): Promise<Observation["newerHead"]> {
+  const newer = live.newerBefore;
+  if (newer === undefined) return undefined;
+  return {
+    sha: newer.sha,
+    before: newer.status,
+    after: await statusOf(deps, newer.sha),
+  };
+}
+
+// The attempt a run is on now. A rerun raises it, so the rerun wait reads it.
+async function attemptOf(deps: SandboxDeps, runId: number): Promise<number> {
+  const run = await ghJson<{ run_attempt: number }>(deps, [
+    "api",
+    `repos/${SANDBOX_REPO}/actions/runs/${runId}`,
+  ]);
+  return run.run_attempt;
+}
+
+// SB3: reruns the scenario's first run. Its id is the run's, so the rerun reviews the
+// head that run was started on. The newer head's status is snapshotted first, so the
+// check can tell whether the rerun touched it.
+async function rerunFirst(deps: SandboxDeps, live: Live): Promise<void> {
+  const first = live.firstRun;
+  const newerSha = live.headSha;
+  if (first === undefined || live.firstHeadSha === undefined) {
+    throw new Error(
+      "rerun-first needs the scenario's first run, and no run was recorded for phase 1",
+    );
+  }
+  if (newerSha === undefined) throw new Error("the branch has no newer head");
+  live.newerBefore = { sha: newerSha, status: await statusOf(deps, newerSha) };
+  live.rerunAttempt = await attemptOf(deps, first.databaseId);
+  deps.log(`rerun of run ${first.databaseId} (attempt ${live.rerunAttempt})`);
+  await ghOk(deps, [
+    "run",
+    "rerun",
+    String(first.databaseId),
+    "-R",
+    SANDBOX_REPO,
+  ]);
 }
 
 // A PR comment as the authenticated user, and the comment's id and creation time for
@@ -886,7 +979,9 @@ async function waitForRun(
       const run =
         phase.wait === "pull_request"
           ? await findPullRequestRun(deps, live)
-          : await findCommentRun(deps, live);
+          : phase.wait === "rerun"
+            ? await findRerun(deps, live)
+            : await findCommentRun(deps, live);
       if (run !== undefined) {
         live.inFlight = {
           databaseId: run.databaseId,
@@ -940,6 +1035,31 @@ async function findPullRequestRun(
   return runs.find((r) => r.headSha === live.headSha);
 }
 
+// The first run, as its next attempt reads once the rerun has started it. A run whose
+// attempt has not moved is the first attempt still, so it is not this rerun's.
+async function findRerun(
+  deps: SandboxDeps,
+  live: Live,
+): Promise<RunListItem | undefined> {
+  const first = live.firstRun;
+  if (first === undefined || live.rerunAttempt === undefined) {
+    throw new Error("waiting for a rerun before any rerun was started");
+  }
+  const run = await ghJson<{
+    status: string;
+    conclusion: string | null;
+    run_attempt: number;
+    head_sha: string;
+  }>(deps, ["api", `repos/${SANDBOX_REPO}/actions/runs/${first.databaseId}`]);
+  if (run.run_attempt <= live.rerunAttempt) return undefined;
+  return {
+    ...first,
+    headSha: run.head_sha,
+    status: run.status,
+    conclusion: run.conclusion,
+  };
+}
+
 // The issue_comment run of the comment. It runs main's workflow, so its head is
 // main's and it names no PR branch, and it is not found by sha. It is the one run
 // that shows this scenario's PR title and was created at or after the comment. The
@@ -966,14 +1086,78 @@ async function findCommentRun(
   return fresh[0];
 }
 
+// GitHub serves a run's job log with a lag after the run completes, so a read right after
+// it can report the log missing. Only that failure is retried, a bounded number of times;
+// any other failure is raised at once. A log still missing after the last read is an
+// error of the scenario (the check cannot be read), never a FAIL and never a flake.
+const LOG_READ_TRIES = 6;
+const LOG_READ_INTERVAL_MS = 10_000;
+const LOG_NOT_YET_SERVED = /log not found|HTTP 404|404 Not Found/i;
+
+// WHY the review job's own log, not the whole run's: the run's job list also carries the
+// admission ledger's check run (pr-hero/ci-admission), which has no log, and a plain
+// `run view --log` fails on it with "log not found: <that job's id>" every time (live,
+// sandbox PRs #56, #59, #60). A run with no job named review, or a failed jobs read, falls back
+// to the whole log.
+async function reviewJobLogArgs(
+  deps: SandboxDeps,
+  runId: number,
+): Promise<string[]> {
+  const base = ["run", "view", String(runId), "-R", SANDBOX_REPO, "--log"];
+  let jobs: { name?: unknown; databaseId?: unknown }[] = [];
+  try {
+    const raw = await ghOk(deps, [
+      "run",
+      "view",
+      String(runId),
+      "-R",
+      SANDBOX_REPO,
+      "--json",
+      "jobs",
+    ]);
+    const parsed = JSON.parse(raw) as { jobs?: unknown };
+    if (Array.isArray(parsed.jobs)) jobs = parsed.jobs;
+  } catch {
+    return base;
+  }
+  const review = jobs.find(
+    (job) => job.name === "review" && typeof job.databaseId === "number",
+  );
+  return review === undefined
+    ? base
+    : [...base, "--job", String(review.databaseId)];
+}
+
+async function readRunLog(deps: SandboxDeps, runId: number): Promise<string> {
+  const args = await reviewJobLogArgs(deps, runId);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await ghOk(deps, args);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!LOG_NOT_YET_SERVED.test(message)) throw error;
+      if (attempt >= LOG_READ_TRIES) {
+        throw new Error(
+          `the run log was unavailable after ${LOG_READ_TRIES} reads of run ${runId} (GitHub had not served it): ${message}`,
+        );
+      }
+      await deps.clock.sleep(LOG_READ_INTERVAL_MS);
+    }
+  }
+}
+
 // An observation plus the head status's created_at, which StatusFact does not carry.
 type Collected = Observation & { statusCreatedAt?: string };
 
 // Reads the observables of the phase. Each source is a separate call, so a failure
 // in one is an error for the whole scenario, not a silently empty field.
-async function collect(deps: SandboxDeps, live: Live): Promise<Collected> {
+async function collect(
+  deps: SandboxDeps,
+  live: Live,
+  options: { readLog: boolean; observedHead?: string },
+): Promise<Collected> {
   const pr = requirePr(live);
-  const headSha = live.headSha;
+  const headSha = options.observedHead ?? live.headSha;
   if (headSha === undefined)
     throw new Error("the branch has no head to observe");
   const run = live.run;
@@ -1029,6 +1213,12 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Collected> {
     })),
   ];
   const latest = combined.statuses.find((s) => s.context === STATUS_CONTEXT);
+  // The log is read only for a phase that asks for it, so every other phase makes the
+  // same calls it always did.
+  const hunterFailures =
+    options.readLog && run !== undefined
+      ? hunterFailuresIn(await readRunLog(deps, run.databaseId))
+      : undefined;
   const runFact: RunFact | undefined =
     run === undefined || runView === undefined
       ? undefined
@@ -1051,6 +1241,7 @@ async function collect(deps: SandboxDeps, live: Live): Promise<Collected> {
     statusCreatedAt: latest?.created_at,
     comments,
     artifacts,
+    ...(hunterFailures === undefined ? {} : { hunterFailures }),
     // Only a comment run was started by the comment, so only it is judged against
     // the comment's time.
     triggeredAt:
