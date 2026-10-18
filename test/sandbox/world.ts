@@ -213,6 +213,14 @@ export interface WorldOptions {
   // D3: a report on a head whose branch carries src/mute.ts gets a state block that
   // names it. This drops that block, the mutation the state-row check must catch.
   omitStateRows?: boolean;
+  // D3 (rereview-fresh-finding): on a head whose branch carries src/mute.ts, a review
+  // posts one blocking finding anchored there, and the state row at that file is tiered
+  // blocking, the shape the product writes for a finding it found. Unset, the review
+  // posts no such finding and the state row carries no tier, as before.
+  muteBlockingFinding?: true;
+  // With muteBlockingFinding, the tier the state row at src/mute.ts carries. `advisory`
+  // is the mutation the tiered state-row check must catch.
+  muteStateRowTier?: "blocking" | "advisory";
   // T5b: the verdict the CI adjudicator's reply to a `/pr-hero recheck` carries, with
   // blockingFindings on. Unset, it is `rejected`; `upheld` is the mutation the
   // adjudication check must catch.
@@ -485,7 +493,12 @@ export class FakeGithub {
   private stateBlock(sha: string): string {
     if (!this.muteHeads.has(sha) || this.options.omitStateRows === true)
       return "";
-    return `\n<!-- pr-hero-state v=1 head=${sha} -->\n<!-- {"findings":[{"id":"R001","locs":["src/mute.ts:3"]}],"reviews":2,"hw":1} -->`;
+    // The tier is written only when a knob asks for one, so the default row is unchanged.
+    const tier =
+      this.options.muteStateRowTier ??
+      (this.options.muteBlockingFinding === true ? "blocking" : undefined);
+    const tierField = tier === undefined ? "" : `,"tier":"${tier}"`;
+    return `\n<!-- pr-hero-state v=1 head=${sha} -->\n<!-- {"findings":[{"id":"R001"${tierField},"locs":["src/mute.ts:3"]}],"reviews":2,"hw":1} -->`;
   }
 
   private comment(body: string): CommentRow {
@@ -528,9 +541,24 @@ export class FakeGithub {
           ),
         );
       }
+      // D3: the finding a re-review first finds at the mute file, on a head that carries it.
+      const muteFinding =
+        this.options.muteBlockingFinding === true && this.muteHeads.has(sha);
+      // One finding per head: a second review of the same head keeps the first one, as
+      // the product's re-review carries its own finding forward instead of posting another.
+      const muteMarker = blockingFinding(sha, MUTE_PATH, 3).split(" -->")[0];
+      if (
+        muteFinding &&
+        !this.inlineOf(prNumber).some((c) => c.body.startsWith(muteMarker))
+      ) {
+        this.inlineOf(prNumber).push(
+          this.comment(blockingFinding(sha, MUTE_PATH, 3)),
+        );
+      }
       const blockingCount =
         (this.options.blockingFindings === true ? 1 : 0) +
-        (this.options.plantedFinding === true ? 1 : 0);
+        (this.options.plantedFinding === true ? 1 : 0) +
+        (muteFinding ? 1 : 0);
       const gateFails =
         outcome === "review" &&
         blockingCount > 0 &&

@@ -49,7 +49,8 @@ export type Check =
   // conclusion cannot show that no review ran. This is the inverse of own-evidence.
   | { kind: "no-run-evidence" }
   // D3: this head's report carries a state-block row located in `path`.
-  | { kind: "state-row-at"; path: string }
+  // S2: `tier`, when set, makes the row match only with that tier as well as the path.
+  | { kind: "state-row-at"; path: string; tier?: "blocking" | "advisory" }
   // SB3: the phase's run concluded this way.
   | { kind: "run-conclusion"; conclusion: string }
   // SB3: the head's pr-hero status exists and is not pending, so a cancelled run leaves no stuck gate.
@@ -114,7 +115,9 @@ export function describeCheck(check: Check): string {
     case "no-run-evidence":
       return "the run left no review evidence of its own";
     case "state-row-at":
-      return `state row at ${check.path}`;
+      return check.tier === undefined
+        ? `state row at ${check.path}`
+        : `state row at ${check.path} with tier ${check.tier}`;
     case "run-conclusion":
       return `run concluded ${check.conclusion}`;
     case "status-settled":
@@ -147,6 +150,48 @@ function headReports(obs: Observation): number {
 // harness does not import the engine.
 const PARTIAL_REVIEW =
   /^pr-hero: review partial \(\d+ of \d+ hunters failed\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$|^pr-hero: review partial again \(\d+ of \d+ hunters failed\) — fix the failing route or \/pr-hero override$/;
+
+// S3: this observation's head carries a blocking finding comment anchored at `path`. The
+// same blocking test the status-matches-findings check reads (the finding header's tier),
+// narrowed to the head under test, so an earlier head's finding does not count.
+export function blockingFindingAt(obs: Observation, path: string): boolean {
+  return obs.comments.some(
+    (c) =>
+      c.kind === "finding" &&
+      c.blocking === true &&
+      c.head === obs.headSha &&
+      c.path === path,
+  );
+}
+
+// The blocking entries in this head's report's "Comments Outside Diff" section. Each has
+// no inline comment, so only the report's count shows it. Read by status-matches-findings
+// and by ownBlockingGate, so both count the same thing.
+export function outsideDiffBlockingOn(obs: Observation): number {
+  return obs.comments.reduce(
+    (sum, c) =>
+      c.kind === "report" && c.head === obs.headSha
+        ? sum + (c.outsideDiffBlocking ?? 0)
+        : sum,
+    0,
+  );
+}
+
+// S3 gate for the ifOwnBlockingAt checks: this head shows a blocking finding at the path,
+// either inline there or in its report's outside-diff section, where each entry names the
+// path it is about (outsideDiffBlockingPaths). An outside-diff finding at another file
+// does not open the gate for this path. Only when neither holds are the checks not asserted.
+export function ownBlockingGate(obs: Observation, path: string): boolean {
+  return (
+    blockingFindingAt(obs, path) ||
+    obs.comments.some(
+      (c) =>
+        c.kind === "report" &&
+        c.head === obs.headSha &&
+        (c.outsideDiffBlockingPaths ?? []).includes(path),
+    )
+  );
+}
 
 export function evaluateCheck(check: Check, obs: Observation): CheckResult {
   const label = describeCheck(check);
@@ -219,13 +264,7 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         (c) =>
           c.kind === "finding" && c.blocking === true && c.head === obs.headSha,
       ).length;
-      const outside = obs.comments.reduce(
-        (sum, c) =>
-          c.kind === "report" && c.head === obs.headSha
-            ? sum + (c.outsideDiffBlocking ?? 0)
-            : sum,
-        0,
-      );
+      const outside = outsideDiffBlockingOn(obs);
       const visible = inline + outside;
       const counted = gateBlockingCount(status.description);
       // Each branch names its case in the detail, so a pass says which rule it used.
@@ -368,6 +407,20 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       const blocks = reports.filter((c) => c.statePaths !== undefined);
       if (blocks.length === 0) {
         return pass(false, "no state block on this head's report");
+      }
+      // S2: a tiered check reads each row's tier too, so an advisory row at the path
+      // does not satisfy a blocking one. Without a tier the path alone decides, as before.
+      if (check.tier !== undefined) {
+        const tiered = blocks.flatMap((c) => c.stateRows ?? []);
+        const shown = tiered
+          .map((row) => `${row.path} (${row.tier ?? "no tier"})`)
+          .join(", ");
+        return pass(
+          tiered.some(
+            (row) => row.path === check.path && row.tier === check.tier,
+          ),
+          `no state row at ${check.path} with tier ${check.tier} (state rows: ${shown || "none"})`,
+        );
       }
       const rows = blocks.flatMap((c) => c.statePaths ?? []);
       return pass(

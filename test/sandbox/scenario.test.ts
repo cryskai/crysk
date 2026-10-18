@@ -1179,15 +1179,15 @@ describe("T2e: the reactions and the near miss, end to end", () => {
 // re-review still counts it. The second push adds a file, and the forced review on
 // that head must write the state row at that file.
 describe("rereview-fresh-finding: the state row of a finding first found by a re-review", () => {
-  test("rereview-fresh-finding exits 0: the report carries a state row at src/mute.ts", async () => {
-    const world = new FakeGithub({ ref: REF });
+  test("rereview-fresh-finding exits 0: the report carries a blocking state row at src/mute.ts, and the re-review's own blocking finding is there", async () => {
+    const world = new FakeGithub({ ref: REF, muteBlockingFinding: true });
     const h = world.harness();
     expect(
       await runScenarios(h.deps, ["rereview-fresh-finding"], OPTIONS),
     ).toBe(0);
     expect(
       h.logs.some((l) =>
-        /PASS {2}rereview-fresh-finding: \[3\] state row at src\/mute\.ts/.test(
+        /PASS {2}rereview-fresh-finding: \[3\] state row at src\/mute\.ts with tier blocking/.test(
           l,
         ),
       ),
@@ -1195,18 +1195,59 @@ describe("rereview-fresh-finding: the state row of a finding first found by a re
   });
 
   test("rereview-fresh-finding exits 1 when the report carries no state row at src/mute.ts", async () => {
-    const world = new FakeGithub({ ref: REF, omitStateRows: true });
+    const world = new FakeGithub({
+      ref: REF,
+      muteBlockingFinding: true,
+      omitStateRows: true,
+    });
     const h = world.harness();
     expect(
       await runScenarios(h.deps, ["rereview-fresh-finding"], OPTIONS),
     ).toBe(1);
     expect(
       h.logs.some((l) =>
-        /FAIL {2}rereview-fresh-finding: \[3\] state row at src\/mute\.ts/.test(
+        /FAIL {2}rereview-fresh-finding: \[3\] state row at src\/mute\.ts with tier blocking/.test(
           l,
         ),
       ),
     ).toBe(true);
+  });
+
+  test("rereview-fresh-finding exits 1 when the row at src/mute.ts is advisory though the finding is blocking", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      muteBlockingFinding: true,
+      muteStateRowTier: "advisory",
+    });
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["rereview-fresh-finding"], OPTIONS),
+    ).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        /FAIL {2}rereview-fresh-finding: \[3\] state row at src\/mute\.ts with tier blocking/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("rereview-fresh-finding names its state row as not asserted, and exits 0, when the re-review found no blocking finding at src/mute.ts", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(
+      await runScenarios(h.deps, ["rereview-fresh-finding"], OPTIONS),
+    ).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        l.startsWith(
+          "  not asserted: rereview-fresh-finding [3] state row at src/mute.ts with tier blocking (the re-review found no blocking finding at src/mute.ts)",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) => /^ {2}(PASS|FAIL)\b.*\[3\] state row at/.test(l)),
+    ).toBe(false);
   });
 
   test("a push that adds files on an unchanged variant is not empty, and does not throw", async () => {

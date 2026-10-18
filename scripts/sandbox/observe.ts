@@ -100,10 +100,18 @@ export interface CommentFact {
   // the findings the PR shows with no inline anchor. Set only when there is at
   // least one, so a report without one keeps the shape it always had.
   outsideDiffBlocking?: number;
+  // PR #362 F001 round 2: the path each of those entries names (outsideDiffBlockingPaths),
+  // so a gate can tell whether the outside-diff finding is about the path it checks. Set
+  // only when at least one entry names a path; an entry with no parseable location adds
+  // to outsideDiffBlocking but not here.
+  outsideDiffBlockingPaths?: string[];
   // T5b: the verdict of a CI adjudication reply (`verdict=` on its marker line).
   verdict?: string;
   // D3: the paths of a report's state-block rows (every loc of every row, once each), so a check can read what the PR's state remembers. Set only on a report that carries a state block.
   statePaths?: string[];
+  // S1: the same rows with the tier each row carries, one entry per (path, tier), so a
+  // check can ask for a path under a given tier. Set exactly when statePaths is.
+  stateRows?: StateRow[];
   // A finding's anchor, read off its marker (`path=<p> line=<n>`, preflight.ts findingMarker).
   // The line is the one the marker names, so a check reads the site the product posted.
   path?: string;
@@ -185,18 +193,56 @@ export function outcomeCodeOf(body: string): string | undefined {
 const OUTSIDE_DIFF_HEADING = "### Comments Outside Diff";
 const BLOCKING_ENTRY_HEADER = "🔴 blocking · ";
 
-export function outsideDiffBlockingCount(body: string): number {
+// One location line per blocking entry, in order: the first non-empty line under its
+// header (report.ts findingBodyLines writes the location there). Undefined when the
+// entry has none, so the count still includes it.
+function outsideDiffBlockingLocations(body: string): (string | undefined)[] {
+  const locations: (string | undefined)[] = [];
   let inSection = false;
-  let count = 0;
+  let awaitingLocation = false;
   for (const line of body.split("\n")) {
     if (!inSection) {
       if (line.startsWith(OUTSIDE_DIFF_HEADING)) inSection = true;
       continue;
     }
     if (/^#{1,3} /.test(line) || line === "---") break;
-    if (line.startsWith(BLOCKING_ENTRY_HEADER)) count += 1;
+    if (line.startsWith(BLOCKING_ENTRY_HEADER)) {
+      locations.push(undefined);
+      awaitingLocation = true;
+      continue;
+    }
+    if (awaitingLocation && line.trim() !== "") {
+      locations[locations.length - 1] = line;
+      awaitingLocation = false;
+    }
   }
-  return count;
+  return locations;
+}
+
+export function outsideDiffBlockingCount(body: string): number {
+  return outsideDiffBlockingLocations(body).length;
+}
+
+// The path of a location line: the first backticked `path:line` span, plain or inside a
+// link, with the `:line` suffix after its last colon dropped. Undefined when there is no
+// such span, so an unparseable entry names no path.
+function locationPath(location: string | undefined): string | undefined {
+  const span =
+    location === undefined ? undefined : /`([^`]+)`/.exec(location)?.[1];
+  if (span === undefined) return undefined;
+  const colon = span.lastIndexOf(":");
+  return colon > 0 ? span.slice(0, colon) : undefined;
+}
+
+// PR #362 F001 round 2: the path each blocking entry of the section is about, so the
+// ifOwnBlockingAt gate opens only for the path a PR's outside-diff finding names.
+export function outsideDiffBlockingPaths(body: string): string[] {
+  const paths: string[] = [];
+  for (const location of outsideDiffBlockingLocations(body)) {
+    const path = locationPath(location);
+    if (path !== undefined) paths.push(path);
+  }
+  return paths;
 }
 
 // D3: the state block a report carries (report.ts writes it after the body): the line
@@ -204,7 +250,15 @@ export function outsideDiffBlockingCount(body: string): number {
 // name the paths the PR's state remembers; the line number after the last colon is dropped.
 const STATE_LINE_PREFIX = "<!-- pr-hero-state v=1 ";
 
-export function statePathsOf(body: string): string[] | undefined {
+// S1: one state row's path and tier. The tier is the row's own `tier` field (blocking,
+// advisory or unrecoverable); a row without one reads with no tier, so a tiered check
+// never matches it.
+export interface StateRow {
+  path: string;
+  tier?: string;
+}
+
+export function stateRowsOf(body: string): StateRow[] | undefined {
   const lines = body.split("\n");
   const at = lines.findIndex((line) => line.startsWith(STATE_LINE_PREFIX));
   const json = lines[at + 1];
@@ -218,20 +272,28 @@ export function statePathsOf(body: string): string[] | undefined {
   }
   const findings = (state as { findings?: unknown } | null)?.findings;
   if (!Array.isArray(findings)) return undefined;
-  const paths: string[] = [];
+  const rows: StateRow[] = [];
   // Every loc, not the first: formatLocs sorts a row's locs by path, so the first one
   // can be a proof_ref's file rather than the finding's own.
   for (const row of findings) {
-    const locs = (row as { locs?: unknown } | null)?.locs;
+    const fields = row as { locs?: unknown; tier?: unknown } | null;
+    const locs = fields?.locs;
     if (!Array.isArray(locs)) continue;
+    const tier = typeof fields?.tier === "string" ? fields.tier : undefined;
     for (const loc of locs) {
       if (typeof loc !== "string") continue;
       const colon = loc.lastIndexOf(":");
       const path = colon === -1 ? loc : loc.slice(0, colon);
-      if (!paths.includes(path)) paths.push(path);
+      if (rows.some((r) => r.path === path && r.tier === tier)) continue;
+      rows.push(tier === undefined ? { path } : { path, tier });
     }
   }
-  return paths;
+  return rows;
+}
+
+// The distinct paths of the rows, in the order the rows name them.
+function pathsOf(rows: readonly StateRow[]): string[] {
+  return [...new Set(rows.map((row) => row.path))];
 }
 
 // T5b: the marker the CI adjudicator writes on its reply to a dismissal. Its verdict is
@@ -246,13 +308,19 @@ export function classifyComment(
   if (first.startsWith(REPORT_MARKER_PREFIX)) {
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     const outside = outsideDiffBlockingCount(body);
-    const statePaths = statePathsOf(body);
+    const outsidePaths = outsideDiffBlockingPaths(body);
+    const stateRows = stateRowsOf(body);
     return {
       source,
       kind: "report",
       ...(head === undefined ? {} : { head }),
       ...(outside === 0 ? {} : { outsideDiffBlocking: outside }),
-      ...(statePaths === undefined ? {} : { statePaths }),
+      ...(outsidePaths.length === 0
+        ? {}
+        : { outsideDiffBlockingPaths: outsidePaths }),
+      ...(stateRows === undefined
+        ? {}
+        : { statePaths: pathsOf(stateRows), stateRows }),
     };
   }
   if (first.startsWith(FINDING_MARKER_PREFIX)) {
