@@ -134,7 +134,7 @@ model credential, the pull request number or head cannot be resolved, the commen
 cannot be verified, or an install step fails before pr-hero starts, pr-hero posts one `pr-hero`
 commit status (`error`) and one comment on the pull request. A review that starts and then fails also
 does, when the CLI reports an error or every review hunter fails; if the CLI takes the review's lock and then
-stops before it reports an outcome, pr-hero posts the comment, and its `error` status on the head that lock is on, when that head's `pr-hero` status is still `pending` or cannot be read. A review cancelled mid-review sets `error` `PRH-CANCELLED: not reviewed — /pr-hero review reviews this head` on its head, so a cancelled gate never stays pending. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
+stops before it reports an outcome, pr-hero posts the comment, and its `error` status on the head that lock is on, when that head's `pr-hero` status is still `pending` or cannot be read. A review cancelled mid-review sets `error` `PRH-CANCELLED: not reviewed — /pr-hero review reviews this head` on its head, so a cancelled gate never stays pending. The `pending` status names its run: in Actions it links to that run's attempt, so the status's link opens the Actions run, and a cancel settles only the pending that names its own run. A `pending` from an older pr-hero, with no run link, is matched by its creation time instead. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
 or unclassified) and the command that fixes it.
 A newer comment replaces the older one from the same author. pr-hero removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/pr-hero review`
 comment posts no comment: the trigger reacts to it instead ([Reactions on a command](#reactions-on-a-command)). A review that ran keeps its own status. A size or budget skip sets a `failure`
@@ -321,6 +321,10 @@ The workflow's `permissions:` block needs six scopes, each for a specific reason
 - **`checks: write`** — durable CI admission ledger (attempt reservations and terminal outcomes on Check Runs).
 - **`actions: read`** — the admission gate lists this workflow's past runs (`gh run list`). A public
   repo serves that without the scope, so a missing grant only fails on a private repo, with HTTP 403.
+
+The workflow token may also be unable to resolve review threads, even with `issues: write`. GitHub returns
+`Resource not accessible by integration` for that mutation, and the log says so once per run. The
+verified-gone reply is still posted, and the gate is unaffected: the thread stays open for a person to close.
 
 ## Security considerations
 
@@ -607,7 +611,7 @@ open: this run's blocking findings, plus each blocking finding from an earlier r
 been cleared (subject to the known gap at the end of this paragraph). A finding is still open when it is carried forward unchanged, when the verifier could not
 decide, when a triage reply deferred it, or when a triage reply dismissed it. A dismissal the adjudicator
 upheld counts too. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, or when every file it
-names was deleted. Triage replies (`applied`, `dismissed`,
+names was deleted. A dismissed, deferred or misclassified finding is re-verified when a push touches its code, and leaves the count when verified gone. Triage replies (`applied`, `dismissed`,
 `deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator checks them only when someone comments `/pr-hero recheck` (see [Rechecking a dismissal](#rechecking-a-dismissal)). The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. **State block.** From the second review on, the summary carries a `pr-hero-state` block: the merged live set of the pull request's open findings. It holds every surviving earlier finding and this run's findings, so a blocking finding first raised by a re-review still counts on the next review, including a same-head `/pr-hero review` that runs no hunters. A finding that a re-review verified gone leaves the block. Each row keeps its `R###` id. The block's `hw` field is the highest id ever assigned on the pull request, so a retired id is never reused. When the summary would exceed GitHub's comment size limit, the cap drops prior advisory findings first (unconfirmed, then carried), never a blocking finding, and the summary states how many finding identities it dropped from the block. Known gap: the first review writes no state block, so an outside-diff finding of the first review is not persisted. Its inline findings are recovered from their markers on the second review.
 
 

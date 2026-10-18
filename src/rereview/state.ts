@@ -380,7 +380,17 @@ export function assembleLive(input: {
   let reTiered = 0;
   for (const row of input.settled) {
     let status: GateStatus = row.status;
-    if (status === "queued") {
+    if (status === "queued" && row.held !== undefined) {
+      // WHY a held row settles only on a refutation: the triage it carries is
+      // what the gate counted before the push touched the finding. A verifier
+      // that finds it still present, or cannot decide, leaves the triage
+      // semantics in place (suppressed stays suppressed, deferred stays
+      // deferred, the persisted row is the same as before the verify).
+      status =
+        input.verifyVerdicts.get(row.id) === "verified-gone"
+          ? "verified-gone"
+          : row.held;
+    } else if (status === "queued") {
       status = input.verifyVerdicts.get(row.id) ?? "unconfirmed";
     }
     if (status === "verified-gone") {

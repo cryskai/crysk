@@ -81,6 +81,9 @@ function thisRunOverrideCutoff(): number | null {
 // Whether an override posted during this run stands over its final write. The rule itself
 // is overrideStandsOverRun (src/ci/override.ts), applied to the cutoff the CLI computed.
 //
+// The wait before the one retry of a failed override read (overrideStandsOverThisRun).
+const OVERRIDE_READ_RETRY_DELAY_MS = 2_000;
+
 // WHY the read is strict: the reader is asked with failClosed "read", so a failed gh read throws instead
 // of looking like a head with no override (fetchCommitStatuses, src/pr/pr.ts). A malformed row is
 // skipped, not a failure: a valid fresh override on the same head still stands over the run.
@@ -89,30 +92,48 @@ function thisRunOverrideCutoff(): number | null {
 // replace an override on the head that we could not read. Holding the verdict back would leave the
 // head with no status, the same gap the override rule exists to prevent elsewhere, so we take the
 // rarer overwrite and log a warning that says so.
+// WHY one retry (2 s, the sleep injected by the caller or Bun.sleep): a failed read is often a blip,
+// and a second read narrows the window in which an override is missed. The retry narrows the window
+// only: when it fails too, the fallback is unchanged, the verdict is written with its warning.
 async function overrideStandsOverThisRun(
   operatorRoot: string,
   headSha: string,
   spawnFn: typeof Bun.spawn | undefined,
   readStatuses: typeof fetchCommitStatuses,
   cutoffMs: number | null,
+  sleep: (ms: number) => Promise<void> = (ms) => Bun.sleep(ms),
 ): Promise<boolean> {
   if (cutoffMs === null) return false;
-  let statuses: readonly CommitStatusFact[];
-  try {
-    statuses = await readStatuses(operatorRoot, headSha, {
+  const readOnce = () =>
+    readStatuses(operatorRoot, headSha, {
       spawnFn,
       failClosed: "read",
     });
+  let statuses: readonly CommitStatusFact[];
+  try {
+    statuses = await readOnce();
   } catch {
-    log(
-      formatWorkflowCommand(
-        "warning",
-        `pr-hero: could not read the statuses of ${headSha.slice(0, 7)}, so the override check could not read the head and the verdict is written`,
-      ),
-    );
-    return false;
+    // One retry after a short wait narrows the window; when it fails too, the fallback below is
+    // the same as before the retry existed.
+    try {
+      await sleep(OVERRIDE_READ_RETRY_DELAY_MS);
+      statuses = await readOnce();
+    } catch {
+      return overrideReadFallback(headSha);
+    }
   }
   return overrideStandsOverRun(statuses, cutoffMs);
+}
+
+// The override read's fallback: the verdict is written, and the warning says the head was not read.
+function overrideReadFallback(headSha: string): false {
+  log(
+    formatWorkflowCommand(
+      "warning",
+      `pr-hero: could not read the statuses of ${headSha.slice(0, 7)}, so the override check could not read the head and the verdict is written`,
+    ),
+  );
+  return false;
 }
 
 // The inner `finally`: the commit status must settle BEFORE the lock is
@@ -169,6 +190,8 @@ export async function settleCommitStatusAndLedger(input: {
   // posted during this run stands (overrideStandsOverRun). Production omits it and
   // gets the real reader; a test injects one.
   readStatuses?: typeof fetchCommitStatuses;
+  // The wait before the override read's one retry. Production omits it (Bun.sleep); a test injects one.
+  sleep?: (ms: number) => Promise<void>;
   // Where the CLI's outcome record is written (PRHERO_OUTCOME_DIR). Production omits
   // it, and the record writer then reads process.env, as every other writer does.
   env?: Readonly<Record<string, string | undefined>>;
@@ -234,6 +257,7 @@ export async function settleCommitStatusAndLedger(input: {
         input.spawnFn,
         input.readStatuses ?? fetchCommitStatuses,
         overrideCutoff,
+        input.sleep,
       ));
     if (overrideStands) {
       // WHY one line and no status: the override stays the head's status. This run's

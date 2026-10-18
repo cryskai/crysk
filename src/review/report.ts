@@ -744,8 +744,8 @@ export function renderPrComment(
   }
   if ((delta?.rereview?.capped ?? 0) > 0) {
     out.push(
-      `⚠️ **${delta?.rereview?.capped} prior finding(s) unconfirmed:** ` +
-        "verification cap (`max_verification_steps`) bound this run; " +
+      `⚠️ **${delta?.rereview?.capped} prior finding(s) not verified:** ` +
+        "verification cap (`max_verification_steps`) bound this run (a dismissed or deferred one keeps its triage); " +
         "`--yes` does not bypass it.",
     );
     out.push("");

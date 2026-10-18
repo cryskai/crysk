@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  actionsRunUrl,
   type CatalogEntry,
   type CliRecord,
   codeOf,
@@ -879,9 +880,11 @@ describe("renderCode and renderError: the annotation", () => {
       { detail: "dedupe: pr-hero" },
       "action",
     );
+    // The owner (the caller's unclassified) is unchanged; only the lead names the condition.
+    expect(hunters.owner).toBe("unclassified");
     expect(
       hunters.annotation.startsWith(
-        "::error title=pr-hero PRH-HUNTERS-FAILED::Unclassified: ",
+        "::error title=pr-hero PRH-HUNTERS-FAILED::Not reviewed: ",
       ),
     ).toBe(true);
   });
@@ -2235,5 +2238,74 @@ describe("PRH-GOTCHAS-MISSING fix names the init command", () => {
     expect(fix).toBe(
       "Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).",
     );
+  });
+});
+
+describe("PRH-HUNTERS-FAILED lead", () => {
+  // WHY: the caller requests this code for a condition it observes directly
+  // (the hunter set), so "Unclassified:" would blame pr-hero for nothing
+  // unknown. Other unclassified codes keep their lead.
+  test("names the condition instead of Unclassified", () => {
+    const rendered = renderCode("PRH-HUNTERS-FAILED", FULL, "action");
+    expect(
+      rendered.annotation.startsWith(
+        "::error title=pr-hero PRH-HUNTERS-FAILED::Not reviewed: ",
+      ),
+    ).toBe(true);
+    expect(rendered.annotation.includes("Unclassified:")).toBe(false);
+    expect(rendered.summary.join("\n").includes("Unclassified:")).toBe(false);
+  });
+
+  test("other unclassified codes still lead with Unclassified", () => {
+    const rendered = renderCode("PRH-UNCLASSIFIED", FULL, "action");
+    expect(rendered.annotation.includes("::Unclassified: ")).toBe(true);
+  });
+});
+
+// The run's own URL, the target_url of the pending the CLI posts in Actions (SB3 follow-up).
+describe("actionsRunUrl — the run a pending belongs to", () => {
+  const IN_ACTIONS = {
+    GITHUB_ACTIONS: "true",
+    GITHUB_SERVER_URL: "https://github.com",
+    GITHUB_REPOSITORY: "acme/widgets",
+    GITHUB_RUN_ID: "4242",
+  };
+
+  test("names the run and its attempt, the first attempt when none is given", () => {
+    expect(actionsRunUrl(IN_ACTIONS)).toBe(
+      "https://github.com/acme/widgets/actions/runs/4242/attempts/1",
+    );
+  });
+
+  test("names the attempt the runner reports", () => {
+    expect(actionsRunUrl({ ...IN_ACTIONS, GITHUB_RUN_ATTEMPT: "3" })).toBe(
+      "https://github.com/acme/widgets/actions/runs/4242/attempts/3",
+    );
+  });
+
+  test("an attempt that is not a positive integer is the first attempt", () => {
+    for (const attempt of ["0", "x", "-2"]) {
+      expect(
+        actionsRunUrl({ ...IN_ACTIONS, GITHUB_RUN_ATTEMPT: attempt }),
+      ).toBe("https://github.com/acme/widgets/actions/runs/4242/attempts/1");
+    }
+  });
+
+  test("outside GitHub Actions there is no run URL", () => {
+    const { GITHUB_ACTIONS: _actions, ...outside } = IN_ACTIONS;
+    expect(actionsRunUrl(outside)).toBeUndefined();
+    expect(actionsRunUrl({ ...IN_ACTIONS, GITHUB_ACTIONS: "false" })).toBe(
+      undefined,
+    );
+  });
+
+  test("a run without its server, repository, or run id has no run URL", () => {
+    for (const key of [
+      "GITHUB_SERVER_URL",
+      "GITHUB_REPOSITORY",
+      "GITHUB_RUN_ID",
+    ] as const) {
+      expect(actionsRunUrl({ ...IN_ACTIONS, [key]: "" })).toBeUndefined();
+    }
   });
 });

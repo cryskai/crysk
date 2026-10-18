@@ -60,6 +60,7 @@ import {
 } from "../src/cli";
 import { canonicalRemoteId } from "../src/home-preflight";
 import { readLocalIgnoreRules } from "../src/ignore-read";
+import { createSignalHandler } from "../src/signal-handler";
 
 // ---------------------------------------------------------------------------
 // FakeGh: records every call's argv AND stdin (decoded), in order. Routes
@@ -944,5 +945,54 @@ describe("main — the outcome record in action mode", () => {
     expect(runCliAt).toBeGreaterThan(-1);
     expect(writeAt).toBeGreaterThan(runCliAt);
     expect(rethrowAt).toBeGreaterThan(writeAt);
+  });
+});
+
+describe("runCli exit hooks on a non-TTY stderr", () => {
+  // WHY: the cursor-restore escape is a terminal control. On a pipe or a CI
+  // log it prints as literal "[?25h" after every command. Only a terminal
+  // whose cursor the menu hid needs it restored.
+  test("a non-TTY run writes no cursor-restore escape", async () => {
+    const root = path.resolve(import.meta.dir, "..");
+    const proc = Bun.spawn(["bun", "bin/pr-hero.js", "--help"], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stderr, exitCode] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stderr.includes("\x1b[?25h")).toBe(false);
+  });
+});
+
+// A second signal must never cut the first one's settle short (Actions sends
+// SIGINT then SIGTERM; npx with a piped stdin can deliver SIGINT twice).
+describe("createSignalHandler", () => {
+  test("a second signal waits for the first settle, and the process exits once with the first code", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const events: string[] = [];
+    const onSignal = createSignalHandler({
+      settle: async () => {
+        events.push("settle-start");
+        await gate;
+        events.push("settle-end");
+      },
+      exit: (code) => {
+        events.push(`exit ${code}`);
+      },
+    });
+    const first = onSignal(130)();
+    const second = onSignal(143)();
+    await Promise.resolve();
+    expect(events).toEqual(["settle-start"]);
+    release();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["settle-start", "settle-end", "exit 130"]);
   });
 });

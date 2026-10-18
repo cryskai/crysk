@@ -349,59 +349,166 @@ export async function observeOpenCodeExecutable(
   }
 }
 
+// Qualification runs right after the server's "listening" line, on a runner
+// that may be cold or CPU-contended, so a single shared deadline turned a slow
+// but healthy server into a failed session (~10 s in). Each request gets its
+// own deadline, and only transport-level failures are retried.
+const QUALIFY_HEALTH_DEADLINE_MS = 2_000;
+const QUALIFY_DOC_DEADLINE_MS = 4_000;
+const QUALIFY_ATTEMPTS = 3;
+const QUALIFY_BACKOFF_MS = [250, 500] as const;
+const QUALIFY_DEADLINE_MESSAGE = "OpenCode health/doc deadline";
+const BYTE_LIMIT_MESSAGE = "OpenCode observation byte limit exceeded";
+
+// The only error class qualification retries: a request deadline, a
+// fetch/connection failure while sending or reading, or an HTTP status >= 500.
+// Everything else (an unhealthy body, a version or contract mismatch, a 4xx,
+// malformed JSON, the byte limit) is NOT transport and is never retried: those
+// are the identity and contract facts the guard exists to refuse, and a retry
+// would only re-ask a server that already answered.
+class OpenCodeQualificationTransportError extends Error {
+  override readonly name = "OpenCodeQualificationTransportError";
+}
+
+export interface OpenCodeQualificationOptions {
+  readonly healthDeadlineMs?: number;
+  readonly docDeadlineMs?: number;
+  readonly backoffMs?: readonly number[];
+}
+
 export async function qualifyOpenCodeServer(
   url: string,
   expected: OpenCodeObservedIdentity,
   signal?: AbortSignal,
   fetcher: typeof fetch = fetch,
+  options: OpenCodeQualificationOptions = {},
 ): Promise<{
   serverVersion: string;
   consumedContractSha256: string;
   openApiDocumentSha256: string;
 }> {
-  const controller = new AbortController();
-  const abort = () => controller.abort(signal?.reason);
   signal?.throwIfAborted();
-  signal?.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(
-    () => controller.abort(new Error("OpenCode health/doc deadline")),
-    2_000,
-  );
-  const get = async (path: string) => {
-    const response = await withAbort(
-      fetcher(new URL(path, url), { signal: controller.signal }),
-      controller.signal,
-    );
-    if (!response.ok || response.body === null)
-      throw new Error(`OpenCode qualification unavailable: ${path}`);
-    return JSON.parse(
-      await boundedText(response.body, 2 * 1024 * 1024, controller.signal),
-    );
-  };
-  try {
-    const health = record(await get("/global/health"));
-    if (health.healthy !== true || health.version !== expected.serverVersion)
-      throw new Error(
-        "OpenCode serving version differs from observed executable",
+  const backoffMs = options.backoffMs ?? QUALIFY_BACKOFF_MS;
+
+  // One request, one deadline. The deadline covers the body read too, because
+  // a server that sends headers and then stalls is the same failure as one
+  // that never answers.
+  const attempt = async (
+    path: string,
+    deadlineMs: number,
+  ): Promise<unknown> => {
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    let deadlineHit = false;
+    const timer = setTimeout(() => {
+      deadlineHit = true;
+      controller.abort(new Error(QUALIFY_DEADLINE_MESSAGE));
+    }, deadlineMs);
+    // A caller abort is never a transport failure: rethrow it so the retry
+    // loop stops. A deadline or a connection error is retryable.
+    const transport = (error: unknown): unknown => {
+      if (signal?.aborted) return error;
+      if (deadlineHit)
+        return new OpenCodeQualificationTransportError(
+          QUALIFY_DEADLINE_MESSAGE,
+        );
+      if (error instanceof Error && error.message === BYTE_LIMIT_MESSAGE)
+        return error;
+      return new OpenCodeQualificationTransportError(
+        error instanceof Error ? error.message : String(error),
       );
-    const document = await get("/doc");
-    const consumedContractSha256 = consumedOpenCodeContractDigest(document);
-    if (
-      expected.sdkVersion !== "1.18.25" ||
-      expected.serverVersion !== "1.18.30" ||
-      consumedContractSha256 !== OPENCODE_CONSUMED_CONTRACT_SHA256
-    )
-      throw new Error("OpenCode served contract is not qualified");
-    return {
-      serverVersion: String(health.version),
-      consumedContractSha256,
-      openApiDocumentSha256: createHash("sha256")
-        .update(JSON.stringify(document))
-        .digest("hex"),
     };
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", abort);
-    controller.abort();
-  }
+    try {
+      let response: Response;
+      try {
+        response = await withAbort(
+          fetcher(new URL(path, url), { signal: controller.signal }),
+          controller.signal,
+        );
+      } catch (error) {
+        throw transport(error);
+      }
+      if (!response.ok || response.body === null) {
+        const message = `OpenCode qualification unavailable: ${path}`;
+        throw response.status >= 500
+          ? new OpenCodeQualificationTransportError(message)
+          : new Error(message);
+      }
+      let text: string;
+      try {
+        text = await boundedText(
+          response.body,
+          2 * 1024 * 1024,
+          controller.signal,
+        );
+      } catch (error) {
+        throw transport(error);
+      }
+      return JSON.parse(text);
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      controller.abort();
+    }
+  };
+
+  const get = async (path: string, deadlineMs: number): Promise<unknown> => {
+    for (let n = 1; ; n++) {
+      try {
+        return await attempt(path, deadlineMs);
+      } catch (error) {
+        if (
+          signal?.aborted ||
+          !(error instanceof OpenCodeQualificationTransportError) ||
+          n >= QUALIFY_ATTEMPTS
+        )
+          throw error;
+        // The backoff listens to the caller too: an abort ends the wait at
+        // once instead of after the sleep.
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(sleep);
+            signal?.removeEventListener("abort", done);
+            resolve();
+          };
+          const sleep = setTimeout(
+            done,
+            backoffMs[n - 1] ?? backoffMs.at(-1) ?? 0,
+          );
+          signal?.addEventListener("abort", done, { once: true });
+        });
+        signal?.throwIfAborted();
+      }
+    }
+  };
+
+  const health = record(
+    await get(
+      "/global/health",
+      options.healthDeadlineMs ?? QUALIFY_HEALTH_DEADLINE_MS,
+    ),
+  );
+  if (health.healthy !== true || health.version !== expected.serverVersion)
+    throw new Error(
+      "OpenCode serving version differs from observed executable",
+    );
+  const document = await get(
+    "/doc",
+    options.docDeadlineMs ?? QUALIFY_DOC_DEADLINE_MS,
+  );
+  const consumedContractSha256 = consumedOpenCodeContractDigest(document);
+  if (
+    expected.sdkVersion !== "1.18.25" ||
+    expected.serverVersion !== "1.18.30" ||
+    consumedContractSha256 !== OPENCODE_CONSUMED_CONTRACT_SHA256
+  )
+    throw new Error("OpenCode served contract is not qualified");
+  return {
+    serverVersion: String(health.version),
+    consumedContractSha256,
+    openApiDocumentSha256: createHash("sha256")
+      .update(JSON.stringify(document))
+      .digest("hex"),
+  };
 }

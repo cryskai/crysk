@@ -53,6 +53,10 @@ function writeExecutable(file: string, body: string): void {
   chmodSync(file, 0o755);
 }
 
+// The launcher probes a Bun with `--version` before using it, so every fake that
+// must reach its real behavior answers that probe first.
+const VERSION_OK = `if [ "$1" = "--version" ]; then echo 1.3.14; exit 0; fi`;
+
 function fakeBunOn(dir: string, body: string): string {
   const file = path.join(dir, "bun");
   writeExecutable(file, body);
@@ -125,7 +129,7 @@ test.skipIf(process.platform === "win32")(
   () => {
     const pathDir = path.join(tmp, "path-bin");
     mkdirSync(pathDir);
-    fakeBunOn(pathDir, "exit 3");
+    fakeBunOn(pathDir, `${VERSION_OK}\nexit 3`);
 
     const result = runLauncher([], {
       PATH: `${pathDir}${path.delimiter}${path.dirname(NODE)}`,
@@ -156,7 +160,10 @@ test.skipIf(process.platform === "win32")(
     // own handlers before the child can start, so READY means both sides are listening.
     fakeBunOn(
       pathDir,
-      `trap 'echo got-term > "$MARK"; exit 0' TERM\ntouch "$READY"\nwhile :; do sleep 0.1; done`,
+      `${VERSION_OK}
+trap 'echo got-term > "$MARK"; exit 0' TERM
+touch "$READY"
+while :; do sleep 0.1; done`,
     );
 
     const proc = Bun.spawn([NODE, launcher()], {
@@ -200,10 +207,136 @@ test("under Bun, the launcher runs the CLI in-process and prints its usage", () 
 });
 
 test.skipIf(process.platform === "win32")(
+  "a bundled Bun that fails `--version` is skipped for the Bun on PATH",
+  () => {
+    writeExecutable(
+      path.join(pkg, "node_modules", "bun", "bin", "bun.exe"),
+      "exit 1",
+    );
+    const pathDir = path.join(tmp, "path-bin");
+    mkdirSync(pathDir);
+    fakeBunOn(pathDir, 'echo "PATHBUN $@"');
+
+    const result = runLauncher(["x"], {
+      PATH: `${pathDir}${path.delimiter}${path.dirname(NODE)}`,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(decode(result.stdout)).toContain(
+      `PATHBUN ${path.join(pkg, "src", "cli.ts")} x`,
+    );
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "when neither the bundled Bun nor the Bun on PATH runs, exit 127 and name both and the fix",
+  () => {
+    writeExecutable(
+      path.join(pkg, "node_modules", "bun", "bin", "bun.exe"),
+      "exit 1",
+    );
+    const pathDir = path.join(tmp, "path-bin");
+    mkdirSync(pathDir);
+    fakeBunOn(pathDir, "exit 1");
+
+    const result = runLauncher([], {
+      PATH: `${pathDir}${path.delimiter}${path.dirname(NODE)}`,
+    });
+
+    const err = decode(result.stderr);
+    expect(result.exitCode).toBe(127);
+    expect(err).toContain("bundled");
+    expect(err).toContain("PATH");
+    expect(err).toContain("npm i -g bun");
+    expect(err).toContain("https://bun.sh");
+    expect(err).toContain("reinstall pr-hero");
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "SIGINT sent to the launcher alone reaches the child when stdin is not a TTY",
+  async () => {
+    const pathDir = path.join(tmp, "path-bin");
+    const mark = path.join(tmp, "mark");
+    const ready = path.join(tmp, "ready");
+    mkdirSync(pathDir);
+    // The loop is bounded (about 10 s) so a regression that drops the signal
+    // cannot leave the fake running for good.
+    fakeBunOn(
+      pathDir,
+      `${VERSION_OK}\ntrap 'echo got-int > "$MARK"; exit 0' INT\n` +
+        `touch "$READY"\ni=0\nwhile [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done`,
+    );
+
+    const proc = Bun.spawn([NODE, launcher()], {
+      env: {
+        PATH: `${pathDir}${path.delimiter}${path.dirname(NODE)}:/bin:/usr/bin`,
+        MARK: mark,
+        READY: ready,
+      },
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    for (let waited = 0; !existsSync(ready) && waited < 5000; waited += 50) {
+      await Bun.sleep(50);
+    }
+    expect(existsSync(ready)).toBe(true);
+    proc.kill("SIGINT");
+
+    const exited = await Promise.race([
+      proc.exited.then(() => true),
+      Bun.sleep(5000).then(() => false),
+    ]);
+    expect(exited).toBe(true);
+    expect(existsSync(mark)).toBe(true);
+    expect(readFileSync(mark, "utf8")).toContain("got-int");
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "on a TTY, SIGINT sent to the launcher alone is ignored and the child keeps running",
+  async () => {
+    const pathDir = path.join(tmp, "path-bin");
+    const mark = path.join(tmp, "mark");
+    const ready = path.join(tmp, "ready");
+    mkdirSync(pathDir);
+    // The child gets the terminal's process group in real use, so a signal the
+    // launcher ignores must not reach it; the child then exits on its own.
+    fakeBunOn(
+      pathDir,
+      `${VERSION_OK}\ntrap 'echo got-int > "$MARK"; exit 0' INT\n` +
+        `touch "$READY"\ni=0\nwhile [ $i -lt 15 ]; do sleep 0.1; i=$((i+1)); done\necho done-alone > "$MARK"`,
+    );
+
+    const proc = Bun.spawn([NODE, launcher()], {
+      env: {
+        PATH: `${pathDir}${path.delimiter}${path.dirname(NODE)}:/bin:/usr/bin`,
+        MARK: mark,
+        READY: ready,
+      },
+      terminal: { cols: 80, rows: 24, data() {} },
+    });
+    for (let waited = 0; !existsSync(ready) && waited < 5000; waited += 50) {
+      await Bun.sleep(50);
+    }
+    expect(existsSync(ready)).toBe(true);
+    proc.kill("SIGINT");
+
+    const exited = await Promise.race([
+      proc.exited.then(() => true),
+      Bun.sleep(8000).then(() => false),
+    ]);
+    expect(exited).toBe(true);
+    expect(readFileSync(mark, "utf8")).toBe("done-alone\n");
+  },
+);
+
+test.skipIf(process.platform === "win32")(
   "a child that dies from SIGINT makes the launcher die from SIGINT, not exit 0",
   () => {
     const pathDir = nodeOnlyDir();
-    fakeBunOn(pathDir, "kill -INT $$\nsleep 5");
+    fakeBunOn(pathDir, `${VERSION_OK}\nkill -INT $$\nsleep 5`);
 
     const result = runLauncher([], { PATH: `${pathDir}:/bin:/usr/bin` });
 

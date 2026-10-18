@@ -210,6 +210,25 @@ export const CLI_RECORD_FILE = "cli.json";
 // pending landed. The cancel settle overwrites only the pending with exactly this time.
 export const PENDING_AT_FILE = "pending-at";
 
+// The URL of this run's attempt, or undefined outside GitHub Actions. The CLI's pending names
+// it as its target_url, and the cancel settle compares a pending with it (SB3 follow-up), so
+// the CLI and the publisher share this one builder: they cannot disagree on the URL. An attempt
+// that is not a positive integer reads as the first attempt, as the trigger record writes it.
+export function actionsRunUrl(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | undefined {
+  if (env.GITHUB_ACTIONS !== "true") return undefined;
+  const server = env.GITHUB_SERVER_URL ?? "";
+  const repository = env.GITHUB_REPOSITORY ?? "";
+  const runId = env.GITHUB_RUN_ID ?? "";
+  if (server === "" || repository === "" || runId === "") return undefined;
+  const attempt = /^[0-9]+$/.test(env.GITHUB_RUN_ATTEMPT ?? "")
+    ? Number(env.GITHUB_RUN_ATTEMPT)
+    : 0;
+  const first = attempt > 0 ? attempt : 1;
+  return `${server}/${repository}/actions/runs/${runId}/attempts/${first}`;
+}
+
 // The only classes the CLI writes (src/ci/classify-error.ts). A wider reader
 // would hide a writer's bug, the same rule as parseRecordClass below. The config
 // classes are the ones a throw site names (T2d-1). The person layer is not one of
@@ -1575,6 +1594,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-HUNTERS-FAILED": {
     level: "error",
     owner: "unclassified",
+    // WHY a lead of its own: the caller requests this code for a condition it
+    // sees directly (the hunter set), so "Unclassified:" would blame an unknown
+    // cause that does not exist. The owner stays unclassified for the table.
+    lead: "Not reviewed:",
     what: "Every review hunter failed in {step}: {detail}",
     variants: single(
       "no hunter returned a result, so there is no finding to report",
