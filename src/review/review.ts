@@ -23,6 +23,7 @@ import {
   resolveRepoRoot,
 } from "#git/git";
 import { engineIdentity } from "#git/identity";
+import { countFreeRouteSteps } from "#model/free-discovery";
 import { reviewPr } from "#pr/review-pr";
 import type { Telemetry } from "#review/findings";
 import { type PipelineResult, runPipeline } from "#review/pipeline";
@@ -234,6 +235,15 @@ export async function review(options: CliOptions): Promise<number> {
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
+  // Read off the admission above, which already decided every free verdict:
+  // this adds no probe. Absent without routing, so the band stays.
+  const freeRoute =
+    routePlan === undefined || productionAdmission === undefined
+      ? undefined
+      : await countFreeRouteSteps({
+          steps: routePlan.steps,
+          probe: productionAdmission.freeModelProbe,
+        });
   // Named rather than inlined into renderPlan: the same context is what the
   // confirm menu's "Show details" renders, and building it twice would risk
   // the card and the details view disagreeing about the run they describe.
@@ -262,6 +272,7 @@ export async function review(options: CliOptions): Promise<number> {
     droppedPaths: effectiveDiff.droppedPaths,
     configProvenance: configProvenanceOf(loaded, agentsDirSource),
     ...(routePlan === undefined ? {} : { routePlan }),
+    ...(freeRoute === undefined ? {} : { freeRoute }),
   };
   for (const line of renderPlan(planContext, styleEnabled())) log(line);
 

@@ -84,3 +84,28 @@ describe("resolvePrPlanAndConfirm records its progress on the head it posted", (
     );
   });
 });
+
+// The free-route count is read off the admitted route plan, so it must be
+// taken after resolvePipelineRoute (the admission that decides the verdicts)
+// and before the plan card renders. Rendering first would print the band
+// for a route the run already knows is free.
+describe("resolvePrPlanAndConfirm prices the plan line by the admitted route", () => {
+  test("the free-route count is taken after the admission and before the card renders", () => {
+    const admission = body.search(/await resolvePipelineRoute\(/);
+    const count = body.search(/await countFreeRouteSteps\(/);
+    // The context spread is what hands the count to the renderer; the card
+    // renders from that context, so both must follow the count.
+    const handoff = body.indexOf("...(freeRoute === undefined");
+    const render = body.indexOf("renderPrPlan(planContext");
+    expect(admission).toBeGreaterThan(-1);
+    expect(count).toBeGreaterThan(admission);
+    expect(handoff).toBeGreaterThan(count);
+    expect(render).toBeGreaterThan(handoff);
+  });
+
+  test("countFreeRouteSteps is imported from the free-discovery module", () => {
+    expect(code).toMatch(
+      /import \{[^}]*\bcountFreeRouteSteps\b[^}]*\} from "#model\/free-discovery";/,
+    );
+  });
+});

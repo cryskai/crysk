@@ -1,3 +1,5 @@
+import { OPENCODE_OAUTH_PROVIDER } from "../security/credential-broker";
+
 // #182: live free-model discovery. OpenCode free models (backend `opencode`,
 // provider `opencode`, e.g. `muse-spark-1.3-contributor-free`) authenticate
 // with NOTHING, but without a liveness check they are refused at credential
@@ -257,4 +259,44 @@ export function createFreeModelProbe(options: {
     cache.set(key, verdict);
     return verdict;
   };
+}
+
+// The plan line's billing half: how many steps of an ADMITTED route plan the
+// free verdict covers. Reads only the verdicts admission already decided, so
+// it never spawns — `probe` is the memoised instance admission returned, and a
+// pair admission never probed would spawn here, which is why the gate below
+// is the same one admission applies. Only OpenCode api-token routes can be
+// free: an OAuth provider (OPENCODE_OAUTH_PROVIDER) never probes, and a
+// claude-code step has no free kind at all. A missing probe, or a throwing
+// one, counts as not free: an unknown price is never presented as free.
+export interface FreeRouteBilling {
+  readonly free: number;
+  readonly total: number;
+}
+
+export async function countFreeRouteSteps(input: {
+  readonly steps: readonly {
+    readonly route: {
+      readonly backend: string;
+      readonly provider: string;
+      readonly modelSnapshot: string;
+    };
+  }[];
+  readonly probe: FreeModelProbe | undefined;
+}): Promise<FreeRouteBilling> {
+  const total = input.steps.length;
+  if (input.probe === undefined) return { free: 0, total };
+  const probe = input.probe;
+  const verdicts = await Promise.all(
+    input.steps.map(async ({ route }) => {
+      if (route.backend !== "opencode") return false;
+      if (route.provider === OPENCODE_OAUTH_PROVIDER) return false;
+      try {
+        return await probe(route.provider, route.modelSnapshot);
+      } catch {
+        return false;
+      }
+    }),
+  );
+  return { free: verdicts.filter((free) => free).length, total };
 }
