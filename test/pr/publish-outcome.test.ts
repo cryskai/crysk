@@ -43,7 +43,7 @@
 // before that later throw, and reverts to "never called" the instant the
 // call is moved past it (mutation-checked below).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -298,6 +298,34 @@ describe("publishRunOutcome", () => {
     expect(error).toBeInstanceOf(CliError);
     expect(error.cls).toEqual({ kind: "invariant" });
     expect(error.message).toBe("internal: pipeline returned no result");
+  });
+
+  // W3-FOOTER: the plan's free-route count travels into the footer, so a free
+  // run is not footed as a subscription run. Footer lines go to stderr.
+  test("a free route's notional row says so, carried from the plan's count", async () => {
+    const written: string[] = [];
+    const spy = spyOn(process.stderr, "write").mockImplementation(
+      (chunk: string | Uint8Array) => {
+        written.push(String(chunk));
+        return true;
+      },
+    );
+    try {
+      await publishRunOutcome(
+        baseInput({
+          result: {
+            ...baseResult(),
+            usageV2: { notionalCostUsd: 0.05 },
+          } as unknown as PipelineResult,
+          freeRoute: { free: 2, total: 2 },
+        }),
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    const footer = written.join("").replace(/\s+/g, " ");
+    expect(footer).toContain("not charged on a free route");
+    expect(footer).not.toContain("subscription");
   });
 
   // Task item 2 (first half): posting disabled is postFindingsIfEnabled's

@@ -141,3 +141,14 @@ describe("pendingStatusTargetUrl — the pending names its run", () => {
     );
   });
 });
+
+// W3-FOOTER: the free-route count reaches the footer, not only the plan card.
+// resolvePrPlanAndConfirm returns it so reviewPr can hand the billing mode to
+// publishRunOutcome; the count is computed once, in the function that renders it.
+describe("resolvePrPlanAndConfirm returns the free-route count for the footer", () => {
+  test("the success return carries freeRoute alongside routePlan", () => {
+    const ret = body.lastIndexOf("return {");
+    expect(ret).toBeGreaterThan(-1);
+    expect(body.slice(ret)).toMatch(/\bfreeRoute,/);
+  });
+});
