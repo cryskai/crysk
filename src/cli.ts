@@ -271,7 +271,11 @@ export async function main(argv: string[]): Promise<number> {
 export async function runCli(
   argv: string[] = Bun.argv.slice(2),
 ): Promise<void> {
+  // WHY only on a TTY: the escape only undoes a cursor the menu hid on a
+  // terminal. On a pipe or a CI log it prints as literal "[?25h" after every
+  // command, so a non-TTY run writes nothing.
   const restoreCursor = () => {
+    if (process.stderr.isTTY !== true) return;
     try {
       process.stderr.write("\x1b[?25h");
     } catch {

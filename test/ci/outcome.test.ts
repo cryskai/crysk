@@ -879,9 +879,11 @@ describe("renderCode and renderError: the annotation", () => {
       { detail: "dedupe: pr-hero" },
       "action",
     );
+    // The owner (the caller's unclassified) is unchanged; only the lead names the condition.
+    expect(hunters.owner).toBe("unclassified");
     expect(
       hunters.annotation.startsWith(
-        "::error title=pr-hero PRH-HUNTERS-FAILED::Unclassified: ",
+        "::error title=pr-hero PRH-HUNTERS-FAILED::Not reviewed: ",
       ),
     ).toBe(true);
   });
@@ -2221,5 +2223,26 @@ describe("parseCliRecord — the hunter_failures field", () => {
         }),
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("PRH-HUNTERS-FAILED lead", () => {
+  // WHY: the caller requests this code for a condition it observes directly
+  // (the hunter set), so "Unclassified:" would blame pr-hero for nothing
+  // unknown. Other unclassified codes keep their lead.
+  test("names the condition instead of Unclassified", () => {
+    const rendered = renderCode("PRH-HUNTERS-FAILED", FULL, "action");
+    expect(
+      rendered.annotation.startsWith(
+        "::error title=pr-hero PRH-HUNTERS-FAILED::Not reviewed: ",
+      ),
+    ).toBe(true);
+    expect(rendered.annotation.includes("Unclassified:")).toBe(false);
+    expect(rendered.summary.join("\n").includes("Unclassified:")).toBe(false);
+  });
+
+  test("other unclassified codes still lead with Unclassified", () => {
+    const rendered = renderCode("PRH-UNCLASSIFIED", FULL, "action");
+    expect(rendered.annotation.includes("::Unclassified: ")).toBe(true);
   });
 });

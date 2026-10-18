@@ -946,3 +946,23 @@ describe("main — the outcome record in action mode", () => {
     expect(rethrowAt).toBeGreaterThan(writeAt);
   });
 });
+
+describe("runCli exit hooks on a non-TTY stderr", () => {
+  // WHY: the cursor-restore escape is a terminal control. On a pipe or a CI
+  // log it prints as literal "[?25h" after every command. Only a terminal
+  // whose cursor the menu hid needs it restored.
+  test("a non-TTY run writes no cursor-restore escape", async () => {
+    const root = path.resolve(import.meta.dir, "..");
+    const proc = Bun.spawn(["bun", "bin/pr-hero.js", "--help"], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stderr, exitCode] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stderr.includes("\x1b[?25h")).toBe(false);
+  });
+});

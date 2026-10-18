@@ -2296,6 +2296,9 @@ function parseReviewThreads(stdout: string): GraphQlThread[] {
   return nodes as GraphQlThread[];
 }
 
+// The GitHub message for a token without the permission to resolve review threads.
+const WORKFLOW_TOKEN_CANNOT_RESOLVE = "Resource not accessible by integration";
+
 // Map a REST review-comment id to its GraphQL review thread and resolve it.
 // Idempotent: an already-resolved thread is a skip, not an error. A comment
 // with no thread (deleted, or outside the first 100 threads) is not-found
@@ -3140,6 +3143,9 @@ export async function postInlineFindings(input: {
       priors: input.rereviewPriors ?? [],
       posted,
     });
+    // WHY one notice per run: a token that cannot resolve threads cannot do it
+    // for any prior, so one line says so instead of one failure per prior.
+    let threadResolveNoticeLogged = false;
     for (const target of targets) {
       if (target.channel !== "review") continue;
       // The reply is bounded AND caught, and a failure `continue`s past the
@@ -3185,9 +3191,22 @@ export async function postInlineFindings(input: {
           );
         }
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // WHY a notice, not a failure: the reply is posted and the gate does not
+        // depend on the resolve, so the run continues as designed.
+        if (message.includes(WORKFLOW_TOKEN_CANNOT_RESOLVE)) {
+          if (!threadResolveNoticeLogged) {
+            threadResolveNoticeLogged = true;
+            log(
+              "resolve skipped: the workflow token cannot resolve review threads " +
+                `(${WORKFLOW_TOKEN_CANNOT_RESOLVE}); the verified-gone replies are posted`,
+            );
+          }
+          continue;
+        }
         log(
           `resolve failed for ${target.priorId} after the verified-gone reply posted: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
+            message,
         );
       }
     }
