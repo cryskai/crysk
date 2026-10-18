@@ -807,6 +807,60 @@ describe("fetchPostedFindingComments — marker prefix disjointness", () => {
       },
     ]);
   });
+
+  // The visible badge line is the only place a posted comment states its tier
+  // (the marker carries no tier), so the matcher's escalation guard reads it
+  // from the body. Bodies come from the real renderer so the parser cannot
+  // drift from what pr-hero writes.
+  describe("tier from the visible badge line", () => {
+    const bodyWithTier = (tier: "blocking" | "advisory") =>
+      renderIssueFindingComment(
+        finding({
+          id: "F-tier",
+          tier,
+          severity: tier === "blocking" ? "CRITICAL" : "WARNING",
+          path: "src/a.ts",
+          line: 10,
+        }),
+        HEAD,
+      );
+
+    async function fetchOneIssueComment(body: string) {
+      const { spawnFn } = makeFakeGh([
+        { match: ["pulls/42/comments"], response: { stdout: ndjson([]) } },
+        {
+          match: ["issues/42/comments"],
+          response: {
+            stdout: ndjson([{ id: 5, user: "pr-hero", body }]),
+          },
+        },
+      ]);
+      const posted = await fetchPostedFindingComments(OPERATOR_ROOT, 42, {
+        spawnFn,
+      });
+      expect(posted).toHaveLength(1);
+      return posted[0];
+    }
+
+    test("a 🔴 blocking badge parses to tier blocking", async () => {
+      const comment = await fetchOneIssueComment(bodyWithTier("blocking"));
+      expect(comment?.tier).toBe("blocking");
+    });
+
+    test("a 🟡 advisory badge parses to tier advisory", async () => {
+      const comment = await fetchOneIssueComment(bodyWithTier("advisory"));
+      expect(comment?.tier).toBe("advisory");
+    });
+
+    test("a finding comment with no recognizable badge carries no tier", async () => {
+      const comment = await fetchOneIssueComment(
+        "<!-- pr-hero-finding path=src%2Fa.ts line=10 head=" +
+          `${HEAD} c=abcdef123456 -->\nclaim text only`,
+      );
+      expect(comment).toBeDefined();
+      expect(comment).not.toHaveProperty("tier");
+    });
+  });
 });
 
 // PrHeroFindingRef conversion — postPrReview's `allFindings` argument is the

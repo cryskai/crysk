@@ -58,6 +58,7 @@ import {
 import type { Finding, FindingsDocument, RunStatus } from "#review/findings";
 import {
   type PrCommentDelta,
+  parseFindingCommentBadge,
   renderInlineComment,
   renderIssueFindingComment,
   renderPrComment,
@@ -1268,6 +1269,16 @@ export async function fetchPrReviewComments(
   return comments;
 }
 
+// The tier a posted finding comment states on its visible badge line, or
+// nothing. The marker carries no tier, so this is the only record of it.
+// parseFindingCommentBadge is all-or-nothing: a body it cannot read yields
+// no key at all, which the matcher treats as unknown (today's behavior),
+// never as a guessed tier.
+function postedTier(body: string): { tier?: "blocking" | "advisory" } {
+  const tier = parseFindingCommentBadge(body)?.tier;
+  return tier === undefined ? {} : { tier };
+}
+
 // Both channels pr-hero's own per-finding comments can live in, reduced to
 // pr/inline.ts's PostedFindingComment shape. A comment that does not parse as a
 // finding marker is silently excluded — this is where the two marker
@@ -1294,6 +1305,7 @@ export async function fetchPostedFindingComments(
       marker,
       livePath: comment.path,
       liveLine: comment.line ?? undefined,
+      ...postedTier(comment.body),
       ...(comment.created_at === undefined
         ? {}
         : { created_at: comment.created_at }),
@@ -1306,6 +1318,7 @@ export async function fetchPostedFindingComments(
       id: comment.id,
       channel: "issue",
       marker,
+      ...postedTier(comment.body),
       ...(comment.created_at === undefined
         ? {}
         : { created_at: comment.created_at }),
