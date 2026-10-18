@@ -275,13 +275,79 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     }),
   },
   "review-free/0": {
-    pass: obs(),
+    // The review found the planted bug on this head, and no hunter failed in its run.
+    pass: obs({
+      comments: [
+        { source: "issue", kind: "report", head: NEW },
+        {
+          source: "inline",
+          kind: "finding",
+          head: NEW,
+          path: "src/volume.ts",
+          line: 4,
+        },
+      ],
+      hunterFailures: [],
+    }),
     fail: obs({
       status: {
         state: "error",
         description: "PRH-HUNTERS-FAILED: every hunter failed",
       },
       comments: [outcome("PRH-HUNTERS-FAILED")],
+    }),
+  },
+  // SB3 stale-tmp: the review runs as if the stale records were not there.
+  "stale-tmp/0": {
+    pass: obs(),
+    fail: obs({
+      run: {
+        id: 42,
+        event: "pull_request",
+        status: "completed",
+        conclusion: "failure",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "failure" }],
+      },
+      status: errorStatus("PRH-CONFIG-PARSE"),
+      comments: [outcome("PRH-CONFIG-PARSE")],
+    }),
+  },
+  // SB3 rerun-after-push: the first push's run may hunters-fail, as a precondition.
+  "rerun-after-push/0": {
+    pass: obs(),
+    fail: obs({
+      status: errorStatus("PRH-CRED-MISSING"),
+      comments: [outcome("PRH-CRED-MISSING")],
+    }),
+  },
+  "rerun-after-push/1": {
+    pass: obs(),
+    fail: obs({
+      run: {
+        id: 43,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: RUN_STEP_NAME, conclusion: "success" }],
+      },
+    }),
+  },
+  // The rerun settles the old head, and the newer head's status is unchanged by it.
+  "rerun-after-push/2": {
+    pass: obs({
+      newerHead: {
+        sha: NEW,
+        before: { state: "error", description: "PRH-HUNTERS-FAILED: x" },
+        after: { state: "error", description: "PRH-HUNTERS-FAILED: x" },
+      },
+    }),
+    fail: obs({
+      status: { state: "pending", description: "pr-hero reviewing" },
+      newerHead: {
+        sha: NEW,
+        before: { state: "error", description: "PRH-HUNTERS-FAILED: x" },
+        after: { state: "error", description: "PRH-HUNTERS-FAILED: x" },
+      },
     }),
   },
   "review-advisory/0": {
@@ -1348,5 +1414,116 @@ describe("SB3: run-conclusion and status-settled (cancel probe)", () => {
     expect(evaluateCheck(settled, obs()).label).toBe(
       "pr-hero status is settled (not pending)",
     );
+  });
+});
+
+describe("SB3 checks: the planted-bug site, the hunter log, and the newer head", () => {
+  const finding = (path: string, line: number, head = NEW) => ({
+    source: "inline" as const,
+    kind: "finding" as const,
+    head,
+    path,
+    line,
+  });
+
+  test("finding-at-planted-site: a finding on this head anchored inside the planted file passes", () => {
+    const check = { kind: "finding-at-planted-site" } as const;
+    const r = evaluateCheck(
+      check,
+      obs({ comments: [finding("src/volume.ts", 4)] }),
+    );
+    expect(r.pass).toBe(true);
+    expect(r.cause).toBeUndefined();
+  });
+
+  test("finding-at-planted-site: the file name alone is not the site, and an older head's finding does not count", () => {
+    const check = { kind: "finding-at-planted-site" } as const;
+    // A finding in another file, and one in the planted file on an older head.
+    const r = evaluateCheck(
+      check,
+      obs({
+        comments: [
+          finding("src/player.ts", 4),
+          finding("src/volume.ts", 4, OLD),
+        ],
+      }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.detail).toBe("findings on this head: src/player.ts:4");
+  });
+
+  test("finding-at-planted-site: with no finding at all, the failure says so", () => {
+    const check = { kind: "finding-at-planted-site" } as const;
+    const r = evaluateCheck(check, obs());
+    expect(r.pass).toBe(false);
+    expect(r.detail).toBe("findings on this head: none");
+  });
+
+  test("finding-at-planted-site: a miss while a hunter failed is the free model's flake", () => {
+    const check = { kind: "finding-at-planted-site" } as const;
+    const r = evaluateCheck(
+      check,
+      obs({ comments: [], hunterFailures: ["logic"] }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.cause).toBe("free-model-hunters-failed");
+  });
+
+  test("no-hunter-failed: an empty log passes, and a failed hunter fails with the flake's cause", () => {
+    const check = { kind: "no-hunter-failed" } as const;
+    expect(evaluateCheck(check, obs({ hunterFailures: [] })).pass).toBe(true);
+    const failed = evaluateCheck(
+      check,
+      obs({ hunterFailures: ["logic", "api"] }),
+    );
+    expect(failed.pass).toBe(false);
+    expect(failed.detail).toBe("hunters failed: logic, api");
+    expect(failed.cause).toBe("free-model-hunters-failed");
+  });
+
+  test("no-hunter-failed: a run whose log was not read never passes", () => {
+    const check = { kind: "no-hunter-failed" } as const;
+    const r = evaluateCheck(check, obs());
+    expect(r.pass).toBe(false);
+    expect(r.detail).toBe("the run log was not read");
+    expect(r.cause).toBeUndefined();
+  });
+
+  test("newer-head-unchanged: the same status before and after passes, a changed one fails with both", () => {
+    const check = { kind: "newer-head-unchanged" } as const;
+    const same = { state: "success", description: "review posted" };
+    expect(
+      evaluateCheck(
+        check,
+        obs({ newerHead: { sha: NEW, before: same, after: same } }),
+      ).pass,
+    ).toBe(true);
+    const changed = evaluateCheck(
+      check,
+      obs({
+        newerHead: {
+          sha: NEW,
+          before: same,
+          after: { state: "failure", description: "pr-hero: 1 blocking" },
+        },
+      }),
+    );
+    expect(changed.pass).toBe(false);
+    expect(changed.detail).toBe(
+      `${NEW.slice(0, 7)} changed from success: review posted to failure: pr-hero: 1 blocking`,
+    );
+  });
+
+  test("newer-head-unchanged: a head that was not observed, or a status not read, never passes", () => {
+    const check = { kind: "newer-head-unchanged" } as const;
+    expect(evaluateCheck(check, obs()).pass).toBe(false);
+    const unread = evaluateCheck(
+      check,
+      obs({
+        newerHead: { sha: NEW, before: { state: "success", description: "x" } },
+      }),
+    );
+    expect(unread.pass).toBe(false);
+    expect(unread.detail).toBe("status before success, after not read");
   });
 });

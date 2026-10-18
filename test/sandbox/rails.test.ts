@@ -289,6 +289,35 @@ describe("gh rail: run cancel", () => {
   });
 });
 
+describe("gh rail: run view --log (SB3 hunter check)", () => {
+  test("accepts the log read of a sandbox run, and refuses it aimed at another repo", () => {
+    expect(() =>
+      assertGhArgs(["run", "view", "42", "-R", SANDBOX_REPO, "--log"]),
+    ).not.toThrow();
+    expect(() =>
+      assertGhArgs(["run", "view", "42", "-R", "juanmaagd/pr-hero", "--log"]),
+    ).toThrow(RailViolation);
+  });
+});
+
+describe("gh rail: run rerun (SB3)", () => {
+  test("accepts a rerun of a run in the sandbox", () => {
+    expect(() =>
+      assertGhArgs(["run", "rerun", "42", "-R", SANDBOX_REPO]),
+    ).not.toThrow();
+  });
+
+  test("refuses a rerun without the sandbox target, or aimed at another repo", () => {
+    const refused: string[][] = [
+      ["run", "rerun", "42"],
+      ["run", "rerun", "42", "-R", "juanmaagd/pr-hero"],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+});
+
 describe("gh rail: one review-thread reply on a sandbox PR (T5b)", () => {
   const path = `repos/${SANDBOX_REPO}/pulls/7/comments`;
   const reply = (...extra: string[]) => [

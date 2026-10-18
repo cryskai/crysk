@@ -36,7 +36,7 @@ const OPTIONS = {
 
 describe("run: the scenarios against the fake repository", () => {
   test("review-free exits 0, closes its PR and branch, and the table names each expectation", async () => {
-    const world = new FakeGithub({ ref: REF });
+    const world = new FakeGithub({ ref: REF, plantedFinding: true });
     const h = world.harness();
     const code = await runScenarios(h.deps, ["review-free"], OPTIONS);
     expect(code).toBe(0);
@@ -475,6 +475,7 @@ describe("run: the scenarios against the fake repository", () => {
     test("the flake attempt is re-run on a fresh PR, which passes, so the invocation exits 0 and both attempts are reported", async () => {
       const world = new FakeGithub({
         ref: REF,
+        plantedFinding: true,
         runOutcomes: ["hunters-failed"],
       });
       const h = world.harness();
@@ -599,7 +600,7 @@ describe("run: the scenarios against the fake repository", () => {
 
 describe("run: --keep and the serialization check", () => {
   test("--keep leaves each PR open, and the next scenario of the same run passes the check past the PR it opened", async () => {
-    const world = new FakeGithub({ ref: REF });
+    const world = new FakeGithub({ ref: REF, plantedFinding: true });
     const h = world.harness();
     expect(
       await runScenarios(h.deps, ["no-credential", "review-free"], {
@@ -615,7 +616,7 @@ describe("run: --keep and the serialization check", () => {
   });
 
   test("without --keep each PR is closed before the next scenario opens its own", async () => {
-    const world = new FakeGithub({ ref: REF });
+    const world = new FakeGithub({ ref: REF, plantedFinding: true });
     const h = world.harness();
     expect(
       await runScenarios(h.deps, ["no-credential", "review-free"], OPTIONS),
@@ -982,7 +983,11 @@ describe("run: the S4 gate verdicts against the fake repository", () => {
   });
 
   test("review-free exits 0 when the gate reads a blocking finding as failure", async () => {
-    const world = new FakeGithub({ ref: REF, blockingFindings: true });
+    const world = new FakeGithub({
+      ref: REF,
+      blockingFindings: true,
+      plantedFinding: true,
+    });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(0);
     expect(
@@ -1279,5 +1284,190 @@ describe("cancel: a review run cancelled mid-review leaves its status settled (S
     const h = world.harness();
     expect(await runScenarios(h.deps, ["cancel"], OPTIONS)).toBe(1);
     expect(h.logs.some((l) => l.includes("cancel sent to run"))).toBe(true);
+  });
+});
+
+describe("SB3: stale-tmp, rerun-after-push, and the planted-bug and hunter checks of review-free", () => {
+  test("stale-tmp: a run that leaves the stale records alone reviews and exits 0", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["stale-tmp"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) => /PASS {2}stale-tmp: path is reviewed/.test(l)),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) => /PASS {2}stale-tmp: no outcome comment/.test(l)),
+    ).toBe(true);
+  });
+
+  test("stale-tmp: a run the stale records break fails its checks, and the scenario exits 1", async () => {
+    const world = new FakeGithub({ ref: REF, staleRecordsBreakRun: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["stale-tmp"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) => /FAIL {2}stale-tmp: no outcome comment/.test(l)),
+    ).toBe(true);
+  });
+
+  test("rerun-after-push: the rerun settles the old head, and the newer head's status is unchanged", async () => {
+    // The first run reviews; the second push's run hunters-fail, so the newer head reads an error.
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["review", "hunters-failed"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["rerun-after-push"], OPTIONS)).toBe(0);
+    expect(world.events).toContain(`run ${world.runs[0]?.databaseId} rerun`);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}rerun-after-push: (\[3\] )?the newer head/.test(l),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}rerun-after-push: (\[3\] )?pr-hero status is settled/.test(l),
+      ),
+    ).toBe(true);
+  });
+
+  test("rerun-after-push: a rerun that writes the newest head's status is the overwrite the check catches", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      runOutcomes: ["review", "hunters-failed"],
+      rerunWritesNewestHead: true,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["rerun-after-push"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        /FAIL {2}rerun-after-push: (\[3\] )?the newer head's pr-hero status is unchanged/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("review-free: a hunter that failed is the free model's flake, re-run once, and a repeat is reported as it is", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      plantedFinding: true,
+      hunterFailures: ["logic"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+    // The first attempt, and its one re-run on a fresh PR; the repeat is not re-run again.
+    expect(world.prs.size).toBe(2);
+    expect(
+      h.logs.some((l) =>
+        l.includes(
+          "FAIL (free-model hunters failed: re-run)  review-free: no hunter failed in the run",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("review-free: a planted bug that a failed hunter missed carries the flake's label too", async () => {
+    const world = new FakeGithub({ ref: REF, hunterFailures: ["logic"] });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        l.includes(
+          "FAIL (free-model hunters failed: re-run)  review-free: a finding is anchored at the planted bug",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("review-free: a planted bug no hunter missed, and no hunter failed, is a plain pass", async () => {
+    const world = new FakeGithub({ ref: REF, plantedFinding: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(0);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}review-free: a finding is anchored at the planted bug/.test(l),
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}review-free: no hunter failed in the run/.test(l),
+      ),
+    ).toBe(true);
+  });
+
+  test("review-free: a planted bug the review never reports fails as a finding, not a flake", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+    expect(world.prs.size).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        l.includes(
+          "FAIL  review-free: a finding is anchored at the planted bug (src/volume.ts:1-5)",
+        ),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("the run log read of review-free: GitHub serves a log with a lag", () => {
+  // The fake clock records every sleep; the poll sleeps at the scenario's interval, so the
+  // log retries are the 10 s sleeps.
+  const logSleeps = (sleeps: readonly number[]) =>
+    sleeps.filter((ms) => ms === 10_000).length;
+
+  test("a log that appears on the third read is read, the check runs, and the scenario passes", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      plantedFinding: true,
+      runLogMissingReads: 2,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(0);
+    expect(world.logReadCount).toBe(3);
+    expect(
+      logSleeps((h.deps.clock as unknown as { sleeps: number[] }).sleeps),
+    ).toBe(2);
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}review-free: no hunter failed in the run/.test(l),
+      ),
+    ).toBe(true);
+  });
+
+  test("a log that never appears is an error of the scenario, with the unavailable text, not a FAIL or a flake", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      plantedFinding: true,
+      runLogNeverServed: true,
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+    expect(world.logReadCount).toBe(6);
+    expect(
+      logSleeps((h.deps.clock as unknown as { sleeps: number[] }).sleeps),
+    ).toBe(5);
+    expect(
+      h.logs.some((l) =>
+        l.includes("the run log was unavailable after 6 reads"),
+      ),
+    ).toBe(true);
+    expect(h.logs.some((l) => /FAIL.*no hunter failed/.test(l))).toBe(false);
+    expect(h.logs.some((l) => l.includes("re-run"))).toBe(false);
+    expect(world.prs.size).toBe(1);
+  });
+
+  test("a read that fails for another reason is raised at once, without a retry", async () => {
+    const world = new FakeGithub({ ref: REF, plantedFinding: true });
+    const h = world.harness();
+    const base = h.deps.gh;
+    h.deps.gh = async (args) =>
+      args[0] === "run" && args[1] === "view" && args.includes("--log")
+        ? fail("HTTP 502: Bad Gateway")
+        : base(args);
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
+    expect(
+      logSleeps((h.deps.clock as unknown as { sleeps: number[] }).sleeps),
+    ).toBe(0);
   });
 });

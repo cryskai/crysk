@@ -46,6 +46,7 @@ describe("workflow variants: the real scaffold", () => {
       "bad-routing",
       "advisory",
       "size-skip",
+      "stale-tmp",
     ]);
   });
 
@@ -176,5 +177,31 @@ describe("workflow variants: the gate mode (S4)", () => {
     expect(() => applyVariant("advisory", changed)).toThrow(
       WorkflowVariantError,
     );
+  });
+});
+
+describe("the stale-tmp variant (SB3): the stale records are planted before the action step", () => {
+  test("adds one run step before the action step and changes nothing else", () => {
+    const stale = workflowVariant("stale-tmp", REF);
+    const lines = stale.split("\n");
+    const normal = NORMAL.split("\n");
+    // Six lines before the action step: its name, `run: |`, the mkdir and the two writes, a blank.
+    expect(lines.length).toBe(normal.length + 6);
+    const at = lines.indexOf("      - name: Run pr-hero");
+    expect(at).toBeGreaterThan(0);
+    expect(lines.filter((l) => l === "      - name: Run pr-hero").length).toBe(
+      1,
+    );
+    expect(lines[at - 6]).toBe(
+      "      - name: Leave stale temp records from a killed run",
+    );
+    expect(lines.slice(at - 3, at).join("\n")).toContain(
+      'printf \'{"stale":true}\' > "$RUNNER_TEMP/pr-hero-outcome/trigger.json.tmp"',
+    );
+    expect(lines.slice(at - 3, at).join("\n")).toContain(
+      'printf \'{"stale":true}\' > "$RUNNER_TEMP/pr-hero-outcome/setup.json.tmp"',
+    );
+    // Everything else is the scaffold, byte for byte.
+    expect([...lines.slice(0, at - 6), ...lines.slice(at)]).toEqual(normal);
   });
 });

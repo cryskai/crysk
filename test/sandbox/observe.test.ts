@@ -15,6 +15,7 @@ import {
 import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import { renderReport } from "../../scripts/sandbox/report";
 import { decidePublication } from "../../src/ci/publish";
+import { findingMarker } from "../../src/pr/preflight";
 
 const SHA = "a".repeat(40);
 
@@ -165,7 +166,25 @@ describe("classifyComment: where a blocking finding is shown (Fix A)", () => {
       kind: "finding",
       blocking: true,
       head: SHA,
+      path: "src/a.ts",
+      line: 3,
     });
+  });
+
+  test("the anchor of a marker the engine writes is decoded (the engine percent-encodes the path)", () => {
+    // Live, sandbox PR #61: the planted-site check read `src%2Fvolume.ts:4` and failed.
+    const marker = findingMarker({
+      path: "src/volume.ts",
+      line: 4,
+      headSha: SHA,
+      claim: "the planted bug",
+    });
+    expect(
+      classifyComment(
+        `${marker}\n\n🔴 blocking · BLOCKER · introduced · reliability`,
+        "inline",
+      ),
+    ).toMatchObject({ path: "src/volume.ts", line: 4 });
   });
 
   test("a report counts its blocking entries in the outside-diff section and carries no count for advisory ones", () => {
@@ -760,5 +779,24 @@ describe("classifyComment: a CI adjudication reply (T5b)", () => {
     const fact = classifyComment(body, "inline");
     expect(fact.kind).toBe("adjudication");
     expect("verdict" in fact).toBe(false);
+  });
+});
+
+describe("hunterFailuresIn: the hunters a run's log says failed", () => {
+  test("reads each failed hunter once, from the progress line's words, whatever the prefix", async () => {
+    const { hunterFailuresIn } = await import("../../scripts/sandbox/observe");
+    const log = [
+      "pr-hero Review\tRun pr-hero\t2026-10-18T10:00:01Z  [1.0s] hunter logic: done",
+      "pr-hero Review\tRun pr-hero\t2026-10-18T10:00:02Z  [2.0s] hunter api: failed (the run continues)",
+      "pr-hero Review\tRun pr-hero\t2026-10-18T10:00:03Z  [3.0s] hunter api: failed (the run continues)",
+      "pr-hero Review\tRun pr-hero\t2026-10-18T10:00:04Z  [4.0s] hunter shape: failed — timeout (the run continues)",
+    ].join("\n");
+    expect(hunterFailuresIn(log)).toEqual(["api", "shape"]);
+  });
+
+  test("a log with no failed hunter, or an empty log, reads as none", async () => {
+    const { hunterFailuresIn } = await import("../../scripts/sandbox/observe");
+    expect(hunterFailuresIn("[1.0s] hunter logic: done\n")).toEqual([]);
+    expect(hunterFailuresIn("")).toEqual([]);
   });
 });

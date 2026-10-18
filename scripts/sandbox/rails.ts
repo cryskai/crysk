@@ -48,6 +48,9 @@ const GH_TARGETED = new Set([
   // Cancelling a sandbox run is how a timed-out scenario stops its review. It
   // is still only ever aimed at the sandbox, by the same -R check as the rest.
   "run cancel",
+  // SB3: the rerun-after-push scenario reruns its first run, which reuses that run's id
+  // and reviews the head it was started on. Repo-targeted like every verb here.
+  "run rerun",
 ]);
 
 // The rules in this block apply to every gh call, whatever its verb, so a verb

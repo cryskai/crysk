@@ -88,7 +88,7 @@ describe("the policy, over a memory lock", () => {
 
   test("a stale holder is taken over, and the takeover is logged", async () => {
     const lock = memoryRunLock({ recorded: 8888 });
-    const world = new FakeGithub({ ref: REF });
+    const world = new FakeGithub({ ref: REF, plantedFinding: true });
     const h = world.harness(lock);
     expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(0);
     expect(
@@ -104,7 +104,7 @@ describe("the policy, over a memory lock", () => {
 
   test("an unreadable lock refuses the start and is left in place", async () => {
     const lock = memoryRunLock({ recorded: "unreadable" });
-    const world = new FakeGithub({ ref: REF });
+    const world = new FakeGithub({ ref: REF, plantedFinding: true });
     const h = world.harness(lock);
     expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(1);
     expect(h.logs.some((l) => l.includes("names no pid"))).toBe(true);
@@ -114,7 +114,7 @@ describe("the policy, over a memory lock", () => {
 
   test("the lock is released when the invocation succeeds", async () => {
     const lock = memoryRunLock();
-    const h = new FakeGithub({ ref: REF }).harness(lock);
+    const h = new FakeGithub({ ref: REF, plantedFinding: true }).harness(lock);
     expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(0);
     expect(lock.recorded()).toBeUndefined();
   });
@@ -165,7 +165,7 @@ describe("the policy, over a memory lock", () => {
 
   test("a second invocation on the same machine is refused while the first runs", async () => {
     const lock = memoryRunLock();
-    const world = new FakeGithub({ ref: REF });
+    const world = new FakeGithub({ ref: REF, plantedFinding: true });
     const first = world.harness(lock);
     const second = harness({
       lock,

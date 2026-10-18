@@ -104,6 +104,23 @@ export interface CommentFact {
   verdict?: string;
   // D3: the paths of a report's state-block rows (every loc of every row, once each), so a check can read what the PR's state remembers. Set only on a report that carries a state block.
   statePaths?: string[];
+  // A finding's anchor, read off its marker (`path=<p> line=<n>`, preflight.ts findingMarker).
+  // The line is the one the marker names, so a check reads the site the product posted.
+  path?: string;
+  line?: number;
+}
+
+// The hunters that failed, by name, in the order their lines appear in a run's log. A
+// failed hunter prints `hunter <name>: failed` (src/ui/progress.ts startLineRenderer): the
+// line keeps GitHub's timestamp and job prefix, so the match is on the words alone. Each name
+// once, however many lines it has.
+export function hunterFailuresIn(log: string): string[] {
+  const names: string[] = [];
+  for (const match of log.matchAll(/\bhunter ([^\s:]+): failed\b/g)) {
+    const name = match[1] ?? "";
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
 }
 
 export interface RunFact {
@@ -136,6 +153,17 @@ export interface Observation {
   // Absent on a phase with no trigger comment, so a check can tell "no reaction"
   // from "not observed".
   reactions?: readonly string[];
+  // The hunters that failed in the observed run, by name, read from its log. Absent
+  // unless the phase asked for the log (scenario.ts collect), so a check can tell
+  // "no hunter failed" from "the log was not read".
+  hunterFailures?: readonly string[];
+  // The head the phase did not observe, read for a check that compares it before and
+  // after the phase (rerun-after-push). Absent on every other phase.
+  newerHead?: {
+    sha: string;
+    before?: StatusFact;
+    after?: StatusFact;
+  };
 }
 
 export type SmokePath =
@@ -233,11 +261,16 @@ export function classifyComment(
     // the head, so the check can tell this head's finding from an older one.
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     const blocking = body.includes("🔴 blocking");
+    // The anchor is in the same first line as the head (findingMarker, preflight.ts).
+    const anchor = /\bpath=(\S+) line=(\d+)\b/.exec(first);
     return {
       source,
       kind: "finding",
       ...(head === undefined ? {} : { head }),
       ...(blocking ? { blocking: true as const } : {}),
+      ...(anchor === null
+        ? {}
+        : { path: decodeMarkerPath(anchor[1]), line: Number(anchor[2]) }),
     };
   }
   if (first.startsWith(OUTCOME_MARKER_PREFIX)) {
@@ -373,4 +406,16 @@ export function invariantViolations(obs: Observation): string[] {
     );
   }
   return violations;
+}
+
+// The engine percent-encodes the marker's path (`path=src%2Fvolume.ts`, findingMarker in
+// src/pr/preflight.ts), so a check comparing it to a repository path must decode it first
+// (live, sandbox PR #61: the planted-site check saw `src%2Fvolume.ts:4` and failed). A
+// malformed escape is kept as written.
+function decodeMarkerPath(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }

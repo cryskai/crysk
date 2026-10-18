@@ -16,6 +16,7 @@ export const VARIANT_NAMES = [
   "bad-routing",
   "advisory",
   "size-skip",
+  "stale-tmp",
 ] as const;
 
 export type VariantName = (typeof VARIANT_NAMES)[number];
@@ -57,6 +58,22 @@ const MODE_ADVISORY_LINE = "          mode: advisory";
 // anchor no-credential uses). The threshold of 1 makes any real diff a skip.
 const OPENCODE_AUTH_LINE = `          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}`;
 const SIZE_SKIP_LINE = "          max-changed-lines: 1";
+
+// SB3 stale-tmp: a killed earlier run leaves its fixed-name temp records in the outcome
+// directory. The product's writes use unique temp names (trigger.ts recordTempPath), so
+// these must not break the run. The fault is a step the sandbox adds before the action
+// step, in the runner's own temp directory, where the product's outcome records go.
+// The anchor is the action step's name line; the injected step keeps its indentation.
+const RUN_STEP_LINE = "      - name: Run pr-hero";
+const STALE_TMP_STEP = [
+  "      - name: Leave stale temp records from a killed run",
+  "        run: |",
+  '          mkdir -p "$RUNNER_TEMP/pr-hero-outcome"',
+  '          printf \'{"stale":true}\' > "$RUNNER_TEMP/pr-hero-outcome/trigger.json.tmp"',
+  '          printf \'{"stale":true}\' > "$RUNNER_TEMP/pr-hero-outcome/setup.json.tmp"',
+  "",
+  RUN_STEP_LINE,
+].join("\n");
 
 // Replaces the one line equal to `line`, or removes it when `replacement` is
 // undefined. Refuses unless exactly one line matches.
@@ -101,6 +118,8 @@ export function applyVariant(name: VariantName, scaffold: string): string {
         OPENCODE_AUTH_LINE,
         `${OPENCODE_AUTH_LINE}\n${SIZE_SKIP_LINE}`,
       );
+    case "stale-tmp":
+      return replaceExactLine(scaffold, RUN_STEP_LINE, STALE_TMP_STEP);
   }
 }
 

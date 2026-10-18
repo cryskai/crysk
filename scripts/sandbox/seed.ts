@@ -150,3 +150,13 @@ export function sandboxFiles(ref: string): Map<string, string> {
 export function plantedVolume(): string {
   return VOLUME_BUGGY;
 }
+
+// Where the planted bug is, as the fixture's answer key puts it (fixtures/setup.ts):
+// the whole buggy volume file, since every line of it is the planted contract change.
+// A finding anchored anywhere in it is the planted bug. Defined once here, so review-free's
+// check and its fixtures read the same site.
+export const PLANTED_SITE = {
+  path: VOLUME_PATH,
+  lineMin: 1,
+  lineMax: VOLUME_BUGGY.trimEnd().split("\n").length,
+} as const;

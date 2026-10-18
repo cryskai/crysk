@@ -40,13 +40,16 @@ export type Action =
   // A PR comment, posted as the authenticated user.
   | { kind: "comment"; body: string }
   // T5b: reply `dismissed` on the first blocking finding's thread, then comment /pr-hero recheck.
-  | { kind: "dismiss-and-recheck"; argument: string };
+  | { kind: "dismiss-and-recheck"; argument: string }
+  // SB3: `gh run rerun` of the scenario's first run (its head is the older one).
+  | { kind: "rerun-first" };
 
 export interface Phase {
   action: Action;
   // The run this phase waits for: the pull_request run on the new head, or the
   // issue_comment run that the comment started (main's workflow).
-  wait: "pull_request" | "issue_comment";
+  // `rerun` waits on the first run's id, its next attempt, which a rerun-first action starts.
+  wait: "pull_request" | "issue_comment" | "rerun";
   checks: readonly Check[];
   // Asserted only when the phase before this one posted an outcome comment, such
   // as the cleanup of that comment. Otherwise they are not asserted, and the
@@ -74,6 +77,10 @@ const STEP_SUCCEEDED: Check = { kind: "step-succeeded" };
 // pinned to one state. It must agree with the blocking findings the PR shows.
 const STATUS_MATCHES_FINDINGS: Check = { kind: "status-matches-findings" };
 const ONE_REPORT: Check = { kind: "report-min", min: 1 };
+// The planted bug is reported on the head, and no hunter died on the way. Both read the
+// run's own log or its findings, so a phase that asks for them reads the log.
+const PLANTED_FINDING: Check = { kind: "finding-at-planted-site" };
+const NO_HUNTER_FAILED: Check = { kind: "no-hunter-failed" };
 
 export const SCENARIOS: readonly Scenario[] = [
   {
@@ -149,7 +156,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "review-free",
     description:
-      "the normal workflow on the sandbox route: a reviewed head, a report, and a status that agrees with the blocking findings",
+      "the normal workflow on the sandbox route: a reviewed head, a report, a status that agrees with the blocking findings, the planted bug reported, and no hunter failed",
     phases: [
       {
         action: { kind: "open", variant: "normal" },
@@ -160,6 +167,8 @@ export const SCENARIOS: readonly Scenario[] = [
           STATUS_MATCHES_FINDINGS,
           ONE_REPORT,
           { kind: "no-outcome" },
+          PLANTED_FINDING,
+          NO_HUNTER_FAILED,
         ],
       },
     ],
@@ -411,6 +420,53 @@ export const SCENARIOS: readonly Scenario[] = [
         afterPriorBlocking: [
           { kind: "status", state: "failure" },
           { kind: "adjudication-reply", accept: ["rejected", "inconclusive"] },
+        ],
+      },
+    ],
+  },
+  {
+    name: "stale-tmp",
+    description:
+      "a run directory left with stale trigger.json.tmp and setup.json.tmp by a killed earlier run does not break the next run (SB3)",
+    phases: [
+      {
+        // The sandbox plants the stale records in the runner's outcome directory before
+        // the action step (variants.ts stale-tmp), so the review must run as if they were not there.
+        action: { kind: "open", variant: "stale-tmp" },
+        wait: "pull_request",
+        checks: [REVIEWED, STEP_SUCCEEDED, { kind: "no-outcome" }],
+      },
+    ],
+  },
+  {
+    name: "rerun-after-push",
+    description:
+      "a second push, then a rerun of the first run: the rerun settles the old head and leaves the newer head's pr-hero status as it was (SB3)",
+    phases: [
+      {
+        action: { kind: "open", variant: "normal" },
+        wait: "pull_request",
+        // A precondition: the free route may hunters-fail on this first run, and the rerun is under test.
+        checks: [{ kind: "path", accept: ["reviewed", "hunters-failed"] }],
+      },
+      {
+        action: {
+          kind: "push",
+          variant: "normal",
+          files: [{ path: MUTE_PATH, contents: MUTE_BUGGY }],
+        },
+        wait: "pull_request",
+        // The newer head's own run. Admission may skip it; the rerun below does not depend on it.
+        checks: [{ kind: "run-completed", event: "pull_request" }],
+      },
+      {
+        action: { kind: "rerun-first" },
+        wait: "rerun",
+        // Read on the OLDER head: the rerun reviews that head, and only that head may change.
+        checks: [
+          { kind: "run-completed", event: "pull_request" },
+          { kind: "status-settled" },
+          { kind: "newer-head-unchanged" },
         ],
       },
     ],

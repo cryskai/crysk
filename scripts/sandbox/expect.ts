@@ -6,10 +6,12 @@
 import { RUN_STEP_NAME } from "./markers";
 import {
   COMMENT_RUN_CLOCK_SKEW_MS,
+  type CommentFact,
   classifyPath,
   type Observation,
   postedByThisRun,
 } from "./observe";
+import { PLANTED_SITE } from "./seed";
 
 export type Check =
   // `skipped` accepts any documented skip, `skipped:<reason>`.
@@ -53,7 +55,15 @@ export type Check =
   // SB3: the head's pr-hero status exists and is not pending, so a cancelled run leaves no stuck gate.
   | { kind: "status-settled" }
   // T5b: this run posted a CI adjudication reply whose verdict is one of `accept`.
-  | { kind: "adjudication-reply"; accept: readonly string[] };
+  | { kind: "adjudication-reply"; accept: readonly string[] }
+  // The planted bug is reported: a finding on this head is anchored in PLANTED_SITE.
+  | { kind: "finding-at-planted-site" }
+  // No hunter failed in the observed run, read from its log. A failed hunter is the
+  // free model's flake, so the failure carries that cause and a re-run may clear it.
+  | { kind: "no-hunter-failed" }
+  // The head a rerun did not observe kept its status: its status before the rerun and
+  // after it are the same. Reads Observation.newerHead, so it is a single-observation check.
+  | { kind: "newer-head-unchanged" };
 
 export interface CheckResult {
   label: string;
@@ -111,6 +121,12 @@ export function describeCheck(check: Check): string {
       return "pr-hero status is settled (not pending)";
     case "adjudication-reply":
       return `CI adjudication reply is one of ${check.accept.join("/")}`;
+    case "finding-at-planted-site":
+      return `a finding is anchored at the planted bug (${PLANTED_SITE.path}:${PLANTED_SITE.lineMin}-${PLANTED_SITE.lineMax})`;
+    case "no-hunter-failed":
+      return "no hunter failed in the run";
+    case "newer-head-unchanged":
+      return "the newer head's pr-hero status is unchanged by the rerun";
   }
 }
 
@@ -393,6 +409,66 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       return pass(
         false,
         `no adjudication reply from this run (verdicts seen: ${seen.join(", ") || "none"})`,
+      );
+    }
+    case "finding-at-planted-site": {
+      // Only findings on the observed head count: an older head's finding is not this run's.
+      const sites = obs.comments.filter(
+        (c) => c.kind === "finding" && c.head === obs.headSha,
+      );
+      const inSite = (c: CommentFact): boolean =>
+        c.path === PLANTED_SITE.path &&
+        c.line !== undefined &&
+        c.line >= PLANTED_SITE.lineMin &&
+        c.line <= PLANTED_SITE.lineMax;
+      const found = sites.some(inSite);
+      const seen = sites.map((c) =>
+        c.path === undefined ? "no anchor" : `${c.path}:${c.line ?? "?"}`,
+      );
+      // A hunter that died may be the one that would have found the bug: its miss is the flake.
+      const flake = (obs.hunterFailures?.length ?? 0) > 0;
+      const result = pass(
+        found,
+        `findings on this head: ${seen.join(", ") || "none"}`,
+      );
+      return flake && !found
+        ? { ...result, cause: "free-model-hunters-failed" }
+        : result;
+    }
+    case "no-hunter-failed": {
+      // An unread log is not a clean run: it fails, so a missing read never passes.
+      const failed = obs.hunterFailures;
+      if (failed === undefined) {
+        return pass(false, "the run log was not read");
+      }
+      if (failed.length === 0) return pass(true);
+      return {
+        label,
+        pass: false,
+        detail: `hunters failed: ${failed.join(", ")}`,
+        cause: "free-model-hunters-failed",
+      };
+    }
+    case "newer-head-unchanged": {
+      const newer = obs.newerHead;
+      if (newer === undefined) {
+        return pass(false, "the newer head was not observed");
+      }
+      const { before, after } = newer;
+      if (before === undefined || after === undefined) {
+        return pass(
+          false,
+          `status before ${before === undefined ? "not read" : `${before.state}`}, after ${after === undefined ? "not read" : `${after.state}`}`,
+        );
+      }
+      const same =
+        before.state === after.state &&
+        before.description === after.description;
+      return pass(
+        same,
+        same
+          ? undefined
+          : `${newer.sha.slice(0, 7)} changed from ${before.state}: ${before.description} to ${after.state}: ${after.description}`,
       );
     }
   }
