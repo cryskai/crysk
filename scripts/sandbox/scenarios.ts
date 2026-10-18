@@ -59,6 +59,10 @@ export interface Phase {
   // finding comment, such as a re-run on the same head that must keep a red gate
   // red. Otherwise they are not asserted, and the runner says why.
   afterPriorBlocking?: readonly Check[];
+  // S3: asserted only when this phase's own observation carries a blocking finding
+  // comment on this head at `path`, such as a re-review that must name the row it
+  // found. Otherwise they are not asserted, and the runner says why.
+  ifOwnBlockingAt?: { path: string; checks: readonly Check[] };
   // SB3: once this phase's run is in progress and the head's pr-hero status is pending, cancel the run, then wait for it to complete as usual.
   cancelWhenPending?: true;
 }
@@ -391,8 +395,13 @@ export const SCENARIOS: readonly Scenario[] = [
           { kind: "run-completed", event: "issue_comment" },
           STEP_SUCCEEDED,
           STATUS_MATCHES_FINDINGS,
-          { kind: "state-row-at", path: MUTE_PATH },
         ],
+        // S4: the state row is read only when this re-review itself found the blocking
+        // finding at the mute file. Without that finding there is nothing to remember.
+        ifOwnBlockingAt: {
+          path: MUTE_PATH,
+          checks: [{ kind: "state-row-at", path: MUTE_PATH, tier: "blocking" }],
+        },
       },
     ],
   },

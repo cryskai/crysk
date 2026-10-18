@@ -11,7 +11,12 @@
 //
 // smoke is the review-free scenario, run through this same code (smoke.ts).
 
-import { type CheckResult, describeCheck, evaluateChecks } from "./expect";
+import {
+  blockingFindingAt,
+  type CheckResult,
+  describeCheck,
+  evaluateChecks,
+} from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
 import { FINDING_MARKER_PREFIX, STATUS_CONTEXT } from "./markers";
 import {
@@ -532,10 +537,23 @@ async function runOne(
           );
         }
       }
+      // S3: the phase's own observation decides, not the previous phase's. A head with no
+      // blocking finding at the path has nothing for these checks to read, so they are named.
+      const ownAt = phase.ifOwnBlockingAt;
+      const ownBlocking =
+        ownAt === undefined || blockingFindingAt(obs, ownAt.path);
+      if (ownAt !== undefined && !ownBlocking) {
+        for (const check of ownAt.checks) {
+          deps.log(
+            `  not asserted: ${scenario.name} [${index + 1}] ${describeCheck(check)} (the re-review found no blocking finding at ${ownAt.path})`,
+          );
+        }
+      }
       const asserted = [
         ...phase.checks,
         ...(priorOutcome ? after : []),
         ...(priorBlocking ? afterBlocking : []),
+        ...(ownAt !== undefined && ownBlocking ? ownAt.checks : []),
       ];
       // A failed check of a run whose hunters failed is the free model's flake. It
       // keeps its failure and exit code; only its label says why. A head that posted

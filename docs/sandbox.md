@@ -173,6 +173,10 @@ once, so a scaffold change fails the run loudly instead of testing a different w
    `push`, or `comment`), a `wait`, and its `checks`. Use `afterPriorOutcome` for a check
    that only applies when the phase before posted an outcome comment. Use `afterPriorBlocking`
    for a check that only applies when the phase before posted a blocking finding comment.
+   Use `ifOwnBlockingAt: { path, checks }` for checks that apply only when the phase's own
+   observation carries a blocking finding comment on its head at `path`; otherwise each is
+   named as not asserted, with the path. A `state-row-at` check takes an optional `tier`
+   (`blocking` or `advisory`) and then matches the row's tier as well as its path.
 2. If the scenario needs a different workflow, add a variant in
    `scripts/sandbox/variants.ts`. A variant is a transform that refuses unless its anchor
    line appears exactly once in the scaffold.

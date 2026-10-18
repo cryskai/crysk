@@ -739,6 +739,7 @@ describe("classifyComment: the state-block paths of a report (D3)", () => {
       kind: "report",
       head: SHA,
       statePaths: ["src/mute.ts", "src/a.ts"],
+      stateRows: [{ path: "src/mute.ts" }, { path: "src/a.ts" }],
     });
   });
 
@@ -749,6 +750,49 @@ describe("classifyComment: the state-block paths of a report (D3)", () => {
   test("a malformed state JSON line gives no statePaths key", () => {
     const bad = STATE_BODY.replace('"reviews":2', '"reviews":');
     expect("statePaths" in classifyComment(bad, "issue")).toBe(false);
+  });
+});
+
+// S1: each state row keeps its tier next to its paths, so a check can read the tier.
+describe("classifyComment: the state rows of a report keep each row's tier (S1)", () => {
+  const body = (rows: string) =>
+    [
+      `<!-- pr-hero-report head=${SHA} -->`,
+      "",
+      "body",
+      `<!-- pr-hero-state v=1 head=${SHA} -->`,
+      `<!-- {"findings":[${rows}],"reviews":2,"hw":2} -->`,
+    ].join("\n");
+
+  test("a blocking row and an advisory row keep their own tiers", () => {
+    const text = body(
+      '{"id":"R001","tier":"blocking","locs":["src/mute.ts:3"]},{"id":"R002","tier":"advisory","locs":["src/a.ts:3-5"]}',
+    );
+    expect(classifyComment(text, "issue").stateRows).toEqual([
+      { path: "src/mute.ts", tier: "blocking" },
+      { path: "src/a.ts", tier: "advisory" },
+    ]);
+  });
+
+  test("every loc of a row carries the row's tier, and the same path under two tiers is two rows", () => {
+    const text = body(
+      '{"id":"R001","tier":"blocking","locs":["src/format.ts:4","src/mute.ts:3"]},{"id":"R002","tier":"advisory","locs":["src/mute.ts:9"]}',
+    );
+    expect(classifyComment(text, "issue").stateRows).toEqual([
+      { path: "src/format.ts", tier: "blocking" },
+      { path: "src/mute.ts", tier: "blocking" },
+      { path: "src/mute.ts", tier: "advisory" },
+    ]);
+  });
+
+  test("statePaths still lists each path once, in the order the rows name them", () => {
+    const text = body(
+      '{"id":"R001","tier":"blocking","locs":["src/mute.ts:3"]},{"id":"R002","tier":"advisory","locs":["src/mute.ts:9","src/a.ts:1"]}',
+    );
+    expect(classifyComment(text, "issue").statePaths).toEqual([
+      "src/mute.ts",
+      "src/a.ts",
+    ]);
   });
 });
 

@@ -104,6 +104,9 @@ export interface CommentFact {
   verdict?: string;
   // D3: the paths of a report's state-block rows (every loc of every row, once each), so a check can read what the PR's state remembers. Set only on a report that carries a state block.
   statePaths?: string[];
+  // S1: the same rows with the tier each row carries, one entry per (path, tier), so a
+  // check can ask for a path under a given tier. Set exactly when statePaths is.
+  stateRows?: StateRow[];
   // A finding's anchor, read off its marker (`path=<p> line=<n>`, preflight.ts findingMarker).
   // The line is the one the marker names, so a check reads the site the product posted.
   path?: string;
@@ -204,7 +207,15 @@ export function outsideDiffBlockingCount(body: string): number {
 // name the paths the PR's state remembers; the line number after the last colon is dropped.
 const STATE_LINE_PREFIX = "<!-- pr-hero-state v=1 ";
 
-export function statePathsOf(body: string): string[] | undefined {
+// S1: one state row's path and tier. The tier is the row's own `tier` field (blocking,
+// advisory or unrecoverable); a row without one reads with no tier, so a tiered check
+// never matches it.
+export interface StateRow {
+  path: string;
+  tier?: string;
+}
+
+export function stateRowsOf(body: string): StateRow[] | undefined {
   const lines = body.split("\n");
   const at = lines.findIndex((line) => line.startsWith(STATE_LINE_PREFIX));
   const json = lines[at + 1];
@@ -218,20 +229,28 @@ export function statePathsOf(body: string): string[] | undefined {
   }
   const findings = (state as { findings?: unknown } | null)?.findings;
   if (!Array.isArray(findings)) return undefined;
-  const paths: string[] = [];
+  const rows: StateRow[] = [];
   // Every loc, not the first: formatLocs sorts a row's locs by path, so the first one
   // can be a proof_ref's file rather than the finding's own.
   for (const row of findings) {
-    const locs = (row as { locs?: unknown } | null)?.locs;
+    const fields = row as { locs?: unknown; tier?: unknown } | null;
+    const locs = fields?.locs;
     if (!Array.isArray(locs)) continue;
+    const tier = typeof fields?.tier === "string" ? fields.tier : undefined;
     for (const loc of locs) {
       if (typeof loc !== "string") continue;
       const colon = loc.lastIndexOf(":");
       const path = colon === -1 ? loc : loc.slice(0, colon);
-      if (!paths.includes(path)) paths.push(path);
+      if (rows.some((r) => r.path === path && r.tier === tier)) continue;
+      rows.push(tier === undefined ? { path } : { path, tier });
     }
   }
-  return paths;
+  return rows;
+}
+
+// The distinct paths of the rows, in the order the rows name them.
+function pathsOf(rows: readonly StateRow[]): string[] {
+  return [...new Set(rows.map((row) => row.path))];
 }
 
 // T5b: the marker the CI adjudicator writes on its reply to a dismissal. Its verdict is
@@ -246,13 +265,15 @@ export function classifyComment(
   if (first.startsWith(REPORT_MARKER_PREFIX)) {
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     const outside = outsideDiffBlockingCount(body);
-    const statePaths = statePathsOf(body);
+    const stateRows = stateRowsOf(body);
     return {
       source,
       kind: "report",
       ...(head === undefined ? {} : { head }),
       ...(outside === 0 ? {} : { outsideDiffBlocking: outside }),
-      ...(statePaths === undefined ? {} : { statePaths }),
+      ...(stateRows === undefined
+        ? {}
+        : { statePaths: pathsOf(stateRows), stateRows }),
     };
   }
   if (first.startsWith(FINDING_MARKER_PREFIX)) {

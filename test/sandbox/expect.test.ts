@@ -5,7 +5,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
-import { evaluateCheck, evaluateChecks } from "../../scripts/sandbox/expect";
+import {
+  blockingFindingAt,
+  evaluateCheck,
+  evaluateChecks,
+} from "../../scripts/sandbox/expect";
 import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
 import {
   classifyComment,
@@ -653,8 +657,18 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
           kind: "report",
           head: NEW,
           statePaths: ["src/volume.ts", "src/mute.ts"],
+          stateRows: [
+            { path: "src/volume.ts", tier: "blocking" },
+            { path: "src/mute.ts", tier: "blocking" },
+          ],
         },
-        { source: "inline", kind: "finding", blocking: true, head: NEW },
+        {
+          source: "inline",
+          kind: "finding",
+          blocking: true,
+          head: NEW,
+          path: "src/mute.ts",
+        },
       ],
     }),
     // T5c: the state block holds only review 1's rows, so the re-review's own
@@ -678,8 +692,15 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
           kind: "report",
           head: NEW,
           statePaths: ["src/volume.ts"],
+          stateRows: [{ path: "src/volume.ts", tier: "blocking" }],
         },
-        { source: "inline", kind: "finding", blocking: true, head: NEW },
+        {
+          source: "inline",
+          kind: "finding",
+          blocking: true,
+          head: NEW,
+          path: "src/mute.ts",
+        },
       ],
     }),
   },
@@ -834,11 +855,25 @@ describe("scenario data: every declared expectation, pass and fail", () => {
         const fixtures = RECORDED[key];
         if (fixtures === undefined)
           throw new Error(`no recorded fixtures for ${key}`);
+        // S3: the ifOwnBlockingAt checks are read only when the fixture's own observation
+        // carries the blocking finding, as the runner decides it.
+        const checksOf = (o: Observation) => {
+          const own = phase.ifOwnBlockingAt;
+          const asserted =
+            own !== undefined && blockingFindingAt(o, own.path)
+              ? own.checks
+              : [];
+          return [...phase.checks, ...asserted];
+        };
         expect(
-          evaluateChecks(phase.checks, fixtures.pass).every((r) => r.pass),
+          evaluateChecks(checksOf(fixtures.pass), fixtures.pass).every(
+            (r) => r.pass,
+          ),
         ).toBe(true);
         expect(
-          evaluateChecks(phase.checks, fixtures.fail).some((r) => !r.pass),
+          evaluateChecks(checksOf(fixtures.fail), fixtures.fail).some(
+            (r) => !r.pass,
+          ),
         ).toBe(true);
       });
     });
@@ -1280,6 +1315,137 @@ describe("state-row-at: this head's report carries a state row in the path (D3)"
     const result = evaluateCheck(check, obs({ comments: [report(NEW)] }));
     expect(result.pass).toBe(false);
     expect(result.detail).toBe("no state block on this head's report");
+  });
+});
+
+// S2: with a tier, a state row matches only on its path AND its tier.
+describe("state-row-at with a tier: the row at the path must carry that tier (S2)", () => {
+  const blocking = {
+    kind: "state-row-at",
+    path: "src/mute.ts",
+    tier: "blocking",
+  } as const;
+  const report = (head: string, rows: { path: string; tier?: string }[]) => ({
+    source: "issue" as const,
+    kind: "report" as const,
+    head,
+    statePaths: rows.map((row) => row.path),
+    stateRows: rows,
+  });
+
+  test("fails when the row at the path is advisory, though the path matches", () => {
+    const result = evaluateCheck(
+      blocking,
+      obs({
+        comments: [
+          report(NEW, [
+            { path: "src/mute.ts", tier: "advisory" },
+            { path: "src/a.ts", tier: "blocking" },
+          ]),
+        ],
+      }),
+    );
+    expect(result.pass).toBe(false);
+    expect(result.label).toBe("state row at src/mute.ts with tier blocking");
+    expect(result.detail).toBe(
+      "no state row at src/mute.ts with tier blocking (state rows: src/mute.ts (advisory), src/a.ts (blocking))",
+    );
+  });
+
+  test("passes when the row at the path carries the tier", () => {
+    const result = evaluateCheck(
+      blocking,
+      obs({
+        comments: [report(NEW, [{ path: "src/mute.ts", tier: "blocking" }])],
+      }),
+    );
+    expect(result.pass).toBe(true);
+    expect(result.label).toBe("state row at src/mute.ts with tier blocking");
+  });
+
+  test("names no state rows when the report carries none with a tier", () => {
+    const result = evaluateCheck(
+      blocking,
+      obs({ comments: [report(NEW, [])] }),
+    );
+    expect(result.pass).toBe(false);
+    expect(result.detail).toBe(
+      "no state row at src/mute.ts with tier blocking (state rows: none)",
+    );
+  });
+
+  test("without a tier, the check reads the path alone, whatever the row's tier (unchanged)", () => {
+    const result = evaluateCheck(
+      { kind: "state-row-at", path: "src/mute.ts" },
+      obs({
+        comments: [report(NEW, [{ path: "src/mute.ts", tier: "advisory" }])],
+      }),
+    );
+    expect(result.pass).toBe(true);
+  });
+});
+
+// S3: the phase's own observation decides whether its ifOwnBlockingAt checks are asserted.
+describe("blockingFindingAt: this head's own blocking finding at the path (S3)", () => {
+  const finding = (
+    head: string,
+    path: string,
+    blocking: boolean,
+  ): Observation["comments"][number] => ({
+    source: "inline",
+    kind: "finding",
+    head,
+    path,
+    line: 3,
+    ...(blocking ? { blocking: true as const } : {}),
+  });
+
+  test("true when this head carries a blocking finding at the path", () => {
+    expect(
+      blockingFindingAt(
+        obs({ comments: [finding(NEW, "src/mute.ts", true)] }),
+        "src/mute.ts",
+      ),
+    ).toBe(true);
+  });
+
+  test("false for an advisory finding at the path", () => {
+    expect(
+      blockingFindingAt(
+        obs({ comments: [finding(NEW, "src/mute.ts", false)] }),
+        "src/mute.ts",
+      ),
+    ).toBe(false);
+  });
+
+  test("false for a blocking finding at another path, or on an older head", () => {
+    expect(
+      blockingFindingAt(
+        obs({ comments: [finding(NEW, "src/a.ts", true)] }),
+        "src/mute.ts",
+      ),
+    ).toBe(false);
+    expect(
+      blockingFindingAt(
+        obs({ comments: [finding(OLD, "src/mute.ts", true)] }),
+        "src/mute.ts",
+      ),
+    ).toBe(false);
+  });
+
+  test("a blocking finding at the path with no state row on the report is a FAIL of state-row-at", () => {
+    const o = obs({
+      comments: [
+        finding(NEW, "src/mute.ts", true),
+        { source: "issue", kind: "report", head: NEW },
+      ],
+    });
+    expect(blockingFindingAt(o, "src/mute.ts")).toBe(true);
+    const [result] = evaluateChecks(
+      [{ kind: "state-row-at", path: "src/mute.ts", tier: "blocking" }],
+      o,
+    );
+    expect(result?.pass).toBe(false);
   });
 });
 
