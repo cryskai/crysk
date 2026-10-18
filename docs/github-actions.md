@@ -311,6 +311,10 @@ The workflow's `permissions:` block needs six scopes, each for a specific reason
 - **`actions: read`** — the admission gate lists this workflow's past runs (`gh run list`). A public
   repo serves that without the scope, so a missing grant only fails on a private repo, with HTTP 403.
 
+The workflow token may also be unable to resolve review threads, even with `issues: write`. GitHub returns
+`Resource not accessible by integration` for that mutation, and the log says so once per run. The
+verified-gone reply is still posted, and the gate is unaffected: the thread stays open for a person to close.
+
 ## Security considerations
 
 ### Fork pull requests

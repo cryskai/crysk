@@ -1575,6 +1575,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-HUNTERS-FAILED": {
     level: "error",
     owner: "unclassified",
+    // WHY a lead of its own: the caller requests this code for a condition it
+    // sees directly (the hunter set), so "Unclassified:" would blame an unknown
+    // cause that does not exist. The owner stays unclassified for the table.
+    lead: "Not reviewed:",
     what: "Every review hunter failed in {step}: {detail}",
     variants: single(
       "no hunter returned a result, so there is no finding to report",

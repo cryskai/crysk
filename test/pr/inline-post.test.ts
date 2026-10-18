@@ -1841,6 +1841,127 @@ describe("postInlineFindings — the collapse loop cannot hang (F005)", () => {
     expect(logged).toContain("timed out after 30 ms");
     expect(logged).not.toContain("resolved: review thread for R001");
   });
+
+  // Two verified-gone priors, so the run-level notice is observably ONE line
+  // where a per-prior line would print twice.
+  const PRIOR_CLAIM_2 =
+    "the second prior finding, checked and gone at this head";
+  const PRIOR_MARKER_2 = findingMarker({
+    path: "src/a.ts",
+    line: 11,
+    headSha: OLD_HEAD,
+    claim: PRIOR_CLAIM_2,
+  });
+
+  async function collapseTwoWithLookupFailure(failure: string): Promise<{
+    logged: string;
+    calls: RecordedCall[];
+  }> {
+    const script: ScriptEntry[] = [
+      headRefOidScript(HEAD),
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 501,
+              user: "pr-hero",
+              body: `${PRIOR_MARKER}\n${PRIOR_CLAIM}`,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: null,
+            },
+            {
+              id: 502,
+              user: "pr-hero",
+              body: `${PRIOR_MARKER_2}\n${PRIOR_CLAIM_2}`,
+              path: "src/a.ts",
+              line: 11,
+              original_line: 11,
+              in_reply_to_id: null,
+            },
+          ]),
+        },
+      },
+      { match: ["reviewThreads"], response: { stderr: failure, exitCode: 1 } },
+      {
+        match: ["repo", "view", "--json", "owner,name"],
+        response: {
+          stdout: JSON.stringify({
+            owner: { login: "juanmaagd" },
+            name: "pr-hero",
+          }),
+        },
+      },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ];
+    const rereviewTwo: RereviewProvenance = {
+      ...rereview(),
+      prior_findings: 2,
+      verified: 2,
+      resolved_verified: 2,
+      resolved_ids: ["R001", "R002"],
+    };
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { spawnFn, calls } = makeFakeGh(script);
+      await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+        rereview: rereviewTwo,
+        rereviewPriors: [
+          { id: "R001", claim: PRIOR_CLAIM, locs: ["src/a.ts:10"] },
+          { id: "R002", claim: PRIOR_CLAIM_2, locs: ["src/a.ts:11"] },
+        ],
+        ghTimeoutMs: 30,
+      });
+      return { logged: chunks.join(""), calls };
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  }
+
+  test("a token that cannot resolve threads gets one run-level notice, not a line per prior", async () => {
+    const { logged, calls } = await collapseTwoWithLookupFailure(
+      "gh: Resource not accessible by integration (HTTP 403)",
+    );
+    const notice =
+      "resolve skipped: the workflow token cannot resolve review threads " +
+      "(Resource not accessible by integration); the verified-gone replies are posted";
+    expect(logged.split(notice)).toHaveLength(2);
+    expect(logged).not.toContain("resolve failed for R001");
+    expect(logged).not.toContain("resolve failed for R002");
+    // The replies still post: the gate and the reply are unaffected.
+    expect(
+      calls.filter((c) => c.argv.join(" ").includes("in_reply_to=501")),
+    ).toHaveLength(1);
+    expect(
+      calls.filter((c) => c.argv.join(" ").includes("in_reply_to=502")),
+    ).toHaveLength(1);
+  });
+
+  test("any other resolve failure keeps the per-prior line", async () => {
+    const { logged } = await collapseTwoWithLookupFailure(
+      "gh: Could not resolve to a PullRequest (HTTP 404)",
+    );
+    expect(logged).toContain("resolve failed for R001");
+    expect(logged).toContain("resolve failed for R002");
+    expect(logged).not.toContain("the workflow token cannot resolve");
+  });
 });
 
 // A re-review PATCHes the summary in place, and GitHub neither notifies on an
