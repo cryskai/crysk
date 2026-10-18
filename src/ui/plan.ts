@@ -442,6 +442,18 @@ function decisionLines(
   return lines;
 }
 
+// The free-route wording of the estimate, shared by the plan card and the result
+// footer's estimate row so both print one verdict. A free route bills nothing,
+// so the band is relabelled as token-derived instead of read as a cost.
+export function freeRouteEstimateText(estimate: {
+  low: number;
+  high: number;
+}): string {
+  const low = `$${estimate.low.toFixed(2)}`;
+  const high = `$${estimate.high.toFixed(2)}`;
+  return `free route (token-derived ${low} – ${high}, not billed)`;
+}
+
 // The estimate row's text, shared by both plan cards. The band is token-derived
 // whatever the route; the free verdict changes only the claim made about it. A
 // free route bills nothing, so a dollar figure would read as a cost, and the
@@ -461,7 +473,7 @@ export function planEstimateLine(input: {
   // the confirm read one verdict, so they cannot disagree about what is billed.
   const billing = freeBillingMode(input.freeRoute);
   if (billing === "free") {
-    return `estimate: free route (token-derived ${low} – ${high}, not billed)`;
+    return `estimate: ${freeRouteEstimateText(input.estimate)}`;
   }
   const line =
     `estimate ${low} – ${high} (${input.hunterCount} hunter(s) + refuter ` +

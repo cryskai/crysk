@@ -50,6 +50,8 @@ import { collapseTargets, type RereviewProvenance } from "#rereview/prepare";
 import {
   droppedStateNote,
   type FreshStateFinding,
+  GITHUB_ISSUE_COMMENT_MAX,
+  type MergedState,
   mergeStateFindings,
   parseStateBlock,
   renderStateBlock,
@@ -2491,12 +2493,67 @@ export async function listAdmissionCheckRuns(
   }
 }
 
+// W3-RESERVE: a POST that failed may still have created the run (gh timed out
+// after GitHub accepted it). Look it up by external_id AND by the attempt and
+// createdAt of the record being posted: external_id is the reservation
+// fingerprint, shared by every attempt on this head and policy, so it alone
+// would adopt an earlier attempt's run. Any failure of the lookup reads as "no
+// match", which keeps the POST retry exactly as it was.
+async function findAdmissionCheckRunForAttempt(
+  operatorRoot: string,
+  headSha: string,
+  record: AdmissionRecord,
+  spawnFn?: typeof Bun.spawn,
+): Promise<{ id: number; status: string | undefined } | null> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      [
+        "api",
+        `repos/{owner}/{repo}/commits/${headSha}/check-runs?check_name=${ADMISSION_CHECK_RUN_NAME}&filter=all`,
+        "--paginate",
+        "--jq",
+        `.check_runs[] | select(.name == "${ADMISSION_CHECK_RUN_NAME}") | {id: .id, name: .name, status: .status, external_id: .external_id, output: {text: .output.text}}`,
+      ],
+      undefined,
+      spawnFn,
+      ADMISSION_CHECK_RUN_TIMEOUT_MS,
+    );
+    if (!result.ok) return null;
+    for (const line of result.stdout.split("\n")) {
+      const parsedRecord = parseAdmissionCheckRunRow(line);
+      if (parsedRecord === null) continue;
+      const row = JSON.parse(line) as {
+        id?: number;
+        status?: string;
+        external_id?: string;
+      };
+      if (
+        typeof row.id === "number" &&
+        row.external_id === record.reservationId &&
+        parsedRecord.attemptNumber === record.attemptNumber &&
+        parsedRecord.createdAt === record.createdAt
+      ) {
+        return { id: row.id, status: row.status };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertAdmissionCheckRun(
   operatorRoot: string,
   input: {
     headSha: string;
     record: AdmissionRecord;
     checkRunId?: number;
+    // Set only by a caller whose record this run just created. WHY: a reused
+    // active record (reserveAdmissionAttempt's created:false) already has another
+    // run's check run with the same external_id, attempt and createdAt, and
+    // adopting it would make two workflow runs settle one row (review #360).
+    adoptOnFailedPost?: boolean;
   },
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<number> {
@@ -2556,6 +2613,24 @@ export async function upsertAdmissionCheckRun(
       );
     }
     lastStderr = result.stderr.trim();
+    // Only a POST can have created a run the caller does not know about; a
+    // PATCH already names its run. A match is adopted instead of retried.
+    if (input.checkRunId === undefined && input.adoptOnFailedPost === true) {
+      const existing = await findAdmissionCheckRunForAttempt(
+        operatorRoot,
+        input.headSha,
+        input.record,
+        options?.spawnFn,
+      );
+      if (existing !== null) {
+        if (existing.status === checkStatus) return existing.id;
+        return upsertAdmissionCheckRun(
+          operatorRoot,
+          { ...input, checkRunId: existing.id, adoptOnFailedPost: false },
+          options,
+        );
+      }
+    }
   }
   throw new CliError(`gh api (admission check run) failed: ${lastStderr}`);
 }
@@ -2979,7 +3054,12 @@ export async function postInlineFindings(input: {
     undefined,
     input.ciMode,
   );
-  const merged =
+  // WHY one merge function for both writes: the S1 re-merge reruns it with a
+  // PATCH-sized budget and the SAME inputs, so the kept ids and hw cannot
+  // drift between the POST and the PATCH.
+  const mergeStateWithBudget = (
+    stateBudget: number,
+  ): MergedState | undefined =>
     framing === undefined
       ? undefined
       : mergeStateFindings({
@@ -2987,19 +3067,23 @@ export async function postInlineFindings(input: {
           reviews: postedReviewCount,
           live: framing.live,
           previous: previousState,
+          previousHead: previousState?.headSha ?? null,
           retiredIds: [
             ...(framing.resolved_ids ?? []),
             ...(framing.worsened ?? []).map((w) => w.priorId),
           ],
           fresh: freshFindings,
-          stateBudget: stateBlockBudget(referenceBody.length),
+          stateBudget,
         });
+  const merged = mergeStateWithBudget(stateBlockBudget(referenceBody.length));
 
-  const renderBody = (
+  const renderWithState = (
     delta: PrCommentDelta,
     outside: readonly Finding[],
     moved: string | undefined,
-    urls?: ReadonlyMap<string, string>,
+    urls: ReadonlyMap<string, string> | undefined,
+    state: MergedState | undefined,
+    compactFrom?: number,
   ): string => {
     const body = renderPrComment(
       doc,
@@ -3009,6 +3093,7 @@ export async function postInlineFindings(input: {
       moved,
       urls,
       input.ciMode,
+      compactFrom,
     );
     // WHY the admission block is written on BOTH paths: its `reviews` is the
     // only count a summary keeps when the count is 0. renderStateBlock omits 0
@@ -3026,15 +3111,21 @@ export async function postInlineFindings(input: {
       counts,
       postedReviewCount,
     );
-    if (merged === undefined) {
+    if (state === undefined) {
       return `${body}${admissionBlock}`;
     }
     // The drop line sits right above the state block it accounts for. Empty
     // when the cap dropped nothing.
-    const note = droppedStateNote(merged.dropped);
+    const note = droppedStateNote(state.dropped);
     const noteLine = note === "" ? "" : `${note}\n`;
-    return `${body}${admissionBlock}${noteLine}${renderStateBlock(doc.head_sha, merged.rows, postedReviewCount, merged.hw)}`;
+    return `${body}${admissionBlock}${noteLine}${renderStateBlock(doc.head_sha, state.rows, postedReviewCount, state.hw)}`;
   };
+  const renderBody = (
+    delta: PrCommentDelta,
+    outside: readonly Finding[],
+    moved: string | undefined,
+    urls?: ReadonlyMap<string, string>,
+  ): string => renderWithState(delta, outside, moved, urls, merged);
 
   // The id this run's own creation just returned, if any — threaded to the
   // closing PATCH below so it updates THIS comment directly rather than
@@ -3149,10 +3240,55 @@ export async function postInlineFindings(input: {
   });
 
   const delta: PrCommentDelta = { ...plan.delta, previousHeadSha };
+  // S1 — the 422 demotion grew the Outside Diff after the POST-shaped merge,
+  // so the PATCH body can be longer than the budget was sized for. Compact
+  // first, with the POST merge's state: the demoted entries shrink from the
+  // last one backwards (location and link only) and the first fit wins. WHY
+  // compaction before re-merging: a re-merge sized from the uncompacted body
+  // can leave no room for the advisory rows, and those rows are then evicted
+  // for good even though compaction would have made room. Without a demotion
+  // the body stays byte-identical to today's, whatever its length. The PATCH
+  // is never knowingly sent above the limit.
+  const grew = outsideDiff.length > plannedOutsideDiff.length;
+  const renderPatch = (
+    state: MergedState | undefined,
+    compactFrom?: number,
+  ): string =>
+    renderWithState(
+      delta,
+      outsideDiff,
+      movedHeadSha,
+      commentUrlByFindingId,
+      state,
+      compactFrom,
+    );
+  let patchBody = renderPatch(merged);
+  if (grew && patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
+    for (let from = outsideDiff.length - 1; from >= 0; from--) {
+      patchBody = renderPatch(merged, from);
+      if (patchBody.length <= GITHUB_ISSUE_COMMENT_MAX) break;
+    }
+    // S1b — only when every entry is compacted and the body still does not
+    // fit does the state shrink: re-merge with the same inputs and a budget
+    // sized from the fully compacted body without its state block. The ids
+    // and hw are budget-independent, and only advisory rows can be dropped.
+    if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
+      const bodyWithoutState = renderPatch(undefined, 0);
+      const reMerged = mergeStateWithBudget(
+        stateBlockBudget(bodyWithoutState.length),
+      );
+      patchBody = renderPatch(reMerged, 0);
+    }
+    if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
+      process.stdout.write(
+        `::warning::pr-hero: the summary is ${patchBody.length} characters, over GitHub's ${GITHUB_ISSUE_COMMENT_MAX}-character comment limit even with every Outside Diff entry compacted; sending it as is\n`,
+      );
+    }
+  }
   const patched = await postPrComment(
     operatorRoot,
     pr,
-    renderBody(delta, outsideDiff, movedHeadSha, commentUrlByFindingId),
+    patchBody,
     spawnFn,
     summaryCommentId ?? undefined,
   );

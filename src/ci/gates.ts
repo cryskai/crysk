@@ -444,11 +444,11 @@ export function budgetUnlimitedNoticeMessage(
 ): string | null {
   if (ceiling.source !== "unlimited-subscription") return null;
   return (
-    "no budget-usd ceiling was applied: this route authenticates against a " +
-    "Claude subscription, where a run draws on quota rather than a " +
-    "per-token invoice, so the estimated cost is not a dollar figure to " +
-    "gate on. The size gate still applies independently. Set `budget-usd: " +
-    "<n>` to impose a ceiling anyway."
+    "no budget-usd ceiling was applied: this route has no per-token invoice " +
+    "credential (a Claude subscription or a free route), so a run draws on " +
+    "quota rather than a per-token invoice and the estimated cost is not a " +
+    "dollar figure to gate on. The size gate still applies independently. " +
+    "Set `budget-usd: <n>` to impose a ceiling anyway."
   );
 }
 

@@ -208,9 +208,9 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
 });
 
 // T5b: each adjudication verdict is posted as a reply on its finding's thread.
-// The in-run verdict already settled this run's gate, so a failed post is a
-// warning, never a failed run: the next run then counts the finding again,
-// which fails closed.
+// No verdict changes this run's gate, so a failed post is a warning, never a
+// failed run: the dismissal keeps no CI ruling, the next recheck rules on it
+// again, and the next review still counts the finding, which fails closed.
 describe("postAdjudicationReplies", () => {
   const HEAD = "d".repeat(40);
   const ADJUDICATION = {

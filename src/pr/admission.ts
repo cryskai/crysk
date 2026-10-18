@@ -193,7 +193,7 @@ export async function reserveCiAdmissionLedger(input: {
   // Test-only seam (default: the real Bun.spawn), threaded to the check-run write.
   spawnFn?: typeof Bun.spawn;
 }): Promise<CiAdmissionLedgerState> {
-  const { record } = reserveAdmissionAttempt({
+  const { record, created } = reserveAdmissionAttempt({
     existing: input.existing,
     prNumber: input.prNumber,
     headSha: input.headSha,
@@ -211,6 +211,7 @@ export async function reserveCiAdmissionLedger(input: {
     {
       headSha: input.headSha,
       record,
+      adoptOnFailedPost: created,
     },
     { spawnFn: input.spawnFn },
   );

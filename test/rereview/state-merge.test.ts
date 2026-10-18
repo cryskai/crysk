@@ -379,3 +379,101 @@ describe("S7 — the merge is pure and deterministic", () => {
     expect(a).toBe(b);
   });
 });
+
+describe("S1 — a tighter PATCH-sized budget re-merges with the same ids and hw", () => {
+  const priors = [
+    live("R001", "carried", { claim: "stale claim" }),
+    live("R002", "carried", {
+      tier: "advisory",
+      sev: "SUGGESTION",
+      locs: ["src/other.ts:3"],
+      claim: "advisory prior",
+    }),
+  ];
+  const survivors = [fresh(12, "blocking", { claim: "current claim" })];
+
+  test("a budget too small for the advisory prior evicts it and keeps the blocking row", () => {
+    const wide = merge({ live: priors, fresh: survivors });
+    const tight = merge({ live: priors, fresh: survivors, stateBudget: 0 });
+    expect(wide.rows.map((r) => r.id)).toEqual(["R001", "R002"]);
+    expect(tight.rows.map((r) => r.id)).toEqual(["R001"]);
+    expect(tight.rows[0]).toMatchObject({
+      id: "R001",
+      tier: "blocking",
+      locs: ["src/app.ts:12"],
+      claim: "current claim",
+    });
+    expect(tight.dropped).toBe(1);
+    expect(tight.hw).toBe(wide.hw);
+  });
+
+  test("kept rows carry the same ids and hw as the first merge", () => {
+    const first = merge({ live: priors, fresh: survivors });
+    const second = merge({ live: priors, fresh: survivors, stateBudget: 0 });
+    const firstById = new Map(first.rows.map((r) => [r.id, r]));
+    for (const row of second.rows) {
+      expect(firstById.get(row.id)).toMatchObject({
+        id: row.id,
+        locs: row.locs,
+        claim: row.claim,
+      });
+    }
+    expect(second.hw).toBe(first.hw);
+  });
+});
+
+describe("S2 — a same-head re-post re-pairs its earlier rows", () => {
+  const OTHER_HEAD = "1".repeat(40);
+  const survivor = () => [fresh(30, "blocking", { claim: "same claim" })];
+  const first = merge({ live: [], fresh: survivor(), previous: null });
+
+  test("(a) merging twice at the same head gives the same rows and hw", () => {
+    const second = merge({
+      live: [],
+      fresh: survivor(),
+      previous: { findings: first.rows, hw: first.hw },
+      previousHead: HEAD,
+    });
+    expect(first.rows.map((r) => r.id)).toEqual(["R001"]);
+    expect(second.rows).toEqual(first.rows);
+    expect(second.hw).toBe(first.hw);
+  });
+
+  test("(b) a different previous head merges exactly as when no head is given", () => {
+    const previous = { findings: first.rows, hw: first.hw };
+    const different = merge({
+      live: [],
+      fresh: survivor(),
+      previous,
+      previousHead: OTHER_HEAD,
+    });
+    const absent = merge({ live: [], fresh: survivor(), previous });
+    expect(different).toEqual(absent);
+    expect(different.rows.map((r) => r.id)).toEqual(["R002"]);
+    expect(different.hw).toBe(2);
+  });
+
+  test("(c) a same-head previous row the fresh set no longer holds is kept", () => {
+    const prior = stateFinding({
+      id: "R001",
+      sev: "CRITICAL",
+      tier: "blocking",
+      channel: "inline",
+      locs: ["src/app.ts:10"],
+      claim: "gone now",
+    });
+    const merged = merge({
+      live: [],
+      fresh: [],
+      previous: { findings: [prior], hw: 1 },
+      previousHead: HEAD,
+    });
+    expect(merged.rows.map((r) => r.id)).toEqual(["R001"]);
+    expect(merged.rows[0]).toMatchObject({
+      id: "R001",
+      claim: "gone now",
+      status: "unconfirmed",
+    });
+    expect(merged.hw).toBe(1);
+  });
+});

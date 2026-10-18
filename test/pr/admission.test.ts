@@ -9,12 +9,18 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  ADMISSION_CHECK_RUN_NAME,
   type AdmissionAttemptStatus,
   type AdmissionRecord,
   admissionRecordFingerprint,
+  serializeAdmissionRecord,
 } from "#ci/admission-ledger";
 import { ciGateSkipOutputs } from "#ci/gates";
 import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
+import {
+  ciReviewPolicyHash,
+  resolveCiReviewPolicy,
+} from "#ci/review-admission";
 import {
   type AdmissionStatusInput,
   type CiAdmissionLedgerState,
@@ -24,6 +30,7 @@ import {
   isReviewVerdictStatus,
   publishCiSkip,
   releaseCiAdmissionLedger,
+  reserveCiAdmissionLedger,
   settleCiAdmissionLedger,
   settleHeldAdmissionLedgerOnSignal,
 } from "#pr/admission";
@@ -1407,3 +1414,102 @@ function restoreOutcomeDir(saved: string | undefined): void {
     process.env.PRHERO_OUTCOME_DIR = saved;
   }
 }
+
+// Review #360: a reserve POST that failed adopts a check run found by its
+// external_id, attempt and createdAt only when this run created the record. A
+// reused active record already belongs to another run's check run, and adopting
+// it would make two workflow runs settle one row.
+describe("reserveCiAdmissionLedger — adoption after a failed POST", () => {
+  const RESERVE_POLICY = resolveCiReviewPolicy({});
+  const RESERVE_HASH = ciReviewPolicyHash(RESERVE_POLICY);
+
+  function failingPostGh(lookupStdout: string): {
+    spawnFn: typeof Bun.spawn;
+    calls: string[][];
+  } {
+    const calls: string[][] = [];
+    const encoder = new TextEncoder();
+    const stream = (text: string) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (text) controller.enqueue(encoder.encode(text));
+          controller.close();
+        },
+      });
+    const spawnFn = ((argv: string[]) => {
+      calls.push(argv);
+      const lookup = argv.join(" ").includes("check_name=");
+      return {
+        stdout: stream(lookup ? lookupStdout : ""),
+        stderr: stream(lookup ? "" : "gh timed out after 15000 ms"),
+        exited: Promise.resolve(lookup ? 0 : 1),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, calls };
+  }
+
+  function rowFor(record: AdmissionRecord): string {
+    return `${JSON.stringify({
+      id: 812,
+      name: ADMISSION_CHECK_RUN_NAME,
+      status: "in_progress",
+      external_id: record.reservationId,
+      output: { text: serializeAdmissionRecord(record) },
+    })}\n`;
+  }
+
+  test("a reused active record never looks up, so another run's check run is not adopted", async () => {
+    const active: AdmissionRecord = {
+      schemaVersion: 1,
+      prNumber: PR,
+      headSha: HEAD,
+      policyHash: RESERVE_HASH,
+      reservationId: admissionRecordFingerprint(PR, HEAD, RESERVE_HASH),
+      attemptNumber: 1,
+      status: "reserved",
+      decisionReason: ORIGINAL_REASON,
+      priorScore: null,
+      blockingCount: null,
+      advisoryCount: null,
+      workflowRunId: "111",
+      createdAt: new Date().toISOString(),
+      settledAt: null,
+    };
+    const { spawnFn, calls } = failingPostGh(rowFor(active));
+    await expect(
+      reserveCiAdmissionLedger({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: HEAD,
+        policy: RESERVE_POLICY,
+        policyHash: RESERVE_HASH,
+        existing: [active],
+        decisionReason: "admitted",
+        spawnFn,
+      }),
+    ).rejects.toThrow("gh timed out after 15000 ms");
+    expect(calls.some((argv) => argv.join(" ").includes("check_name="))).toBe(
+      false,
+    );
+  });
+
+  test("a record this run created looks the failed POST up", async () => {
+    const { spawnFn, calls } = failingPostGh("");
+    await expect(
+      reserveCiAdmissionLedger({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        headSha: HEAD,
+        policy: RESERVE_POLICY,
+        policyHash: RESERVE_HASH,
+        existing: [],
+        decisionReason: "admitted",
+        spawnFn,
+      }),
+    ).rejects.toThrow("gh timed out after 15000 ms");
+    expect(
+      calls.filter((argv) => argv.join(" ").includes("check_name=")),
+    ).toHaveLength(2);
+  });
+});

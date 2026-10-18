@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import type { ComparisonResult } from "#compare/compare";
 import type { GreptileFinding } from "#compare/greptile";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
+import { planEstimateLine } from "#ui/plan";
 import { type ResultInput, renderResult } from "#ui/result";
 
 const ESC = String.fromCharCode(27);
@@ -935,5 +936,72 @@ describe("renderResult styling", () => {
     expect(Array.isArray(lines)).toBe(true);
     // Leading blank: the block separates itself from the progress panel above.
     expect(lines[0]).toBe("");
+  });
+});
+
+// W3-FOOTER: a free OpenCode route is not billed, so the footer must not say
+// it was "not charged on a subscription" (false there), and a mixed route must
+// name its free share. Rows wrap at the value column, so the wording is read
+// with whitespace collapsed; the wrapping itself has its own tests above.
+describe("renderResult footer on a free route (W3-FOOTER)", () => {
+  const flat = (lines: string[]): string => joined(lines).replace(/\s+/g, " ");
+  const notional = { notionalUsd: 0.0455 };
+
+  test("billing free: the notional row names a free route, never a subscription", () => {
+    const text = flat(renderResult(input({ ...notional, billing: "free" })));
+    expect(text).toContain(
+      "$0.05 at list price — not charged on a free route; budget limits read the cash figure above",
+    );
+    expect(text).not.toContain("subscription");
+  });
+
+  test("billing mixed: the estimate row appends the free-steps note", () => {
+    const text = flat(renderResult(input({ ...notional, billing: "mixed" })));
+    expect(text).toContain("$3.50–$5.25 (free steps not billed)");
+    // The notional row keeps today's wording: only the free share changed.
+    expect(text).toContain("not charged on a subscription");
+  });
+
+  test("billing free: the estimate row carries the plan card's free wording, never a bare band", () => {
+    const text = flat(renderResult(input({ ...notional, billing: "free" })));
+    // The plan card prints this line for the same band and the same free
+    // route; the footer must read the same verdict, not its own rewording.
+    const planCard = planEstimateLine({
+      estimate: { low: 3.5, high: 5.25 },
+      hunterCount: 1,
+      summarizer: true,
+      freeRoute: { free: 5, total: 5 },
+    });
+    expect(planCard).toBe(
+      "estimate: free route (token-derived $3.50 – $5.25, not billed)",
+    );
+    expect(text).toContain(
+      "estimate free route (token-derived $3.50 – $5.25, not billed)",
+    );
+    expect(text).not.toContain("estimate $3.50–$5.25");
+  });
+
+  test("billing undefined: the estimate row keeps the bare band", () => {
+    const text = flat(renderResult(input({ ...notional, billing: undefined })));
+    expect(text).toContain("estimate $3.50–$5.25");
+    expect(text).not.toContain("token-derived");
+  });
+
+  test("billing undefined: byte-identical to a run that never heard of billing", () => {
+    expect(renderResult(input({ ...notional }))).toEqual(
+      renderResult(input({ ...notional, billing: undefined })),
+    );
+    expect(flat(renderResult(input({ ...notional })))).toContain(
+      "not charged on a subscription",
+    );
+  });
+
+  test("styles off: a free-route footer carries no escape bytes", () => {
+    for (const billing of ["free", "mixed"] as const) {
+      const lines = renderResult(
+        input({ ...notional, billing, styles: false }),
+      );
+      expect(lines.join("\n")).not.toContain("\x1b");
+    }
   });
 });
