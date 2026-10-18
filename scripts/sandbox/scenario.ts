@@ -12,10 +12,12 @@
 // smoke is the review-free scenario, run through this same code (smoke.ts).
 
 import {
+  type Check,
   type CheckResult,
   describeCheck,
   evaluateChecks,
   ownBlockingGate,
+  ownBlockingUndecided,
 } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
 import { FINDING_MARKER_PREFIX, STATUS_CONTEXT } from "./markers";
@@ -261,6 +263,21 @@ export async function runScenarios(
   return exitCodeFor(ran, skippedBy);
 }
 
+// S1: whether a phase asserts a no-hunter-failed check anywhere it can, so the run log is
+// read for it. Every list a phase asserts counts, not only its own checks; otherwise such a
+// check would evaluate against an unread log (hunterFailures === undefined).
+export function phaseReadsLog(phase: Phase): boolean {
+  const lists: (readonly Check[] | undefined)[] = [
+    phase.checks,
+    phase.afterPriorOutcome,
+    phase.afterPriorBlocking,
+    phase.ifOwnBlockingAt?.checks,
+  ];
+  return lists.some(
+    (list) => list?.some((check) => check.kind === "no-hunter-failed") === true,
+  );
+}
+
 // The one failure a re-run is for: every failed check carries the free model's flake
 // cause, and nothing else went wrong. No error (a timeout or a cleanup failure is one),
 // and no S7 violation. Any other failure is a finding, and stands as it is.
@@ -483,7 +500,7 @@ async function runOne(
       // beside it, so the check can see that the rerun left it alone.
       const rerunPhase = phase.action.kind === "rerun-first";
       const collected = await collect(work, live, {
-        readLog: phase.checks.some((c) => c.kind === "no-hunter-failed"),
+        readLog: phaseReadsLog(phase),
         observedHead: rerunPhase ? live.firstHeadSha : undefined,
       });
       // Only a comment phase has a triggering comment whose reactions a check can read.
@@ -564,7 +581,14 @@ async function runOne(
         observed === "hunters-failed" &&
         obs.status?.state !== "success" &&
         isOwnHuntersFailed(obs, collected.statusCreatedAt);
-      const phaseChecks = evaluateChecks(asserted, obs).map(
+      // S2: a closed gate that an unlocated outside-diff entry leaves undecided fails loud,
+      // once, instead of skipping the ifOwnBlockingAt checks silently.
+      const undecided =
+        ownAt === undefined ? undefined : ownBlockingUndecided(obs, ownAt.path);
+      const phaseChecks = [
+        ...evaluateChecks(asserted, obs),
+        ...(undecided === undefined ? [] : [undecided]),
+      ].map(
         (r): CheckResult =>
           freeModelFlake && !r.pass
             ? { ...r, cause: "free-model-hunters-failed" }

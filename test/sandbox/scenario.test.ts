@@ -16,8 +16,8 @@ import {
   type ScenarioResult,
 } from "../../scripts/sandbox/report";
 import { DEFAULT_TIMEOUT_MS } from "../../scripts/sandbox/runs";
-import { runScenarios } from "../../scripts/sandbox/scenario";
-import { findScenario } from "../../scripts/sandbox/scenarios";
+import { phaseReadsLog, runScenarios } from "../../scripts/sandbox/scenario";
+import { findScenario, type Phase } from "../../scripts/sandbox/scenarios";
 import {
   GOTCHAS_PATH,
   sandboxFiles,
@@ -1510,5 +1510,59 @@ describe("the run log read of review-free: GitHub serves a log with a lag", () =
     expect(
       logSleeps((h.deps.clock as unknown as { sleeps: number[] }).sleeps),
     ).toBe(0);
+  });
+});
+
+// S1: a phase reads the run log when ANY list it can assert carries a no-hunter-failed
+// check, not only its own checks. Otherwise that check reads hunterFailures === undefined.
+describe("phaseReadsLog: every list a phase asserts counts (S1)", () => {
+  const base: Phase = {
+    action: { kind: "rerun-first" },
+    wait: "rerun",
+    checks: [],
+  };
+  const NO_HUNTER_FAILED = { kind: "no-hunter-failed" } as const;
+
+  test("a no-hunter-failed check in the phase's own checks reads the log", () => {
+    expect(phaseReadsLog({ ...base, checks: [NO_HUNTER_FAILED] })).toBe(true);
+  });
+
+  test("a no-hunter-failed check in afterPriorOutcome reads the log", () => {
+    expect(
+      phaseReadsLog({ ...base, afterPriorOutcome: [NO_HUNTER_FAILED] }),
+    ).toBe(true);
+  });
+
+  test("a no-hunter-failed check in afterPriorBlocking reads the log", () => {
+    expect(
+      phaseReadsLog({ ...base, afterPriorBlocking: [NO_HUNTER_FAILED] }),
+    ).toBe(true);
+  });
+
+  test("a no-hunter-failed check in ifOwnBlockingAt reads the log", () => {
+    expect(
+      phaseReadsLog({
+        ...base,
+        ifOwnBlockingAt: { path: "src/a.ts", checks: [NO_HUNTER_FAILED] },
+      }),
+    ).toBe(true);
+  });
+
+  test("a phase with no no-hunter-failed check in any list does not read the log (unchanged)", () => {
+    expect(
+      phaseReadsLog({
+        ...base,
+        checks: [{ kind: "status", state: "failure" }],
+        afterPriorOutcome: [{ kind: "no-outcome" }],
+        afterPriorBlocking: [{ kind: "status", state: "failure" }],
+        ifOwnBlockingAt: {
+          path: "src/a.ts",
+          checks: [
+            { kind: "state-row-at", path: "src/a.ts", tier: "blocking" },
+          ],
+        },
+      }),
+    ).toBe(false);
+    expect(phaseReadsLog(base)).toBe(false);
   });
 });

@@ -105,6 +105,10 @@ export interface CommentFact {
   // only when at least one entry names a path; an entry with no parseable location adds
   // to outsideDiffBlocking but not here.
   outsideDiffBlockingPaths?: string[];
+  // S2: how many of those blocking entries name no parseable path (outsideDiffBlockingPaths
+  // drops them). Set only when at least one does, so a gate can fail loud on them instead of
+  // silently skipping its checks.
+  outsideDiffUnlocated?: number;
   // T5b: the verdict of a CI adjudication reply (`verdict=` on its marker line).
   verdict?: string;
   // D3: the paths of a report's state-block rows (every loc of every row, once each), so a check can read what the PR's state remembers. Set only on a report that carries a state block.
@@ -223,6 +227,14 @@ export function outsideDiffBlockingCount(body: string): number {
   return outsideDiffBlockingLocations(body).length;
 }
 
+// S2: the blocking entries whose location names no path, the ones outsideDiffBlockingPaths
+// drops. Counted so a gate that cannot decide them fails loud rather than skipping.
+export function outsideDiffUnlocatedCount(body: string): number {
+  return outsideDiffBlockingLocations(body).filter(
+    (location) => locationPath(location) === undefined,
+  ).length;
+}
+
 // The path of a location line: the first backticked `path:line` span, plain or inside a
 // link, with the `:line` suffix after its last colon dropped. Undefined when there is no
 // such span, so an unparseable entry names no path.
@@ -309,6 +321,7 @@ export function classifyComment(
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     const outside = outsideDiffBlockingCount(body);
     const outsidePaths = outsideDiffBlockingPaths(body);
+    const unlocated = outsideDiffUnlocatedCount(body);
     const stateRows = stateRowsOf(body);
     return {
       source,
@@ -318,6 +331,7 @@ export function classifyComment(
       ...(outsidePaths.length === 0
         ? {}
         : { outsideDiffBlockingPaths: outsidePaths }),
+      ...(unlocated === 0 ? {} : { outsideDiffUnlocated: unlocated }),
       ...(stateRows === undefined
         ? {}
         : { statePaths: pathsOf(stateRows), stateRows }),

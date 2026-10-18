@@ -165,8 +165,8 @@ export function blockingFindingAt(obs: Observation, path: string): boolean {
 }
 
 // The blocking entries in this head's report's "Comments Outside Diff" section. Each has
-// no inline comment, so only the report's count shows it. Read by status-matches-findings
-// and by ownBlockingGate, so both count the same thing.
+// no inline comment, so only the report's count shows it. Read by status-matches-findings,
+// which counts every visible blocking finding; ownBlockingGate reads the paths instead.
 export function outsideDiffBlockingOn(obs: Observation): number {
   return obs.comments.reduce(
     (sum, c) =>
@@ -191,6 +191,30 @@ export function ownBlockingGate(obs: Observation, path: string): boolean {
         (c.outsideDiffBlockingPaths ?? []).includes(path),
     )
   );
+}
+
+// S2: a closed ownBlockingGate on a head whose outside-diff blocking entry names no path
+// cannot be decided: that entry may be about this path. The ifOwnBlockingAt checks then
+// fail with this result rather than being silently skipped. Undefined when the gate is
+// open, or when every entry on this head names a path.
+export function ownBlockingUndecided(
+  obs: Observation,
+  path: string,
+): CheckResult | undefined {
+  if (ownBlockingGate(obs, path)) return undefined;
+  const unlocated = obs.comments.reduce(
+    (sum, c) =>
+      c.kind === "report" && c.head === obs.headSha
+        ? sum + (c.outsideDiffUnlocated ?? 0)
+        : sum,
+    0,
+  );
+  if (unlocated === 0) return undefined;
+  return {
+    label: "an outside-diff blocking entry on this head has no parseable path",
+    pass: false,
+    detail: `an outside-diff blocking entry on this head has no parseable path:line location, so the gate for ${path} cannot be decided`,
+  };
 }
 
 export function evaluateCheck(check: Check, obs: Observation): CheckResult {

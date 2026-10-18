@@ -1141,3 +1141,11 @@ describe("plan card and details route dimensions display", () => {
     expect(prText).toContain(sonnetRouteLabel);
   });
 });
+
+// S4: the RUN row's count is the config's suspicion priors, labelled as such, not prior findings.
+describe("renderPlan: the RUN row labels the config suspicion priors (S4)", () => {
+  test("the count reads as suspicion priors", () => {
+    const text = joined(renderPlan(planContext(), false));
+    expect(text).toContain("0 suspicion prior(s)");
+  });
+});
