@@ -1037,6 +1037,9 @@ describe("status-matches-findings: the status agrees with the blocking findings 
     for (const description of [
       "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
       "pr-hero: review partial (1 of 4 hunters failed) carried from abc1234 — /pr-hero review retries it",
+      "pr-hero: review partial (1 of 4 hunters failed, set 3fa9c1) — /pr-hero review retries it",
+      "pr-hero: review partial (1 of 4 hunters failed, set 3fa9c1) carried from abc1234 — /pr-hero review retries it",
+      "pr-hero: review partial again (1 of 4 hunters failed, set 3fa9c1) — fix the failing route or /pr-hero override",
     ]) {
       const result = evaluateCheck(
         check,

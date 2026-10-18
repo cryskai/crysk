@@ -971,6 +971,7 @@ describe("a pipeline whose hunters all fail with model_unavailable", () => {
       expect(result.hunterFailures?.length).toBeGreaterThan(0);
       for (const failure of result.hunterFailures ?? []) {
         expect(failure).toEqual({
+          name: expect.stringMatching(/^hunter-/),
           cause: "model_unavailable",
           provider: "openai",
           model: "gpt-4o",
@@ -1027,6 +1028,7 @@ describe("a pipeline whose hunters all fail with a missing provider record", () 
       expect(result.hunterFailures?.length).toBeGreaterThan(0);
       for (const failure of result.hunterFailures ?? []) {
         expect(failure).toEqual({
+          name: expect.stringMatching(/^hunter-/),
           cause: "missing_provider_record",
           provider: "openai",
           model: "gpt-4o",

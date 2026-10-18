@@ -149,7 +149,7 @@ function headReports(obs: Observation): number {
 // The partial-review verdict's text, finished or carried. Spelled out here because the sandbox
 // harness does not import the engine.
 const PARTIAL_REVIEW =
-  /^pr-hero: review partial \(\d+ of \d+ hunters failed\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$|^pr-hero: review partial again \(\d+ of \d+ hunters failed\) — fix the failing route or \/pr-hero override$/;
+  /^pr-hero: review partial \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$|^pr-hero: review partial again \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\) — fix the failing route or \/pr-hero override$/;
 
 // S3: this observation's head carries a blocking finding comment anchored at `path`. The
 // same blocking test the status-matches-findings check reads (the finding header's tier),

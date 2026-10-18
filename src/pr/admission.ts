@@ -356,9 +356,11 @@ export function carriedPartialDescription(
   failed: number,
   total: number,
   sha: string,
+  set?: string,
 ): string {
+  const suffix = set === undefined ? "" : `, set ${set}`;
   return clipStatusDescription(
-    `pr-hero: review partial (${failed} of ${total} hunters failed) ${CARRIED_FROM}${sha.slice(0, 7)} — /pr-hero review retries it`,
+    `pr-hero: review partial (${failed} of ${total} hunters failed${suffix}) ${CARRIED_FROM}${sha.slice(0, 7)} — /pr-hero review retries it`,
   );
 }
 
@@ -421,18 +423,20 @@ function carriedBlockingMatches(description: string): boolean {
 // S5: a partial review is a red verdict with its own text (N of M hunters failed). Its counts are read
 // first, then the builder must reproduce the whole text, the same rule as the blocking verdict.
 // W3-PARTIAL S2: the repeat form ('again') reads the same counts; the flag only picks the builder that must rebuild the text.
+// W4-R363 S1: the failed-set key (", set abc123") is read when present; a text from before the key has none.
 const PARTIAL_COUNTS =
-  /^pr-hero: review partial( again)? \((\d+) of (\d+) hunters failed\)/;
+  /^pr-hero: review partial( again)? \((\d+) of (\d+) hunters failed(?:, set ([0-9a-f]{6}))?\)/;
 
 export function partialCountsIn(
   description: string | null | undefined,
-): { failed: number; total: number; again: boolean } | null {
+): { failed: number; total: number; again: boolean; set?: string } | null {
   const match = PARTIAL_COUNTS.exec(description ?? "");
   if (match === null) return null;
   return {
     failed: Number(match[2]),
     total: Number(match[3]),
     again: match[1] !== undefined,
+    ...(match[4] === undefined ? {} : { set: match[4] }),
   };
 }
 
@@ -442,8 +446,8 @@ export function finishedPartialMatches(description: string): boolean {
   const counts = partialCountsIn(description);
   if (counts === null) return false;
   const rebuilt = counts.again
-    ? partialReviewAgainDescription(counts.failed, counts.total)
-    : partialReviewDescription(counts.failed, counts.total);
+    ? partialReviewAgainDescription(counts.failed, counts.total, counts.set)
+    : partialReviewDescription(counts.failed, counts.total, counts.set);
   return rebuilt === description;
 }
 
@@ -453,7 +457,8 @@ function carriedPartialMatches(description: string): boolean {
   return (
     sha !== null &&
     counts !== null &&
-    carriedPartialDescription(counts.failed, counts.total, sha) === description
+    carriedPartialDescription(counts.failed, counts.total, sha, counts.set) ===
+      description
   );
 }
 
@@ -551,6 +556,7 @@ export function admissionSkipDecision(
         partial.failed,
         partial.total,
         input.carried.sha,
+        partial.set,
       ),
     };
   }

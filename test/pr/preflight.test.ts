@@ -30,6 +30,7 @@ import {
   decideWorktree,
   findingMarker,
   findMarkedCommentId,
+  hunterFailureSetKey,
   IN_FLIGHT_TTL_MS,
   isInFlightCommitStatus,
   LOCAL_COMMIT_STATUS_CONTEXT,
@@ -1641,8 +1642,12 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
     ciMode?: "gate" | "advisory";
     sessionFailed?: boolean;
     noReviewerRan?: boolean;
+    hunterFailureNames?: readonly string[];
   }) =>
     commitStatusCompletion({
+      ...(over.hunterFailureNames === undefined
+        ? {}
+        : { hunterFailureNames: over.hunterFailureNames }),
       ...(over.noReviewerRan === undefined
         ? {}
         : { noReviewerRan: over.noReviewerRan }),
@@ -1659,16 +1664,58 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
     });
 
   test("some hunters failed, none blocking: failure, carrying N and M", () => {
-    expect(gate({ hunterCount: 4, hunterFailures: 1 })).toEqual({
+    expect(
+      gate({
+        hunterCount: 4,
+        hunterFailures: 1,
+        hunterFailureNames: ["hunter-reliability"],
+      }),
+    ).toEqual({
       phase: "partial",
       failed: 1,
       total: 4,
+      set: "938084",
     });
   });
 
-  test("the exact partial text names N of M and the retry", () => {
-    expect(partialReviewDescription(1, 4)).toBe(
-      "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+  test("the partial verdict carries the failed hunters' set, not only the counts (W4-R363 S1)", () => {
+    const reliability = gate({
+      hunterCount: 4,
+      hunterFailures: 1,
+      hunterFailureNames: ["hunter-reliability"],
+    });
+    const resilience = gate({
+      hunterCount: 4,
+      hunterFailures: 1,
+      hunterFailureNames: ["hunter-resilience"],
+    });
+    expect(reliability).toMatchObject({ failed: 1, total: 4 });
+    expect(resilience).toMatchObject({ failed: 1, total: 4 });
+    expect(reliability).not.toEqual(resilience);
+  });
+
+  test("the exact partial text names N of M, the failed set, and the retry", () => {
+    expect(partialReviewDescription(1, 4, "938084")).toBe(
+      "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it",
+    );
+  });
+
+  test("the set key is the first six hex of sha256 over the sorted unique failed names", () => {
+    expect(hunterFailureSetKey(["hunter-reliability"])).toBe("938084");
+    expect(
+      hunterFailureSetKey(["hunter-reliability", "hunter-readability"]),
+    ).toBe(
+      hunterFailureSetKey([
+        "hunter-readability",
+        "hunter-reliability",
+        "hunter-readability",
+      ]),
+    );
+    expect(
+      hunterFailureSetKey(["hunter-readability", "hunter-reliability"]),
+    ).toBe("f232c5");
+    expect(hunterFailureSetKey(["hunter-resilience"])).not.toBe(
+      hunterFailureSetKey(["hunter-reliability"]),
     );
   });
 
@@ -1729,6 +1776,14 @@ describe("partialReviewAgainDescription — a repeated partial review (W3-PARTIA
     const text = partialReviewAgainDescription(999, 999);
     expect(text).toBe(
       "pr-hero: review partial again (999 of 999 hunters failed) — fix the failing route or /pr-hero override",
+    );
+    expect(text.length).toBeLessThanOrEqual(140);
+  });
+
+  test("the set key fits: the longest realistic counts with a key stay within 140 characters (W4-R363 S1)", () => {
+    const text = partialReviewAgainDescription(12, 12, "938084");
+    expect(text).toBe(
+      "pr-hero: review partial again (12 of 12 hunters failed, set 938084) — fix the failing route or /pr-hero override",
     );
     expect(text.length).toBeLessThanOrEqual(140);
   });

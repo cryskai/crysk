@@ -38,6 +38,7 @@ import type { CiAdmissionLedgerState } from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
 import {
   COMMIT_STATUS_CONTEXT,
+  hunterFailureSetKey,
   LOCAL_COMMIT_STATUS_CONTEXT,
   resolveCiPosture,
 } from "#pr/preflight";
@@ -51,6 +52,16 @@ import { finalizePrReviewRun, settleCommitStatusAndLedger } from "#pr/teardown";
 import { unresolvedBlockingCount } from "#rereview/state";
 import type { PipelineResult } from "#review/pipeline";
 import { CliError } from "../../src/errors";
+
+// W4-R363: the failed hunters' names, one per hunter. The first is "hunter-reliability" (set 938084).
+function failedHunterNames(count: number): string[] {
+  return Array.from({ length: count }, (_, i) =>
+    i === 0 ? "hunter-reliability" : `hunter-h${i}`,
+  );
+}
+function failedHunters(count: number): { name: string }[] {
+  return failedHunterNames(count).map((name) => ({ name }));
+}
 
 const HEAD = "a".repeat(40);
 const POLICY_HASH = "abc123def4567890";
@@ -304,10 +315,11 @@ describe("settleCommitStatusAndLedger — a partial review is red in gate mode (
       sessionFailed,
       hunterCount: 4,
       hunterFailedCount: hunterFailures,
+      hunterFailures: failedHunters(hunterFailures),
     }) as unknown as PipelineResult;
 
   const PARTIAL_DESCRIPTION =
-    "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it";
+    "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
 
   test.each([
     [
@@ -1835,16 +1847,17 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
     context: COMMIT_STATUS_CONTEXT,
   };
   const PARTIAL_1_OF_4 =
-    "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it";
+    "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
   const PARTIAL_1_OF_4_CARRIED =
-    "pr-hero: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it";
+    "pr-hero: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /pr-hero review retries it";
   const REPEAT_1_OF_4 =
-    "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override";
+    "pr-hero: review partial again (1 of 4 hunters failed, set 938084) — fix the failing route or /pr-hero override";
   const partialResult = (failures: number, total = 4) =>
     ({
       sessionFailed: false,
       hunterCount: total,
       hunterFailedCount: failures,
+      hunterFailures: failedHunters(failures),
     }) as unknown as PipelineResult;
   const row = (state: string, description: string) => ({
     state,
@@ -1925,6 +1938,28 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
     expect(description).toBe(REPEAT_1_OF_4);
   });
 
+  test("a previous partial with the same N and M but another failed hunter: today's text (W4-R363 F001)", async () => {
+    const description = await partialDescriptionWith(async () => [
+      PENDING_ROW,
+      row(
+        "failure",
+        "pr-hero: review partial (1 of 4 hunters failed, set d5af83) — /pr-hero review retries it",
+      ),
+    ]);
+    expect(description).toBe(PARTIAL_1_OF_4);
+  });
+
+  test("a previous partial without a set key (the earlier text) is not the same: today's text (W4-R363 S1)", async () => {
+    const description = await partialDescriptionWith(async () => [
+      PENDING_ROW,
+      row(
+        "failure",
+        "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+      ),
+    ]);
+    expect(description).toBe(PARTIAL_1_OF_4);
+  });
+
   test("a previous repeat with the same N and M: the repeat text is written again", async () => {
     const description = await partialDescriptionWith(async () => [
       PENDING_ROW,
@@ -1986,14 +2021,14 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
   });
 
   test("the repeat text of three-digit counts stays within 140 characters", async () => {
-    const REPEAT_999 =
-      "pr-hero: review partial again (999 of 999 hunters failed) — fix the failing route or /pr-hero override";
+    const key = hunterFailureSetKey(failedHunterNames(999));
+    const REPEAT_999 = `pr-hero: review partial again (999 of 999 hunters failed, set ${key}) — fix the failing route or /pr-hero override`;
     const description = await partialDescriptionWith(
       async () => [
         PENDING_ROW,
         row(
           "failure",
-          "pr-hero: review partial (999 of 999 hunters failed) — /pr-hero review retries it",
+          `pr-hero: review partial (999 of 999 hunters failed, set ${key}) — /pr-hero review retries it`,
         ),
       ],
       999,
