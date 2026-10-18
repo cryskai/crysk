@@ -23,6 +23,10 @@ import {
   severityEmoji,
 } from "#review/report";
 import { clusterByRootCause } from "#review/root-cause";
+import {
+  outsideDiffBlockingCount,
+  outsideDiffBlockingPaths,
+} from "../../scripts/sandbox/observe";
 
 const ANCHOR = "src/duration.ts:19-20";
 
@@ -2484,5 +2488,35 @@ describe("renderPrComment — compact Outside Diff entries (S1b)", () => {
       2,
     );
     expect(outOfRange).toBe(omitted);
+  });
+});
+
+describe("renderPrComment — a compact Outside Diff entry keeps its tier", () => {
+  const WEB_URL = "https://github.com/musivetech/musive";
+  const blocking = finding({
+    id: "F001",
+    path: "src/never-a.ts",
+    line: 1,
+    tier: "blocking",
+    claim: "a long claim body",
+  });
+
+  test("the compact line opens with the tier, and the sandbox parser reads it as a blocking entry at its path", () => {
+    const body = renderPrComment(
+      doc({ findings: [blocking] }),
+      WEB_URL,
+      undefined,
+      [blocking],
+      undefined,
+      undefined,
+      undefined,
+      0,
+    );
+    const section = body.slice(body.indexOf("### Comments Outside Diff"));
+    expect(section).toContain(
+      `🔴 blocking · [\`src/never-a.ts:1\`](${WEB_URL}/blob/${"b".repeat(40)}/src/never-a.ts#L1)`,
+    );
+    expect(outsideDiffBlockingCount(body)).toBe(1);
+    expect(outsideDiffBlockingPaths(body)).toEqual(["src/never-a.ts"]);
   });
 });
