@@ -23,6 +23,7 @@ import {
   renderStateBlock,
   type StateFinding,
   stateFinding,
+  unresolvedBlockingCount,
 } from "#rereview/state";
 import { TRIAGE_MARKER_PREFIX } from "#triage/triage";
 
@@ -455,5 +456,87 @@ describe("assembleLive", () => {
     });
     expect(assembled.returned).toBe(1);
     expect(assembled.live).toEqual([]);
+  });
+});
+
+// A held triage settlement (classify.ts) is queued for verification when a push
+// touches its code. The verifier's answer decides the gate: a refutation takes
+// the finding out of the count, and anything else settles it back to the status
+// the triage would have given, so the triage semantics are unchanged.
+describe("assembleLive — a held triage settlement after verification", () => {
+  const TOUCHED: PhaseBContext = {
+    case: "C",
+    deletedFiles: new Set(),
+    renameMap: new Map(),
+    touched: () => true,
+    summaryUpdatedAt: null,
+  };
+
+  function heldPrior(triage: PriorRecord["triage"]): PriorRecord {
+    return {
+      id: "R001",
+      sev: "CRITICAL",
+      tier: "blocking",
+      channel: "inline",
+      locs: ["src/app.ts:10"],
+      claim: "held prior",
+      triage,
+      newThreadReply: false,
+    };
+  }
+
+  const rejected = heldPrior({
+    tag: "dismissed",
+    verdict: "rejected",
+    createdAt: null,
+  });
+
+  test("still present after verification settles back to the held returned status", () => {
+    const assembled = assembleLive({
+      settled: [classifyPrior(rejected, TOUCHED)],
+      priors: [rejected],
+      verifyVerdicts: new Map([["R001", "carried"]]),
+    });
+    expect(assembled.gateRows.map((row) => row.status)).toEqual(["returned"]);
+    expect(
+      assembled.live.map((row) => `${row.id}:${row.status}:${row.tier}`),
+    ).toEqual(["R001:carried:blocking"]);
+    expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(1);
+  });
+
+  test("an inconclusive verdict settles back to the held status too", () => {
+    const suppressed = heldPrior({
+      tag: "dismissed",
+      verdict: "upheld",
+      createdAt: null,
+    });
+    const assembled = assembleLive({
+      settled: [classifyPrior(suppressed, TOUCHED)],
+      priors: [suppressed],
+      verifyVerdicts: new Map([["R001", "unconfirmed"]]),
+    });
+    expect(assembled.gateRows.map((row) => row.status)).toEqual(["suppressed"]);
+    expect(assembled.live.map((row) => row.status)).toEqual(["suppressed"]);
+  });
+
+  test("a queued held row the verifier never reached settles back to the held status", () => {
+    const assembled = assembleLive({
+      settled: [classifyPrior(rejected, TOUCHED)],
+      priors: [rejected],
+      verifyVerdicts: new Map(),
+    });
+    expect(assembled.gateRows.map((row) => row.status)).toEqual(["returned"]);
+  });
+
+  test("verified gone leaves the gate count, whatever triage tag the finding carried", () => {
+    const assembled = assembleLive({
+      settled: [classifyPrior(rejected, TOUCHED)],
+      priors: [rejected],
+      verifyVerdicts: new Map([["R001", "verified-gone"]]),
+    });
+    expect(assembled.verifiedGone).toBe(1);
+    expect(assembled.verifiedGoneIds).toEqual(["R001"]);
+    expect(assembled.gateRows).toEqual([]);
+    expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(0);
   });
 });

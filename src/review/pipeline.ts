@@ -1251,7 +1251,8 @@ async function execute(
     // "`resolved` is never inferred from absence", violated from the other
     // direction. Phase B already ran in the CLI, so the deterministic
     // outcomes stand and anything that was queued lands as `unconfirmed` —
-    // which is precisely what "never run" means there.
+    // which is precisely what "never run" means there. A queued row that holds
+    // a triage settlement lands back on that settlement instead (assembleLive).
     await writePipelinePlan(input, state);
     return {
       skillOutput: {

@@ -134,12 +134,22 @@ export interface PhaseBContext {
   verifyAll?: boolean;
 }
 
+// The triage settlements a verification can hold (see `held` below).
+export type HeldStatus = "returned" | "suppressed" | "deferred" | "re-tiered";
+
 export interface PhaseBResult {
   id: string;
   status: GateStatus;
   locs: string[];
   renamed: boolean;
   trigger?: VerifyTrigger;
+  // WHY `held`: a triage settlement a push that touched the finding's code, or a
+  // verify-all case, must not settle on the triage alone. The prior is queued
+  // (status `queued`) and this field keeps what the triage would have said. The
+  // verifier's verdict then decides: `verified-gone` when the finding is refuted,
+  // this status otherwise (assembleLive in rereview/state.ts). Absent on every
+  // row that the triage did not decide.
+  held?: HeldStatus;
 }
 
 export function classifyPrior(
@@ -163,17 +173,37 @@ export function classifyPrior(
   if (triage?.tag === "dismissed" && triage.ciVerdict === "upheld") {
     return { id: prior.id, status: "ci-dismissed", locs, renamed };
   }
-  if (triage?.tag === "dismissed" && triage.verdict === "upheld") {
-    return { id: prior.id, status: "suppressed", locs, renamed };
-  }
-  if (triage?.tag === "dismissed" && triage.verdict === "rejected") {
-    return { id: prior.id, status: "returned", locs, renamed };
-  }
-  if (triage?.tag === "deferred") {
-    return { id: prior.id, status: "deferred", locs, renamed };
-  }
-  if (triage?.tag === "misclassified") {
-    return { id: prior.id, status: "re-tiered", locs, renamed };
+
+  // WHY a triage settlement is queued, not returned: the author's dismissal,
+  // deferral or misclassification was made against the code as it was. A push
+  // that touched the finding's code, or a verify-all case, is the moment the
+  // finding can be fixed, and only the verifier can see that. Without this the
+  // gate counted a fixed finding forever (its triage row never reached verify).
+  // The verifier's answer decides in assembleLive: gone leaves the count, any
+  // other answer settles back to the held status.
+  const held = triageHeldStatus(triage);
+  if (held !== undefined) {
+    if (ctx.case === "D" || ctx.case === "E" || ctx.verifyAll === true) {
+      return {
+        id: prior.id,
+        status: "queued",
+        locs,
+        renamed,
+        trigger: "verify_all",
+        held,
+      };
+    }
+    if (ctx.touched(rewritten)) {
+      return {
+        id: prior.id,
+        status: "queued",
+        locs,
+        renamed,
+        trigger: "touched",
+        held,
+      };
+    }
+    return { id: prior.id, status: held, locs, renamed };
   }
 
   if (ctx.case === "D" || ctx.case === "E" || ctx.verifyAll === true) {
@@ -217,6 +247,18 @@ export function classifyPrior(
   }
 
   return { id: prior.id, status: "carried", locs, renamed };
+}
+
+function triageHeldStatus(triage: PriorTriage | null): HeldStatus | undefined {
+  if (triage?.tag === "dismissed" && triage.verdict === "upheld") {
+    return "suppressed";
+  }
+  if (triage?.tag === "dismissed" && triage.verdict === "rejected") {
+    return "returned";
+  }
+  if (triage?.tag === "deferred") return "deferred";
+  if (triage?.tag === "misclassified") return "re-tiered";
+  return undefined;
 }
 
 function everyFileDeleted(
@@ -285,7 +327,10 @@ export function applyWorsening(input: {
   const priorById = new Map(input.priors.map((prior) => [prior.id, prior]));
   const hits: WorseningHit[] = [];
   const settled = input.settled.map((row) => {
-    if (row.status !== "suppressed") return row;
+    // A held suppressed row is queued, so it is worsened in place: it stays
+    // queued for its verification and holds `returned` instead.
+    const heldSuppressed = row.status === "queued" && row.held === "suppressed";
+    if (row.status !== "suppressed" && !heldSuppressed) return row;
     const prior = priorById.get(row.id);
     if (prior === undefined) return row;
     const ident = identityFromLocs(row.locs);
@@ -308,6 +353,7 @@ export function applyWorsening(input: {
         priorSev: prior.sev,
         discoverySev: survivor.severity,
       });
+      if (heldSuppressed) return { ...row, held: "returned" as const };
       return { ...row, status: "returned" as const };
     }
     return row;
