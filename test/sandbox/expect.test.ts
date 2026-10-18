@@ -10,6 +10,8 @@ import {
   evaluateCheck,
   evaluateChecks,
   ownBlockingGate,
+  ownBlockingSkipReason,
+  ownBlockingUndecided,
 } from "../../scripts/sandbox/expect";
 import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
 import {
@@ -1786,5 +1788,102 @@ describe("ownBlockingGate: the ifOwnBlockingAt checks are asserted (PR #362 F001
     });
     expect(ownBlockingGate(o, "src/mute.ts")).toBe(true);
     expect(blockingFindingAt(o, "src/mute.ts")).toBe(true);
+  });
+});
+
+// S2: a closed gate on a head whose outside-diff blocking entry names no path cannot be
+// decided, so the ifOwnBlockingAt checks fail loud with a named detail instead of skipping.
+describe("ownBlockingUndecided: an unlocated outside-diff entry fails the closed gate (S2)", () => {
+  const unlocatedReport = (
+    unlocated: number | undefined,
+    head: string = NEW,
+  ): Observation["comments"][number] => ({
+    source: "issue",
+    kind: "report",
+    head,
+    outsideDiffBlocking: 1,
+    ...(unlocated === undefined ? {} : { outsideDiffUnlocated: unlocated }),
+  });
+  const DETAIL =
+    "an outside-diff blocking entry on this head has no parseable path:line location, so the gate for src/mute.ts cannot be decided";
+
+  test("a closed gate with an unlocated entry on this head fails once, with the named detail", () => {
+    const o = obs({ comments: [unlocatedReport(1)] });
+    expect(ownBlockingGate(o, "src/mute.ts")).toBe(false);
+    expect(ownBlockingUndecided(o, "src/mute.ts")).toEqual({
+      label:
+        "an outside-diff blocking entry on this head has no parseable path",
+      pass: false,
+      detail: DETAIL,
+    });
+  });
+
+  test("an open gate is unchanged: no undecided result even with an unlocated entry", () => {
+    const o = obs({
+      comments: [
+        unlocatedReport(1),
+        {
+          source: "issue",
+          kind: "report",
+          head: NEW,
+          outsideDiffBlocking: 1,
+          outsideDiffBlockingPaths: ["src/mute.ts"],
+        },
+      ],
+    });
+    expect(ownBlockingGate(o, "src/mute.ts")).toBe(true);
+    expect(ownBlockingUndecided(o, "src/mute.ts")).toBeUndefined();
+  });
+
+  test("a closed gate with no unlocated entry is unchanged: no undecided result", () => {
+    expect(
+      ownBlockingUndecided(
+        obs({ comments: [unlocatedReport(0)] }),
+        "src/mute.ts",
+      ),
+    ).toBeUndefined();
+    expect(
+      ownBlockingUndecided(
+        obs({ comments: [unlocatedReport(undefined)] }),
+        "src/mute.ts",
+      ),
+    ).toBeUndefined();
+    expect(
+      ownBlockingUndecided(obs({ comments: [] }), "src/mute.ts"),
+    ).toBeUndefined();
+  });
+
+  test("an unlocated entry on an older head does not decide this head's gate", () => {
+    expect(
+      ownBlockingUndecided(
+        obs({ comments: [unlocatedReport(1, OLD)] }),
+        "src/mute.ts",
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe("ownBlockingSkipReason: the skip line of a closed ifOwnBlockingAt gate", () => {
+  test("an undecided gate says so instead of claiming no blocking finding", () => {
+    const o = obs({
+      comments: [
+        {
+          source: "issue",
+          kind: "report",
+          head: NEW,
+          outsideDiffBlocking: 1,
+          outsideDiffUnlocated: 1,
+        },
+      ],
+    });
+    expect(ownBlockingSkipReason(o, "src/mute.ts")).toBe(
+      "an unlocated outside-diff blocking entry leaves src/mute.ts undecided",
+    );
+  });
+
+  test("a gate closed with nothing unlocated keeps the previous line", () => {
+    expect(ownBlockingSkipReason(obs(), "src/mute.ts")).toBe(
+      "the re-review found no blocking finding at src/mute.ts",
+    );
   });
 });

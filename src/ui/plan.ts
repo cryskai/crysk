@@ -638,7 +638,7 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
       `${path.basename(ctx.runDir)} · ` +
         (ctx.codegraphAvailable ? "codegraph live" : "codegraph NOT FOUND") +
         ` · hop budget ${ctx.options.hopBudget}` +
-        ` · ${ctx.config.suspicion_priors.length} prior(s)`,
+        ` · ${ctx.config.suspicion_priors.length} suspicion prior(s)`,
       { styles, width },
     ),
     ...configRow(ctx.configProvenance, ctx.options, styles, width),
@@ -1002,7 +1002,7 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
         `${prWorktreePlanTag(ctx.worktreePath)} · ` +
         `${codegraphPlanTag(ctx.worktreePath)} · ` +
         `hop budget ${ctx.options.hopBudget} · ` +
-        `${ctx.config.suspicion_priors.length} prior(s)`,
+        `${ctx.config.suspicion_priors.length} suspicion prior(s)`,
       { styles, width },
     ),
     ...configRow(ctx.configProvenance, ctx.options, styles, width),

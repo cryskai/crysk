@@ -873,3 +873,40 @@ describe("hunterFailuresIn: the hunters a run's log says failed", () => {
     expect(hunterFailuresIn("")).toEqual([]);
   });
 });
+
+// S2: an outside-diff blocking entry whose location names no path still counts, and the
+// report says how many of those there are, so a gate can fail loud instead of skipping.
+describe("classifyComment: the outside-diff entries with no parseable path (S2)", () => {
+  const SHA = "a".repeat(40);
+  const UNPARSEABLE =
+    "🔴 blocking · BLOCKER · introduced · reliability\nno location line here\n\nThe claim.";
+  const PARSEABLE =
+    "🔴 blocking · BLOCKER · introduced · reliability\n`src/app.ts:10` — run()\n\nThe claim.";
+  const reportWith = (entries: readonly string[]) =>
+    `<!-- pr-hero-report head=${SHA} -->\n\n# pr-hero review\n\n### Comments Outside Diff (${entries.length})\n\n${entries.join("\n\n")}\n\n---\n\n<sub>run completed</sub>`;
+
+  test("a blocking entry with no backticked path:line counts as unlocated", () => {
+    expect(
+      classifyComment(reportWith([UNPARSEABLE, PARSEABLE]), "issue"),
+    ).toEqual({
+      source: "issue",
+      kind: "report",
+      head: SHA,
+      outsideDiffBlocking: 2,
+      outsideDiffBlockingPaths: ["src/app.ts"],
+      outsideDiffUnlocated: 1,
+    });
+  });
+
+  test("a report whose blocking entries all name a path carries no unlocated field", () => {
+    const fact = classifyComment(reportWith([PARSEABLE]), "issue");
+    expect(fact).toEqual({
+      source: "issue",
+      kind: "report",
+      head: SHA,
+      outsideDiffBlocking: 1,
+      outsideDiffBlockingPaths: ["src/app.ts"],
+    });
+    expect(fact).not.toHaveProperty("outsideDiffUnlocated");
+  });
+});
