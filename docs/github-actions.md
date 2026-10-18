@@ -11,7 +11,7 @@ block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mo
    `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. Pick one — never both blank. Leave OpenCode unset:
    that is today's Claude CI.
 2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
-   to `.github/workflows/pr-hero.yml`, or run `pr-hero setup --ci` (or `pr-hero ci init`) in a clone of
+   to `.github/workflows/pr-hero.yml`, or run `npx -y pr-hero setup --ci` (or `pr-hero ci init`) in a clone of
    your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need pr-hero
    installed locally: the file is the whole install. It reviews every push to a pull request, answers a
    `/pr-hero review` comment (see [Re-review on demand](#re-review-on-demand)), and answers a
@@ -22,10 +22,21 @@ block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mo
    `test/packaging.test.ts` asserts each file against its own generator options; it does **not** assert
    the two are byte-identical. The template wires quoted `routing` / `opencode-auth` inputs; empty
    values are absent, so Claude-only repos keep those lines.
-3. **Open a pull request** from a branch in this repository (not a fork). pr-hero comments inline, posts
+3. **Write the repository gotchas.** Run `npx -y pr-hero init` in a clone of your repo: it creates
+   `.prhero/config.json` and `.prhero/gotchas.md`. Replace the placeholder lines in `gotchas.md` with real
+   facts about your repository (a deliberate oddity that looks like a bug, an invariant enforced outside
+   the diff, an ownership rule a newcomer would break), then delete the `human-attention-required` marker
+   line. Gotchas are injected into every hunter's prompt; without them the run fails
+   [`PRH-GOTCHAS-MISSING`](#prh-gotchas-missing).
+4. **Commit `.prhero/` to the default branch.** Comment-triggered runs read the base branch, so the file
+   must be there, not only on your feature branch.
+5. **Require the check.** In branch protection, require the `pr-hero` status check (the gate), not the
+   `review` job, which stays green even when it finds blocking issues. A private repository on GitHub Free
+   cannot require status checks (GitHub returns HTTP 403), so there the gate is advisory in practice.
+6. **Open a pull request** from a branch in this repository (not a fork). pr-hero comments inline, posts
    a summary review, and writes a `$GITHUB_STEP_SUMMARY` block within a few minutes. If no credential
    secret is set, the run fails red and its step summary lists the commands that set one.
-4. **Verify readiness any time** with `pr-hero doctor` — it checks for the required secrets when run
+7. **Verify readiness any time** with `pr-hero doctor` — it checks for the required secrets when run
    inside Actions, and for the workflow file's presence locally.
 
 To review with OpenCode instead of (or mixed with) Claude, add `OPENCODE_AUTH_JSON` and
@@ -1137,7 +1148,7 @@ pr-hero review --pr {pr} --dry-run
 
 **Fix:**
 
-Write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).
+Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).
 
 ### PRH-CONFIG-INVALID
 

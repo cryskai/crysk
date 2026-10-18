@@ -1037,6 +1037,82 @@ describe("ci init next steps (CLI)", () => {
   });
 });
 
+// The first-PR walkthrough: a user who ran only `setup --ci` got a red PR
+// (PRH-GOTCHAS-MISSING) because nothing printed told them to run `init` and
+// write the gotchas. The init steps print only while the gotchas file is
+// absent or still the scaffold; a repo with real gotchas gets none of them.
+describe("ci init gotchas steps (CLI)", () => {
+  async function runInit(
+    gotchas: string | undefined,
+  ): Promise<{ output: string; code: number }> {
+    const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-gotchas-"));
+    try {
+      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      if (gotchas !== undefined) {
+        await mkdir(path.join(dir, ".prhero"), { recursive: true });
+        await writeFile(path.join(dir, ".prhero", "gotchas.md"), gotchas);
+      }
+      const result = Bun.spawnSync(
+        [
+          process.execPath,
+          path.join(import.meta.dir, "../../src/cli.ts"),
+          "ci",
+          "init",
+        ],
+        { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
+      );
+      return {
+        output: `${result.stdout}${result.stderr}`,
+        code: result.exitCode,
+      };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a repo without .prhero/gotchas.md is told to run init, write gotchas, and commit .prhero/ before opening the PR", async () => {
+    const { output, code } = await runInit(undefined);
+    expect(code).toBe(0);
+    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("human-attention-required");
+    expect(output).toContain("Commit .prhero/ to the default branch");
+    expect(output.indexOf("npx -y pr-hero init")).toBeLessThan(
+      output.indexOf("Open a pull request"),
+    );
+  });
+
+  test("a scaffold still carrying the marker gets the same init steps", async () => {
+    const { output } = await runInit(
+      "<!-- human-attention-required: delete -->\n# Repo gotchas\n",
+    );
+    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("human-attention-required");
+    expect(output).toContain("Commit .prhero/ to the default branch");
+  });
+
+  test("real gotchas without the marker print no init steps, and still name the required check", async () => {
+    const { output } = await runInit(
+      "- auth: the token is refreshed by the proxy, not here\n",
+    );
+    expect(output).not.toContain("npx -y pr-hero init");
+    expect(output).not.toContain("human-attention-required");
+    expect(output).toContain("require the `pr-hero` status check");
+    expect(output).toContain("GitHub Free");
+    // The steps stay numbered 1..n with no gap where the init steps were.
+    const numbers = [...output.matchAll(/^ {2}(\d+)\. /gm)].map((m) =>
+      Number(m[1]),
+    );
+    expect(numbers).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("every repo is told to require the pr-hero status check, not the review job", async () => {
+    const { output } = await runInit(undefined);
+    expect(output).toContain(
+      "require the `pr-hero` status check (not the `review` job)",
+    );
+  });
+});
+
 describe("runCiSetup (impure edge)", () => {
   let dir: string;
 

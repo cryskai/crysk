@@ -2223,3 +2223,17 @@ describe("parseCliRecord — the hunter_failures field", () => {
     ).toBeUndefined();
   });
 });
+
+// A first-time user reads only the Fix line; it must name the command that
+// creates .prhero/gotchas.md, or the user writes the file by hand in the wrong
+// place or never writes it at all.
+describe("PRH-GOTCHAS-MISSING fix names the init command", () => {
+  test("the fix starts by running `npx -y pr-hero init`, then the existing steps", () => {
+    const [[fix]] = fixListsOf(
+      entryOf("PRH-GOTCHAS-MISSING").variants.default.fixes,
+    );
+    expect(fix).toBe(
+      "Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).",
+    );
+  });
+});

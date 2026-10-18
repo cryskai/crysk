@@ -1373,7 +1373,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "reviews need real repository facts to be accurate",
       [
-        "Write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).",
+        "Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).",
       ],
       "write real facts into .prhero/gotchas.md, remove the scaffold marker line, and commit it to the base branch",
     ),

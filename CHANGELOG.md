@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`setup --ci` says what the first PR needs**: when `.prhero/gotchas.md` is missing or still the scaffold, the next steps now
+  include `npx -y pr-hero init`, writing real gotchas, committing `.prhero/` to the default branch, and requiring the `pr-hero`
+  status check (not the `review` job). A repository that already has real gotchas is not told to write them again.
+- **`PRH-GOTCHAS-MISSING` names the init command**: its Fix starts with `npx -y pr-hero init`, and the GitHub Actions Quick path
+  gains the gotchas, commit and required-check steps, with the GitHub Free private-repository caveat.
 - **The agent loop through `npx`**: the triage and CI-setup skills now run every command as `npx -y pr-hero ...`, so a
   coding agent needs Node and `gh` and no pr-hero install. The triage skill teaches the whole loop, including a dismissal
   closed by `/pr-hero recheck`: the CI adjudicator's `upheld` makes the next review stop counting the finding. The CI-setup

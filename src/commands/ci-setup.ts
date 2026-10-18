@@ -1,6 +1,7 @@
+import path from "node:path";
 import { runCiSetup } from "#ci/setup";
 import { resolveOptionalRepoRoot } from "#config/config";
-import type { CliOptions } from "#review/preflight";
+import { type CliOptions, GOTCHAS_PLACEHOLDER_MARKER } from "#review/preflight";
 import { log } from "#ui/primitives";
 
 // Shared shell for `pr-hero setup --ci` and `pr-hero ci init` — both are the
@@ -26,17 +27,43 @@ export async function ciSetupCommand(options: CliOptions): Promise<number> {
   );
   log();
   log("Next steps:");
-  log("  1. Commit .github/workflows/pr-hero.yml");
+  let step = 0;
+  const next = () => `  ${++step}.`;
+  log(`${next()} Commit .github/workflows/pr-hero.yml`);
   log(
-    "  2. Add a repository secret: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)",
+    `${next()} Add a repository secret: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)`,
   );
-  log("  3. Open a pull request to trigger the workflow");
+  // The first PR of a new repository goes red without gotchas: every hunter's
+  // prompt carries them, and PRH-GOTCHAS-MISSING refuses the review while the
+  // file is absent or still the scaffold. So the init steps print only then;
+  // a repo that already wrote real gotchas is not told to write them again.
+  const gotchasPath = path.join(repoRoot, ".prhero", "gotchas.md");
+  const gotchas = (await Bun.file(gotchasPath).exists())
+    ? await Bun.file(gotchasPath).text()
+    : undefined;
+  if (gotchas === undefined || gotchas.includes(GOTCHAS_PLACEHOLDER_MARKER)) {
+    log(
+      `${next()} Run \`npx -y pr-hero init\` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md)`,
+    );
+    log(
+      `${next()} Replace the placeholder lines in .prhero/gotchas.md with real facts about this repository, then delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line: pr-hero refuses to review while it is there`,
+    );
+    log(
+      `${next()} Commit .prhero/ to the default branch (comment-triggered runs read the base branch)`,
+    );
+  }
+  // The check to require is `pr-hero` (the commit status, the gate), not the
+  // `review` job, which stays green even when it finds blocking issues.
+  log(
+    `${next()} In branch protection, require the \`pr-hero\` status check (not the \`review\` job); a private repository on GitHub Free cannot require status checks`,
+  );
+  log(`${next()} Open a pull request to trigger the workflow`);
   // GitHub reads a comment-triggered workflow from the DEFAULT branch, so a
   // `/pr-hero review` on a pull request that only ADDS this file starts
   // nothing, with no error anywhere. Said here because this is where a new
   // user first reads how to force a review.
   log(
-    "  4. Comment /pr-hero review on a pull request to force a review; it works once this file is on the default branch",
+    `${next()} Comment /pr-hero review on a pull request to force a review; it works once this file is on the default branch`,
   );
   return 0;
 }
