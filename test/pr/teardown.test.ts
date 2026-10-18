@@ -1702,3 +1702,123 @@ describe("settleCommitStatusAndLedger — the override read is strict and logged
     expect(heldCommitStatusLock()).toBeNull();
   });
 });
+
+// The override read gets one retry after a short wait before its fail-open fallback. The retry
+// narrows the window; the fallback itself (the verdict is written, with a warning) is unchanged.
+describe("settleCommitStatusAndLedger — one retry of the override read", () => {
+  const OVERRIDE =
+    "pr-hero: overridden by @maintainer — no review on this head";
+  const LOCK: Parameters<typeof holdCommitStatusLock>[0] = {
+    operatorRoot: "/repo",
+    sha: HEAD,
+    targetUrl: undefined,
+    context: COMMIT_STATUS_CONTEXT,
+  };
+  const overrideFact = (createdMs: number) => ({
+    state: "success",
+    context: COMMIT_STATUS_CONTEXT,
+    created_at: new Date(createdMs).toISOString(),
+    description: OVERRIDE,
+  });
+  const postCount = (calls: string[][]) =>
+    calls.filter((argv) => parseStatusFlags(argv).state !== undefined).length;
+
+  afterEach(() => {
+    releaseCommitStatusLock();
+  });
+
+  async function captureStderr(run: () => Promise<unknown>): Promise<string> {
+    const logged: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      logged.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await run();
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    return logged.join("\n");
+  }
+
+  // A reader that answers each call from `answers` in order: an Error throws, a list returns.
+  function scriptedReader(
+    answers: Array<Error | ReturnType<typeof overrideFact>[]>,
+  ) {
+    const reads: string[] = [];
+    const readStatuses = async (_root: string, sha: string) => {
+      reads.push(sha);
+      const answer = answers.shift();
+      if (answer instanceof Error) throw answer;
+      return answer ?? [];
+    };
+    return { reads, readStatuses };
+  }
+
+  function gateInput(
+    spawnFn: typeof Bun.spawn,
+    extra: Partial<Parameters<typeof settleCommitStatusAndLedger>[0]>,
+  ): Parameters<typeof settleCommitStatusAndLedger>[0] {
+    return {
+      result: pipelineResult(false),
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: undefined,
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: "gate",
+      statusContext: COMMIT_STATUS_CONTEXT,
+      blockingCount: 0,
+      ...extra,
+    };
+  }
+
+  test("a read that fails once then succeeds uses the second read, and an override there stands", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    const { reads, readStatuses } = scriptedReader([
+      new Error("gh failed"),
+      [overrideFact(Date.now() + 120_000)],
+    ]);
+    const sleeps: number[] = [];
+    await settleCommitStatusAndLedger(
+      gateInput(spawnFn, {
+        readStatuses,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      }),
+    );
+    expect(reads).toHaveLength(2);
+    expect(sleeps).toEqual([2_000]);
+    expect(postCount(calls)).toBe(0);
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+
+  test("a read that fails twice keeps the fallback: the verdict is written and the warning is logged", async () => {
+    holdCommitStatusLock(LOCK);
+    const { spawnFn, calls } = makeStatusSpawn();
+    const { reads, readStatuses } = scriptedReader([
+      new Error("gh failed"),
+      new Error("gh failed"),
+    ]);
+    const sleeps: number[] = [];
+    const logged = await captureStderr(() =>
+      settleCommitStatusAndLedger(
+        gateInput(spawnFn, {
+          readStatuses,
+          sleep: async (ms) => {
+            sleeps.push(ms);
+          },
+        }),
+      ),
+    );
+    expect(reads).toHaveLength(2);
+    expect(sleeps).toEqual([2_000]);
+    expect(postCount(calls)).toBe(1);
+    expect(logged).toContain("could not read the statuses");
+    expect(heldCommitStatusLock()).toBeNull();
+  });
+});

@@ -22,6 +22,7 @@
 // (src/pr/ci-admission-gate.ts), expressed so the type checker enforces it.
 import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
+import { actionsRunUrl } from "#ci/outcome";
 import type { ResolvedRoutePlan } from "#model/routing";
 import {
   type CiAdmissionLedgerState,
@@ -78,6 +79,16 @@ export type PrPlanAndConfirmResult =
       estimate: ReturnType<typeof estimateCost>;
       statusTargetUrl: string | undefined;
     };
+
+// The pending's target_url (SB3 follow-up): in GitHub Actions it is this run's attempt, so the
+// cancel settle can tell this run's pending from another run's (decideCancelSettle, src/ci/publish.ts).
+// Outside Actions it stays the PR page. The lock hold keeps the PR page either way.
+export function pendingStatusTargetUrl(
+  prTargetUrl: string | undefined,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | undefined {
+  return actionsRunUrl(env) ?? prTargetUrl;
+}
 
 export async function resolvePrPlanAndConfirm(params: {
   options: CliOptions;
@@ -297,7 +308,7 @@ export async function resolvePrPlanAndConfirm(params: {
     commitStatusRequest({
       phase: "pending",
       posted: false,
-      targetUrl: statusTargetUrl,
+      targetUrl: pendingStatusTargetUrl(statusTargetUrl),
       context: params.statusContext,
     }),
     undefined,

@@ -59,6 +59,7 @@ import type {
   TriggerRecord,
 } from "./outcome";
 import {
+  actionsRunUrl,
   CLI_RECORD_FILE,
   OUTCOME_MARKER_PREFIX,
   PENDING_AT_FILE,
@@ -103,6 +104,8 @@ const HUNTERS_DETAIL = "each hunter's session ended without a result";
 const PERMISSION_STEP = "the commenter permission check";
 // Short and fixed: one pause before the one retry of the status write.
 const STATUS_RETRY_DELAY_MS = 2_000;
+// The wait before the one retry of a failed head-status read (readHeadStatuses).
+const STATUS_READ_RETRY_DELAY_MS = 2_000;
 const GH_TIMEOUT_MS = 30_000;
 
 export interface GhResult {
@@ -500,44 +503,63 @@ function clipStatusDescription(text: string): string {
 export const CANCELLED_STATUS_DESCRIPTION =
   "PRH-CANCELLED: not reviewed — /pr-hero review reviews this head";
 
-// WHY an exact match (review #347 rounds 1-3): the CLI records the created_at GitHub returned
-// for its own pending (PENDING_AT_FILE, written once the pending landed). The settle
-// overwrites the head's newest pending only when its created_at is exactly that time, so
-// another run's pending (a Force Review beside a push run on the same head) is never
-// touched, however close in time it was posted. No record of the pending means this run's
+// The run URL identifies the pending (SB3 follow-up). A pending the CLI posted in Actions carries
+// its run's attempt URL (actionsRunUrl, src/ci/cli-record.ts), and the settle is this run's only
+// when that URL is this run's. A pending that names another run's actions URL is never settled,
+// whatever its created_at: that closes the residual where a cancel in the milliseconds before the
+// pending-at record was written left the head pending, and the one where two pendings posted in
+// the same second were not told apart.
+//
+// WHY the created_at rule is kept as the fallback (review #347 rounds 1-3): a pending with no run
+// URL was posted by an older CLI. The CLI records the created_at GitHub returned for its own pending
+// (PENDING_AT_FILE, written once the pending landed), and the settle overwrites the head's newest
+// pending only when its created_at is exactly that time, so another run's pending (a Force Review
+// beside a push run on the same head) is not touched. No record of the pending means this run's
 // pending never landed, or the CLI died first, and there is nothing of this run's to settle.
-// Known residual (Juanma chose B on #347): a cancel that lands in the milliseconds between
-// the pending committing on GitHub and this record being written leaves the head pending,
-// as every cancel did before this step existed; and created_at has whole-second precision,
-// so two pendings posted in one second on one head are not told apart. A run-specific
-// identity on the pending status (its target_url) is the follow-up that closes both.
 // Any CLI record that names a head is this run's lock on it: the CLI rewrites its record
 // (reviewing, then reviewed or hunters-failed) before its final status.
 export function decideCancelSettle(input: {
   record: CliRecord | undefined;
-  latest: { state: string; created_at: string } | undefined;
+  latest:
+    | { state: string; created_at: string; target_url?: string | null }
+    | undefined;
   pendingAt: string | undefined;
+  // This run's own run URL (actionsRunUrl), or undefined outside Actions.
+  runUrl?: string;
 }): { settle: true; headSha: string } | { settle: false; reason: string } {
   const record = input.record;
   if (record === undefined || record.head_sha === undefined) {
     return { settle: false, reason: "no review lock in this run" };
   }
-  if (input.latest?.state !== "pending") {
+  const latest = input.latest;
+  if (latest?.state !== "pending") {
     return {
       settle: false,
       reason: "the head's pr-hero status is not pending",
     };
   }
+  if (
+    typeof latest.target_url === "string" &&
+    ACTIONS_RUN_URL.test(latest.target_url)
+  ) {
+    if (input.runUrl !== undefined && latest.target_url === input.runUrl) {
+      return { settle: true, headSha: record.head_sha };
+    }
+    return { settle: false, reason: "the pending status is another run's" };
+  }
   const own = input.pendingAt;
   if (
     own === undefined ||
-    Date.parse(input.latest.created_at) !== Date.parse(own) ||
+    Date.parse(latest.created_at) !== Date.parse(own) ||
     !Number.isFinite(Date.parse(own))
   ) {
     return { settle: false, reason: "the pending status is not this run's" };
   }
   return { settle: true, headSha: record.head_sha };
 }
+
+// The actions URL of a run's attempt, as actionsRunUrl builds it.
+const ACTIONS_RUN_URL = /\/actions\/runs\/[0-9]+/;
 
 // ---------------------------------------------------------------------------
 // The shell.
@@ -960,9 +982,11 @@ const SETTLED_STATES: ReadonlySet<string> = new Set([
 
 // The result of reading the head's statuses. A failed read and an empty answer are different
 // things: an empty answer says the head has no statuses, a failed read says nothing about them.
-type HeadStatusRead =
-  | { ok: true; statuses: OverrideStatusFact[] }
-  | { ok: false };
+type HeadStatusRead = { ok: true; statuses: HeadStatusRow[] } | { ok: false };
+
+// A status row as the publisher reads it: the override fact, and the target_url the cancel settle
+// matches a pending by (SB3 follow-up). Absent when the row has none.
+type HeadStatusRow = OverrideStatusFact & { targetUrl?: string };
 
 // The head's statuses, as the combined-status endpoint returns them, read through this step's
 // own gh seam in one attempt. A failed gh call is { ok: false }. WHY per_page=100: the combined
@@ -973,7 +997,26 @@ type HeadStatusRead =
 // repost, and the reviewing path). WHY: a corrupt row must never turn a settled head into an error
 // overwrite, and a valid override on the head must not be hidden by a garbage line next to it. Only
 // a failed gh call is an unknown read.
+//
+// WHY one retry (after 2 s): both callers fall back when this read fails (the repost goes ahead, or
+// the cancel settle leaves the head as it is). A blip on one read is common, and the retry narrows
+// that window; the fallback itself is unchanged, and so is its warning when the retry fails too.
 function readHeadStatuses(
+  deps: PublishDeps,
+  repo: string,
+  sha: string,
+): HeadStatusRead {
+  let read = readHeadStatusesOnce(deps, repo, sha);
+  if (!read.ok) {
+    (deps.sleep ?? ((ms: number) => Bun.sleepSync(ms)))(
+      STATUS_READ_RETRY_DELAY_MS,
+    );
+    read = readHeadStatusesOnce(deps, repo, sha);
+  }
+  return read;
+}
+
+function readHeadStatusesOnce(
   deps: PublishDeps,
   repo: string,
   sha: string,
@@ -982,10 +1025,10 @@ function readHeadStatuses(
     "api",
     `repos/${repo}/commits/${sha}/status?per_page=100`,
     "--jq",
-    ".statuses[]? | [.context, .state, .created_at, .description] | @json",
+    ".statuses[]? | [.context, .state, .created_at, .description, .target_url] | @json",
   ]);
   if (read.exitCode !== 0) return { ok: false };
-  const statuses: OverrideStatusFact[] = [];
+  const statuses: HeadStatusRow[] = [];
   for (const line of read.stdout.split("\n")) {
     if (line.trim() === "") continue;
     const row = parseStatusRow(line);
@@ -995,8 +1038,8 @@ function readHeadStatuses(
   return { ok: true, statuses };
 }
 
-// One --jq row as an override fact, or undefined when the line does not parse to one.
-function parseStatusRow(line: string): OverrideStatusFact | undefined {
+// One --jq row as a status row, or undefined when the line does not parse to one.
+function parseStatusRow(line: string): HeadStatusRow | undefined {
   let value: unknown;
   try {
     value = JSON.parse(line);
@@ -1004,7 +1047,7 @@ function parseStatusRow(line: string): OverrideStatusFact | undefined {
     return undefined;
   }
   if (!Array.isArray(value)) return undefined;
-  const [context, state, createdAt, description] = value;
+  const [context, state, createdAt, description, targetUrl] = value;
   if (
     typeof context !== "string" ||
     typeof state !== "string" ||
@@ -1017,6 +1060,7 @@ function parseStatusRow(line: string): OverrideStatusFact | undefined {
     state,
     created_at: createdAt,
     description: typeof description === "string" ? description : undefined,
+    ...(typeof targetUrl === "string" ? { targetUrl } : {}),
   };
 }
 
@@ -1351,7 +1395,9 @@ export function runCancelSettle(deps: PublishDeps): number {
   }
   const repository = deps.env.GITHUB_REPOSITORY ?? "";
   const head = record?.head_sha;
-  let latest: { state: string; created_at: string } | undefined;
+  let latest:
+    | { state: string; created_at: string; target_url?: string | null }
+    | undefined;
   if (head !== undefined) {
     const read = readHeadStatuses(deps, repository, head);
     if (!read.ok) {
@@ -1363,12 +1409,24 @@ export function runCancelSettle(deps: PublishDeps): number {
       );
       return 0;
     }
-    latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
+    const newest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
+    // newestStatusInContext returns the row it was given, so the row's target is found by identity.
+    latest =
+      newest === undefined
+        ? undefined
+        : {
+            state: newest.state,
+            created_at: newest.created_at,
+            target_url: read.statuses.find((row) => row === newest)?.targetUrl,
+          };
   }
+  // This run's own URL, from the same env the CLI read when it posted its pending.
+  const ownRunUrl = actionsRunUrl(deps.env);
   const decision = decideCancelSettle({
     record,
     latest,
     pendingAt: pendingAt === "" ? undefined : pendingAt,
+    runUrl: ownRunUrl,
   });
   if (!decision.settle) {
     deps.stdout(
@@ -1380,7 +1438,9 @@ export function runCancelSettle(deps: PublishDeps): number {
     return 0;
   }
   const serverUrl = deps.env.GITHUB_SERVER_URL || "https://github.com";
-  const runUrl = `${serverUrl}/${repository}/actions/runs/${deps.env.GITHUB_RUN_ID ?? ""}`;
+  const runUrl =
+    ownRunUrl ??
+    `${serverUrl}/${repository}/actions/runs/${deps.env.GITHUB_RUN_ID ?? ""}`;
   const status = postStatus(deps, repository, decision.headSha, {
     state: "error",
     context: STATUS_CONTEXT,
