@@ -58,7 +58,8 @@ npm install -g pr-hero
 
 # Option D: No install, for an agent or a one-off run (needs only Node). It cannot
 # register the MCP server or the launchd agents: npx's cache is temporary, so those
-# refuse and ask for option B.
+# refuse and ask for option B. The launcher uses the bundled Bun only when it runs
+# (`bun --version` is checked first), otherwise the Bun on PATH, and exits 127 naming both if neither works.
 npx pr-hero doctor
 
 # Option C: From source / development (the bin runs on Node; on a machine with Bun
@@ -104,6 +105,9 @@ unattended. It is also optional for reviewing: `review` never checks whether it 
 only `pr-hero doctor` reports it. What it buys is the skills, the MCP registration and
 the repo scaffold; skip it and you scaffold the repo yourself with `pr-hero init`. It does
 **not** commit or `.gitignore` what it scaffolds, which is why step 5 exists.
+
+**Skill drift.** `setup` (and `upgrade`) installs the bundled skills into each agent's skills
+directory. A skill copy that differs from the bundled one and has no recorded digest is kept as it is and reported as drift, never overwritten, so your local edits survive; `pr-hero setup` prints each kept skill, and `pr-hero upgrade` replaces it.
 
 **On step 6.** `gotchas.md` is injected verbatim into every hunter's system prompt, and
 what `setup`/`init` write there is a placeholder: `- <subsystem>: <the thing that looks

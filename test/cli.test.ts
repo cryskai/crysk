@@ -60,6 +60,7 @@ import {
 } from "../src/cli";
 import { canonicalRemoteId } from "../src/home-preflight";
 import { readLocalIgnoreRules } from "../src/ignore-read";
+import { createSignalHandler } from "../src/signal-handler";
 
 // ---------------------------------------------------------------------------
 // FakeGh: records every call's argv AND stdin (decoded), in order. Routes
@@ -964,5 +965,34 @@ describe("runCli exit hooks on a non-TTY stderr", () => {
     ]);
     expect(exitCode).toBe(0);
     expect(stderr.includes("\x1b[?25h")).toBe(false);
+  });
+});
+
+// A second signal must never cut the first one's settle short (Actions sends
+// SIGINT then SIGTERM; npx with a piped stdin can deliver SIGINT twice).
+describe("createSignalHandler", () => {
+  test("a second signal waits for the first settle, and the process exits once with the first code", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const events: string[] = [];
+    const onSignal = createSignalHandler({
+      settle: async () => {
+        events.push("settle-start");
+        await gate;
+        events.push("settle-end");
+      },
+      exit: (code) => {
+        events.push(`exit ${code}`);
+      },
+    });
+    const first = onSignal(130)();
+    const second = onSignal(143)();
+    await Promise.resolve();
+    expect(events).toEqual(["settle-start"]);
+    release();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["settle-start", "settle-end", "exit 130"]);
   });
 });

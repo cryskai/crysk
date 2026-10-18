@@ -1027,7 +1027,7 @@ function listing(...rows: Array<[number, string, string, string]>): GhResult {
 
 // One JSON array per status of the head, as the status read's --jq filter
 // prints them: [context, state, created_at].
-function statusRows(...rows: Array<[string, string, string]>): GhResult {
+function statusRows(...rows: unknown[][]): GhResult {
   return ok(rows.map((row) => JSON.stringify(row)).join("\n"));
 }
 
@@ -1046,6 +1046,8 @@ function runPublishIn(options: {
   // The answer to the head's combined-status read, printed one row per status
   // as the --jq filter does. Unset, the read fails.
   latestStatus?: GhResult;
+  // Answers to the head's status reads in order, before latestStatus answers the rest.
+  latestStatusReads?: GhResult[];
   env?: Record<string, string>;
   // The publisher's clock. Unset, the real one: only a test that reads the time
   // back needs it pinned.
@@ -1080,6 +1082,7 @@ function runPublishIn(options: {
       );
     }
     const statusAnswers = [...(options.status ?? [ok()])];
+    const statusReads = [...(options.latestStatusReads ?? [])];
     const calls: Call[] = [];
     let stdout = "";
     let summary = "";
@@ -1103,7 +1106,11 @@ function runPublishIn(options: {
         // (reviewing) on the head it names (decideCliOutcome). Every other read is
         // a regression, and the tests assert which calls route here.
         if (endpoint.includes("/commits/")) {
-          return options.latestStatus ?? fail("gh: status read not answered");
+          return (
+            statusReads.shift() ??
+            options.latestStatus ??
+            fail("gh: status read not answered")
+          );
         }
         if (endpoint.includes("/statuses/")) {
           return statusAnswers.length > 1
@@ -1375,7 +1382,9 @@ describe("runPublish — the shell", () => {
       list: listing(),
     });
     expect(run.exitCode).toBe(0);
+    // One retry after 2 s: a read that fails twice is the same fallback as before the retry.
     expect(statusReadEndpoints(run.calls)).toEqual([
+      `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
       `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
     ]);
     const statuses = statusCalls(run.calls);
@@ -2877,16 +2886,105 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
   });
 });
 
+// The run URL identifies the pending (SB3 follow-up): a pending the CLI posted in Actions names
+// its run, so a settle is the same run's only when the URL is. The created_at rule stays for a
+// pending with no run URL (an older CLI).
+const CANCEL_RUN_URL =
+  "https://github.com/acme/widgets/actions/runs/4242/attempts/1";
+const OTHER_CANCEL_RUN_URL =
+  "https://github.com/acme/widgets/actions/runs/4300/attempts/1";
+const pendingWithUrl = (ms: number, targetUrl: string | null | undefined) => ({
+  state: "pending",
+  created_at: new Date(ms).toISOString(),
+  ...(targetUrl === undefined ? {} : { target_url: targetUrl }),
+});
+
+describe("decideCancelSettle — the run URL identifies the pending", () => {
+  test("this run's own URL settles, with no pending-at record", () => {
+    expect(
+      decideCancelSettle({
+        record: reviewingRecord(),
+        latest: pendingWithUrl(WRITTEN_MS, CANCEL_RUN_URL),
+        pendingAt: undefined,
+        runUrl: CANCEL_RUN_URL,
+      }),
+    ).toEqual({ settle: true, headSha: CANCEL_HEAD });
+  });
+
+  test("another run's actions URL never settles, even at this run's created_at", () => {
+    expect(
+      decideCancelSettle({
+        record: reviewingRecord(),
+        latest: pendingWithUrl(WRITTEN_MS, OTHER_CANCEL_RUN_URL),
+        pendingAt: PENDING_ISO,
+        runUrl: CANCEL_RUN_URL,
+      }),
+    ).toEqual({
+      settle: false,
+      reason: "the pending status is another run's",
+    });
+  });
+
+  test("an actions URL settles nothing outside Actions, whatever the created_at", () => {
+    expect(
+      decideCancelSettle({
+        record: reviewingRecord(),
+        latest: pendingWithUrl(WRITTEN_MS, CANCEL_RUN_URL),
+        pendingAt: PENDING_ISO,
+        runUrl: undefined,
+      }),
+    ).toEqual({
+      settle: false,
+      reason: "the pending status is another run's",
+    });
+  });
+
+  // An older CLI posted the pending with no run URL, or with a URL that is not a run's (the PR
+  // page of a local post). Those keep the created_at rule.
+  test.each([undefined, null, "https://github.com/acme/widgets/pull/7"])(
+    "a pending with no run URL (%s) keeps the created_at rule",
+    (targetUrl) => {
+      expect(
+        decideCancelSettle({
+          record: reviewingRecord(),
+          latest: pendingWithUrl(WRITTEN_MS, targetUrl),
+          pendingAt: PENDING_ISO,
+          runUrl: CANCEL_RUN_URL,
+        }),
+      ).toEqual({ settle: true, headSha: CANCEL_HEAD });
+      expect(
+        decideCancelSettle({
+          record: reviewingRecord(),
+          latest: pendingWithUrl(WRITTEN_MS + 1_000, targetUrl),
+          pendingAt: PENDING_ISO,
+          runUrl: CANCEL_RUN_URL,
+        }),
+      ).toEqual({
+        settle: false,
+        reason: "the pending status is not this run's",
+      });
+    },
+  );
+});
+
 function runCancelSettleIn(options: {
   cliRecord?: object | string;
   statuses?: GhResult;
+  // Answers to the head's status reads in order, before `statuses` answers the rest.
+  reads?: GhResult[];
   post?: GhResult;
+  // The Actions variables, merged over the default env of a run outside Actions.
+  env?: Record<string, string>;
+  // False when the pending-at record is not written (the pending never landed).
+  pendingAtRecord?: boolean;
 }) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-cancel-"));
   try {
     if (options.cliRecord !== undefined) {
       // The CLI's record of its own pending, written once the pending landed.
-      writeFileSync(path.join(dir, PENDING_AT_FILE), `${PENDING_ISO}\n`);
+      if (options.pendingAtRecord !== false) {
+        writeFileSync(path.join(dir, PENDING_AT_FILE), `${PENDING_ISO}\n`);
+      }
       writeFileSync(
         path.join(dir, CLI_RECORD_FILE),
         typeof options.cliRecord === "string"
@@ -2895,6 +2993,8 @@ function runCancelSettleIn(options: {
       );
     }
     const calls: Call[] = [];
+    const readAnswers = [...(options.reads ?? [])];
+    const sleeps: number[] = [];
     let stdout = "";
     const exitCode = runCancelSettle({
       env: {
@@ -2902,23 +3002,30 @@ function runCancelSettleIn(options: {
         GITHUB_REPOSITORY: REPO,
         GITHUB_RUN_ID: "4242",
         GITHUB_SERVER_URL: "https://github.com",
+        ...options.env,
       },
       gh: (args, stdin) => {
         calls.push({ args: [...args], stdin });
         const endpoint = args.find((arg) => arg.startsWith("repos/")) ?? "";
         if (endpoint.includes("/commits/")) {
-          return options.statuses ?? fail("gh: status read not answered");
+          return (
+            readAnswers.shift() ??
+            options.statuses ??
+            fail("gh: status read not answered")
+          );
         }
         if (endpoint.includes("/statuses/")) return options.post ?? ok();
         return fail("gh: unexpected call");
       },
-      sleep: () => {},
+      sleep: (ms) => {
+        sleeps.push(ms);
+      },
       stdout: (text) => {
         stdout += text;
       },
       appendSummary: () => {},
     });
-    return { exitCode, stdout, calls };
+    return { exitCode, stdout, calls, sleeps };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -3024,5 +3131,136 @@ describe("runCancelSettle — the shell (SB3)", () => {
     });
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain("::warning title=pr-hero::");
+  });
+});
+
+// SB3 follow-up: the settle reads the run URL and the head's status read gets one retry.
+describe("runCancelSettle — the run URL and one retry of the status read", () => {
+  const IN_ACTIONS = { GITHUB_ACTIONS: "true", GITHUB_RUN_ATTEMPT: "1" };
+  const statusReadEndpoint = (call: Call) =>
+    call.args.find((arg) => arg.includes("/commits/")) ?? "";
+  const reads = (calls: Call[]) =>
+    calls.filter((call) => statusReadEndpoint(call) !== "");
+
+  test("the settle's own status names this run's attempt in Actions", () => {
+    const run = runCancelSettleIn({
+      cliRecord: liveRecordText,
+      statuses: statusRows(["pr-hero", "pending", PENDING_ISO]),
+      env: IN_ACTIONS,
+    });
+    expect(statusCalls(run.calls)[0]?.args).toContain(
+      `target_url=${CANCEL_RUN_URL}`,
+    );
+  });
+
+  test("the status read asks for the target_url of each row", () => {
+    const run = runCancelSettleIn({
+      cliRecord: liveRecordText,
+      statuses: statusRows(["pr-hero", "pending", PENDING_ISO]),
+    });
+    const read = reads(run.calls)[0];
+    const jq = read?.args[read.args.indexOf("--jq") + 1] ?? "";
+    expect(jq).toContain("target_url");
+  });
+
+  test("this run's own pending settles with no pending-at record", () => {
+    const run = runCancelSettleIn({
+      cliRecord: liveRecordText,
+      statuses: statusRows([
+        "pr-hero",
+        "pending",
+        "2026-10-17T10:00:09Z",
+        null,
+        CANCEL_RUN_URL,
+      ]),
+      pendingAtRecord: false,
+      env: IN_ACTIONS,
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(run.stdout).toContain("the pr-hero status is now PRH-CANCELLED");
+  });
+
+  test("another run's pending with this run's created_at is not settled", () => {
+    const run = runCancelSettleIn({
+      cliRecord: liveRecordText,
+      statuses: statusRows([
+        "pr-hero",
+        "pending",
+        PENDING_ISO,
+        null,
+        OTHER_CANCEL_RUN_URL,
+      ]),
+      env: IN_ACTIONS,
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusCalls(run.calls)).toHaveLength(0);
+    expect(run.stdout).toContain(
+      "cancel: nothing to settle (the pending status is another run's)",
+    );
+  });
+
+  test("a status read that fails once is retried after 2 s, and the second read decides", () => {
+    const run = runCancelSettleIn({
+      cliRecord: liveRecordText,
+      reads: [fail("gh: Server Error (HTTP 500)")],
+      statuses: statusRows(["pr-hero", "pending", PENDING_ISO]),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(reads(run.calls)).toHaveLength(2);
+    expect(run.sleeps).toEqual([2_000]);
+    expect(statusCalls(run.calls)).toHaveLength(1);
+  });
+
+  test("a status read that fails twice keeps the fallback: no write, and one warning", () => {
+    const run = runCancelSettleIn({
+      cliRecord: liveRecordText,
+      reads: [
+        fail("gh: Server Error (HTTP 500)"),
+        fail("gh: Server Error (HTTP 500)"),
+      ],
+    });
+    expect(run.exitCode).toBe(0);
+    expect(reads(run.calls)).toHaveLength(2);
+    expect(run.sleeps).toEqual([2_000]);
+    expect(statusCalls(run.calls)).toHaveLength(0);
+    expect(
+      run.stdout.split("\n").filter((line) => line.startsWith("::warning")),
+    ).toHaveLength(1);
+  });
+});
+
+describe("runPublish — the override read gets one retry", () => {
+  const OVERRIDE =
+    "pr-hero: overridden by @maintainer — no review on this head";
+  const RUN_START = Date.parse("2026-10-17T12:00:00Z");
+
+  test("a head read that fails once and then succeeds honors the override", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: {
+        ...REVIEWED,
+        head_sha: REVIEWED_HEAD,
+        unsettled_status: { state: "success", description: "review complete" },
+        override_cutoff_ms: RUN_START,
+      },
+      status: [ok()],
+      viewer: ok("pr-hero-bot"),
+      list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
+      latestStatusReads: [fail("gh: Server Error (HTTP 500)")],
+      latestStatus: ok(
+        JSON.stringify([
+          "pr-hero",
+          "success",
+          new Date(RUN_START + 30_000).toISOString(),
+          OVERRIDE,
+        ]),
+      ),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(statusReadEndpoints(run.calls)).toHaveLength(2);
+    expect(statusCalls(run.calls)).toEqual([]);
+    expect(run.stdout).not.toContain("::warning");
   });
 });
