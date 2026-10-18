@@ -177,11 +177,20 @@ export function outsideDiffBlockingOn(obs: Observation): number {
   );
 }
 
-// S3 gate for the ifOwnBlockingAt checks: this head shows a blocking finding the checks
-// can read, either inline at the path or in its report's outside-diff section (which has
-// no path, so it opens the gate for any path). Only when neither holds are they not asserted.
+// S3 gate for the ifOwnBlockingAt checks: this head shows a blocking finding at the path,
+// either inline there or in its report's outside-diff section, where each entry names the
+// path it is about (outsideDiffBlockingPaths). An outside-diff finding at another file
+// does not open the gate for this path. Only when neither holds are the checks not asserted.
 export function ownBlockingGate(obs: Observation, path: string): boolean {
-  return blockingFindingAt(obs, path) || outsideDiffBlockingOn(obs) > 0;
+  return (
+    blockingFindingAt(obs, path) ||
+    obs.comments.some(
+      (c) =>
+        c.kind === "report" &&
+        c.head === obs.headSha &&
+        (c.outsideDiffBlockingPaths ?? []).includes(path),
+    )
+  );
 }
 
 export function evaluateCheck(check: Check, obs: Observation): CheckResult {

@@ -1697,15 +1697,19 @@ describe("SB3 checks: the planted-bug site, the hunter log, and the newer head",
 // "Comments Outside Diff" section has no inline comment and no path, so the gate must
 // open on the head's outside-diff count too, not on an inline anchor alone.
 describe("ownBlockingGate: the ifOwnBlockingAt checks are asserted (PR #362 F001)", () => {
-  const outsideReport = (count: number): Observation["comments"][number] => ({
+  const outsideReport = (
+    paths: string[],
+    head: string = NEW,
+  ): Observation["comments"][number] => ({
     source: "issue",
     kind: "report",
-    head: NEW,
-    outsideDiffBlocking: count,
+    head,
+    outsideDiffBlocking: paths.length,
+    outsideDiffBlockingPaths: paths,
   });
 
-  test("an outside-diff blocking finding and no inline one: asserted, and a missing row FAILs", () => {
-    const o = obs({ comments: [outsideReport(1)] });
+  test("an outside-diff blocking finding at the path and no inline one: asserted, and a missing row FAILs", () => {
+    const o = obs({ comments: [outsideReport(["src/mute.ts"])] });
     expect(blockingFindingAt(o, "src/mute.ts")).toBe(false);
     expect(ownBlockingGate(o, "src/mute.ts")).toBe(true);
     const [result] = evaluateChecks(
@@ -1741,12 +1745,15 @@ describe("ownBlockingGate: the ifOwnBlockingAt checks are asserted (PR #362 F001
     ).toBe(false);
   });
 
+  test("an outside-diff blocking finding at another file does not open the gate for this path (PR #362 F001 round 2)", () => {
+    const o = obs({ comments: [outsideReport(["src/player.ts"])] });
+    expect(blockingFindingAt(o, "src/mute.ts")).toBe(false);
+    expect(ownBlockingGate(o, "src/mute.ts")).toBe(false);
+    expect(ownBlockingGate(o, "src/player.ts")).toBe(true);
+  });
+
   test("an outside-diff blocking finding on an older head does not open the gate", () => {
-    const o = obs({
-      comments: [
-        { source: "issue", kind: "report", head: OLD, outsideDiffBlocking: 2 },
-      ],
-    });
+    const o = obs({ comments: [outsideReport(["src/mute.ts"], OLD)] });
     expect(ownBlockingGate(o, "src/mute.ts")).toBe(false);
   });
 

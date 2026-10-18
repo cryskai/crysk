@@ -100,6 +100,11 @@ export interface CommentFact {
   // the findings the PR shows with no inline anchor. Set only when there is at
   // least one, so a report without one keeps the shape it always had.
   outsideDiffBlocking?: number;
+  // PR #362 F001 round 2: the path each of those entries names (outsideDiffBlockingPaths),
+  // so a gate can tell whether the outside-diff finding is about the path it checks. Set
+  // only when at least one entry names a path; an entry with no parseable location adds
+  // to outsideDiffBlocking but not here.
+  outsideDiffBlockingPaths?: string[];
   // T5b: the verdict of a CI adjudication reply (`verdict=` on its marker line).
   verdict?: string;
   // D3: the paths of a report's state-block rows (every loc of every row, once each), so a check can read what the PR's state remembers. Set only on a report that carries a state block.
@@ -188,18 +193,56 @@ export function outcomeCodeOf(body: string): string | undefined {
 const OUTSIDE_DIFF_HEADING = "### Comments Outside Diff";
 const BLOCKING_ENTRY_HEADER = "🔴 blocking · ";
 
-export function outsideDiffBlockingCount(body: string): number {
+// One location line per blocking entry, in order: the first non-empty line under its
+// header (report.ts findingBodyLines writes the location there). Undefined when the
+// entry has none, so the count still includes it.
+function outsideDiffBlockingLocations(body: string): (string | undefined)[] {
+  const locations: (string | undefined)[] = [];
   let inSection = false;
-  let count = 0;
+  let awaitingLocation = false;
   for (const line of body.split("\n")) {
     if (!inSection) {
       if (line.startsWith(OUTSIDE_DIFF_HEADING)) inSection = true;
       continue;
     }
     if (/^#{1,3} /.test(line) || line === "---") break;
-    if (line.startsWith(BLOCKING_ENTRY_HEADER)) count += 1;
+    if (line.startsWith(BLOCKING_ENTRY_HEADER)) {
+      locations.push(undefined);
+      awaitingLocation = true;
+      continue;
+    }
+    if (awaitingLocation && line.trim() !== "") {
+      locations[locations.length - 1] = line;
+      awaitingLocation = false;
+    }
   }
-  return count;
+  return locations;
+}
+
+export function outsideDiffBlockingCount(body: string): number {
+  return outsideDiffBlockingLocations(body).length;
+}
+
+// The path of a location line: the first backticked `path:line` span, plain or inside a
+// link, with the `:line` suffix after its last colon dropped. Undefined when there is no
+// such span, so an unparseable entry names no path.
+function locationPath(location: string | undefined): string | undefined {
+  const span =
+    location === undefined ? undefined : /`([^`]+)`/.exec(location)?.[1];
+  if (span === undefined) return undefined;
+  const colon = span.lastIndexOf(":");
+  return colon > 0 ? span.slice(0, colon) : undefined;
+}
+
+// PR #362 F001 round 2: the path each blocking entry of the section is about, so the
+// ifOwnBlockingAt gate opens only for the path a PR's outside-diff finding names.
+export function outsideDiffBlockingPaths(body: string): string[] {
+  const paths: string[] = [];
+  for (const location of outsideDiffBlockingLocations(body)) {
+    const path = locationPath(location);
+    if (path !== undefined) paths.push(path);
+  }
+  return paths;
 }
 
 // D3: the state block a report carries (report.ts writes it after the body): the line
@@ -265,12 +308,16 @@ export function classifyComment(
   if (first.startsWith(REPORT_MARKER_PREFIX)) {
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     const outside = outsideDiffBlockingCount(body);
+    const outsidePaths = outsideDiffBlockingPaths(body);
     const stateRows = stateRowsOf(body);
     return {
       source,
       kind: "report",
       ...(head === undefined ? {} : { head }),
       ...(outside === 0 ? {} : { outsideDiffBlocking: outside }),
+      ...(outsidePaths.length === 0
+        ? {}
+        : { outsideDiffBlockingPaths: outsidePaths }),
       ...(stateRows === undefined
         ? {}
         : { statePaths: pathsOf(stateRows), stateRows }),

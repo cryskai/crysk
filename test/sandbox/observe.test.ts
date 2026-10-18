@@ -11,6 +11,8 @@ import {
   invariantViolations,
   type Observation,
   outcomeCodeOf,
+  outsideDiffBlockingCount,
+  outsideDiffBlockingPaths,
 } from "../../scripts/sandbox/observe";
 import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import { renderReport } from "../../scripts/sandbox/report";
@@ -201,10 +203,37 @@ describe("classifyComment: where a blocking finding is shown (Fix A)", () => {
       kind: "report",
       head: SHA,
       outsideDiffBlocking: 2,
+      outsideDiffBlockingPaths: ["src/app.ts", "src/app.ts"],
     });
     expect(
       classifyComment(reportWith([OUTSIDE_ADVISORY], FOOTER), "issue"),
     ).toEqual({ source: "issue", kind: "report", head: SHA });
+  });
+
+  // PR #362 F001 round 2: each outside-diff blocking entry names its own path, so a gate
+  // can tell which file the PR's outside-diff findings are about.
+  test("the outside-diff blocking entries name their paths, plain or linked; an advisory entry and a blocking line after the rule add none", () => {
+    const PLAIN =
+      "🔴 blocking · BLOCKER · introduced · reliability\n`src/mute.ts:4` — fn()\n\nThe claim.";
+    const LINKED =
+      "🔴 blocking · BLOCKER · introduced · reliability\n[`src/player.ts:12`](https://x/blob/abc/src/player.ts#L12)\n\nThe claim.";
+    const body = reportWith(
+      [PLAIN, OUTSIDE_ADVISORY, LINKED],
+      `${FOOTER}\n\n🔴 blocking · quoted in the footer\n\`src/after.ts:1\``,
+    );
+    expect(outsideDiffBlockingPaths(body)).toEqual([
+      "src/mute.ts",
+      "src/player.ts",
+    ]);
+    expect(outsideDiffBlockingCount(body)).toBe(2);
+  });
+
+  test("a blocking entry whose location line cannot be parsed counts but names no path", () => {
+    const UNPARSEABLE =
+      "🔴 blocking · BLOCKER · introduced · reliability\nno location line here\n\nThe claim.";
+    const body = reportWith([OUTSIDE_BLOCKING, UNPARSEABLE], FOOTER);
+    expect(outsideDiffBlockingCount(body)).toBe(2);
+    expect(outsideDiffBlockingPaths(body)).toEqual(["src/app.ts"]);
   });
 
   test("a blocking-looking line after the section ends, at a rule or a heading, is not an entry", () => {
