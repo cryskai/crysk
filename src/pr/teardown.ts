@@ -9,9 +9,13 @@ import { recordUnsettledStatus } from "#ci/cli-record";
 import { overrideCutoffMs, overrideStandsOverRun } from "#ci/override";
 import { formatWorkflowCommand } from "#ci/reporter";
 import type { CiAdmissionLedgerState } from "#pr/admission";
-import { settleCiAdmissionLedger } from "#pr/admission";
+import {
+  finishedPartialMatches,
+  partialCountsIn,
+  settleCiAdmissionLedger,
+} from "#pr/admission";
 import type { InlinePostOutcome } from "#pr/inline";
-import { fetchCommitStatuses } from "#pr/pr";
+import { fetchCommitStatuses, fetchCommitStatusList } from "#pr/pr";
 import {
   blockingCommitStatusRequest,
   type CiMode,
@@ -136,6 +140,36 @@ function overrideReadFallback(headSha: string): false {
   return false;
 }
 
+// W3-PARTIAL S1: the head's previous verdict is this same partial (N of M), so this write is the repeat.
+// The full-history reader (fetchCommitStatusList) is the one read: the combined endpoint keeps only the
+// newest row per context, and this run's own pending hides the previous verdict there. The newest row
+// that is not pending is that verdict, and a null or throwing read keeps today's text.
+async function previousPartialIsSame(
+  operatorRoot: string,
+  headSha: string,
+  spawnFn: typeof Bun.spawn | undefined,
+  readHistory: typeof fetchCommitStatusList,
+  failed: number,
+  total: number,
+): Promise<boolean> {
+  let history: readonly CommitStatusFact[] | null;
+  try {
+    history = await readHistory(operatorRoot, headSha, { spawnFn });
+  } catch {
+    return false;
+  }
+  if (history === null) return false;
+  const previous = history.find(
+    (row) => row.context === COMMIT_STATUS_CONTEXT && row.state !== "pending",
+  );
+  const description = previous?.description;
+  if (typeof description !== "string" || !finishedPartialMatches(description)) {
+    return false;
+  }
+  const counts = partialCountsIn(description);
+  return counts !== null && counts.failed === failed && counts.total === total;
+}
+
 // The inner `finally`: the commit status must settle BEFORE the lock is
 // released, and the lock must be released on every path — throw, early
 // return, or normal exit. The release sits in a try/finally around the
@@ -190,6 +224,8 @@ export async function settleCommitStatusAndLedger(input: {
   // posted during this run stands (overrideStandsOverRun). Production omits it and
   // gets the real reader; a test injects one.
   readStatuses?: typeof fetchCommitStatuses;
+  // W3-PARTIAL S1: the full-history reader for the repeat check (fetchCommitStatusList). Production omits it; a test injects one.
+  readHistory?: typeof fetchCommitStatusList;
   // The wait before the override read's one retry. Production omits it (Bun.sleep); a test injects one.
   sleep?: (ms: number) => Promise<void>;
   // Where the CLI's outcome record is written (PRHERO_OUTCOME_DIR). Production omits
@@ -217,7 +253,7 @@ export async function settleCommitStatusAndLedger(input: {
       : { hunterFailures: input.result.hunterFailedCount }),
     ...(input.result?.noReviewerRan === true ? { noReviewerRan: true } : {}),
   });
-  const request =
+  let request =
     completion.phase === "failure"
       ? blockingCommitStatusRequest({
           blockingCount: completion.blockingCount,
@@ -246,6 +282,31 @@ export async function settleCommitStatusAndLedger(input: {
     // a body threw or every hunter failed, and it may replace the override (the rule in
     // docs/github-actions.md, "Overriding a red gate"). The publisher applies the same rule
     // (src/ci/publish.ts). Advisory is left as it was: this rule is the gate's.
+    // W3-PARTIAL S1 / F002: a partial that repeats the head's previous finished partial (same N and M) is
+    // written as the repeat text. The history read happens here, before the override read, so the override
+    // check stays immediately ahead of the write and no read widens the window where an override can land.
+    // Only a partial completion reads history, and only where the run's start is known (the same
+    // precondition as the override read).
+    if (
+      completion.phase === "partial" &&
+      overrideCutoff !== null &&
+      (await previousPartialIsSame(
+        input.operatorRoot,
+        input.headSha,
+        input.spawnFn,
+        input.readHistory ?? fetchCommitStatusList,
+        completion.failed,
+        completion.total,
+      ))
+    ) {
+      request = partialReviewCommitStatusRequest({
+        failed: completion.failed,
+        total: completion.total,
+        targetUrl: input.statusTargetUrl,
+        context: input.statusContext,
+        repeat: true,
+      });
+    }
     const verdictWrite =
       request.state === "success" || request.state === "failure";
     const overrideStands =

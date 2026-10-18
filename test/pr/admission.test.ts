@@ -612,6 +612,31 @@ describe("publishCiSkip: the outcome record", () => {
       const PARTIAL_CARRIED =
         "pr-hero: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it";
 
+      // W3-PARTIAL S2: the repeat form is a review verdict, and it is a source for the carry: the skip
+      // inherits today's carried text, because the carried form is generic and keeps its existing wording.
+      test("the repeat form is a review verdict, and a skip carries it as the same carried text", async () => {
+        const REPEAT_1_OF_4 =
+          "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override";
+        expect(
+          isReviewVerdictStatus({
+            state: "failure",
+            description: REPEAT_1_OF_4,
+          }),
+        ).toBe(true);
+        const { calls } = await skipWith(
+          [row("failure", REPEAT_1_OF_4, T1)],
+          "low-risk-delta",
+        );
+        expect(calls).toEqual([
+          {
+            sha: STATUS_HEAD,
+            state: "failure",
+            description: PARTIAL_CARRIED,
+            targetUrl: expect.any(String),
+          },
+        ]);
+      });
+
       test("the matcher admits the partial text and its carried form as a review verdict", () => {
         expect(
           isReviewVerdictStatus({

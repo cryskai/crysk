@@ -478,6 +478,11 @@ function newestReply(
 const PARTIAL_REVIEW_GATE =
   /^pr-hero: review partial \(\d+ of \d+ hunters failed\)/;
 
+// W3-PARTIAL F004: the repeat form, the same N of M failure set as the head's previous partial verdict.
+// A retry already failed that way, so the unlock is a route fix or an override, never review again.
+const PARTIAL_REVIEW_AGAIN_GATE =
+  /^pr-hero: review partial again \(\d+ of \d+ hunters failed\)/;
+
 // unresolved_blocking has two sources, and the description wins when it has one. A red
 // gate's description names the count its own rule counted (rereview/state.ts
 // unresolvedBlockingCount), which can include a carried row that no comment in this read
@@ -675,6 +680,13 @@ function decideNext(
   }
   // S6: a red gate that is a partial review (its own text, or the carried form) is not a finding to fix.
   // Nothing blocking was found, so the retry is the unlock. Its text is the gate's own, so no count is read.
+  if (PARTIAL_REVIEW_AGAIN_GATE.test(gate.description ?? "")) {
+    return {
+      next_action: "override-or-fix",
+      reason:
+        "The review is partial again with the same failure counts: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /pr-hero override.",
+    };
+  }
   if (PARTIAL_REVIEW_GATE.test(gate.description ?? "")) {
     return {
       next_action: "review",

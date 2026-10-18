@@ -37,6 +37,7 @@ import {
   type CommitStatusFact,
   clipStatusDescription,
   commitStatusRequest,
+  partialReviewAgainDescription,
   partialReviewDescription,
   prHtmlUrl,
   skipCommitStatusRequest,
@@ -419,23 +420,31 @@ function carriedBlockingMatches(description: string): boolean {
 
 // S5: a partial review is a red verdict with its own text (N of M hunters failed). Its counts are read
 // first, then the builder must reproduce the whole text, the same rule as the blocking verdict.
+// W3-PARTIAL S2: the repeat form ('again') reads the same counts; the flag only picks the builder that must rebuild the text.
 const PARTIAL_COUNTS =
-  /^pr-hero: review partial \((\d+) of (\d+) hunters failed\)/;
+  /^pr-hero: review partial( again)? \((\d+) of (\d+) hunters failed\)/;
 
-function partialCountsIn(
+export function partialCountsIn(
   description: string | null | undefined,
-): { failed: number; total: number } | null {
+): { failed: number; total: number; again: boolean } | null {
   const match = PARTIAL_COUNTS.exec(description ?? "");
   if (match === null) return null;
-  return { failed: Number(match[1]), total: Number(match[2]) };
+  return {
+    failed: Number(match[2]),
+    total: Number(match[3]),
+    again: match[1] !== undefined,
+  };
 }
 
-function finishedPartialMatches(description: string): boolean {
+// Exported for the teardown's repeat check (teardown.ts previousPartialIsSame): the one rule for a finished
+// partial verdict, so a carried row never counts as a review's own verdict.
+export function finishedPartialMatches(description: string): boolean {
   const counts = partialCountsIn(description);
-  return (
-    counts !== null &&
-    partialReviewDescription(counts.failed, counts.total) === description
-  );
+  if (counts === null) return false;
+  const rebuilt = counts.again
+    ? partialReviewAgainDescription(counts.failed, counts.total)
+    : partialReviewDescription(counts.failed, counts.total);
+  return rebuilt === description;
 }
 
 function carriedPartialMatches(description: string): boolean {

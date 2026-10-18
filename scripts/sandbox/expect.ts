@@ -146,7 +146,7 @@ function headReports(obs: Observation): number {
 // The partial-review verdict's text, finished or carried. Spelled out here because the sandbox
 // harness does not import the engine.
 const PARTIAL_REVIEW =
-  /^pr-hero: review partial \(\d+ of \d+ hunters failed\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$/;
+  /^pr-hero: review partial \(\d+ of \d+ hunters failed\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$|^pr-hero: review partial again \(\d+ of \d+ hunters failed\) — fix the failing route or \/pr-hero override$/;
 
 export function evaluateCheck(check: Check, obs: Observation): CheckResult {
   const label = describeCheck(check);

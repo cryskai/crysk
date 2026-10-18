@@ -1066,6 +1066,19 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
     expect(status.next_action).toBe("review");
   });
 
+  // W3-PARTIAL F004: a retry already failed the same way, so the repeat form asks for a route fix or an override, not review.
+  test("the repeat form of the partial review asks for a fix or an override", () => {
+    const REPEAT =
+      "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override";
+    const status = buildPrStatus(
+      input({ statuses: [gate("failure", REPEAT)] }),
+    );
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason).toBe(
+      "The review is partial again with the same failure counts: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /pr-hero override.",
+    );
+  });
+
   test("a red partial review names no blocking count: unresolved_blocking is the live count, zero here", () => {
     const status = buildPrStatus(
       input({ statuses: [gate("failure", PARTIAL)] }),
