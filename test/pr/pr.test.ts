@@ -2482,8 +2482,13 @@ describe("upsertAdmissionCheckRun", () => {
     expect(argv).toContain("POST");
     expect(argv.join(" ")).toContain("repos/{owner}/{repo}/check-runs");
     expect(argv.join(" ")).toContain(`external_id=${record.reservationId}`);
-    expect(argv.join(" ")).toContain(
-      `output[text]=${serializeAdmissionRecord(record)}`,
+    // The record carries one fresh POST nonce on top of the reservation fields.
+    const outputText = argv.find((arg) => arg.startsWith("output[text]="));
+    expect(JSON.parse(outputText?.slice("output[text]=".length) ?? "")).toEqual(
+      {
+        ...record,
+        postNonce: expect.any(String),
+      },
     );
     expect(argv.join(" ")).toContain(`name=${ADMISSION_CHECK_RUN_NAME}`);
   });
@@ -3071,15 +3076,37 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
   // by the --jq in the lookup (external_id included).
   function checkRunRow(
     record: AdmissionRecord,
-    overrides: { id?: number; status?: string; externalId?: string } = {},
+    overrides: {
+      id?: number;
+      status?: string;
+      externalId?: string;
+      postNonce?: string;
+    } = {},
   ): string {
     return JSON.stringify({
       id: overrides.id ?? 900,
       name: ADMISSION_CHECK_RUN_NAME,
       status: overrides.status ?? "completed",
       external_id: overrides.externalId ?? record.reservationId,
-      output: { text: serializeAdmissionRecord(record) },
+      output: {
+        text: serializeAdmissionRecord({
+          ...record,
+          postNonce: overrides.postNonce,
+        }),
+      },
     });
+  }
+
+  // The serialized record a POST wrote (output[text]), read off its argv.
+  function nonceText(argv: string[]): string {
+    const text = argv.find((arg) => arg.startsWith("output[text]="));
+    return text?.slice("output[text]=".length) ?? "";
+  }
+
+  // The nonce a POST wrote into its own record, so a fake lookup can answer
+  // with the run that POST created.
+  function nonceOfPost(argv: string[]): string | undefined {
+    return (JSON.parse(nonceText(argv)) as { postNonce?: string }).postNonce;
   }
 
   test("a failed POST whose run the lookup finds is adopted: no second POST, id returned", async () => {
@@ -3087,16 +3114,20 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
       status: "completed",
       decisionReason: "review complete",
     });
+    let postNonce: string | undefined;
     const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
       if (isLookup(argv)) {
-        return { stdout: `${checkRunRow(record, { id: 812 })}\n` };
+        return { stdout: `${checkRunRow(record, { id: 812, postNonce })}\n` };
       }
-      if (isPost(argv)) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      if (isPost(argv)) {
+        postNonce = nonceOfPost(argv);
+        return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      }
       return {};
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record, adoptOnFailedPost: true },
+      { headSha: HEAD, record },
       { spawnFn },
     );
     expect(id).toBe(812);
@@ -3108,19 +3139,19 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     );
   });
 
-  test("a run from an earlier attempt with the same external_id is never adopted: POST retried", async () => {
+  test("a run from an earlier attempt with the same external_id and nonce is never adopted: POST retried", async () => {
     const record = admissionRecordFixture({ attemptNumber: 2 });
-    const earlier = admissionRecordFixture({
-      attemptNumber: 1,
-      createdAt: "2026-08-28T11:00:00.000Z",
-    });
+    const earlier = admissionRecordFixture({ attemptNumber: 1 });
+    // The row carries THIS call's nonce, so only the attempt/createdAt rule can reject it.
+    let postNonce: string | undefined;
     let posts = 0;
     const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
       if (isLookup(argv)) {
-        return { stdout: `${checkRunRow(earlier, { id: 811 })}\n` };
+        return { stdout: `${checkRunRow(earlier, { id: 811, postNonce })}\n` };
       }
       if (isPost(argv)) {
         posts += 1;
+        postNonce ??= nonceOfPost(argv);
         if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
         return { stdout: JSON.stringify({ id: 613 }) };
       }
@@ -3128,7 +3159,38 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record, adoptOnFailedPost: true },
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(613);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.some(isPatch)).toBe(false);
+  });
+
+  test("a run with another createdAt, same external_id, attempt and nonce, is never adopted: POST retried", async () => {
+    const record = admissionRecordFixture({ attemptNumber: 2 });
+    const earlier = admissionRecordFixture({
+      attemptNumber: 2,
+      createdAt: "2026-08-28T11:00:00.000Z",
+    });
+    // The row carries THIS call's nonce, so only the attempt/createdAt rule can reject it.
+    let postNonce: string | undefined;
+    let posts = 0;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(earlier, { id: 811, postNonce })}\n` };
+      }
+      if (isPost(argv)) {
+        posts += 1;
+        postNonce ??= nonceOfPost(argv);
+        if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        return { stdout: JSON.stringify({ id: 613 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
       { spawnFn },
     );
     expect(id).toBe(613);
@@ -3150,7 +3212,7 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record, adoptOnFailedPost: true },
+      { headSha: HEAD, record },
       { spawnFn },
     );
     expect(id).toBe(614);
@@ -3163,19 +3225,23 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
       status: "completed",
       decisionReason: "review complete",
     });
+    let postNonce: string | undefined;
     const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
       if (isLookup(argv)) {
         return {
-          stdout: `${checkRunRow(record, { id: 815, status: "in_progress" })}\n`,
+          stdout: `${checkRunRow(record, { id: 815, status: "in_progress", postNonce })}\n`,
         };
       }
-      if (isPost(argv)) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      if (isPost(argv)) {
+        postNonce = nonceOfPost(argv);
+        return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      }
       if (isPatch(argv)) return { stdout: JSON.stringify({ id: 815 }) };
       return {};
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record, adoptOnFailedPost: true },
+      { headSha: HEAD, record },
       { spawnFn },
     );
     expect(id).toBe(815);
@@ -3186,24 +3252,89 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     expect(patches[0]?.join(" ")).toContain("conclusion=success");
   });
 
-  test("a failed POST without adoptOnFailedPost (a reused record) never looks up or adopts", async () => {
-    const record = admissionRecordFixture();
+  test("a reused record adopts the run that carries this call's nonce, not a sibling", async () => {
+    // The reused record (reserve's created:false) has a sibling run with the
+    // same external_id, attempt and createdAt, written by another workflow run.
+    // Only the nonce this POST wrote names the run this call created.
+    const record = admissionRecordFixture({
+      status: "completed",
+      decisionReason: "review complete",
+    });
+    let postNonce: string | undefined;
     const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
       if (isLookup(argv)) {
-        return { stdout: `${checkRunRow(record, { id: 812 })}\n` };
+        return {
+          stdout: `${checkRunRow(record, { id: 811, postNonce: "sibling-nonce" })}\n`,
+        };
       }
-      if (isPost(argv)) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      if (isPost(argv)) {
+        postNonce = nonceOfPost(argv);
+        if (calls.filter(isPost).length === 1) {
+          return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        }
+        return { stdout: JSON.stringify({ id: 613 }) };
+      }
       return {};
     });
-    await expect(
-      upsertAdmissionCheckRun(
-        OPERATOR_ROOT,
-        { headSha: HEAD, record },
-        { spawnFn },
-      ),
-    ).rejects.toThrow(TIMEOUT_STDERR);
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(postNonce).toEqual(expect.any(String));
+    expect(id).toBe(613);
     expect(calls.filter(isPost)).toHaveLength(2);
-    expect(calls.some(isLookup)).toBe(false);
+    expect(calls.some(isPatch)).toBe(false);
+  });
+
+  test("a reused record adopts its own nonce run when the timed-out POST created it", async () => {
+    const record = admissionRecordFixture({
+      status: "completed",
+      decisionReason: "review complete",
+    });
+    let postNonce: string | undefined;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(record, { id: 812, postNonce })}\n` };
+      }
+      if (isPost(argv)) {
+        postNonce = nonceOfPost(argv);
+        return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(812);
+    expect(calls.filter(isPost)).toHaveLength(1);
+    expect(calls.filter(isLookup)).toHaveLength(1);
+  });
+
+  test("a run without a nonce (written before this field) is never adopted", async () => {
+    const record = admissionRecordFixture();
+    let posts = 0;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(record, { id: 811 })}\n` };
+      }
+      if (isPost(argv)) {
+        posts += 1;
+        if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        return { stdout: JSON.stringify({ id: 614 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(614);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.some(isPatch)).toBe(false);
   });
 
   test("a POST that succeeds does no lookup", async () => {
@@ -3214,7 +3345,7 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     });
     const id = await upsertAdmissionCheckRun(
       OPERATOR_ROOT,
-      { headSha: HEAD, record, adoptOnFailedPost: true },
+      { headSha: HEAD, record },
       { spawnFn },
     );
     expect(id).toBe(501);

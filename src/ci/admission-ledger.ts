@@ -47,6 +47,12 @@ export interface AdmissionRecord {
   // time a count reads the row. Absent on an automatic row, so every row
   // written before this field existed reads as automatic.
   forced?: true;
+  // WHY a per-POST nonce: a reserve POST whose gh call timed out may have
+  // created a run GitHub accepted. The nonce is minted once per upsert call and
+  // written into that run's record, so a lookup can name exactly the run this
+  // call created. Absent on every row written before this field existed, and
+  // such a row never matches a lookup.
+  postNonce?: string;
 }
 
 // #164, Juanma 2026-09-01: a cancelled run posted nothing, so it must not
@@ -171,6 +177,9 @@ export function parseAdmissionRecord(text: string): AdmissionRecord | null {
           ? (parsed.settledAt ?? null)
           : null,
       ...(parsed.forced === true ? { forced: true as const } : {}),
+      ...(typeof parsed.postNonce === "string"
+        ? { postNonce: parsed.postNonce }
+        : {}),
     };
   } catch {
     return null;

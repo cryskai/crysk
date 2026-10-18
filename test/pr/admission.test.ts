@@ -1415,10 +1415,10 @@ function restoreOutcomeDir(saved: string | undefined): void {
   }
 }
 
-// Review #360: a reserve POST that failed adopts a check run found by its
-// external_id, attempt and createdAt only when this run created the record. A
-// reused active record already belongs to another run's check run, and adopting
-// it would make two workflow runs settle one row.
+// Review #360: a reserve POST that failed adopts a check run only when the
+// run carries this call's POST nonce. A reused active record already belongs to
+// another run's check run with the same external_id, attempt and createdAt, so
+// those fields alone would make two workflow runs settle one row.
 describe("reserveCiAdmissionLedger — adoption after a failed POST", () => {
   const RESERVE_POLICY = resolveCiReviewPolicy({});
   const RESERVE_HASH = ciReviewPolicyHash(RESERVE_POLICY);
@@ -1459,7 +1459,7 @@ describe("reserveCiAdmissionLedger — adoption after a failed POST", () => {
     })}\n`;
   }
 
-  test("a reused active record never looks up, so another run's check run is not adopted", async () => {
+  test("a reused active record looks up but never adopts another run's check run", async () => {
     const active: AdmissionRecord = {
       schemaVersion: 1,
       prNumber: PR,
@@ -1489,9 +1489,12 @@ describe("reserveCiAdmissionLedger — adoption after a failed POST", () => {
         spawnFn,
       }),
     ).rejects.toThrow("gh timed out after 15000 ms");
+    // The sibling run has no nonce, so the lookup reads it as no match and the
+    // POST is retried rather than adopted.
     expect(calls.some((argv) => argv.join(" ").includes("check_name="))).toBe(
-      false,
+      true,
     );
+    expect(calls.filter((argv) => argv.includes("POST"))).toHaveLength(2);
   });
 
   test("a record this run created looks the failed POST up", async () => {
