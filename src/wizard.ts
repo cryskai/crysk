@@ -515,11 +515,19 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       let mcpRegistered = true;
       for (const env of state.envDetections) {
         if (env.skillsDir) {
-          await syncSkills(env, assets, {
+          const sync = await syncSkills(env, assets, {
             exists: deps.exists,
             readFile: deps.readFile,
             writeFile: deps.writeFile,
           });
+          // A kept local copy is not an error, but the operator must see that it
+          // was not replaced; the other statuses are in the result for callers.
+          for (const outcome of sync.skills) {
+            if (outcome.status !== "drift-kept") continue;
+            process.stderr.write(
+              `pr-hero: ${outcome.skill} not updated for ${env.displayName}: ${outcome.reason ?? "local edits kept"}\n`,
+            );
+          }
         }
         if (env.mcpConfigFile) {
           const registration = await registerMcpServer(env, mcpReg, {
