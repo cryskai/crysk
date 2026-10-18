@@ -656,6 +656,11 @@ export function renderPrComment(
   // S4: the footer's disclaimer follows the gate mode. Omitted means advisory,
   // the wording every caller has today, until a caller passes its mode.
   ciMode: CiMode = "advisory",
+  // S1b: Outside Diff entries at this index and after render compact (the
+  // linked location only). WHY an index and not a flag: the size fallback
+  // compacts from the last entry backwards, one entry at a time, until the
+  // body fits. Omitted or past the end, the section is byte-identical.
+  compactFrom?: number,
 ): string {
   // Normalize away one trailing slash so `gh repo view` output and a
   // hand-typed URL build the same links.
@@ -813,7 +818,14 @@ export function renderPrComment(
   }
   out.push(...liveFindingLines(delta?.rereview));
   if (outsideDiffFindings.length > 0) {
-    out.push(...outsideDiffSection(outsideDiffFindings, doc.head_sha, webUrl));
+    out.push(
+      ...outsideDiffSection(
+        outsideDiffFindings,
+        doc.head_sha,
+        webUrl,
+        compactFrom,
+      ),
+    );
     out.push("");
   }
   // Omit the "since <sha>" clause when the previous head equals the current
@@ -1076,10 +1088,17 @@ function outsideDiffSection(
   findings: readonly Finding[],
   headSha: string,
   webUrl: string | undefined,
+  compactFrom: number | undefined,
 ): string[] {
   const out: string[] = [`### Comments Outside Diff (${findings.length})`, ""];
   for (const [i, finding] of findings.entries()) {
     if (i > 0) out.push("");
+    // A compact entry keeps only its linked location: no claim, evidence, or
+    // prompt-to-fix body. The location line is the review link itself.
+    if (compactFrom !== undefined && i >= compactFrom) {
+      out.push(findingLocationLine(finding, headSha, webUrl, true));
+      continue;
+    }
     out.push(...findingBodyLines(finding, headSha, webUrl, true));
   }
   return out;

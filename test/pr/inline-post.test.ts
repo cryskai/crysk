@@ -2398,6 +2398,58 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
     expect(stateOf(bodies[0] ?? "")).toBe(stateOf(bodies[1] ?? ""));
     expect(stateOf(bodies[1] ?? "")).toContain("fresh blocker");
   });
+
+  // S1 wiring, through the public post path. Each blocking claim renders in
+  // the headline, the state block, and the demoted Outside Diff prompt, so six
+  // 3000-char claims put the base PATCH near 72k. The limit is GitHub's.
+  test("S1 — a 422 demotion whose Outside Diff bodies overflow the limit keeps the PATCH within it and every blocking state row", async () => {
+    const GITHUB_LIMIT = 65536;
+    const findings = Array.from({ length: 6 }, (_, i) =>
+      finding({
+        id: `F00${i + 1}`,
+        path: "src/a.ts",
+        line: 10 + i,
+        tier: "blocking",
+        severity: "BLOCKER",
+        claim: `claim ${i} ${"z".repeat(4500)}`,
+      }),
+    );
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: PRIOR_SUMMARY }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/reviews"],
+        response: {
+          stderr: "gh: Unprocessable Entity (HTTP 422)",
+          exitCode: 1,
+        },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenance([]),
+      rereviewPriors: [],
+    });
+    expect(outcome.reviewOutcome).toBe("demoted");
+    expect(outcome.outsideDiffCount).toBe(6);
+    const patch = summaryStdins(calls).at(-1) ?? "";
+    expect(patch.length).toBeLessThanOrEqual(GITHUB_LIMIT);
+    const state = parseStateBlock(patch);
+    expect(state?.findings).toHaveLength(6);
+    expect(state?.findings.every((f) => f.tier === "blocking")).toBe(true);
+  });
 });
 
 // The summary's own counter, end to end: postInlineFindings writes it into the

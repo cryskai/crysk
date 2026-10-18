@@ -2404,3 +2404,85 @@ describe("the report footers follow the gate mode (S4)", () => {
     expect(gate).not.toContain("not a merge gate");
   });
 });
+
+describe("renderPrComment — compact Outside Diff entries (S1b)", () => {
+  const WEB_URL = "https://github.com/musivetech/musive";
+  const a = finding({
+    id: "F001",
+    path: "src/never-a.ts",
+    line: 1,
+    claim: "first long claim body",
+  });
+  const b = finding({
+    id: "F002",
+    path: "src/never-b.ts",
+    line: 2,
+    claim: "second long claim body",
+  });
+  // The claims also render in the findings list above the section, which
+  // compaction never touches, so the assertions read the section alone.
+  const outsideSection = (body: string) =>
+    body.slice(body.indexOf("### Comments Outside Diff"));
+
+  test("compacting from index 1 keeps entry 0 whole and reduces entry 1 to its linked location", () => {
+    const body = renderPrComment(
+      doc({ findings: [a, b] }),
+      WEB_URL,
+      undefined,
+      [a, b],
+      undefined,
+      undefined,
+      undefined,
+      1,
+    );
+    const section = outsideSection(body);
+    expect(section).toContain("### Comments Outside Diff (2)");
+    expect(section).toContain("first long claim body");
+    expect(section).not.toContain("second long claim body");
+    expect(section).toContain(
+      `[\`src/never-b.ts:2\`](${WEB_URL}/blob/${"b".repeat(40)}/src/never-b.ts#L2)`,
+    );
+    expect(section.split("Prompt to fix with AI").length - 1).toBe(1);
+  });
+
+  test("compacting from index 0 leaves only linked locations in the section", () => {
+    const body = renderPrComment(
+      doc({ findings: [a, b] }),
+      WEB_URL,
+      undefined,
+      [a, b],
+      undefined,
+      undefined,
+      undefined,
+      0,
+    );
+    const section = outsideSection(body);
+    expect(section).not.toContain("first long claim body");
+    expect(section).not.toContain("second long claim body");
+    expect(section).not.toContain("Prompt to fix with AI");
+    expect(section).toContain(
+      `[\`src/never-a.ts:1\`](${WEB_URL}/blob/${"b".repeat(40)}/src/never-a.ts#L1)`,
+    );
+  });
+
+  test("an omitted or out-of-range compactFrom renders byte-identically to today", () => {
+    const omitted = renderPrComment(
+      doc({ findings: [a, b] }),
+      WEB_URL,
+      undefined,
+      [a, b],
+      undefined,
+    );
+    const outOfRange = renderPrComment(
+      doc({ findings: [a, b] }),
+      WEB_URL,
+      undefined,
+      [a, b],
+      undefined,
+      undefined,
+      undefined,
+      2,
+    );
+    expect(outOfRange).toBe(omitted);
+  });
+});

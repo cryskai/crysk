@@ -50,6 +50,8 @@ import { collapseTargets, type RereviewProvenance } from "#rereview/prepare";
 import {
   droppedStateNote,
   type FreshStateFinding,
+  GITHUB_ISSUE_COMMENT_MAX,
+  type MergedState,
   mergeStateFindings,
   parseStateBlock,
   renderStateBlock,
@@ -2979,7 +2981,12 @@ export async function postInlineFindings(input: {
     undefined,
     input.ciMode,
   );
-  const merged =
+  // WHY one merge function for both writes: the S1 re-merge reruns it with a
+  // PATCH-sized budget and the SAME inputs, so the kept ids and hw cannot
+  // drift between the POST and the PATCH.
+  const mergeStateWithBudget = (
+    stateBudget: number,
+  ): MergedState | undefined =>
     framing === undefined
       ? undefined
       : mergeStateFindings({
@@ -2987,19 +2994,23 @@ export async function postInlineFindings(input: {
           reviews: postedReviewCount,
           live: framing.live,
           previous: previousState,
+          previousHead: previousState?.headSha ?? null,
           retiredIds: [
             ...(framing.resolved_ids ?? []),
             ...(framing.worsened ?? []).map((w) => w.priorId),
           ],
           fresh: freshFindings,
-          stateBudget: stateBlockBudget(referenceBody.length),
+          stateBudget,
         });
+  const merged = mergeStateWithBudget(stateBlockBudget(referenceBody.length));
 
-  const renderBody = (
+  const renderWithState = (
     delta: PrCommentDelta,
     outside: readonly Finding[],
     moved: string | undefined,
-    urls?: ReadonlyMap<string, string>,
+    urls: ReadonlyMap<string, string> | undefined,
+    state: MergedState | undefined,
+    compactFrom?: number,
   ): string => {
     const body = renderPrComment(
       doc,
@@ -3009,6 +3020,7 @@ export async function postInlineFindings(input: {
       moved,
       urls,
       input.ciMode,
+      compactFrom,
     );
     // WHY the admission block is written on BOTH paths: its `reviews` is the
     // only count a summary keeps when the count is 0. renderStateBlock omits 0
@@ -3026,15 +3038,21 @@ export async function postInlineFindings(input: {
       counts,
       postedReviewCount,
     );
-    if (merged === undefined) {
+    if (state === undefined) {
       return `${body}${admissionBlock}`;
     }
     // The drop line sits right above the state block it accounts for. Empty
     // when the cap dropped nothing.
-    const note = droppedStateNote(merged.dropped);
+    const note = droppedStateNote(state.dropped);
     const noteLine = note === "" ? "" : `${note}\n`;
-    return `${body}${admissionBlock}${noteLine}${renderStateBlock(doc.head_sha, merged.rows, postedReviewCount, merged.hw)}`;
+    return `${body}${admissionBlock}${noteLine}${renderStateBlock(doc.head_sha, state.rows, postedReviewCount, state.hw)}`;
   };
+  const renderBody = (
+    delta: PrCommentDelta,
+    outside: readonly Finding[],
+    moved: string | undefined,
+    urls?: ReadonlyMap<string, string>,
+  ): string => renderWithState(delta, outside, moved, urls, merged);
 
   // The id this run's own creation just returned, if any — threaded to the
   // closing PATCH below so it updates THIS comment directly rather than
@@ -3149,10 +3167,63 @@ export async function postInlineFindings(input: {
   });
 
   const delta: PrCommentDelta = { ...plan.delta, previousHeadSha };
+  // S1 — the 422 demotion grew the Outside Diff after the POST-shaped merge,
+  // so the PATCH body is longer than the budget was sized for. Re-merge with
+  // the same inputs and a budget sized from the PATCH body without its state
+  // block: the ids and hw are budget-independent, and only advisory rows can
+  // be dropped (the cap never evicts blocking or touched rows).
+  const patchState =
+    outsideDiff.length > plannedOutsideDiff.length
+      ? mergeStateWithBudget(
+          stateBlockBudget(
+            renderWithState(
+              delta,
+              outsideDiff,
+              movedHeadSha,
+              commentUrlByFindingId,
+              undefined,
+            ).length,
+          ),
+        )
+      : merged;
+  // S1b — when the demotion made the PATCH too long, compact the demoted
+  // entries from the last one backwards (location and link only) until it
+  // fits. WHY only with a demotion: without one the body stays byte-identical
+  // to today's, whatever its length. The PATCH is never knowingly sent above
+  // the limit: when every entry is compacted and it still is, the warning
+  // names the size and the body is sent as is.
+  let patchBody = renderWithState(
+    delta,
+    outsideDiff,
+    movedHeadSha,
+    commentUrlByFindingId,
+    patchState,
+  );
+  if (
+    outsideDiff.length > plannedOutsideDiff.length &&
+    patchBody.length > GITHUB_ISSUE_COMMENT_MAX
+  ) {
+    for (let from = outsideDiff.length - 1; from >= 0; from--) {
+      patchBody = renderWithState(
+        delta,
+        outsideDiff,
+        movedHeadSha,
+        commentUrlByFindingId,
+        patchState,
+        from,
+      );
+      if (patchBody.length <= GITHUB_ISSUE_COMMENT_MAX) break;
+    }
+    if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
+      process.stdout.write(
+        `::warning::pr-hero: the summary is ${patchBody.length} characters, over GitHub's ${GITHUB_ISSUE_COMMENT_MAX}-character comment limit even with every Outside Diff entry compacted; sending it as is\n`,
+      );
+    }
+  }
   const patched = await postPrComment(
     operatorRoot,
     pr,
-    renderBody(delta, outsideDiff, movedHeadSha, commentUrlByFindingId),
+    patchBody,
     spawnFn,
     summaryCommentId ?? undefined,
   );
