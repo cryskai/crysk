@@ -3024,3 +3024,181 @@ describe("repostMarkedPrComment — a CI skip notice stays visible", () => {
     expect(calls.some((c) => isDelete(c.argv))).toBe(false);
   });
 });
+
+// W3-RESERVE: a POST that failed (gh timed out after 15 s) may still have
+// created the run on GitHub. Before the POST is retried, the run is looked up by
+// external_id and by the record's attempt and createdAt, so a run the POST
+// already created is adopted instead of duplicated.
+describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
+  const TIMEOUT_STDERR = "gh timed out after 15000 ms";
+
+  // Dispatches on the argv shape, unlike makeFakeGh's first-match script,
+  // because the lookup GET and the POST share the `check-runs` path segment.
+  function scriptedCheckRunGh(
+    respond: (argv: string[]) => {
+      stdout?: string;
+      stderr?: string;
+      exitCode?: number;
+    },
+  ): { spawnFn: typeof Bun.spawn; calls: string[][] } {
+    const calls: string[][] = [];
+    const encoder = new TextEncoder();
+    const spawnFn = ((argv: string[]) => {
+      calls.push(argv);
+      const scripted = respond(argv);
+      const stream = (text: string) =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (text) controller.enqueue(encoder.encode(text));
+            controller.close();
+          },
+        });
+      return {
+        stdout: stream(scripted.stdout ?? ""),
+        stderr: stream(scripted.stderr ?? ""),
+        exited: Promise.resolve(scripted.exitCode ?? 0),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, calls };
+  }
+
+  const isLookup = (argv: string[]) => argv.join(" ").includes("check_name=");
+  const isPost = (argv: string[]) => argv.includes("POST");
+  const isPatch = (argv: string[]) => argv.includes("PATCH");
+
+  // One lookup row exactly as GitHub returns it under `filter=all`, projected
+  // by the --jq in the lookup (external_id included).
+  function checkRunRow(
+    record: AdmissionRecord,
+    overrides: { id?: number; status?: string; externalId?: string } = {},
+  ): string {
+    return JSON.stringify({
+      id: overrides.id ?? 900,
+      name: ADMISSION_CHECK_RUN_NAME,
+      status: overrides.status ?? "completed",
+      external_id: overrides.externalId ?? record.reservationId,
+      output: { text: serializeAdmissionRecord(record) },
+    });
+  }
+
+  test("a failed POST whose run the lookup finds is adopted: no second POST, id returned", async () => {
+    const record = admissionRecordFixture({
+      status: "completed",
+      decisionReason: "review complete",
+    });
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(record, { id: 812 })}\n` };
+      }
+      if (isPost(argv)) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(812);
+    expect(calls.filter(isPost)).toHaveLength(1);
+    expect(calls.filter(isLookup)).toHaveLength(1);
+    expect(calls.some(isPatch)).toBe(false);
+    expect(calls.find(isLookup)?.join(" ")).toContain(
+      `commits/${HEAD}/check-runs`,
+    );
+  });
+
+  test("a run from an earlier attempt with the same external_id is never adopted: POST retried", async () => {
+    const record = admissionRecordFixture({ attemptNumber: 2 });
+    const earlier = admissionRecordFixture({
+      attemptNumber: 1,
+      createdAt: "2026-08-28T11:00:00.000Z",
+    });
+    let posts = 0;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(earlier, { id: 811 })}\n` };
+      }
+      if (isPost(argv)) {
+        posts += 1;
+        if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        return { stdout: JSON.stringify({ id: 613 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(613);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.some(isPatch)).toBe(false);
+  });
+
+  test("a lookup that fails leaves the POST retry as it was", async () => {
+    const record = admissionRecordFixture();
+    let posts = 0;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) return { stderr: "HTTP 500", exitCode: 1 };
+      if (isPost(argv)) {
+        posts += 1;
+        if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        return { stdout: JSON.stringify({ id: 614 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(614);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.filter(isLookup)).toHaveLength(1);
+  });
+
+  test("a matched run in another status is adopted with one PATCH to its id", async () => {
+    const record = admissionRecordFixture({
+      status: "completed",
+      decisionReason: "review complete",
+    });
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return {
+          stdout: `${checkRunRow(record, { id: 815, status: "in_progress" })}\n`,
+        };
+      }
+      if (isPost(argv)) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      if (isPatch(argv)) return { stdout: JSON.stringify({ id: 815 }) };
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(815);
+    expect(calls.filter(isPost)).toHaveLength(1);
+    const patches = calls.filter(isPatch);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.join(" ")).toContain("check-runs/815");
+    expect(patches[0]?.join(" ")).toContain("conclusion=success");
+  });
+
+  test("a POST that succeeds does no lookup", async () => {
+    const record = admissionRecordFixture();
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isPost(argv)) return { stdout: JSON.stringify({ id: 501 }) };
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(501);
+    expect(calls).toHaveLength(1);
+    expect(calls.some(isLookup)).toBe(false);
+  });
+});

@@ -2491,6 +2491,56 @@ export async function listAdmissionCheckRuns(
   }
 }
 
+// W3-RESERVE: a POST that failed may still have created the run (gh timed out
+// after GitHub accepted it). Look it up by external_id AND by the attempt and
+// createdAt of the record being posted: external_id is the reservation
+// fingerprint, shared by every attempt on this head and policy, so it alone
+// would adopt an earlier attempt's run. Any failure of the lookup reads as "no
+// match", which keeps the POST retry exactly as it was.
+async function findAdmissionCheckRunForAttempt(
+  operatorRoot: string,
+  headSha: string,
+  record: AdmissionRecord,
+  spawnFn?: typeof Bun.spawn,
+): Promise<{ id: number; status: string | undefined } | null> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      [
+        "api",
+        `repos/{owner}/{repo}/commits/${headSha}/check-runs?check_name=${ADMISSION_CHECK_RUN_NAME}&filter=all`,
+        "--paginate",
+        "--jq",
+        `.check_runs[] | select(.name == "${ADMISSION_CHECK_RUN_NAME}") | {id: .id, name: .name, status: .status, external_id: .external_id, output: {text: .output.text}}`,
+      ],
+      undefined,
+      spawnFn,
+      ADMISSION_CHECK_RUN_TIMEOUT_MS,
+    );
+    if (!result.ok) return null;
+    for (const line of result.stdout.split("\n")) {
+      const parsedRecord = parseAdmissionCheckRunRow(line);
+      if (parsedRecord === null) continue;
+      const row = JSON.parse(line) as {
+        id?: number;
+        status?: string;
+        external_id?: string;
+      };
+      if (
+        typeof row.id === "number" &&
+        row.external_id === record.reservationId &&
+        parsedRecord.attemptNumber === record.attemptNumber &&
+        parsedRecord.createdAt === record.createdAt
+      ) {
+        return { id: row.id, status: row.status };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertAdmissionCheckRun(
   operatorRoot: string,
   input: {
@@ -2556,6 +2606,24 @@ export async function upsertAdmissionCheckRun(
       );
     }
     lastStderr = result.stderr.trim();
+    // Only a POST can have created a run the caller does not know about; a
+    // PATCH already names its run. A match is adopted instead of retried.
+    if (input.checkRunId === undefined) {
+      const existing = await findAdmissionCheckRunForAttempt(
+        operatorRoot,
+        input.headSha,
+        input.record,
+        options?.spawnFn,
+      );
+      if (existing !== null) {
+        if (existing.status === checkStatus) return existing.id;
+        return upsertAdmissionCheckRun(
+          operatorRoot,
+          { ...input, checkRunId: existing.id },
+          options,
+        );
+      }
+    }
   }
   throw new CliError(`gh api (admission check run) failed: ${lastStderr}`);
 }
