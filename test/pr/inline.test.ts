@@ -491,6 +491,23 @@ describe("matchPostedFindings — tier escalation", () => {
     expect(result.resolved.map((p) => p.id).sort()).toEqual([801, 802]);
   });
 
+  test("a same-head windowed advisory winner on another line still posts the blocking finding fresh", () => {
+    // PR #349 round 2: only the duplicate-marker case is exempt; a windowed
+    // winner has a different line, so the fresh comment has its own marker.
+    const result = matchPostedFindings({
+      findings: [
+        finding("src/session.ts", 38, {
+          claim: "an unrelated blocking defect",
+          tier: "blocking",
+        }),
+      ],
+      posted: [posted("src/session.ts", 35, { tier: "advisory" })],
+      headSha: HEAD,
+    });
+    expect(result.persist).toHaveLength(0);
+    expect(result.fresh).toHaveLength(1);
+  });
+
   test("escalation on the same head stays a persist (a fresh comment would duplicate the marker)", () => {
     const result = matchPostedFindings({
       findings: [finding("src/session.ts", 35, { tier: "blocking" })],

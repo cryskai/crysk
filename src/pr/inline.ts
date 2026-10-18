@@ -322,17 +322,26 @@ export function matchPostedFindings(input: {
     // tooling reads these comments and would never see it. It posts fresh
     // instead; the old comment falls to `resolved`. Every other tier
     // combination, and an unknown tier on either side, matches as before.
-    // Only across heads: on the SAME head a fresh comment would carry the very
-    // marker the old one carries (path, line, head, claim fingerprint), and every
-    // marker reader (buildCommentUrlMap, triage reply) takes the first match,
-    // the stale advisory one. A same-head tier flip of the same claim stays a
-    // persist, the residual this guard accepts (PR #349 round 1).
+    // Except when a fresh comment would carry the very marker the old one
+    // carries (path, line, head, claim fingerprint): every marker reader
+    // (buildCommentUrlMap, triage reply) takes the first match, the stale
+    // advisory one. A same-head tier flip of the same claim on the same line
+    // stays a persist, the residual this guard accepts (PR #349 round 1).
     // The guard runs on the WINNER, after resolveWinner, never by filtering
     // the candidates: dropping a candidate first could dissolve a tie that
     // must post fresh and hand the finding to an unrelated comment.
+    // The same-head exemption is exactly the duplicate-marker case: same head,
+    // same line, same claim fingerprint. A same-head WINDOWED winner sits on
+    // another line, so a fresh comment has its own marker and must post
+    // (PR #349 round 2).
+    const freshWouldDuplicateMarker =
+      winner !== undefined &&
+      winner.marker.headSha === input.headSha &&
+      winner.marker.line === finding.line &&
+      winner.marker.c === claimFingerprint(finding.claim);
     if (
       winner !== undefined &&
-      winner.marker.headSha !== input.headSha &&
+      !freshWouldDuplicateMarker &&
       finding.tier === "blocking" &&
       winner.tier === "advisory"
     ) {
