@@ -16,6 +16,7 @@ import {
   DEFAULT_CI_REVIEW_POLICY_MODE,
   deltaTouchesPriorFindings,
   evaluateCiReviewAdmission,
+  nextStateReviewCount,
   parseCiAdmissionBlock,
   parseFindingCommentTier,
   pathsFromPostedFindingMarkers,
@@ -23,6 +24,7 @@ import {
   priorScoreForAdmission,
   priorTierScore,
   renderCiAdmissionBlock,
+  resolveCiAdmissionAttemptCount,
   resolveCiReviewPolicy,
   resolveCiTrustedActors,
   resolveReviewAttemptCount,
@@ -1257,5 +1259,131 @@ describe("evaluateCiReviewAdmission — delta risk bypass", () => {
         }),
       ),
     ).toEqual({ action: "run" });
+  });
+});
+
+// A forced comment run is a deliberate spend outside the AUTOMATIC budget
+// (see countableWorkflowHeads and countTerminalAttempts), so the head it ran on
+// and the summary counter it would bump must both stay as they were.
+describe("a forced run does not spend an automatic attempt", () => {
+  const forcedRow = (
+    headSha: string,
+    status: AdmissionRecord["status"],
+    attemptNumber: number,
+  ): AdmissionRecord => ({
+    ...ledgerRow(headSha, status),
+    attemptNumber,
+    forced: true,
+  });
+
+  test("countableWorkflowHeads drops a head whose only rows are forced", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [forcedRow(HEAD_A, "completed", 1)]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(false);
+  });
+
+  test("keeps a head that has an automatic completed row next to a forced one", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([
+        [
+          HEAD_A,
+          [ledgerRow(HEAD_A, "completed"), forcedRow(HEAD_A, "completed", 2)],
+        ],
+      ]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
+
+  test("nextStateReviewCount keeps the previous count for a forced run", () => {
+    const state = { headSha: HEAD_A, findings: [], reviews: 2, hw: 0 };
+    expect(
+      nextStateReviewCount({ existingSummaryId: 7, state, force: true }),
+    ).toBe(2);
+  });
+
+  test("nextStateReviewCount still adds one for an automatic run", () => {
+    const state = { headSha: HEAD_A, findings: [], reviews: 2, hw: 0 };
+    expect(nextStateReviewCount({ existingSummaryId: 7, state })).toBe(3);
+  });
+
+  test("the attempt count is the highest of the three legs, with forced rows left out", () => {
+    const ledgerRecords = [
+      ledgerRow(HEAD_A, "completed"),
+      ledgerRow(HEAD_B, "failed"),
+      forcedRow(HEAD_A, "completed", 2),
+    ];
+    // Terminal rows (completed + failed) are the highest leg: 2.
+    expect(
+      resolveCiAdmissionAttemptCount({
+        stateCount: 1,
+        workflowHeads: new Set([HEAD_A]),
+        ledgerRecords,
+      }),
+    ).toBe(2);
+    // The summary counter wins when it is higher.
+    expect(
+      resolveCiAdmissionAttemptCount({
+        stateCount: 5,
+        workflowHeads: new Set([HEAD_A]),
+        ledgerRecords,
+      }),
+    ).toBe(5);
+    // Distinct workflow heads win when they are higher.
+    expect(
+      resolveCiAdmissionAttemptCount({
+        stateCount: 1,
+        workflowHeads: new Set([HEAD_A, HEAD_B, "c".repeat(40)]),
+        ledgerRecords,
+      }),
+    ).toBe(3);
+  });
+});
+
+// A forced FIRST review posts the first summary of the PR. That summary must
+// read as zero automatic reviews. If it read as one (for example because a
+// floor of 1 was written, or because the zero block failed to parse so the
+// marker fallback counted the summary), the next automatic push would be
+// charged the forced run's attempt.
+describe("a forced first review's summary reads as zero automatic reviews", () => {
+  test("the count is 0, the admission block carries 0, and the attempt count stays 0", () => {
+    const count = nextStateReviewCount({
+      existingSummaryId: null,
+      state: null,
+      force: true,
+    });
+    expect(count).toBe(0);
+
+    const summaryBody = renderCiAdmissionBlock(
+      HEAD_A,
+      { blocking: 0, advisory: 0 },
+      count,
+    );
+    const parsed = parseCiAdmissionBlock(summaryBody);
+    expect(parsed?.reviews).toBe(0);
+    expect(stateReviewCount(null, true, parsed)).toBe(0);
+    const forcedRow: AdmissionRecord = {
+      ...ledgerRow(HEAD_A, "completed"),
+      forced: true,
+    };
+    // The gate passes only countable heads, so the forced-only head is dropped first.
+    expect(
+      resolveCiAdmissionAttemptCount({
+        stateCount: stateReviewCount(null, true, parsed),
+        workflowHeads: countableWorkflowHeads(
+          new Set([HEAD_A]),
+          new Map([[HEAD_A, [forcedRow]]]),
+        ),
+        ledgerRecords: [forcedRow],
+      }),
+    ).toBe(0);
+  });
+
+  test("an automatic first review still writes 1", () => {
+    expect(nextStateReviewCount({ existingSummaryId: null, state: null })).toBe(
+      1,
+    );
   });
 });

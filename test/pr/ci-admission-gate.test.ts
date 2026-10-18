@@ -39,6 +39,8 @@ import {
 } from "#pr/admission";
 import {
   evaluateCiAdmissionGate,
+  isCiConfigError,
+  recordCiConfigErrorSkip,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
 import { CommentsTruncatedError, upsertAdmissionCheckRun } from "#pr/pr";
@@ -53,6 +55,7 @@ import {
   EMPTY_LOCAL_CONFIG,
   type LocalConfig,
 } from "#review/preflight";
+import { CliError } from "../../src/errors";
 
 const PR = 42;
 const HEAD_A = "a".repeat(40);
@@ -1431,6 +1434,77 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(statusWrites(calls)).toEqual([]);
     expect(
       calls.some((argv) => argv.some((t) => t.includes("/statuses?"))),
+    ).toBe(false);
+  });
+});
+
+// A CI run that exits on a configuration error (gotchas, prompt set) before it
+// reviews anything writes a gate-skipped row for its head, so that head does not
+// spend one of the PR's automatic attempts (#326 gives the gate skips the same
+// treatment). The error itself is rethrown by the caller, unchanged.
+describe("recordCiConfigErrorSkip — a configuration error before the review spends nothing", () => {
+  const CONFIG_REASON = "configuration error before the review";
+
+  test("writes a gate-skipped row for the head", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await recordCiConfigErrorSkip({
+      operatorRoot: "/repo",
+      prNumber: PR,
+      config: EMPTY_LOCAL_CONFIG,
+      resolveHeadSha: async () => HEAD_A,
+      reason: CONFIG_REASON,
+      spawnFn,
+    });
+
+    expect(
+      calls.some((argv) =>
+        argv.join(" ").includes("output[summary]=gate-skipped (attempt 1)"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a head lookup that fails writes nothing and does not throw", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh([], calls);
+
+    await expect(
+      recordCiConfigErrorSkip({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        config: EMPTY_LOCAL_CONFIG,
+        resolveHeadSha: async () => {
+          throw new Error("gh pr view failed");
+        },
+        reason: CONFIG_REASON,
+        spawnFn,
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("isCiConfigError — only a classified configuration CliError qualifies", () => {
+  test.each([
+    { kind: "gotchas", reason: "empty" },
+    { kind: "gotchas", reason: "placeholder" },
+    { kind: "prompt-set" },
+  ] as const)("$kind is a configuration error", (cls) => {
+    expect(isCiConfigError(new CliError("bad config", { cls }))).toBe(true);
+  });
+
+  test("an unclassified error is not one", () => {
+    expect(isCiConfigError(new CliError("network down"))).toBe(false);
+    expect(isCiConfigError(new Error("boom"))).toBe(false);
+  });
+
+  test("a classified error of another class is not one", () => {
+    expect(
+      isCiConfigError(new CliError("no spend", { cls: { kind: "invariant" } })),
     ).toBe(false);
   });
 });

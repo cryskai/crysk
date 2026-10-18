@@ -42,6 +42,11 @@ export interface AdmissionRecord {
   workflowRunId: string | null;
   createdAt: string;
   settledAt: string | null;
+  // WHY a flag and not decisionReason: settleAdmissionAttempt overwrites
+  // decisionReason at every settle, so a forced run's reason is gone by the
+  // time a count reads the row. Absent on an automatic row, so every row
+  // written before this field existed reads as automatic.
+  forced?: true;
 }
 
 // #164, Juanma 2026-09-01: a cancelled run posted nothing, so it must not
@@ -61,6 +66,11 @@ export interface AdmissionRecord {
 // which is in this set (admission skips keep it on purpose), so every gate
 // skip spent an attempt. The workflow-heads leg then counted that head a second
 // time, and a PR with one review run reported "2/2 attempts" (#326).
+// A forced row (`forced: true`, a `/pr-hero review` or `/pr-hero recheck`
+// comment) is excluded whatever its status: the budget bounds AUTOMATIC reviews,
+// and a writer's explicit comment is a deliberate spend outside it. The filter
+// is in countTerminalAttempts, not in this set, because a forced `completed`
+// row is still a real completed review.
 const TERMINAL_BUDGET_STATUSES: ReadonlySet<AdmissionAttemptStatus> = new Set([
   "completed",
   "failed",
@@ -75,6 +85,9 @@ const TERMINAL_BUDGET_STATUSES: ReadonlySet<AdmissionAttemptStatus> = new Set([
 //   gate (pr/review-pr.ts:312) and the budget gate (pr/plan.ts:153, reached from
 //   pr/review-pr.ts:401). Both come before the `"provider-started"` settle at
 //   pr/review-pr.ts:516.
+// - `"gate-skipped"` also comes from recordCiConfigErrorSkip (pr/ci-admission-gate.ts),
+//   called from the pre-reservation catch in pr/review-pr.ts when gotchas or the
+//   prompt set is misconfigured. It runs before any reservation or provider call.
 // - `"yielded"`: written only by yieldToInFlightReview (pr/ci-admission-gate.ts:380),
 //   whose sole caller is pr/review-pr.ts:359, again before the `"provider-started"`
 //   settle at pr/review-pr.ts:516.
@@ -157,6 +170,7 @@ export function parseAdmissionRecord(text: string): AdmissionRecord | null {
         parsed.settledAt === null || typeof parsed.settledAt === "string"
           ? (parsed.settledAt ?? null)
           : null,
+      ...(parsed.forced === true ? { forced: true as const } : {}),
     };
   } catch {
     return null;
@@ -170,8 +184,10 @@ export function serializeAdmissionRecord(record: AdmissionRecord): string {
 export function countTerminalAttempts(
   records: readonly AdmissionRecord[],
 ): number {
-  return records.filter((record) => TERMINAL_BUDGET_STATUSES.has(record.status))
-    .length;
+  return records.filter(
+    (record) =>
+      record.forced !== true && TERMINAL_BUDGET_STATUSES.has(record.status),
+  ).length;
 }
 
 function recordsForFingerprint(
@@ -253,6 +269,7 @@ export function reserveAdmissionAttempt(input: {
   blockingCount?: number | null;
   advisoryCount?: number | null;
   reservationTtlSeconds: number;
+  forced?: boolean;
 }): { record: AdmissionRecord; created: boolean } {
   const now = input.now ?? new Date();
   const active = selectActiveReservation(
@@ -262,7 +279,15 @@ export function reserveAdmissionAttempt(input: {
     input.reservationTtlSeconds,
     now,
   );
-  if (active !== null) {
+  // WHY an active row is reused only when its kind matches the caller's: a
+  // forced caller may take over an active AUTOMATIC row, and the run settles it
+  // as automatic (a forced run that races an in-flight automatic run is counted
+  // as that automatic run; accepted, the active row belongs to a run already
+  // in progress). An AUTOMATIC caller never takes over a FORCED row: that row
+  // would carry `forced: true` through every settle, and countTerminalAttempts
+  // would then drop the automatic run's own spend. So the automatic caller
+  // creates its own row beside it instead.
+  if (active !== null && !(input.forced !== true && active.forced === true)) {
     return { record: active, created: false };
   }
 
@@ -292,6 +317,7 @@ export function reserveAdmissionAttempt(input: {
     workflowRunId: input.workflowRunId ?? null,
     createdAt: now.toISOString(),
     settledAt: null,
+    ...(input.forced === true ? { forced: true as const } : {}),
   };
   return { record, created: true };
 }

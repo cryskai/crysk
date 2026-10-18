@@ -18,6 +18,7 @@
 // header made the same call before this move).
 
 import { describe, expect, test } from "bun:test";
+import { parseCiAdmissionBlock } from "#ci/review-admission";
 import type { PrHeroFindingRef } from "#compare/compare";
 import {
   computeDroppedFindingIds,
@@ -2275,5 +2276,40 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       body.slice(body.indexOf("<!-- pr-hero-state "));
     expect(stateOf(bodies[0] ?? "")).toBe(stateOf(bodies[1] ?? ""));
     expect(stateOf(bodies[1] ?? "")).toContain("fresh blocker");
+  });
+});
+
+// The summary's own counter, end to end: postInlineFindings writes it into the
+// summary body, and a later run reads it back. A comment-triggered (forced)
+// post must leave it where it was; an automatic post must still add one.
+describe("postInlineFindings — the summary counter and a forced run", () => {
+  async function postFirstReview(force: boolean | undefined) {
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      ...(force === undefined ? {} : { force }),
+    });
+    const bodies = summaryStdins(calls);
+    return parseCiAdmissionBlock(bodies[bodies.length - 1] ?? "")?.reviews;
+  }
+
+  test("an automatic first review writes one review, as before", async () => {
+    expect(await postFirstReview(undefined)).toBe(1);
+    expect(await postFirstReview(false)).toBe(1);
+  });
+
+  test("a forced first review writes zero automatic reviews", async () => {
+    expect(await postFirstReview(true)).toBe(0);
   });
 });

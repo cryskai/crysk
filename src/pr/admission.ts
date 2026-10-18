@@ -186,6 +186,11 @@ export async function reserveCiAdmissionLedger(input: {
   priorScore?: number | null;
   blockingCount?: number | null;
   advisoryCount?: number | null;
+  // A comment-triggered run (`/pr-hero review`, `/pr-hero recheck`): its row is
+  // marked so the attempt count leaves it out (see countTerminalAttempts).
+  forced?: boolean;
+  // Test-only seam (default: the real Bun.spawn), threaded to the check-run write.
+  spawnFn?: typeof Bun.spawn;
 }): Promise<CiAdmissionLedgerState> {
   const { record } = reserveAdmissionAttempt({
     existing: input.existing,
@@ -198,11 +203,16 @@ export async function reserveCiAdmissionLedger(input: {
     blockingCount: input.blockingCount ?? null,
     advisoryCount: input.advisoryCount ?? null,
     reservationTtlSeconds: input.policy.reservationTtlSeconds,
+    forced: input.forced,
   });
-  const checkRunId = await upsertAdmissionCheckRun(input.operatorRoot, {
-    headSha: input.headSha,
-    record,
-  });
+  const checkRunId = await upsertAdmissionCheckRun(
+    input.operatorRoot,
+    {
+      headSha: input.headSha,
+      record,
+    },
+    { spawnFn: input.spawnFn },
+  );
   return {
     record,
     checkRunId,

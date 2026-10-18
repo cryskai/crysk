@@ -530,7 +530,7 @@ Check Run ledger is authoritative.
 An attempt counts toward `ci_max_attempts` when its run reached the provider (completed, failed, or
 still in progress) or when admission itself skipped it. Two outcomes spend nothing and do not count: a
 run that stood down for a review already in flight on the same head, and a run the size gate or the
-budget ceiling skipped before any agent started. A cancelled row does not count either, but it is not
+budget ceiling skipped before any agent started. A run that stopped on a configuration error (a bad gotchas file or prompt set) before it reviewed anything spends nothing either, and so do forced comment runs (`/pr-hero review`, `/pr-hero recheck`): the budget bounds automatic reviews, and a deliberate comment is a spend outside it. A cancelled row does not count either, but it is not
 proof that nothing was spent: a cancel signal can arrive after the provider started, so a run that
 GitHub concludes as `failure` (for example one killed by `timeout-minutes`) still counts. A skipped run
 still shows as a skipped check on the commit.

@@ -2815,6 +2815,9 @@ export async function postInlineFindings(input: {
   // rather than passing. The two callers meet the same state having paid very
   // different prices for it — see the guard's own WHY below.
   refuseOnVanishedPriorSummary?: boolean;
+  // The run was a comment-triggered (forced) run. It leaves the summary counter
+  // where it was: the budget bounds automatic reviews (see nextStateReviewCount).
+  force?: boolean;
 }): Promise<InlinePostOutcome> {
   const { operatorRoot, pr, headSha, doc, webUrl, spawnFn } = input;
   const ghTimeoutMs = input.ghTimeoutMs ?? COLLAPSE_GH_TIMEOUT_MS;
@@ -2832,6 +2835,7 @@ export async function postInlineFindings(input: {
     existingSummaryId,
     state: previousState,
     summaryBody,
+    force: input.force,
   });
 
   // Before the create-first POST and before the review submission — the last
@@ -3349,6 +3353,8 @@ export async function postInlineIfEligible(input: {
   // S4: the CI mode the summary's footer names. Omitted is advisory, which is
   // what the local `post` command gets.
   ciMode?: CiMode;
+  // Forwarded to postInlineFindings: a forced run leaves the summary counter alone.
+  force?: boolean;
 }): Promise<InlinePostOutcome | null> {
   if (input.sessionFailed) {
     log(input.skippedReason);
