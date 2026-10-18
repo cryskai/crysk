@@ -1735,7 +1735,7 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
     expect(status.reason).toMatch(/\/pr-hero review/);
   });
 
-  test("(c) a live blocking finding still wins over the budget gate", () => {
+  test("(c) a used-up budget answers review even with a live blocking finding (no push gets reviewed there; review #348 R006)", () => {
     const status = buildPrStatus(
       input({
         statuses: [gate("failure", BUDGET_DESCRIPTION)],
@@ -1751,7 +1751,47 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
         ],
       }),
     );
-    expect(status.next_action).toBe("triage");
+    expect(status.next_action).toBe("review");
+  });
+
+  test("R006: a budget gate after a push with an older head's thread-less row answers review, not fix", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BUDGET_DESCRIPTION)],
+        issueComments: [
+          {
+            id: 100,
+            body: summary("0".repeat(40), [
+              stateRow("R001", CLAIM, "blocking", "src/b.ts:42"),
+            ]),
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("review");
+  });
+
+  test("R006: a skipped gate with a thread-less row falls to the skip branch, not fix", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "pr-hero skipped the review: the diff is over the size gate — /pr-hero review reviews it anyway",
+          ),
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM, "blocking", "src/b.ts:42"),
+            ]),
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("override-or-fix");
+    expect(status.reason).toContain("was skipped");
   });
 
   test("(d) a row bound to its posted comment is emitted once, with its comment", () => {

@@ -587,6 +587,17 @@ function decideNext(
     };
   }
   // failure: the blocking findings on this head decide between triage, fix, and override.
+  // G12, first: the gate is red because no review may run on this head (the automatic budget is
+  // used up, or the policy is manual_only). No push gets an automatic review there, so a fix cannot
+  // clear anything; the review the human asks for is the only unlock, whatever the summary's rows
+  // (from an older head) say (review #348 R006).
+  if (REVIEW_TRIGGER_GATE.test(gate.description ?? "")) {
+    return {
+      next_action: "review",
+      reason:
+        "The automatic review budget for this PR is used up, or the review policy is manual (ci_review_policy is manual_only); comment /pr-hero review to review this head.",
+    };
+  }
   // A row with no comment has no thread a triage reply could land in, so it is never "untriaged".
   const untriaged = liveBlocking.filter(
     (a) => a.finding.comment_id !== null && !a.triagedAtPostedHead,
@@ -600,8 +611,11 @@ function decideNext(
   // WHY this precedes the upheld-dismissal review branch: a blocking row with no thread cannot be
   // answered, and only a fix clears it. Answering review here would re-run a gate that still counts
   // it, and the review never stops counting it (review #348 R001/R003).
+  // Only a gate that states a blocking count is the verdict of a review the summary's rows belong
+  // to. A skipped or partial gate reviewed nothing, and its rows may be an older head's, so it falls
+  // through to its own branches below (review #348 R006).
   const unthreaded = liveBlocking.filter((a) => a.finding.comment_id === null);
-  if (unthreaded.length > 0) {
+  if (unthreaded.length > 0 && gateBlockingCount(gate) !== null) {
     const ids = unthreaded.map((a) => a.finding.id ?? "unnamed").join(", ");
     return {
       next_action: "fix",
@@ -672,16 +686,6 @@ function decideNext(
     return {
       next_action: "override-or-fix",
       reason: `The gate is red with ${liveBlocking.length} live blocking finding(s), all triaged and none applied or pending a CI ruling (a rejected dismissal, or a deferred or misclassified tag, never leaves the count): fix and push, or override the gate.`,
-    };
-  }
-  // G12: the gate is red only because no review may run on this head (the automatic budget is used
-  // up, or the policy is manual_only). Nothing is blocking, so the review the human asked for is the
-  // unlock. Live blocking findings returned above, so they win over this branch.
-  if (REVIEW_TRIGGER_GATE.test(gate.description ?? "")) {
-    return {
-      next_action: "review",
-      reason:
-        "The automatic review budget for this PR is used up, or the review policy is manual (ci_review_policy is manual_only); comment /pr-hero review to review this head.",
     };
   }
   return {
