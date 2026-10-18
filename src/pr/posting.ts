@@ -54,6 +54,9 @@ export async function postFindingsIfEnabled(input: {
   onDelivered?: () => void;
   // S4: the mode this run resolved. It reaches the summary comment's footer.
   ciMode: CiMode;
+  // A comment-triggered run. Forwarded so the summary counter stays put (see
+  // nextStateReviewCount in ci/review-admission.ts).
+  force?: boolean;
 }): Promise<PostingStageResult> {
   if (!input.postEnabled) {
     return { posted: null, postedWebUrl: undefined };
@@ -79,6 +82,7 @@ export async function postFindingsIfEnabled(input: {
     rereview: input.rereview,
     rereviewPriors: input.rereviewPriors,
     ciMode: input.ciMode,
+    force: input.force,
   });
   if (posted) {
     input.onDelivered?.();

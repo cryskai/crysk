@@ -46,6 +46,8 @@ import {
 } from "#pr/admission";
 import {
   evaluateCiAdmissionGate,
+  isCiConfigError,
+  recordCiConfigErrorSkip,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
 import { discoveryHunters, resolvePrDiscovery } from "#pr/discovery";
@@ -56,9 +58,14 @@ import {
   fetchPrComments,
   fetchPrReviewComments,
   ghPrFiles,
+  ghPrView,
   postReviewCommentReply,
 } from "#pr/pr";
-import { createPrRunDir, resolveCiPosture } from "#pr/preflight";
+import {
+  createPrRunDir,
+  resolveCiPosture,
+  resolvePrTarget,
+} from "#pr/preflight";
 import { publishRunOutcome } from "#pr/publish-outcome";
 import { resolveEagerLocalIgnore, resolvePrFetchAndRange } from "#pr/range";
 import {
@@ -273,16 +280,36 @@ export async function reviewPr(
     operatorRoot,
     readLocal: readLocalIgnoreRules,
   });
-  const step2 = await resolvePrPromptSetAndBudget({
-    options,
-    loaded,
-    isCi,
-    operatorRoot,
-  });
+  let step2: Awaited<ReturnType<typeof resolvePrPromptSetAndBudget>>;
+  try {
+    step2 = await resolvePrPromptSetAndBudget({
+      options,
+      loaded,
+      isCi,
+      operatorRoot,
+    });
+    await validateGotchas(step2.gotchasPath);
+  } catch (error) {
+    // WHY a row before the rethrow: this run stops before the admission
+    // reservation below, so without one its head would count as a spent
+    // attempt (see recordCiConfigErrorSkip). Only CI writes it, the same way the
+    // size gate does, and never on a dry run, which writes nothing. The error
+    // itself is rethrown unchanged.
+    if (isCi && !options.dryRun && isCiConfigError(error)) {
+      await recordCiConfigErrorSkip({
+        operatorRoot,
+        prNumber,
+        config,
+        resolveHeadSha: async () =>
+          resolvePrTarget(await ghPrView(operatorRoot, prNumber)).headSha,
+        reason: "configuration error before the review; no provider spend",
+      });
+    }
+    throw error;
+  }
   const { ciBudgetCeiling, agents, spec, agentFiles, promptSet, gotchasPath } =
     step2;
   const { dir: agentsDir, source: agentsDirSource } = agents;
-  await validateGotchas(gotchasPath);
   // Local mode's dirty-tree and HEAD-match gates are both skipped here ON
   // PURPOSE: the hunters read the worktree and never this checkout, and the
   // worktree satisfies the HEAD gate by construction (created detached at
@@ -378,6 +405,7 @@ export async function reviewPr(
         decisionReason: options.force
           ? "manual override (--force)"
           : "admission: run",
+        forced: options.force === true,
       });
       holdCiAdmissionLedger(ciAdmissionLedger);
     } catch (error) {

@@ -231,6 +231,8 @@ export async function publishRunOutcome(
       runDir: input.runDir,
       rereview: input.rereview,
       rereviewPriors: input.phaseB?.priors,
+      // A comment-triggered run: its summary counter stays where it was.
+      force: input.options.force === true,
       // THE delivery point when posting is on: the findings POST has resolved, so
       // the review is delivered. It fires before the local receipt is written, so a
       // receipt write that throws is a failure after delivery. A failed session never
