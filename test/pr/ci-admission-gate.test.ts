@@ -1531,3 +1531,49 @@ describe("recordCiConfigErrorSkip — a hung GitHub call is bounded", () => {
     expect(calls).toEqual([]);
   });
 });
+
+// Once the reservation exists, the settle must run to completion, even when it
+// is slower than the read deadline. Abandoning it would leave a `reserved` check
+// run that counts as a spent attempt forever.
+describe("recordCiConfigErrorSkip — a created reservation is always settled", () => {
+  test("a slow but bounded settle finishes before the call returns, as gate-skipped", async () => {
+    const calls: string[][] = [];
+    const base = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+    let settleFinished = false;
+    const spawnFn = ((argv: string[]) => {
+      const proc = base(argv);
+      if (!argv.join(" ").includes("PATCH")) return proc;
+      return {
+        ...proc,
+        exited: new Promise<number>((resolve) =>
+          setTimeout(() => {
+            settleFinished = true;
+            resolve(0);
+          }, 60),
+        ),
+      };
+    }) as unknown as typeof Bun.spawn;
+
+    await recordCiConfigErrorSkip({
+      operatorRoot: "/repo",
+      prNumber: PR,
+      config: EMPTY_LOCAL_CONFIG,
+      resolveHeadSha: async () => HEAD_A,
+      reason: "configuration error before the review",
+      spawnFn,
+      timeoutMs: 25,
+    });
+
+    expect(settleFinished).toBe(true);
+    expect(
+      calls.some(
+        (argv) =>
+          argv.join(" ").includes("PATCH") &&
+          argv.join(" ").includes("output[summary]=gate-skipped"),
+      ),
+    ).toBe(true);
+  });
+});

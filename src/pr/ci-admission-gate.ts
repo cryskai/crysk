@@ -488,15 +488,59 @@ export async function recordCiConfigErrorSkip(input: {
   resolveHeadSha: () => Promise<string>;
   reason: string;
   spawnFn?: typeof Bun.spawn;
-  // Test-only seam: the bound on the whole write (default: the check-run bound).
+  // Test-only seam: the bound on the READS before the reservation.
   timeoutMs?: number;
 }): Promise<void> {
-  // WHY a bound: the caller rethrows the configuration error right after this
-  // returns, and a gh call that never answers would park the run before that
-  // error is raised. The whole write is bounded, not each gh call, so every
-  // step (head lookup, list, reserve, settle) shares one deadline. On timeout the
-  // row is skipped and the caller's error is raised as usual. The write that is
-  // still pending is abandoned, not cancelled: the run is exiting anyway.
+  // WHY the deadline covers only the reads: the head lookup and the ledger list
+  // have no bound of their own, and the caller rethrows the configuration error
+  // right after this returns. Once a reservation exists, though, it must be
+  // settled, or it stays `reserved` and counts as a spent attempt forever. So the
+  // deadline ends before the reserve, and the settle always runs. Its gh calls
+  // are already bounded by the check-run upsert (ADMISSION_CHECK_RUN_TIMEOUT_MS,
+  // two attempts), and a failed settle is swallowed by tryPersistCiAdmissionLedger.
+  const reads = await readBeforeReservation(input);
+  if (reads === null) return;
+  try {
+    const active = selectActiveReservation(
+      reads.existing,
+      reads.headSha,
+      reads.ciPolicyHash,
+      reads.ciPolicy.reservationTtlSeconds,
+      new Date(),
+    );
+    if (active !== null) return;
+    // If the reserve fails there is no row, so there is nothing to settle.
+    const state = await reserveCiAdmissionLedger({
+      operatorRoot: input.operatorRoot,
+      prNumber: input.prNumber,
+      headSha: reads.headSha,
+      policy: reads.ciPolicy,
+      policyHash: reads.ciPolicyHash,
+      existing: reads.existing,
+      decisionReason: input.reason,
+      spawnFn: input.spawnFn,
+    });
+    await settleCiGateSkip(state, input.reason, { spawnFn: input.spawnFn });
+  } catch {
+    // Swallowed on purpose: see the WHY above.
+  }
+}
+
+// The reads before the reservation, under one deadline. Returns null when the
+// deadline wins or a read fails: nothing was reserved, so there is nothing to
+// settle, and the caller rethrows the original error.
+async function readBeforeReservation(input: {
+  operatorRoot: string;
+  config: LocalConfig;
+  resolveHeadSha: () => Promise<string>;
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<{
+  headSha: string;
+  ciPolicy: CiReviewPolicy;
+  ciPolicyHash: string;
+  existing: AdmissionRecord[];
+} | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<"timeout">((resolve) => {
     timer = setTimeout(
@@ -504,54 +548,27 @@ export async function recordCiConfigErrorSkip(input: {
       input.timeoutMs ?? CONFIG_SKIP_RECORD_TIMEOUT_MS,
     );
   });
+  const work = (async () => {
+    const headSha = await input.resolveHeadSha();
+    const ciPolicy = resolveCiReviewPolicy(input.config);
+    const ciPolicyHash = ciReviewPolicyHash(ciPolicy);
+    const existing = await listAdmissionCheckRuns(input.operatorRoot, headSha, {
+      spawnFn: input.spawnFn,
+    });
+    return { headSha, ciPolicy, ciPolicyHash, existing };
+  })();
   try {
-    const outcome = await Promise.race([
-      writeConfigErrorSkipRow(input).then(() => "done" as const),
-      deadline,
-    ]);
+    const outcome = await Promise.race([work, deadline]);
     if (outcome === "timeout") {
       log(
         "config-error ledger row not recorded: GitHub did not answer in time",
       );
+      return null;
     }
+    return outcome;
   } catch {
-    // Swallowed on purpose: see the WHY above.
+    return null;
   } finally {
     clearTimeout(timer);
   }
-}
-
-async function writeConfigErrorSkipRow(input: {
-  operatorRoot: string;
-  prNumber: number;
-  config: LocalConfig;
-  resolveHeadSha: () => Promise<string>;
-  reason: string;
-  spawnFn?: typeof Bun.spawn;
-}): Promise<void> {
-  const headSha = await input.resolveHeadSha();
-  const ciPolicy = resolveCiReviewPolicy(input.config);
-  const ciPolicyHash = ciReviewPolicyHash(ciPolicy);
-  const existing = await listAdmissionCheckRuns(input.operatorRoot, headSha, {
-    spawnFn: input.spawnFn,
-  });
-  const active = selectActiveReservation(
-    existing,
-    headSha,
-    ciPolicyHash,
-    ciPolicy.reservationTtlSeconds,
-    new Date(),
-  );
-  if (active !== null) return;
-  const state = await reserveCiAdmissionLedger({
-    operatorRoot: input.operatorRoot,
-    prNumber: input.prNumber,
-    headSha,
-    policy: ciPolicy,
-    policyHash: ciPolicyHash,
-    existing,
-    decisionReason: input.reason,
-    spawnFn: input.spawnFn,
-  });
-  await settleCiGateSkip(state, input.reason, { spawnFn: input.spawnFn });
 }
