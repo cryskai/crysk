@@ -12,10 +12,10 @@
 // smoke is the review-free scenario, run through this same code (smoke.ts).
 
 import {
-  blockingFindingAt,
   type CheckResult,
   describeCheck,
   evaluateChecks,
+  ownBlockingGate,
 } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
 import { FINDING_MARKER_PREFIX, STATUS_CONTEXT } from "./markers";
@@ -538,10 +538,11 @@ async function runOne(
         }
       }
       // S3: the phase's own observation decides, not the previous phase's. A head with no
-      // blocking finding at the path has nothing for these checks to read, so they are named.
+      // blocking finding at the path (inline or outside the diff) has nothing for these
+      // checks to read, so they are named.
       const ownAt = phase.ifOwnBlockingAt;
       const ownBlocking =
-        ownAt === undefined || blockingFindingAt(obs, ownAt.path);
+        ownAt === undefined || ownBlockingGate(obs, ownAt.path);
       if (ownAt !== undefined && !ownBlocking) {
         for (const check of ownAt.checks) {
           deps.log(

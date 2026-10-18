@@ -164,6 +164,26 @@ export function blockingFindingAt(obs: Observation, path: string): boolean {
   );
 }
 
+// The blocking entries in this head's report's "Comments Outside Diff" section. Each has
+// no inline comment, so only the report's count shows it. Read by status-matches-findings
+// and by ownBlockingGate, so both count the same thing.
+export function outsideDiffBlockingOn(obs: Observation): number {
+  return obs.comments.reduce(
+    (sum, c) =>
+      c.kind === "report" && c.head === obs.headSha
+        ? sum + (c.outsideDiffBlocking ?? 0)
+        : sum,
+    0,
+  );
+}
+
+// S3 gate for the ifOwnBlockingAt checks: this head shows a blocking finding the checks
+// can read, either inline at the path or in its report's outside-diff section (which has
+// no path, so it opens the gate for any path). Only when neither holds are they not asserted.
+export function ownBlockingGate(obs: Observation, path: string): boolean {
+  return blockingFindingAt(obs, path) || outsideDiffBlockingOn(obs) > 0;
+}
+
 export function evaluateCheck(check: Check, obs: Observation): CheckResult {
   const label = describeCheck(check);
   const pass = (ok: boolean, detail?: string): CheckResult =>
@@ -235,13 +255,7 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         (c) =>
           c.kind === "finding" && c.blocking === true && c.head === obs.headSha,
       ).length;
-      const outside = obs.comments.reduce(
-        (sum, c) =>
-          c.kind === "report" && c.head === obs.headSha
-            ? sum + (c.outsideDiffBlocking ?? 0)
-            : sum,
-        0,
-      );
+      const outside = outsideDiffBlockingOn(obs);
       const visible = inline + outside;
       const counted = gateBlockingCount(status.description);
       // Each branch names its case in the detail, so a pass says which rule it used.

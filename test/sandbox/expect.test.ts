@@ -9,6 +9,7 @@ import {
   blockingFindingAt,
   evaluateCheck,
   evaluateChecks,
+  ownBlockingGate,
 } from "../../scripts/sandbox/expect";
 import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
 import {
@@ -860,9 +861,7 @@ describe("scenario data: every declared expectation, pass and fail", () => {
         const checksOf = (o: Observation) => {
           const own = phase.ifOwnBlockingAt;
           const asserted =
-            own !== undefined && blockingFindingAt(o, own.path)
-              ? own.checks
-              : [];
+            own !== undefined && ownBlockingGate(o, own.path) ? own.checks : [];
           return [...phase.checks, ...asserted];
         };
         expect(
@@ -1691,5 +1690,80 @@ describe("SB3 checks: the planted-bug site, the hunter log, and the newer head",
     );
     expect(unread.pass).toBe(false);
     expect(unread.detail).toBe("status before success, after not read");
+  });
+});
+
+// S3 follow-up (PR #362 F001): a blocking finding listed only in the report's
+// "Comments Outside Diff" section has no inline comment and no path, so the gate must
+// open on the head's outside-diff count too, not on an inline anchor alone.
+describe("ownBlockingGate: the ifOwnBlockingAt checks are asserted (PR #362 F001)", () => {
+  const outsideReport = (count: number): Observation["comments"][number] => ({
+    source: "issue",
+    kind: "report",
+    head: NEW,
+    outsideDiffBlocking: count,
+  });
+
+  test("an outside-diff blocking finding and no inline one: asserted, and a missing row FAILs", () => {
+    const o = obs({ comments: [outsideReport(1)] });
+    expect(blockingFindingAt(o, "src/mute.ts")).toBe(false);
+    expect(ownBlockingGate(o, "src/mute.ts")).toBe(true);
+    const [result] = evaluateChecks(
+      [{ kind: "state-row-at", path: "src/mute.ts", tier: "blocking" }],
+      o,
+    );
+    expect(result?.pass).toBe(false);
+  });
+
+  test("no blocking finding at all, inline or outside the diff: not asserted", () => {
+    expect(ownBlockingGate(obs({ comments: [] }), "src/mute.ts")).toBe(false);
+    expect(
+      ownBlockingGate(
+        obs({
+          comments: [
+            {
+              source: "issue",
+              kind: "report",
+              head: NEW,
+              outsideDiffBlocking: 0,
+            },
+            {
+              source: "inline",
+              kind: "finding",
+              head: NEW,
+              path: "src/mute.ts",
+              line: 3,
+            },
+          ],
+        }),
+        "src/mute.ts",
+      ),
+    ).toBe(false);
+  });
+
+  test("an outside-diff blocking finding on an older head does not open the gate", () => {
+    const o = obs({
+      comments: [
+        { source: "issue", kind: "report", head: OLD, outsideDiffBlocking: 2 },
+      ],
+    });
+    expect(ownBlockingGate(o, "src/mute.ts")).toBe(false);
+  });
+
+  test("an inline blocking finding at the path: asserted, unchanged", () => {
+    const o = obs({
+      comments: [
+        {
+          source: "inline",
+          kind: "finding",
+          head: NEW,
+          path: "src/mute.ts",
+          line: 3,
+          blocking: true,
+        },
+      ],
+    });
+    expect(ownBlockingGate(o, "src/mute.ts")).toBe(true);
+    expect(blockingFindingAt(o, "src/mute.ts")).toBe(true);
   });
 });
