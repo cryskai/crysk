@@ -45,6 +45,7 @@ import {
   terminalWidth,
   yellow,
 } from "#ui/primitives";
+import { FREE_STEPS_NOTE, freeBillingMode } from "#ui/select";
 
 // C5 O-7's payload for both plan surfaces: everything the card and the
 // details view need to name a value the operator cannot see by opening their
@@ -456,16 +457,16 @@ export function planEstimateLine(input: {
 }): string {
   const low = `$${input.estimate.low.toFixed(2)}`;
   const high = `$${input.estimate.high.toFixed(2)}`;
-  const free = input.freeRoute;
-  if (free !== undefined && free.total > 0 && free.free === free.total) {
+  // The mode is the prompt's too (ui/select.ts freeBillingMode): the card and
+  // the confirm read one verdict, so they cannot disagree about what is billed.
+  const billing = freeBillingMode(input.freeRoute);
+  if (billing === "free") {
     return `estimate: free route (token-derived ${low} – ${high}, not billed)`;
   }
   const line =
     `estimate ${low} – ${high} (${input.hunterCount} hunter(s) + refuter ` +
     `${input.summarizer ? "+ summarizer" : "+ summarizer disabled"})`;
-  return free !== undefined && free.free > 0
-    ? `${line} (free steps not billed)`
-    : line;
+  return billing === "mixed" ? `${line} ${FREE_STEPS_NOTE}` : line;
 }
 
 // Both details views' rows, with a label column DERIVED from their own labels

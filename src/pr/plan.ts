@@ -268,6 +268,7 @@ export async function resolvePrPlanAndConfirm(params: {
       estimate.high,
       params.options.post ?? false,
       () => prPlanDetails(planContext, styleEnabled()),
+      freeRoute,
     );
     if (choice.kind === "cancel") {
       log("aborted; nothing was spent.");

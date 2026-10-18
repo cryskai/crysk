@@ -313,8 +313,12 @@ export async function review(options: CliOptions): Promise<number> {
   // without --pr), so the "don't post" option is not offered and the choice's
   // `post` field carries nothing local mode could act on.
   if (!options.yes) {
-    const choice = await confirm(estimate.low, estimate.high, false, () =>
-      planDetails(planContext, styleEnabled()),
+    const choice = await confirm(
+      estimate.low,
+      estimate.high,
+      false,
+      () => planDetails(planContext, styleEnabled()),
+      freeRoute,
     );
     if (choice.kind === "cancel") {
       log("aborted; nothing was spent.");
