@@ -181,6 +181,9 @@ export interface PostedFindingComment {
   // current position, not the position at post time.
   livePath?: string;
   liveLine?: number;
+  // The tier the comment's visible badge states. Absent when the badge is
+  // unreadable; absent means unknown, and the matcher then behaves as before.
+  tier?: "blocking" | "advisory";
   created_at?: string;
 }
 
@@ -230,6 +233,14 @@ function candidatesFor(
   for (const posted of available) {
     const path = posted.livePath ?? posted.marker.path;
     if (path !== finding.path) continue;
+    // WHY an advisory comment never matches a blocking finding (tier
+    // escalation): the gate counts the blocking finding, so it must be
+    // visible. Persisting it onto the old advisory comment would leave the
+    // PR showing "advisory" for a finding the gate blocks on, and the triage
+    // tooling reads these comments and would never see it. It posts fresh
+    // instead; the old comment falls to `resolved`. Every other tier
+    // combination, and an unknown tier on either side, matches as before.
+    if (finding.tier === "blocking" && posted.tier === "advisory") continue;
     const sameHead = posted.marker.headSha === headSha;
     // WHY the fingerprint is consulted here too, not just in resolveWinner's
     // tie-break: this branch used to treat same-head path+line alone as

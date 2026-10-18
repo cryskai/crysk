@@ -435,6 +435,75 @@ describe("matchPostedFindings", () => {
   });
 });
 
+// Tier escalation (advisory posted, blocking found at the same place on a
+// later head) must post fresh, never persist: the gate counts the blocking
+// finding, and an old advisory comment left as the only match would be the
+// invisible miss the module's demote-not-guess rule exists to prevent.
+describe("matchPostedFindings — tier escalation", () => {
+  const NEW_HEAD = "bbbb000011112222333344445555666677778888";
+
+  test("advisory posted at line 35 + blocking finding at line 35 on a later head → fresh, comment unmatched", () => {
+    const advisory = posted("src/session.ts", 35, {
+      id: 701,
+      tier: "advisory",
+    });
+    const result = matchPostedFindings({
+      findings: [
+        finding("src/session.ts", 35, {
+          id: "F-escalated",
+          claim: "a different, blocking defect",
+          tier: "blocking",
+        }),
+      ],
+      posted: [advisory],
+      headSha: NEW_HEAD,
+    });
+    expect(result.persist).toHaveLength(0);
+    expect(result.fresh.map((f) => f.id)).toEqual(["F-escalated"]);
+    expect(result.resolved.map((p) => p.id)).toEqual([701]);
+  });
+
+  test("escalation also posts fresh on the same head (the exact-line branch)", () => {
+    const result = matchPostedFindings({
+      findings: [finding("src/session.ts", 35, { tier: "blocking" })],
+      posted: [posted("src/session.ts", 35, { tier: "advisory" })],
+      headSha: HEAD,
+    });
+    expect(result.persist).toHaveLength(0);
+    expect(result.fresh).toHaveLength(1);
+  });
+
+  test("same tier still persists across heads", () => {
+    const result = matchPostedFindings({
+      findings: [finding("src/session.ts", 35, { tier: "blocking" })],
+      posted: [posted("src/session.ts", 35, { tier: "blocking" })],
+      headSha: NEW_HEAD,
+    });
+    expect(result.persist).toHaveLength(1);
+    expect(result.fresh).toHaveLength(0);
+  });
+
+  test("advisory finding against a blocking posted comment (de-escalation) still persists", () => {
+    const result = matchPostedFindings({
+      findings: [finding("src/session.ts", 35, { tier: "advisory" })],
+      posted: [posted("src/session.ts", 35, { tier: "blocking" })],
+      headSha: NEW_HEAD,
+    });
+    expect(result.persist).toHaveLength(1);
+    expect(result.fresh).toHaveLength(0);
+  });
+
+  test("an unknown tier on the posted side never blocks a persist", () => {
+    const result = matchPostedFindings({
+      findings: [finding("src/session.ts", 35, { tier: "blocking" })],
+      posted: [posted("src/session.ts", 35)],
+      headSha: NEW_HEAD,
+    });
+    expect(result.persist).toHaveLength(1);
+    expect(result.fresh).toHaveLength(0);
+  });
+});
+
 describe("buildPostPlan", () => {
   test("mixed run: 1 resolved, 1 new, 2 persist", () => {
     const persistPosted1 = posted("a.ts", 10, { id: 1 });
