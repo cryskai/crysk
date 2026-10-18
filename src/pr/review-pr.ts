@@ -146,9 +146,10 @@ export function recordPipelineOutcome(
 }
 
 // T5b: one reply per adjudication, on the finding's own thread. Posted after the
-// review is published. WHY a failed post only warns: the in-run verdict already
-// settled this run's gate, and a missing reply makes the next run count the
-// finding again, which fails closed.
+// review is published. WHY a failed post only warns: no verdict changes this run's
+// gate. A reply that fails or does not land leaves the dismissal with no CI ruling,
+// so the next /pr-hero recheck rules on it again and the next review still counts
+// the finding, which fails closed.
 const ADJUDICATION_REPLY_TIMEOUT_MS = 30_000;
 
 const ADJUDICATION_BADGES = {

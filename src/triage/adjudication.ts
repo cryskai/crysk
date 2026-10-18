@@ -104,8 +104,7 @@ export interface AdjudicationOutcome {
   // path:line citations the adjudicator gave. Empty when it failed.
   evidence: string[];
   // Set when no ruling exists: the step failed or timed out, the argument forged
-  // the nonce, or no refuter is configured. The verdict is then "inconclusive" for
-  // this run's gate, but nothing is posted, so the dismissal stays pending and a
-  // later recheck rules on it.
+  // the nonce, or no refuter is configured. The verdict is then "inconclusive" and
+  // nothing is posted, so the dismissal stays pending and a later recheck rules on it.
   failed?: true;
 }
