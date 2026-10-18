@@ -463,14 +463,42 @@ describe("matchPostedFindings — tier escalation", () => {
     expect(result.resolved.map((p) => p.id)).toEqual([701]);
   });
 
-  test("escalation also posts fresh on the same head (the exact-line branch)", () => {
+  test("the guard never dissolves a tie: an advisory and an unrelated blocking comment at equal distance still post fresh", () => {
+    // PR #349 round 1: filtering the advisory candidate first left the
+    // blocking comment as the sole candidate, and the finding persisted onto
+    // an unrelated defect's comment.
+    const advisory = posted("src/session.ts", 34, {
+      id: 801,
+      tier: "advisory",
+    });
+    const unrelated = posted("src/session.ts", 38, {
+      id: 802,
+      tier: "blocking",
+    });
+    const result = matchPostedFindings({
+      findings: [
+        finding("src/session.ts", 36, {
+          id: "F-tie",
+          claim: "a claim neither comment fingerprints",
+          tier: "blocking",
+        }),
+      ],
+      posted: [advisory, unrelated],
+      headSha: NEW_HEAD,
+    });
+    expect(result.persist).toHaveLength(0);
+    expect(result.fresh.map((f) => f.id)).toEqual(["F-tie"]);
+    expect(result.resolved.map((p) => p.id).sort()).toEqual([801, 802]);
+  });
+
+  test("escalation on the same head stays a persist (a fresh comment would duplicate the marker)", () => {
     const result = matchPostedFindings({
       findings: [finding("src/session.ts", 35, { tier: "blocking" })],
       posted: [posted("src/session.ts", 35, { tier: "advisory" })],
       headSha: HEAD,
     });
-    expect(result.persist).toHaveLength(0);
-    expect(result.fresh).toHaveLength(1);
+    expect(result.persist).toHaveLength(1);
+    expect(result.fresh).toHaveLength(0);
   });
 
   test("same tier still persists across heads", () => {

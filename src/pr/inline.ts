@@ -233,14 +233,6 @@ function candidatesFor(
   for (const posted of available) {
     const path = posted.livePath ?? posted.marker.path;
     if (path !== finding.path) continue;
-    // WHY an advisory comment never matches a blocking finding (tier
-    // escalation): the gate counts the blocking finding, so it must be
-    // visible. Persisting it onto the old advisory comment would leave the
-    // PR showing "advisory" for a finding the gate blocks on, and the triage
-    // tooling reads these comments and would never see it. It posts fresh
-    // instead; the old comment falls to `resolved`. Every other tier
-    // combination, and an unknown tier on either side, matches as before.
-    if (finding.tier === "blocking" && posted.tier === "advisory") continue;
     const sameHead = posted.marker.headSha === headSha;
     // WHY the fingerprint is consulted here too, not just in resolveWinner's
     // tie-break: this branch used to treat same-head path+line alone as
@@ -323,6 +315,30 @@ export function matchPostedFindings(input: {
   for (const finding of input.findings) {
     const candidates = candidatesFor(finding, available, window, input.headSha);
     const winner = resolveWinner(finding, candidates);
+    // WHY an advisory comment never matches a blocking finding (tier
+    // escalation): the gate counts the blocking finding, so it must be
+    // visible. Persisting it onto the old advisory comment would leave the
+    // PR showing "advisory" for a finding the gate blocks on, and the triage
+    // tooling reads these comments and would never see it. It posts fresh
+    // instead; the old comment falls to `resolved`. Every other tier
+    // combination, and an unknown tier on either side, matches as before.
+    // Only across heads: on the SAME head a fresh comment would carry the very
+    // marker the old one carries (path, line, head, claim fingerprint), and every
+    // marker reader (buildCommentUrlMap, triage reply) takes the first match,
+    // the stale advisory one. A same-head tier flip of the same claim stays a
+    // persist, the residual this guard accepts (PR #349 round 1).
+    // The guard runs on the WINNER, after resolveWinner, never by filtering
+    // the candidates: dropping a candidate first could dissolve a tie that
+    // must post fresh and hand the finding to an unrelated comment.
+    if (
+      winner !== undefined &&
+      winner.marker.headSha !== input.headSha &&
+      finding.tier === "blocking" &&
+      winner.tier === "advisory"
+    ) {
+      fresh.push(finding);
+      continue;
+    }
     if (winner === undefined) {
       fresh.push(finding);
       continue;
