@@ -577,7 +577,11 @@ describe("buildPrStatus: findings", () => {
         ],
       }),
     );
-    expect(status.findings).toEqual([]);
+    // The state row is a live finding with no thread (the gate counts it), so it is emitted; the
+    // human reply and the summary are still not findings.
+    expect(status.findings.map((f) => [f.id, f.comment_id])).toEqual([
+      ["R001", null],
+    ]);
   });
 
   test("the state block joins a finding by claim fingerprint and supplies the id", () => {
@@ -1570,7 +1574,7 @@ describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
             id: 100,
             body: summary(CURRENT, [
               stateRow("R001", CLAIM),
-              stateRow("R002", CLAIM_TWO),
+              stateRow("R002", CLAIM_TWO, "blocking", "src/a.ts:20"),
             ]),
           },
         ],
@@ -1622,5 +1626,181 @@ describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
       }),
     );
     expect(status.next_action).toBe("fix");
+  });
+});
+
+describe("buildPrStatus: a live blocking row with no comment thread", () => {
+  const CLAIM_TWO = "a second claim that only the state block carries";
+  const BUDGET_DESCRIPTION =
+    "pr-hero: review budget for this PR is used up — /pr-hero review reviews this head";
+  const MANUAL_DESCRIPTION =
+    "pr-hero: review needs a manual trigger (ci_review_policy is manual_only) — /pr-hero review reviews this head";
+
+  test("(a) a state row with no comment behind a red gate is a finding with no thread, and it is fixed", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM, "blocking", "src/b.ts:42"),
+            ]),
+          },
+        ],
+      }),
+    );
+    expect(status.findings).toHaveLength(1);
+    expect(status.findings[0]).toMatchObject({
+      id: "R001",
+      path: "src/b.ts",
+      line: 42,
+      head: null,
+      comment_id: null,
+      channel: "inline",
+      tier: "blocking",
+      blocking: true,
+      live_on_head: true,
+      triage: null,
+      ci_verdict: null,
+    });
+    expect(status.unresolved_blocking).toBe(1);
+    expect(status.next_action).toBe("fix");
+    expect(status.reason).toBe(
+      "1 live blocking finding(s) (R001) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /pr-hero override.",
+    );
+  });
+
+  // #348 R001/R003: the upheld dismissal was consumed, the gate still counts a summary-only row.
+  // The answer must be fix, never review, which would loop on the same red gate.
+  test("(b) upheld dismissals consumed and one summary-only blocking row: never review", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "dismissed",
+            verdict: "upheld",
+          }),
+          {
+            id: 3,
+            user: CI_ADJUDICATOR_LOGIN,
+            body: `${adjudicationMarker({
+              verdict: "upheld",
+              reply: 2,
+              head: CURRENT,
+            })}\n\nruling`,
+            in_reply_to_id: 1,
+          },
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM),
+              stateRow("R002", CLAIM_TWO, "blocking", "src/c.ts:7"),
+            ]),
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+    expect(status.reason).toMatch(/\(R002\)/);
+    expect(status.reason).not.toMatch(/upheld every dismissal/);
+  });
+
+  test("(c) a used-up automatic budget with no live blocking finding is review", () => {
+    const status = buildPrStatus(
+      input({ statuses: [gate("failure", BUDGET_DESCRIPTION)] }),
+    );
+    expect(status.next_action).toBe("review");
+    expect(status.reason).toMatch(/automatic review budget/);
+    expect(status.reason).toMatch(/\/pr-hero review/);
+  });
+
+  test("(c) a manual_only policy with no live blocking finding is review", () => {
+    const status = buildPrStatus(
+      input({ statuses: [gate("failure", MANUAL_DESCRIPTION)] }),
+    );
+    expect(status.next_action).toBe("review");
+    expect(status.reason).toMatch(/manual-only|manual_only/);
+    expect(status.reason).toMatch(/\/pr-hero review/);
+  });
+
+  test("(c) a live blocking finding still wins over the budget gate", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BUDGET_DESCRIPTION)],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("triage");
+  });
+
+  test("(d) a row bound to its posted comment is emitted once, with its comment", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BLOCKING_DESCRIPTION(1))],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+        issueComments: [
+          { id: 100, body: summary(CURRENT, [stateRow("R001", CLAIM)]) },
+        ],
+      }),
+    );
+    expect(status.findings).toHaveLength(1);
+    expect(status.findings[0]?.comment_id).toBe(1);
+    expect(status.findings[0]?.id).toBe("R001");
+    expect(status.unresolved_blocking).toBe(1);
+  });
+
+  test("unresolved_blocking counts a threaded and an unthreaded row once each", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", BUDGET_DESCRIPTION)],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+        ],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM),
+              stateRow("R002", CLAIM_TWO, "blocking", "src/c.ts:7"),
+            ]),
+          },
+        ],
+      }),
+    );
+    expect(status.unresolved_blocking).toBe(2);
+    expect(status.findings.filter((f) => f.comment_id === null)).toHaveLength(
+      1,
+    );
   });
 });

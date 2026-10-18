@@ -4,7 +4,7 @@ description: "Triage pr-hero findings posted as PR comments — for each one, re
 license: Apache-2.0
 metadata:
   author: juanmaagd
-  version: "1.5"
+  version: "1.6"
 ---
 
 ## When to Use
@@ -86,13 +86,17 @@ it**. The four tags are peers. None is the default.
 0. **Read the PR's state first.** Run `npx -y pr-hero status --pr <n> --json`. It is read-only: it reads
    GitHub through `gh` and writes nothing. Act on its `next_action`:
    - `wait`: a review is in flight on this head. Do not triage yet; wait for it to finish.
-   - `review`: no review has run on this head, the last one did not finish, or the CI adjudicator
-     upheld every dismissal and the next review will stop counting them. Comment
+   - `review`: no review has run on this head, the last one did not finish, the CI adjudicator
+     upheld every dismissal and the next review will stop counting them, or the automatic review
+     budget for this PR is used up (or the review policy is manual-only). Comment
      `gh pr comment <n> --body "/pr-hero review"`, then run step 0 again once it settles.
    - `triage`: a live blocking finding on this head has no triage reply at the head it was posted
      on, or the gate is green and a finding posted on this head has no reply yet (advisory findings
      need one too). Run the loop below.
-   - `fix`: a blocking finding is tagged `applied`. Push the fix; the next review verifies it.
+   - `fix`: a blocking finding is tagged `applied`, or a blocking finding has no comment thread
+     (`comment_id` is null: a summary-only row, or one never posted inline). Push the fix; the next
+     review verifies it. A thread-less finding cannot be answered with `triage reply`, so fix it or
+     ask a maintainer for `/pr-hero override`.
    - `recheck`: blocking findings are answered `dismissed` and the CI adjudicator has not ruled on
      them on this head (or ruled `inconclusive`). Comment `gh pr comment <n> --body "/pr-hero recheck"`
      and follow "Closing a dismissal" below.
@@ -103,7 +107,9 @@ it**. The four tags are peers. None is the default.
      finding posted on this head has a reply.
 
    `findings[]` lists each posted finding with its `id`, `path`, `line`, `head`, `live_on_head`, and
-   its newest `triage` (`null` when none), and `ci_verdict`: the CI adjudicator's ruling on that newest
+   its newest `triage` (`null` when none), and `ci_verdict`. `comment_id` can be null: a live row of
+   the summary's state block that no comment carries (summary-only, or never posted inline). Its
+   `head` is null too, and it has no thread to reply in: the CI adjudicator's ruling on that newest
    reply on this head (`upheld`, `rejected`, `inconclusive`, or `null`). `triage` is only the newest reply, so a finding can be
    answered at its own head and then re-answered at a later head. The thread (step 2 below) settles
    the per-head question, and the escalation count still reads the thread's prior markers.

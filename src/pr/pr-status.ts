@@ -27,6 +27,7 @@ import {
   SEVERITY_UNRECOVERABLE,
   TIER_UNRECOVERABLE,
 } from "#rereview/classify";
+import { parseProofRefLocs } from "#rereview/identity";
 import { bindPriorsToPosted } from "#rereview/prepare";
 import { parseStateBlock, type StateFinding } from "#rereview/state";
 import { parseFindingCommentBadge } from "#review/report";
@@ -82,8 +83,12 @@ export interface PrStatusFinding {
   id: string | null;
   path: string;
   line: number;
-  head: string;
-  comment_id: number;
+  // The head the finding was posted on. Null for a state row no comment carries: the row has no
+  // head of its own, and nothing was posted here.
+  head: string | null;
+  // Null for a finding with no comment thread (a state row no comment bound: summary-only, or
+  // never posted inline). Such a finding cannot be answered with a triage reply.
+  comment_id: number | null;
   channel: "inline" | "outside";
   severity: string | null;
   // The tier the badge or the state row reports: "blocking" or "advisory". "unrecoverable" (the
@@ -365,7 +370,37 @@ function readFindings(
       ),
     });
   }
+  // A live row no comment bound to (summary-only, or never posted inline) is still a finding the
+  // gate counts. Without this row the status could not see a blocking finding the gate names.
+  for (const row of rows) {
+    if (bound.has(row.id)) continue;
+    out.push({ finding: unthreadedFinding(row), triagedAtPostedHead: false });
+  }
   return out;
+}
+
+// A state row with no comment: its anchor is the first of its locs (path:line or path:a-b, the
+// start line), read with the same parser the binder uses. A row with no parseable loc keeps its raw
+// text and line 0, so it still blocks and still reports.
+function unthreadedFinding(row: StateFinding): PrStatusFinding {
+  const first = row.locs[0];
+  const span = first === undefined ? undefined : parseProofRefLocs(first)[0];
+  // Fail closed: only an advisory tier clears a row, as for a comment.
+  const tier: RecoveredTier = row.tier;
+  return {
+    id: row.id,
+    path: span?.path ?? first ?? "",
+    line: span?.span.start ?? 0,
+    head: null,
+    comment_id: null,
+    channel: row.channel,
+    severity: row.sev !== SEVERITY_UNRECOVERABLE ? row.sev : null,
+    tier,
+    blocking: tier !== "advisory",
+    live_on_head: true,
+    triage: null,
+    ci_verdict: null,
+  };
 }
 
 // The CI adjudicator's ruling on the newest triage reply of one inline finding. Only a reply
@@ -464,6 +499,11 @@ function gateBlockingCount(gate: PrStatusGate): number | null {
   return counted?.[1] === undefined ? null : Number(counted[1]);
 }
 
+// The gate descriptions that name no review of this head: the automatic budget is used up, or the
+// policy is manual (src/pr/admission.ts). Their text is the gate's own, so no count is read.
+const REVIEW_TRIGGER_GATE =
+  /^pr-hero: review (budget for this PR is used up|needs a manual trigger)/;
+
 // A blocking finding whose newest reply is a dismissal the CI adjudicator upheld on this head.
 function upheldDismissal(a: AnalyzedFinding): boolean {
   return (
@@ -547,11 +587,25 @@ function decideNext(
     };
   }
   // failure: the blocking findings on this head decide between triage, fix, and override.
-  const untriaged = liveBlocking.filter((a) => !a.triagedAtPostedHead);
+  // A row with no comment has no thread a triage reply could land in, so it is never "untriaged".
+  const untriaged = liveBlocking.filter(
+    (a) => a.finding.comment_id !== null && !a.triagedAtPostedHead,
+  );
   if (untriaged.length > 0) {
     return {
       next_action: "triage",
       reason: `${untriaged.length} live blocking finding(s) on this head have no triage reply at the head they were posted on; triage them first.`,
+    };
+  }
+  // WHY this precedes the upheld-dismissal review branch: a blocking row with no thread cannot be
+  // answered, and only a fix clears it. Answering review here would re-run a gate that still counts
+  // it, and the review never stops counting it (review #348 R001/R003).
+  const unthreaded = liveBlocking.filter((a) => a.finding.comment_id === null);
+  if (unthreaded.length > 0) {
+    const ids = unthreaded.map((a) => a.finding.id ?? "unnamed").join(", ");
+    return {
+      next_action: "fix",
+      reason: `${unthreaded.length} live blocking finding(s) (${ids}) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /pr-hero override.`,
     };
   }
   const applied = liveBlocking.filter(
@@ -618,6 +672,16 @@ function decideNext(
     return {
       next_action: "override-or-fix",
       reason: `The gate is red with ${liveBlocking.length} live blocking finding(s), all triaged and none applied or pending a CI ruling (a rejected dismissal, or a deferred or misclassified tag, never leaves the count): fix and push, or override the gate.`,
+    };
+  }
+  // G12: the gate is red only because no review may run on this head (the automatic budget is used
+  // up, or the policy is manual_only). Nothing is blocking, so the review the human asked for is the
+  // unlock. Live blocking findings returned above, so they win over this branch.
+  if (REVIEW_TRIGGER_GATE.test(gate.description ?? "")) {
+    return {
+      next_action: "review",
+      reason:
+        "The automatic review budget for this PR is used up, or the review policy is manual (ci_review_policy is manual_only); comment /pr-hero review to review this head.",
     };
   }
   return {
