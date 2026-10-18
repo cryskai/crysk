@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import type { ComparisonResult } from "#compare/compare";
 import type { GreptileFinding } from "#compare/greptile";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
+import { planEstimateLine } from "#ui/plan";
 import { type ResultInput, renderResult } from "#ui/result";
 
 const ESC = String.fromCharCode(27);
@@ -959,6 +960,31 @@ describe("renderResult footer on a free route (W3-FOOTER)", () => {
     expect(text).toContain("$3.50–$5.25 (free steps not billed)");
     // The notional row keeps today's wording: only the free share changed.
     expect(text).toContain("not charged on a subscription");
+  });
+
+  test("billing free: the estimate row carries the plan card's free wording, never a bare band", () => {
+    const text = flat(renderResult(input({ ...notional, billing: "free" })));
+    // The plan card prints this line for the same band and the same free
+    // route; the footer must read the same verdict, not its own rewording.
+    const planCard = planEstimateLine({
+      estimate: { low: 3.5, high: 5.25 },
+      hunterCount: 1,
+      summarizer: true,
+      freeRoute: { free: 5, total: 5 },
+    });
+    expect(planCard).toBe(
+      "estimate: free route (token-derived $3.50 – $5.25, not billed)",
+    );
+    expect(text).toContain(
+      "estimate free route (token-derived $3.50 – $5.25, not billed)",
+    );
+    expect(text).not.toContain("estimate $3.50–$5.25");
+  });
+
+  test("billing undefined: the estimate row keeps the bare band", () => {
+    const text = flat(renderResult(input({ ...notional, billing: undefined })));
+    expect(text).toContain("estimate $3.50–$5.25");
+    expect(text).not.toContain("token-derived");
   });
 
   test("billing undefined: byte-identical to a run that never heard of billing", () => {

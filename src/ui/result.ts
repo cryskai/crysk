@@ -26,6 +26,7 @@ import {
   movedHeadSentence,
 } from "#review/report";
 import type { UnresolvedSpend } from "../execution/spend-limiter";
+import { freeRouteEstimateText } from "./plan";
 import {
   cyan,
   dim,
@@ -542,9 +543,11 @@ export function renderResult(input: ResultInput): string[] {
     // says every live run lands in a ledger.
     ...row(
       "estimate",
-      input.billing === "mixed"
-        ? `$${input.estimate.low.toFixed(2)}–$${input.estimate.high.toFixed(2)} ${FREE_STEPS_NOTE}`
-        : `$${input.estimate.low.toFixed(2)}–$${input.estimate.high.toFixed(2)}`,
+      input.billing === "free"
+        ? freeRouteEstimateText(input.estimate)
+        : input.billing === "mixed"
+          ? `$${input.estimate.low.toFixed(2)}–$${input.estimate.high.toFixed(2)} ${FREE_STEPS_NOTE}`
+          : `$${input.estimate.low.toFixed(2)}–$${input.estimate.high.toFixed(2)}`,
       footer,
     ),
   );
