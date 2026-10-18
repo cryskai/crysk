@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`setup --ci` says what the first PR needs**: when `.prhero/gotchas.md` is missing or still the scaffold, the next steps now
+  include `npx -y pr-hero init`, writing real gotchas, committing `.prhero/` to the default branch, and requiring the `pr-hero`
+  status check (not the `review` job). A repository that already has real gotchas is not told to write them again.
+- **`PRH-GOTCHAS-MISSING` names the init command**: its Fix starts with `npx -y pr-hero init`, and the GitHub Actions Quick path
+  gains the gotchas, commit and required-check steps, with the GitHub Free private-repository caveat.
+- **The agent loop through `npx`**: the triage and CI-setup skills now run every command as `npx -y pr-hero ...`, so a
+  coding agent needs Node and `gh` and no pr-hero install. The triage skill teaches the whole loop, including a dismissal
+  closed by `/pr-hero recheck`: the CI adjudicator's `upheld` makes the next review stop counting the finding. The CI-setup
+  skill gains troubleshooting rows for a partial review, `PRH-CANCELLED`, `PRH-MODEL-UNAVAILABLE` and `PRH-CRED-UNUSABLE`.
+- **`pr-hero status` says when to recheck**: each finding carries `ci_verdict` (the CI adjudicator's ruling on its newest
+  reply, on this head, from `github-actions[bot]` only), and a red gate whose blocking dismissals have no ruling answers
+  `next_action: "recheck"`; once every dismissal is upheld it answers `review`.
+- **`pr-hero skills install [--force]`**: installs the skills into every detected coding agent with no TTY, so an agent can
+  run `npx -y pr-hero skills install` itself. Until now only the interactive `setup` wizard installed them.
+
+### Added
 - **`npx pr-hero` without Bun**: `bin/pr-hero.js` now starts under Node too. It runs the CLI in-process under Bun,
   and under Node it starts Bun on `src/cli.ts`: the bundled `bun` dependency (pinned to 1.3.14, an
   `optionalDependency`) first, then `bun` on PATH. It forwards SIGTERM, SIGHUP and the exit code (Ctrl+C reaches Bun from the terminal), and

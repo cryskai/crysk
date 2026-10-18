@@ -154,21 +154,32 @@ test.skipIf(process.platform === "win32")(
   async () => {
     const pathDir = path.join(tmp, "path-bin");
     const mark = path.join(tmp, "mark");
+    const ready = path.join(tmp, "ready");
     mkdirSync(pathDir);
+    // The fake writes READY only after its trap is installed, and the launcher registers its
+    // own handlers before the child can start, so READY means both sides are listening.
     fakeBunOn(
       pathDir,
-      `${VERSION_OK}\ntrap 'echo got-term > "$MARK"; exit 0' TERM\nwhile :; do sleep 0.1; done`,
+      `${VERSION_OK}
+trap 'echo got-term > "$MARK"; exit 0' TERM
+touch "$READY"
+while :; do sleep 0.1; done`,
     );
 
     const proc = Bun.spawn([NODE, launcher()], {
       env: {
         PATH: `${pathDir}${path.delimiter}${path.dirname(NODE)}:/bin:/usr/bin`,
         MARK: mark,
+        READY: ready,
       },
       stdout: "ignore",
       stderr: "ignore",
     });
-    await Bun.sleep(500);
+    // A readiness handshake, not a fixed sleep: a loaded runner can take longer than any
+    // fixed wait to start Node, the launcher and the fake.
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(ready) && Date.now() < deadline) await Bun.sleep(25);
+    expect(existsSync(ready)).toBe(true);
     proc.kill("SIGTERM");
 
     const exited = await Promise.race([
@@ -179,6 +190,9 @@ test.skipIf(process.platform === "win32")(
     expect(existsSync(mark)).toBe(true);
     expect(readFileSync(mark, "utf8")).toContain("got-term");
   },
+  // The handshake may wait up to 10 s and the exit up to 5 s; Bun's 5 s default would cut
+  // it first (review #348 F003).
+  20_000,
 );
 
 test("under Bun, the launcher runs the CLI in-process and prints its usage", () => {

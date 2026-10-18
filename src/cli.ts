@@ -29,6 +29,7 @@ import { ledgerCommand } from "#commands/ledger";
 import { mcpCommand } from "#commands/mcp";
 import { menuCommand } from "#commands/menu";
 import { postCommand } from "#commands/post";
+import { skillsInstallCommand } from "#commands/skills";
 import { statusCommand } from "#commands/status";
 import { triageCommand } from "#commands/triage";
 import { uninstallCommand } from "#commands/uninstall";
@@ -233,25 +234,29 @@ export async function main(argv: string[]): Promise<number> {
                     ? await postCommand(parsed.options)
                     : parsed.command === "status"
                       ? await statusCommand(parsed.options)
-                      : parsed.command === "triage"
-                        ? await triageCommand(parsed.options)
-                        : parsed.command === "gc"
-                          ? await gcCommand(parsed.options)
-                          : parsed.command === "usage"
-                            ? await usageCommand(parsed.options)
-                            : parsed.command === "reverts"
-                              ? await revertsCommand(parsed.options)
-                              : parsed.command === "corpus"
-                                ? await corpusCommand(parsed.options)
-                                : parsed.command === "config"
-                                  ? await configCommand(parsed.options)
-                                  : parsed.command === "mcp"
-                                    ? await mcpCommand(parsed.options)
-                                    : parsed.command === "upgrade"
-                                      ? await upgradeCommand(parsed.options)
-                                      : parsed.command === "uninstall"
-                                        ? await uninstallCommand(parsed.options)
-                                        : await review(parsed.options);
+                      : parsed.command === "skills"
+                        ? await skillsInstallCommand(parsed.options)
+                        : parsed.command === "triage"
+                          ? await triageCommand(parsed.options)
+                          : parsed.command === "gc"
+                            ? await gcCommand(parsed.options)
+                            : parsed.command === "usage"
+                              ? await usageCommand(parsed.options)
+                              : parsed.command === "reverts"
+                                ? await revertsCommand(parsed.options)
+                                : parsed.command === "corpus"
+                                  ? await corpusCommand(parsed.options)
+                                  : parsed.command === "config"
+                                    ? await configCommand(parsed.options)
+                                    : parsed.command === "mcp"
+                                      ? await mcpCommand(parsed.options)
+                                      : parsed.command === "upgrade"
+                                        ? await upgradeCommand(parsed.options)
+                                        : parsed.command === "uninstall"
+                                          ? await uninstallCommand(
+                                              parsed.options,
+                                            )
+                                          : await review(parsed.options);
   } catch (error) {
     if (error instanceof CliError || error instanceof CliUsageError) {
       writeFatalCliRecord(classifyCliError(error));

@@ -72,6 +72,8 @@ See [Requirements](#requirements) above — `claude` and `git` are needed by eve
 
 ## From install to first review
 
+Only want the CI review? You do not need to install anything: see [GitHub Actions — Quick path](docs/github-actions.md#quick-path) (`npx -y pr-hero setup --ci`, `npx -y pr-hero init`, one secret).
+
 Seven steps, in this order. Steps 2, 5 and 6 are the ones that get skipped, and
 each one breaks the step after it.
 

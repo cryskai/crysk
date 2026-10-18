@@ -4,7 +4,7 @@ description: "Triage pr-hero findings posted as PR comments — for each one, re
 license: Apache-2.0
 metadata:
   author: juanmaagd
-  version: "1.4"
+  version: "1.6"
 ---
 
 ## When to Use
@@ -26,6 +26,23 @@ review thread. Do not reply on the summary. Do not invent a `gh` comment for the
 This skill only answers findings that already have their own `<!-- pr-hero-finding`
 comment — almost always an inline review comment on Files changed.
 
+## Running the CLI (no install needed)
+
+Every command below runs through `npx`, so nothing has to be installed on the machine first:
+
+```bash
+npx -y pr-hero <command> ...
+```
+
+`npx` needs only Node. pr-hero's package brings its own Bun runtime, and when that is
+unavailable it uses a `bun` already on PATH. `-y` skips npx's install prompt, which an agent
+cannot answer. If `pr-hero` is already on PATH (a global install), `pr-hero <command>` is the
+same command. Do not install pr-hero just to triage a PR. To put these skills into another coding
+agent on the machine, run `npx -y pr-hero skills install` (non-interactive; `--force` overwrites local edits).
+
+You also need `gh`, authenticated as a user with write access to the repository: the driver posts
+through it, and you comment `/pr-hero recheck` and `/pr-hero review` through it.
+
 ## The strategic why
 
 The bottleneck of coding with AI is the review. If an agent writes the code and only a human can
@@ -39,7 +56,17 @@ tag, not applying the review as a todo list.
 
 Every pr-hero comment is a **claim to verify**, not an order. An advisory report never blocks anything. A CI
 report in gate mode can turn the `pr-hero` status red on blocking findings. Your reply is argument and evidence,
-and it does not clear that status on its own: a fix pushed to the head and reviewed again does. You — the
+and it never clears that status on its own. A blocking finding stops counting in exactly two ways:
+
+- **A fix**, pushed to the head and verified gone by the next review.
+- **A dismissal the CI adjudicator upholds.** You reply `dismissed`, comment `/pr-hero recheck`, an
+  adjudicator running in CI rules on your argument, and only its `upheld` (posted by
+  `github-actions[bot]` on that head) lets the next review stop counting the finding. See
+  "Closing a dismissal" below.
+
+`deferred` and `misclassified` never leave the gate count, whatever any adjudicator says: they are
+for findings that are real (or real at another severity), so the gate stays red until a fix or a
+human `/pr-hero override`. You — the
 coding agent running this skill — have the authority and the duty to accept it **or reject
 it**. The four tags are peers. None is the default.
 
@@ -56,22 +83,34 @@ it**. The four tags are peers. None is the default.
 
 ## The loop, end to end
 
-0. **Read the PR's state first.** Run `pr-hero status --pr <n> --json`. It is read-only: it reads
+0. **Read the PR's state first.** Run `npx -y pr-hero status --pr <n> --json`. It is read-only: it reads
    GitHub through `gh` and writes nothing. Act on its `next_action`:
    - `wait`: a review is in flight on this head. Do not triage yet; wait for it to finish.
-   - `review`: no review has run on this head, or the last one did not finish. Ask the operator to
-     comment `/pr-hero review` on the PR, or wait for the watcher.
+   - `review`: no review has run on this head, the last one did not finish, the CI adjudicator
+     upheld every dismissal and the next review will stop counting them, or the automatic review
+     budget for this PR is used up (or the review policy is manual-only). Comment
+     `gh pr comment <n> --body "/pr-hero review"`, then run step 0 again once it settles.
    - `triage`: a live blocking finding on this head has no triage reply at the head it was posted
      on, or the gate is green and a finding posted on this head has no reply yet (advisory findings
      need one too). Run the loop below.
-   - `fix`: a blocking finding is tagged `applied`. Push the fix; the next review verifies it.
-   - `override-or-fix`: the gate is red and every blocking finding is already answered. Fix and push,
-     or ask a maintainer to override. Never override it yourself.
+   - `fix`: a blocking finding is tagged `applied`, or a blocking finding has no comment thread
+     (`comment_id` is null: a summary-only row, or one never posted inline). Push the fix; the next
+     review verifies it. A thread-less finding cannot be answered with `triage reply`, so fix it or
+     ask a maintainer for `/pr-hero override`.
+   - `recheck`: blocking findings are answered `dismissed` and the CI adjudicator has not ruled on
+     them on this head (or ruled `inconclusive`). Comment `gh pr comment <n> --body "/pr-hero recheck"`
+     and follow "Closing a dismissal" below.
+   - `override-or-fix`: the gate is red and every blocking finding is already answered, but none can
+     clear without a fix: a dismissal the CI adjudicator rejected, or a `deferred` / `misclassified`
+     tag. Fix and push, or ask a maintainer to override. Never override it yourself.
    - `done`: nothing is owed on this head. The gate passed (or an override unlocked it) and every
      finding posted on this head has a reply.
 
    `findings[]` lists each posted finding with its `id`, `path`, `line`, `head`, `live_on_head`, and
-   its newest `triage` (`null` when none). `triage` is only the newest reply, so a finding can be
+   its newest `triage` (`null` when none), and `ci_verdict`. `comment_id` can be null: a live row of
+   the summary's state block that no comment carries (summary-only, or never posted inline). Its
+   `head` is null too, and it has no thread to reply in: the CI adjudicator's ruling on that newest
+   reply on this head (`upheld`, `rejected`, `inconclusive`, or `null`). `triage` is only the newest reply, so a finding can be
    answered at its own head and then re-answered at a later head. The thread (step 2 below) settles
    the per-head question, and the escalation count still reads the thread's prior markers.
 
@@ -96,7 +135,7 @@ current head:
    file and run:
 
    ```bash
-   pr-hero triage reply --pr <n> --from <run-dir> --finding F00N \
+   npx -y pr-hero triage reply --pr <n> --from <run-dir> --finding F00N \
      --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
    ```
 
@@ -115,12 +154,41 @@ current head:
    *(Note: The MCP server is strictly read-only for querying runs, findings, and
    past triage records via `prhero_get_triage` and `prhero_get_findings`. All
    mutations — posting comments, resolving threads, and updating the database —
-   must be performed via `pr-hero triage reply`.)*
+   must be performed via `npx -y pr-hero triage reply`.)*
 
    **Greptile re-review:** Greptile updates its existing PR comment in place —
    it does not post a second one. Do not wait for a new Greptile comment to
    appear; poll for a body change on the existing one, or re-run
    `compare-pr.ts` when you need an updated head-to-head.
+
+## Closing a dismissal: `/pr-hero recheck`
+
+Your local adjudicator (step 4) is a check on yourself before you post: its verdict goes in your
+reply's marker, and the gate ignores it, because you ran it. The gate trusts only the CI
+adjudicator. When step 0 says `recheck`:
+
+1. Comment `gh pr comment <n> --body "/pr-hero recheck"`. It runs a review of the head and, for each
+   blocking finding whose newest reply is `dismissed` (at most 5 per run), an adjudicator in CI that
+   reads your argument and the repository at that head. You may comment it yourself: you only supply
+   the argument, the CI adjudicator rules. (`/pr-hero override` is the opposite: never yours to post.)
+2. Wait with step 0 (`wait`) until the run settles. Each ruling is a reply on the finding's thread,
+   from `github-actions[bot]`, whose first line is
+   `<!-- pr-hero-adjudication verdict=<v> reply=<your reply's id> head=<sha> -->`. Step 0's
+   `ci_verdict` reads it for you.
+3. Act on the verdict:
+   - `upheld`: the dismissal stands. The recheck run itself does not change its own count; step 0
+     now says `review`. Comment `/pr-hero review`, and that review no longer counts the finding.
+   - `rejected`: the finding stands. Re-read the adjudicator's evidence. Fix it, or, if you still hold
+     it is wrong, ask a human (they may override). Do not re-post the same argument.
+   - `inconclusive`: the repository did not settle it either way. Post a new `dismissed` reply with
+     stronger, cited evidence (a new reply is pending again), then recheck once more.
+   - No ruling at all after the run: the adjudicator step failed. Nothing was posted and the
+     dismissal is still pending; recheck again.
+4. A ruling counts only on the head it was given. After any push, step 0 asks for a recheck again.
+
+Only an inline finding can be rechecked: the CI adjudicator answers on the finding's own review
+thread. A legacy top-level finding (no review thread) cannot be cleared by a dismissal; step 0 says
+`override-or-fix` for it.
 
 ## The four tags
 
@@ -177,7 +245,7 @@ adjudicator that inherited your context would simply agree with itself.
 
 The adjudicator returns exactly one of `upheld`, `rejected`, or `inconclusive` — see
 `adjudicator.md` for what each means and the burden-of-proof rule behind them. Pass that
-exact word as `--verdict` on `pr-hero triage reply` (and mention it in the reasoning
+exact word as `--verdict` on `npx -y pr-hero triage reply` (and mention it in the reasoning
 prose). The driver writes it on the marker; the ledger and the escalation rule read it
 back from there.
 
@@ -294,11 +362,12 @@ this PR. The engine typed it wrong, not the code.
   never does.
 - The adjudicator never sees your reasoning context — only the finding, your argument, and the
   repo.
-- Never call `gh` to post or resolve a triage reply. Run `pr-hero triage reply`.
+- Never call `gh` to post or resolve a triage reply. Run `npx -y pr-hero triage reply`. (Commenting
+  `/pr-hero recheck` or `/pr-hero review` with `gh pr comment` is not a triage reply, and is how you ask for them.)
   If that command posted the reply and then failed to resolve, re-run the
   **same** command — same-head skip retries resolve only. Do not `gh`.
 - Never triage a finding that only exists under `### Comments Outside Diff` in the
-  summary. It has no thread this slice (W2). If `pr-hero triage reply` reports no
+  summary. It has no thread this slice (W2). If `npx -y pr-hero triage reply` reports no
   matching marker, stop.
 - `dismissed`, `deferred`, and `misclassified` without `--verdict` are malformed. `applied` WITH
   `--verdict` is equally malformed.
