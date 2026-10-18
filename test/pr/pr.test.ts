@@ -3139,19 +3139,50 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     );
   });
 
-  test("a run from an earlier attempt with the same external_id is never adopted: POST retried", async () => {
+  test("a run from an earlier attempt with the same external_id and nonce is never adopted: POST retried", async () => {
     const record = admissionRecordFixture({ attemptNumber: 2 });
-    const earlier = admissionRecordFixture({
-      attemptNumber: 1,
-      createdAt: "2026-08-28T11:00:00.000Z",
-    });
+    const earlier = admissionRecordFixture({ attemptNumber: 1 });
+    // The row carries THIS call's nonce, so only the attempt/createdAt rule can reject it.
+    let postNonce: string | undefined;
     let posts = 0;
     const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
       if (isLookup(argv)) {
-        return { stdout: `${checkRunRow(earlier, { id: 811 })}\n` };
+        return { stdout: `${checkRunRow(earlier, { id: 811, postNonce })}\n` };
       }
       if (isPost(argv)) {
         posts += 1;
+        postNonce ??= nonceOfPost(argv);
+        if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        return { stdout: JSON.stringify({ id: 613 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(613);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.some(isPatch)).toBe(false);
+  });
+
+  test("a run with another createdAt, same external_id, attempt and nonce, is never adopted: POST retried", async () => {
+    const record = admissionRecordFixture({ attemptNumber: 2 });
+    const earlier = admissionRecordFixture({
+      attemptNumber: 2,
+      createdAt: "2026-08-28T11:00:00.000Z",
+    });
+    // The row carries THIS call's nonce, so only the attempt/createdAt rule can reject it.
+    let postNonce: string | undefined;
+    let posts = 0;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(earlier, { id: 811, postNonce })}\n` };
+      }
+      if (isPost(argv)) {
+        posts += 1;
+        postNonce ??= nonceOfPost(argv);
         if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
         return { stdout: JSON.stringify({ id: 613 }) };
       }
