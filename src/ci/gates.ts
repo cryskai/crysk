@@ -281,8 +281,8 @@ export function budgetDisabledWarningMessage(
   if (budgetUsd === undefined || budgetUsd > 0) return null;
   return (
     "budget-usd ceiling is disabled (<= 0 was configured); estimated cost " +
-    "is unconstrained for this CI run. The size gate still applies " +
-    "independently."
+    "is unconstrained for this CI run. The size gate is resolved " +
+    "separately."
   );
 }
 
