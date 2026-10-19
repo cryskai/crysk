@@ -3246,14 +3246,25 @@ export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero 
 // made ONLY of these lines is a scaffold nobody filled in, whether its marker
 // was deleted or it predates the marker. musive committed the pre-marker
 // template, and its three `<subsystem>` lines were injected into every hunter.
-const SCAFFOLD_BODY_LINES = new Set(
-  [GOTCHAS_TEMPLATE, SETUP_GOTCHAS_FALLBACK]
+//
+// RETIRED lines are ones an earlier release's scaffold wrote and today's no
+// longer does. A repo may still have them committed, so when a scaffold's
+// wording changes, its old lines move here — otherwise that repo's scaffold
+// slips past the gate again. (GOTCHAS_TEMPLATE's body has never changed; the
+// setup fallback's sentence did, in 60c28c6.)
+const RETIRED_SCAFFOLD_LINES = [
+  "(No invariants defined during onboarding. Edit this file with project failure modes.)",
+];
+
+const SCAFFOLD_BODY_LINES = new Set([
+  ...[GOTCHAS_TEMPLATE, SETUP_GOTCHAS_FALLBACK]
     .flatMap((scaffold) => scaffold.split("\n"))
     .map((line) => line.trim())
     .filter(
       (line) => line.length > 0 && !line.includes(GOTCHAS_PLACEHOLDER_MARKER),
     ),
-);
+  ...RETIRED_SCAFFOLD_LINES,
+]);
 
 export type GotchasUnusableReason = "empty" | "placeholder";
 

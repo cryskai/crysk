@@ -2187,6 +2187,13 @@ describe("gotchasUnusableReason", () => {
     expect(gotchasUnusableReason(text)).toBe("placeholder");
   });
 
+  test("an earlier release's setup fallback with its marker line deleted is still a placeholder", () => {
+    // The exact bytes `pr-hero setup` wrote before 60c28c6, minus the marker.
+    const retired =
+      "# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Edit this file with project failure modes.)\n";
+    expect(gotchasUnusableReason(retired)).toBe("placeholder");
+  });
+
   test("real gotchas that keep one stray template line still pass", () => {
     const text =
       "# Repo gotchas\n\n- billing: amounts are integer cents everywhere\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n";
