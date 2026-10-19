@@ -1090,6 +1090,14 @@ describe("ci init gotchas steps (CLI)", () => {
     expect(output).toContain("Commit .prhero/ to the default branch");
   });
 
+  test("a scaffold whose marker line was deleted gets the same init steps", async () => {
+    const { output } = await runInit(
+      "# Repo gotchas\n\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n",
+    );
+    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("Commit .prhero/ to the default branch");
+  });
+
   test("real gotchas without the marker print no init steps, and still name the required check", async () => {
     const { output } = await runInit(
       "- auth: the token is refreshed by the proxy, not here\n",

@@ -53,6 +53,7 @@ import {
   resolveScout,
   resolveSummary,
   runDirCandidate,
+  SETUP_GOTCHAS_FALLBACK,
   SUMMARY_DIRECTION,
   type SummaryConfig,
 } from "#review/preflight";
@@ -2146,11 +2147,12 @@ describe("gotchasUnusableReason", () => {
     expect(gotchasUnusableReason(real)).toBeUndefined();
   });
 
-  test("BACKCOMPAT — the pre-marker template a repo may already have committed still passes", () => {
-    // The honest limit of this fix, stated as a test rather than a hope: the
-    // marker is the ONLY signal, so a repo that committed the OLD raw
-    // template (before the marker existed) keeps reviewing blind. This fix
-    // bites new scaffolds; it does not retro-detect old ones.
+  test("the pre-marker template a repo may already have committed is a placeholder too", () => {
+    // This used to pin the marker's honest limit: a repo that committed the
+    // OLD raw template, before the marker existed, kept reviewing blind.
+    // musive did exactly that, and its three `<subsystem>` lines reached
+    // every hunter. The exact-line rule closes it — every line below is one
+    // the shipped scaffold writes.
     const preMarkerTemplate = [
       "# Repo gotchas",
       "",
@@ -2160,7 +2162,40 @@ describe("gotchasUnusableReason", () => {
       "- <subsystem>: <the thing that looks like a bug but is deliberate, and why>",
       "",
     ].join("\n");
-    expect(gotchasUnusableReason(preMarkerTemplate)).toBeUndefined();
+    expect(gotchasUnusableReason(preMarkerTemplate)).toBe("placeholder");
+  });
+
+  test("the template with only its marker line deleted is still a placeholder", () => {
+    const text = GOTCHAS_TEMPLATE.split("\n")
+      .filter((l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER))
+      .join("\n");
+    expect(gotchasUnusableReason(text)).toBe("placeholder");
+  });
+
+  test("the same scaffold re-indented and with extra blank lines is still a placeholder", () => {
+    const text = GOTCHAS_TEMPLATE.split("\n")
+      .filter((l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER))
+      .map((l) => `  ${l}`)
+      .join("\n\n");
+    expect(gotchasUnusableReason(text)).toBe("placeholder");
+  });
+
+  test("the setup fallback with its marker line deleted is still a placeholder", () => {
+    const text = SETUP_GOTCHAS_FALLBACK.split("\n")
+      .filter((l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER))
+      .join("\n");
+    expect(gotchasUnusableReason(text)).toBe("placeholder");
+  });
+
+  test("real gotchas that keep one stray template line still pass", () => {
+    const text =
+      "# Repo gotchas\n\n- billing: amounts are integer cents everywhere\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n";
+    expect(gotchasUnusableReason(text)).toBeUndefined();
+  });
+
+  test("a file of real gotchas passes", () => {
+    const text = "- billing: amounts are integer cents everywhere\n";
+    expect(gotchasUnusableReason(text)).toBeUndefined();
   });
 });
 

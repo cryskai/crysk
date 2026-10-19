@@ -3205,8 +3205,9 @@ export const INIT_GIT_REMINDER =
   "reads the checkout directly, so pr-hero refuses to run on a dirty tree — " +
   "and an untracked .prhero/ is exactly that.";
 
-// The token every scaffolded gotchas file carries, and the ONLY thing that
-// distinguishes "nobody has written this yet" from a real file. It is not a
+// The token every scaffolded gotchas file carries, and the primary signal
+// that distinguishes "nobody has written this yet" from a real file (the
+// exact-line rule further down is the only other one). It is not a
 // new invention: `pr-hero setup`'s fallback already wrote it (wizard.ts), it
 // simply had no reader. `pr-hero init`'s template now carries it too, so both
 // scaffolds are detectable by one token instead of by matching their prose.
@@ -3215,6 +3216,14 @@ export const INIT_GIT_REMINDER =
 // a marker is a file DECLARING itself unfinished. Anything inferred from the
 // prose would eventually reject somebody's real gotchas for looking generic,
 // and the cost of a false positive here is a refused review.
+//
+// The one inference allowed beside the marker is an EXACT one: a file whose
+// every non-blank line is a line one of our own scaffolds wrote. That is not
+// a heuristic about prose — no real gotchas file consists solely of our
+// template lines — and a real file that keeps one stray template line beside
+// real ones still passes. It exists because a scaffold without its marker
+// line — deleted by hand, or committed before the marker existed — reached
+// every hunter as if it were real.
 export const GOTCHAS_PLACEHOLDER_MARKER = "human-attention-required";
 
 export const GOTCHAS_TEMPLATE = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: delete THIS line once the gotchas below are real — pr-hero refuses to review while it is here. -->
@@ -3227,6 +3236,24 @@ verbatim into every hunter's system prompt, so keep them short and true.
 - <subsystem>: <the invariant that is enforced somewhere the diff does not show>
 - <subsystem>: <the naming/ownership rule a newcomer would violate>
 `;
+
+// `pr-hero setup`'s fallback scaffold (wizard.ts writes it when onboarding
+// collected zero invariants). It lives here, beside GOTCHAS_TEMPLATE, so the
+// gate below can recognise both scaffolds from one place.
+export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero invariants defined during onboarding -->\n\n# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Replace this with your project's real failure modes, then delete the marker line at the top — pr-hero refuses to review while it is there.)\n`;
+
+// Every non-blank line the two scaffolds write, minus the marker line. A file
+// made ONLY of these lines is a scaffold nobody filled in, whether its marker
+// was deleted or it predates the marker. musive committed the pre-marker
+// template, and its three `<subsystem>` lines were injected into every hunter.
+const SCAFFOLD_BODY_LINES = new Set(
+  [GOTCHAS_TEMPLATE, SETUP_GOTCHAS_FALLBACK]
+    .flatMap((scaffold) => scaffold.split("\n"))
+    .map((line) => line.trim())
+    .filter(
+      (line) => line.length > 0 && !line.includes(GOTCHAS_PLACEHOLDER_MARKER),
+    ),
+);
 
 export type GotchasUnusableReason = "empty" | "placeholder";
 
@@ -3246,6 +3273,13 @@ export function gotchasUnusableReason(
 ): GotchasUnusableReason | undefined {
   if (text.trim().length === 0) return "empty";
   if (text.includes(GOTCHAS_PLACEHOLDER_MARKER)) return "placeholder";
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.every((line) => SCAFFOLD_BODY_LINES.has(line))) {
+    return "placeholder";
+  }
   return undefined;
 }
 
@@ -3300,10 +3334,11 @@ export function initGotchasInstructions(
     // layer down.
     return [
       "The .prhero/gotchas.md already on disk is still a scaffold: it carries " +
-        `the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line, and pr-hero ` +
-        "refuses to review while that line is present.",
+        `the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line or nothing but the ` +
+        "scaffold's own lines, and pr-hero refuses to review it.",
       "",
-      "Write facts about THIS repo into it, then delete the marker line.",
+      "Write facts about THIS repo into it, and delete the marker line if it " +
+        "is still there.",
     ];
   }
   if (reason === "empty") {
@@ -3346,13 +3381,13 @@ export function gotchasErrorMessage(
       "",
       ...why,
       "",
-      `It still carries the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line, which`,
-      "is how `pr-hero init` and `pr-hero setup` mark a file they wrote and",
-      "nobody has edited. Reviewing with it would spend real money feeding",
-      "every hunter placeholder text, and return a clean-LOOKING result.",
+      `It still carries the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line, or`,
+      "nothing but the lines `pr-hero init` and `pr-hero setup` scaffold.",
+      "Reviewing with it would spend real money feeding every hunter",
+      "placeholder text, and return a clean-LOOKING result.",
       "",
-      "Replace the placeholder lines with facts about THIS repo, then delete",
-      "the marker line at the top.",
+      "Replace the placeholder lines with facts about THIS repo, and delete",
+      "the marker line at the top if it is still there.",
     ].join("\n");
   }
   return [
