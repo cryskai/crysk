@@ -1154,7 +1154,7 @@ pr-hero review --pr {pr} --dry-run
 
 **Fix:**
 
-Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).
+Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).
 
 ### PRH-CONFIG-INVALID
 

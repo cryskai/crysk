@@ -2236,7 +2236,7 @@ describe("PRH-GOTCHAS-MISSING fix names the init command", () => {
       entryOf("PRH-GOTCHAS-MISSING").variants.default.fixes,
     );
     expect(fix).toBe(
-      "Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).",
+      "Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
     );
   });
 });
