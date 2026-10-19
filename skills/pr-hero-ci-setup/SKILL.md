@@ -50,7 +50,7 @@ Load when the user asks to:
 | Mixed OpenCode providers in one run | Out of scope (#195). One OpenCode provider per run. Mixed `claude-code` + one OpenCode provider is legal. |
 | OpenCode CLI pin | Action installs **1.18.30** iff `opencode-auth != ''` OR routing contains `opencode`. Never `latest`. |
 | Fork PRs | Their pushes skip (no secrets). A user with write access comments `/pr-hero review`, and that run (base context, with secrets) reviews the fork head. Review `if` never reads `secrets`; the action checks credentials (Anthropic **or** Claude OAuth **or** `OPENCODE_AUTH_JSON`). |
-| Spend gates | Defaults: `budget-usd: 10.00` on metered routes (Anthropic key **or** OpenCode auth file), `max-changed-lines: 4000`, `max-changed-files: 50`. Claude-only OAuth stays unlimited-subscription unless OpenCode auth is also present. |
+| Spend gates | Defaults: `budget-usd: 10.00` on metered routes (Anthropic key **or** OpenCode auth file), `max-changed-lines: 4000` and `max-changed-files: 50` on metered routes only; a Claude subscription route has no size limit unless the workflow or `.prhero/config.json` sets one. Claude-only OAuth stays unlimited-subscription unless OpenCode auth is also present. |
 | Existing workflow | `setup --ci` skips; ask before `--force` |
 | First-time admission | Recommend `ci_admission_observe_only: true` — `references/ci-admission.md` |
 | User wants max CI spend | Lower `ci_max_attempts` and/or raise `ci_rereview_min_score` |

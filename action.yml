@@ -34,13 +34,11 @@ inputs:
     required: false
     default: 'false'
   max-changed-lines:
-    description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit.'
+    description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit. Leave unset to resolve it from the route billing mode - no limit on a Claude subscription (a run draws on quota, not a per-token invoice), 4000 on a metered ANTHROPIC_API_KEY route.'
     required: false
-    default: '4000'
   max-changed-files:
-    description: 'Size gate: skip the review when the diff exceeds this many changed files. 0 disables the limit.'
+    description: 'Size gate: skip the review when the diff exceeds this many changed files. 0 disables the limit. Leave unset to resolve it from the route billing mode - no limit on a Claude subscription, 50 on a metered ANTHROPIC_API_KEY route.'
     required: false
-    default: '50'
   budget-usd:
     description: 'Spend gate: skip the review when its estimated cost exceeds this USD ceiling. Leave unset to resolve the ceiling from the route billing mode - no ceiling on a Claude subscription (a run draws on quota, not a per-token invoice), a default ceiling on a metered ANTHROPIC_API_KEY route. An explicit value is honoured on any route; a value <= 0 disables the ceiling (still gated by the size limits above).'
     required: false

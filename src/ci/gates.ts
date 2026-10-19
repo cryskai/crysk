@@ -447,8 +447,89 @@ export function budgetUnlimitedNoticeMessage(
     "no budget-usd ceiling was applied: this route has no per-token invoice " +
     "credential (a Claude subscription or a free route), so a run draws on " +
     "quota rather than a per-token invoice and the estimated cost is not a " +
-    "dollar figure to gate on. The size gate still applies independently. " +
+    "dollar figure to gate on. The size gate resolves from the route separately. " +
     "Set `budget-usd: <n>` to impose a ceiling anyway."
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Route-aware size limits — the size gate's half of the #156 policy above.
+// The size gate is a COST and predictability gate (review/size-gate.ts's own
+// header), and on a subscription route a run's cash cost is $0. Skipping the
+// largest PRs there saved nothing and left the riskiest changes unreviewed:
+// on musive, 20 PRs in two months got no review at all. So, per knob: an
+// explicit flag wins; a value in the repo config is left for sizeGateConfig
+// to apply; otherwise a subscription route gets no limit (0) and a metered
+// route keeps the limits the action used to hard-code.
+// ---------------------------------------------------------------------------
+
+// The action's former `max-changed-files` default. Kept for metered routes so
+// unsetting the action input changes nothing for anyone who pays per token.
+// Lines need no constant: the engine default (DEFAULT_SIZE_GATE, 4000) already
+// equals the action's former `max-changed-lines` default.
+export const CI_DEFAULT_METERED_MAX_CHANGED_FILES = 50;
+
+export interface CiSizeLimits {
+  // `undefined` means "not decided here": sizeGateConfig then applies the
+  // repo config value, or the engine default.
+  maxChangedLines: number | undefined;
+  maxChangedFiles: number | undefined;
+  // The knobs THIS policy turned off. Non-empty only on a subscription route,
+  // and only for knobs neither the flags nor the repo config set. It feeds the
+  // notice below, because a gate that silently stops running is a defect in
+  // this module's doctrine.
+  defaultedOff: Array<"lines" | "files">;
+}
+
+export function resolveCiSizeLimits(input: {
+  flags: { maxChangedLines?: number; maxChangedFiles?: number };
+  config:
+    | { max_changed_lines?: number; max_changed_files?: number }
+    | undefined;
+  billingMode: CiBillingMode;
+}): CiSizeLimits {
+  const defaultedOff: Array<"lines" | "files"> = [];
+  const knob = (
+    flag: number | undefined,
+    configured: number | undefined,
+    meteredDefault: number | undefined,
+    name: "lines" | "files",
+  ): number | undefined => {
+    if (flag !== undefined) return flag;
+    if (configured !== undefined) return undefined;
+    if (input.billingMode === "metered") return meteredDefault;
+    defaultedOff.push(name);
+    return 0;
+  };
+  const maxChangedLines = knob(
+    input.flags.maxChangedLines,
+    input.config?.max_changed_lines,
+    undefined,
+    "lines",
+  );
+  const maxChangedFiles = knob(
+    input.flags.maxChangedFiles,
+    input.config?.max_changed_files,
+    CI_DEFAULT_METERED_MAX_CHANGED_FILES,
+    "files",
+  );
+  return { maxChangedLines, maxChangedFiles, defaultedOff };
+}
+
+// A NOTE, like budgetUnlimitedNoticeMessage: nobody chose anything wrong, but
+// a gate that did not run is still announced.
+export function sizeGateUnlimitedNoticeMessage(
+  limits: CiSizeLimits,
+): string | null {
+  if (limits.defaultedOff.length === 0) return null;
+  const what = limits.defaultedOff
+    .map((k) => (k === "lines" ? "changed-lines" : "changed-files"))
+    .join(" or ");
+  return (
+    `pr-hero size gate: no ${what} limit on a Claude subscription route — ` +
+    "a run draws on quota, not a per-token invoice, so large PRs are " +
+    "reviewed instead of skipped. Set `max-changed-lines` / " +
+    "`max-changed-files` to impose a limit."
   );
 }
 

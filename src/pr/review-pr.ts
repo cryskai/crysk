@@ -286,6 +286,7 @@ export async function reviewPr(
     step2 = await resolvePrPromptSetAndBudget({
       options,
       loaded,
+      config,
       isCi,
       operatorRoot,
     });
@@ -308,9 +309,31 @@ export async function reviewPr(
     }
     throw error;
   }
-  const { ciBudgetCeiling, agents, spec, agentFiles, promptSet, gotchasPath } =
-    step2;
+  const {
+    ciBudgetCeiling,
+    ciSizeLimits,
+    agents,
+    spec,
+    agentFiles,
+    promptSet,
+    gotchasPath,
+  } = step2;
   const { dir: agentsDir, source: agentsDirSource } = agents;
+  // CI resolves the limits from the route (resolveCiSizeLimits); a local run
+  // keeps the flags. An `undefined` knob falls through to the repo config,
+  // then the engine default, inside sizeGateConfigFor. Computed ONCE so the
+  // dry-run plan and the real gate cannot disagree about the same PR.
+  const sizeGateOverrides =
+    ciSizeLimits === undefined
+      ? options
+      : {
+          ...(ciSizeLimits.maxChangedLines === undefined
+            ? {}
+            : { maxChangedLines: ciSizeLimits.maxChangedLines }),
+          ...(ciSizeLimits.maxChangedFiles === undefined
+            ? {}
+            : { maxChangedFiles: ciSizeLimits.maxChangedFiles }),
+        };
   // Local mode's dirty-tree and HEAD-match gates are both skipped here ON
   // PURPOSE: the hunters read the worktree and never this checkout, and the
   // worktree satisfies the HEAD gate by construction (created detached at
@@ -361,7 +384,11 @@ export async function reviewPr(
       summary.enabled,
       options.scout,
     );
-    const dryRunGateConfig = sizeGateConfigFor(options, config, localIgnore);
+    const dryRunGateConfig = sizeGateConfigFor(
+      sizeGateOverrides,
+      config,
+      localIgnore,
+    );
     // See resolvePrDryRunNumstat (src/pr/target.ts) for the full rationale —
     // the degrade-to-aggregate-estimate rule PR1b Addition 1 / #5557 needs
     // when `gh`'s per-file `files` list is truncated, unavailable, or the
@@ -471,7 +498,7 @@ export async function reviewPr(
       baseRef: target.baseRef,
       headLabel,
       isCi,
-      sizeGateOverrides: options,
+      sizeGateOverrides,
       config,
       prIgnore,
       issueComments,

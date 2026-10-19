@@ -14,6 +14,7 @@ import {
   budgetDisabledWarningMessage,
   budgetUnlimitedNoticeMessage,
   CI_DEFAULT_METERED_BUDGET_USD,
+  CI_DEFAULT_METERED_MAX_CHANGED_FILES,
   type CiBudgetGateSkipInput,
   type CiGateSkip,
   type CiSizeGateSkipInput,
@@ -22,6 +23,8 @@ import {
   deriveCiBillingMode,
   evaluateBudgetGate,
   resolveCiBudgetCeiling,
+  resolveCiSizeLimits,
+  sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { renderStepSummary } from "#ci/reporter";
 import type { SizeGateVerdict } from "#review/size-gate";
@@ -566,7 +569,7 @@ describe("budgetUnlimitedNoticeMessage", () => {
       "no budget-usd ceiling was applied: this route has no per-token invoice " +
         "credential (a Claude subscription or a free route), so a run draws on " +
         "quota rather than a per-token invoice and the estimated cost is not a " +
-        "dollar figure to gate on. The size gate still applies independently. " +
+        "dollar figure to gate on. The size gate resolves from the route separately. " +
         "Set `budget-usd: <n>` to impose a ceiling anyway.",
     );
   });
@@ -593,5 +596,132 @@ describe("budgetUnlimitedNoticeMessage", () => {
     });
     expect(notice).not.toBe(budgetDisabledWarningMessage(0));
     expect(notice?.toLowerCase()).not.toContain("disabled");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveCiSizeLimits — the size gate's route-aware half of the #156 policy.
+// ---------------------------------------------------------------------------
+
+describe("resolveCiSizeLimits", () => {
+  test("subscription, nothing configured: both limits off and announced", () => {
+    expect(
+      resolveCiSizeLimits({
+        flags: {},
+        config: undefined,
+        billingMode: "subscription",
+      }),
+    ).toEqual({
+      maxChangedLines: 0,
+      maxChangedFiles: 0,
+      defaultedOff: ["lines", "files"],
+    });
+  });
+
+  test("metered, nothing configured: the action's former limits", () => {
+    expect(
+      resolveCiSizeLimits({
+        flags: {},
+        config: undefined,
+        billingMode: "metered",
+      }),
+    ).toEqual({
+      maxChangedLines: undefined,
+      maxChangedFiles: 50,
+      defaultedOff: [],
+    });
+    expect(CI_DEFAULT_METERED_MAX_CHANGED_FILES).toBe(50);
+  });
+
+  test("an explicit flag wins on a subscription", () => {
+    expect(
+      resolveCiSizeLimits({
+        flags: { maxChangedLines: 2500, maxChangedFiles: 40 },
+        config: undefined,
+        billingMode: "subscription",
+      }),
+    ).toEqual({
+      maxChangedLines: 2500,
+      maxChangedFiles: 40,
+      defaultedOff: [],
+    });
+  });
+
+  test("an explicit 0 flag stays 0 on a metered route", () => {
+    expect(
+      resolveCiSizeLimits({
+        flags: { maxChangedLines: 0, maxChangedFiles: 0 },
+        config: undefined,
+        billingMode: "metered",
+      }),
+    ).toEqual({
+      maxChangedLines: 0,
+      maxChangedFiles: 0,
+      defaultedOff: [],
+    });
+  });
+
+  test("a repo-config value is left for sizeGateConfig on a subscription", () => {
+    expect(
+      resolveCiSizeLimits({
+        flags: {},
+        config: { max_changed_lines: 3000 },
+        billingMode: "subscription",
+      }),
+    ).toEqual({
+      maxChangedLines: undefined,
+      maxChangedFiles: 0,
+      defaultedOff: ["files"],
+    });
+  });
+
+  test("a repo-config value is left for sizeGateConfig on a metered route", () => {
+    expect(
+      resolveCiSizeLimits({
+        flags: {},
+        config: { max_changed_files: 10 },
+        billingMode: "metered",
+      }),
+    ).toEqual({
+      maxChangedLines: undefined,
+      maxChangedFiles: undefined,
+      defaultedOff: [],
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sizeGateUnlimitedNoticeMessage — a NOTE for the knobs this policy turned off.
+// ---------------------------------------------------------------------------
+
+describe("sizeGateUnlimitedNoticeMessage", () => {
+  test("returns null when nothing was defaulted off", () => {
+    expect(
+      sizeGateUnlimitedNoticeMessage({
+        maxChangedLines: 2500,
+        maxChangedFiles: 40,
+        defaultedOff: [],
+      }),
+    ).toBeNull();
+  });
+
+  test("names both knobs when both were defaulted off", () => {
+    const message = sizeGateUnlimitedNoticeMessage({
+      maxChangedLines: 0,
+      maxChangedFiles: 0,
+      defaultedOff: ["lines", "files"],
+    });
+    expect(message).toContain("no changed-lines or changed-files limit");
+    expect(message).toContain("max-changed-lines");
+  });
+
+  test("names only the knob that was defaulted off", () => {
+    const message = sizeGateUnlimitedNoticeMessage({
+      maxChangedLines: undefined,
+      maxChangedFiles: 0,
+      defaultedOff: ["files"],
+    });
+    expect(message).toContain("no changed-files limit");
+    expect(message).not.toContain("changed-lines or");
   });
 });
