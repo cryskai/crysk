@@ -818,6 +818,13 @@ export const CODEGRAPH_MANDATE = [
 // Read from the registry file the hunters are actually spawned with, not from
 // a flag beside it: the mandate must promise exactly what the session gets. A
 // missing or unparseable registry grants nothing.
+//
+// The registry is only half the grant. Each step is spawned with
+// `--tools agent.tools`, so a hunter whose frontmatter omits the tool cannot
+// call it even when the server is up — the call site checks both, the same
+// rule HUNTER_READ_REQUIREMENT follows for reads.
+const CODEGRAPH_TOOL = "mcp__codegraph__codegraph_explore";
+
 async function codegraphGranted(mcpConfigPath: string): Promise<boolean> {
   try {
     const registry = await Bun.file(mcpConfigPath).json();
@@ -1559,7 +1566,7 @@ async function execute(
         input.hopBudget,
         boundaryNonce,
         agent.tools.length > 0,
-        codegraph,
+        codegraph && agent.tools.includes(CODEGRAPH_TOOL),
         leadsBlock,
       ),
       tools: agent.tools,

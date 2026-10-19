@@ -539,8 +539,11 @@ describe("parityTriggered", () => {
 // ---------------------------------------------------------------------------
 
 describe("codegraph mandate", () => {
-  async function huntersWithRegistry(granted: boolean | null) {
-    const input = await makeInput();
+  async function huntersWithRegistry(
+    granted: boolean | null,
+    agentsDir?: string,
+  ) {
+    const input = await makeInput({}, { agentsDir });
     const mcpConfigPath = path.join(input.runDir, "mcp.json");
     if (granted !== null) await writeMcpConfig(mcpConfigPath, granted);
     const runner = new FakeStepRunner(HUNTERS_OK);
@@ -570,6 +573,33 @@ describe("codegraph mandate", () => {
       expect(spec.prompt).not.toContain(CODEGRAPH_MANDATE);
       expect(spec.prompt).toContain("Hop budget: 12");
     }
+  });
+
+  // The registry grants the server to the run; each step's `--tools` grants
+  // it to the hunter. A hunter whose frontmatter omits the tool cannot call
+  // it, so ordering the call would demand the impossible.
+  test("a granting registry still leaves the mandate out for a hunter that does not declare the tool", async () => {
+    const agentsDir = await makeAgentsDir();
+    await Bun.write(
+      path.join(agentsDir, "deep-review-resilience.md"),
+      [
+        "---",
+        "name: deep-review-resilience",
+        "description: a hunter without codegraph",
+        "model: sonnet",
+        "tools: Read, Grep, Glob",
+        "---",
+        "",
+        "Hunt bugs in the diff.",
+        "",
+      ].join("\n"),
+    );
+    const hunters = await huntersWithRegistry(true, agentsDir);
+    const prompt = (name: string) =>
+      hunters.find((s) => s.name === name)?.prompt ?? "";
+    expect(prompt("hunter-reliability")).toContain(CODEGRAPH_MANDATE);
+    expect(prompt("hunter-resilience")).toContain("Hop budget: 12");
+    expect(prompt("hunter-resilience")).not.toContain(CODEGRAPH_MANDATE);
   });
 
   test("a missing registry file leaves the hunter prompt without the mandate", async () => {
