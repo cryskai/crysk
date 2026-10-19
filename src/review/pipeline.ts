@@ -791,11 +791,55 @@ const SUMMARY_OUTPUT_CONTRACT = [
 // (`docs/c4-preamble-design.md` §3.3-§3.4): the patch is the PR author's, and
 // the leads are model prose derived from it. `nonce` sits ahead of the
 // defaulted parameter so a caller cannot reach this composer without one.
+// The codegraph mandate, appended only when the run's MCP registry grants
+// codegraph (`codegraphGranted`).
+//
+// WHY a mandate and not the agent files' conditional "hop when it lives outside
+// the diff": with the tool merely available, 58 of 184 hunter sessions on
+// musive (32%) called it even once (2026-10-19, local watcher transcripts).
+// At that adoption a with/without-codegraph comparison measures the hunter's
+// choice of WHEN to look, not what looking finds — so the tool has to be used
+// always before it can be evaluated at all.
+//
+// WHY only on a granting registry: CI installs no codegraph, and a prompt
+// that orders a call to a tool the session lacks is a lie the hunter pays for
+// in turns. Without the grant the prompt stays byte-identical to before.
+export const CODEGRAPH_MANDATE = [
+  "Codegraph is available in this run, and using it is mandatory.",
+  "Before you draft any finding, call `codegraph_explore` at least once, naming",
+  "the symbols the patch defines or changes (functions, components, hooks,",
+  "types, exported values). Read the callers, consumers and dependents it",
+  "returns, and follow the ones whose behaviour the change can affect. Grep and",
+  "Read are for reading inside files you have already located; they do not",
+  "replace this step. A session with zero `codegraph_explore` calls is",
+  "incomplete, even when it ends with no findings.",
+].join("\n");
+
+// Read from the registry file the hunters are actually spawned with, not from
+// a flag beside it: the mandate must promise exactly what the session gets. A
+// missing or unparseable registry grants nothing.
+//
+// The registry is only half the grant. Each step is spawned with
+// `--tools agent.tools`, so a hunter whose frontmatter omits the tool cannot
+// call it even when the server is up — the call site checks both, the same
+// rule HUNTER_READ_REQUIREMENT follows for reads.
+const CODEGRAPH_TOOL = "mcp__codegraph__codegraph_explore";
+
+async function codegraphGranted(mcpConfigPath: string): Promise<boolean> {
+  try {
+    const registry = await Bun.file(mcpConfigPath).json();
+    return Object.hasOwn(registry?.mcpServers ?? {}, "codegraph");
+  } catch {
+    return false;
+  }
+}
+
 function hunterPrompt(
   patch: string,
   hopBudget: number,
   nonce: string,
   toolsEnabled: boolean,
+  codegraph: boolean,
   leadsBlock = "",
 ): string {
   const wrappedLeads = wrapBlock("scout_leads", nonce, leadsBlock);
@@ -804,6 +848,7 @@ function hunterPrompt(
     "",
     `Hop budget: ${hopBudget}`,
     "",
+    ...(codegraph ? [CODEGRAPH_MANDATE, ""] : []),
     // Ported prose Step 4 wording: the hop counters are the hunter's own
     // claim, and telemetry can contradict them.
     "`hops_used` and `hop_trail` are self-reported and may be cross-checked",
@@ -1489,6 +1534,7 @@ async function execute(
   // composing writes a system prompt per hunter to the run dir, so an aborted
   // run should not even build the specs it will never spawn.
   const huntersAdmitted = !ceilingAborted(deps, state);
+  const codegraph = await codegraphGranted(input.mcpConfigPath);
   // validateReviewSpec pins hunter keys inside the findings-schema Hunter
   // enum (v1.0.0 constraint), so the cast below is checked, not assumed.
   // `meta` rides along so the join below can stamp attempt provenance onto the
@@ -1520,6 +1566,7 @@ async function execute(
         input.hopBudget,
         boundaryNonce,
         agent.tools.length > 0,
+        codegraph && agent.tools.includes(CODEGRAPH_TOOL),
         leadsBlock,
       ),
       tools: agent.tools,
