@@ -1877,6 +1877,74 @@ describe("parseFindingCommentBadge — round trip with the renderer that wrote i
   });
 });
 
+describe("finding header refuter verdict", () => {
+  const HEAD = "b".repeat(40);
+
+  // The header is the first line after the marker that starts with the scan
+  // aid's tier word. Read it back from the rendered body, never by position.
+  function headerLineOf(body: string): string {
+    const line = body
+      .split("\n")
+      .find((candidate) => /^\S+\s+(blocking|advisory) ·/.test(candidate));
+    expect(line).toBeDefined();
+    return line ?? "";
+  }
+
+  test("a corroborated finding names the verdict last", () => {
+    const body = renderInlineComment(
+      finding({ id: "F001", refuter_verdict: "corroborated" }),
+      HEAD,
+    );
+    expect(headerLineOf(body).endsWith(" · refuter: corroborated")).toBe(true);
+  });
+
+  test("a finding the refuter never saw reads unchecked", () => {
+    const body = renderInlineComment(
+      finding({
+        id: "F001",
+        severity: "WARNING",
+        tier: "advisory",
+        refuter_verdict: "not_submitted",
+      }),
+      HEAD,
+    );
+    const header = headerLineOf(body);
+    expect(header.endsWith(" · refuter: unchecked")).toBe(true);
+    expect(header).not.toContain("not_submitted");
+  });
+
+  test("a downgraded-latent finding names the verdict verbatim", () => {
+    const body = renderInlineComment(
+      finding({
+        id: "F001",
+        severity: "CRITICAL",
+        tier: "advisory",
+        refuter_verdict: "downgraded-latent",
+      }),
+      HEAD,
+    );
+    expect(headerLineOf(body).endsWith(" · refuter: downgraded-latent")).toBe(
+      true,
+    );
+  });
+
+  test("the badge parser still reads the new header", () => {
+    const body = renderInlineComment(
+      finding({
+        id: "F001",
+        severity: "CRITICAL",
+        tier: "blocking",
+        refuter_verdict: "corroborated",
+      }),
+      HEAD,
+    );
+    expect(parseFindingCommentBadge(body)).toMatchObject({
+      sev: "CRITICAL",
+      tier: "blocking",
+    });
+  });
+});
+
 describe("renderInlineComment", () => {
   const WEB_URL = "https://github.com/musivetech/musive";
   const HEAD = "b".repeat(40);
@@ -1911,7 +1979,7 @@ describe("renderInlineComment", () => {
       HEAD,
     );
     expect(body).toContain(
-      `${scanAidEmoji({ severity: "BLOCKER", tier: "blocking" })} blocking · BLOCKER · introduced · lifecycle`,
+      `${scanAidEmoji({ severity: "BLOCKER", tier: "blocking" })} blocking · BLOCKER · introduced · lifecycle · refuter: corroborated`,
     );
   });
 
@@ -1927,7 +1995,7 @@ describe("renderInlineComment", () => {
       HEAD,
     );
     expect(body).toContain(
-      `${scanAidEmoji({ severity: "CRITICAL", tier: "advisory" })} advisory · CRITICAL · introduced · lifecycle`,
+      `${scanAidEmoji({ severity: "CRITICAL", tier: "advisory" })} advisory · CRITICAL · introduced · lifecycle · refuter: downgraded-latent`,
     );
     expect(body).not.toContain("🔴 CRITICAL");
     expect(body).not.toContain("🔴 blocking");
@@ -2116,7 +2184,7 @@ describe("renderIssueFindingComment", () => {
       HEAD,
     );
     expect(body).toContain(
-      `${scanAidEmoji({ severity: "BLOCKER", tier: "blocking" })} blocking · BLOCKER · introduced · reliability`,
+      `${scanAidEmoji({ severity: "BLOCKER", tier: "blocking" })} blocking · BLOCKER · introduced · reliability · refuter: corroborated`,
     );
     expect(body).toContain("`src/a.ts:10`");
     expect(body).toContain("could not anchor this");

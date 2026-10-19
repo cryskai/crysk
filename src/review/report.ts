@@ -23,6 +23,7 @@ import {
 import type {
   Finding,
   FindingsDocument,
+  RefuterVerdict,
   RunStatus,
   Severity,
   Tier,
@@ -1121,7 +1122,7 @@ function outsideDiffSection(
 // see below):
 //   <marker>
 //
-//   🔴 blocking · CRITICAL · introduced · lifecycle
+//   🔴 blocking · CRITICAL · introduced · lifecycle · refuter: corroborated
 //   `path:line` — symbol()
 //
 //   <claim, as a single unbroken-but-readable paragraph — item 5: "es solo
@@ -1132,11 +1133,26 @@ function outsideDiffSection(
 //
 //   <details>Evidence (N)</details>
 //   <details>Prompt to fix with AI</details>
+//
+// The refuter's verdict is the header's LAST field (diagnosis 5.9): without
+// it, triage cannot tell a refuter-corroborated blocker from a warning that
+// never reached the refuter. Appended, never inserted, because the parsers
+// that read this line back (FINDING_HEADER_BADGE here, FINDING_HEADER_TIER in
+// ci/review-admission.ts) anchor on the leading fields only.
 function findingHeaderLine(finding: Finding): string {
   return (
     `${scanAidEmoji(finding)} ${finding.tier} · ${finding.severity} · ` +
-    `${finding.causal_disposition} · ${finding.hunter}`
+    `${finding.causal_disposition} · ${finding.hunter} · ` +
+    `refuter: ${refuterLabel(finding.refuter_verdict)}`
   );
+}
+
+// `not_submitted` is the engine's word for "the refuter never saw this
+// finding" (every WARNING/SUGGESTION, and blockers on a truncated run). On a
+// PR comment that reads as a submission failure, so it renders as `unchecked`.
+// Every other verdict renders verbatim, matching the ledger's vocabulary.
+function refuterLabel(verdict: RefuterVerdict): string {
+  return verdict === "not_submitted" ? "unchecked" : verdict;
 }
 
 function findingLocationLine(
