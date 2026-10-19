@@ -28,7 +28,8 @@ been burned by a manual match that inflated a score by 50%.
 ## The two sibling folders (load-bearing context)
 
 - **`../deep-review/`** — the LAB. Owns the golden dataset (audited Greptile findings), the bench ledger
-  (`bench/METRICS.md`, append-only), the prompt sets (`agents/<set>/`, immutable once scored), the
+  (`bench/METRICS.md`, append-only, plus `bench/experiments/` for every live experiment's raw data —
+  see rule 6), the prompt sets (`agents/<set>/`, immutable once scored), the
   scorer, the replay/smoke CLI, and the musive target-repo config. It consumes this engine via
   `"pr-hero": "file:../../pr-hero"` and measures it. Its `CLAUDE.md` gotchas BIND any session that
   touches both repos — above all: **never read `../deep-review/dataset/test.jsonl`** and never edit a
@@ -164,7 +165,11 @@ over** (found while wiring C5, 2026-08-23):
    validator stays closed (4 hunter names, `1-14`). So a new hunter key needs no schema change — but any
    further widening of a shared field still does, on both sides. Category 15 = local logic error (see
    `docs/research/local-logic-misses.md`); its lab mirror is still owed.
-6. **Every live run costs money → it lands in a ledger** (lab runs in `bench/`; local evals in the
-   commit/PR description).
+6. **Every live run costs money → it lands in the lab's ledger the day it runs**: a section in
+   `../deep-review/bench/METRICS.md` (question, arms, n, result, cost, PR) and the raw data under
+   `../deep-review/bench/experiments/<date>-<slug>/`. The lab is a private repo, so musive data is
+   safe there and never in this public one. The commit/PR description keeps a copy of the numbers,
+   never the only one: between the pivot and 2026-10-19 that was the only copy, and two months of
+   results scattered (the ledger's post-pivot index lists what was lost).
 7. **One variable per experiment**; replicates + N-of-M semantics; attribute misses (hunter/merge/
    refuter) before choosing a lever. The lab's variance is HIGH — single runs prove nothing.
