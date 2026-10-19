@@ -2080,6 +2080,24 @@ describe("renderInlineComment", () => {
     expect(body).not.toContain("real, but no live trigger");
   });
 
+  test("a demoted CRITICAL the refuter never saw says so, matching the header", () => {
+    const body = renderInlineComment(
+      finding({
+        id: "F001",
+        severity: "CRITICAL",
+        evidence_class: "inferential",
+        refuter_verdict: "not_submitted",
+        tier: "advisory",
+      }),
+      HEAD,
+    );
+    expect(body).toContain(
+      "⚖️ Downgraded to advisory — the refuter never checked it",
+    );
+    expect(body).toContain("refuter: unchecked");
+    expect(body).not.toContain("not_submitted");
+  });
+
   test("evidence folds into details with the blank-line discipline, count in the label", () => {
     const body = renderInlineComment(finding({ id: "F001" }), HEAD);
     expect(body).toContain(

@@ -1191,18 +1191,23 @@ function tierExplanationLines(finding: Finding): string[] {
   const isBlockerClass =
     finding.severity === "BLOCKER" || finding.severity === "CRITICAL";
   if (!isBlockerClass || finding.tier !== "advisory") return [];
+  // `not_submitted` never reached the refuter, so "the refuter returned" it
+  // would be false, and printing the engine's word here would contradict the
+  // header, which says `refuter: unchecked` (refuterLabel).
   const lines = [
-    "⚖️ Downgraded to advisory — the refuter returned " +
-      `\`${finding.refuter_verdict}\``,
+    finding.refuter_verdict === "not_submitted"
+      ? "⚖️ Downgraded to advisory — the refuter never checked it"
+      : "⚖️ Downgraded to advisory — the refuter returned " +
+        `\`${finding.refuter_verdict}\``,
   ];
   // `downgraded-latent` is the one verdict with a documented, human-legible
   // meaning worth spelling out inline (review/findings.ts's own WHY comment on the
   // type): a real defect the refuter could not currently trigger. The other
-  // verdicts that can also land here (`inconclusive`; `not_submitted`, either
-  // unrefuted-inferential or demoted because the run was truncated before the
-  // refuter leg ran; or an `insufficient` evidence_class regardless of
-  // verdict) have no equally short gloss, so they render with just the verdict
-  // name rather than a guessed one.
+  // verdicts that can also land here (`inconclusive`, or an `insufficient`
+  // evidence_class regardless of verdict) have no equally short gloss, so they
+  // render with just the verdict name rather than a guessed one.
+  // `not_submitted` (unrefuted-inferential, or demoted because the run was
+  // truncated before the refuter leg ran) has its own line above.
   if (finding.refuter_verdict === "downgraded-latent") {
     lines.push("   (real, but no live trigger today)");
   }
