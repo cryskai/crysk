@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-19
+
+### Fixed
+- **Incremental re-reviews anchor inline comments against the full PR diff** (#366): hunting still reads the push
+  delta, but a finding on an untouched line of the PR now gets a review thread instead of landing in Comments Outside
+  Diff, so it can be dismissed and rechecked. The run dir gains `anchor.patch`, which `post --from` and
+  `triage reply` read (falling back to `diff.patch`).
+- **A timed-out admission reserve POST is adopted by its own nonce** (#360, #367): each check-run write carries a
+  per-call `postNonce`, and a failed POST adopts only the run carrying it, reused records included, so a POST GitHub
+  accepted no longer leaves a `reserved` row counting toward the attempt budget.
+- **"Review partial again" compares which hunters failed** (#363, #368): the partial status reads
+  `(N of M hunters failed, set abc123)`, and the repeat text (fix the route or override) is written only when the same
+  hunters failed again. Older texts without the key still parse and read as not a repeat.
+- **A compacted Outside Diff entry keeps its tier** (#369): the size fallback now renders `🔴 blocking · <location>`
+  instead of the bare location.
+- **The state block stays within its PATCH budget, and a same-head re-post is idempotent** (#364).
+- **A free route no longer shows a dollar band, and the cost footer and CI notice no longer claim a Claude
+  subscription on it** (#355, #361).
+- **Config-error and forced runs no longer use an automatic review attempt** (#353).
+- **A dismissed, deferred or misclassified finding is re-verified when its code changes** (#351), and a finding that
+  escalates to blocking posts its own comment (#349).
+- **The CLI's pending status carries its run's URL, and a cancel settles only that pending** (#357).
+- **The launcher probes the bundled Bun and forwards SIGINT without a TTY** (#356); **skills sync never overwrites a
+  local copy it has no digest for** (#354); **OpenCode qualification retries transport failures with a per-request
+  deadline** (#352); three small CI gaps from the e2e walkthrough (#350).
+- **The plan's RUN row says `suspicion prior(s)`**, which is what it counts (#365).
+
+### Docs
+- An upheld dismissal takes effect in two steps (#359).
+
+
 ### Added
 - **`setup --ci` says what the first PR needs**: when `.prhero/gotchas.md` is missing or still the scaffold, the next steps now
   include `npx -y pr-hero init`, writing real gotchas, committing `.prhero/` to the default branch, and requiring the `pr-hero`
@@ -416,7 +447,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/juanmaagd/pr-hero/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/juanmaagd/pr-hero/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/juanmaagd/pr-hero/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/juanmaagd/pr-hero/compare/v0.2.0...v0.2.1
