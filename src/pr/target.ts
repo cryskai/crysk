@@ -21,8 +21,11 @@ import os from "node:os";
 import {
   budgetDisabledWarningMessage,
   budgetUnlimitedNoticeMessage,
+  type CiSizeLimits,
   deriveCiBillingMode,
   resolveCiBudgetCeiling,
+  resolveCiSizeLimits,
+  sizeGateUnlimitedNoticeMessage,
 } from "#ci/gates";
 import { formatWorkflowCommand } from "#ci/reporter";
 import { resolveRepoRoot } from "#git/git";
@@ -134,6 +137,7 @@ export async function resolvePrRunOptions(
 
 export interface ResolvedPrPromptSet {
   ciBudgetCeiling: ReturnType<typeof resolveCiBudgetCeiling>;
+  ciSizeLimits: CiSizeLimits | undefined;
   agents: AgentsDirResolution;
   spec: ReviewSpec;
   agentFiles: Map<string, ParsedAgent>;
@@ -150,9 +154,15 @@ export interface ResolvedPrPromptSet {
 export async function resolvePrPromptSetAndBudget(params: {
   options: CliOptions;
   loaded: LoadedRunConfig["loaded"];
+  config: LoadedRunConfig["config"];
   isCi: boolean;
   operatorRoot: string;
 }): Promise<ResolvedPrPromptSet> {
+  // File presence, not envBillsMetered: that predicate stamps Claude
+  // usage and must stay Anthropic-env-only.
+  const billingMode = deriveCiBillingMode(process.env, {
+    openCodeAuthPresent: existsSync(resolveOpenCodeAuthPath()),
+  });
   // Issue #156: resolve the ceiling ONCE, here, and use this same value at
   // the budget gate far below (src/pr/review-pr.ts's plan/confirm stage).
   // Resolving twice invites the announcement and the gate drifting apart.
@@ -162,12 +172,18 @@ export async function resolvePrPromptSetAndBudget(params: {
   // configured.
   const ciBudgetCeiling = resolveCiBudgetCeiling({
     configured: params.options.budgetUsd,
-    billingMode: deriveCiBillingMode(process.env, {
-      // File presence, not envBillsMetered: that predicate stamps Claude
-      // usage and must stay Anthropic-env-only.
-      openCodeAuthPresent: existsSync(resolveOpenCodeAuthPath()),
-    }),
+    billingMode,
   });
+  // The size gate's half of the same route policy (ci/gates.ts,
+  // resolveCiSizeLimits). CI only: a local or watcher run keeps reading the
+  // flags and the repo config exactly as before.
+  const ciSizeLimits = params.isCi
+    ? resolveCiSizeLimits({
+        flags: params.options,
+        config: params.config,
+        billingMode,
+      })
+    : undefined;
   // Spec 3.1: a silent disable is indistinguishable from a passing gate, so
   // an EXPLICIT `--budget-usd <= 0` warns even though it never skips a run.
   // Emitted here (once, as soon as isCi/budgetUsd are both known) rather
@@ -187,6 +203,12 @@ export async function resolvePrPromptSetAndBudget(params: {
     if (unlimitedNotice !== null) {
       log(formatWorkflowCommand("notice", unlimitedNotice));
     }
+    if (ciSizeLimits !== undefined) {
+      const sizeNotice = sizeGateUnlimitedNoticeMessage(ciSizeLimits);
+      if (sizeNotice !== null) {
+        log(formatWorkflowCommand("notice", sizeNotice));
+      }
+    }
   }
   // The WHOLE resolution, not just its dir: under the compiled binary the
   // prompt set is a map of embedded paths and `dir` is only a display label.
@@ -198,7 +220,15 @@ export async function resolvePrPromptSetAndBudget(params: {
     params.options.gotchas,
     params.operatorRoot,
   );
-  return { ciBudgetCeiling, agents, spec, agentFiles, promptSet, gotchasPath };
+  return {
+    ciBudgetCeiling,
+    ciSizeLimits,
+    agents,
+    spec,
+    agentFiles,
+    promptSet,
+    gotchasPath,
+  };
 }
 
 // PR1b Addition 1 / #5557's degrade rule, extracted so it can be proven

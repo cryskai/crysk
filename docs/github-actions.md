@@ -377,7 +377,7 @@ nothing:
 
 | Gate | Input | Default | Disable |
 |---|---|---|---|
-| Size | `max-changed-lines` / `max-changed-files` | `4000` / `50` | `0` |
+| Size | `max-changed-lines` / `max-changed-files` | route-derived (see below) | `0` |
 | Budget | `budget-usd` | route-derived (see below) | any value `<= 0` |
 
 Both gates exit 0 and leave a courteous PR comment plus step-summary note when they trip — they are cost
@@ -392,6 +392,12 @@ real cash cost is `$0.00` and there is no dollar figure to gate on — no ceilin
 emits a `::notice::` saying so. A metered route (`ANTHROPIC_API_KEY`, or OpenCode API-token auth via
 `OPENCODE_AUTH_JSON`) gets a `10.00` default, because that is the case where a runaway PR really does
 produce an invoice. Setting `budget-usd` explicitly is honoured verbatim on either route.
+
+**Leaving `max-changed-lines` / `max-changed-files` unset resolves them the same way.** On a Claude
+subscription route there is no size limit, so large pull requests are reviewed instead of skipped, and
+the run emits a `::notice::` saying so. A metered route keeps `4000` lines / `50` files. A value set in
+the workflow, or `max_changed_lines` / `max_changed_files` in `.prhero/config.json`, is honoured on
+either route, and `0` disables that limit.
 
 If **both** Claude credentials are set, the ceiling is applied: this project does not record which one
 the Claude CLI actually bills, and a wrongly-removed ceiling costs money while a wrongly-applied one
