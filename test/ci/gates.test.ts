@@ -210,6 +210,29 @@ describe("ciSizeGateSkip", () => {
     expect(lowered).not.toContain("reject");
   });
 
+  test("a knob that is off is named as off in the comment, never as 0", () => {
+    const skip = ciSizeGateSkip({
+      isCi: true,
+      verdict: failedLinesGate,
+      prNumber: 55,
+      maxChangedLines: 1000,
+      maxChangedFiles: 0,
+    });
+    expect(skip?.comment).toContain("(max 1000 lines / no file limit)");
+    expect(skip?.comment).not.toContain("0 files");
+  });
+
+  test("both knobs on keep the original wording", () => {
+    const skip = ciSizeGateSkip({
+      isCi: true,
+      verdict: failedLinesGate,
+      prNumber: 55,
+      maxChangedLines: 1000,
+      maxChangedFiles: 50,
+    });
+    expect(skip?.comment).toContain("(max 1000 lines / 50 files)");
+  });
+
   test("the summary payload renders cleanly through ci-reporter's renderStepSummary (shape compatibility)", () => {
     const skip = ciSizeGateSkip({
       isCi: true,

@@ -175,6 +175,17 @@ type ManualRequiredSummary = Extract<
   { kind: "manual-required" }
 >;
 
+// Same reason as reporter.ts's sizeLimitText: a knob that is off (<= 0) must
+// not print as "0 files". Both knobs on keeps the original wording.
+function sizeLimitsText(maxLines: number, maxFiles: number): string {
+  if (maxLines > 0 && maxFiles > 0) {
+    return `max ${maxLines} lines / ${maxFiles} files`;
+  }
+  const lines = maxLines > 0 ? `max ${maxLines} lines` : "no line limit";
+  const files = maxFiles > 0 ? `max ${maxFiles} files` : "no file limit";
+  return `${lines} / ${files}`;
+}
+
 function buildSizeSkipComment(data: SkipSizeSummary): string {
   const lines = [
     SKIP_SIZE_COMMENT_MARKER,
@@ -182,7 +193,7 @@ function buildSizeSkipComment(data: SkipSizeSummary): string {
     "",
     `⚠️ This diff changes ${data.changedLines} line(s) across ` +
       `${data.changedFiles} file(s), exceeding the configured size gate ` +
-      `(max ${data.maxChangedLines} lines / ${data.maxChangedFiles} files).`,
+      `(${sizeLimitsText(data.maxChangedLines, data.maxChangedFiles)}).`,
     "",
     "pr-hero did not run to avoid reviewing an unbounded diff. Split the " +
       "PR or raise `max-changed-lines` / `max-changed-files` to change the " +

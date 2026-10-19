@@ -297,6 +297,14 @@ function usd(amount: number): string {
   return `$${amount.toFixed(2)}`;
 }
 
+// A size limit <= 0 means that knob is off (review/size-gate.ts). Printed as
+// a number it reads "limit 0", a limit every diff exceeds, and a subscription
+// route now turns a knob off by default (resolveCiSizeLimits), so the other
+// knob tripping would show it.
+export function sizeLimitText(limit: number): string {
+  return limit > 0 ? `limit ${limit}` : "no limit";
+}
+
 function skipSizeLines(data: CiSkipSizeSummary): string[] {
   return [
     `### ⚠️ pr-hero Review Skipped — PR #${data.prNumber}`,
@@ -305,8 +313,8 @@ function skipSizeLines(data: CiSkipSizeSummary): string[] {
     "",
     "| Metric | Value |",
     "| --- | --- |",
-    `| Changed lines | ${data.changedLines} (limit ${data.maxChangedLines}) |`,
-    `| Changed files | ${data.changedFiles} (limit ${data.maxChangedFiles}) |`,
+    `| Changed lines | ${data.changedLines} (${sizeLimitText(data.maxChangedLines)}) |`,
+    `| Changed files | ${data.changedFiles} (${sizeLimitText(data.maxChangedFiles)}) |`,
     "",
     "pr-hero did not run to avoid reviewing an unbounded diff. Split the " +
       "PR or raise `max-changed-lines` / `max-changed-files`.",
