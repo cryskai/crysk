@@ -211,8 +211,12 @@ function outsideDiffBlockingLocations(body: string): (string | undefined)[] {
     }
     if (/^#{1,3} /.test(line) || line === "---") break;
     if (line.startsWith(BLOCKING_ENTRY_HEADER)) {
-      locations.push(undefined);
-      awaitingLocation = true;
+      // A compacted entry (report.ts size fallback) carries its location on the
+      // header line itself, so it is not awaited on the next line.
+      const rest = line.slice(BLOCKING_ENTRY_HEADER.length);
+      const compact = rest.includes("`");
+      locations.push(compact ? rest : undefined);
+      awaitingLocation = !compact;
       continue;
     }
     if (awaitingLocation && line.trim() !== "") {

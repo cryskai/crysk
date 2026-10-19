@@ -1093,10 +1093,15 @@ function outsideDiffSection(
   const out: string[] = [`### Comments Outside Diff (${findings.length})`, ""];
   for (const [i, finding] of findings.entries()) {
     if (i > 0) out.push("");
-    // A compact entry keeps only its linked location: no claim, evidence, or
-    // prompt-to-fix body. The location line is the review link itself.
+    // A compact entry keeps only its tier and linked location: no claim,
+    // evidence, or prompt-to-fix body. WHY the tier stays: without it a reader
+    // (or the sandbox's report parser) cannot tell a compacted blocking entry
+    // from an advisory one.
     if (compactFrom !== undefined && i >= compactFrom) {
-      out.push(findingLocationLine(finding, headSha, webUrl, true));
+      out.push(
+        `${scanAidEmoji(finding)} ${finding.tier} · ` +
+          findingLocationLine(finding, headSha, webUrl, true),
+      );
       continue;
     }
     out.push(...findingBodyLines(finding, headSha, webUrl, true));
