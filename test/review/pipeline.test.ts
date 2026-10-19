@@ -14,6 +14,7 @@ import {
   validateFindingsDocument,
 } from "#review/findings";
 import {
+  CODEGRAPH_MANDATE,
   changedPathsFromDiff,
   makeProofRefResolver,
   PIPELINE_SCHEMA_VERSION,
@@ -25,6 +26,7 @@ import {
   stepFailureReason,
 } from "#review/pipeline";
 import { GOTCHAS_TEMPLATE } from "#review/preflight";
+import { writeMcpConfig } from "#review/run";
 import type { ScoutLead } from "#review/scout";
 import { defaultReviewSpec } from "#review/spec";
 import type { StepResult, StepRunner, StepSpec } from "#review/step-runner";
@@ -528,6 +530,54 @@ describe("parityTriggered", () => {
         ["**/FileUploaderStore.ts", "packages/common/lib/dtos/**"],
       ),
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Codegraph mandate — the hunter prompt requires the tool only when the run's
+// MCP registry actually grants it.
+// ---------------------------------------------------------------------------
+
+describe("codegraph mandate", () => {
+  async function huntersWithRegistry(granted: boolean | null) {
+    const input = await makeInput();
+    const mcpConfigPath = path.join(input.runDir, "mcp.json");
+    if (granted !== null) await writeMcpConfig(mcpConfigPath, granted);
+    const runner = new FakeStepRunner(HUNTERS_OK);
+    await runPipeline({ ...input, mcpConfigPath }, { runner });
+    return runner.specs.filter((s) => s.name.startsWith("hunter-"));
+  }
+
+  test("a registry granting codegraph puts the mandate in every hunter prompt", async () => {
+    const hunters = await huntersWithRegistry(true);
+    expect(hunters.length).toBeGreaterThan(0);
+    for (const spec of hunters) {
+      expect(spec.prompt).toContain(CODEGRAPH_MANDATE);
+      // Read after the budget it spends, before the output contract.
+      expect(spec.prompt.indexOf("Hop budget:")).toBeLessThan(
+        spec.prompt.indexOf(CODEGRAPH_MANDATE),
+      );
+      expect(spec.prompt.indexOf(CODEGRAPH_MANDATE)).toBeLessThan(
+        spec.prompt.indexOf('{"findings":[]}'),
+      );
+    }
+  });
+
+  test("an empty registry leaves the hunter prompt without the mandate", async () => {
+    const hunters = await huntersWithRegistry(false);
+    expect(hunters.length).toBeGreaterThan(0);
+    for (const spec of hunters) {
+      expect(spec.prompt).not.toContain(CODEGRAPH_MANDATE);
+      expect(spec.prompt).toContain("Hop budget: 12");
+    }
+  });
+
+  test("a missing registry file leaves the hunter prompt without the mandate", async () => {
+    const hunters = await huntersWithRegistry(null);
+    expect(hunters.length).toBeGreaterThan(0);
+    for (const spec of hunters) {
+      expect(spec.prompt).not.toContain(CODEGRAPH_MANDATE);
+    }
   });
 });
 

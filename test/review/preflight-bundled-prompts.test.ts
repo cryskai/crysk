@@ -194,6 +194,21 @@ describe("bundled prompts declare the intended model split", () => {
     expect(refuter.effort).toBe("high");
   });
 
+  // The engine mandates a codegraph_explore call whenever the run's registry
+  // grants codegraph, so a hunter that does not declare the tool would be
+  // told to use something it never listed (logic did, until 2026-10).
+  test("every bundled hunter prompt declares codegraph_explore", () => {
+    const hunterFiles = readdirSync(defaultDir)
+      .filter((f) => f.startsWith("deep-review-") && f.endsWith(".md"))
+      .sort();
+    expect(hunterFiles.length).toBeGreaterThan(0);
+    for (const file of hunterFiles) {
+      expect(parsedOf(file).tools, `${file} tools`).toContain(
+        "mcp__codegraph__codegraph_explore",
+      );
+    }
+  });
+
   test("every bundled hunter prompt declares sonnet at xhigh effort", () => {
     const hunterFiles = readdirSync(defaultDir)
       .filter((f) => f.startsWith("deep-review-") && f.endsWith(".md"))
