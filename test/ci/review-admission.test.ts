@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { AdmissionRecord } from "#ci/admission-ledger";
 import {
   CI_REVIEW_POLICY_SCHEMA_VERSION,
   type CiReviewAdmissionInput,
@@ -6,6 +7,7 @@ import {
   canonicalAdmissionFindings,
   ciReviewPolicyHash,
   ciReviewSkipDetail,
+  countableWorkflowHeads,
   DEFAULT_CI_ADVISORY_WEIGHT,
   DEFAULT_CI_BLOCKING_WEIGHT,
   DEFAULT_CI_MAX_ATTEMPTS,
@@ -14,6 +16,7 @@ import {
   DEFAULT_CI_REVIEW_POLICY_MODE,
   deltaTouchesPriorFindings,
   evaluateCiReviewAdmission,
+  nextStateReviewCount,
   parseCiAdmissionBlock,
   parseFindingCommentTier,
   pathsFromPostedFindingMarkers,
@@ -21,6 +24,7 @@ import {
   priorScoreForAdmission,
   priorTierScore,
   renderCiAdmissionBlock,
+  resolveCiAdmissionAttemptCount,
   resolveCiReviewPolicy,
   resolveCiTrustedActors,
   resolveReviewAttemptCount,
@@ -279,7 +283,7 @@ describe("priorScoreForAdmission precedence", () => {
   test("state findings beat admission and posted comments", () => {
     expect(
       priorScoreForAdmission({
-        state: { headSha: HEAD_A, findings: [finding("advisory")] },
+        state: { headSha: HEAD_A, hw: 0, findings: [finding("advisory")] },
         admission: { headSha: HEAD_A, blocking: 9, advisory: 0, reviews: 1 },
         postedFindings: {
           blocking: 9,
@@ -597,6 +601,7 @@ describe("evaluateCiReviewAdmission", () => {
           reviewCount: 1,
           state: {
             headSha: HEAD_A,
+            hw: 0,
             findings: [
               finding("advisory"),
               finding("advisory"),
@@ -620,6 +625,7 @@ describe("evaluateCiReviewAdmission", () => {
         reviewCount: 2,
         state: {
           headSha: HEAD_A,
+          hw: 0,
           findings: [finding("blocking"), finding("blocking")],
           reviews: 2,
         },
@@ -639,7 +645,10 @@ describe("evaluateCiReviewAdmission", () => {
 describe("stateReviewCount", () => {
   test("reads reviews from state when present", () => {
     expect(
-      stateReviewCount({ headSha: HEAD_A, findings: [], reviews: 2 }, true),
+      stateReviewCount(
+        { headSha: HEAD_A, hw: 0, findings: [], reviews: 2 },
+        true,
+      ),
     ).toBe(2);
   });
 
@@ -823,6 +832,128 @@ describe("resolveReviewAttemptCount", () => {
   });
 });
 
+function ledgerRow(
+  headSha: string,
+  status: AdmissionRecord["status"],
+): AdmissionRecord {
+  return {
+    schemaVersion: 1,
+    prNumber: 326,
+    headSha,
+    policyHash: "abc123def4567890",
+    reservationId: "0123456789abcdef",
+    attemptNumber: 1,
+    status,
+    decisionReason: "",
+    priorScore: null,
+    blockingCount: null,
+    advisoryCount: null,
+    workflowRunId: null,
+    createdAt: "2026-10-16T12:00:00.000Z",
+    settledAt: null,
+  };
+}
+
+// #326: a head whose pr-hero run concluded success only because the gate
+// skipped it spent nothing, so it must not count as a review attempt. A
+// head with no ledger row at all (a run older than the ledger) still counts.
+describe("countableWorkflowHeads", () => {
+  test("drops a head whose only ledger row is a gate skip (#326)", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [ledgerRow(HEAD_A, "gate-skipped")]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(false);
+  });
+
+  // `reserved` is deliberately absent: a reserved row does not prove the run
+  // spent nothing, so it is kept below (the provider-started settle is
+  // best-effort and the run may have reached the provider anyway).
+  test.each(["yielded"] as const)(
+    "drops a head whose only ledger row is %s (spent nothing, like the gate skip)",
+    (status) => {
+      const countable = countableWorkflowHeads(
+        new Set([HEAD_A]),
+        new Map([[HEAD_A, [ledgerRow(HEAD_A, status)]]]),
+      );
+      expect(countable.has(HEAD_A)).toBe(false);
+    },
+  );
+
+  // F001: `cancelled` is written over a `provider-started` row by the SIGTERM
+  // and SIGINT handlers (admission.ts settleHeldAdmissionLedgerOnSignal), after
+  // hunters may already have run. A `timeout-minutes` kill concludes the run
+  // `failure`, so this head is in the workflow-run list and must stay counted.
+  test("keeps a head whose only ledger row is cancelled (a signal can land after provider spend)", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [ledgerRow(HEAD_A, "cancelled")]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
+
+  test("keeps a head whose only ledger row is reserved (provider-started write may have failed)", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [ledgerRow(HEAD_A, "reserved")]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
+
+  test("keeps a head with a reserved row next to a gate skip", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([
+        [
+          HEAD_A,
+          [ledgerRow(HEAD_A, "gate-skipped"), ledgerRow(HEAD_A, "reserved")],
+        ],
+      ]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
+
+  test("keeps a head whose only ledger row has a status this engine does not know", () => {
+    // Simulates a row written by a newer engine: the parser casts the status
+    // string through unchecked, so the allowlist must fail closed on it.
+    const unknownStatus = "some-future-status" as AdmissionRecord["status"];
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [ledgerRow(HEAD_A, unknownStatus)]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
+
+  test("keeps a head that has no ledger row at all", () => {
+    const countable = countableWorkflowHeads(new Set([HEAD_B]), new Map());
+    expect(countable.has(HEAD_B)).toBe(true);
+  });
+
+  test.each(["completed", "failed", "provider-started", "skipped"] as const)(
+    "keeps a head with a %s row",
+    (status) => {
+      const countable = countableWorkflowHeads(
+        new Set([HEAD_B]),
+        new Map([[HEAD_B, [ledgerRow(HEAD_B, status)]]]),
+      );
+      expect(countable.has(HEAD_B)).toBe(true);
+    },
+  );
+
+  test("keeps a gate-skipped head that also has a completed row", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([
+        [
+          HEAD_A,
+          [ledgerRow(HEAD_A, "gate-skipped"), ledgerRow(HEAD_A, "completed")],
+        ],
+      ]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
+});
+
 describe("postedFindingFingerprint", () => {
   test("joins head, path, line, and claim fingerprint", () => {
     expect(
@@ -842,7 +973,7 @@ describe("validateAdmissionAuthority", () => {
       validateAdmissionAuthority({
         summaryHead: HEAD_A,
         reportMarkerHead: HEAD_A,
-        state: { headSha: HEAD_A, findings: [] },
+        state: { headSha: HEAD_A, hw: 0, findings: [] },
         admission: { headSha: HEAD_A, blocking: 0, advisory: 1, reviews: 1 },
       }),
     ).toEqual({ ok: true, authoritativeHead: HEAD_A });
@@ -868,7 +999,7 @@ describe("validateAdmissionAuthority", () => {
       validateAdmissionAuthority({
         summaryHead: HEAD_A,
         reportMarkerHead: HEAD_A,
-        state: { headSha: HEAD_B, findings: [] },
+        state: { headSha: HEAD_B, hw: 0, findings: [] },
         admission: null,
       }),
     ).toMatchObject({
@@ -1128,5 +1259,131 @@ describe("evaluateCiReviewAdmission — delta risk bypass", () => {
         }),
       ),
     ).toEqual({ action: "run" });
+  });
+});
+
+// A forced comment run is a deliberate spend outside the AUTOMATIC budget
+// (see countableWorkflowHeads and countTerminalAttempts), so the head it ran on
+// and the summary counter it would bump must both stay as they were.
+describe("a forced run does not spend an automatic attempt", () => {
+  const forcedRow = (
+    headSha: string,
+    status: AdmissionRecord["status"],
+    attemptNumber: number,
+  ): AdmissionRecord => ({
+    ...ledgerRow(headSha, status),
+    attemptNumber,
+    forced: true,
+  });
+
+  test("countableWorkflowHeads drops a head whose only rows are forced", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([[HEAD_A, [forcedRow(HEAD_A, "completed", 1)]]]),
+    );
+    expect(countable.has(HEAD_A)).toBe(false);
+  });
+
+  test("keeps a head that has an automatic completed row next to a forced one", () => {
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_A]),
+      new Map([
+        [
+          HEAD_A,
+          [ledgerRow(HEAD_A, "completed"), forcedRow(HEAD_A, "completed", 2)],
+        ],
+      ]),
+    );
+    expect(countable.has(HEAD_A)).toBe(true);
+  });
+
+  test("nextStateReviewCount keeps the previous count for a forced run", () => {
+    const state = { headSha: HEAD_A, findings: [], reviews: 2, hw: 0 };
+    expect(
+      nextStateReviewCount({ existingSummaryId: 7, state, force: true }),
+    ).toBe(2);
+  });
+
+  test("nextStateReviewCount still adds one for an automatic run", () => {
+    const state = { headSha: HEAD_A, findings: [], reviews: 2, hw: 0 };
+    expect(nextStateReviewCount({ existingSummaryId: 7, state })).toBe(3);
+  });
+
+  test("the attempt count is the highest of the three legs, with forced rows left out", () => {
+    const ledgerRecords = [
+      ledgerRow(HEAD_A, "completed"),
+      ledgerRow(HEAD_B, "failed"),
+      forcedRow(HEAD_A, "completed", 2),
+    ];
+    // Terminal rows (completed + failed) are the highest leg: 2.
+    expect(
+      resolveCiAdmissionAttemptCount({
+        stateCount: 1,
+        workflowHeads: new Set([HEAD_A]),
+        ledgerRecords,
+      }),
+    ).toBe(2);
+    // The summary counter wins when it is higher.
+    expect(
+      resolveCiAdmissionAttemptCount({
+        stateCount: 5,
+        workflowHeads: new Set([HEAD_A]),
+        ledgerRecords,
+      }),
+    ).toBe(5);
+    // Distinct workflow heads win when they are higher.
+    expect(
+      resolveCiAdmissionAttemptCount({
+        stateCount: 1,
+        workflowHeads: new Set([HEAD_A, HEAD_B, "c".repeat(40)]),
+        ledgerRecords,
+      }),
+    ).toBe(3);
+  });
+});
+
+// A forced FIRST review posts the first summary of the PR. That summary must
+// read as zero automatic reviews. If it read as one (for example because a
+// floor of 1 was written, or because the zero block failed to parse so the
+// marker fallback counted the summary), the next automatic push would be
+// charged the forced run's attempt.
+describe("a forced first review's summary reads as zero automatic reviews", () => {
+  test("the count is 0, the admission block carries 0, and the attempt count stays 0", () => {
+    const count = nextStateReviewCount({
+      existingSummaryId: null,
+      state: null,
+      force: true,
+    });
+    expect(count).toBe(0);
+
+    const summaryBody = renderCiAdmissionBlock(
+      HEAD_A,
+      { blocking: 0, advisory: 0 },
+      count,
+    );
+    const parsed = parseCiAdmissionBlock(summaryBody);
+    expect(parsed?.reviews).toBe(0);
+    expect(stateReviewCount(null, true, parsed)).toBe(0);
+    const forcedRow: AdmissionRecord = {
+      ...ledgerRow(HEAD_A, "completed"),
+      forced: true,
+    };
+    // The gate passes only countable heads, so the forced-only head is dropped first.
+    expect(
+      resolveCiAdmissionAttemptCount({
+        stateCount: stateReviewCount(null, true, parsed),
+        workflowHeads: countableWorkflowHeads(
+          new Set([HEAD_A]),
+          new Map([[HEAD_A, [forcedRow]]]),
+        ),
+        ledgerRecords: [forcedRow],
+      }),
+    ).toBe(0);
+  });
+
+  test("an automatic first review still writes 1", () => {
+    expect(nextStateReviewCount({ existingSummaryId: null, state: null })).toBe(
+      1,
+    );
   });
 });

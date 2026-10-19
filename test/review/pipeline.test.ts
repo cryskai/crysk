@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PriorRecord } from "#rereview/classify";
 import type { RereviewProvenance } from "#rereview/prepare";
+import { unresolvedBlockingCount } from "#rereview/state";
 import type { DraftFinding, HunterDraft, RefuterResult } from "#review/drafts";
 import {
   mergeRunEnvelope,
@@ -680,6 +681,45 @@ describe("hunter fan-out", () => {
     expect(result.skillOutput.findings.length).toBe(1);
     expect(result.sessionFailed).toBe(false);
     expect(result.perAgent.resilience?.status).toBe("failed");
+  });
+
+  // S4: the gate's partial verdict reads these two counts off the result. M is the
+  // hunters that ran, N the ones that failed; a trigger-skipped hunter is in neither.
+  test("the result counts the hunters that ran (M) and the ones that failed (N)", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, { findings: [draft()] }),
+      "hunter-resilience": (spec) => failed(spec),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.hunterCount).toBe(2);
+    expect(result.hunterFailedCount).toBe(1);
+  });
+
+  test("noReviewerRan: false on a review whose hunters ran", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, { findings: [draft()] }),
+      "hunter-resilience": (spec) => ok(spec, { findings: [] }),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.noReviewerRan).toBe(false);
+  });
+
+  test("noReviewerRan: false on a re-review that skipped discovery, though it ran zero hunters", async () => {
+    const runner = new FakeStepRunner({});
+    const result = await runPipeline(await makeInput({ skipDiscovery: true }), {
+      runner,
+    });
+    expect(result.hunterCount).toBe(0);
+    expect(result.noReviewerRan).toBe(false);
+  });
+
+  test("noReviewerRan: true when an unusable gotchas file stops the run before any hunter", async () => {
+    const runner = new FakeStepRunner({});
+    const result = await runPipeline(await makeInput({}, { gotchas: "" }), {
+      runner,
+    });
+    expect(result.sessionFailed).toBe(false);
+    expect(result.noReviewerRan).toBe(true);
   });
 
   test("ALL hunters failing sets sessionFailed", async () => {
@@ -2509,6 +2549,73 @@ describe("assembly", () => {
     expect(plan.rereview.case).toBe("C");
     expect(plan.rereview.discovery_skipped_empty_delta).toBe(true);
     expect(result.skillOutput.findings).toEqual([]);
+  });
+
+  // S7 wiring: a re-review with no hunters must still gate and persist a
+  // misclassified blocking prior. The gate row comes from fillRereviewProvenance,
+  // and the state block copy comes from the same assembleLive.
+  test("S7 — a misclassified blocking prior, re-review with no hunters, still counts and persists", async () => {
+    const runner = new FakeStepRunner({});
+    const input = await makeInput({
+      skipDiscovery: true,
+      rereview: {
+        case: "C",
+        last_reviewed_head: "a".repeat(40),
+        last_head_source: "summary_marker",
+        discovery_range: `${"a".repeat(40)}..${"c".repeat(40)}`,
+        discovery_restricted: true,
+        discovery_skipped_empty_delta: true,
+        prior_findings: 1,
+        settled_deterministically: 0,
+        verified: 0,
+        verification_capped: 0,
+        verification_triggers: {
+          applied: 0,
+          touched: 0,
+          overlap: 0,
+          verify_all: 0,
+        },
+        live: [],
+      },
+      phaseB: {
+        settled: [
+          {
+            id: "R001",
+            status: "re-tiered",
+            locs: ["src/app.ts:10"],
+            renamed: false,
+          },
+        ],
+        priors: [
+          {
+            id: "R001",
+            sev: "CRITICAL",
+            tier: "blocking",
+            channel: "inline",
+            locs: ["src/app.ts:10"],
+            claim: "a live defect",
+            triage: { tag: "misclassified", verdict: null, createdAt: null },
+            newThreadReply: false,
+          },
+        ],
+      },
+    });
+    const result = await runPipeline(input, { runner });
+    expect(runner.specs.filter((s) => s.name.startsWith("hunter-"))).toEqual(
+      [],
+    );
+    expect(result.gatePriors?.map((row) => `${row.id}:${row.status}`)).toEqual([
+      "R001:re-tiered",
+    ]);
+    expect(unresolvedBlockingCount([], result.gatePriors ?? [])).toBe(1);
+    const plan = (await Bun.file(
+      path.join(input.runDir, "pipeline.json"),
+    ).json()) as {
+      rereview: { live: Array<{ id: string; status: string; tier: string }> };
+    };
+    expect(
+      plan.rereview.live.map((row) => `${row.id}:${row.status}:${row.tier}`),
+    ).toEqual(["R001:carried:blocking"]);
   });
 
   test("V-ns — runVerify uses V### ids, steps/verify/, and per_agent.verifier", async () => {

@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { loadEffectiveConfig } from "#config/config";
 import {
   DEFAULT_BASE_REF,
   headContainedInBaseMessage,
@@ -40,6 +44,9 @@ import {
   parseLocalConfig,
   parseNumstat,
   parseNumstatFiles,
+  parseRoutingConfig,
+  preflightAgentsDir,
+  resolveAgentsDir,
   resolveAgentsDirSetting,
   resolveMaxVerificationSteps,
   resolvePost,
@@ -50,7 +57,7 @@ import {
   type SummaryConfig,
 } from "#review/preflight";
 import { validateReviewSpec } from "#review/spec";
-import { CliUsageError } from "../../src/errors";
+import { CliError, CliUsageError } from "../../src/errors";
 
 describe("parseArgs", () => {
   // `base` is deliberately ABSENT here: resolving the repo's real default
@@ -242,6 +249,31 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["ledger", "--full"])).toThrow(
       "only applies to the review command",
     );
+  });
+
+  test("--adjudicate is OFF unless asked for, and needs --pr", () => {
+    expect(parseArgs(["review", "--pr", "7"]).options.adjudicate).toBeFalsy();
+    expect(
+      parseArgs(["review", "--pr", "7", "--ci", "--adjudicate"]).options
+        .adjudicate,
+    ).toBe(true);
+    expect(() => parseArgs(["review", "--adjudicate"])).toThrow(
+      "--adjudicate runs the CI adjudicator against a PR, so it requires --pr",
+    );
+  });
+
+  test("--adjudicate requires review --ci, not just --pr", () => {
+    expect(() => parseArgs(["review", "--pr", "1", "--adjudicate"])).toThrow(
+      "--adjudicate only applies with review --ci",
+    );
+    expect(
+      parseArgs(["review", "--pr", "1", "--ci", "--adjudicate"]).options
+        .adjudicate,
+    ).toBe(true);
+  });
+
+  test("--adjudicate is documented in the help text next to --full", () => {
+    expect(HELP_TEXT).toContain("--adjudicate        with --pr --ci:");
   });
 
   test("--scout-model without --scout is a loud no-op, not a quiet one", () => {
@@ -2283,5 +2315,234 @@ describe("initGotchasInstructions — only claims what the run did", () => {
         expect(line).not.toContain("\x1b");
       }
     }
+  });
+});
+
+// T2d-1 (S2): each classified config, extra-hunter and prompt-set throw carries its
+// record class. The message is the one the parser always printed, so the class is the
+// only change. The person layer is deliberately NOT classified: its catalog text names
+// the repo file (see the note below).
+describe("parse errors carry their record class (T2d-1)", () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  function thrownBy(thrower: () => unknown): CliUsageError | CliError {
+    try {
+      thrower();
+    } catch (error) {
+      return error as CliUsageError | CliError;
+    }
+    throw new Error("expected the parser to throw");
+  }
+
+  test("the repo config's invalid JSON is repo-config, same message", () => {
+    const error = thrownBy(() => parseLocalConfig("not json"));
+    expect(error).toBeInstanceOf(CliUsageError);
+    expect(error.cls).toEqual({ kind: "config-parse", source: "repo-config" });
+    expect(
+      error.message.startsWith(".prhero/config.json is not valid JSON: "),
+    ).toBe(true);
+  });
+
+  test("a per-person key in the repo config is repo-config, same message", () => {
+    const error = thrownBy(() => parseLocalConfig('{"routing": {}}'));
+    expect(error.cls).toEqual({ kind: "config-parse", source: "repo-config" });
+    expect(error.message).toBe(
+      ".prhero/config.json: routing is a per-person key — put it in ~/.prhero/config.json",
+    );
+  });
+
+  test("the person layer's own parse errors stay unclassified, because its text names the repo file", () => {
+    const error = thrownBy(() => parseGlobalConfig('{"default_base": "dev"}'));
+    expect(error).toBeInstanceOf(CliUsageError);
+    expect(error.cls).toBeUndefined();
+    expect(error.message).toBe(
+      "~/.prhero/config.json: default_base is a per-repo key — put it in <repo>/.prhero/config.json",
+    );
+  });
+
+  test("routing that the person layer rejects stays unclassified, same message", () => {
+    // WHY: the routing class renders PRH-ROUTING-INVALID, whose text names PRHERO_ROUTING
+    // and `gh variable set`. Neither is the fix for a personal file, so the person
+    // layer's routing error carries no class, like the rest of that file's errors.
+    const error = thrownBy(() => parseGlobalConfig('{"routing": "invalid"}'));
+    expect(error).toBeInstanceOf(CliUsageError);
+    expect(error.cls).toBeUndefined();
+    expect(error.message).toBe(
+      "~/.prhero/config.json routing must be an object",
+    );
+  });
+
+  test("parseRoutingConfig names routing for any file it is given", () => {
+    const error = thrownBy(() =>
+      parseRoutingConfig("invalid", "~/.prhero/config.json"),
+    );
+    expect(error.cls).toEqual({ kind: "config-parse", source: "routing" });
+    expect(error.message).toBe(
+      "~/.prhero/config.json routing must be an object",
+    );
+  });
+
+  test("a malformed PRHERO_EXTRA_HUNTERS entry is extra-hunters, same message", () => {
+    const error = thrownBy(() =>
+      localReviewSpec({ PRHERO_EXTRA_HUNTERS: "nokey" }),
+    );
+    expect(error).toBeInstanceOf(CliUsageError);
+    expect(error.cls).toEqual({
+      kind: "config-parse",
+      source: "extra-hunters",
+    });
+    expect(error.message).toBe(
+      'PRHERO_EXTRA_HUNTERS[0] must be "key:file.md", got: "nokey"',
+    );
+  });
+
+  test("the basename check on an extra hunter file is extra-hunters too", () => {
+    // The fourth throw of parseExtraHunters: assertBasenameOnly, which the
+    // three key/file checks above do not reach.
+    const error = thrownBy(() =>
+      localReviewSpec({ PRHERO_EXTRA_HUNTERS: "logic:../escape.md" }),
+    );
+    expect(error.cls).toEqual({
+      kind: "config-parse",
+      source: "extra-hunters",
+    });
+    expect(
+      error.message.startsWith("spec.agents[0].file must be a plain basename"),
+    ).toBe(true);
+  });
+
+  test("a missing agents dir is prompt-set, same message", async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "pr-hero-preflight-agents-"));
+    const loaded = await loadEffectiveConfig({ root: dir, home: dir });
+    const missing = path.join(dir, "no-such-agents");
+    const error = thrownBy(() => resolveAgentsDir({ agents: missing }, loaded));
+    expect(error).toBeInstanceOf(CliError);
+    expect(error.cls).toEqual({ kind: "prompt-set" });
+    expect(error.message).toBe(`agents dir does not exist: ${missing}`);
+  });
+
+  test("a prompt set that does not match the review spec is prompt-set", async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "pr-hero-preflight-agents-"));
+    await mkdir(path.join(dir, "agents"));
+    const agents = { kind: "dir" as const, dir: path.join(dir, "agents") };
+    const error = await preflightAgentsDir(agents, [
+      "deep-review-reliability.md",
+    ]).then(
+      () => {
+        throw new Error("expected preflightAgentsDir to throw");
+      },
+      (e: CliError) => e,
+    );
+    expect(error).toBeInstanceOf(CliError);
+    expect(error.cls).toEqual({ kind: "prompt-set" });
+    expect(
+      error.message.startsWith(`prompt set ${agents.dir} does not match`),
+    ).toBe(true);
+  });
+});
+
+// `pr-hero status` (ROADMAP S9): a read-only command with one numeric --pr and one --json.
+// Everything else is refused rather than ignored, because a flag that parses and then does
+// nothing is an operator believing they changed a read they did not.
+describe("parseArgs status", () => {
+  test("reads the command, its PR and --json", () => {
+    const { command, options } = parseArgs(["status", "--pr", "12", "--json"]);
+    expect(command).toBe("status");
+    expect(options.pr).toBe(12);
+    expect(options.json).toBe(true);
+  });
+
+  test("--json is optional", () => {
+    const { command, options } = parseArgs(["status", "--pr", "12"]);
+    expect(command).toBe("status");
+    expect(options.json).toBeUndefined();
+  });
+
+  test("--pr is required", () => {
+    expect(() => parseArgs(["status"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["status", "--json"])).toThrow(
+      /status requires --pr/,
+    );
+  });
+
+  test("--pr must be numeric: a bare flag, or a non-number, is refused", () => {
+    expect(() => parseArgs(["status", "--pr"])).toThrow(/status requires --pr/);
+    expect(() => parseArgs(["status", "--pr", "12abc"])).toThrow(CliUsageError);
+  });
+
+  test("an unknown flag throws", () => {
+    expect(() => parseArgs(["status", "--pr", "12", "--bogus"])).toThrow(
+      /unknown option: --bogus/,
+    );
+  });
+
+  test("a flag that another command owns throws on status, rather than being ignored", () => {
+    expect(() => parseArgs(["status", "--pr", "12", "--post"])).toThrow(
+      CliUsageError,
+    );
+    expect(() =>
+      parseArgs(["status", "--pr", "12", "--from", "/tmp/run"]),
+    ).toThrow(CliUsageError);
+  });
+
+  test("--json is refused on every other command", () => {
+    expect(() => parseArgs(["review", "--pr", "12", "--json"])).toThrow(
+      /--json only applies to the status command/,
+    );
+  });
+
+  test("a second word after status is an unexpected argument", () => {
+    expect(() => parseArgs(["status", "status", "--pr", "12"])).toThrow(
+      /unexpected argument/,
+    );
+  });
+
+  test("watch status and gc status still parse as their own sub-words", () => {
+    expect(parseArgs(["watch", "status"]).options.watch).toBe("status");
+    expect(parseArgs(["gc", "status"]).options.gc).toBe("status");
+    expect(parseArgs(["watch", "status"]).command).toBe("watch");
+    expect(parseArgs(["gc", "status"]).command).toBe("gc");
+  });
+
+  test("status is in the command list the unknown-command error names", () => {
+    expect(() => parseArgs(["statu"])).toThrow(/"status"/);
+  });
+});
+
+describe("skills install (non-interactive skill sync)", () => {
+  test("skills install parses to command skills with the install subcommand", () => {
+    const parsed = parseArgs(["skills", "install"]);
+    expect(parsed.command).toBe("skills");
+    expect(parsed.options.skills).toBe("install");
+    expect(parsed.options.force).toBe(false);
+  });
+
+  test("skills install --force sets force", () => {
+    const parsed = parseArgs(["skills", "install", "--force"]);
+    expect(parsed.options.skills).toBe("install");
+    expect(parsed.options.force).toBe(true);
+  });
+
+  test("skills without a subcommand, or with another one, is a usage error", () => {
+    const text = "pr-hero skills needs a subcommand: install";
+    expect(() => parseArgs(["skills"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["skills"])).toThrow(text);
+    expect(() => parseArgs(["skills", "remove"])).toThrow(CliUsageError);
+    expect(() => parseArgs(["skills", "remove"])).toThrow(text);
+  });
+
+  test("help lists skills install next to setup", () => {
+    expect(HELP_TEXT).toContain("pr-hero skills install");
+    expect(HELP_TEXT).toContain(
+      "Install the triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
+    );
+  });
+
+  test("skills is in the command list the unknown-command error names", () => {
+    expect(() => parseArgs(["skilz"])).toThrow(/"skills"/);
   });
 });

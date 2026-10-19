@@ -6,18 +6,24 @@ import {
   parseFindingMarker,
   prCommentMarker,
 } from "#pr/preflight";
-import { SEVERITY_UNRECOVERABLE, TIER_UNRECOVERABLE } from "#rereview/classify";
+import {
+  applyWorsening,
+  classifyPrior,
+  type PhaseBContext,
+  type PriorRecord,
+  SEVERITY_UNRECOVERABLE,
+  TIER_UNRECOVERABLE,
+} from "#rereview/classify";
 import {
   assembleLive,
-  assignFreshIds,
   capLiveFindings,
   type LiveFinding,
   PR_STATE_MARKER_PREFIX,
   parseStateBlock,
   renderStateBlock,
-  rewriteStateFindings,
   type StateFinding,
   stateFinding,
+  unresolvedBlockingCount,
 } from "#rereview/state";
 import { TRIAGE_MARKER_PREFIX } from "#triage/triage";
 
@@ -155,57 +161,13 @@ describe("render / parse round-trip", () => {
   });
 });
 
-describe("D5d — rewrite from the merged live set", () => {
-  test("one new, three carried, one verified-gone → four entries; gone retired", () => {
-    const previous = [
-      finding("R001"),
-      finding("R002"),
-      finding("R003"),
-      finding("R004"),
-    ];
-    const next = rewriteStateFindings({
-      previous,
-      survivingIds: new Set(["R002", "R003", "R004"]),
-      fresh: [
-        {
-          sev: "WARNING",
-          tier: "advisory",
-          channel: "inline",
-          locs: ["new.ts:3"],
-          c: finding("R999", { claim: "fresh" }).c,
-          claim: "fresh",
-        },
-      ],
-    });
-    expect(next.map((f) => f.id)).toEqual(["R002", "R003", "R004", "R005"]);
-    expect(next).toHaveLength(4);
-  });
-
-  test("a retired id is never reused (R2-S1)", () => {
-    const assigned = assignFreshIds(
-      ["R001", "R002"],
-      [
-        {
-          sev: "CRITICAL",
-          tier: "blocking",
-          channel: "inline",
-          locs: ["a.ts:1"],
-          c: "aaaaaaaaaaaa",
-          claim: "x",
-        },
-      ],
-    );
-    expect(assigned[0]?.id).toBe("R003");
-  });
-});
-
 describe("D5b — cap evicts unconfirmed then carried, never suppressed or deferred", () => {
   test("drops unconfirmed before carried, and keeps suppressed + deferred", () => {
     const entries = [
       live("R001", "suppressed"),
       live("R002", "deferred"),
-      live("R003", "carried", { claim: "c".repeat(80) }),
-      live("R004", "unconfirmed", { claim: "u".repeat(80) }),
+      live("R003", "carried", { claim: "c".repeat(80), tier: "advisory" }),
+      live("R004", "unconfirmed", { claim: "u".repeat(80), tier: "advisory" }),
     ];
     const prefix = "x".repeat(200);
     const result = capLiveFindings(entries, prefix, HEAD, 400);
@@ -319,5 +281,262 @@ describe("assembleLive", () => {
     expect(row1?.c).not.toBe(claimFingerprint(""));
     expect(row2?.c).not.toBe(claimFingerprint(""));
     expect(row1?.c).not.toBe(row2?.c);
+  });
+
+  // The gate reads every prior that is not verified gone, so it keeps the
+  // returned and re-tiered rows. `live` keeps the re-tiered one (triage-driven,
+  // persisted as carried) and drops the worsening return (R003, no triage). Only
+  // a verifier verdict (or a deleted file) takes a row out of the gate.
+  test("gateRows keep every returned and re-tiered row; live keeps the re-tiered one and drops the worsening return", () => {
+    const mk = (id: string) => ({
+      id,
+      sev: "CRITICAL" as const,
+      tier: "blocking" as const,
+      channel: "inline" as const,
+      locs: [`src/${id}.ts:1`],
+      claim: id,
+      triage: null,
+      newThreadReply: false,
+    });
+    const priors = ["R001", "R002", "R003", "R004", "R005"].map(mk);
+    const assembled = assembleLive({
+      settled: [
+        {
+          id: "R001",
+          status: "carried",
+          locs: ["src/R001.ts:1"],
+          renamed: false,
+        },
+        {
+          id: "R002",
+          status: "re-tiered",
+          locs: ["src/R002.ts:1"],
+          renamed: false,
+        },
+        {
+          id: "R003",
+          status: "returned",
+          locs: ["src/R003.ts:1"],
+          renamed: false,
+        },
+        {
+          id: "R004",
+          status: "verified-gone",
+          locs: ["src/R004.ts:1"],
+          renamed: false,
+        },
+        {
+          id: "R005",
+          status: "queued",
+          locs: ["src/R005.ts:1"],
+          renamed: false,
+          trigger: "touched",
+        },
+      ],
+      priors,
+      verifyVerdicts: new Map([["R005", "verified-gone"]]),
+    });
+    expect(assembled.live.map((row) => row.id)).toEqual(["R001", "R002"]);
+    expect(assembled.gateRows.map((row) => `${row.id}:${row.status}`)).toEqual([
+      "R001:carried",
+      "R002:re-tiered",
+      "R003:returned",
+    ]);
+    expect(assembled.gateRows.every((row) => row.tier === "blocking")).toBe(
+      true,
+    );
+  });
+
+  // The state block is the only memory the next run has. A triage-driven
+  // prior (misclassified, or a rejected dismissal) must persist as `carried`
+  // with its own tier, or two pushes would clear a blocking finding (S7).
+  const NO_CHANGE: PhaseBContext = {
+    case: "C",
+    deletedFiles: new Set(),
+    renameMap: new Map(),
+    touched: () => false,
+    summaryUpdatedAt: null,
+  };
+
+  function blockingPrior(triage: PriorRecord["triage"]): PriorRecord {
+    return {
+      id: "R001",
+      sev: "CRITICAL",
+      tier: "blocking",
+      channel: "inline",
+      locs: ["src/app.ts:10"],
+      claim: "blocking prior",
+      triage,
+      newThreadReply: false,
+    };
+  }
+
+  // A persisted prior counts once, as carried. The delta line draws carried,
+  // re-tiered and returned as disjoint buckets, so counting it again as
+  // re-tiered rendered one finding as "1 carried · 1 re-tiered".
+  test("a misclassified blocking prior stays in live as carried, with its own tier, and does not count as re-tiered", () => {
+    const prior = blockingPrior({
+      tag: "misclassified",
+      verdict: null,
+      createdAt: null,
+    });
+    const assembled = assembleLive({
+      settled: [classifyPrior(prior, NO_CHANGE)],
+      priors: [prior],
+      verifyVerdicts: new Map(),
+    });
+    expect(assembled.reTiered).toBe(0);
+    expect(
+      assembled.live.map((row) => `${row.id}:${row.status}:${row.tier}`),
+    ).toEqual(["R001:carried:blocking"]);
+  });
+
+  test("a blocking prior whose rejected dismissal reopened it stays in live as carried, and does not count as returned", () => {
+    const prior = blockingPrior({
+      tag: "dismissed",
+      verdict: "rejected",
+      createdAt: null,
+    });
+    const assembled = assembleLive({
+      settled: [classifyPrior(prior, NO_CHANGE)],
+      priors: [prior],
+      verifyVerdicts: new Map(),
+    });
+    expect(assembled.returned).toBe(0);
+    expect(
+      assembled.live.map((row) => `${row.id}:${row.status}:${row.tier}`),
+    ).toEqual(["R001:carried:blocking"]);
+  });
+
+  // Pins the previous behaviour. A worsening return is this run's own stronger
+  // survivor, which carries the finding into the next run, so the prior stays
+  // out of live. Production reaches it through an upheld dismissal (only a
+  // suppressed row can be worsened, classify.ts applyWorsening).
+  test("a worsening return of an upheld dismissal stays out of live; it is counted as returned", () => {
+    const prior = blockingPrior({
+      tag: "dismissed",
+      verdict: "upheld",
+      createdAt: null,
+    });
+    const worsened = applyWorsening({
+      settled: [classifyPrior(prior, NO_CHANGE)],
+      priors: [prior],
+      survivors: [
+        {
+          path: "src/app.ts",
+          line: 10,
+          proof_refs: [],
+          severity: "BLOCKER",
+        },
+      ],
+    });
+    const assembled = assembleLive({
+      settled: worsened.settled,
+      priors: [prior],
+      verifyVerdicts: new Map(),
+    });
+    expect(worsened.settled[0]?.status).toBe("returned");
+    expect(assembled.returned).toBe(1);
+    expect(assembled.live).toEqual([]);
+  });
+
+  test("a returned prior with no triage marker stays out of live: only a rejected dismissal persists", () => {
+    const prior = blockingPrior(null);
+    const assembled = assembleLive({
+      settled: [
+        {
+          id: "R001",
+          status: "returned",
+          locs: ["src/app.ts:10"],
+          renamed: false,
+        },
+      ],
+      priors: [prior],
+      verifyVerdicts: new Map(),
+    });
+    expect(assembled.returned).toBe(1);
+    expect(assembled.live).toEqual([]);
+  });
+});
+
+// A held triage settlement (classify.ts) is queued for verification when a push
+// touches its code. The verifier's answer decides the gate: a refutation takes
+// the finding out of the count, and anything else settles it back to the status
+// the triage would have given, so the triage semantics are unchanged.
+describe("assembleLive — a held triage settlement after verification", () => {
+  const TOUCHED: PhaseBContext = {
+    case: "C",
+    deletedFiles: new Set(),
+    renameMap: new Map(),
+    touched: () => true,
+    summaryUpdatedAt: null,
+  };
+
+  function heldPrior(triage: PriorRecord["triage"]): PriorRecord {
+    return {
+      id: "R001",
+      sev: "CRITICAL",
+      tier: "blocking",
+      channel: "inline",
+      locs: ["src/app.ts:10"],
+      claim: "held prior",
+      triage,
+      newThreadReply: false,
+    };
+  }
+
+  const rejected = heldPrior({
+    tag: "dismissed",
+    verdict: "rejected",
+    createdAt: null,
+  });
+
+  test("still present after verification settles back to the held returned status", () => {
+    const assembled = assembleLive({
+      settled: [classifyPrior(rejected, TOUCHED)],
+      priors: [rejected],
+      verifyVerdicts: new Map([["R001", "carried"]]),
+    });
+    expect(assembled.gateRows.map((row) => row.status)).toEqual(["returned"]);
+    expect(
+      assembled.live.map((row) => `${row.id}:${row.status}:${row.tier}`),
+    ).toEqual(["R001:carried:blocking"]);
+    expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(1);
+  });
+
+  test("an inconclusive verdict settles back to the held status too", () => {
+    const suppressed = heldPrior({
+      tag: "dismissed",
+      verdict: "upheld",
+      createdAt: null,
+    });
+    const assembled = assembleLive({
+      settled: [classifyPrior(suppressed, TOUCHED)],
+      priors: [suppressed],
+      verifyVerdicts: new Map([["R001", "unconfirmed"]]),
+    });
+    expect(assembled.gateRows.map((row) => row.status)).toEqual(["suppressed"]);
+    expect(assembled.live.map((row) => row.status)).toEqual(["suppressed"]);
+  });
+
+  test("a queued held row the verifier never reached settles back to the held status", () => {
+    const assembled = assembleLive({
+      settled: [classifyPrior(rejected, TOUCHED)],
+      priors: [rejected],
+      verifyVerdicts: new Map(),
+    });
+    expect(assembled.gateRows.map((row) => row.status)).toEqual(["returned"]);
+  });
+
+  test("verified gone leaves the gate count, whatever triage tag the finding carried", () => {
+    const assembled = assembleLive({
+      settled: [classifyPrior(rejected, TOUCHED)],
+      priors: [rejected],
+      verifyVerdicts: new Map([["R001", "verified-gone"]]),
+    });
+    expect(assembled.verifiedGone).toBe(1);
+    expect(assembled.verifiedGoneIds).toEqual(["R001"]);
+    expect(assembled.gateRows).toEqual([]);
+    expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(0);
   });
 });

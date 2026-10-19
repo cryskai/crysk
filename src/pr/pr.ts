@@ -20,6 +20,7 @@
 // worktree add` is bound to one git dir, the registered owner for that
 // origin, which may not be the operator cwd.
 
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
@@ -45,11 +46,22 @@ import { renderComparison } from "#compare/report";
 import { THREAD_PAGE_SIZE } from "#corpus/preflight";
 import { git } from "#git/git";
 import { isFullCommitId } from "#git/refs";
+import type { FindingChannel } from "#rereview/classify";
 import { collapseTargets, type RereviewProvenance } from "#rereview/prepare";
-import { parseStateBlock, renderStateBlock } from "#rereview/state";
+import {
+  droppedStateNote,
+  type FreshStateFinding,
+  GITHUB_ISSUE_COMMENT_MAX,
+  type MergedState,
+  mergeStateFindings,
+  parseStateBlock,
+  renderStateBlock,
+  stateBlockBudget,
+} from "#rereview/state";
 import type { Finding, FindingsDocument, RunStatus } from "#review/findings";
 import {
   type PrCommentDelta,
+  parseFindingCommentBadge,
   renderInlineComment,
   renderIssueFindingComment,
   renderPrComment,
@@ -72,7 +84,7 @@ import {
 } from "./inline";
 import {
   buildComparisonJson,
-  COMMIT_STATUS_CONTEXT,
+  type CiMode,
   COMMIT_STATUS_TIMEOUT_MS,
   type CommitStatusFact,
   type CommitStatusRequest,
@@ -177,14 +189,17 @@ export const PR_VIEW_JSON_FIELDS =
 export async function ghPrView(
   operatorRoot: string,
   pr: number,
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<string> {
-  const result = await gh(operatorRoot, [
-    "pr",
-    "view",
-    String(pr),
-    "--json",
-    PR_VIEW_JSON_FIELDS,
-  ]);
+  // Unbounded unless the caller names a bound, as before: a caller that must not hang passes
+  // one (pr-hero status does, with GH_PR_VIEW_TIMEOUT_MS).
+  const result = await gh(
+    operatorRoot,
+    ["pr", "view", String(pr), "--json", PR_VIEW_JSON_FIELDS],
+    undefined,
+    options?.spawnFn,
+    options?.timeoutMs,
+  );
   if (!result.ok) {
     throw new CliError(`gh pr view ${pr} failed: ${result.stderr.trim()}`);
   }
@@ -312,14 +327,17 @@ export async function ghPrFiles(
 export async function ghPrHeadSha(
   operatorRoot: string,
   pr: number,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<string | undefined> {
   try {
+    // Bounded by default (F004): its only caller is the findings POST's
+    // pre-review re-read, and an unanswered read there would park the POST.
     const result = await gh(
       operatorRoot,
       ["pr", "view", String(pr), "--json", "headRefOid", "-q", ".headRefOid"],
       undefined,
       options?.spawnFn,
+      options?.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
     );
     if (!result.ok) return undefined;
     const sha = result.stdout.trim();
@@ -331,14 +349,19 @@ export async function ghPrHeadSha(
 
 export async function ghRepoWebUrl(
   operatorRoot: string,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<string | undefined> {
   try {
+    // Bounded by default (F004): posting.ts calls this with no options, and an
+    // unanswered `gh repo view` there would park the findings POST before its
+    // first write. Every caller already treats undefined as "unknown", so a
+    // timeout here degrades exactly like a failed call.
     const result = await gh(
       operatorRoot,
       ["repo", "view", "--json", "url", "-q", ".url"],
       undefined,
       options?.spawnFn,
+      options?.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
     );
     if (!result.ok) return undefined;
     const url = result.stdout.trim();
@@ -348,10 +371,58 @@ export async function ghRepoWebUrl(
   }
 }
 
+// The PR's own web URL, the fallback an outside-channel triage reply links its finding through
+// when the repo's web URL cannot be read. Bounded like ghRepoWebUrl, and undefined on any
+// failure, so the caller can fall through to the next source.
+export async function ghPrWebUrl(
+  operatorRoot: string,
+  pr: number,
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
+): Promise<string | undefined> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      ["pr", "view", String(pr), "--json", "url", "-q", ".url"],
+      undefined,
+      options?.spawnFn,
+      options?.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
+    );
+    if (!result.ok) return undefined;
+    const url = result.stdout.trim();
+    return url === "" ? undefined : url;
+  } catch {
+    return undefined;
+  }
+}
+
+// The repo's owner/name (`owner/repo`), the last source an outside-channel triage reply's link
+// is built from. Bounded like ghRepoWebUrl; undefined on any failure.
+export async function ghRepoNameWithOwner(
+  operatorRoot: string,
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
+): Promise<string | undefined> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+      undefined,
+      options?.spawnFn,
+      options?.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
+    );
+    if (!result.ok) return undefined;
+    const name = result.stdout.trim();
+    return name === "" ? undefined : name;
+  } catch {
+    return undefined;
+  }
+}
+
 // In-flight / completed signal on the head SHA. Fail-loud here: the CLI
 // catches and warns, because a missing `repo:status` scope must not abort a
-// review that already cost hunter money. Context is COMMIT_STATUS_CONTEXT
-// so the watcher can find this row among CI statuses.
+// review that already cost hunter money. The context is the request's own
+// (T3 S7): the gate's `pr-hero` only from a `--ci` run's request, and
+// `pr-hero/local` from every other run, so the POST can never pick a context
+// the caller did not choose.
 export async function postCommitStatus(
   operatorRoot: string,
   sha: string,
@@ -361,7 +432,7 @@ export async function postCommitStatus(
   // handler racing the runner's SIGKILL, where the retry below costs more
   // time than it buys. Every other caller keeps the two-attempt default.
   options?: { attempts?: number; timeoutMs?: number },
-): Promise<void> {
+): Promise<string | undefined> {
   if (!isFullCommitId(sha)) {
     throw new CliError(
       `commit status: head sha is not a full 40-char id: ${sha.slice(0, 16)}`,
@@ -375,7 +446,7 @@ export async function postCommitStatus(
     "-f",
     `state=${status.state}`,
     "-f",
-    `context=${COMMIT_STATUS_CONTEXT}`,
+    `context=${status.context}`,
     "-f",
     `description=${status.description}`,
   ];
@@ -389,7 +460,7 @@ export async function postCommitStatus(
   let lastStderr = "";
   for (let attempt = 0; attempt < attempts; attempt++) {
     const result = await gh(operatorRoot, args, undefined, spawnFn, timeoutMs);
-    if (result.ok) return;
+    if (result.ok) return createdAtOf(result.stdout);
     lastStderr = result.stderr.trim();
   }
   throw new CliError(
@@ -397,54 +468,219 @@ export async function postCommitStatus(
   );
 }
 
+// The created_at of the status a POST created, or undefined when the answer has none (a
+// fake, or an answer gh did not print). Never throws: the write already landed.
+function createdAtOf(stdout: string): string | undefined {
+  try {
+    const parsed = JSON.parse(stdout) as { created_at?: unknown };
+    return typeof parsed.created_at === "string"
+      ? parsed.created_at
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Combined status (singular `/status`), not the paginated list (`/statuses`).
 // The list interleaves every CI context newest-first, so a busy SHA can bury
 // `pr-hero` past page 1 and the watcher would miss an in-flight pending.
 // Combined returns the latest row per context in one shot.
 //
-// Never throws: a 403, a hung gh (timeout), or garbage jq must not take
-// the watch tick down. Unreadable reads as not in-flight.
-export async function fetchCommitStatuses(
+// WHY per_page=100: the combined endpoint pages its contexts at 30 by default, so a
+// busy head's `pr-hero` row can sit past the first page. The publisher's reader asks for
+// 100 (src/ci/publish.ts, readHeadStatuses), and this one must see the same rows, or the
+// CLI writes its verdict over an override the publisher sees. The in-flight readers
+// (watch, the admission yield guard) take the newest row per context, so the extra rows
+// only add contexts they would otherwise miss.
+//
+// The description rides along for the override check (src/pr/teardown.ts), which tells
+// an override from a review's own status by it. The in-flight readers ignore it. The
+// target_url rides along for `pr-hero status`, which names the run that wrote the gate.
+//
+// The head's full status history, every row, newest first, for the CI admission carry-forward
+// (src/pr/admission.ts) and the skip's override check. It reads the paginated list (`/statuses`),
+// not the combined endpoint: the combined one keeps only the newest row per context, so an override
+// would show in place of the review's own verdict under it. Null on any failure, a malformed row
+// included, so the caller can fail closed; an empty array means the head has no rows at all.
+//
+// WHY --paginate: a head with more than 100 rows keeps its older rows on page 2, and the carry reads
+// the newest verdict. Page 1 alone would miss it and carry a false red. The call stays bounded by
+// its timeout, and --paginate runs the --jq projection on every page, so the output is still one
+// row per line.
+export async function fetchCommitStatusList(
   operatorRoot: string,
   sha: string,
   options?: { spawnFn?: typeof Bun.spawn },
-): Promise<CommitStatusFact[]> {
-  if (!isFullCommitId(sha)) return [];
+): Promise<CommitStatusFact[] | null> {
+  if (!isFullCommitId(sha)) return null;
   try {
     const result = await gh(
       operatorRoot,
       [
         "api",
-        `repos/{owner}/{repo}/commits/${sha}/status`,
+        "--paginate",
+        `repos/{owner}/{repo}/commits/${sha}/statuses?per_page=100`,
         "--jq",
-        ".statuses[]? | {state: .state, context: .context, created_at: .created_at}",
+        ".[]? | {state: .state, context: .context, created_at: .created_at, description: .description}",
       ],
       undefined,
       options?.spawnFn,
       COMMIT_STATUS_TIMEOUT_MS,
     );
-    if (!result.ok) return [];
+    if (!result.ok) return null;
     const statuses: CommitStatusFact[] = [];
     for (const line of result.stdout.split("\n")) {
       if (line.trim() === "") continue;
-      try {
-        const parsed = JSON.parse(line) as CommitStatusFact;
-        if (
-          typeof parsed.state === "string" &&
-          typeof parsed.context === "string" &&
-          typeof parsed.created_at === "string"
-        ) {
-          statuses.push(parsed);
-        }
-      } catch {
-        // Drop the bad line; keep whatever parsed. One garbage object must
-        // not hide a real pending on the next line.
+      const parsed = JSON.parse(line) as CommitStatusFact;
+      if (
+        typeof parsed.state !== "string" ||
+        typeof parsed.context !== "string" ||
+        typeof parsed.created_at !== "string"
+      ) {
+        return null;
       }
+      statuses.push(parsed);
     }
     return statuses;
   } catch {
+    return null;
+  }
+}
+
+// The PR's commit shas, OLDEST first (GitHub's order for pulls/<n>/commits). The CI admission
+// carry-forward walks them newest-first from the head (src/pr/admission.ts). WHY --paginate: a PR
+// above 100 commits keeps its newest commits on page 2, which a single page would never reach. GitHub
+// lists at most 250 commits per pull request, so the call is at most three requests, and it stays
+// bounded by its timeout. Null on any failure or a malformed sha, so the caller can fail closed; an
+// empty array means the list has no commits.
+export async function fetchPrCommitShas(
+  operatorRoot: string,
+  pr: number,
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<string[] | null> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      [
+        "api",
+        "--paginate",
+        `repos/{owner}/{repo}/pulls/${pr}/commits?per_page=100`,
+        "--jq",
+        ".[]?.sha",
+      ],
+      undefined,
+      options?.spawnFn,
+      COMMIT_STATUS_TIMEOUT_MS,
+    );
+    if (!result.ok) return null;
+    const shas: string[] = [];
+    for (const line of result.stdout.split("\n")) {
+      const sha = line.trim();
+      if (sha === "") continue;
+      if (!isFullCommitId(sha)) return null;
+      shas.push(sha);
+    }
+    return shas;
+  } catch {
+    return null;
+  }
+}
+
+// Never throws by default: a 403, a hung gh (timeout), or garbage jq must not take the watch tick
+// down. Unreadable reads as no rows, which the watch reads as not in-flight.
+//
+// WHY failClosed: two readers must tell a failed read from a head with no status rows, because an
+// empty answer for an unreadable head reads as "no status". The CI override check
+// (src/ci/publish.ts, src/pr/teardown.ts) would then write over a human's decision, and `pr-hero status`,
+// the skill's only reading of the gate (src/commands/status.ts), would send a review out blind. The
+// default keeps the empty answer every watch and admission caller relies on.
+//
+// Three modes, because the readers need different things from a bad row:
+// - false (default): a failed read returns [], and a bad row is dropped.
+// - "read": a failed read throws, and so does an abbreviated sha, which is a head that cannot be read.
+//   A bad row is still dropped, so one garbage line cannot hide a valid override on the same head.
+//   This is the mode the override checks use: the only unknown is whether gh answered at all.
+// - true: a failed read throws, and so does a bad row, because the row it would drop could be the
+//   override. Used by `pr-hero status` and admission, which must not read past a row they cannot parse.
+export async function fetchCommitStatuses(
+  operatorRoot: string,
+  sha: string,
+  options?: { spawnFn?: typeof Bun.spawn; failClosed?: boolean | "read" },
+): Promise<CommitStatusFact[]> {
+  const failClosed = options?.failClosed;
+  const strictRead = failClosed === true || failClosed === "read";
+  const strictRows = failClosed === true;
+  const unreadable = (why: string): CommitStatusFact[] => {
+    if (strictRead) {
+      throw new CliError(
+        `could not read the statuses of ${sha.slice(0, 7)}: ${why}`,
+      );
+    }
+    return [];
+  };
+  if (!isFullCommitId(sha)) return unreadable("not a full commit id");
+  try {
+    const result = await gh(
+      operatorRoot,
+      [
+        "api",
+        `repos/{owner}/{repo}/commits/${sha}/status?per_page=100`,
+        "--jq",
+        ".statuses[]? | {state: .state, context: .context, created_at: .created_at, description: .description, target_url: .target_url}",
+      ],
+      undefined,
+      options?.spawnFn,
+      COMMIT_STATUS_TIMEOUT_MS,
+    );
+    if (!result.ok) return unreadable(result.stderr.trim() || "gh failed");
+    const statuses: CommitStatusFact[] = [];
+    for (const line of result.stdout.split("\n")) {
+      if (line.trim() === "") continue;
+      // Every bad line takes one of two paths, decided per line: a line that does not parse, and a line
+      // that parses to something other than a status (`null`, a bare string, a row missing a field). Both
+      // are skipped by default and in "read" mode, and both throw under true. The shape check sits inside
+      // this per-line handling on purpose: outside it, a `null` throws a TypeError into the outer catch,
+      // which returns [] and drops every status, not just the bad line.
+      const parsed = parseStatusLine(line);
+      if (parsed === null) {
+        if (strictRows) {
+          return unreadable(
+            `unreadable commit status line from gh api: ${line.slice(0, 120)}`,
+          );
+        }
+        // Drop the bad line; keep whatever parsed. One garbage object must not hide a real pending on
+        // the next line.
+        continue;
+      }
+      statuses.push(parsed);
+    }
+    return statuses;
+  } catch (error) {
+    if (strictRead) throw error;
     return [];
   }
+}
+
+// One line of the commit-status stream as a status fact, or null when the line is not one:
+// unparseable JSON, or JSON that is not an object with the three string fields a status
+// read needs. Pure, so both modes of fetchCommitStatuses judge a line the same way.
+function parseStatusLine(line: string): CommitStatusFact | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const fact = parsed as Partial<CommitStatusFact>;
+  if (
+    typeof fact.state !== "string" ||
+    typeof fact.context !== "string" ||
+    typeof fact.created_at !== "string"
+  ) {
+    return null;
+  }
+  return fact as CommitStatusFact;
 }
 
 // WHY this exact refspec pair (paid-for): a merged PR's branch is usually
@@ -674,6 +910,9 @@ export async function writeComparison(input: {
 // ci/gates.ts's SKIP_SIZE_COMMENT_MARKER / SKIP_BUDGET_COMMENT_MARKER so a
 // repeat CI run finds and updates its own prior skip comment instead of
 // stacking a new one.
+// `timeoutMs` bounds the lookup and the write alike (F004). Its default is the
+// findings POST's bound, and both production callers are on that path; the
+// parameter exists so a test can prove a hang fails inside a few ms.
 export async function postPrComment(
   operatorRoot: string,
   pr: number,
@@ -681,11 +920,12 @@ export async function postPrComment(
   spawnFn?: typeof Bun.spawn,
   knownCommentId?: number,
   markerPrefix?: string,
+  timeoutMs: number = POSTING_GH_TIMEOUT_MS,
 ): Promise<{ action: "created" | "updated"; commentId: number }> {
   const existingId =
     knownCommentId ??
     findMarkedCommentId(
-      await fetchPrComments(operatorRoot, pr, { spawnFn }),
+      await fetchPrComments(operatorRoot, pr, { spawnFn, timeoutMs }),
       markerPrefix,
     );
   const action = existingId === null ? "created" : "updated";
@@ -705,6 +945,7 @@ export async function postPrComment(
           ],
           body,
           spawnFn,
+          timeoutMs,
         )
       : await gh(
           operatorRoot,
@@ -718,6 +959,7 @@ export async function postPrComment(
           ],
           body,
           spawnFn,
+          timeoutMs,
         );
   if (!result.ok) {
     throw new CliError(
@@ -910,7 +1152,12 @@ export async function fetchPrComments(
     // both succeed — posting dies at the pre-flight fetch with no review
     // published. Fall back to GraphQL so listing tracks the write path.
     if (is404(result.stderr)) {
-      return fetchPrCommentsGraphql(operatorRoot, pr, options?.spawnFn);
+      return fetchPrCommentsGraphql(
+        operatorRoot,
+        pr,
+        options?.spawnFn,
+        options?.timeoutMs,
+      );
     }
     throw new CliError(
       `gh api issues/${pr}/comments failed: ${result.stderr.trim()}`,
@@ -983,7 +1230,7 @@ export interface PrReviewComment {
 export async function fetchPrReviewComments(
   operatorRoot: string,
   pr: number,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<PrReviewComment[]> {
   const result = await gh(
     operatorRoot,
@@ -998,10 +1245,16 @@ export async function fetchPrReviewComments(
     ],
     undefined,
     options?.spawnFn,
+    options?.timeoutMs,
   );
   if (!result.ok) {
     if (is404(result.stderr)) {
-      return fetchPrReviewCommentsGraphql(operatorRoot, pr, options?.spawnFn);
+      return fetchPrReviewCommentsGraphql(
+        operatorRoot,
+        pr,
+        options?.spawnFn,
+        options?.timeoutMs,
+      );
     }
     throw new CliError(
       `gh api pulls/${pr}/comments failed: ${result.stderr.trim()}`,
@@ -1019,6 +1272,16 @@ export async function fetchPrReviewComments(
   return comments;
 }
 
+// The tier a posted finding comment states on its visible badge line, or
+// nothing. The marker carries no tier, so this is the only record of it.
+// parseFindingCommentBadge is all-or-nothing: a body it cannot read yields
+// no key at all, which the matcher treats as unknown (today's behavior),
+// never as a guessed tier.
+function postedTier(body: string): { tier?: "blocking" | "advisory" } {
+  const tier = parseFindingCommentBadge(body)?.tier;
+  return tier === undefined ? {} : { tier };
+}
+
 // Both channels pr-hero's own per-finding comments can live in, reduced to
 // pr/inline.ts's PostedFindingComment shape. A comment that does not parse as a
 // finding marker is silently excluded — this is where the two marker
@@ -1029,7 +1292,7 @@ export async function fetchPrReviewComments(
 export async function fetchPostedFindingComments(
   operatorRoot: string,
   pr: number,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<PostedFindingComment[]> {
   const [reviewComments, issueComments] = await Promise.all([
     fetchPrReviewComments(operatorRoot, pr, options),
@@ -1045,6 +1308,7 @@ export async function fetchPostedFindingComments(
       marker,
       livePath: comment.path,
       liveLine: comment.line ?? undefined,
+      ...postedTier(comment.body),
       ...(comment.created_at === undefined
         ? {}
         : { created_at: comment.created_at }),
@@ -1057,6 +1321,7 @@ export async function fetchPostedFindingComments(
       id: comment.id,
       channel: "issue",
       marker,
+      ...postedTier(comment.body),
       ...(comment.created_at === undefined
         ? {}
         : { created_at: comment.created_at }),
@@ -1097,7 +1362,7 @@ const PR_REVIEW_COMMENTS_QUERY =
   `reviewThreads(first:${THREAD_PAGE_SIZE},after:$cursor){` +
   "pageInfo{endCursor hasNextPage}" +
   "nodes{comments(first:100){nodes{" +
-  "fullDatabaseId body createdAt author{login} path line originalLine " +
+  "fullDatabaseId body createdAt author{login __typename} path line originalLine " +
   "replyTo{fullDatabaseId}}}}}}}}";
 
 // Parses `gh api repos/.../compare/{base}...{head}` — filenames only.
@@ -1265,6 +1530,7 @@ async function ghGraphql(
   variables: Record<string, string | number>,
   what: string,
   spawnFn?: typeof Bun.spawn,
+  timeoutMs?: number,
 ): Promise<string> {
   assertBalancedGraphql(query, what);
   const args = ["api", "graphql", "-f", `query=${query}`];
@@ -1272,7 +1538,7 @@ async function ghGraphql(
     const flag = typeof value === "number" ? "-F" : "-f";
     args.push(flag, `${key}=${value}`);
   }
-  const result = await gh(operatorRoot, args, undefined, spawnFn);
+  const result = await gh(operatorRoot, args, undefined, spawnFn, timeoutMs);
   if (!result.ok) {
     throw new CliError(
       `gh api graphql (${what}) failed: ${result.stderr.trim()}`,
@@ -1285,6 +1551,18 @@ function graphqlLogin(value: unknown): string {
   if (typeof value !== "object" || value === null) return "";
   const login = (value as { login?: unknown }).login;
   return typeof login === "string" ? login : "";
+}
+
+// WHY a bot gets the REST spelling: REST reports a GitHub App as
+// `github-actions[bot]`, while GraphQL reports the bare login. Without this the
+// CI adjudicator's login would differ between the two read paths.
+function graphqlReviewLogin(value: unknown): string {
+  const login = graphqlLogin(value);
+  const typename =
+    typeof value === "object" && value !== null
+      ? (value as { __typename?: unknown }).__typename
+      : undefined;
+  return typename === "Bot" && login !== "" ? `${login}[bot]` : login;
 }
 
 function issueCommentsFromNodes(nodes: unknown[]): {
@@ -1389,6 +1667,7 @@ async function fetchPrCommentsGraphql(
   operatorRoot: string,
   pr: number,
   spawnFn?: typeof Bun.spawn,
+  timeoutMs?: number,
 ): Promise<
   {
     id: number;
@@ -1399,7 +1678,7 @@ async function fetchPrCommentsGraphql(
   }[]
 > {
   assertBalancedGraphql(PR_ISSUE_COMMENTS_QUERY, "issueComments");
-  const repo = await ghRepoOwnerName(operatorRoot, spawnFn);
+  const repo = await ghRepoOwnerName(operatorRoot, spawnFn, timeoutMs);
   const comments: {
     id: number;
     user: string;
@@ -1426,6 +1705,7 @@ async function fetchPrCommentsGraphql(
       variables,
       "issueComments",
       spawnFn,
+      timeoutMs,
     );
     const page = parseIssueCommentsGraphqlPage(stdout);
     comments.push(...issueCommentsFromNodes(page.nodes));
@@ -1533,7 +1813,7 @@ function reviewCommentsFromThreadNodes(
       const replyToId = graphqlDatabaseId(record.replyTo?.fullDatabaseId);
       comments.push({
         id,
-        user: graphqlLogin(record.author),
+        user: graphqlReviewLogin(record.author),
         body: typeof record.body === "string" ? record.body : "",
         path: typeof record.path === "string" ? record.path : "",
         line,
@@ -1552,9 +1832,10 @@ async function fetchPrReviewCommentsGraphql(
   operatorRoot: string,
   pr: number,
   spawnFn?: typeof Bun.spawn,
+  timeoutMs?: number,
 ): Promise<PrReviewComment[]> {
   assertBalancedGraphql(PR_REVIEW_COMMENTS_QUERY, "reviewComments");
-  const repo = await ghRepoOwnerName(operatorRoot, spawnFn);
+  const repo = await ghRepoOwnerName(operatorRoot, spawnFn, timeoutMs);
   const comments: PrReviewComment[] = [];
   let cursor: string | null = null;
   let hasNextPage = true;
@@ -1575,6 +1856,7 @@ async function fetchPrReviewCommentsGraphql(
       variables,
       "reviewComments",
       spawnFn,
+      timeoutMs,
     );
     const page = parseReviewCommentsGraphqlPage(stdout);
     comments.push(...reviewCommentsFromThreadNodes(page.nodes));
@@ -1656,6 +1938,10 @@ export async function postPrReview(input: {
   allFindings: PrHeroFindingRef[];
   webUrl?: string;
   spawnFn?: typeof Bun.spawn;
+  // Bounds the submission and its 422 recovery reads (F004). Defaults to the
+  // posting bound; a timeout is NOT retried, because the submission may already
+  // have landed and a second POST would duplicate the review.
+  timeoutMs?: number;
 }): Promise<ReviewSubmissionOutcome> {
   if (input.findings.length === 0) {
     return { outcome: "posted", findings: [] };
@@ -1706,6 +1992,7 @@ export async function postPrReview(input: {
     ],
     JSON.stringify(body),
     input.spawnFn,
+    input.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
   );
   if (result.ok) {
     return { outcome: "posted", findings: input.findings };
@@ -1718,7 +2005,10 @@ export async function postPrReview(input: {
   const posted = await fetchPostedFindingComments(
     input.operatorRoot,
     input.pr,
-    { spawnFn: input.spawnFn },
+    {
+      spawnFn: input.spawnFn,
+      timeoutMs: input.timeoutMs ?? POSTING_GH_TIMEOUT_MS,
+    },
   );
   const match = matchPostedFindings({
     findings: input.allFindings,
@@ -2022,6 +2312,9 @@ function parseReviewThreads(stdout: string): GraphQlThread[] {
   return nodes as GraphQlThread[];
 }
 
+// The GitHub message for a token without the permission to resolve review threads.
+const WORKFLOW_TOKEN_CANNOT_RESOLVE = "Resource not accessible by integration";
+
 // Map a REST review-comment id to its GraphQL review thread and resolve it.
 // Idempotent: an already-resolved thread is a skip, not an error. A comment
 // with no thread (deleted, or outside the first 100 threads) is not-found
@@ -2115,6 +2408,10 @@ function admissionCheckRunConclusion(
     // than red on the PR (musive #1935 showed a red check for exactly this).
     case "yielded":
       return "skipped";
+    // #326: a size or budget gate skip. It was `skipped` (grey) before the
+    // status split, so it stays grey; `neutral` would change how the PR reads.
+    case "gate-skipped":
+      return "skipped";
     default:
       return "neutral";
   }
@@ -2155,18 +2452,28 @@ function parseAdmissionCheckRunRow(line: string): AdmissionRecord | null {
 // a missing `checks: read` scope must not abort a review that already passed
 // the pure admission gate — an empty read underestimates attempts (more spend,
 // never silent skip).
+//
+// `includeHistory` adds `filter=all`. GitHub's check-runs endpoint defaults to
+// `filter=latest`, which returns only the newest check run per name. Every
+// admission attempt on a head is its own check run with the same name, so the
+// default hides all earlier attempts on that head. A per-head read that decides
+// whether a workflow run spent (countableWorkflowHeads) needs that history: a head
+// with `[completed, gate-skipped]` would otherwise look like `[gate-skipped]` and
+// be dropped. Leave it off for a read that wants current state. The request stays
+// paginated (`--paginate`), so every page of history is read.
 export async function listAdmissionCheckRuns(
   operatorRoot: string,
   ref: string,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; includeHistory?: boolean },
 ): Promise<AdmissionRecord[]> {
   if (!isFullCommitId(ref) && ref.trim().length === 0) return [];
+  const historyQuery = options?.includeHistory === true ? "?filter=all" : "";
   try {
     const result = await gh(
       operatorRoot,
       [
         "api",
-        `repos/{owner}/{repo}/commits/${ref}/check-runs`,
+        `repos/{owner}/{repo}/commits/${ref}/check-runs${historyQuery}`,
         "--paginate",
         "--jq",
         `.check_runs[] | select(.name == "${ADMISSION_CHECK_RUN_NAME}") | {id: .id, name: .name, status: .status, output: {text: .output.text}}`,
@@ -2187,6 +2494,64 @@ export async function listAdmissionCheckRuns(
   }
 }
 
+// W3-RESERVE: a POST that failed may still have created the run (gh timed out
+// after GitHub accepted it). Look it up by external_id AND by the attempt and
+// createdAt of the record being posted: external_id is the reservation
+// fingerprint, shared by every attempt on this head and policy, so it alone
+// would adopt an earlier attempt's run. Any failure of the lookup reads as "no
+// match", which keeps the POST retry exactly as it was.
+//
+// The POST nonce is what names this call's run. A reused record shares its
+// external_id, attempt and createdAt with a run another workflow run wrote
+// (review #360 F001), so those three can never tell the two apart; only the
+// nonce this call wrote into its own record can. A run without a nonce never
+// matches.
+async function findAdmissionCheckRunForAttempt(
+  operatorRoot: string,
+  headSha: string,
+  record: AdmissionRecord,
+  postNonce: string,
+  spawnFn?: typeof Bun.spawn,
+): Promise<{ id: number; status: string | undefined } | null> {
+  try {
+    const result = await gh(
+      operatorRoot,
+      [
+        "api",
+        `repos/{owner}/{repo}/commits/${headSha}/check-runs?check_name=${ADMISSION_CHECK_RUN_NAME}&filter=all`,
+        "--paginate",
+        "--jq",
+        `.check_runs[] | select(.name == "${ADMISSION_CHECK_RUN_NAME}") | {id: .id, name: .name, status: .status, external_id: .external_id, output: {text: .output.text}}`,
+      ],
+      undefined,
+      spawnFn,
+      ADMISSION_CHECK_RUN_TIMEOUT_MS,
+    );
+    if (!result.ok) return null;
+    for (const line of result.stdout.split("\n")) {
+      const parsedRecord = parseAdmissionCheckRunRow(line);
+      if (parsedRecord === null) continue;
+      const row = JSON.parse(line) as {
+        id?: number;
+        status?: string;
+        external_id?: string;
+      };
+      if (
+        typeof row.id === "number" &&
+        row.external_id === record.reservationId &&
+        parsedRecord.attemptNumber === record.attemptNumber &&
+        parsedRecord.createdAt === record.createdAt &&
+        parsedRecord.postNonce === postNonce
+      ) {
+        return { id: row.id, status: row.status };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertAdmissionCheckRun(
   operatorRoot: string,
   input: {
@@ -2201,7 +2566,15 @@ export async function upsertAdmissionCheckRun(
       `admission check run: head sha is not a full 40-char id: ${input.headSha.slice(0, 16)}`,
     );
   }
-  const serialized = serializeAdmissionRecord(input.record);
+  // WHY one nonce per call, minted before the retry loop: the POST writes it
+  // into the run's record, and a failed POST's lookup adopts only a run carrying
+  // it. That is why adoption is safe for a reused record too: a sibling run from
+  // another workflow run can never carry this call's nonce.
+  const postNonce = randomUUID();
+  const serialized = serializeAdmissionRecord({
+    ...input.record,
+    postNonce,
+  });
   const checkStatus = admissionCheckRunStatus(input.record.status);
   const args = [
     "api",
@@ -2252,6 +2625,25 @@ export async function upsertAdmissionCheckRun(
       );
     }
     lastStderr = result.stderr.trim();
+    // Only a POST can have created a run the caller does not know about; a
+    // PATCH already names its run. A match is adopted instead of retried.
+    if (input.checkRunId === undefined) {
+      const existing = await findAdmissionCheckRunForAttempt(
+        operatorRoot,
+        input.headSha,
+        input.record,
+        postNonce,
+        options?.spawnFn,
+      );
+      if (existing !== null) {
+        if (existing.status === checkStatus) return existing.id;
+        return upsertAdmissionCheckRun(
+          operatorRoot,
+          { ...input, checkRunId: existing.id },
+          options,
+        );
+      }
+    }
   }
   throw new CliError(`gh api (admission check run) failed: ${lastStderr}`);
 }
@@ -2303,6 +2695,7 @@ export async function resolveInlinePostPlan(input: {
 }> {
   const issueComments = await fetchPrComments(input.operatorRoot, input.pr, {
     spawnFn: input.spawnFn,
+    timeoutMs: POSTING_GH_TIMEOUT_MS,
   });
   const existingSummaryId = findMarkedCommentId(issueComments);
   const summaryBody = summaryBodyForId(issueComments, existingSummaryId);
@@ -2313,7 +2706,7 @@ export async function resolveInlinePostPlan(input: {
   const posted = await fetchPostedFindingComments(
     input.operatorRoot,
     input.pr,
-    { spawnFn: input.spawnFn },
+    { spawnFn: input.spawnFn, timeoutMs: POSTING_GH_TIMEOUT_MS },
   );
   const anchors = parseHunkAnchors(input.diffPatch);
   const findingRefs: PrHeroFindingRef[] = input.doc.findings.map((f) => {
@@ -2384,6 +2777,19 @@ function findingCommentUrl(
 // single REST/graphql round trip and still finite; the failure it converts is
 // "hangs until someone kills it" → "one logged line, thread left open".
 const COLLAPSE_GH_TIMEOUT_MS = 120_000;
+
+// The bound on every gh call the findings POST makes: the summary create and
+// PATCH, the review submission and its 422 recovery reads, the pre-POST head
+// re-read, and the reads around them. WHY 120 s: the POST runs after the review
+// has already finished, so a slow GitHub answer for a large review still lands
+// well inside it. WHY a bound at all (F004, PR #330): an accepted-but-unanswered
+// call parked publishRunOutcome forever, and the pending commit status with it.
+// A timeout fails exactly like a non-zero gh exit, so the posting catch records
+// the step error and the publisher reports it. WHY no retry: a timed-out POST
+// may already have landed, and a retry would duplicate the review. A local
+// `pr-hero review --pr N --post` runs this same code, so it now also fails after
+// 120 s instead of hanging. That is intended.
+export const POSTING_GH_TIMEOUT_MS = 120_000;
 
 // The actual post sequence (design D6, reordered per Juanma's PR #2
 // feedback item 2; W2 issues #16/#17 retire the issue-comment loop):
@@ -2480,6 +2886,9 @@ export async function postInlineFindings(input: {
   // Watchdog for the collapse loop's gh calls. A seam, like `spawnFn`: no
   // production caller sets it, the tests drive the timeout path with it.
   ghTimeoutMs?: number;
+  // S4: the CI mode the summary comment's disclaimer follows. Omitted is
+  // advisory: the local `post` command, and every caller that never sets it.
+  ciMode?: CiMode;
   // Set ONLY by `post --from` (`runPostCommand`). A PR that already carries a
   // pr-hero summary is by definition a re-review, so publishing it without a
   // `rereview` block renders the absence-matcher delta ("N resolved") and no
@@ -2510,6 +2919,9 @@ export async function postInlineFindings(input: {
   // rather than passing. The two callers meet the same state having paid very
   // different prices for it — see the guard's own WHY below.
   refuseOnVanishedPriorSummary?: boolean;
+  // The run was a comment-triggered (forced) run. It leaves the summary counter
+  // where it was: the budget bounds automatic reviews (see nextStateReviewCount).
+  force?: boolean;
 }): Promise<InlinePostOutcome> {
   const { operatorRoot, pr, headSha, doc, webUrl, spawnFn } = input;
   const ghTimeoutMs = input.ghTimeoutMs ?? COLLAPSE_GH_TIMEOUT_MS;
@@ -2521,10 +2933,13 @@ export async function postInlineFindings(input: {
     findingRefs,
     posted,
   } = await resolveInlinePostPlan(input);
+  const previousState =
+    summaryBody === null ? null : parseStateBlock(summaryBody);
   const postedReviewCount = nextStateReviewCount({
     existingSummaryId,
-    state: summaryBody === null ? null : parseStateBlock(summaryBody),
+    state: previousState,
     summaryBody,
+    force: input.force,
   });
 
   // Before the create-first POST and before the review submission — the last
@@ -2600,29 +3015,6 @@ export async function postInlineFindings(input: {
       : rereviewDeltaFromProvenance(framing, doc.findings.length);
   const overlayDelta = (delta: PrCommentDelta): PrCommentDelta =>
     rereviewDelta === undefined ? delta : { ...delta, rereview: rereviewDelta };
-  const renderBody = (
-    delta: PrCommentDelta,
-    outside: readonly Finding[],
-    moved: string | undefined,
-    urls?: ReadonlyMap<string, string>,
-  ): string => {
-    const body = renderPrComment(
-      doc,
-      webUrl,
-      overlayDelta(delta),
-      outside,
-      moved,
-      urls,
-    );
-    if (framing === undefined) {
-      const counts = tierCountsFromFindings(
-        canonicalAdmissionFindings(doc.findings),
-      );
-      return `${body}${renderCiAdmissionBlock(doc.head_sha, counts, postedReviewCount)}`;
-    }
-    return `${body}${renderStateBlock(doc.head_sha, framing.live, postedReviewCount)}`;
-  };
-
   const byId = new Map(doc.findings.map((f) => [f.id, f]));
   const findingsFor = (refs: PrHeroFindingRef[]): Finding[] =>
     refs
@@ -2642,6 +3034,111 @@ export async function postInlineFindings(input: {
   // the create-first POST already includes it — after the review, the
   // closing PATCH may grow it with 422-demoted findings.
   const plannedOutsideDiff = findingsFor(plan.issueComments);
+
+  // The state block is merged ONCE, here, and both writes append the same
+  // string, so the create-first POST and the closing PATCH cannot disagree
+  // about which rows exist or what their ids are. Its budget is derived from
+  // the POST-shaped body, the one body known before any write (see
+  // stateBlockBudget). The findings are read off the same resolved refs the
+  // plan posted from, so a fresh row's locs name the line the comment sits on.
+  const lineById = new Map(findingRefs.map((ref) => [ref.id, ref.line]));
+  const freshChannel = (id: string): FindingChannel =>
+    plan.issueComments.some((f) => f.id === id) ||
+    plan.persisting.some(
+      (match) => match.finding.id === id && match.posted.channel === "issue",
+    )
+      ? "outside"
+      : "inline";
+  const freshFindings: FreshStateFinding[] = doc.findings.map((f) => ({
+    path: f.path,
+    line: lineById.get(f.id) ?? f.line,
+    proof_refs: f.proof_refs,
+    tier: f.tier,
+    severity: f.severity,
+    claim: f.claim,
+    channel: freshChannel(f.id),
+  }));
+  const referenceBody = renderPrComment(
+    doc,
+    webUrl,
+    overlayDelta({ ...plan.delta, previousHeadSha }),
+    plannedOutsideDiff,
+    undefined,
+    undefined,
+    input.ciMode,
+  );
+  // WHY one merge function for both writes: the S1 re-merge reruns it with a
+  // PATCH-sized budget and the SAME inputs, so the kept ids and hw cannot
+  // drift between the POST and the PATCH.
+  const mergeStateWithBudget = (
+    stateBudget: number,
+  ): MergedState | undefined =>
+    framing === undefined
+      ? undefined
+      : mergeStateFindings({
+          headSha: doc.head_sha,
+          reviews: postedReviewCount,
+          live: framing.live,
+          previous: previousState,
+          previousHead: previousState?.headSha ?? null,
+          retiredIds: [
+            ...(framing.resolved_ids ?? []),
+            ...(framing.worsened ?? []).map((w) => w.priorId),
+          ],
+          fresh: freshFindings,
+          stateBudget,
+        });
+  const merged = mergeStateWithBudget(stateBlockBudget(referenceBody.length));
+
+  const renderWithState = (
+    delta: PrCommentDelta,
+    outside: readonly Finding[],
+    moved: string | undefined,
+    urls: ReadonlyMap<string, string> | undefined,
+    state: MergedState | undefined,
+    compactFrom?: number,
+  ): string => {
+    const body = renderPrComment(
+      doc,
+      webUrl,
+      overlayDelta(delta),
+      outside,
+      moved,
+      urls,
+      input.ciMode,
+      compactFrom,
+    );
+    // WHY the admission block is written on BOTH paths: its `reviews` is the
+    // only count a summary keeps when the count is 0. renderStateBlock omits 0
+    // (parseStateBlock rejects < 1 on purpose), so a forced re-review rendered
+    // through the state block would read back as "a summary exists, so one
+    // review", charging an attempt that never happened. Its blocking/advisory
+    // counts are only read when the state block has no findings (see
+    // priorScoreForAdmission), and the first-review path already writes them
+    // this way.
+    const counts = tierCountsFromFindings(
+      canonicalAdmissionFindings(doc.findings),
+    );
+    const admissionBlock = renderCiAdmissionBlock(
+      doc.head_sha,
+      counts,
+      postedReviewCount,
+    );
+    if (state === undefined) {
+      return `${body}${admissionBlock}`;
+    }
+    // The drop line sits right above the state block it accounts for. Empty
+    // when the cap dropped nothing.
+    const note = droppedStateNote(state.dropped);
+    const noteLine = note === "" ? "" : `${note}\n`;
+    return `${body}${admissionBlock}${noteLine}${renderStateBlock(doc.head_sha, state.rows, postedReviewCount, state.hw)}`;
+  };
+  const renderBody = (
+    delta: PrCommentDelta,
+    outside: readonly Finding[],
+    moved: string | undefined,
+    urls?: ReadonlyMap<string, string>,
+  ): string => renderWithState(delta, outside, moved, urls, merged);
 
   // The id this run's own creation just returned, if any — threaded to the
   // closing PATCH below so it updates THIS comment directly rather than
@@ -2756,10 +3253,55 @@ export async function postInlineFindings(input: {
   });
 
   const delta: PrCommentDelta = { ...plan.delta, previousHeadSha };
+  // S1 — the 422 demotion grew the Outside Diff after the POST-shaped merge,
+  // so the PATCH body can be longer than the budget was sized for. Compact
+  // first, with the POST merge's state: the demoted entries shrink from the
+  // last one backwards (location and link only) and the first fit wins. WHY
+  // compaction before re-merging: a re-merge sized from the uncompacted body
+  // can leave no room for the advisory rows, and those rows are then evicted
+  // for good even though compaction would have made room. Without a demotion
+  // the body stays byte-identical to today's, whatever its length. The PATCH
+  // is never knowingly sent above the limit.
+  const grew = outsideDiff.length > plannedOutsideDiff.length;
+  const renderPatch = (
+    state: MergedState | undefined,
+    compactFrom?: number,
+  ): string =>
+    renderWithState(
+      delta,
+      outsideDiff,
+      movedHeadSha,
+      commentUrlByFindingId,
+      state,
+      compactFrom,
+    );
+  let patchBody = renderPatch(merged);
+  if (grew && patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
+    for (let from = outsideDiff.length - 1; from >= 0; from--) {
+      patchBody = renderPatch(merged, from);
+      if (patchBody.length <= GITHUB_ISSUE_COMMENT_MAX) break;
+    }
+    // S1b — only when every entry is compacted and the body still does not
+    // fit does the state shrink: re-merge with the same inputs and a budget
+    // sized from the fully compacted body without its state block. The ids
+    // and hw are budget-independent, and only advisory rows can be dropped.
+    if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
+      const bodyWithoutState = renderPatch(undefined, 0);
+      const reMerged = mergeStateWithBudget(
+        stateBlockBudget(bodyWithoutState.length),
+      );
+      patchBody = renderPatch(reMerged, 0);
+    }
+    if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
+      process.stdout.write(
+        `::warning::pr-hero: the summary is ${patchBody.length} characters, over GitHub's ${GITHUB_ISSUE_COMMENT_MAX}-character comment limit even with every Outside Diff entry compacted; sending it as is\n`,
+      );
+    }
+  }
   const patched = await postPrComment(
     operatorRoot,
     pr,
-    renderBody(delta, outsideDiff, movedHeadSha, commentUrlByFindingId),
+    patchBody,
     spawnFn,
     summaryCommentId ?? undefined,
   );
@@ -2780,6 +3322,9 @@ export async function postInlineFindings(input: {
       priors: input.rereviewPriors ?? [],
       posted,
     });
+    // WHY one notice per run: a token that cannot resolve threads cannot do it
+    // for any prior, so one line says so instead of one failure per prior.
+    let threadResolveNoticeLogged = false;
     for (const target of targets) {
       if (target.channel !== "review") continue;
       // The reply is bounded AND caught, and a failure `continue`s past the
@@ -2825,9 +3370,22 @@ export async function postInlineFindings(input: {
           );
         }
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // WHY a notice, not a failure: the reply is posted and the gate does not
+        // depend on the resolve, so the run continues as designed.
+        if (message.includes(WORKFLOW_TOKEN_CANNOT_RESOLVE)) {
+          if (!threadResolveNoticeLogged) {
+            threadResolveNoticeLogged = true;
+            log(
+              "resolve skipped: the workflow token cannot resolve review threads " +
+                `(${WORKFLOW_TOKEN_CANNOT_RESOLVE}); the verified-gone replies are posted`,
+            );
+          }
+          continue;
+        }
         log(
           `resolve failed for ${target.priorId} after the verified-gone reply posted: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
+            message,
         );
       }
     }
@@ -2938,6 +3496,7 @@ async function buildCommentUrlMap(input: {
   if (input.freshlyPostedReview.length > 0) {
     const freshReview = await fetchPrReviewComments(operatorRoot, pr, {
       spawnFn,
+      timeoutMs: POSTING_GH_TIMEOUT_MS,
     });
     for (const finding of input.freshlyPostedReview) {
       const fingerprint = claimFingerprint(finding.claim);
@@ -2985,6 +3544,11 @@ export async function postInlineIfEligible(input: {
     claim: string;
     locs: readonly string[];
   }[];
+  // S4: the CI mode the summary's footer names. Omitted is advisory, which is
+  // what the local `post` command gets.
+  ciMode?: CiMode;
+  // Forwarded to postInlineFindings: a forced run leaves the summary counter alone.
+  force?: boolean;
 }): Promise<InlinePostOutcome | null> {
   if (input.sessionFailed) {
     log(input.skippedReason);

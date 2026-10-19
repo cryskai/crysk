@@ -562,9 +562,24 @@ describe("budgetUnlimitedNoticeMessage", () => {
     });
     expect(message).not.toBeNull();
     if (message === null) throw new Error("unreachable");
-    expect(message.toLowerCase()).toContain("subscription");
-    expect(message.toLowerCase()).toContain("size gate");
-    expect(message).toContain("budget-usd");
+    expect(message).toBe(
+      "no budget-usd ceiling was applied: this route has no per-token invoice " +
+        "credential (a Claude subscription or a free route), so a run draws on " +
+        "quota rather than a per-token invoice and the estimated cost is not a " +
+        "dollar figure to gate on. The size gate still applies independently. " +
+        "Set `budget-usd: <n>` to impose a ceiling anyway.",
+    );
+  });
+
+  // W3-FOOTER: the notice runs on a free OpenCode route too, so it must not
+  // name the Claude subscription as the only cause.
+  test("names no single provider: a free route is covered by the same notice", () => {
+    const message = budgetUnlimitedNoticeMessage({
+      budgetUsd: undefined,
+      source: "unlimited-subscription",
+    });
+    expect(message).toContain("a free route");
+    expect(message).not.toContain("authenticates against");
   });
 
   // Two different facts: "you disabled the ceiling you configured" and "no

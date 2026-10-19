@@ -209,6 +209,43 @@ describe("renderStepSummary — clean review (no findings)", () => {
   });
 });
 
+// The footer must not contradict the gate: in gate mode the report backs the
+// commit status that is the required check. Advisory, and any caller that does
+// not pass a mode (every caller today), keeps the footer byte-identical.
+describe("renderStepSummary — the footer follows the gate mode (S4)", () => {
+  const data: CiSummaryData = {
+    kind: "reviewed",
+    prNumber: 7,
+    headSha: HEAD_SHA,
+    findings: [],
+    costUsdEst: 3.68,
+    wallMs: 45_000,
+    model: "haiku+sonnet",
+  };
+  const ADVISORY_FOOTER =
+    "<sub>pr-hero — AI code review assistant. Assistant report, not a merge gate.</sub>";
+  const GATE_FOOTER =
+    "<sub>pr-hero — AI code review assistant. Assistant report backing the pr-hero commit status, the required check in gate mode.</sub>";
+
+  test("advisory: the footer is byte-identical to today's, and the default call is advisory", () => {
+    const advisory = renderStepSummary(data, "advisory");
+    expect(advisory.trimEnd().endsWith(ADVISORY_FOOTER)).toBe(true);
+    expect(renderStepSummary(data)).toBe(advisory);
+  });
+
+  test("gate: the footer says the report backs the required status, and never disclaims a merge gate", () => {
+    const gate = renderStepSummary(data, "gate");
+    expect(gate.trimEnd().endsWith(GATE_FOOTER)).toBe(true);
+    expect(gate).not.toContain("not a merge gate");
+  });
+
+  test("gate: the body is the same as advisory, only the footer moves", () => {
+    const advisory = renderStepSummary(data, "advisory");
+    const gate = renderStepSummary(data, "gate");
+    expect(gate.replace(GATE_FOOTER, ADVISORY_FOOTER)).toBe(advisory);
+  });
+});
+
 describe("renderStepSummary — skipped, size gate limit exceeded", () => {
   const data: CiSummaryData = {
     kind: "skipped-size",

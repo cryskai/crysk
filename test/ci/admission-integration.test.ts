@@ -10,6 +10,7 @@ import {
   type CiReviewAdmissionInput,
   canonicalAdmissionFindings,
   ciReviewPolicyHash,
+  countableWorkflowHeads,
   evaluateCiReviewAdmission,
   formatCiAdmissionObserveNotice,
   parseCiAdmissionBlock,
@@ -70,6 +71,67 @@ function postedFindingComment(input: {
     "claim text"
   );
 }
+
+// #326: a head whose pr-hero run concluded success only because the budget
+// gate skipped it used to count as a spent attempt. Two heads on the PR had a
+// successful run: the first was budget-skipped and spent nothing, the second
+// was reviewed. The head being admitted must still have its last attempt.
+describe("issue #326 — a gate-skipped head does not spend the budget", () => {
+  function freshRow(headSha: string) {
+    return reserveAdmissionAttempt({
+      existing: [],
+      prNumber: PR,
+      headSha,
+      policyHash: POLICY_HASH,
+      reservationTtlSeconds: POLICY.reservationTtlSeconds,
+      now: new Date("2026-10-16T12:00:00.000Z"),
+    }).record;
+  }
+
+  test("the reviewed head is the only attempt, so the next run is admitted", () => {
+    const gateSkipped = settleAdmissionAttempt(
+      freshRow(HEAD_C),
+      "gate-skipped",
+      "estimated cost exceeds the configured CI budget ceiling",
+    );
+    const reviewed = settleAdmissionAttempt(
+      freshRow(HEAD_B),
+      "completed",
+      "review complete",
+    );
+
+    const countable = countableWorkflowHeads(
+      new Set([HEAD_C, HEAD_B]),
+      new Map([
+        [HEAD_C, [gateSkipped]],
+        [HEAD_B, [reviewed]],
+      ]),
+    );
+    const reviewCount = resolveCiAdmissionAttemptCount({
+      stateCount: 0,
+      workflowHeads: countable,
+      ledgerRecords: [freshRow(HEAD_D)],
+    });
+    expect(reviewCount).toBe(1);
+
+    const verdict = evaluateCiReviewAdmission(
+      admissionInput({
+        currentHead: HEAD_D,
+        summaryHead: HEAD_B,
+        markerSeen: true,
+        reviewCount,
+        state: null,
+        admission: parseCiAdmissionBlock(
+          admissionBody(HEAD_B, { blocking: 0, advisory: 1 }),
+        ),
+        postedFindings: null,
+        policy: POLICY,
+        deltaRisk: classifyChangedPaths(["src/pipeline.ts"]),
+      }),
+    );
+    expect(verdict.action).toBe("run");
+  });
+});
 
 function settlePush(
   records: AdmissionRecord[],
@@ -523,6 +585,7 @@ describe("observability — admission metadata in step summaries", () => {
     if (verdict.action !== "skip") return;
     const rendered = planCiReviewSkip({
       prNumber: PR,
+      ciMode: "advisory",
       verdict,
       admission: {
         currentHead: HEAD_B,
@@ -558,6 +621,7 @@ describe("observability — admission metadata in step summaries", () => {
     if (verdict.action !== "manual-required") return;
     const rendered = planCiReviewManualRequired({
       prNumber: PR,
+      ciMode: "advisory",
       verdict,
       admission: {
         currentHead: HEAD_D,

@@ -7,6 +7,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-19
+
+### Fixed
+- **Incremental re-reviews anchor inline comments against the full PR diff** (#366): hunting still reads the push
+  delta, but a finding on an untouched line of the PR now gets a review thread instead of landing in Comments Outside
+  Diff, so it can be dismissed and rechecked. The run dir gains `anchor.patch`, which `post --from` and
+  `triage reply` read (falling back to `diff.patch`).
+- **A timed-out admission reserve POST is adopted by its own nonce** (#360, #367): each check-run write carries a
+  per-call `postNonce`, and a failed POST adopts only the run carrying it, reused records included, so a POST GitHub
+  accepted no longer leaves a `reserved` row counting toward the attempt budget.
+- **"Review partial again" compares which hunters failed** (#363, #368): the partial status reads
+  `(N of M hunters failed, set abc123)`, and the repeat text (fix the route or override) is written only when the same
+  hunters failed again. Older texts without the key still parse and read as not a repeat.
+- **A compacted Outside Diff entry keeps its tier** (#369): the size fallback now renders `🔴 blocking · <location>`
+  instead of the bare location.
+- **The state block stays within its PATCH budget, and a same-head re-post is idempotent** (#364).
+- **A free route no longer shows a dollar band, and the cost footer and CI notice no longer claim a Claude
+  subscription on it** (#355, #361).
+- **Config-error and forced runs no longer use an automatic review attempt** (#353).
+- **A dismissed, deferred or misclassified finding is re-verified when its code changes** (#351), and a finding that
+  escalates to blocking posts its own comment (#349).
+- **The CLI's pending status carries its run's URL, and a cancel settles only that pending** (#357).
+- **The launcher probes the bundled Bun and forwards SIGINT without a TTY** (#356); **skills sync never overwrites a
+  local copy it has no digest for** (#354); **OpenCode qualification retries transport failures with a per-request
+  deadline** (#352); three small CI gaps from the e2e walkthrough (#350).
+- **The plan's RUN row says `suspicion prior(s)`**, which is what it counts (#365).
+
+### Docs
+- An upheld dismissal takes effect in two steps (#359).
+
+
+### Added
+- **`setup --ci` says what the first PR needs**: when `.prhero/gotchas.md` is missing or still the scaffold, the next steps now
+  include `npx -y pr-hero init`, writing real gotchas, committing `.prhero/` to the default branch, and requiring the `pr-hero`
+  status check (not the `review` job). A repository that already has real gotchas is not told to write them again.
+- **`PRH-GOTCHAS-MISSING` names the init command**: its Fix starts with `npx -y pr-hero init`, and the GitHub Actions Quick path
+  gains the gotchas, commit and required-check steps, with the GitHub Free private-repository caveat.
+- **The agent loop through `npx`**: the triage and CI-setup skills now run every command as `npx -y pr-hero ...`, so a
+  coding agent needs Node and `gh` and no pr-hero install. The triage skill teaches the whole loop, including a dismissal
+  closed by `/pr-hero recheck`: the CI adjudicator's `upheld` makes the next review stop counting the finding. The CI-setup
+  skill gains troubleshooting rows for a partial review, `PRH-CANCELLED`, `PRH-MODEL-UNAVAILABLE` and `PRH-CRED-UNUSABLE`.
+- **`pr-hero status` says when to recheck**: each finding carries `ci_verdict` (the CI adjudicator's ruling on its newest
+  reply, on this head, from `github-actions[bot]` only), and a red gate whose blocking dismissals have no ruling answers
+  `next_action: "recheck"`; once every dismissal is upheld it answers `review`.
+- **`pr-hero skills install [--force]`**: installs the skills into every detected coding agent with no TTY, so an agent can
+  run `npx -y pr-hero skills install` itself. Until now only the interactive `setup` wizard installed them.
+
+### Added
+- **`npx pr-hero` without Bun**: `bin/pr-hero.js` now starts under Node too. It runs the CLI in-process under Bun,
+  and under Node it starts Bun on `src/cli.ts`: the bundled `bun` dependency (pinned to 1.3.14, an
+  `optionalDependency`) first, then `bun` on PATH. It forwards SIGTERM, SIGHUP and the exit code (Ctrl+C reaches Bun from the terminal), and
+  exits 127 with an install hint when no Bun is found. `@opencode-ai/sdk` moves to `dependencies`, and the action
+  installs with `--omit=optional`, so CI does not download the bundled Bun. MCP and launchd registration refuse a
+  run from npx's temporary cache: "install pr-hero (npm i -g pr-hero) to register".
+
+### Changed
+- **Gate: a partial review is red**: in gate mode a finished review where some hunters failed, and no blocking
+  finding survived, sets `failure` with `pr-hero: review partial (N of M hunters failed) — /pr-hero review retries it`
+  instead of `success`. A blocking count still wins. A skip carries a partial verdict red, and `pr-hero status`
+  answers `review` for it. Advisory mode is unchanged.
+
+### Fixed
+- **A cancelled review no longer leaves its `pr-hero` status pending.** A cancel kills the CLI before its own settle lands, so the head's status stayed `pending: pr-hero reviewing` forever. A separate `Settle a cancelled review` step now runs only on a cancel and sets this run's own pending on the locked head to `error` `PRH-CANCELLED: not reviewed — /pr-hero review reviews this head`. The `!cancelled()` publish step is unchanged, so a superseded run still reports no false failure.
+- **A re-review's fresh findings reach the state block.** From the second review on, the summary's `pr-hero-state` block holds this run's findings as well as the earlier ones. Before, it held only the earlier findings, so a blocking finding first raised by a re-review was forgotten by the next review, and a same-head forced re-review could read green. Known gap: the first review writes no state block, so its outside-diff findings are not persisted; its inline findings are recovered from their markers on the second review.
+- **A run whose every hunter failed for one cause no longer shows placeholders.** The hunters-failed path renders a
+  shared cause only when its sentence is complete with the params that path has: `model_unavailable` with the provider
+  known, and `missing_provider_record` with the provider and model known. Every other cause keeps `PRH-HUNTERS-FAILED`.
+  The sandbox reads `PRH-MODEL-UNAVAILABLE` and a hunter-route `PRH-CRED-UNUSABLE` as the same hunters-failed path.
+- **A model the provider does not serve is named after the provider.** A provider refusal whose `status=` slot
+  reports HTTP 404 now classifies as `model_unavailable`, a terminal cause that is never retried. Its CI outcome is
+  `PRH-MODEL-UNAVAILABLE` with the lead `Provider <name>:` instead of `Unclassified:`, and the code's owner is now
+  the provider. The `provider_configuration_invalid` cause keeps its `Your configuration:` lead. Other refusal
+  statuses classify as before.
+- **A run whose every hunter hit the same unserved model says so.** The CLI record of a `hunters-failed` run now
+  names each failed hunter's transport cause, provider and model (`hunter_failures`). When every hunter failed with
+  `model_unavailable`, the publisher renders `PRH-MODEL-UNAVAILABLE` with the lead `Provider <name>:` and the model,
+  instead of `PRH-HUNTERS-FAILED`. Any other mix, and a record without the field, render as before.
+- **A run whose every hunter lacks the route's credential record names it.** An OpenCode route whose provider has no
+  record in the auth store now carries the typed cause `missing_provider_record`, from the broker's own refusal and not
+  from its message text. When every failed hunter shares a cause with a code of its own, the publisher renders that
+  code and its owner: `PRH-CRED-UNUSABLE` with `Your configuration:` and the route (`route <provider>/<model> has no
+  usable credential record`). A mix of causes, or `runtime_unavailable`, still renders `PRH-HUNTERS-FAILED`.
+
+### Added
+- **`/pr-hero recheck` and the CI adjudicator**: a PR comment that is exactly `/pr-hero recheck` runs `/pr-hero review` with `--adjudicate`. The CI adjudicator rules on up to 5 pending `dismissed` replies to blocking findings, and only an upheld dismissal leaves the gate count. `deferred` and `misclassified` never do, and a rejected or inconclusive verdict keeps the finding counted. Verdicts are replies by `github-actions[bot]`, so a custom token fails closed. The recheck run never changes the count itself: an upheld finding leaves it from the next review of the same head, which reads the reply back. A verdict counts only on the head it was given, and a failed adjudicator step posts nothing and stays pending. Refused on fork pull requests, with the same permission check as `/pr-hero review`.
+- **`pr-hero status --pr <n> [--json]`**: a read-only command that reads one PR's pr-hero gate, its posted
+  findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `override-or-fix`, `done`) through `gh` alone. With
+  `--json` it prints one `pr-hero.status/v1` object on stdout. It fails closed: a failed read or a truncated comment
+  list, or a read that never answers within its bound, exits 1 with nothing on stdout. A green gate with a finding
+  on this head that has no reply is `triage`, not `done`, because the triage skill answers advisory findings too. A
+  green gate over a partial review of this head (some reviewers failed) is `review`. Each finding carries `blocking`,
+  which is true for an unrecoverable tier as it is for a blocking one, so such a finding is never read as clear. A
+  finding whose badge and state row both fail to give a tier reads as `tier: "unrecoverable"`, never `null`. The
+  triage skill runs it as step 0. `docs/github-actions.md` has the shape.
+- **Gate mode for CI**: the action's `mode` input (`gate` or `advisory`, default `gate`) decides what the
+  `pr-hero` commit status says. `gate` sets `failure` on unresolved blocking findings, on a size or budget
+  skip, and on a crash, and `success` otherwise. `advisory` keeps the previous posture: a finished review is
+  always `success`. Local runs and the watcher post their status on `pr-hero/local`, which the required check
+  never reads, so a local run cannot overwrite a red gate. A watcher run also stands down for a local review
+  already in flight on the same head, while a `--ci` run still stands down only for a pending on `pr-hero`. When
+  the review itself failed before delivery, a failed final status write is logged and never replaces that failure.
+  When a delivered review's final status write fails, including when a step after the delivery failed, the publisher
+  step of the same job posts that status once more, so the required check does not stay pending; the job still fails.
+  `/pr-hero override` unlocks a red gate for the head it names, and is refused on a pull request from a fork. When the
+  override's status is written, it also removes earlier outcome comments from the pull request, as a completed review
+  does, and keeps every override record.
+- **Reactions answer a `/pr-hero` comment the trigger does not review**: a refused or near-miss comment gets a
+  reaction on the comment and no text reply. 👀 marks an accepted command, 👎 a refused one (no write access, or a
+  refused override), and 😕 a near miss, which runs nothing. A reaction is best effort: when GitHub refuses it, the run
+  prints one warning and its outcome does not change. Only a comment's first attempt reacts: a re-run keeps its decision and adds no reaction. A comment run's head lookup for an authorised commenter with no
+  credential is retried once, so a transient failure no longer leaves that run without its status.
+
+### Fixed
+- **An unreadable override check is no longer silent**: when a review's override check cannot read the head's statuses, the verdict is written as before and the run logs a warning that says so, and the publisher's repost of an unsettled status logs the same warning. A malformed status row is ignored and the valid rows decide, so a valid fresh override beside a garbage row still stands and nothing is written over it; only a failed gh read (an error or a timeout) counts as unreadable and writes the verdict with the warning.
+- **A skipped head no longer leaves the gate silent**: in gate mode, a head the admission gate skips (low-risk or
+  below-threshold delta, or once per PR) inherits the verdict of the pull request's last reviewed commit, read from
+  that commit's own statuses (the newest earlier commit with a review's verdict, within the last 20), never from
+  comment content, so a comment naming a green head carries nothing. A skip's failure is not a verdict, so one skip no
+  longer hides a green review on an older commit. A red review stays red and a clean one reads as
+  no review needed. An override is never carried, and a head whose newest status is an override keeps it, when that
+  head's statuses can be read: a re-run writes no skip status over it. When they cannot be read, the skip's status is
+  written as planned and the run logs a warning. With no readable verdict, or when the attempt budget is used up, the head is
+  `failure` with the way to review it. Before this, an admission skip posted no status, so a required check could
+  block with no explanation, or pass a head nobody decided about.
+- **An outside-channel triage reply keeps its `#issuecomment` link when the repo's web URL cannot be read**: the link
+  is what binds the reply to its finding, and a failed `gh repo view` used to post the reply with no link at all. The
+  reply now falls back to the PR's own URL, then to the repo's `nameWithOwner` on the GitHub host. It posts without a
+  link only when none of the three is known.
+- **The gate counts unresolved findings, not only this run's**: a blocking finding an earlier review left
+  open stays counted through a re-review that carries it, through a same-head `/pr-hero review` that runs no
+  hunters, through a triage reply on its own, and through later pushes after a rejected dismissal or a
+  `misclassified` reply. Before this, each of those read green. A finding leaves the
+  count only when the re-review verifies it gone or its files were deleted. Known gap: a blocking finding first
+  raised by a re-review, rather than by the first review, is not yet carried to the reviews after it. An advisory
+  finding from this run never clears a blocking one at the same spot.
+- **An override holds against every verdict write of the review (`success` or `failure`), when the head's statuses can be
+  read**: the check covers a body that failed after delivery, and the publisher step's repost of a status the CLI could
+  not write. An `error` write, such as a
+  review whose hunters all failed, is not a verdict and may replace the override. The run's start is stamped before its
+  pending status is posted, with a 5-second clock-skew allowance, so an override posted while that post was slow stands;
+  when that pending did not land, the allowance is dropped. The CLI's head-status read asks for 100 contexts per page, as
+  the publisher's does, so a busy head's `pr-hero` row is not missed. A failed head lookup for `/pr-hero override` gets its
+  own refusal notice, apart from the notice for a proven fork.
+
 ## [0.2.3] - 2026-10-16
 
 ### Added
@@ -303,7 +447,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/juanmaagd/pr-hero/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/juanmaagd/pr-hero/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/juanmaagd/pr-hero/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/juanmaagd/pr-hero/compare/v0.2.0...v0.2.1

@@ -20,15 +20,27 @@
 // fabricating values nothing produced. Same intent as
 // CiAdmissionGateResult's `exitCode: number | undefined` sentinel
 // (src/pr/ci-admission-gate.ts), expressed so the type checker enforces it.
+import { recordPendingCreatedAt, recordReviewing } from "#ci/cli-record";
 import { planCiBudgetSkip } from "#ci/gates";
+import { actionsRunUrl } from "#ci/outcome";
+import {
+  countFreeRouteSteps,
+  type FreeRouteBilling,
+} from "#model/free-discovery";
 import type { ResolvedRoutePlan } from "#model/routing";
 import {
   type CiAdmissionLedgerState,
   publishCiSkip,
-  settleCiAdmissionLedger,
+  settleCiGateSkip,
 } from "#pr/admission";
 import { ghRepoWebUrl } from "#pr/pr";
-import { commitStatusRequest, type PrTarget, prHtmlUrl } from "#pr/preflight";
+import {
+  type CiMode,
+  type CommitStatusContext,
+  commitStatusRequest,
+  type PrTarget,
+  prHtmlUrl,
+} from "#pr/preflight";
 import { holdCommitStatusLock, tryPublishCommitStatus } from "#pr/status";
 import type { buildPhaseBQueue, PreparedDiscovery } from "#rereview/prepare";
 import {
@@ -70,7 +82,20 @@ export type PrPlanAndConfirmResult =
       maxVerificationSteps: number;
       estimate: ReturnType<typeof estimateCost>;
       statusTargetUrl: string | undefined;
+      // W3-FOOTER: the count the plan card priced by, handed on so the end-of-run
+      // footer names a free route the same way the card did.
+      freeRoute: FreeRouteBilling | undefined;
     };
+
+// The pending's target_url (SB3 follow-up): in GitHub Actions it is this run's attempt, so the
+// cancel settle can tell this run's pending from another run's (decideCancelSettle, src/ci/publish.ts).
+// Outside Actions it stays the PR page. The lock hold keeps the PR page either way.
+export function pendingStatusTargetUrl(
+  prTargetUrl: string | undefined,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | undefined {
+  return actionsRunUrl(env) ?? prTargetUrl;
+}
 
 export async function resolvePrPlanAndConfirm(params: {
   options: CliOptions;
@@ -95,6 +120,12 @@ export async function resolvePrPlanAndConfirm(params: {
   summary: LoadedRunConfig["summary"];
   loaded: LoadedRunConfig["loaded"];
   isCi: boolean;
+  // The one resolution of the run's CI mode (resolveCiPosture, reviewPr). Passed
+  // down, never re-resolved here.
+  ciMode: CiMode;
+  // The context this run's statuses post on: pr-hero only for an explicit --ci
+  // run, pr-hero/local otherwise (resolveCiPosture). Passed down, never re-derived.
+  statusContext: CommitStatusContext;
   ciBudgetCeiling: { budgetUsd: number | undefined };
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
@@ -148,11 +179,11 @@ export async function resolvePrPlanAndConfirm(params: {
       budgetUsd: params.ciBudgetCeiling.budgetUsd,
       prNumber: params.prNumber,
       force: params.options.force,
+      ciMode: params.ciMode,
     });
     if (budgetPlan !== null) {
-      await settleCiAdmissionLedger(
+      await settleCiGateSkip(
         params.ciAdmissionLedger,
-        "skipped",
         "estimated cost exceeds the configured CI budget ceiling",
       );
       const exitCode = await publishCiSkip({
@@ -164,6 +195,8 @@ export async function resolvePrPlanAndConfirm(params: {
         plan: budgetPlan,
         noticeMessage:
           "pr-hero review skipped — estimated cost exceeds the configured CI budget ceiling",
+        ciMode: params.ciMode,
+        headSha: params.headSha,
       });
       return { exitCode };
     }
@@ -181,6 +214,15 @@ export async function resolvePrPlanAndConfirm(params: {
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
+  // Read off the admission above, which already decided every free verdict:
+  // this adds no probe. Absent without routing, so the band stays.
+  const freeRoute =
+    routePlan === undefined || productionAdmission === undefined
+      ? undefined
+      : await countFreeRouteSteps({
+          steps: routePlan.steps,
+          probe: productionAdmission.freeModelProbe,
+        });
   const runnerAuthority = await resolveRunnerAuthority({
     workspaceRoot: params.worktreePath,
   });
@@ -230,6 +272,7 @@ export async function resolvePrPlanAndConfirm(params: {
           },
         }),
     ...(routePlan === undefined ? {} : { routePlan }),
+    ...(freeRoute === undefined ? {} : { freeRoute }),
   };
   for (const line of renderPrPlan(planContext, styleEnabled())) log(line);
   // What this run will actually publish. `options` is never mutated: the plan
@@ -242,6 +285,7 @@ export async function resolvePrPlanAndConfirm(params: {
       estimate.high,
       params.options.post ?? false,
       () => prPlanDetails(planContext, styleEnabled()),
+      freeRoute,
     );
     if (choice.kind === "cancel") {
       log("aborted; nothing was spent.");
@@ -261,25 +305,50 @@ export async function resolvePrPlanAndConfirm(params: {
     await ghRepoWebUrl(params.operatorRoot),
     params.prNumber,
   );
-  await tryPublishCommitStatus(
+  // WHY the progress record comes BEFORE the pending post (F001 and F002 on #330): the
+  // publisher gives a run with no record no status on any head, so the record is what
+  // says the lock is this run's and on which head. The CLI records that it is about to
+  // hold the lock before it posts the lock, so no kill can leave a landed pending with
+  // no record; such a pending would stay until the admission gate's 90-minute TTL
+  // expires. If the post never lands and the CLI then dies, the publisher reads no
+  // pending status on that head and posts the error status (unless the head's newest
+  // pr-hero status already settled), which is right, because the run died. If the CLI
+  // completes, its terminal record overwrites `reviewing`.
+  // WHY the start is read here, before the record and the POST: the POST can take two
+  // attempts of 15 s, and an override posted while it is in flight was posted during this
+  // run. Stamping after the POST would class that override as before the run and overwrite
+  // it (the override rule, src/ci/override.ts).
+  const runStartedMs = Date.now();
+  recordReviewing(params.headSha);
+  const pendingLanded = await tryPublishCommitStatus(
     params.operatorRoot,
     params.headSha,
     commitStatusRequest({
       phase: "pending",
       posted: false,
-      targetUrl: statusTargetUrl,
+      targetUrl: pendingStatusTargetUrl(statusTargetUrl),
+      context: params.statusContext,
     }),
+    undefined,
+    (createdAt) => recordPendingCreatedAt(createdAt),
   );
   // From here the lock is HELD, and the only two ways out both clear it:
   // the finally below on the normal path, and the signal handlers in runCli
   // on the cancelled one. Held even if the publish above failed — a settle
   // for a status that was never posted is a harmless no-op write, whereas
-  // skipping the hold on a publish that actually landed is the #162 bug.
-  holdCommitStatusLock({
-    operatorRoot: params.operatorRoot,
-    sha: params.headSha,
-    targetUrl: statusTargetUrl,
-  });
+  // skipping the hold on a publish that actually landed is the #162 bug. Whether the
+  // pending landed is passed too: only a landed pending vouches for runStartedMs in the
+  // override check (teardown.ts).
+  holdCommitStatusLock(
+    {
+      operatorRoot: params.operatorRoot,
+      sha: params.headSha,
+      targetUrl: statusTargetUrl,
+      context: params.statusContext,
+    },
+    runStartedMs,
+    pendingLanded,
+  );
 
   return {
     exitCode: undefined,
@@ -290,5 +359,6 @@ export async function resolvePrPlanAndConfirm(params: {
     maxVerificationSteps,
     estimate,
     statusTargetUrl,
+    freeRoute,
   };
 }

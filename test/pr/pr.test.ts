@@ -30,13 +30,17 @@ import type { PrHeroFindingRef } from "#compare/compare";
 import {
   CommentsTruncatedError,
   fetchCommitStatuses,
+  fetchCommitStatusList,
   fetchPostedFindingComments,
   fetchPrComments,
+  fetchPrCommitShas,
   fetchPrReviewComments,
   GRAPHQL_COMMENT_MAX_PAGES,
   ghPrFiles,
   ghPrHeadSha,
+  ghRepoWebUrl,
   listAdmissionCheckRuns,
+  POSTING_GH_TIMEOUT_MS,
   parseCompareChangedFiles,
   parsePrHeroWorkflowRunHeads,
   postCommitStatus,
@@ -55,12 +59,14 @@ import {
   COMMIT_STATUS_TIMEOUT_MS,
   commitStatusRequest,
   findingMarker,
+  LOCAL_COMMIT_STATUS_CONTEXT,
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
 } from "#pr/preflight";
 import type { Finding } from "#review/findings";
 import { renderIssueFindingComment } from "#review/report";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
+import { CliError } from "../../src/errors";
 
 // ---------------------------------------------------------------------------
 // FakeSpawn: scripted {stdout, stderr, exitCode} per call, in call order.
@@ -296,6 +302,71 @@ describe("fetchPrReviewComments", () => {
       },
     ]);
     expect(calls.some((c) => c.argv.join(" ").includes("graphql"))).toBe(true);
+  });
+
+  test("GraphQL maps a Bot author to its [bot] login and keeps a User login", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["pulls/42/comments"],
+        response: { stderr: "gh: Not Found (HTTP 404)", exitCode: 1 },
+      },
+      repoView,
+      {
+        match: ["graphql", "reviewThreads"],
+        response: {
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      {
+                        comments: {
+                          nodes: [
+                            {
+                              fullDatabaseId: 9,
+                              body: "bot",
+                              author: {
+                                login: "github-actions",
+                                __typename: "Bot",
+                              },
+                              path: "src/a.ts",
+                              line: 12,
+                              originalLine: 10,
+                              replyTo: null,
+                            },
+                            {
+                              fullDatabaseId: 10,
+                              body: "human",
+                              author: { login: "octocat", __typename: "User" },
+                              path: "src/a.ts",
+                              line: 12,
+                              originalLine: 10,
+                              replyTo: { fullDatabaseId: 9 },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const comments = await fetchPrReviewComments(OPERATOR_ROOT, 42, {
+      spawnFn,
+    });
+    expect(comments.map((c) => [c.id, c.user])).toEqual([
+      [9, "github-actions[bot]"],
+      [10, "octocat"],
+    ]);
+    expect(
+      calls.some((c) => c.argv.join(" ").includes("author{login __typename}")),
+    ).toBe(true);
   });
 
   test("an unparseable line fails loud rather than silently dropping it", async () => {
@@ -735,6 +806,60 @@ describe("fetchPostedFindingComments — marker prefix disjointness", () => {
         liveLine: 12,
       },
     ]);
+  });
+
+  // The visible badge line is the only place a posted comment states its tier
+  // (the marker carries no tier), so the matcher's escalation guard reads it
+  // from the body. Bodies come from the real renderer so the parser cannot
+  // drift from what pr-hero writes.
+  describe("tier from the visible badge line", () => {
+    const bodyWithTier = (tier: "blocking" | "advisory") =>
+      renderIssueFindingComment(
+        finding({
+          id: "F-tier",
+          tier,
+          severity: tier === "blocking" ? "CRITICAL" : "WARNING",
+          path: "src/a.ts",
+          line: 10,
+        }),
+        HEAD,
+      );
+
+    async function fetchOneIssueComment(body: string) {
+      const { spawnFn } = makeFakeGh([
+        { match: ["pulls/42/comments"], response: { stdout: ndjson([]) } },
+        {
+          match: ["issues/42/comments"],
+          response: {
+            stdout: ndjson([{ id: 5, user: "pr-hero", body }]),
+          },
+        },
+      ]);
+      const posted = await fetchPostedFindingComments(OPERATOR_ROOT, 42, {
+        spawnFn,
+      });
+      expect(posted).toHaveLength(1);
+      return posted[0];
+    }
+
+    test("a 🔴 blocking badge parses to tier blocking", async () => {
+      const comment = await fetchOneIssueComment(bodyWithTier("blocking"));
+      expect(comment?.tier).toBe("blocking");
+    });
+
+    test("a 🟡 advisory badge parses to tier advisory", async () => {
+      const comment = await fetchOneIssueComment(bodyWithTier("advisory"));
+      expect(comment?.tier).toBe("advisory");
+    });
+
+    test("a finding comment with no recognizable badge carries no tier", async () => {
+      const comment = await fetchOneIssueComment(
+        "<!-- pr-hero-finding path=src%2Fa.ts line=10 head=" +
+          `${HEAD} c=abcdef123456 -->\nclaim text only`,
+      );
+      expect(comment).toBeDefined();
+      expect(comment).not.toHaveProperty("tier");
+    });
   });
 });
 
@@ -1572,6 +1697,27 @@ describe("resolveReviewThreadForComment", () => {
 });
 
 describe("postCommitStatus", () => {
+  test("returns the created_at GitHub answered with, for the cancel settle's identity (SB3)", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["statuses", HEAD],
+        response: {
+          stdout: '{"id":1,"created_at":"2026-10-17T10:00:00Z"}',
+          exitCode: 0,
+        },
+      },
+    ]);
+    const request = commitStatusRequest({
+      phase: "pending",
+      posted: false,
+      targetUrl: undefined,
+      context: COMMIT_STATUS_CONTEXT,
+    });
+    expect(await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn)).toBe(
+      "2026-10-17T10:00:00Z",
+    );
+  });
+
   test("POSTs state, context, description and target_url as -f fields, not argv prose", async () => {
     const { spawnFn, calls } = makeFakeGh([
       {
@@ -1583,6 +1729,7 @@ describe("postCommitStatus", () => {
       phase: "pending",
       posted: false,
       targetUrl: "https://github.com/org/repo/pull/7",
+      context: COMMIT_STATUS_CONTEXT,
     });
     await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn);
     expect(calls).toHaveLength(1);
@@ -1595,6 +1742,28 @@ describe("postCommitStatus", () => {
     expect(argv).toContain(`description=${request.description}`);
     expect(argv).toContain(`target_url=${request.targetUrl}`);
     expect(calls[0]?.stdin).toBeUndefined();
+  });
+
+  // T3 S7: the POST carries the context the request was built with, never a
+  // constant. A local run's status must land on pr-hero/local, so the gate's
+  // context is named only by a CI run's request.
+  test("POSTs the request's own context: a local request never names pr-hero", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["statuses", HEAD],
+        response: { stdout: "{}", exitCode: 0 },
+      },
+    ]);
+    const request = commitStatusRequest({
+      phase: "success",
+      posted: false,
+      targetUrl: undefined,
+      context: LOCAL_COMMIT_STATUS_CONTEXT,
+    });
+    await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn);
+    const argv = calls[0]?.argv ?? [];
+    expect(argv).toContain(`context=${LOCAL_COMMIT_STATUS_CONTEXT}`);
+    expect(argv).not.toContain(`context=${COMMIT_STATUS_CONTEXT}`);
   });
 
   test("omits target_url when the request has none", async () => {
@@ -1611,6 +1780,7 @@ describe("postCommitStatus", () => {
         phase: "success",
         posted: false,
         targetUrl: undefined,
+        context: COMMIT_STATUS_CONTEXT,
       }),
       spawnFn,
     );
@@ -1636,6 +1806,7 @@ describe("postCommitStatus", () => {
           phase: "pending",
           posted: false,
           targetUrl: undefined,
+          context: COMMIT_STATUS_CONTEXT,
         }),
         spawnFn,
       ),
@@ -1653,6 +1824,7 @@ describe("postCommitStatus", () => {
           phase: "pending",
           posted: false,
           targetUrl: undefined,
+          context: COMMIT_STATUS_CONTEXT,
         }),
         spawnFn,
       ),
@@ -1693,6 +1865,7 @@ describe("postCommitStatus bounds", () => {
     phase: "error",
     posted: false,
     targetUrl: undefined,
+    context: COMMIT_STATUS_CONTEXT,
   });
 
   test("the default settle keeps two attempts at the 15s bound", async () => {
@@ -1775,6 +1948,129 @@ describe("ghPrFiles bounds", () => {
   });
 });
 
+// gh's own paging, as far as these tests need it: without --paginate the call answers the first page
+// only; with it, every page, in order, on one stdout (the --jq projection runs per page).
+function pagedFakeGh(pages: unknown[][]): {
+  spawnFn: typeof Bun.spawn;
+  calls: string[][];
+} {
+  const calls: string[][] = [];
+  const encoder = new TextEncoder();
+  const spawnFn = ((argv: string[]) => {
+    calls.push(argv);
+    const rows = argv.includes("--paginate") ? pages.flat() : (pages[0] ?? []);
+    const text = rows.map((row) => `${JSON.stringify(row)}\n`).join("");
+    const stream = (value: string) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (value) controller.enqueue(encoder.encode(value));
+          controller.close();
+        },
+      });
+    return {
+      stdout: stream(text),
+      stderr: stream(""),
+      exited: Promise.resolve(0),
+      kill() {},
+    };
+  }) as unknown as typeof Bun.spawn;
+  return { spawnFn, calls };
+}
+
+describe("fetchCommitStatusList: every page of the head's status list", () => {
+  const T_OLD = "2026-10-16T10:00:00Z";
+  const T_NEW = "2026-10-17T10:00:00Z";
+  const VERDICT = {
+    state: "failure",
+    context: COMMIT_STATUS_CONTEXT,
+    created_at: T_OLD,
+    description:
+      "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+  };
+
+  test("a verdict on page 2, behind 100 newer rows on page 1, is found", async () => {
+    const newer = Array.from({ length: 100 }, (_, i) => ({
+      state: "success",
+      context: "ci",
+      created_at: T_NEW,
+      description: `build ${i}`,
+    }));
+    const { spawnFn, calls } = pagedFakeGh([newer, [VERDICT]]);
+    const statuses = await fetchCommitStatusList(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    expect(calls[0]?.includes("--paginate")).toBe(true);
+    expect(statuses?.length).toBe(101);
+    expect(statuses?.find((s) => s.context === COMMIT_STATUS_CONTEXT)).toEqual(
+      VERDICT,
+    );
+  });
+
+  test("the list call keeps the --paginate read on the statuses endpoint, bounded by its timeout", async () => {
+    const { spawnFn, calls } = pagedFakeGh([[VERDICT]]);
+    await fetchCommitStatusList(OPERATOR_ROOT, HEAD, { spawnFn });
+    const argv = calls[0] ?? [];
+    expect(argv.join(" ")).toContain(
+      `repos/{owner}/{repo}/commits/${HEAD}/statuses?per_page=100`,
+    );
+    expect(argv.indexOf("--paginate")).toBeLessThan(argv.indexOf("--jq"));
+  });
+
+  test("a failed page read fails closed (null), never a partial list", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/statuses`],
+        response: { stdout: "", stderr: "gh: HTTP 502", exitCode: 1 },
+      },
+    ]);
+    expect(
+      await fetchCommitStatusList(OPERATOR_ROOT, HEAD, { spawnFn }),
+    ).toBeNull();
+  });
+});
+
+describe("fetchPrCommitShas: the PR's commits, oldest first", () => {
+  const SHA_1 = "1".repeat(40);
+  const SHA_2 = "2".repeat(40);
+  const SHA_3 = "3".repeat(40);
+
+  test("lists every page of pulls/<n>/commits, in GitHub's oldest-first order", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["pulls/7/commits"],
+        response: { stdout: `${SHA_1}\n${SHA_2}\n${SHA_3}\n` },
+      },
+    ]);
+    const shas = await fetchPrCommitShas(OPERATOR_ROOT, 7, { spawnFn });
+    expect(shas).toEqual([SHA_1, SHA_2, SHA_3]);
+    const argv = calls[0]?.argv ?? [];
+    expect(argv).toContain("--paginate");
+    expect(argv.join(" ")).toContain(
+      "repos/{owner}/{repo}/pulls/7/commits?per_page=100",
+    );
+  });
+
+  test("a failed call fails closed (null)", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["pulls/7/commits"],
+        response: { stdout: "", stderr: "gh: Not Found", exitCode: 1 },
+      },
+    ]);
+    expect(await fetchPrCommitShas(OPERATOR_ROOT, 7, { spawnFn })).toBeNull();
+  });
+
+  test("a malformed row fails closed (null), never a partial walk", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["pulls/7/commits"],
+        response: { stdout: `${SHA_1}\nnot-a-sha\n` },
+      },
+    ]);
+    expect(await fetchPrCommitShas(OPERATOR_ROOT, 7, { spawnFn })).toBeNull();
+  });
+});
+
 describe("fetchCommitStatuses", () => {
   test("reads the combined status endpoint, latest per context, no pagination", async () => {
     const { spawnFn, calls } = makeFakeGh([
@@ -1814,6 +2110,59 @@ describe("fetchCommitStatuses", () => {
         created_at: "2026-08-18T16:00:00Z",
       },
     ]);
+  });
+
+  // The publisher's reader asks for 100 contexts per page (src/ci/publish.ts, readHeadStatuses),
+  // and this reader must see the same rows. At GitHub's default of 30 a busy head's pr-hero
+  // row can be missing, and the CLI would then write its verdict over an override the
+  // publisher sees. The path is asserted whole, because the fakes below match by substring.
+  test("asks for 100 contexts per page, the same page size as the publisher's reader", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      { match: [`commits/${HEAD}/status`], response: { stdout: "" } },
+    ]);
+    await fetchCommitStatuses(OPERATOR_ROOT, HEAD, { spawnFn });
+    const argv = calls[0]?.argv ?? [];
+    expect(argv).toContain(
+      `repos/{owner}/{repo}/commits/${HEAD}/status?per_page=100`,
+    );
+  });
+
+  // The override check (src/pr/teardown.ts) tells an override from a review's own
+  // status by its description, so the request must ask for it. The jq is asserted
+  // because a fake that echoed the field would pass against a filter that drops it.
+  test("the request asks for each status's description, and a row carries it, null when GitHub sends none", async () => {
+    const override =
+      "pr-hero: overridden by @maintainer — no review on this head";
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: ndjson([
+            {
+              state: "success",
+              context: COMMIT_STATUS_CONTEXT,
+              created_at: "2026-08-18T16:30:00Z",
+              description: override,
+            },
+            {
+              state: "pending",
+              context: "ci",
+              created_at: "2026-08-18T16:00:00Z",
+              description: null,
+            },
+          ]),
+        },
+      },
+    ]);
+    const statuses = await fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    const argv = calls[0]?.argv ?? [];
+    const jq = argv[argv.indexOf("--jq") + 1] ?? "";
+    expect(jq).toContain(".statuses[]?");
+    expect(jq).toContain("description: .description");
+    expect(statuses[0]?.description).toBe(override);
+    expect(statuses[1]?.description).toBeNull();
   });
 
   test("a failed fetch is empty, not a throw", async () => {
@@ -1865,6 +2214,180 @@ describe("fetchCommitStatuses", () => {
     await expect(
       fetchCommitStatuses(OPERATOR_ROOT, "abc", { spawnFn }),
     ).resolves.toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  // `pr-hero status` reads the gate's target_url for its own output. The jq is pinned
+  // because a fake that echoed the field would pass against a filter that drops it.
+  test("the request asks for each status's target_url, and a row carries it", async () => {
+    const url = "https://github.com/MusiveTech/musive/actions/runs/9";
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: ndjson([
+            {
+              state: "success",
+              context: COMMIT_STATUS_CONTEXT,
+              created_at: "2026-08-18T16:30:00Z",
+              target_url: url,
+            },
+          ]),
+        },
+      },
+    ]);
+    const statuses = await fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    const argv = calls[0]?.argv ?? [];
+    const jq = argv[argv.indexOf("--jq") + 1] ?? "";
+    expect(jq).toContain("target_url: .target_url");
+    expect(statuses[0]?.target_url).toBe(url);
+  });
+
+  // The default keeps the swallowing contract every watch and admission caller depends on.
+  // `failClosed` is the status command's reading: an unreadable gate is an error, never
+  // an empty list that reads as "no pr-hero status", which would send a review out blind.
+  test("failClosed: a failed read throws a CliError, the default still returns empty", async () => {
+    const failing = () =>
+      makeFakeGh([
+        {
+          match: [`commits/${HEAD}/status`],
+          response: {
+            stdout: "",
+            stderr: "Resource not accessible (HTTP 403)",
+            exitCode: 1,
+          },
+        },
+      ]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+        spawnFn: failing().spawnFn,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+        spawnFn: failing().spawnFn,
+        failClosed: true,
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+  });
+
+  test("failClosed: an unparseable line throws, where the default drops it", async () => {
+    const garbage = () =>
+      makeFakeGh([
+        {
+          match: [`commits/${HEAD}/status`],
+          response: {
+            stdout:
+              "not-json\n" +
+              ndjson([
+                {
+                  state: "pending",
+                  context: COMMIT_STATUS_CONTEXT,
+                  created_at: "2026-08-18T16:30:00Z",
+                },
+              ]),
+          },
+        },
+      ]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+        spawnFn: garbage().spawnFn,
+        failClosed: true,
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, { spawnFn: garbage().spawnFn }),
+    ).resolves.toHaveLength(1);
+  });
+
+  test("a line that is valid JSON but not a status is skipped by default, and the rest are kept", async () => {
+    const pending = {
+      state: "pending",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: "2026-08-18T16:30:00Z",
+    };
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: `null\n${ndjson([pending])}\nnot-json`,
+        },
+      },
+    ]);
+    const statuses = await fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.state).toBe("pending");
+  });
+
+  test("failClosed: a line that is valid JSON but not a status throws", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: {
+          stdout: "null",
+        },
+      },
+    ]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, { spawnFn, failClosed: true }),
+    ).rejects.toBeInstanceOf(CliError);
+  });
+
+  // failClosed: "read" is the override check's reading: a failed gh read throws, but a malformed
+  // row is skipped, so one garbage line cannot hide a valid override on the same head.
+  test('failClosed "read": a failed gh read still throws a CliError', async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: { stdout: "", stderr: "gh: HTTP 500", exitCode: 1 },
+      },
+    ]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, HEAD, { spawnFn, failClosed: "read" }),
+    ).rejects.toBeInstanceOf(CliError);
+  });
+
+  test('failClosed "read": an unparseable or non-status line is skipped, and the valid rows are kept', async () => {
+    const valid = {
+      state: "success",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: "2026-08-18T16:30:00Z",
+      description: "pr-hero: overridden by @maintainer",
+    };
+    const { spawnFn } = makeFakeGh([
+      {
+        match: [`commits/${HEAD}/status`],
+        response: { stdout: `not-json\nnull\n${ndjson([valid])}` },
+      },
+    ]);
+    const statuses = await fetchCommitStatuses(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+      failClosed: "read",
+    });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.description).toBe(valid.description);
+  });
+
+  test('failClosed "read": an abbreviated sha throws, where the default is empty', async () => {
+    const { spawnFn, calls } = makeFakeGh([]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, "abc", {
+        spawnFn,
+        failClosed: "read",
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("failClosed: an abbreviated sha throws, where the default is empty", async () => {
+    const { spawnFn, calls } = makeFakeGh([]);
+    await expect(
+      fetchCommitStatuses(OPERATOR_ROOT, "abc", { spawnFn, failClosed: true }),
+    ).rejects.toBeInstanceOf(CliError);
     expect(calls).toHaveLength(0);
   });
 });
@@ -1959,8 +2482,13 @@ describe("upsertAdmissionCheckRun", () => {
     expect(argv).toContain("POST");
     expect(argv.join(" ")).toContain("repos/{owner}/{repo}/check-runs");
     expect(argv.join(" ")).toContain(`external_id=${record.reservationId}`);
-    expect(argv.join(" ")).toContain(
-      `output[text]=${serializeAdmissionRecord(record)}`,
+    // The record carries one fresh POST nonce on top of the reservation fields.
+    const outputText = argv.find((arg) => arg.startsWith("output[text]="));
+    expect(JSON.parse(outputText?.slice("output[text]=".length) ?? "")).toEqual(
+      {
+        ...record,
+        postNonce: expect.any(String),
+      },
     );
     expect(argv.join(" ")).toContain(`name=${ADMISSION_CHECK_RUN_NAME}`);
   });
@@ -2009,6 +2537,229 @@ describe("upsertAdmissionCheckRun", () => {
     const argv = calls[0]?.argv ?? [];
     expect(argv).toContain("status=completed");
     expect(argv).toContain("conclusion=skipped");
+  });
+});
+
+// F004 (PR #330): an accepted-but-unanswered gh call on the findings POST
+// parked publishRunOutcome forever, and the pending commit status with it.
+// Every call on that path now carries a bound. A bound that fires fails like
+// any non-zero gh exit, with no retry: a timed-out POST may already have
+// landed, and a retry would duplicate the review. The hang fakes close their
+// streams on kill(), the same shape repostMarkedPrComment's tests use, because
+// gh() reads both streams before it reports.
+describe("the findings POST bounds every gh call (F004)", () => {
+  function hangOn(
+    base: typeof Bun.spawn,
+    when: (argv: string[]) => boolean,
+  ): typeof Bun.spawn {
+    return ((argv: string[], opts?: unknown) => {
+      if (!when(argv)) {
+        return (base as unknown as (a: string[], o?: unknown) => unknown)(
+          argv,
+          opts,
+        );
+      }
+      const held: ReadableStreamDefaultController<Uint8Array>[] = [];
+      const open = () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            held.push(controller);
+          },
+        });
+      let resolveExit: (code: number) => void = () => {};
+      const exited = new Promise<number>((resolve) => {
+        resolveExit = resolve;
+      });
+      let safety: ReturnType<typeof setTimeout> | undefined;
+      const close = () => {
+        if (safety !== undefined) clearTimeout(safety);
+        for (const controller of held) {
+          try {
+            controller.close();
+          } catch {
+            // already closed by the safety net
+          }
+        }
+        resolveExit(143);
+      };
+      // Safety net only: the bound under test (50 ms) must fire first. Without
+      // this fallback a call that never gets a bound spins the runner forever
+      // instead of failing its one test.
+      safety = setTimeout(close, 2000);
+      return { stdout: open(), stderr: open(), exited, kill: close };
+    }) as unknown as typeof Bun.spawn;
+  }
+
+  // Wraps any fake and records the bound each call carries. The bound travels
+  // as Bun.spawn's `timeout` option, the same lever gh() sets, so a dropped
+  // argument shows up here as `undefined`.
+  function recordTimeouts(base: typeof Bun.spawn): {
+    spawnFn: typeof Bun.spawn;
+    timeouts: { argv: string[]; timeout: number | undefined }[];
+  } {
+    const timeouts: { argv: string[]; timeout: number | undefined }[] = [];
+    const spawnFn = ((argv: string[], opts?: { timeout?: number }) => {
+      timeouts.push({ argv, timeout: opts?.timeout });
+      return (base as unknown as (a: string[], o?: unknown) => unknown)(
+        argv,
+        opts,
+      );
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, timeouts };
+  }
+
+  const oneFinding = finding({ id: "F001", path: "src/a.ts", line: 10 });
+  const reviewInput = (spawnFn: typeof Bun.spawn) => ({
+    operatorRoot: OPERATOR_ROOT,
+    pr: 42,
+    headSha: HEAD,
+    findings: [oneFinding],
+    allFindings: [toRef(oneFinding)],
+    spawnFn,
+  });
+
+  test("a summary create that never answers rejects within its bound", async () => {
+    const base = makeFakeGh([]);
+    await expect(
+      postPrComment(
+        OPERATOR_ROOT,
+        42,
+        "body",
+        hangOn(base.spawnFn, (argv) => argv.includes("POST")),
+        undefined,
+        undefined,
+        50,
+      ),
+    ).rejects.toThrow(/timed out after 50 ms/);
+  });
+
+  test("a summary PATCH that never answers rejects within its bound", async () => {
+    const base = makeFakeGh([]);
+    await expect(
+      postPrComment(
+        OPERATOR_ROOT,
+        42,
+        "body",
+        hangOn(base.spawnFn, (argv) => argv.includes("PATCH")),
+        77,
+        undefined,
+        50,
+      ),
+    ).rejects.toThrow(/timed out after 50 ms/);
+  });
+
+  test("a review POST that never answers rejects within its bound, and is not retried", async () => {
+    const base = makeFakeGh([]);
+    // Match on the joined argv: the endpoint is one element of the array.
+    const isReview = (argv: string[]) =>
+      argv.join(" ").includes("pulls/42/reviews");
+    const rec = recordTimeouts(hangOn(base.spawnFn, isReview));
+    await expect(
+      postPrReview({ ...reviewInput(rec.spawnFn), timeoutMs: 50 }),
+    ).rejects.toThrow(/timed out after 50 ms/);
+    const reviewPosts = rec.timeouts.filter((t) => isReview(t.argv));
+    expect(reviewPosts).toHaveLength(1);
+    // No 422 recovery either: a timeout is not a 422, and its re-reads would
+    // be the wrong answer to a submission that may already have landed.
+    expect(rec.timeouts.some((t) => t.argv.includes("--paginate"))).toBe(false);
+  });
+
+  test("with no timeout passed, every findings-POST primitive sends the posting bound", async () => {
+    const base = makeFakeGh([
+      { match: ["headRefOid"], response: { stdout: `${HEAD}\n` } },
+      {
+        match: ["repo", "view", "--json", "url"],
+        response: { stdout: "https://github.com/musive/pr-hero\n" },
+      },
+      // postPrComment's PATCH must answer with the comment id it reads back.
+      {
+        match: ["PATCH", "issues/comments/77"],
+        response: { stdout: JSON.stringify({ id: 77 }) },
+      },
+    ]);
+    const rec = recordTimeouts(base.spawnFn);
+    await postPrComment(OPERATOR_ROOT, 42, "body", rec.spawnFn, 77);
+    await postPrReview(reviewInput(rec.spawnFn));
+    await ghPrHeadSha(OPERATOR_ROOT, 42, { spawnFn: rec.spawnFn });
+    await ghRepoWebUrl(OPERATOR_ROOT, { spawnFn: rec.spawnFn });
+    expect(rec.timeouts.map((t) => t.timeout)).toEqual([
+      POSTING_GH_TIMEOUT_MS,
+      POSTING_GH_TIMEOUT_MS,
+      POSTING_GH_TIMEOUT_MS,
+      POSTING_GH_TIMEOUT_MS,
+    ]);
+  });
+
+  test("a comment read's GraphQL fallback carries the caller's bound on every call", async () => {
+    const base = makeFakeGh([
+      {
+        match: ["issues/42/comments"],
+        response: { stderr: "gh: Not Found (HTTP 404)", exitCode: 1 },
+      },
+      repoView,
+      {
+        match: ["graphql", "databaseId"],
+        response: {
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [],
+                  },
+                },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const rec = recordTimeouts(base.spawnFn);
+    await fetchPrComments(OPERATOR_ROOT, 42, {
+      spawnFn: rec.spawnFn,
+      timeoutMs: 50,
+    });
+    expect(rec.timeouts.some((t) => t.argv.includes("graphql"))).toBe(true);
+    expect(rec.timeouts.map((t) => t.timeout)).toEqual(
+      rec.timeouts.map(() => 50),
+    );
+  });
+
+  test("a review read's GraphQL fallback carries the caller's bound on every call", async () => {
+    const base = makeFakeGh([
+      {
+        match: ["pulls/42/comments"],
+        response: { stderr: "gh: Not Found (HTTP 404)", exitCode: 1 },
+      },
+      repoView,
+      {
+        match: ["graphql", "reviewThreads"],
+        response: {
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [],
+                  },
+                },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const rec = recordTimeouts(base.spawnFn);
+    await fetchPrReviewComments(OPERATOR_ROOT, 42, {
+      spawnFn: rec.spawnFn,
+      timeoutMs: 50,
+    });
+    expect(rec.timeouts.some((t) => t.argv.includes("graphql"))).toBe(true);
+    expect(rec.timeouts.map((t) => t.timeout)).toEqual(
+      rec.timeouts.map(() => 50),
+    );
   });
 });
 
@@ -2276,5 +3027,329 @@ describe("repostMarkedPrComment — a CI skip notice stays visible", () => {
       }),
     ).rejects.toThrow(/post PR comment/);
     expect(calls.some((c) => isDelete(c.argv))).toBe(false);
+  });
+});
+
+// W3-RESERVE: a POST that failed (gh timed out after 15 s) may still have
+// created the run on GitHub. Before the POST is retried, the run is looked up by
+// external_id and by the record's attempt and createdAt, so a run the POST
+// already created is adopted instead of duplicated.
+describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
+  const TIMEOUT_STDERR = "gh timed out after 15000 ms";
+
+  // Dispatches on the argv shape, unlike makeFakeGh's first-match script,
+  // because the lookup GET and the POST share the `check-runs` path segment.
+  function scriptedCheckRunGh(
+    respond: (argv: string[]) => {
+      stdout?: string;
+      stderr?: string;
+      exitCode?: number;
+    },
+  ): { spawnFn: typeof Bun.spawn; calls: string[][] } {
+    const calls: string[][] = [];
+    const encoder = new TextEncoder();
+    const spawnFn = ((argv: string[]) => {
+      calls.push(argv);
+      const scripted = respond(argv);
+      const stream = (text: string) =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (text) controller.enqueue(encoder.encode(text));
+            controller.close();
+          },
+        });
+      return {
+        stdout: stream(scripted.stdout ?? ""),
+        stderr: stream(scripted.stderr ?? ""),
+        exited: Promise.resolve(scripted.exitCode ?? 0),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return { spawnFn, calls };
+  }
+
+  const isLookup = (argv: string[]) => argv.join(" ").includes("check_name=");
+  const isPost = (argv: string[]) => argv.includes("POST");
+  const isPatch = (argv: string[]) => argv.includes("PATCH");
+
+  // One lookup row exactly as GitHub returns it under `filter=all`, projected
+  // by the --jq in the lookup (external_id included).
+  function checkRunRow(
+    record: AdmissionRecord,
+    overrides: {
+      id?: number;
+      status?: string;
+      externalId?: string;
+      postNonce?: string;
+    } = {},
+  ): string {
+    return JSON.stringify({
+      id: overrides.id ?? 900,
+      name: ADMISSION_CHECK_RUN_NAME,
+      status: overrides.status ?? "completed",
+      external_id: overrides.externalId ?? record.reservationId,
+      output: {
+        text: serializeAdmissionRecord({
+          ...record,
+          postNonce: overrides.postNonce,
+        }),
+      },
+    });
+  }
+
+  // The serialized record a POST wrote (output[text]), read off its argv.
+  function nonceText(argv: string[]): string {
+    const text = argv.find((arg) => arg.startsWith("output[text]="));
+    return text?.slice("output[text]=".length) ?? "";
+  }
+
+  // The nonce a POST wrote into its own record, so a fake lookup can answer
+  // with the run that POST created.
+  function nonceOfPost(argv: string[]): string | undefined {
+    return (JSON.parse(nonceText(argv)) as { postNonce?: string }).postNonce;
+  }
+
+  test("a failed POST whose run the lookup finds is adopted: no second POST, id returned", async () => {
+    const record = admissionRecordFixture({
+      status: "completed",
+      decisionReason: "review complete",
+    });
+    let postNonce: string | undefined;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(record, { id: 812, postNonce })}\n` };
+      }
+      if (isPost(argv)) {
+        postNonce = nonceOfPost(argv);
+        return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(812);
+    expect(calls.filter(isPost)).toHaveLength(1);
+    expect(calls.filter(isLookup)).toHaveLength(1);
+    expect(calls.some(isPatch)).toBe(false);
+    expect(calls.find(isLookup)?.join(" ")).toContain(
+      `commits/${HEAD}/check-runs`,
+    );
+  });
+
+  test("a run from an earlier attempt with the same external_id and nonce is never adopted: POST retried", async () => {
+    const record = admissionRecordFixture({ attemptNumber: 2 });
+    const earlier = admissionRecordFixture({ attemptNumber: 1 });
+    // The row carries THIS call's nonce, so only the attempt/createdAt rule can reject it.
+    let postNonce: string | undefined;
+    let posts = 0;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(earlier, { id: 811, postNonce })}\n` };
+      }
+      if (isPost(argv)) {
+        posts += 1;
+        postNonce ??= nonceOfPost(argv);
+        if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        return { stdout: JSON.stringify({ id: 613 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(613);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.some(isPatch)).toBe(false);
+  });
+
+  test("a run with another createdAt, same external_id, attempt and nonce, is never adopted: POST retried", async () => {
+    const record = admissionRecordFixture({ attemptNumber: 2 });
+    const earlier = admissionRecordFixture({
+      attemptNumber: 2,
+      createdAt: "2026-08-28T11:00:00.000Z",
+    });
+    // The row carries THIS call's nonce, so only the attempt/createdAt rule can reject it.
+    let postNonce: string | undefined;
+    let posts = 0;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(earlier, { id: 811, postNonce })}\n` };
+      }
+      if (isPost(argv)) {
+        posts += 1;
+        postNonce ??= nonceOfPost(argv);
+        if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        return { stdout: JSON.stringify({ id: 613 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(613);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.some(isPatch)).toBe(false);
+  });
+
+  test("a lookup that fails leaves the POST retry as it was", async () => {
+    const record = admissionRecordFixture();
+    let posts = 0;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) return { stderr: "HTTP 500", exitCode: 1 };
+      if (isPost(argv)) {
+        posts += 1;
+        if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        return { stdout: JSON.stringify({ id: 614 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(614);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.filter(isLookup)).toHaveLength(1);
+  });
+
+  test("a matched run in another status is adopted with one PATCH to its id", async () => {
+    const record = admissionRecordFixture({
+      status: "completed",
+      decisionReason: "review complete",
+    });
+    let postNonce: string | undefined;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return {
+          stdout: `${checkRunRow(record, { id: 815, status: "in_progress", postNonce })}\n`,
+        };
+      }
+      if (isPost(argv)) {
+        postNonce = nonceOfPost(argv);
+        return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      }
+      if (isPatch(argv)) return { stdout: JSON.stringify({ id: 815 }) };
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(815);
+    expect(calls.filter(isPost)).toHaveLength(1);
+    const patches = calls.filter(isPatch);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.join(" ")).toContain("check-runs/815");
+    expect(patches[0]?.join(" ")).toContain("conclusion=success");
+  });
+
+  test("a reused record adopts the run that carries this call's nonce, not a sibling", async () => {
+    // The reused record (reserve's created:false) has a sibling run with the
+    // same external_id, attempt and createdAt, written by another workflow run.
+    // Only the nonce this POST wrote names the run this call created.
+    const record = admissionRecordFixture({
+      status: "completed",
+      decisionReason: "review complete",
+    });
+    let postNonce: string | undefined;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return {
+          stdout: `${checkRunRow(record, { id: 811, postNonce: "sibling-nonce" })}\n`,
+        };
+      }
+      if (isPost(argv)) {
+        postNonce = nonceOfPost(argv);
+        if (calls.filter(isPost).length === 1) {
+          return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        }
+        return { stdout: JSON.stringify({ id: 613 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(postNonce).toEqual(expect.any(String));
+    expect(id).toBe(613);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.some(isPatch)).toBe(false);
+  });
+
+  test("a reused record adopts its own nonce run when the timed-out POST created it", async () => {
+    const record = admissionRecordFixture({
+      status: "completed",
+      decisionReason: "review complete",
+    });
+    let postNonce: string | undefined;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(record, { id: 812, postNonce })}\n` };
+      }
+      if (isPost(argv)) {
+        postNonce = nonceOfPost(argv);
+        return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(812);
+    expect(calls.filter(isPost)).toHaveLength(1);
+    expect(calls.filter(isLookup)).toHaveLength(1);
+  });
+
+  test("a run without a nonce (written before this field) is never adopted", async () => {
+    const record = admissionRecordFixture();
+    let posts = 0;
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isLookup(argv)) {
+        return { stdout: `${checkRunRow(record, { id: 811 })}\n` };
+      }
+      if (isPost(argv)) {
+        posts += 1;
+        if (posts === 1) return { stderr: TIMEOUT_STDERR, exitCode: 1 };
+        return { stdout: JSON.stringify({ id: 614 }) };
+      }
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(614);
+    expect(calls.filter(isPost)).toHaveLength(2);
+    expect(calls.some(isPatch)).toBe(false);
+  });
+
+  test("a POST that succeeds does no lookup", async () => {
+    const record = admissionRecordFixture();
+    const { spawnFn, calls } = scriptedCheckRunGh((argv) => {
+      if (isPost(argv)) return { stdout: JSON.stringify({ id: 501 }) };
+      return {};
+    });
+    const id = await upsertAdmissionCheckRun(
+      OPERATOR_ROOT,
+      { headSha: HEAD, record },
+      { spawnFn },
+    );
+    expect(id).toBe(501);
+    expect(calls).toHaveLength(1);
+    expect(calls.some(isLookup)).toBe(false);
   });
 });

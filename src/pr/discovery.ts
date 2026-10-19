@@ -22,6 +22,7 @@ import type {
 } from "#pr/pr";
 import { findMarkedCommentId } from "#pr/preflight";
 import {
+  adjudicationQueue,
   buildPhaseBQueue,
   decideLastHeadDelta,
   enrichPriorsFromThreads,
@@ -58,6 +59,7 @@ import {
   sizeGateConfigFor,
 } from "#review/size-gate";
 import type { AgentSpec } from "#review/spec";
+import type { AdjudicationSubject } from "#triage/adjudication";
 import { parsePrCommentMarker, summaryMarkerFields } from "#watch/preflight";
 import { CliError } from "../errors";
 import type { IgnoreFileReadResult } from "../ignore-read";
@@ -102,10 +104,20 @@ export interface PrDiscoveryResult {
     droppedPaths: string[];
     exclusions: ExcludedPath[];
   };
+  // The diff inline comments are anchored against: the FULL PR range
+  // (diffFromSha..headSha), ignore-filtered like the discovery diff. On an
+  // incremental re-review the discovery diff covers only the push delta, so a
+  // finding on an untouched line of the PR would have no anchor and be posted
+  // as an outside-diff comment. Equal to effectiveDiff.patch whenever
+  // discovery already covers the whole PR range.
+  anchorPatch: string;
   gateConfig: ReturnType<typeof sizeGateConfigFor>;
   rereview: RereviewProvenance | undefined;
   verifyQueue: VerifyQueueEntry[];
   overlapCandidates: VerifyQueueEntry[];
+  // T5b: the pending dismissals the CI adjudicator rules on. Empty unless
+  // `adjudicate` was set.
+  adjudicationQueue: AdjudicationSubject[];
   phaseB:
     | {
         settled: ReturnType<typeof buildPhaseBQueue>["settled"];
@@ -120,6 +132,8 @@ export async function resolvePrDiscovery(params: {
   diffFromSha: string;
   headSha: string;
   full: boolean;
+  // T5b: `--adjudicate`. Absent or false queues no adjudication.
+  adjudicate?: boolean;
   baseRef: string;
   headLabel: string;
   isCi: boolean;
@@ -136,6 +150,7 @@ export async function resolvePrDiscovery(params: {
     diffFromSha,
     headSha,
     full,
+    adjudicate,
     baseRef,
     headLabel,
     isCi,
@@ -217,6 +232,22 @@ export async function resolvePrDiscovery(params: {
   }
   const skipDiscovery =
     skipPlannedDiscovery || effectiveDiff.patch.trim().length === 0;
+  // WHY a second git call and not the discovery diff: GitHub anchors a review
+  // comment against the PR's merge-base..head diff, so the anchor set must
+  // cover that range even when discovery read only the delta or nothing.
+  const discoveryIsPrRange =
+    !skipPlannedDiscovery &&
+    prepared.discoveryFrom === diffFromSha &&
+    pathArgs.length === 0;
+  let anchorPatch = effectiveDiff.patch;
+  if (!discoveryIsPrRange) {
+    const prRange = await git.runGit(["diff", `${diffFromSha}..${headSha}`]);
+    if (!prRange.ok) throw new CliError(`git diff failed: ${prRange.stderr}`);
+    anchorPatch = filterDiffByIgnoreRules(
+      prRange.stdout,
+      gateConfig.excludeRules,
+    ).patch;
+  }
   const rereview = toRereviewProvenance(prepared, postedFindings.length);
   if (rereview !== undefined && skipDiscovery) {
     rereview.discovery_skipped_empty_delta = true;
@@ -243,6 +274,7 @@ export async function resolvePrDiscovery(params: {
     typeof buildPhaseBQueue
   >["overlapCandidates"] = [];
   let phaseB: PrDiscoveryResult["phaseB"];
+  let adjudicationSubjects: AdjudicationSubject[] = [];
   const lastHeadDelta = decideLastHeadDelta({
     case: prepared.case,
     L: prepared.last.L,
@@ -317,6 +349,7 @@ export async function resolvePrDiscovery(params: {
       posted: postedFindings,
       replies: reviewComments,
       summaryUpdatedAt,
+      headSha,
     });
     const classified = buildPhaseBQueue({
       case: prepared.case,
@@ -335,6 +368,10 @@ export async function resolvePrDiscovery(params: {
     verifyQueue = classified.queued;
     overlapCandidates = classified.overlapCandidates;
     phaseB = { settled: classified.settled, priors };
+    // T5b: only a `--adjudicate` run pays for adjudicator calls. The priors
+    // here are the enriched ones, so a dismissal's thread and CI verdict are
+    // already bound.
+    adjudicationSubjects = adjudicate === true ? adjudicationQueue(priors) : [];
     if (rereview !== undefined) {
       rereview.prior_findings = priors.length;
       rereview.settled_deterministically = classified.settled.filter(
@@ -382,10 +419,12 @@ export async function resolvePrDiscovery(params: {
     skipDiscovery,
     rawDiff,
     effectiveDiff,
+    anchorPatch,
     gateConfig,
     rereview,
     verifyQueue,
     overlapCandidates,
+    adjudicationQueue: adjudicationSubjects,
     phaseB,
     diffStat,
     sizeGate,

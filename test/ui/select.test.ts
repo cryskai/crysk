@@ -5,6 +5,7 @@ import {
   confirmReview,
   confirmSizeGate,
   costHint,
+  freeBillingMode,
   type KeyReader,
   menuOptions,
   moveCursor,
@@ -458,5 +459,97 @@ describe("confirmSizeGate", () => {
       "stdin exploded",
     );
     expect(closed).toBe(1);
+  });
+});
+
+// One billing verdict, two surfaces: the plan card and the confirm prompt
+// quote the same band, so a free route must not read as spend in either. The
+// mode is derived once (freeBillingMode) from the same free-step count the
+// card uses; the wording below is what the prompt shows for each mode.
+describe("freeBillingMode", () => {
+  test("every step free is free, some free is mixed, none or unknown is neither", () => {
+    expect(freeBillingMode({ free: 5, total: 5 })).toBe("free");
+    expect(freeBillingMode({ free: 2, total: 5 })).toBe("mixed");
+    expect(freeBillingMode({ free: 0, total: 5 })).toBeUndefined();
+    expect(freeBillingMode({ free: 0, total: 0 })).toBeUndefined();
+    expect(freeBillingMode(undefined)).toBeUndefined();
+  });
+});
+
+describe("costHint with a billing mode", () => {
+  test("all free: the hint says free route, not billed, with no dollar figure", () => {
+    expect(costHint(2.85, 6.14, "free")).toBe("free route (not billed)");
+  });
+
+  test("mixed: the band stays and names the free share", () => {
+    expect(costHint(2.85, 6.14, "mixed")).toBe(
+      "$2.85 – $6.14 (free steps not billed)",
+    );
+  });
+
+  test("metered (no mode) is unchanged", () => {
+    expect(costHint(2.85, 6.14, undefined)).toBe("$2.85 – $6.14");
+  });
+});
+
+describe("runConfirm — the wording follows the billing mode", () => {
+  test("TTY menu, all free: the first row's hint is the free wording, not the band", async () => {
+    const io = recorder();
+    await runConfirm(spec({ billing: "free" }), fakeReader(["\r"]), io);
+    const text = io.text();
+    expect(text).toContain("free route (not billed)");
+    expect(text).not.toContain("$2.85 – $6.14");
+  });
+
+  test("TTY menu, mixed: the band stays and carries the free-steps note", async () => {
+    const io = recorder();
+    await runConfirm(spec({ billing: "mixed" }), fakeReader(["\r"]), io);
+    expect(io.text()).toContain("$2.85 – $6.14 (free steps not billed)");
+  });
+
+  test("plain prompt, all free: the sentence names a free route and says not billed", async () => {
+    const io = recorder();
+    await runConfirm(spec({ billing: "free" }), fakeReader(["n\n"], false), io);
+    expect(io.text()).toContain(
+      "Run this review on a free route (token-derived $2.85–$6.14, not billed)? [y/N] ",
+    );
+    expect(io.text()).not.toContain("Spend an estimated");
+  });
+
+  test("plain prompt, mixed: the spend sentence keeps the band and appends the note", async () => {
+    const io = recorder();
+    await runConfirm(
+      spec({ billing: "mixed" }),
+      fakeReader(["n\n"], false),
+      io,
+    );
+    expect(io.text()).toContain(
+      "Spend an estimated $2.85–$6.14 on this review (free steps not billed)? [y/N] ",
+    );
+  });
+
+  test("plain prompt, metered (no mode): byte-identical to today", async () => {
+    const io = recorder();
+    await runConfirm(spec(), fakeReader(["n\n"], false), io);
+    expect(io.text()).toContain(
+      "Spend an estimated $2.85–$6.14 on this review? [y/N] ",
+    );
+  });
+
+  test("the answer semantics are unchanged on a free route: y proceeds, anything else cancels", async () => {
+    expect(
+      await runConfirm(
+        spec({ billing: "free" }),
+        fakeReader(["y\n"], false),
+        recorder(),
+      ),
+    ).toEqual({ kind: "review", post: false });
+    expect(
+      await runConfirm(
+        spec({ billing: "free" }),
+        fakeReader(["n\n"], false),
+        recorder(),
+      ),
+    ).toEqual({ kind: "cancel" });
   });
 });

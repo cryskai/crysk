@@ -208,6 +208,43 @@ describe("parseArgs — --budget-usd", () => {
   });
 });
 
+describe("parseArgs — --ci-mode", () => {
+  test("accepts gate and advisory with review --ci", () => {
+    expect(
+      parseArgs(["review", "--pr", "5", "--ci", "--ci-mode", "gate"]).options
+        .ciMode,
+    ).toBe("gate");
+    expect(
+      parseArgs(["review", "--pr", "5", "--ci", "--ci-mode", "advisory"])
+        .options.ciMode,
+    ).toBe("advisory");
+  });
+
+  test("is unset when not given: the run resolves the mode, not the parser", () => {
+    expect(
+      parseArgs(["review", "--pr", "5", "--ci"]).options.ciMode,
+    ).toBeUndefined();
+  });
+
+  test("an invalid value fails loud", () => {
+    expect(() =>
+      parseArgs(["review", "--pr", "5", "--ci", "--ci-mode", "warn"]),
+    ).toThrow(/--ci-mode/);
+  });
+
+  test("--ci-mode without --ci is a silently dropped intention — rejected", () => {
+    expect(() =>
+      parseArgs(["review", "--pr", "5", "--ci-mode", "advisory"]),
+    ).toThrow(/--ci/);
+  });
+
+  test("--ci-mode on setup --ci is rejected: the mode is a review reading of --ci", () => {
+    expect(() => parseArgs(["setup", "--ci", "--ci-mode", "advisory"])).toThrow(
+      /--ci-mode/,
+    );
+  });
+});
+
 describe("parseArgs — --step-summary / --no-step-summary", () => {
   test("--step-summary sets stepSummary true", () => {
     const { options } = parseArgs([
@@ -370,6 +407,7 @@ describe("planCiSizeSkip", () => {
     expect(
       planCiSizeSkip({
         isCi: true,
+        ciMode: "advisory",
         verdict: passingGate,
         prNumber: 55,
         maxChangedLines: 1000,
@@ -382,6 +420,7 @@ describe("planCiSizeSkip", () => {
     expect(
       planCiSizeSkip({
         isCi: false,
+        ciMode: "advisory",
         verdict: failedLinesGate,
         prNumber: 55,
         maxChangedLines: 1000,
@@ -390,9 +429,26 @@ describe("planCiSizeSkip", () => {
     ).toBeNull();
   });
 
+  // S4, skip-summary chain: review-pr -> planCiSizeSkip -> renderStepSummary.
+  test("a gate run's size-skip summary carries the gate footer, not the merge-gate disclaimer", () => {
+    const plan = planCiSizeSkip({
+      isCi: true,
+      verdict: failedLinesGate,
+      prNumber: 55,
+      maxChangedLines: 1000,
+      maxChangedFiles: 50,
+      ciMode: "gate",
+    });
+    expect(plan?.summaryMarkdown).toContain(
+      "Assistant report backing the pr-hero commit status, the required check in gate mode.</sub>",
+    );
+    expect(plan?.summaryMarkdown).not.toContain("not a merge gate");
+  });
+
   test("builds the full plan: comment, marker, summary markdown, and status=skipped-size outputs", () => {
     const plan: CiGateSkipPlan | null = planCiSizeSkip({
       isCi: true,
+      ciMode: "advisory",
       verdict: failedLinesGate,
       prNumber: 55,
       maxChangedLines: 1000,
@@ -402,6 +458,7 @@ describe("planCiSizeSkip", () => {
     if (plan === null) throw new Error("unreachable");
     expect(plan.markerPrefix).toBe(SKIP_SIZE_COMMENT_MARKER);
     expect(plan.comment.startsWith(SKIP_SIZE_COMMENT_MARKER)).toBe(true);
+    expect(plan.comment).toContain("Comment `/pr-hero review`");
     expect(plan.comment).toContain(ciForceReviewDispatch(55));
     expect(plan.summaryMarkdown).toContain("PR #55");
     expect(plan.outputs).toEqual({
@@ -420,6 +477,7 @@ describe("planCiBudgetSkip", () => {
     expect(
       planCiBudgetSkip({
         isCi: true,
+        ciMode: "advisory",
         estimatedCostUsd: 8,
         budgetUsd: 10,
         prNumber: 56,
@@ -432,6 +490,7 @@ describe("planCiBudgetSkip", () => {
     expect(
       planCiBudgetSkip({
         isCi: true,
+        ciMode: "advisory",
         estimatedCostUsd: 999,
         budgetUsd: 0,
         prNumber: 56,
@@ -443,6 +502,7 @@ describe("planCiBudgetSkip", () => {
   test("builds the full plan: comment, marker, summary markdown, and outputs carrying the estimate that tripped it", () => {
     const plan = planCiBudgetSkip({
       isCi: true,
+      ciMode: "advisory",
       estimatedCostUsd: 12.5,
       budgetUsd: 10,
       prNumber: 56,
@@ -452,6 +512,7 @@ describe("planCiBudgetSkip", () => {
     if (plan === null) throw new Error("unreachable");
     expect(plan.markerPrefix).toBe(SKIP_BUDGET_COMMENT_MARKER);
     expect(plan.comment.startsWith(SKIP_BUDGET_COMMENT_MARKER)).toBe(true);
+    expect(plan.comment).toContain("Comment `/pr-hero review`");
     expect(plan.comment).toContain(ciForceReviewDispatch(56));
     expect(plan.summaryMarkdown).toContain("PR #56");
     expect(plan.outputs.status).toBe("skipped-budget");
@@ -465,6 +526,7 @@ describe("planCiBudgetSkip", () => {
     expect(
       planCiBudgetSkip({
         isCi: true,
+        ciMode: "advisory",
         estimatedCostUsd: 999,
         budgetUsd: 10,
         prNumber: 56,
@@ -497,6 +559,7 @@ function budgetGateFor(input: {
   if (ceiling.budgetUsd === undefined) return null;
   return planCiBudgetSkip({
     isCi: true,
+    ciMode: "advisory",
     estimatedCostUsd: input.estimatedCostUsd,
     budgetUsd: ceiling.budgetUsd,
     prNumber: 156,
@@ -601,6 +664,7 @@ describe("planCiReview", () => {
       wallMs: 90_000,
       model: "sonnet",
       runDir: "/tmp/run",
+      ciMode: "advisory",
     });
     expect(plan.summaryMarkdown).toContain("src/app.ts");
     expect(plan.summaryMarkdown).toContain("blocking");
@@ -621,6 +685,7 @@ describe("planCiReview", () => {
       wallMs: 30_000,
       model: "sonnet",
       runDir: "/tmp/run",
+      ciMode: "advisory",
     });
     expect(plan.outputs.status).toBe("reviewed");
     expect(plan.outputs.findings_count).toBe(0);

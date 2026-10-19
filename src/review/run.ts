@@ -21,6 +21,7 @@ import {
   notionalCostInput,
 } from "#config/config";
 import type { ResolvedRoutePlan, RoutingConfig } from "#model/routing";
+import type { CiMode } from "#pr/preflight";
 import {
   type FindingsDocument,
   mergeRunEnvelope,
@@ -75,7 +76,7 @@ import {
   validateReviewSpec,
 } from "#review/spec";
 import { ClaudeCodeRunner } from "#review/step-runner";
-import { CliError } from "../errors";
+import { CliError, withRecordClass } from "../errors";
 import {
   createProductionRuntime,
   type ProductionAdmissionContext,
@@ -170,7 +171,11 @@ export async function validateGotchas(gotchasPath: string): Promise<void> {
   const gotchas = (await file.exists()) ? await file.text() : "";
   const unusable = gotchasUnusableReason(gotchas);
   if (unusable !== undefined) {
-    throw new CliError(gotchasErrorMessage(gotchasPath, unusable));
+    // The class carries the gate's reason into cli.json (T2d-1). Both reasons render
+    // the one gotchas code today; the reason stays on the record for that reason only.
+    throw new CliError(gotchasErrorMessage(gotchasPath, unusable), {
+      cls: { kind: "gotchas", reason: unusable },
+    });
   }
 }
 
@@ -337,6 +342,9 @@ export async function writeRunReport(params: {
   droppedPaths: string[];
   result: PipelineResult;
   wallMs: number;
+  // S4: the mode the commit status was set under. A PR run passes the mode it
+  // resolved; the local review leaves it out, and the closing note is advisory.
+  ciMode?: CiMode;
 }): Promise<string> {
   const reportPath = path.join(params.runDir, "report.md");
   await Bun.write(
@@ -350,6 +358,7 @@ export async function writeRunReport(params: {
       costUsd: params.result.usage.cost_usd_est,
       ...notionalCostInput(params.result),
       wallMs: params.wallMs,
+      ...(params.ciMode === undefined ? {} : { ciMode: params.ciMode }),
     }),
   );
   return reportPath;
@@ -383,10 +392,18 @@ export async function resolvePromptSet(
   for (const agent of spec.agents) {
     // Parsing every agent file now is a preflight too: a malformed
     // frontmatter block must fail here, not three spawned steps later.
-    agentFiles.set(
-      agent.key,
-      await parseAgentFile(agentFilePath(agents, agent.file)),
-    );
+    // A failure is the error parseAgentFile threw, with its prompt-set class
+    // recorded beside it (T2d-1). It stays a plain Error, not a CliError: main()
+    // prints a CliError as one line, and a local run has always let this failure
+    // take the uncaught path with its excerpt and stack. Wrapping it in a helper
+    // would add a stack frame, so the try stays here.
+    let parsed: ParsedAgent;
+    try {
+      parsed = await parseAgentFile(agentFilePath(agents, agent.file));
+    } catch (error) {
+      throw withRecordClass(error, { kind: "prompt-set" });
+    }
+    agentFiles.set(agent.key, parsed);
   }
   // The prompt set's identity (§3.9), computed from the spec's DECLARATION
   // order — the same order the lab's promptSetFingerprint hashes in, so the

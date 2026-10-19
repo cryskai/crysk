@@ -18,20 +18,36 @@
 // header made the same call before this move).
 
 import { describe, expect, test } from "bun:test";
+import { parseCiAdmissionBlock, stateReviewCount } from "#ci/review-admission";
 import type { PrHeroFindingRef } from "#compare/compare";
 import {
   computeDroppedFindingIds,
   type InlinePostOutcome,
   postingExitCode,
 } from "#pr/inline";
-import { postInlineFindings, postInlineIfEligible } from "#pr/pr";
+import {
+  POSTING_GH_TIMEOUT_MS,
+  postInlineFindings,
+  postInlineIfEligible,
+} from "#pr/pr";
 import {
   claimFingerprint,
   findingMarker,
   PR_FINDING_MARKER_PREFIX,
   PR_REREVIEW_CLOSED_MARKER_PREFIX,
 } from "#pr/preflight";
-import type { RereviewProvenance } from "#rereview/prepare";
+import { classifyPrior } from "#rereview/classify";
+import {
+  priorsFromStateFindings,
+  type RereviewProvenance,
+} from "#rereview/prepare";
+import {
+  assembleLive,
+  type LiveFinding,
+  parseStateBlock,
+  stateFinding,
+  unresolvedBlockingCount,
+} from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 
 // ---------------------------------------------------------------------------
@@ -71,6 +87,9 @@ interface ScriptEntry {
 interface RecordedCall {
   argv: string[];
   stdin: string | undefined;
+  // The bound the call carries (Bun.spawn's `timeout`, set by gh()). Optional
+  // so the hand-built records in older fixtures stay valid.
+  timeout?: number;
 }
 
 function argvContains(argv: string[], tokens: string[]): boolean {
@@ -92,10 +111,13 @@ function makeFakeGh(script: ScriptEntry[]): {
   // Per-entry call counter, only consulted when an entry uses `responses`
   // (sequential) rather than `response` (single, repeats forever).
   const responseIndex = new Map<ScriptEntry, number>();
-  const spawnFn = ((argv: string[], opts?: { stdin?: Uint8Array }) => {
+  const spawnFn = ((
+    argv: string[],
+    opts?: { stdin?: Uint8Array; timeout?: number },
+  ) => {
     const stdin =
       opts?.stdin === undefined ? undefined : decoder.decode(opts.stdin);
-    calls.push({ argv, stdin });
+    calls.push({ argv, stdin, timeout: opts?.timeout });
     const entry = script.find((s) => argvContains(argv, s.match));
     let scripted: ScriptedResponse | undefined;
     if (entry?.responses) {
@@ -1053,6 +1075,63 @@ describe("postInlineFindings — idempotency, same head, drifted live line", () 
   });
 });
 
+// Incremental re-review: a finding the PREVIOUS head already posted inline
+// is carried into this run. Its line sits outside the push delta but inside
+// the full PR diff, which is what posting now receives as diffPatch. It must
+// match the existing thread, not be posted a second time.
+describe("postInlineFindings — carried finding already posted inline (incremental)", () => {
+  test("a carried finding in the full PR diff matches its existing thread: no second review comment", async () => {
+    const marker = findingMarker({
+      path: "src/a.ts",
+      line: 100,
+      headSha: OLD_HEAD, // posted by the previous review, before the push
+      claim: "carried claim",
+    });
+    const findings = [
+      finding({
+        id: "F001",
+        path: "src/a.ts",
+        line: 100,
+        claim: "carried claim",
+      }),
+    ];
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: { stdout: "" },
+      },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 9,
+              user: "pr-hero",
+              body: `${marker}\ncarried claim`,
+              path: "src/a.ts",
+              line: 100,
+              original_line: 100,
+              in_reply_to_id: null,
+            },
+          ]),
+        },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 200),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(outcome.reviewFindingCount).toBe(0);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    expect(calls.some((c) => c.argv.join(" ").includes("reviews"))).toBe(false);
+  });
+});
+
 // Juanma's PR #2 feedback: the summary's index links each line to its own
 // comment. Three sources feed `buildCommentUrlMap` (cli.ts) and none are
 // exercised by makeFakeGh's STATELESS script — a persisting match's url
@@ -1309,6 +1388,67 @@ describe("postInlineFindings — the claim feed reaches the fingerprint tie-brea
     // "persist" side (matched to R2 via the fingerprint tie-break).
     expect(outcome.delta).toEqual({ resolved: 1, new: 0, persist: 1 });
     expect(calls.some((c) => c.argv.join(" ").includes("reviews"))).toBe(false);
+  });
+});
+
+// F004 (PR #330): the findings POST parked forever on an unanswered gh call,
+// and the reads that run before and after the POST were unbounded too. Every
+// call on this path must carry the posting bound, reads included, so a
+// dropped argument on any one of them fails here instead of hanging in
+// production.
+describe("postInlineFindings — every gh call on the findings POST is bounded (F004)", () => {
+  test("a first review: every gh call, reads and writes alike, carries the bound", async () => {
+    const findings = [
+      finding({ id: "F001", path: "src/a.ts", line: 10 }),
+      finding({ id: "F002", path: "src/b.ts", line: 999 }),
+    ];
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(
+      calls.some((c) => c.argv.join(" ").includes("pulls/42/reviews")),
+    ).toBe(true);
+    expect(calls.map((c) => c.timeout)).toEqual(
+      calls.map(() => POSTING_GH_TIMEOUT_MS),
+    );
+  });
+
+  test("a 422 recovery's re-reads carry the bound too", async () => {
+    const findings = [finding({ id: "F001", path: "src/a.ts", line: 10 })];
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      {
+        match: ["pulls/42/reviews"],
+        response: {
+          stderr: "gh: Unprocessable Entity (HTTP 422)",
+          exitCode: 1,
+        },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(outcome.reviewOutcome).toBe("demoted");
+    expect(calls.some((c) => c.argv.includes("--paginate"))).toBe(true);
+    expect(calls.map((c) => c.timeout)).toEqual(
+      calls.map(() => POSTING_GH_TIMEOUT_MS),
+    );
   });
 });
 
@@ -1759,6 +1899,127 @@ describe("postInlineFindings — the collapse loop cannot hang (F005)", () => {
     expect(logged).toContain("timed out after 30 ms");
     expect(logged).not.toContain("resolved: review thread for R001");
   });
+
+  // Two verified-gone priors, so the run-level notice is observably ONE line
+  // where a per-prior line would print twice.
+  const PRIOR_CLAIM_2 =
+    "the second prior finding, checked and gone at this head";
+  const PRIOR_MARKER_2 = findingMarker({
+    path: "src/a.ts",
+    line: 11,
+    headSha: OLD_HEAD,
+    claim: PRIOR_CLAIM_2,
+  });
+
+  async function collapseTwoWithLookupFailure(failure: string): Promise<{
+    logged: string;
+    calls: RecordedCall[];
+  }> {
+    const script: ScriptEntry[] = [
+      headRefOidScript(HEAD),
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 501,
+              user: "pr-hero",
+              body: `${PRIOR_MARKER}\n${PRIOR_CLAIM}`,
+              path: "src/a.ts",
+              line: 10,
+              original_line: 10,
+              in_reply_to_id: null,
+            },
+            {
+              id: 502,
+              user: "pr-hero",
+              body: `${PRIOR_MARKER_2}\n${PRIOR_CLAIM_2}`,
+              path: "src/a.ts",
+              line: 11,
+              original_line: 11,
+              in_reply_to_id: null,
+            },
+          ]),
+        },
+      },
+      { match: ["reviewThreads"], response: { stderr: failure, exitCode: 1 } },
+      {
+        match: ["repo", "view", "--json", "owner,name"],
+        response: {
+          stdout: JSON.stringify({
+            owner: { login: "juanmaagd" },
+            name: "pr-hero",
+          }),
+        },
+      },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ];
+    const rereviewTwo: RereviewProvenance = {
+      ...rereview(),
+      prior_findings: 2,
+      verified: 2,
+      resolved_verified: 2,
+      resolved_ids: ["R001", "R002"],
+    };
+    const chunks: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      chunks.push(
+        typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk),
+      );
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const { spawnFn, calls } = makeFakeGh(script);
+      await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+        rereview: rereviewTwo,
+        rereviewPriors: [
+          { id: "R001", claim: PRIOR_CLAIM, locs: ["src/a.ts:10"] },
+          { id: "R002", claim: PRIOR_CLAIM_2, locs: ["src/a.ts:11"] },
+        ],
+        ghTimeoutMs: 30,
+      });
+      return { logged: chunks.join(""), calls };
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  }
+
+  test("a token that cannot resolve threads gets one run-level notice, not a line per prior", async () => {
+    const { logged, calls } = await collapseTwoWithLookupFailure(
+      "gh: Resource not accessible by integration (HTTP 403)",
+    );
+    const notice =
+      "resolve skipped: the workflow token cannot resolve review threads " +
+      "(Resource not accessible by integration); the verified-gone replies are posted";
+    expect(logged.split(notice)).toHaveLength(2);
+    expect(logged).not.toContain("resolve failed for R001");
+    expect(logged).not.toContain("resolve failed for R002");
+    // The replies still post: the gate and the reply are unaffected.
+    expect(
+      calls.filter((c) => c.argv.join(" ").includes("in_reply_to=501")),
+    ).toHaveLength(1);
+    expect(
+      calls.filter((c) => c.argv.join(" ").includes("in_reply_to=502")),
+    ).toHaveLength(1);
+  });
+
+  test("any other resolve failure keeps the per-prior line", async () => {
+    const { logged } = await collapseTwoWithLookupFailure(
+      "gh: Could not resolve to a PullRequest (HTTP 404)",
+    );
+    expect(logged).toContain("resolve failed for R001");
+    expect(logged).toContain("resolve failed for R002");
+    expect(logged).not.toContain("the workflow token cannot resolve");
+  });
 });
 
 // A re-review PATCHes the summary in place, and GitHub neither notifies on an
@@ -1982,5 +2243,482 @@ describe("postInlineFindings — re-review closing comment", () => {
     expect(closingPosts(calls).length).toBe(1);
     expect(outcome.closingCommentId).toBeUndefined();
     expect(outcome.summary.action).toBe("updated");
+  });
+});
+
+// S1, S3, S7 at the post seam. The state block is the only memory the next
+// run has, so these read what the summary PATCH actually carries.
+describe("postInlineFindings — the state block carries a re-review's fresh findings", () => {
+  const PRIOR_SUMMARY = `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`;
+
+  function reviewScript(): ReturnType<typeof makeFakeGh> {
+    return makeFakeGh([
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: PRIOR_SUMMARY }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+  }
+
+  function reviewProvenance(
+    live: LiveFinding[],
+    over: Partial<RereviewProvenance> = {},
+  ): RereviewProvenance {
+    return {
+      case: "C",
+      last_reviewed_head: OLD_HEAD,
+      last_head_source: "summary_marker",
+      discovery_range: `${OLD_HEAD}..${HEAD}`,
+      discovery_restricted: true,
+      discovery_skipped_empty_delta: false,
+      prior_findings: live.length,
+      settled_deterministically: 0,
+      verified: 0,
+      verification_capped: 0,
+      verification_triggers: {
+        applied: 0,
+        touched: 0,
+        overlap: 0,
+        verify_all: 0,
+      },
+      live,
+      resolved_verified: 0,
+      resolved_ids: [],
+      returned: 0,
+      re_tiered: 0,
+      ...over,
+    } as RereviewProvenance;
+  }
+
+  function summaryState(calls: RecordedCall[]) {
+    const bodies = summaryStdins(calls);
+    return parseStateBlock(bodies[bodies.length - 1] ?? "");
+  }
+
+  test("S1 — review 2's fresh blocking finding is in the state, and review 3 still counts it", async () => {
+    const { spawnFn, calls } = reviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 10,
+            tier: "blocking",
+            severity: "BLOCKER",
+            claim: "fresh blocker",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenance([]),
+      rereviewPriors: [],
+    });
+    const state = summaryState(calls);
+    expect(state?.findings.map((f) => [f.tier, f.claim])).toEqual([
+      ["blocking", "fresh blocker"],
+    ]);
+
+    // Review 3: a same-head forced re-review with no survivors.
+    const priors = priorsFromStateFindings(state?.findings ?? []);
+    const ctx = {
+      case: "C" as const,
+      deletedFiles: new Set<string>(),
+      renameMap: new Map<string, string>(),
+      touched: () => false,
+      summaryUpdatedAt: null,
+    };
+    const assembled = assembleLive({
+      settled: priors.map((p) => classifyPrior(p, ctx)),
+      priors,
+      verifyVerdicts: new Map(),
+    });
+    expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(1);
+  });
+
+  test("S1 — a prior row survives next to a fresh finding, with the prior id kept", async () => {
+    const prior = stateFinding({
+      id: "R001",
+      sev: "CRITICAL",
+      tier: "blocking",
+      channel: "inline",
+      locs: ["src/a.ts:300"],
+      claim: "prior still live",
+    });
+    const { spawnFn, calls } = reviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 10,
+            tier: "blocking",
+            severity: "BLOCKER",
+            claim: "fresh blocker",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenance([{ ...prior, status: "carried" }]),
+      rereviewPriors: [],
+    });
+    const state = summaryState(calls);
+    expect(state?.findings.map((f) => [f.id, f.claim])).toEqual([
+      ["R001", "prior still live"],
+      ["R002", "fresh blocker"],
+    ]);
+  });
+
+  test("S3 — a fresh row's locs use the line the comment was posted at, not findings.json's", async () => {
+    const { spawnFn, calls } = reviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 500,
+            proof_refs: ["src/a.ts:12"],
+            tier: "blocking",
+            severity: "BLOCKER",
+            claim: "moved",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenance([]),
+      rereviewPriors: [],
+    });
+    expect(summaryState(calls)?.findings[0]?.locs).toEqual(["src/a.ts:12"]);
+  });
+
+  test("S7 — the create-first POST and the closing PATCH carry the same state block", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 10,
+            tier: "blocking",
+            severity: "BLOCKER",
+            claim: "fresh blocker",
+          }),
+          finding({
+            id: "F002",
+            path: "src/a.ts",
+            line: 11,
+            tier: "advisory",
+            severity: "SUGGESTION",
+            claim: "advisory near it",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: "https://github.com/o/r",
+      spawnFn,
+      rereview: reviewProvenance([], { last_head_source: "finding_markers" }),
+      rereviewPriors: [],
+    });
+    const bodies = summaryStdins(calls);
+    expect(bodies.length).toBe(2);
+    const stateOf = (body: string) =>
+      body.slice(body.indexOf("<!-- pr-hero-state "));
+    expect(stateOf(bodies[0] ?? "")).toBe(stateOf(bodies[1] ?? ""));
+    expect(stateOf(bodies[1] ?? "")).toContain("fresh blocker");
+  });
+
+  // S1 wiring, through the public post path. Each blocking claim renders in
+  // the headline, the state block, and the demoted Outside Diff prompt, so six
+  // 3000-char claims put the base PATCH near 72k. The limit is GitHub's.
+  test("S1 — a 422 demotion whose Outside Diff bodies overflow the limit keeps the PATCH within it and every blocking state row", async () => {
+    const GITHUB_LIMIT = 65536;
+    const findings = Array.from({ length: 6 }, (_, i) =>
+      finding({
+        id: `F00${i + 1}`,
+        path: "src/a.ts",
+        line: 10 + i,
+        tier: "blocking",
+        severity: "BLOCKER",
+        claim: `claim ${i} ${"z".repeat(4500)}`,
+      }),
+    );
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: PRIOR_SUMMARY }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/reviews"],
+        response: {
+          stderr: "gh: Unprocessable Entity (HTTP 422)",
+          exitCode: 1,
+        },
+      },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenance([]),
+      rereviewPriors: [],
+    });
+    expect(outcome.reviewOutcome).toBe("demoted");
+    expect(outcome.outsideDiffCount).toBe(6);
+    const patch = summaryStdins(calls).at(-1) ?? "";
+    expect(patch.length).toBeLessThanOrEqual(GITHUB_LIMIT);
+    const state = parseStateBlock(patch);
+    expect(state?.findings).toHaveLength(6);
+    expect(state?.findings.every((f) => f.tier === "blocking")).toBe(true);
+  });
+  // S1 — a demotion that compaction alone can fit must not evict the advisory
+  // priors the POST state held. The eight blocking claims put the Outside
+  // Diff bodies (and the state rows they also fill, protected) past the cap,
+  // so a re-merge sized from the uncompacted PATCH would leave no budget.
+  test("S1 — a demotion that compaction alone fits keeps every advisory prior row the POST state held", async () => {
+    const GITHUB_LIMIT = 65536;
+    const findings = Array.from({ length: 8 }, (_, i) =>
+      finding({
+        id: `F00${i + 1}`,
+        path: "src/a.ts",
+        line: 10 + i,
+        tier: "blocking",
+        severity: "BLOCKER",
+        claim: `claim ${i} ${"z".repeat(4000)}`,
+      }),
+    );
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: PRIOR_SUMMARY }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      {
+        match: ["pulls/42/reviews"],
+        response: {
+          stderr: "gh: Unprocessable Entity (HTTP 422)",
+          exitCode: 1,
+        },
+      },
+    ]);
+    const advisoryPrior = stateFinding({
+      id: "R001",
+      sev: "WARNING",
+      tier: "advisory",
+      channel: "inline",
+      locs: ["src/b.ts:5"],
+      claim: "advisory prior kept",
+    });
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenance([{ ...advisoryPrior, status: "carried" }]),
+      rereviewPriors: [],
+    });
+    expect(outcome.reviewOutcome).toBe("demoted");
+    const patch = summaryStdins(calls).at(-1) ?? "";
+    expect(patch.length).toBeLessThanOrEqual(GITHUB_LIMIT);
+    const state = parseStateBlock(patch);
+    expect(state?.findings.find((f) => f.id === "R001")?.claim).toBe(
+      "advisory prior kept",
+    );
+    expect(state?.findings.filter((f) => f.tier === "blocking")).toHaveLength(
+      8,
+    );
+  });
+});
+
+// The summary's own counter, end to end: postInlineFindings writes it into the
+// summary body, and a later run reads it back. A comment-triggered (forced)
+// post must leave it where it was; an automatic post must still add one.
+describe("postInlineFindings — the summary counter and a forced run", () => {
+  async function postFirstReview(force: boolean | undefined) {
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      ...(force === undefined ? {} : { force }),
+    });
+    const bodies = summaryStdins(calls);
+    return parseCiAdmissionBlock(bodies[bodies.length - 1] ?? "")?.reviews;
+  }
+
+  test("an automatic first review writes one review, as before", async () => {
+    expect(await postFirstReview(undefined)).toBe(1);
+    expect(await postFirstReview(false)).toBe(1);
+  });
+
+  test("a forced first review writes zero automatic reviews", async () => {
+    expect(await postFirstReview(true)).toBe(0);
+  });
+});
+
+// Blocker: a forced run's count of 0 must survive the MERGED render path (a
+// re-review, which writes the state block). The state block omits 0, so the
+// admission block has to carry it, or the next read counts the summary as one.
+describe("postInlineFindings — a forced zero survives a merged re-review render", () => {
+  const FIRST_HEAD = OLD_HEAD;
+
+  function reviewProvenanceFor(): RereviewProvenance {
+    return {
+      case: "C",
+      last_reviewed_head: FIRST_HEAD,
+      last_head_source: "summary_marker",
+      discovery_range: `${FIRST_HEAD}..${HEAD}`,
+      discovery_restricted: true,
+      discovery_skipped_empty_delta: false,
+      prior_findings: 0,
+      settled_deterministically: 0,
+      verified: 0,
+      verification_capped: 0,
+      verification_triggers: {
+        applied: 0,
+        touched: 0,
+        overlap: 0,
+        verify_all: 0,
+      },
+      live: [],
+      resolved_verified: 0,
+      resolved_ids: [],
+      returned: 0,
+      re_tiered: 0,
+    } as RereviewProvenance;
+  }
+
+  // Posts one review on HEAD (the second head) over a prior summary body, and
+  // returns the body that run wrote.
+  async function reReview(
+    priorSummary: string,
+    force: boolean,
+  ): Promise<string> {
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(HEAD),
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: priorSummary }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenanceFor(),
+      rereviewPriors: [],
+      force,
+    });
+    const bodies = summaryStdins(calls);
+    return bodies[bodies.length - 1] ?? "";
+  }
+
+  async function firstReviewBody(force: boolean): Promise<string> {
+    const { spawnFn, calls } = makeFakeGh([
+      headRefOidScript(FIRST_HEAD),
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: FIRST_HEAD,
+      doc: doc({
+        head_sha: FIRST_HEAD,
+        findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      force,
+    });
+    const bodies = summaryStdins(calls);
+    return bodies[bodies.length - 1] ?? "";
+  }
+
+  function countAfter(body: string): number {
+    return stateReviewCount(
+      parseStateBlock(body),
+      true,
+      parseCiAdmissionBlock(body),
+    );
+  }
+
+  test("forced first review (0) then forced re-review through the merged path: still 0", async () => {
+    const first = await firstReviewBody(true);
+    expect(countAfter(first)).toBe(0);
+    const second = await reReview(first, true);
+    // The merged path really ran: it wrote a state block.
+    expect(second).toContain("<!-- pr-hero-state ");
+    expect(countAfter(second)).toBe(0);
+  });
+
+  test("automatic re-review after a forced zero: counts 1", async () => {
+    const first = await firstReviewBody(true);
+    const second = await reReview(first, false);
+    expect(second).toContain("<!-- pr-hero-state ");
+    expect(countAfter(second)).toBe(1);
   });
 });

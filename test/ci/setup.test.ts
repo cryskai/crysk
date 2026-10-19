@@ -20,9 +20,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  CI_FORCE_WORKFLOW_RELATIVE_PATH,
   CI_WORKFLOW_RELATIVE_PATH,
-  generateCiForceWorkflowTemplate,
   generateCiWorkflowTemplate,
   materializeCiOpenCodeData,
   OWN_CI_WORKFLOW_OPTIONS,
@@ -50,6 +48,49 @@ const OPENCODE_CI_AUTH = JSON.stringify({
   deepseek: { type: "api", key: "oc-ci-fixture-not-a-secret" },
 });
 
+type WorkflowStep = {
+  id?: string;
+  name?: string;
+  if?: string;
+  uses?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: Record<string, unknown>;
+};
+
+type ParsedWorkflow = {
+  on: Record<string, { types?: string[] } | undefined>;
+  concurrency?: unknown;
+  permissions: Record<string, string>;
+  jobs: Record<
+    string,
+    | {
+        if?: string;
+        concurrency?: unknown;
+        "timeout-minutes"?: number;
+        steps?: WorkflowStep[];
+      }
+    | undefined
+  >;
+};
+
+const parseWorkflow = (template: string) =>
+  Bun.YAML.parse(template) as ParsedWorkflow;
+
+const workflowSteps = (template: string): WorkflowStep[] =>
+  parseWorkflow(template).jobs.review?.steps ?? [];
+
+const scaffolded = () => generateCiWorkflowTemplate();
+const own = () => generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
+
+// The exact job-level group and cancel rule. Spelled out in full because
+// every clause is load-bearing; see the template's own comments for why.
+const WRITER_ASSOCIATION = `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)`;
+// T6 (S8): the group also admits `/pr-hero override` from the same associations, so
+// an override queues behind an in-flight review and lands last.
+const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero recheck') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
+const PUSH_ONLY_CANCEL = `\${{ github.event_name == 'pull_request' }}`;
+
 describe("generateCiWorkflowTemplate (pure)", () => {
   test("produces syntactically valid YAML", () => {
     const parsed = Bun.YAML.parse(generateCiWorkflowTemplate());
@@ -68,10 +109,168 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     ]);
   });
 
-  test("the automatic workflow does not listen for comments", () => {
+  // A `/pr-hero review` comment is how a person or an agent asks for a
+  // review CI skipped. That used to be a second, dispatch-only workflow
+  // (pr-hero-force.yml); one file now listens for both events, and the
+  // action parses the comment and checks who wrote it.
+  test("listens for new comments, and never for a dispatch", () => {
     const template = generateCiWorkflowTemplate();
-    expect(template).not.toContain("issue_comment:");
+    expect(parseWorkflow(template).on.issue_comment?.types).toEqual([
+      "created",
+    ]);
     expect(template).not.toContain("workflow_dispatch:");
+  });
+
+  // Threat matrix RED (6): a job-level `if` cannot read `secrets` (S11/S12),
+  // so credential presence is the action's to detect, loudly, inside the
+  // run. The `if` only routes events. Fork pull_request runs never receive
+  // secrets, so they are skipped here; a maintainer's comment reviews them.
+  test("the review job skips fork pushes, starts only on a `/pr-hero review`, `/pr-hero recheck` or `/pr-hero override` comment, and never reads secrets", () => {
+    const reviewIf = String(
+      parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
+    );
+    expect(reviewIf).toBe(
+      "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || " +
+        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) || " +
+        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero recheck')) || " +
+        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))",
+    );
+    expect(reviewIf).not.toContain("secrets.");
+  });
+
+  // A workflow-level group keyed on `head_ref || ref` put every comment on
+  // every pull request into ONE group (head_ref is empty on issue_comment),
+  // so any comment anywhere could cancel any in-flight review.
+  test.each([
+    ["scaffolded", scaffolded],
+    ["this repo's own", own],
+  ])(
+    "the %s workflow's concurrency is per job and per pull request, and only a push cancels",
+    (_label, template) => {
+      const parsed = parseWorkflow(template());
+      expect(parsed.concurrency).toBeUndefined();
+      expect(parsed.jobs.review?.concurrency).toEqual({
+        group: REVIEW_CONCURRENCY_GROUP,
+        "cancel-in-progress": PUSH_ONLY_CANCEL,
+      });
+    },
+  );
+
+  // GitHub keeps one PENDING run per group and a newer run replaces it, so
+  // whoever can enter the pull request's group can cancel a maintainer's
+  // queued `/pr-hero review`. Only a comment from an associated author may;
+  // the job `if:` stays association-free, so a writer GitHub reports under
+  // another association still runs (the action checks the real permission),
+  // in its own group.
+  test("only an OWNER, MEMBER or COLLABORATOR comment can enter the pull request's group", () => {
+    const parsed = parseWorkflow(scaffolded());
+    const group = String(
+      (parsed.jobs.review?.concurrency as { group?: unknown } | undefined)
+        ?.group ?? "",
+    );
+    expect(group).toContain(
+      `(startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION})`,
+    );
+    expect(String(parsed.jobs.review?.if ?? "")).not.toContain(
+      "author_association",
+    );
+  });
+
+  // S8: an override from an author GitHub does not associate with the repository
+  // gets its own group, exactly as a review does, so it cannot replace a
+  // maintainer's queued review.
+  test("an override comment joins the pull request's group only from an OWNER, MEMBER or COLLABORATOR", () => {
+    const group = String(
+      (
+        parseWorkflow(scaffolded()).jobs.review?.concurrency as
+          | { group?: unknown }
+          | undefined
+      )?.group ?? "",
+    );
+    expect(group).toContain(
+      `(startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})`,
+    );
+  });
+
+  test("the docs' workflow snippet carries the generator's exact concurrency group", () => {
+    const docs = readFileSync(
+      path.resolve(import.meta.dir, "../../docs/github-actions.md"),
+      "utf-8",
+    );
+    expect(docs).toContain(`\n      group: ${REVIEW_CONCURRENCY_GROUP}\n`);
+  });
+
+  // A copy-pasted docs workflow must admit the same comments the generator does. The
+  // job `if:` is compared as parsed YAML, so the folded scalar's layout cannot hide a
+  // missing `/pr-hero override` clause.
+  test("the docs' workflow snippet admits the same comments as the generator's job", () => {
+    const docs = readFileSync(
+      path.resolve(import.meta.dir, "../../docs/github-actions.md"),
+      "utf-8",
+    );
+    const workflowSection = docs.slice(
+      docs.indexOf("## What the workflow does"),
+    );
+    const snippet = /```yaml\n([\s\S]*?)\n```/.exec(workflowSection)?.[1] ?? "";
+    expect(snippet).toContain("name: pr-hero Review");
+    const generatedIf = String(
+      parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
+    );
+    expect(generatedIf).toContain(
+      "startsWith(github.event.comment.body, '/pr-hero override')",
+    );
+    expect(String(parseWorkflow(snippet).jobs.review?.if ?? "")).toBe(
+      generatedIf,
+    );
+  });
+
+  test("there is exactly one job, so its bound is the whole workflow's bound", () => {
+    // The old `credentials` gate job needed its own bound: it ran FIRST and
+    // gated `review` through `needs:`, so a runner hung there inherited
+    // GitHub's 360-minute default. With the gate inside the action there is
+    // no second job left to hang.
+    expect(
+      Object.keys(parseWorkflow(generateCiWorkflowTemplate()).jobs),
+    ).toEqual(["review"]);
+  });
+
+  // The action resolves the pull request, the head and the force/full
+  // request from the event itself. Those inputs stay declared only for
+  // workflows scaffolded before the comment trigger (pr-hero-force.yml).
+  test.each([
+    ["scaffolded", scaffolded],
+    ["this repo's own", own],
+  ])(
+    "the %s workflow hands the action no pr-number, force or full",
+    (_label, template) => {
+      const run = workflowSteps(template()).find((s) => s.id === "pr-hero");
+      expect(run).toBeDefined();
+      const keys = Object.keys(run?.with ?? {});
+      expect(keys).not.toContain("pr-number");
+      expect(keys).not.toContain("force");
+      expect(keys).not.toContain("full");
+    },
+  );
+
+  test("credential detection and the run-directory upload live in the action, not here", () => {
+    const template = generateCiWorkflowTemplate();
+    expect(parseWorkflow(template).jobs.credentials).toBeUndefined();
+    expect(template).not.toContain("has_creds");
+    const uses = workflowSteps(template).map((step) => String(step.uses ?? ""));
+    expect(uses.some((u) => u.startsWith("actions/upload-artifact@"))).toBe(
+      false,
+    );
+    expect(template).toMatch(/action uploads the run directory/i);
+  });
+
+  test("explains the comment trigger's constraints, not merely that it exists", () => {
+    const template = generateCiWorkflowTemplate();
+    // GitHub reads a comment-triggered workflow from the default branch.
+    expect(template).toMatch(/default branch/i);
+    // Why the group is not keyed on the branch.
+    expect(template).toContain("head_ref");
+    // Why a comment run queues instead of cancelling.
+    expect(template).toMatch(/near-miss/i);
   });
 
   test("grants pull-requests: write and contents: read", () => {
@@ -135,7 +334,13 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     const template = generateCiWorkflowTemplate();
     expect(template).toContain(`\${{ secrets.ANTHROPIC_API_KEY }}`);
     expect(template).toContain(`\${{ secrets.GITHUB_TOKEN }}`);
+    expect(template).toContain(`\${{ secrets.OPENCODE_AUTH_JSON }}`);
     expect(template).not.toMatch(/sk-ant-[a-z0-9-]+/i);
+    expect(template).not.toMatch(/ghp_|ghs_/);
+    expect(template).not.toContain("oc-ci-fixture-not-a-secret");
+    // Threat matrix RED (8), the half that outlives the old skip notice: no
+    // inlined OpenCode auth blob of any shape.
+    expect(template).not.toMatch(/"type"\s*:\s*"api"/);
   });
 
   test("wires BOTH documented credential inputs, not just the API key", () => {
@@ -157,75 +362,6 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     expect(step?.with?.["claude-token"]).toBe(
       `\${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`,
     );
-  });
-
-  test("a secretless same-repo PR gets a LOUD notice, not a silent skip", () => {
-    // The defect this pins is not hypothetical: this repo shipped five PRs
-    // (D1-09, D1-03, D1-06, credential-projection, D1-07) whose review job
-    // was skipped for missing credentials. A skipped job does not fail its
-    // workflow, so `gh run list` reported "success" on every one and nobody
-    // noticed the engine had never reviewed its own code. Silence read as
-    // approval. The skip itself is correct — a permanent red X before
-    // credentials are wired teaches people to stop reading CI — so the fix is
-    // to make the skip SAY something, not to make it fail.
-    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
-      jobs: {
-        credentials: { steps: Array<Record<string, string>> };
-      };
-    };
-    const notice = parsed.jobs.credentials.steps.find(
-      (step) => step.id === "notice",
-    );
-    expect(notice).toBeDefined();
-    // Gated on BOTH conditions: fork PRs never receive secrets by design, so
-    // a notice on every fork PR would be noise. The actionable case is a
-    // same-repo PR whose owner simply has not wired a secret yet.
-    expect(notice?.if).toContain("has_creds == 'false'");
-    expect(notice?.if).toContain(
-      "github.event.pull_request.head.repo.full_name == github.repository",
-    );
-    // Both surfaces: an annotation on the run AND a line in the job summary.
-    expect(notice?.run).toContain("::notice");
-    expect(notice?.run).toContain("GITHUB_STEP_SUMMARY");
-    // It must name the fix, not just the symptom.
-    expect(notice?.run).toContain("claude setup-token");
-  });
-
-  test("EVERY job is bounded, not just the one that spends money", () => {
-    // A bound on `review` alone does not deliver the hung-runner protection
-    // its own comment claims. `credentials` runs FIRST and gates `review`
-    // through `needs:`, on the same class of shared ephemeral runners — so a
-    // runner that hangs there falls back to the GitHub default of 360
-    // minutes and stalls the whole workflow for six hours, with `review`
-    // never starting. Bounding the expensive job and leaving the gate
-    // unbounded protects the budget, not the pipeline.
-    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
-      jobs: Record<string, { "timeout-minutes"?: number }>;
-    };
-    const names = Object.keys(parsed.jobs);
-    expect(names.length).toBeGreaterThan(1);
-    for (const name of names) {
-      expect(typeof parsed.jobs[name]?.["timeout-minutes"]).toBe("number");
-    }
-  });
-
-  test("the notice script never lets bash run a backtick as a command", () => {
-    // Backticks inside a DOUBLE-quoted bash string are command substitution,
-    // not literal text. The notice body documents `gh run rerun` in prose, so
-    // an echo that wrapped it in double quotes would actually invoke gh on the
-    // runner and fail the step that exists to explain a failure. Every line
-    // carrying a backtick must be single-quoted.
-    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
-      jobs: { credentials: { steps: Array<Record<string, string>> } };
-    };
-    const script =
-      parsed.jobs.credentials.steps.find((step) => step.id === "notice")?.run ??
-      "";
-    expect(script).toContain("`");
-    for (const line of script.split("\n")) {
-      if (!line.includes("`")) continue;
-      expect(line.trim()).toMatch(/^echo '/);
-    }
   });
 
   test("the review job is bounded ABOVE the pipeline's own ceiling", () => {
@@ -269,118 +405,18 @@ describe("generateCiWorkflowTemplate (pure)", () => {
   // repo chose for itself. `budget-usd` is a real money cap on someone else's
   // account; raising it from a template they did not read is not ours to do.
   //
-  // Since issue #156 NO side sets it, this repo included: action.yml's
-  // `budget-usd` default is empty and the CLI resolves the ceiling from the
-  // route's billing mode, so writing `budget-usd: 15.00` here would IMPOSE a
-  // ceiling on a subscription route that would otherwise carry none — the
-  // opposite of what the override was for.
-  test("neither the scaffolded template nor this repo's own sets budget-usd", () => {
+  // This repo DISABLES the ceiling instead (`budget-usd: 0`). It reviews
+  // itself on a Claude subscription, where a dollar ceiling means nothing,
+  // and the billing-mode policy that was supposed to apply no ceiling there
+  // (#156) resolved this repo's route as metered and skipped #326 and its
+  // predecessors at the $10 default. 0 is the operator's explicit, loud
+  // disable; it never imposes a ceiling, so #156's objection to a fixed
+  // value does not apply. The scaffolded template still says nothing.
+  test("the scaffolded template sets no budget-usd, and this repo's own disables it", () => {
     expect(generateCiWorkflowTemplate()).not.toContain("budget-usd:");
-    expect(generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS)).not.toContain(
-      "budget-usd:",
+    expect(generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS)).toContain(
+      "budget-usd: 0\n",
     );
-  });
-
-  // ---------------------------------------------------------------------
-  // Run-directory artifact upload.
-  //
-  // `pr-hero triage reply --from <run-dir>` is the ONLY supported way to
-  // answer a posted finding, and it hard-fails without a run directory on
-  // disk (runTriageCommand needs comparison.json; the reply path needs
-  // findings.json to map F00N onto the posted marker). In CI that directory
-  // is `~/.prhero/.../runs/pr-<n>-<sha>-1` on an EPHEMERAL runner — it dies
-  // with the job. Uploading it is what keeps the triage half of the loop
-  // reachable once reviews move to Actions.
-  // ---------------------------------------------------------------------
-  const uploadStep = () => {
-    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
-      jobs: { review: { steps: Array<Record<string, unknown>> } };
-    };
-    return parsed.jobs.review.steps.find((step) =>
-      String(step.uses ?? "").startsWith("actions/upload-artifact@"),
-    ) as
-      | { if?: string; with?: Record<string, string | number | boolean> }
-      | undefined;
-  };
-
-  test("uploads the run directory so `triage reply --from` has an input in CI", () => {
-    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
-      jobs: { review: { steps: Array<Record<string, unknown>> } };
-    };
-    // The run step must carry an id, or its `run-dir` output is unreadable.
-    const runStep = parsed.jobs.review.steps.find(
-      (step) => step.name === "Run pr-hero",
-    ) as { id?: string } | undefined;
-    expect(runStep?.id).toBe("pr-hero");
-
-    const upload = uploadStep();
-    expect(upload).toBeDefined();
-    expect(String(upload?.with?.path)).toContain(
-      "steps.pr-hero.outputs.run-dir",
-    );
-  });
-
-  test("the upload runs on always(), not only on a green review", () => {
-    // The incident this pins: every hunter died with `Not logged in · Please
-    // run /login` and the per-attempt logs — the only evidence naming the
-    // cause — were on the runner. Recovering them took pushing a throwaway
-    // debug commit to `cat` them off. A failed review is exactly when the run
-    // directory matters most, so the upload must not hang off step success.
-    expect(uploadStep()?.if).toContain("always()");
-  });
-
-  test("a review that wrote no run directory never turns the job red", () => {
-    // A size-gated or budget-gated review exits 0 having written nothing.
-    // `if-no-files-found: error` would fail the job for a skip that worked
-    // exactly as designed, and the empty-output gate keeps upload-artifact
-    // from ever being handed an empty `path:` in the first place.
-    const upload = uploadStep();
-    expect(upload?.with?.["if-no-files-found"]).toBe("warn");
-    expect(upload?.if).toContain("steps.pr-hero.outputs.run-dir != ''");
-  });
-
-  test("the artifact name pins BOTH the PR number and the head sha", () => {
-    // A PR is reviewed once per push. Naming the artifact after the PR alone
-    // makes `gh run download -n <name>` ambiguous the moment a second commit
-    // lands — and the run directory itself is named `pr-<n>-<sha>-1`, so the
-    // artifact that carries it should say which head it reviewed.
-    const name = String(uploadStep()?.with?.name);
-    expect(name).toContain("github.event.pull_request.number");
-    expect(name).toContain("github.event.pull_request.head.sha");
-  });
-
-  test("a re-run overwrites its artifact instead of failing on a name clash", () => {
-    // v4 artifact names are unique per workflow RUN, and `gh run rerun`
-    // reuses the run id — which the credentials job's own notice text tells
-    // people to do. Without `overwrite`, the second attempt's upload 409s,
-    // and under `always()` that turns the job red for a re-run that
-    // otherwise succeeded.
-    expect(uploadStep()?.with?.overwrite).toBe(true);
-  });
-
-  test("retention is bounded — the artifact carries the diff and the prompts", () => {
-    // The run directory holds diff.patch, the rendered system prompts, the
-    // hunter drafts and findings.json. On a PUBLIC repository every workflow
-    // artifact is downloadable by anyone, so this is short-lived by design:
-    // long enough to triage, short enough to limit exposure.
-    const retention = uploadStep()?.with?.["retention-days"];
-    expect(retention).toBe(7);
-  });
-
-  test("uploads hidden files — the run directory lives under a hidden ancestor", () => {
-    // upload-artifact excludes hidden files by default since v4.4, and the
-    // run directory sits under `~/.prhero`. Combined with
-    // `if-no-files-found: warn`, a hidden-file exclusion here would produce
-    // an EMPTY artifact and a warning nobody reads, which is worse than no
-    // artifact at all.
-    expect(uploadStep()?.with?.["include-hidden-files"]).toBe(true);
-  });
-
-  test("explains WHY the run directory is uploaded, not merely that it is", () => {
-    const template = generateCiWorkflowTemplate();
-    expect(template).toMatch(/triage reply --from/);
-    expect(template).toMatch(/ephemeral/i);
-    expect(template).toMatch(/public repositor/i);
   });
 
   // Threat matrix RED (5): vars must be quoted so an unset PRHERO_ROUTING
@@ -400,89 +436,29 @@ describe("generateCiWorkflowTemplate (pure)", () => {
       `\${{ secrets.OPENCODE_AUTH_JSON }}`,
     );
   });
-
-  // Threat matrix RED (6): job-level `if` cannot read `secrets` (S11/S12).
-  // Presence is detected in the credentials job env and consumed via needs.
-  test("the review job if does not read secrets", () => {
-    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
-      jobs: { review: { if?: string } };
-    };
-    const reviewIf = String(parsed.jobs.review.if ?? "");
-    expect(reviewIf).not.toContain("secrets.");
-    expect(reviewIf).toContain("needs.credentials.outputs.has_creds");
-  });
-
-  // Threat matrix RED (8): the skip notice must name the OpenCode secret so
-  // an OpenCode-only operator can wire it. It must never echo a value.
-  // OpenCode also needs PRHERO_ROUTING; naming only the secret sent operators
-  // to a Claude-default fail-closed job.
-  test("the skip notice names OPENCODE_AUTH_JSON and never a secret value", () => {
-    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
-      jobs: {
-        credentials: {
-          steps: Array<{
-            id?: string;
-            env?: Record<string, string>;
-            run?: string;
-          }>;
-        };
-      };
-    };
-    const detect = parsed.jobs.credentials.steps.find(
-      (step) => step.id === "detect",
-    );
-    expect(detect?.env?.HAS_CREDS).toContain("secrets.OPENCODE_AUTH_JSON");
-    expect(detect?.env?.HAS_CREDS).toContain("secrets.ANTHROPIC_API_KEY");
-    expect(detect?.env?.HAS_CREDS).toContain("secrets.CLAUDE_CODE_OAUTH_TOKEN");
-    const notice = parsed.jobs.credentials.steps.find(
-      (step) => step.id === "notice",
-    );
-    expect(notice?.run).toContain("OPENCODE_AUTH_JSON");
-    expect(notice?.run).toContain("PRHERO_ROUTING");
-    expect(notice?.run).not.toContain("Wire ONE secret");
-    expect(notice?.run).not.toMatch(/sk-ant-|ghp_|ghs_/);
-    expect(notice?.run).not.toContain("oc-ci-fixture-not-a-secret");
-    expect(generateCiWorkflowTemplate()).not.toMatch(/"type"\s*:\s*"api"/);
-  });
 });
 
 // ---------------------------------------------------------------------
-// The force workflow (pr-hero-force.yml).
+// This repo's own comment runs (forceEngineFromPr).
 //
-// A dispatch runs on the DEFAULT branch, and `uses: ./` runs whatever engine
-// actions/checkout put on disk. On #305 that was main's engine, which lagged
-// dev: four hunters returned nothing in 59 s and the complete summary marker
-// they posted blocked every later review of that head. This repo's own force
-// workflow therefore resolves the PR head first and checks out that commit.
-// A consumer repo runs the published tag, so its checkout picks no engine.
+// A comment run starts on the DEFAULT branch, and `uses: ./` runs whatever
+// engine actions/checkout put on disk. On #305 that was main's engine, which
+// lagged dev: four hunters returned nothing in 59 s and the complete summary
+// marker they posted blocked every later review of that head. This repo's
+// own workflow therefore resolves the PR head first and checks out that
+// commit. A consumer repo runs the published tag, so its checkout picks no
+// engine and gets no such step.
 // ---------------------------------------------------------------------
-describe("generateCiForceWorkflowTemplate (pure)", () => {
-  type WorkflowStep = {
-    id?: string;
-    name?: string;
-    if?: string;
-    uses?: string;
-    run?: string;
-    with?: Record<string, unknown>;
-  };
-
-  const scaffoldedForce = () => generateCiForceWorkflowTemplate();
-  const ownForce = () =>
-    generateCiForceWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
-
-  function reviewSteps(template: string): WorkflowStep[] {
-    const parsed = Bun.YAML.parse(template) as {
-      jobs: { review: { steps: WorkflowStep[] } };
-    };
-    return parsed.jobs.review.steps;
-  }
+describe("this repo's own comment runs pin the pull request head", () => {
+  const PROCEED =
+    "github.event_name != 'issue_comment' || steps.gate.outputs.proceed == 'true'";
 
   function stepOrder(template: string): Array<string | undefined> {
-    return reviewSteps(template).map((step) => step.id ?? step.name);
+    return workflowSteps(template).map((step) => step.id ?? step.name);
   }
 
-  function checkoutStep(template: string): WorkflowStep | undefined {
-    return reviewSteps(template).find((step) =>
+  function checkoutOf(template: string): WorkflowStep | undefined {
+    return workflowSteps(template).find((step) =>
       String(step.uses ?? "").startsWith("actions/checkout@"),
     );
   }
@@ -495,20 +471,56 @@ describe("generateCiForceWorkflowTemplate (pure)", () => {
     headRefOid: string | null;
   };
 
+  // A permission lookup that fails `times` times with `stderr` (gh's own
+  // wording), then answers `answer`.
+  type PermissionFailure = { stderr: string; times: number; answer?: string };
+  const NOT_FOUND = "gh: Not Found (HTTP 404)";
+
   // Runs the gate step's own script under `bash -e`, the shell a `run:` step
   // gets by default, with `gh` replaced by a function that logs its arguments
   // and answers through real jq: gh's --jq flag speaks the same filter
-  // language, so the parsing under test is the script's own.
-  function runGate(template: string, pr: PrHead) {
-    const gate = reviewSteps(template).find((step) => step.id === "gate");
-    const dir = mkdtempSync(path.join(tmpdir(), "prhero-force-gate-"));
+  // language, so the parsing under test is the script's own. The commenter's
+  // permission lookup answers `permission`; `null` makes every lookup fail
+  // the way gh does on a 404, and a PermissionFailure scripts any other
+  // failure. `sleep` is a function too, so the retry's pause is recorded and
+  // costs no wall time.
+  function runGate(
+    template: string,
+    pr: PrHead,
+    permission: string | null | PermissionFailure = "write",
+  ) {
+    const gate = workflowSteps(template).find((step) => step.id === "gate");
+    const dir = mkdtempSync(path.join(tmpdir(), "prhero-head-gate-"));
     const outputFile = path.join(dir, "github-output");
     const callLog = path.join(dir, "gh-calls");
+    const sleepLog = path.join(dir, "sleeps");
+    const failuresFile = path.join(dir, "permission-failures");
+    const failure: PermissionFailure | undefined =
+      permission === null
+        ? { stderr: NOT_FOUND, times: 1_000 }
+        : typeof permission === "string"
+          ? undefined
+          : permission;
     writeFileSync(outputFile, "");
     writeFileSync(callLog, "");
+    writeFileSync(sleepLog, "");
+    writeFileSync(failuresFile, String(failure?.times ?? 0));
     const fakeGh = [
+      'sleep() { printf "%s\\n" "$*" >> "$SLEEP_LOG"; }',
       "gh() {",
       '  printf "%s\\n" "$*" >> "$GH_CALL_LOG"',
+      '  case "$*" in',
+      "    *collaborators*)",
+      '      failures=$(<"$FAKE_FAILURES_FILE")',
+      '      if [ "$failures" -gt 0 ]; then',
+      '        printf "%s\\n" "$((failures - 1))" > "$FAKE_FAILURES_FILE"',
+      '        printf "%s\\n" "$FAKE_PERMISSION_STDERR" >&2',
+      "        return 1",
+      "      fi",
+      '      printf "%s\\n" "$FAKE_PERMISSION"',
+      "      return 0",
+      "      ;;",
+      "  esac",
       '  filter="."',
       "  while [ $# -gt 0 ]; do",
       '    if [ "$1" = "--jq" ]; then filter="$2"; fi',
@@ -523,24 +535,39 @@ describe("generateCiForceWorkflowTemplate (pure)", () => {
         env: {
           PATH: process.env.PATH ?? "",
           PR: "305",
+          COMMENTER: "octocat",
           GITHUB_REPOSITORY: REPOSITORY,
           GITHUB_OUTPUT: outputFile,
           GH_CALL_LOG: callLog,
+          SLEEP_LOG: sleepLog,
           FAKE_PR_JSON: JSON.stringify(pr),
+          FAKE_PERMISSION:
+            typeof permission === "string"
+              ? permission
+              : (failure?.answer ?? ""),
+          FAKE_PERMISSION_STDERR: failure?.stderr ?? "",
+          FAKE_FAILURES_FILE: failuresFile,
         },
       },
     );
-    const outputs = Object.fromEntries(
-      readFileSync(outputFile, "utf-8")
+    const lines = (file: string) =>
+      readFileSync(file, "utf-8")
         .split("\n")
-        .filter((line) => line !== "")
-        .map((line) => line.split("=", 2)),
+        .filter((line) => line !== "");
+    const outputs = Object.fromEntries(
+      lines(outputFile).map((line) => line.split("=", 2)),
     );
-    const calls = readFileSync(callLog, "utf-8")
-      .split("\n")
-      .filter((line) => line !== "");
+    const calls = lines(callLog);
+    const sleeps = lines(sleepLog);
     rmSync(dir, { recursive: true, force: true });
-    return { exitCode: result.exitCode, outputs, calls };
+    return {
+      exitCode: result.exitCode,
+      stdout: result.stdout.toString(),
+      outputs,
+      calls,
+      lookups: calls.filter((call) => call.includes("collaborators")).length,
+      sleeps,
+    };
   }
 
   const sameRepoPr: PrHead = {
@@ -554,35 +581,123 @@ describe("generateCiForceWorkflowTemplate (pure)", () => {
   // GitHub reports a null head repository once a fork is deleted.
   const deletedForkPr: PrHead = { headRepository: null, headRefOid: HEAD_SHA };
 
-  test("this repo's own force workflow resolves the PR head before it checks anything out", () => {
-    expect(stepOrder(ownForce())).toEqual([
-      "gate",
-      "Checkout",
-      "pr-hero",
-      "Upload pr-hero run directory",
-    ]);
+  test("resolves the PR head before it checks anything out, and only on a comment", () => {
+    expect(stepOrder(own())).toEqual(["gate", "Checkout", "pr-hero"]);
+    const gate = workflowSteps(own()).find((step) => step.id === "gate");
+    expect(gate?.if).toBe("github.event_name == 'issue_comment'");
+    expect(gate?.env?.PR).toBe(`\${{ github.event.issue.number }}`);
   });
 
-  test("this repo's own force workflow checks out the gate's head sha, only when the gate proceeds", () => {
-    const checkout = checkoutStep(ownForce());
+  test("checks out the gate's head sha on a comment and the event's own ref on a push", () => {
+    // On pull_request the gate is skipped, its sha output is empty, and an
+    // empty `ref:` keeps actions/checkout on that event's default ref.
+    const checkout = checkoutOf(own());
     expect(checkout?.with?.ref).toBe(`\${{ steps.gate.outputs.sha }}`);
-    expect(checkout?.if).toBe("steps.gate.outputs.proceed == 'true'");
+    expect(checkout?.if).toBe(PROCEED);
     expect(checkout?.with?.["fetch-depth"]).toBe(0);
+    const run = workflowSteps(own()).find((step) => step.id === "pr-hero");
+    expect(run?.if).toBe(PROCEED);
   });
 
-  test("this repo's own gate reads the fork verdict and the head sha in ONE gh call", () => {
+  test("reads the fork verdict and the head sha in ONE gh call", () => {
     // Two reads could straddle a push: the fork verdict would describe one
     // head and the checked-out sha another.
-    const gate = runGate(ownForce(), sameRepoPr);
+    const gate = runGate(own(), sameRepoPr);
     expect(gate.exitCode).toBe(0);
     expect(gate.outputs).toEqual({ proceed: "true", sha: HEAD_SHA });
-    expect(gate.calls).toHaveLength(1);
-    expect(gate.calls[0]).toContain("--json headRepository,headRefOid");
+    const prReads = gate.calls.filter((call) => call.startsWith("pr view"));
+    expect(prReads).toHaveLength(1);
+    expect(prReads[0]).toContain("--json headRepository,headRefOid");
   });
 
-  // `ref: ""` makes actions/checkout fall back to the default branch, the
-  // very engine this pin exists to avoid, and any other non-sha value would
-  // be resolved as a ref name. Only a full 40-hex commit sha may proceed.
+  // The write-access check inside action.yml cannot protect THIS repo: here
+  // `uses: ./` runs the checked-out head's own action.yml, so a same-repo head
+  // that predates the check (an old bot branch) would let anyone who can
+  // comment start a review with this repository's secrets. The gate is the
+  // only code that runs before the head does, so the check has to live here,
+  // and it fails closed: anything but admin or write refuses without reading
+  // the PR or checking anything out. A 404 is GitHub's definitive answer for
+  // a non-collaborator, so it refuses quietly after ONE lookup.
+  test.each([
+    ["read", "read"],
+    ["triage", "triage"],
+    ["none", "none"],
+    ["an empty answer", ""],
+    ["a failed lookup (HTTP 404)", null],
+  ])(
+    "refuses a commenter with %s before touching the PR head",
+    (_label, permission) => {
+      const gate = runGate(own(), sameRepoPr, permission);
+      expect(gate.exitCode).toBe(0);
+      expect(gate.outputs).toEqual({ proceed: "false" });
+      expect(gate.stdout).toContain("::notice");
+      expect(gate.stdout).toContain("write access");
+      expect(gate.calls.some((call) => call.startsWith("pr view"))).toBe(false);
+      expect(gate.lookups).toBe(1);
+      expect(gate.sleeps).toEqual([]);
+    },
+  );
+
+  // Any other lookup failure says nothing about the commenter, only about
+  // the API. Refusing quietly there would show a maintainer the same notice
+  // a stranger gets, on a default-branch run nobody sees from the PR. Still
+  // fail-closed (no head is read or checked out), but red.
+  test.each([
+    ["a 5xx", "gh: Server Error (HTTP 502)"],
+    [
+      "a rate limit",
+      "gh: API rate limit exceeded for installation. (HTTP 403)",
+    ],
+    ["a gh that cannot run", "bash: gh: command not found"],
+  ])(
+    "fails the job red on %s twice, after exactly one retry, before touching the PR head",
+    (_label, stderr) => {
+      const gate = runGate(own(), sameRepoPr, { stderr, times: 2 });
+      expect(gate.exitCode).toBe(1);
+      expect(gate.outputs).toEqual({});
+      expect(gate.stdout).toContain("::error title=pr-hero::");
+      expect(gate.stdout).toContain("/pr-hero review");
+      expect(gate.lookups).toBe(2);
+      expect(gate.sleeps).toHaveLength(1);
+      expect(gate.calls.some((call) => call.startsWith("pr view"))).toBe(false);
+    },
+  );
+
+  test("a lookup that fails once and then answers write proceeds", () => {
+    const gate = runGate(own(), sameRepoPr, {
+      stderr: "gh: Server Error (HTTP 502)",
+      times: 1,
+      answer: "write",
+    });
+    expect(gate.exitCode).toBe(0);
+    expect(gate.outputs).toEqual({ proceed: "true", sha: HEAD_SHA });
+    expect(gate.lookups).toBe(2);
+    expect(gate.sleeps).toHaveLength(1);
+  });
+
+  test.each([["admin"], ["write"]])(
+    "lets a commenter with %s through, after checking it first",
+    (permission) => {
+      const gate = runGate(own(), sameRepoPr, permission);
+      expect(gate.outputs).toEqual({ proceed: "true", sha: HEAD_SHA });
+      expect(gate.calls[0]).toBe(
+        `api repos/${REPOSITORY}/collaborators/octocat/permission --jq .permission`,
+      );
+    },
+  );
+
+  test("passes the commenter to the gate through env, never inline", () => {
+    const gate = workflowSteps(own()).find((step) => step.id === "gate");
+    expect(gate?.env?.COMMENTER).toBe(
+      `\${{ github.event.comment.user.login }}`,
+    );
+    expect(String(gate?.run)).not.toContain("github.event.comment");
+  });
+
+  // `ref: ""` makes actions/checkout fall back to the default branch on a
+  // comment event, the very engine this pin exists to avoid, and any other
+  // non-sha value would be resolved as a ref name. Only a full 40-hex commit
+  // sha may proceed.
   test.each([
     ["a missing head commit", null],
     ["a branch name", "main"],
@@ -592,86 +707,41 @@ describe("generateCiForceWorkflowTemplate (pure)", () => {
     ],
     ["a 39-character sha prefix", HEAD_SHA.slice(0, 39)],
     ["a 41-character value", `${HEAD_SHA}0`],
-  ])(
-    "this repo's own gate fails on %s instead of handing it to checkout",
-    (_label, headRefOid) => {
-      const gate = runGate(ownForce(), {
-        headRepository: { nameWithOwner: REPOSITORY },
-        headRefOid,
-      });
-      expect(gate.exitCode).toBe(1);
-      expect(gate.outputs).toEqual({});
-    },
-  );
+  ])("fails on %s instead of handing it to checkout", (_label, headRefOid) => {
+    const gate = runGate(own(), {
+      headRepository: { nameWithOwner: REPOSITORY },
+      headRefOid,
+    });
+    expect(gate.exitCode).toBe(1);
+    expect(gate.outputs).toEqual({});
+  });
 
+  // Here `uses: ./` runs the checked-out engine, so reviewing a fork would
+  // run the fork's own code with this repository's secrets.
   test.each([
-    ["scaffolded", scaffoldedForce],
-    ["this repo's own", ownForce],
-  ])(
-    "the %s gate proceeds on a same-repo PR and publishes its head sha",
-    (_label, template) => {
-      const gate = runGate(template(), sameRepoPr);
-      expect(gate.exitCode).toBe(0);
-      expect(gate.outputs).toEqual({ proceed: "true", sha: HEAD_SHA });
-    },
-  );
+    ["a fork", forkPr],
+    ["a deleted fork", deletedForkPr],
+  ])("refuses %s without failing the job, and says why", (_kind, pr) => {
+    const gate = runGate(own(), pr);
+    expect(gate.exitCode).toBe(0);
+    expect(gate.outputs).toEqual({ proceed: "false" });
+    expect(gate.stdout).toContain("::notice");
+    expect(gate.stdout).toContain("secrets");
+  });
 
-  test.each([
-    ["scaffolded", "a fork", scaffoldedForce, forkPr],
-    ["scaffolded", "a deleted fork", scaffoldedForce, deletedForkPr],
-    ["this repo's own", "a fork", ownForce, forkPr],
-    ["this repo's own", "a deleted fork", ownForce, deletedForkPr],
-  ])(
-    "the %s gate refuses %s without failing the job",
-    (_label, _kind, template, pr) => {
-      const gate = runGate(template(), pr);
-      expect(gate.exitCode).toBe(0);
-      expect(gate.outputs).toEqual({ proceed: "false" });
-    },
-  );
-
-  test("the scaffolded force workflow keeps checkout first and pins no ref", () => {
+  test("the scaffolded workflow resolves nothing and pins no ref", () => {
     // A consumer repo runs juanmaagd/pr-hero@v0, so its checkout never
     // selects the engine and needs no pin.
-    expect(stepOrder(scaffoldedForce())).toEqual([
-      "Checkout",
-      "gate",
-      "pr-hero",
-      "Upload pr-hero run directory",
-    ]);
-    expect(checkoutStep(scaffoldedForce())?.with?.ref).toBeUndefined();
+    expect(stepOrder(scaffolded())).toEqual(["Checkout", "pr-hero"]);
+    expect(checkoutOf(scaffolded())?.with?.ref).toBeUndefined();
+    expect(checkoutOf(scaffolded())?.if).toBeUndefined();
   });
 
   test("the head pin is its own option, never inferred from a local action ref", () => {
-    const localRefOnly = generateCiForceWorkflowTemplate({ actionRef: "./" });
-    expect(checkoutStep(localRefOnly)?.with?.ref).toBeUndefined();
+    const localRefOnly = generateCiWorkflowTemplate({ actionRef: "./" });
+    expect(stepOrder(localRefOnly)).toEqual(["Checkout", "pr-hero"]);
+    expect(checkoutOf(localRefOnly)?.with?.ref).toBeUndefined();
   });
-
-  // A hollow review on the same head leaves a complete summary marker, and
-  // every later run on that head then skips discovery; `--force` never widens
-  // it. The `full` dispatch input is the only way back, in every repo.
-  test.each([
-    ["scaffolded", scaffoldedForce],
-    ["this repo's own", ownForce],
-  ])(
-    "the %s force workflow offers a boolean `full` dispatch input, off by default, and hands it to the action",
-    (_label, template) => {
-      const parsed = Bun.YAML.parse(template()) as {
-        on: {
-          workflow_dispatch: {
-            inputs: Record<string, Record<string, unknown>>;
-          };
-        };
-      };
-      expect(parsed.on.workflow_dispatch.inputs.full).toMatchObject({
-        required: false,
-        type: "boolean",
-        default: false,
-      });
-      const run = reviewSteps(template()).find((step) => step.id === "pr-hero");
-      expect(run?.with?.full).toBe(`\${{ inputs.full }}`);
-    },
-  );
 });
 
 describe("materializeCiOpenCodeData (impure edge)", () => {
@@ -798,6 +868,251 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
   });
 });
 
+// The scaffold's own closing instructions are the first place a new user
+// learns how to force a review, and GitHub reads a comment-triggered workflow
+// from the DEFAULT branch. Committing the file to a feature branch and
+// commenting there starts nothing, silently, so the next steps must say where
+// the file has to land before `/pr-hero review` works.
+// The setup step's own exit path (odd/tasks/agent-first-ci.md, T2b / A1): a
+// malformed routing or auth input is the user's configuration, so the step
+// leaves setup.json for the publisher. Spawned, like the empty-HOME test
+// above, so the test exercises the real entry point and its real exit code.
+describe("setup.ts records a malformed input for the outcome publisher", () => {
+  const SETUP_SCRIPT = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "src",
+    "ci",
+    "setup.ts",
+  );
+
+  async function runSetup(
+    env: Record<string, string>,
+    prepare?: (outDir: string) => Promise<void>,
+  ) {
+    const root = await mkdtemp(path.join(tmpdir(), "pr-hero-setup-record-"));
+    const home = path.join(root, "home");
+    const outDir = path.join(root, "outcome");
+    await mkdir(home, { recursive: true });
+    try {
+      if (prepare !== undefined) await prepare(outDir);
+      const proc = Bun.spawn(["bun", SETUP_SCRIPT], {
+        cwd: root,
+        env: {
+          ...process.env,
+          HOME: home,
+          ROUTING_INPUT: "",
+          OPENCODE_AUTH_INPUT: "",
+          PRHERO_OUTCOME_DIR: outDir,
+          ...env,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stderr, exitCode] = await Promise.all([
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      const recordPath = path.join(outDir, "setup.json");
+      const recordText = existsSync(recordPath)
+        ? await readFile(recordPath, "utf8")
+        : undefined;
+      return { exitCode, stderr, recordText };
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  test("a routing input that is not JSON records config-parse routing, with a fixed detail and no content", async () => {
+    const result = await runSetup({
+      ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("CI routing input is not valid JSON");
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "config-parse", source: "routing" },
+      detail: "the routing input is not valid JSON",
+    });
+    expect(result.recordText).not.toContain("SENTINEL");
+  });
+
+  // WHY a directory (F003 on #330): the setup record's temp name is unique per write
+  // now, so a directory left at the old fixed `setup.json.tmp` by an earlier job
+  // cannot stop this step's record. A directory fails any write to that path.
+  test("a directory left at the old fixed setup temp name does not stop the record", async () => {
+    const result = await runSetup(
+      { ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ' },
+      async (outDir) => {
+        await mkdir(path.join(outDir, "setup.json.tmp"), { recursive: true });
+      },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "config-parse", source: "routing" },
+      detail: "the routing input is not valid JSON",
+    });
+  });
+
+  test("a routing input of the wrong shape records config-parse routing too, without the key it names", async () => {
+    const result = await runSetup({
+      ROUTING_INPUT: '{"SENTINEL-KEY-7f3a": 1}',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "config-parse", source: "routing" },
+      detail: "the routing input is not a valid routing object",
+    });
+    expect(result.recordText).not.toContain("SENTINEL");
+  });
+
+  test("an OpenCode auth input that is not JSON records a credential malformed_payload, with a fixed detail", async () => {
+    const result = await runSetup({
+      OPENCODE_AUTH_INPUT: '{"SENTINEL-AUTH-7f3a": ',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("CI opencode-auth is not valid JSON");
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "credential", failureClass: "malformed_payload" },
+      detail: "the opencode-auth input is not valid JSON",
+    });
+    expect(result.recordText).not.toContain("SENTINEL");
+  });
+
+  test("an OpenCode auth input that is JSON but not an object is the same class, with its own detail", async () => {
+    const result = await runSetup({
+      OPENCODE_AUTH_INPUT: '"SENTINEL-AUTH-7f3a"',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.recordText ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "credential", failureClass: "malformed_payload" },
+      detail: "the opencode-auth input must be a JSON object",
+    });
+    expect(result.recordText).not.toContain("SENTINEL");
+  });
+
+  test("a valid setup writes no record", async () => {
+    const result = await runSetup({});
+    expect(result.exitCode).toBe(0);
+    expect(result.recordText).toBeUndefined();
+  });
+
+  test("an environment failure writes no record, so the publisher cannot blame the configuration for it", async () => {
+    const result = await runSetup({
+      HOME: "",
+      ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.recordText).toBeUndefined();
+  });
+});
+
+describe("ci init next steps (CLI)", () => {
+  test("say that /pr-hero review works once the workflow is on the default branch", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "prhero-ci-init-"));
+    try {
+      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      const result = Bun.spawnSync(
+        [
+          process.execPath,
+          path.join(import.meta.dir, "../../src/cli.ts"),
+          "ci",
+          "init",
+        ],
+        { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
+      );
+      const output = `${result.stdout}${result.stderr}`;
+      expect(result.exitCode).toBe(0);
+      expect(output).toContain("Next steps:");
+      expect(output).toContain("/pr-hero review");
+      expect(output).toMatch(/default branch/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// The first-PR walkthrough: a user who ran only `setup --ci` got a red PR
+// (PRH-GOTCHAS-MISSING) because nothing printed told them to run `init` and
+// write the gotchas. The init steps print only while the gotchas file is
+// absent or still the scaffold; a repo with real gotchas gets none of them.
+describe("ci init gotchas steps (CLI)", () => {
+  async function runInit(
+    gotchas: string | undefined,
+  ): Promise<{ output: string; code: number }> {
+    const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-gotchas-"));
+    try {
+      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      if (gotchas !== undefined) {
+        await mkdir(path.join(dir, ".prhero"), { recursive: true });
+        await writeFile(path.join(dir, ".prhero", "gotchas.md"), gotchas);
+      }
+      const result = Bun.spawnSync(
+        [
+          process.execPath,
+          path.join(import.meta.dir, "../../src/cli.ts"),
+          "ci",
+          "init",
+        ],
+        { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
+      );
+      return {
+        output: `${result.stdout}${result.stderr}`,
+        code: result.exitCode,
+      };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a repo without .prhero/gotchas.md is told to run init, write gotchas, and commit .prhero/ before opening the PR", async () => {
+    const { output, code } = await runInit(undefined);
+    expect(code).toBe(0);
+    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("human-attention-required");
+    expect(output).toContain("Commit .prhero/ to the default branch");
+    expect(output.indexOf("npx -y pr-hero init")).toBeLessThan(
+      output.indexOf("Open a pull request"),
+    );
+  });
+
+  test("a scaffold still carrying the marker gets the same init steps", async () => {
+    const { output } = await runInit(
+      "<!-- human-attention-required: delete -->\n# Repo gotchas\n",
+    );
+    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("human-attention-required");
+    expect(output).toContain("Commit .prhero/ to the default branch");
+  });
+
+  test("real gotchas without the marker print no init steps, and still name the required check", async () => {
+    const { output } = await runInit(
+      "- auth: the token is refreshed by the proxy, not here\n",
+    );
+    expect(output).not.toContain("npx -y pr-hero init");
+    expect(output).not.toContain("human-attention-required");
+    expect(output).toContain("require the `pr-hero` status check");
+    expect(output).toContain("GitHub Free");
+    // The steps stay numbered 1..n with no gap where the init steps were.
+    const numbers = [...output.matchAll(/^ {2}(\d+)\. /gm)].map((m) =>
+      Number(m[1]),
+    );
+    expect(numbers).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("every repo is told to require the pr-hero status check, not the review job", async () => {
+    const { output } = await runInit(undefined);
+    expect(output).toContain(
+      "require the `pr-hero` status check (not the `review` job)",
+    );
+  });
+});
+
 describe("runCiSetup (impure edge)", () => {
   let dir: string;
 
@@ -816,11 +1131,38 @@ describe("runCiSetup (impure edge)", () => {
       "utf8",
     );
     expect(written).toBe(generateCiWorkflowTemplate());
-    const forceWritten = await readFile(
-      path.join(dir, CI_FORCE_WORKFLOW_RELATIVE_PATH),
-      "utf8",
-    );
-    expect(forceWritten).toBe(generateCiForceWorkflowTemplate());
+  });
+
+  // One workflow is the whole install. A literal path, not a constant: the
+  // force workflow's path constant went away with its generator.
+  const LEGACY_FORCE_WORKFLOW = path.join(
+    ".github",
+    "workflows",
+    "pr-hero-force.yml",
+  );
+
+  test("writes only pr-hero.yml, never a force workflow", async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "pr-hero-ci-setup-"));
+
+    await runCiSetup({ cwd: dir });
+
+    expect(existsSync(path.join(dir, CI_WORKFLOW_RELATIVE_PATH))).toBe(true);
+    expect(existsSync(path.join(dir, LEGACY_FORCE_WORKFLOW))).toBe(false);
+  });
+
+  test("--force leaves a legacy pr-hero-force.yml exactly as it was", async () => {
+    // The skip comment still names `gh workflow run pr-hero-force.yml` for
+    // repos scaffolded before the comment trigger, and the action keeps the
+    // inputs that file sets. Re-scaffolding must not delete or rewrite a
+    // file the user may still dispatch.
+    dir = await mkdtemp(path.join(tmpdir(), "pr-hero-ci-setup-"));
+    const legacy = path.join(dir, LEGACY_FORCE_WORKFLOW);
+    await mkdir(path.dirname(legacy), { recursive: true });
+    await writeFile(legacy, "# a legacy force workflow\n");
+
+    await runCiSetup({ cwd: dir, force: true });
+
+    expect(await readFile(legacy, "utf8")).toBe("# a legacy force workflow\n");
   });
 
   test("refuses to overwrite an existing workflow without --force", async () => {
@@ -1104,6 +1446,61 @@ describe("CLI wiring: setup --ci and ci init (parseArgs)", () => {
   test("--ci on a command other than review or setup is rejected", () => {
     expect(() => parseArgs(["doctor", "--ci"])).toThrow(
       /review or setup command/,
+    );
+  });
+});
+
+// S4: the scaffold names its gate mode in the file itself, so a reader sees
+// what turns the status red without consulting the action's defaults.
+describe("scaffold writes the gate mode explicitly (S4)", () => {
+  // The pr-hero step's own `with:`, found by its `uses:` line: the checkout
+  // step above it has a `with:` block of its own.
+  function withBlock(template: string): string[] {
+    const lines = template.split("\n");
+    const uses = lines.findIndex(
+      (line) => line.trim().startsWith("uses:") && /pr-hero|\.\//.test(line),
+    );
+    expect(uses).toBeGreaterThan(-1);
+    const start = lines.findIndex(
+      (line, index) => index > uses && line.trim() === "with:",
+    );
+    expect(start).toBeGreaterThan(-1);
+    const block: string[] = [];
+    for (let i = start + 1; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (line.trim() !== "" && !line.startsWith("          ")) break;
+      block.push(line);
+    }
+    return block;
+  }
+
+  test("the default scaffold writes mode: gate inside the pr-hero with: block", () => {
+    const block = withBlock(generateCiWorkflowTemplate());
+    expect(block).toContain("          mode: gate");
+    expect(block.filter((line) => line.includes("mode:"))).toHaveLength(1);
+  });
+
+  test("the mode it is given is the one written", () => {
+    const block = withBlock(generateCiWorkflowTemplate({ mode: "advisory" }));
+    expect(block).toContain("          mode: advisory");
+    expect(block.some((line) => line.includes("mode: gate"))).toBe(false);
+  });
+
+  test("this repo's own options name gate explicitly", () => {
+    expect(OWN_CI_WORKFLOW_OPTIONS.mode).toBe("gate");
+  });
+});
+
+// `/pr-hero recheck` is accepted wherever `/pr-hero review` is: the job's `if:`
+// and the concurrency group, so the scaffolded workflow starts the same run.
+describe("the scaffolded workflow accepts /pr-hero recheck", () => {
+  test("the if and concurrency clauses mirror the review clauses", () => {
+    const template = generateCiWorkflowTemplate();
+    const recheck = "startsWith(github.event.comment.body, '/pr-hero recheck')";
+    const review = "startsWith(github.event.comment.body, '/pr-hero review')";
+    expect(template.split(review).length - 1).toBeGreaterThan(0);
+    expect(template.split(recheck).length - 1).toBe(
+      template.split(review).length - 1,
     );
   });
 });

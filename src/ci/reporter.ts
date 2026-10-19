@@ -31,6 +31,7 @@
 // multiple output keys written across several tool calls). An overwrite here
 // would silently destroy an earlier step's contribution to the same file.
 import { appendFile } from "node:fs/promises";
+import type { CiMode } from "#pr/preflight";
 import type { Finding, Severity } from "#review/findings";
 import {
   blobUrl,
@@ -200,12 +201,19 @@ export type CiSummaryData =
   | CiSkipCoverageSummary
   | CiManualRequiredSummary;
 
-// Assistant-posture footer (spec 2.1: "Footer attributing pr-hero as an AI
-// code review assistant"), shared by all three variants — the summary must
-// carry the same "not a merge gate" register the PR comment's own footer
-// does (renderPrComment, report.ts), even when the job was skipped.
-const FOOTER =
+// Footer attributing pr-hero as an AI code review assistant (spec 2.1), shared
+// by all five variants. Advisory keeps the "not a merge gate" register the PR
+// comment's own footer has (renderPrComment, report.ts). Gate says the report
+// backs the commit status that is the required check (S4), because a gate
+// that disclaims being one would contradict its own red status.
+const ADVISORY_FOOTER =
   "<sub>pr-hero — AI code review assistant. Assistant report, not a merge gate.</sub>";
+const GATE_FOOTER =
+  "<sub>pr-hero — AI code review assistant. Assistant report backing the pr-hero commit status, the required check in gate mode.</sub>";
+
+function footerFor(ciMode: CiMode): string {
+  return ciMode === "gate" ? GATE_FOOTER : ADVISORY_FOOTER;
+}
 
 function severityRank(severity: Severity): number {
   switch (severity) {
@@ -432,7 +440,12 @@ function reviewedLines(data: CiReviewSummary): string[] {
 // caller supplies every byte, so the summary is re-renderable from a stored
 // findings.json/comparison.json months later, same contract as
 // renderReport/renderPrComment (report.ts).
-export function renderStepSummary(data: CiSummaryData): string {
+// `ciMode` picks the footer only. Omitted means advisory: the footer every
+// caller has today, until a caller passes the mode its status was set under.
+export function renderStepSummary(
+  data: CiSummaryData,
+  ciMode: CiMode = "advisory",
+): string {
   const body =
     data.kind === "skipped-size"
       ? skipSizeLines(data)
@@ -443,7 +456,7 @@ export function renderStepSummary(data: CiSummaryData): string {
           : data.kind === "manual-required"
             ? manualRequiredLines(data)
             : reviewedLines(data);
-  const out = [...body, "---", "", FOOTER];
+  const out = [...body, "---", "", footerFor(ciMode)];
   return `${out.join("\n").trimEnd()}\n`;
 }
 

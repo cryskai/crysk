@@ -31,7 +31,7 @@ import { type EngineAssets, resolveEngineAssets } from "../assets";
 // and imported by value into git.ts — the bottom layer depending on a
 // review-domain module. They live in ../errors and ../git/refs; this file
 // imports only the ones it uses itself.
-import { CliError, CliUsageError } from "../errors";
+import { CliError, CliUsageError, withUsageClass } from "../errors";
 import { DEFAULT_BASE_REF, listPaths } from "../git/refs";
 import { redactDiagnostic } from "../security/redact";
 // review/size-gate.ts imports only a TYPE from here, so this is not a runtime
@@ -97,6 +97,10 @@ export interface CliOptions {
   // second push is delta-scoped unless asked otherwise. Verification,
   // triage, and classification still run (R2-C5). Review-only, like --scout.
   full: boolean;
+  // T5b: with --pr --ci, also have the CI adjudicator rule on each pending
+  // dismissal of a blocking finding. Set by a /pr-hero recheck comment. Absent
+  // means off.
+  adjudicate?: boolean;
   hopBudget: number;
   dryRun: boolean;
   yes: boolean;
@@ -122,6 +126,9 @@ export interface CliOptions {
   // off disk) applied to publishing/triaging instead of aggregating.
   // Required by both; parseArgs enforces it.
   from?: string;
+  // `status` only (ROADMAP S9): print one JSON object on stdout instead of the human lines.
+  // Refused on every other command, so the flag never parses and then does nothing.
+  json?: boolean;
   // The escape hatch for change 3's default. See resolveDiffRange's WHY: the
   // three-dot (merge-base) range is right almost always, and this flag exists
   // for the rare caller who genuinely wants the literal two-point diff.
@@ -136,6 +143,10 @@ export interface CliOptions {
   // watcher: it runs `pr-hero gc` (no reviews, no watch.json, no window/cap).
   // Unset means the collector itself.
   gc?: "install" | "uninstall" | "status";
+  // `skills install` (src/commands/skills.ts): the non-interactive install of
+  // pr-hero's agent skills into every detected coding agent. Its only
+  // subcommand; anything else after `skills` is a usage error.
+  skills?: "install";
   // watch install and gc install: launchd StartInterval, in minutes.
   interval?: number;
   // watch add only: record on_push: true for the repo, so every new push
@@ -241,6 +252,11 @@ export interface CliOptions {
   // (on)", so `--step-summary` and `--no-step-summary` stay distinguishable
   // from "nobody said".
   stepSummary?: boolean;
+  // S4: the commit-status gate for a `review --ci` run, required at parse time
+  // like budgetUsd. `gate` (the CI default) turns the pr-hero commit status red
+  // on blocking findings, a size or budget skip, and a crash; `advisory` keeps
+  // today's posture. Unset means the run resolves it (resolveCiMode, pr/preflight).
+  ciMode?: "gate" | "advisory";
 }
 
 // design.md 3.1's literal formula: Boolean(GITHUB_ACTIONS || CI || --ci).
@@ -270,6 +286,7 @@ export interface ParsedCli {
     | "watch"
     | "post"
     | "triage"
+    | "status"
     | "gc"
     | "usage"
     | "reverts"
@@ -279,6 +296,7 @@ export interface ParsedCli {
     | "upgrade"
     | "uninstall"
     | "ci"
+    | "skills"
     | "help";
   options: CliOptions;
 }
@@ -295,6 +313,8 @@ Usage:
                              Scaffold .github/workflows/pr-hero.yml instead
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed
+  pr-hero skills install [--force]
+                             Install the triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
   pr-hero ci init [--force]  Same scaffolding as "setup --ci", as its own
                              command
   pr-hero doctor [options]   Check system tools and environment readiness
@@ -332,6 +352,14 @@ Usage:
                              badge, posts, and resolves the inline review
                              thread. --body-file is reasoning prose only.
                              --dry-run prints the parent and posts nothing
+  pr-hero status --pr <n> [--json]
+                             Read the PR's pr-hero gate, posted findings and
+                             next action, through gh only and read-only. With
+                             --json, one JSON object on stdout (schema
+                             pr-hero.status/v1); without it, a few lines on
+                             stderr. Exits 1 with no stdout when any read
+                             fails. Skills drive review -> reply -> fix -> wait
+                             from its next_action
   pr-hero reverts [options]  Mine the repo's default branch for PRs that were
                              later reverted or hotfixed, and write them as
                              markdown CANDIDATES for human confirmation. Runs
@@ -445,8 +473,10 @@ Options:
                       case-sensitive). Default: bug
   --runs <dir>        ledger only: the runs root to scan for comparison.json
                       files (default: ~/.prhero/repos/<origin>/runs)
+  --json              status only: print the status as one JSON object on
+                      stdout (schema pr-hero.status/v1)
   --from <dir>        post/triage only: the run dir to read findings.json and
-                      diff.patch (post and triage reply) or comparison.json
+                      anchor.patch or diff.patch (post and triage reply) or comparison.json
                       (triage bind) from (required). triage reply maps
                       --finding F00N onto the posted marker via the same
                       post-line remapping post uses
@@ -482,7 +512,12 @@ Options:
                       Requires --scout
   --full              review only: on a re-review, widen discovery to the
                       full PR range (B..H). Verification and triage still
-                      run; the recorded case does not change
+                      run; the recorded case does not change. On GitHub,
+                      comment /pr-hero review --full on the PR
+  --adjudicate        with --pr --ci: also have the CI adjudicator rule on
+                      each pending dismissal of a blocking finding (at most
+                      5 per run) and post its verdict on the finding's
+                      thread. Set by a /pr-hero recheck comment.
   --hop-budget <n>    Hops per hunter (default: ${DEFAULT_HOP_BUDGET}); the biggest
                       per-hunter cost lever there is
   --two-dot           Diff the literal <base>..<head> two-point range instead
@@ -511,6 +546,12 @@ Options:
   --max-changed-files <n>
                       Size gate: same, on the effective changed-FILE count.
                       Default ${DEFAULT_SIZE_GATE.maxChangedFiles}; 0 disables the limit
+  --ci-mode <gate|advisory>
+                      With review --ci only. gate (the default): the
+                      pr-hero commit status is failure on blocking findings
+                      and on a size or budget skip, and error on a crash.
+                      advisory: the status stays success whatever the
+                      findings, as before
   --force             Review even when CI would skip: the size gate, the
                       review-policy admission rules, and the budget ceiling.
                       On GitHub, comment /pr-hero review on the PR to pass
@@ -554,6 +595,7 @@ const VALUE_FLAGS = new Set([
   "--max-changed-lines",
   "--max-changed-files",
   "--budget-usd",
+  "--ci-mode",
   "--finding",
   "--tag",
   "--body-file",
@@ -596,6 +638,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     | "watch"
     | "post"
     | "triage"
+    | "status"
     | "gc"
     | "usage"
     | "reverts"
@@ -605,6 +648,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     | "upgrade"
     | "uninstall"
     | "ci"
+    | "skills"
     | "help"
     | undefined;
   // --head carries a baked-in default, so "was it explicitly given" cannot
@@ -654,6 +698,10 @@ export function parseArgs(argv: string[]): ParsedCli {
       applyValueFlag(options, arg, value);
       continue;
     }
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
     if (arg === "--dry-run") {
       options.dryRun = true;
       continue;
@@ -688,6 +736,10 @@ export function parseArgs(argv: string[]): ParsedCli {
     }
     if (arg === "--full") {
       options.full = true;
+      continue;
+    }
+    if (arg === "--adjudicate") {
+      options.adjudicate = true;
       continue;
     }
     if (arg === "--yes" || arg === "-y") {
@@ -833,6 +885,19 @@ export function parseArgs(argv: string[]): ParsedCli {
       continue;
     }
     if (
+      command === "skills" &&
+      options.skills === undefined &&
+      arg === "install"
+    ) {
+      options.skills = "install";
+      continue;
+    }
+    // `skills` has exactly one subcommand, `install`; any other word in that
+    // slot is a usage error, not a generic unexpected argument.
+    if (command === "skills" && options.skills === undefined) {
+      throw new CliUsageError("pr-hero skills needs a subcommand: install");
+    }
+    if (
       command === "triage" &&
       options.triage === undefined &&
       arg === "reply"
@@ -866,6 +931,7 @@ export function parseArgs(argv: string[]): ParsedCli {
       arg !== "watch" &&
       arg !== "post" &&
       arg !== "triage" &&
+      arg !== "status" &&
       arg !== "gc" &&
       arg !== "usage" &&
       arg !== "reverts" &&
@@ -875,12 +941,13 @@ export function parseArgs(argv: string[]): ParsedCli {
       arg !== "upgrade" &&
       arg !== "update" &&
       arg !== "uninstall" &&
-      arg !== "ci"
+      arg !== "ci" &&
+      arg !== "skills"
     ) {
       throw new CliUsageError(
         `unknown command: ${arg} (the commands are "menu", "review", "init", "setup", "doctor", ` +
-          '"activity", "ledger", "watch", "post", "triage", "gc", "usage", ' +
-          '"reverts", "corpus", "config", "mcp", "upgrade", "uninstall" and "ci")',
+          '"activity", "ledger", "watch", "post", "triage", "status", "gc", "usage", ' +
+          '"reverts", "corpus", "config", "mcp", "upgrade", "uninstall", "ci" and "skills")',
       );
     }
     command = arg === "update" ? "upgrade" : arg;
@@ -889,6 +956,9 @@ export function parseArgs(argv: string[]): ParsedCli {
     throw new CliUsageError(
       'no command given (did you mean "pr-hero review"?)',
     );
+  }
+  if (command === "skills" && options.skills === undefined) {
+    throw new CliUsageError("pr-hero skills needs a subcommand: install");
   }
   // --pr derives the whole range from the PR record — head from GitHub, base
   // from the merge commit's parent or the base branch — so a hand-picked
@@ -944,6 +1014,16 @@ export function parseArgs(argv: string[]): ParsedCli {
       "--ci runs the CI headless shell against a PR, so it requires --pr",
     );
   }
+  if (options.adjudicate && options.pr === undefined) {
+    throw new CliUsageError(
+      "--adjudicate runs the CI adjudicator against a PR, so it requires --pr",
+    );
+  }
+  // The adjudicator's verdicts are posted only by the CI shell, so the flag is a
+  // no-op anywhere else. Same reasoning as --budget-usd below.
+  if (options.adjudicate && !(options.ci && command === "review")) {
+    throw new CliUsageError("--adjudicate only applies with review --ci");
+  }
   // Same "silently dropped intention" reasoning as --post/--pr above: a
   // spend ceiling or a summary toggle for a mode that never turns on would
   // be a flag the operator believes changed a run it did not. Scoped to
@@ -954,6 +1034,11 @@ export function parseArgs(argv: string[]): ParsedCli {
     !(options.ci && command === "review")
   ) {
     throw new CliUsageError("--budget-usd only applies with review --ci");
+  }
+  // S4: the gate mode is a review reading of --ci, like budgetUsd. Without
+  // it the flag would name a mode that never runs.
+  if (options.ciMode !== undefined && !(options.ci && command === "review")) {
+    throw new CliUsageError("--ci-mode only applies with review --ci");
   }
   if (
     options.stepSummary !== undefined &&
@@ -993,6 +1078,24 @@ export function parseArgs(argv: string[]): ParsedCli {
     throw new CliUsageError(
       "--scout-model sets the model for the scout stage, so it requires --scout",
     );
+  }
+  // `status` (ROADMAP S9) reads one PR and writes nothing, so its whole surface is --pr <n>
+  // and --json. Every other flag is refused here, not ignored: a flag that parses and then
+  // does nothing is an operator believing they changed a read they did not (the --from
+  // guard's reasoning below). --json belongs to status alone.
+  if (command === "status") {
+    if (options.pr === undefined || options.pr === "current") {
+      throw new CliUsageError("status requires --pr <n> (a PR number)");
+    }
+    for (const arg of argv) {
+      if (arg.startsWith("-") && arg !== "--pr" && arg !== "--json") {
+        throw new CliUsageError(
+          `status takes only --pr <n> and --json, not ${arg}`,
+        );
+      }
+    }
+  } else if (options.json) {
+    throw new CliUsageError("--json only applies to the status command");
   }
   // `post` (ROADMAP B6) and `triage` (ROADMAP B6c) share the same shape:
   // both read a PRIOR run's artifacts, named by --from, and act on the PR
@@ -1267,6 +1370,15 @@ function applyValueFlag(
         throw new CliUsageError(`--budget-usd must be a number, got: ${value}`);
       }
       options.budgetUsd = parsed;
+      return;
+    }
+    case "--ci-mode": {
+      if (value !== "gate" && value !== "advisory") {
+        throw new CliUsageError(
+          `--ci-mode must be gate or advisory, got: ${value}`,
+        );
+      }
+      options.ciMode = value;
       return;
     }
     case "--finding":
@@ -1827,7 +1939,9 @@ export function resolveAgentsDir(
   // before a single step spawned. A bundled set's conformance is checked by
   // preflightAgentsDir over the manifest's keys instead.
   if (resolution.kind === "dir" && !existsSync(resolution.dir)) {
-    throw new CliError(`agents dir does not exist: ${resolution.dir}`);
+    throw new CliError(`agents dir does not exist: ${resolution.dir}`, {
+      cls: { kind: "prompt-set" },
+    });
   }
   return resolution;
 }
@@ -1858,6 +1972,7 @@ export async function preflightAgentsDir(
     throw new CliError(
       `prompt set ${agents.dir} does not match the review spec:\n` +
         problems.map((p) => `  - ${p}`).join("\n"),
+      { cls: { kind: "prompt-set" } },
     );
   }
 }
@@ -1929,7 +2044,11 @@ export function localReviewSpec(
         role: "hunter",
         trigger: "input",
       },
-      ...parseExtraHunters(env.PRHERO_EXTRA_HUNTERS),
+      // The boundary, not the three throws: assertBasenameOnly inside
+      // parseExtraHunters is a fourth usage throw of the same parse (T2d-1).
+      ...withUsageClass({ kind: "config-parse", source: "extra-hunters" }, () =>
+        parseExtraHunters(env.PRHERO_EXTRA_HUNTERS),
+      ),
       { key: "refuter", file: "review-refuter.md", role: "refuter" },
     ],
   };
@@ -2093,8 +2212,19 @@ const GLOBAL_CONFIG_LABEL = "~/.prhero/config.json";
 // can still see was absent. The `?? []` locals below stay exactly as they
 // are: they feed the validators, and validating an absent key against the
 // empty array is what keeps every error string byte-identical.
+// The repo layer's usage errors carry the repo-config class (T2d-1). It passes the
+// classed routing parser for symmetry only: `routing` is not a repo key, so the file is
+// rejected as a per-person key before any routing value is parsed. The person layer's
+// errors carry no class (see parseGlobalConfig).
 export function parseLocalConfig(raw: string): ConfigLayer {
-  return parseConfigLayer(raw, REPO_CONFIG_LABEL, LOCAL_CONFIG_KEYS);
+  return withUsageClass({ kind: "config-parse", source: "repo-config" }, () =>
+    parseConfigLayer(
+      raw,
+      REPO_CONFIG_LABEL,
+      LOCAL_CONFIG_KEYS,
+      parseRoutingConfig,
+    ),
+  );
 }
 
 // The global layer's parser: same JSON dialect, same validators, same strict
@@ -2103,8 +2233,16 @@ export function parseLocalConfig(raw: string): ConfigLayer {
 // rejects the three that are, because no global answer to them could be
 // right: two are lists of paths inside one repository and the third selects a
 // commit range ahead of an autodetection that already works.
+// Its routing object is parsed without the routing class. That class renders
+// PRH-ROUTING-INVALID, whose text names PRHERO_ROUTING and `gh variable set`: the
+// fix for the CI routing input, not for this personal file. The message is the same.
 export function parseGlobalConfig(raw: string): ConfigLayer {
-  return parseConfigLayer(raw, GLOBAL_CONFIG_LABEL, GLOBAL_CONFIG_KEYS);
+  return parseConfigLayer(
+    raw,
+    GLOBAL_CONFIG_LABEL,
+    GLOBAL_CONFIG_KEYS,
+    parseRoutingValue,
+  );
 }
 
 // `??` is what makes an explicit `null` mean "absent" for the two arrays, and
@@ -2126,10 +2264,13 @@ function parseOptionalBoolean(
   return value;
 }
 
+// `parseRouting` is the layer's routing parser: the classed one for the repo file, the
+// unclassed one for the person file (see parseGlobalConfig for why it differs).
 function parseConfigLayer(
   raw: string,
   file: string,
   admitted: ReadonlySet<string>,
+  parseRouting: typeof parseRoutingConfig,
 ): ConfigLayer {
   let parsed: unknown;
   try {
@@ -2194,7 +2335,7 @@ function parseConfigLayer(
     }
   }
   const summary = parseSummaryConfig(config.summary, file);
-  const routing = parseRoutingConfig(config.routing, file);
+  const routing = parseRouting(config.routing, file);
   const maxVerificationSteps = parseNonNegativeInteger(
     config.max_verification_steps,
     "max_verification_steps",
@@ -2469,7 +2610,21 @@ function parseRouteMapping(
   };
 }
 
+// Every usage error of the routing object carries the routing class (T2d-1). The CI
+// routing input (src/ci/setup.ts) keeps its own class and discards this one. The repo
+// layer passes this parser too, but never reaches a routing value (see
+// parseLocalConfig). The person layer calls parseRoutingValue directly, so its errors
+// carry no class.
 export function parseRoutingConfig(
+  value: unknown,
+  file: string,
+): RoutingConfig | undefined {
+  return withUsageClass({ kind: "config-parse", source: "routing" }, () =>
+    parseRoutingValue(value, file),
+  );
+}
+
+function parseRoutingValue(
   value: unknown,
   file: string,
 ): RoutingConfig | undefined {

@@ -14,7 +14,8 @@
 // convention that a test file's own gh fixture is not a shared module.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { postFindingsIfEnabled } from "#pr/posting";
@@ -43,12 +44,21 @@ function argvContains(argv: string[], tokens: string[]): boolean {
 function makeFakeGh(script: ScriptEntry[]): {
   spawnFn: typeof Bun.spawn;
   calls: string[][];
+  // The stdin of every call that had one: the summary comment's body travels
+  // this way, so a test reads what was posted, not what was rendered.
+  stdins: string[];
 } {
   const calls: string[][] = [];
+  const stdins: string[] = [];
   const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
   let nextId = 100;
-  const spawnFn = ((argv: string[]) => {
+  const spawnFn = ((
+    argv: string[],
+    opts?: { stdin?: Uint8Array; timeout?: number },
+  ) => {
     calls.push(argv);
+    if (opts?.stdin !== undefined) stdins.push(decoder.decode(opts.stdin));
     const entry = script.find((s) => argvContains(argv, s.match));
     const scripted =
       entry?.response ??
@@ -69,7 +79,7 @@ function makeFakeGh(script: ScriptEntry[]): {
       kill() {},
     };
   }) as unknown as typeof Bun.spawn;
-  return { spawnFn, calls };
+  return { spawnFn, calls, stdins };
 }
 
 function headRefOidScript(headSha: string): ScriptEntry {
@@ -137,6 +147,7 @@ describe("postFindingsIfEnabled — postEnabled gate", () => {
   test("post disabled: makes no gh call and reports nothing posted", async () => {
     const runDir = await tmpRunDir();
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: false,
       sessionFailed: false,
       operatorRoot: OPERATOR_ROOT,
@@ -165,6 +176,7 @@ describe("postFindingsIfEnabled — sessionFailed suppression", () => {
       },
     ]);
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: true,
       sessionFailed: true,
       operatorRoot: OPERATOR_ROOT,
@@ -197,6 +209,7 @@ describe("postFindingsIfEnabled — repo web url resolution", () => {
       ...emptyCommentScript(),
     ]);
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: true,
       sessionFailed: false,
       operatorRoot: OPERATOR_ROOT,
@@ -223,6 +236,7 @@ describe("postFindingsIfEnabled — real posting writes the post.json receipt", 
       ...emptyCommentScript(),
     ]);
     const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
       postEnabled: true,
       sessionFailed: false,
       operatorRoot: OPERATOR_ROOT,
@@ -249,5 +263,242 @@ describe("postFindingsIfEnabled — real posting writes the post.json receipt", 
     expect(receipt.dropped_finding_ids).toEqual(
       result.posted?.droppedFindingIds,
     );
+  });
+});
+
+// WHY onDelivered (F002 on #330): the delivery point is the POST's resolution,
+// not the receipt write after it. A caller that records "delivered" must learn
+// of the POST the moment it lands, so a failed receipt write cannot be read as
+// a failed delivery.
+describe("postFindingsIfEnabled — onDelivered at the delivery point", () => {
+  function cleanRunScripts(): ScriptEntry[] {
+    return [
+      {
+        match: ["repo", "view", "url"],
+        response: { stdout: "https://github.com/acme/widgets\n" },
+      },
+      ...emptyCommentScript(),
+    ];
+  }
+
+  test("a successful POST calls onDelivered once, before the receipt is written", async () => {
+    const runDir = await tmpRunDir();
+    const { spawnFn } = makeFakeGh(cleanRunScripts());
+    let calls = 0;
+    let receiptAtDelivery: boolean | undefined;
+    const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
+      postEnabled: true,
+      sessionFailed: false,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/app.ts", 5),
+      runDir,
+      spawnFn,
+      onDelivered: () => {
+        calls += 1;
+        receiptAtDelivery = existsSync(path.join(runDir, "post.json"));
+      },
+    });
+    expect(result.posted).not.toBeNull();
+    expect(calls).toBe(1);
+    expect(receiptAtDelivery).toBe(false);
+    expect(existsSync(path.join(runDir, "post.json"))).toBe(true);
+  });
+
+  test("a receipt write that throws after the POST still reached onDelivered first, and the throw propagates", async () => {
+    const runDir = await tmpRunDir();
+    // A directory where post.json goes: the receipt write itself throws.
+    await mkdir(path.join(runDir, "post.json"));
+    const { spawnFn } = makeFakeGh(cleanRunScripts());
+    let calls = 0;
+    await expect(
+      postFindingsIfEnabled({
+        ciMode: "advisory",
+        postEnabled: true,
+        sessionFailed: false,
+        operatorRoot: OPERATOR_ROOT,
+        pr: PR,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/app.ts", 5),
+        runDir,
+        spawnFn,
+        onDelivered: () => {
+          calls += 1;
+        },
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
+
+  test("a POST that rejects never calls onDelivered", async () => {
+    const runDir = await tmpRunDir();
+    const { spawnFn } = makeFakeGh([
+      ...cleanRunScripts(),
+      {
+        match: [`issues/${PR}/comments`, "--method"],
+        response: { stderr: "gh: HTTP 502", exitCode: 1 },
+      },
+    ]);
+    let calls = 0;
+    await expect(
+      postFindingsIfEnabled({
+        ciMode: "advisory",
+        postEnabled: true,
+        sessionFailed: false,
+        operatorRoot: OPERATOR_ROOT,
+        pr: PR,
+        headSha: HEAD,
+        doc: doc({ findings: [] }),
+        diffPatch: diffAddingLines("src/app.ts", 5),
+        runDir,
+        spawnFn,
+        onDelivered: () => {
+          calls += 1;
+        },
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(0);
+  });
+
+  test("a failed session never calls onDelivered, and posts nothing", async () => {
+    const runDir = await tmpRunDir();
+    const { spawnFn } = makeFakeGh(cleanRunScripts());
+    let calls = 0;
+    const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
+      postEnabled: true,
+      sessionFailed: true,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/app.ts", 5),
+      runDir,
+      spawnFn,
+      onDelivered: () => {
+        calls += 1;
+      },
+    });
+    expect(result.posted).toBeNull();
+    expect(calls).toBe(0);
+  });
+
+  test("posting off never calls onDelivered", async () => {
+    const runDir = await tmpRunDir();
+    let calls = 0;
+    const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
+      postEnabled: false,
+      sessionFailed: false,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: "",
+      runDir,
+      onDelivered: () => {
+        calls += 1;
+      },
+    });
+    expect(result.posted).toBeNull();
+    expect(calls).toBe(0);
+  });
+});
+
+// S4, PR comment chain: publish-outcome -> postFindingsIfEnabled -> the
+// summary comment -> renderPrComment. Each run's mode reaches the comment
+// body it posts; an advisory run keeps today's disclaimer.
+describe("postFindingsIfEnabled — the CI gate mode reaches the PR comment (S4)", () => {
+  async function postedSummary(ciMode: "gate" | "advisory"): Promise<string> {
+    const runDir = await tmpRunDir();
+    const { spawnFn, stdins } = makeFakeGh([
+      {
+        match: ["repo", "view", "url"],
+        response: { stdout: "https://github.com/acme/widgets\n" },
+      },
+      ...emptyCommentScript(),
+    ]);
+    await postFindingsIfEnabled({
+      postEnabled: true,
+      sessionFailed: false,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/app.ts", 5),
+      runDir,
+      spawnFn,
+      ciMode,
+    });
+    return stdins.find((body) => body.startsWith("<!-- pr-hero-report ")) ?? "";
+  }
+
+  test("a gate run's summary comment backs the required status, and never disclaims a merge gate", async () => {
+    const summary = await postedSummary("gate");
+    expect(summary).toContain(
+      "Assistant report backing the pr-hero commit status, the required check in gate mode: every line above is a claim to verify.",
+    );
+    expect(summary).not.toContain("not a merge gate");
+  });
+
+  test("an advisory run's summary comment keeps today's disclaimer", async () => {
+    const summary = await postedSummary("advisory");
+    expect(summary).toContain(
+      "Assistant report, not a merge gate: every line above is a claim to verify.",
+    );
+  });
+});
+
+// The anchoring diff decides inline vs outside: a finding on a line that only
+// the full PR diff contains (not the push delta) must post as a review thread.
+describe("postFindingsIfEnabled — findings anchor on the diff they are handed", () => {
+  test("a finding anchorable in the full PR diff is posted inline, not as an outside-diff comment", async () => {
+    const runDir = await tmpRunDir();
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["repo", "view", "url"],
+        response: { stdout: "https://github.com/acme/widgets\n" },
+      },
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    const result = await postFindingsIfEnabled({
+      ciMode: "advisory",
+      postEnabled: true,
+      sessionFailed: false,
+      operatorRoot: OPERATOR_ROOT,
+      pr: PR,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          {
+            id: "F001",
+            category: 12,
+            path: "src/app.ts",
+            line: 3,
+            severity: "BLOCKER",
+            evidence_class: "deterministic",
+            refuter_verdict: "corroborated",
+            causal_disposition: "introduced",
+            claim: "the value is stored in seconds and read as milliseconds",
+            proof_refs: [],
+            hunter: "reliability",
+            tier: "blocking",
+            hops_used: 2,
+            hop_trail: [],
+            dedupe_key: "src/app.ts::12",
+          },
+        ],
+      }),
+      diffPatch: diffAddingLines("src/app.ts", 5),
+      runDir,
+      spawnFn,
+    });
+    expect(result.posted?.outsideDiffCount).toBe(0);
+    expect(result.posted?.reviewFindingCount).toBe(1);
   });
 });

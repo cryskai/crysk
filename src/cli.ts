@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 // Local mode (ROADMAP B0): point the engine at a real repo + branch and get a
 // human-readable review back. The lab drives this engine to MEASURE it; this
 // is the other consumer — a developer, on their own tree, before the PR.
@@ -28,6 +29,8 @@ import { ledgerCommand } from "#commands/ledger";
 import { mcpCommand } from "#commands/mcp";
 import { menuCommand } from "#commands/menu";
 import { postCommand } from "#commands/post";
+import { skillsInstallCommand } from "#commands/skills";
+import { statusCommand } from "#commands/status";
 import { triageCommand } from "#commands/triage";
 import { uninstallCommand } from "#commands/uninstall";
 import { upgradeCommand } from "#commands/upgrade";
@@ -46,6 +49,7 @@ import {
   releaseCommitStatusLock,
   settleHeldCommitStatusOnSignal,
 } from "#pr/status";
+import { createSignalHandler } from "./signal-handler";
 
 export {
   heldCommitStatusLock,
@@ -56,6 +60,8 @@ export {
   settleHeldCommitStatusOnSignal,
 };
 
+import { classifyCliError } from "#ci/classify-error";
+import { writeFatalCliRecord } from "#ci/cli-record";
 import {
   reportFatalCiError,
   reportFatalCiErrorIfInJobStep,
@@ -226,27 +232,34 @@ export async function main(argv: string[]): Promise<number> {
                   ? await watchCommand(parsed.options)
                   : parsed.command === "post"
                     ? await postCommand(parsed.options)
-                    : parsed.command === "triage"
-                      ? await triageCommand(parsed.options)
-                      : parsed.command === "gc"
-                        ? await gcCommand(parsed.options)
-                        : parsed.command === "usage"
-                          ? await usageCommand(parsed.options)
-                          : parsed.command === "reverts"
-                            ? await revertsCommand(parsed.options)
-                            : parsed.command === "corpus"
-                              ? await corpusCommand(parsed.options)
-                              : parsed.command === "config"
-                                ? await configCommand(parsed.options)
-                                : parsed.command === "mcp"
-                                  ? await mcpCommand(parsed.options)
-                                  : parsed.command === "upgrade"
-                                    ? await upgradeCommand(parsed.options)
-                                    : parsed.command === "uninstall"
-                                      ? await uninstallCommand(parsed.options)
-                                      : await review(parsed.options);
+                    : parsed.command === "status"
+                      ? await statusCommand(parsed.options)
+                      : parsed.command === "skills"
+                        ? await skillsInstallCommand(parsed.options)
+                        : parsed.command === "triage"
+                          ? await triageCommand(parsed.options)
+                          : parsed.command === "gc"
+                            ? await gcCommand(parsed.options)
+                            : parsed.command === "usage"
+                              ? await usageCommand(parsed.options)
+                              : parsed.command === "reverts"
+                                ? await revertsCommand(parsed.options)
+                                : parsed.command === "corpus"
+                                  ? await corpusCommand(parsed.options)
+                                  : parsed.command === "config"
+                                    ? await configCommand(parsed.options)
+                                    : parsed.command === "mcp"
+                                      ? await mcpCommand(parsed.options)
+                                      : parsed.command === "upgrade"
+                                        ? await upgradeCommand(parsed.options)
+                                        : parsed.command === "uninstall"
+                                          ? await uninstallCommand(
+                                              parsed.options,
+                                            )
+                                          : await review(parsed.options);
   } catch (error) {
     if (error instanceof CliError || error instanceof CliUsageError) {
+      writeFatalCliRecord(classifyCliError(error));
       log(`error: ${error.message}`);
       await reportFatalCiErrorIfInJobStep(error);
       return 1;
@@ -265,40 +278,44 @@ export async function main(argv: string[]): Promise<number> {
 export async function runCli(
   argv: string[] = Bun.argv.slice(2),
 ): Promise<void> {
+  // WHY only on a TTY: the escape only undoes a cursor the menu hid on a
+  // terminal. On a pipe or a CI log it prints as literal "[?25h" after every
+  // command, so a non-TTY run writes nothing.
   const restoreCursor = () => {
+    if (process.stderr.isTTY !== true) return;
     try {
       process.stderr.write("\x1b[?25h");
     } catch {
       // Ignore
     }
   };
-  process.on("SIGTERM", async () => {
-    restoreCursor();
-    try {
-      killAllChildProcesses();
-      await unregisterActiveRun(process.pid);
-    } catch {
-      // Ignore
-    }
-    // After killing the children (stop spending first), before exiting: the
-    // in-flight lock this process took is released by its holder, or the next
-    // run skips the head for the rest of the 90-minute TTL (#146).
-    await settleHeldCommitStatusOnSignal();
-    await settleHeldAdmissionLedgerOnSignal();
-    process.exit(143);
+  // WHY one settle per process: a second signal must not cut the first one's
+  // settle short. Actions cancels with SIGINT and follows with SIGTERM before
+  // its grace period ends, and under npx a terminal Ctrl-C with a piped stdin
+  // reaches the CLI twice (the process group, and the launcher's forward,
+  // bin/pr-hero.js). The settles are take-and-clear, so a second handler found
+  // nothing to post and exited at once, killing the first handler's in-flight
+  // commit-status and ledger writes. Every later signal now waits for the
+  // first settle, which exits the process.
+  const onSignal = createSignalHandler({
+    settle: async () => {
+      restoreCursor();
+      try {
+        killAllChildProcesses();
+        await unregisterActiveRun(process.pid);
+      } catch {
+        // Ignore
+      }
+      // After killing the children (stop spending first), before exiting: the
+      // in-flight lock this process took is released by its holder, or the next
+      // run skips the head for the rest of the 90-minute TTL (#146).
+      await settleHeldCommitStatusOnSignal();
+      await settleHeldAdmissionLedgerOnSignal();
+    },
+    exit: (code) => process.exit(code),
   });
-  process.on("SIGINT", async () => {
-    restoreCursor();
-    try {
-      killAllChildProcesses();
-      await unregisterActiveRun(process.pid);
-    } catch {
-      // Ignore
-    }
-    await settleHeldCommitStatusOnSignal();
-    await settleHeldAdmissionLedgerOnSignal();
-    process.exit(130);
-  });
+  process.on("SIGTERM", onSignal(143));
+  process.on("SIGINT", onSignal(130));
   process.on("exit", () => {
     restoreCursor();
   });
@@ -306,6 +323,10 @@ export async function runCli(
   try {
     exitCode = await main(argv);
   } catch (error) {
+    // Before the rethrow below, and whatever GITHUB_OUTPUT says: a crash in
+    // action mode is the record's to name, unless this job already recorded its
+    // terminal outcome (writeFatalCliRecord keeps that one).
+    writeFatalCliRecord(classifyCliError(error));
     const outputPath = process.env.GITHUB_OUTPUT;
     if (outputPath === undefined || outputPath.length === 0) {
       // Not a real GitHub Actions job step — preserve the original

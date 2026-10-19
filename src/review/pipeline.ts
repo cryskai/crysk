@@ -22,6 +22,10 @@ import {
   spawnModelForClaudeCli,
 } from "#model/routing";
 import {
+  composeAdjudicationPrompt,
+  parseAdjudicationResult,
+} from "#rereview/adjudicate";
+import {
   applyWorsening,
   type GateStatus,
   type PhaseBResult,
@@ -29,7 +33,7 @@ import {
   type WorseningHit,
 } from "#rereview/classify";
 import type { RereviewProvenance } from "#rereview/prepare";
-import { assembleLive } from "#rereview/state";
+import { assembleLive, type GateRow } from "#rereview/state";
 import {
   assignVerifyIds,
   closeVerifyQueue,
@@ -88,6 +92,12 @@ import {
   resolveSpecialty,
   validateReviewSpec,
 } from "#review/spec";
+import type {
+  AdjudicationOutcome,
+  AdjudicationSubject,
+  AdjudicationVerdict,
+} from "#triage/adjudication";
+import { resolveEngineAssets } from "../assets";
 import type { InternalCapabilityReport } from "../diversity/admission";
 import type { BenchmarkTarget } from "../diversity/identity";
 import {
@@ -103,6 +113,7 @@ import {
   recordDiversityHunterResult,
 } from "../diversity/pipeline-integration";
 import { writeJsonAtomically } from "../execution/atomic-write";
+import type { TransportFailureCause } from "../execution/contracts";
 // One predicate, owned beside the appends it recognizes. Already in this
 // module's graph through step-runner's value import of the harness, so it
 // adds no weight (the atomic-write WHY above is about a NEW dependency).
@@ -288,6 +299,9 @@ export interface PipelineInput {
   // caller that has not classified priors). The queue CLOSES after dedupe
   // (W-order): overlapCandidates are priors that may still be appended.
   verifyQueue?: VerifyQueueEntry[];
+  // T5b: the pending dismissals a `/pr-hero recheck` run adjudicates, at most
+  // MAX_ADJUDICATIONS_PER_RUN. Absent or empty on every other run.
+  adjudicationQueue?: AdjudicationSubject[];
   overlapCandidates?: VerifyQueueEntry[];
   // Default 8 matches DEFAULT_MAX_VERIFICATION_STEPS in review/preflight.ts.
   // CLI always passes the resolved config value; this default is the
@@ -521,12 +535,34 @@ export interface PipelineResult {
   // hunter failure is a partial run (prose Step 4: "proceed with whatever
   // hunters did complete"), never a session failure.
   sessionFailed: boolean;
+  // M: the hunters that ran (trigger-skipped hunters are not in it), and N: how many of
+  // them failed. The gate reads both for its partial verdict (commitStatusCompletion).
+  // Optional so a caller's fake result without them reads as "no partial review".
+  hunterCount?: number;
+  hunterFailedCount?: number;
+  // True when the run was meant to review and no hunter ran: the unusable-gotchas early
+  // return, or a ceiling that fired before hunter admission. A re-review that skipped
+  // discovery on purpose (skipDiscovery) also has zero hunters, and is NOT this: it is a
+  // finished review of nothing new. The gate reads this, never hunterCount === 0 alone.
+  noReviewerRan?: boolean;
+  // Only when the run had failed hunters: one entry per failed hunter step, the
+  // cause its transport reported (when it did), and the provider and model its route
+  // named (when it did). The CLI record reads it (src/pr/review-pr.ts).
+  hunterFailures?: HunterFailure[];
   // D1-08 PR5b (D8): every step's `unresolved_remote` reservation, surfaced
   // at the RETURN boundary — not only in pipeline.json — so the cross-run
   // fencing gap (design decision D7: breaker state does not survive a
   // process restart) stays visible to whatever reads this result, not just
   // to a reader of the artifact. Always an array, empty on the common case.
   unresolved: UnresolvedSpend[];
+  // T5b: one entry per adjudicated subject, in queue order. Absent when nothing
+  // was adjudicated. The CLI posts each as a reply on its thread.
+  adjudications?: AdjudicationOutcome[];
+  // The re-review's gate rows (rereview/state.ts): every prior the re-review did
+  // not verify gone. Handed to the publish step in memory only. They never reach
+  // pipeline.json, so the persisted `rereview` block keeps its shape. Absent when
+  // there was no re-review.
+  gatePriors?: readonly GateRow[];
   // D2 PR3: Route plan provenance
   routePlan?: ResolvedRoutePlan;
   routeFingerprint?: string;
@@ -977,11 +1013,17 @@ interface RunState {
   parityFired: boolean;
   hunterCount: number;
   hunterFailures: number;
+  // One entry per failed hunter step, in the order they settled. The CLI record
+  // names each one (hunterFailureOf).
+  failedHunters: HunterFailure[];
   drafts: DraftFinding[];
   survivors?: DedupedSurvivor[];
   deduped?: DedupeLoser[];
   verdicts: Map<string, RefuterOutcome>;
   verifyVerdicts: Map<string, GateStatus>;
+  // T5b: one entry per adjudicated subject, in queue order. Absent when the run
+  // queued no adjudication.
+  adjudications?: AdjudicationOutcome[];
   verificationCapped: number;
   verificationSpawned: number;
   verificationTriggers: {
@@ -1037,6 +1079,9 @@ interface RunState {
   usageTotalV2?: NormalizedUsage;
   steps: StepMeta[];
   worsenedHits: WorseningHit[];
+  // Set by fillRereviewProvenance, the one place the phase B settlement and the
+  // verify verdicts meet. Both return paths read it.
+  gatePriors?: readonly GateRow[];
 }
 
 export async function runPipeline(
@@ -1047,6 +1092,7 @@ export async function runPipeline(
     parityFired: false,
     hunterCount: 0,
     hunterFailures: 0,
+    failedHunters: [],
     drafts: [],
     verdicts: new Map(),
     verifyVerdicts: new Map(),
@@ -1205,7 +1251,8 @@ async function execute(
     // "`resolved` is never inferred from absence", violated from the other
     // direction. Phase B already ran in the CLI, so the deterministic
     // outcomes stand and anything that was queued lands as `unconfirmed` —
-    // which is precisely what "never run" means there.
+    // which is precisely what "never run" means there. A queued row that holds
+    // a triage settlement lands back on that settlement instead (assembleLive).
     await writePipelinePlan(input, state);
     return {
       skillOutput: {
@@ -1217,7 +1264,13 @@ async function execute(
       perAgent: {},
       usage: zeroUsage(),
       sessionFailed: false,
+      noReviewerRan: true,
       unresolved: [],
+      // The early return ran no check, so every prior phase B left open stays
+      // open here. The gate reads them, and nothing retires them.
+      ...(state.gatePriors === undefined
+        ? {}
+        : { gatePriors: state.gatePriors }),
     };
   }
 
@@ -1705,6 +1758,7 @@ async function execute(
           : "hunter step produced no result",
       );
       state.hunterFailures++;
+      state.failedHunters.push(hunterFailureOf(entry.spec, undefined));
       state.partial = true;
       if (diversityCtx.enabled && diversityCtx.plan) {
         diversityCtx = {
@@ -1742,6 +1796,7 @@ async function execute(
     }
     if (result.status !== "ok") {
       state.hunterFailures++;
+      state.failedHunters.push(hunterFailureOf(entry.spec, result));
       state.partial = true;
       continue;
     }
@@ -1834,6 +1889,23 @@ async function execute(
         state.verifyVerdicts.set(entry.priorId, "unconfirmed");
       }
     }
+  }
+
+  // T5b — the adjudication leg rules on each pending dismissal the
+  // `/pr-hero recheck` run queued. Its own namespaced caller, like runVerify:
+  // adjudicate-<priorId> steps, steps/adjudicate/, per_agent.adjudicator. With
+  // no refuter configured there is nothing to ask, so every subject stays
+  // inconclusive and the dismissal stays counted.
+  const adjudicationQueue = input.adjudicationQueue ?? [];
+  if (adjudicationQueue.length > 0 && !ceilingAborted(deps, state)) {
+    state.adjudications = refuterAgent
+      ? await runAdjudicate(input, deps, state, adjudicationQueue, {
+          stepsDir,
+          stepTimeoutMs,
+          agent: refuterAgent,
+          nonce: boundaryNonce,
+        })
+      : adjudicationQueue.map((subject) => failedOutcome(subject));
   }
 
   // Step 6 — one refuter batch: every BLOCKER/CRITICAL survivor, whatever its
@@ -2326,6 +2398,162 @@ async function runVerify(
   if (anyFailed) state.partial = true;
 }
 
+// The adjudicator's agent key in per_agent, like VERIFIER_AGENT for the verifier.
+const ADJUDICATOR_AGENT = "adjudicator";
+
+function inconclusiveOutcome(
+  subject: AdjudicationSubject,
+): AdjudicationOutcome {
+  return {
+    priorId: subject.priorId,
+    threadId: subject.threadId,
+    replyId: subject.replyId,
+    verdict: "inconclusive",
+    evidence: [],
+  };
+}
+
+// No ruling exists at all: the step failed, its output did not parse, the prompt
+// was forged, or no refuter ran it. `failed` is what tells that apart from a
+// parsed "inconclusive", which is a real ruling and carries no such key.
+function failedOutcome(subject: AdjudicationSubject): AdjudicationOutcome {
+  return { ...inconclusiveOutcome(subject), failed: true };
+}
+
+// One isolated adjudicator step per queued dismissal, sharing the refuter's
+// model, effort, tools and route. The verdict is read from the step's parsed
+// output; a failed step, a rejected promise, or a forged nonce is inconclusive,
+// which keeps the finding counted. Only a failed step sets `partial`: an
+// inconclusive ruling is a ruling, and a forged prompt is a guard, not a fault.
+async function runAdjudicate(
+  input: PipelineInput,
+  deps: PipelineDeps,
+  state: RunState,
+  queue: AdjudicationSubject[],
+  options: {
+    stepsDir: string;
+    stepTimeoutMs: number;
+    agent: AgentSpec;
+    nonce: string;
+  },
+): Promise<AdjudicationOutcome[]> {
+  const outcomes = queue.map((subject) => failedOutcome(subject));
+  const adjudicatorPrompt =
+    resolveEngineAssets().triageSkillFiles["adjudicator.md"];
+  if (adjudicatorPrompt === undefined) {
+    throw new Error("bundled adjudicator prompt is missing from the engine");
+  }
+  const body = await Bun.file(adjudicatorPrompt).text();
+  // The refuter's frontmatter supplies tools, model and effort: the adjudicator
+  // runs as the refuter's agent, with the adjudicator body as its system prompt.
+  const agent = await parseAgentFile(
+    agentPromptPath(input, options.agent.file),
+  );
+  const systemPromptPath = path.join(options.stepsDir, "adjudicator.system.md");
+  await writeSystemPrompt(systemPromptPath, body);
+  const model = resolveModel(
+    input,
+    options.agent.model,
+    agent.model,
+    options.agent.file,
+  );
+  const effort = resolveEffort(agent.effort, "refuter");
+  const specs: Array<{
+    index: number;
+    subject: AdjudicationSubject;
+    spec: StepSpec;
+    meta: StepMeta;
+  }> = [];
+  for (const [index, subject] of queue.entries()) {
+    const prompt = composeAdjudicationPrompt(subject, options.nonce);
+    // A forged argument never reaches the model: the subject keeps its
+    // inconclusive outcome, and no step is spent on it.
+    if (prompt === null) continue;
+    const dir = path.join(options.stepsDir, "adjudicate", subject.priorId);
+    await mkdir(dir, { recursive: true });
+    const spec: StepSpec = {
+      name: `adjudicate-${subject.priorId}`,
+      systemPromptPath,
+      prompt,
+      tools: agent.tools,
+      mcpConfigPath: input.mcpConfigPath,
+      model,
+      effort,
+      cwd: input.worktree,
+      outPath: path.join(dir, "result.json"),
+      timeoutMs: options.stepTimeoutMs,
+      maxAttempts: DEFAULT_STEP_MAX_ATTEMPTS,
+      ...(routeForStepKey(state.routePlan, agentStepKey(options.agent)) ===
+      undefined
+        ? {}
+        : {
+            route: routeForStepKey(
+              state.routePlan,
+              agentStepKey(options.agent),
+            ),
+          }),
+      parse: parseAdjudicationResult,
+      onRetry: (info) => emit(deps, { kind: "step-retry", ...info }),
+    };
+    specs.push({ index, subject, spec, meta: stepMeta(spec) });
+  }
+  if (specs.length === 0) return outcomes;
+  for (const { meta } of specs) state.steps.push(meta);
+  const legStartedAt = Date.now();
+  const settled = await Promise.allSettled(
+    specs.map(({ spec }) => deps.runner.run(spec)),
+  );
+  const legElapsedMs = Date.now() - legStartedAt;
+  let usage: SessionUsage | undefined;
+  let attempts = 0;
+  let anyFailed = false;
+  for (const [i, entry] of specs.entries()) {
+    const outcome = settled[i];
+    const result = outcome?.status === "fulfilled" ? outcome.value : undefined;
+    const { subject } = entry;
+    if (result) {
+      usage = usage ? sumUsage(usage, result.usage) : result.usage;
+      attempts += result.attempts;
+      recordSettlement(entry.meta, result, input.runDir);
+      state.usageTotal = sumUsage(state.usageTotal, result.usage);
+      accumulateUsageV2(state, result);
+    } else {
+      recordStepFailure(
+        entry.meta,
+        outcome?.status === "rejected"
+          ? outcome.reason
+          : "adjudicator step produced no result",
+      );
+    }
+    if (result?.status === "ok") {
+      const ruling = result.output as {
+        verdict: AdjudicationVerdict;
+        evidence: string[];
+      };
+      outcomes[entry.index] = {
+        ...inconclusiveOutcome(subject),
+        verdict: ruling.verdict,
+        evidence: ruling.evidence,
+      };
+      continue;
+    }
+    anyFailed = true;
+  }
+  state.perAgent[ADJUDICATOR_AGENT] = usage
+    ? {
+        tokens_total: usage.tokens_total,
+        duration_ms: legElapsedMs,
+        tokens_in: usage.tokens_in,
+        tokens_out: usage.tokens_out,
+        cost_usd_est: usage.cost_usd_est,
+        attempts,
+        status: anyFailed ? "failed" : "ok",
+      }
+    : failedAgentEntry();
+  if (anyFailed) state.partial = true;
+  return outcomes;
+}
+
 // The scout's non-hunter budgets (§3.5 mechanism 4), and the one number here
 // that departs from the ratified design: §3.5 says "a 5-minute watchdog",
 // copying the summarizer. M4 then MEASURED the stage at 86-600s across 60
@@ -2664,13 +2892,49 @@ async function finish(
       : { usageV2: state.usageTotalV2 }),
     sessionFailed:
       state.hunterCount > 0 && state.hunterFailures === state.hunterCount,
+    hunterCount: state.hunterCount,
+    hunterFailedCount: state.hunterFailures,
+    noReviewerRan: input.skipDiscovery !== true && state.hunterCount === 0,
+    ...(state.failedHunters.length === 0
+      ? {}
+      : { hunterFailures: state.failedHunters }),
     unresolved: collectUnresolvedSpend(state),
+    ...(state.adjudications === undefined || state.adjudications.length === 0
+      ? {}
+      : { adjudications: state.adjudications }),
+    ...(state.gatePriors === undefined ? {} : { gatePriors: state.gatePriors }),
     ...(state.routePlan === undefined
       ? {}
       : {
           routePlan: state.routePlan,
           routeFingerprint: state.routePlan.routeFingerprint,
         }),
+  };
+}
+
+// One failed hunter step, as the CLI record names it. The provider and the model come
+// from the step's route; a step with no route, or one that did not report a transport
+// cause, leaves that field out. `name` is the step's name ("hunter-<key>"), stable across
+// runs, so a partial verdict can tell WHICH hunters failed, not only how many.
+export interface HunterFailure {
+  readonly name: string;
+  readonly cause?: TransportFailureCause;
+  readonly provider?: string;
+  readonly model?: string;
+}
+
+function hunterFailureOf(
+  spec: StepSpec,
+  result: StepResult | undefined,
+): HunterFailure {
+  const cause = result?.failureCause;
+  const provider = spec.route?.provider.trim();
+  const model = spec.route?.modelSnapshot.trim();
+  return {
+    name: spec.name,
+    ...(cause === undefined ? {} : { cause }),
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
   };
 }
 
@@ -2813,16 +3077,32 @@ function fillRereviewProvenance(
     input.phaseB === undefined
       ? {
           live: base.live,
+          // No phase B means no settled rows to read, so the gate gets the same
+          // open set `live` already carries, and nothing more.
+          gateRows: base.live.map((row) => ({
+            id: row.id,
+            tier: row.tier,
+            locs: row.locs,
+            status: row.status,
+          })),
           verifiedGone: base.resolved_verified ?? 0,
           verifiedGoneIds: base.resolved_ids ?? [],
           returned: base.returned ?? 0,
           reTiered: base.re_tiered ?? 0,
         }
       : assembleLive({
+          // WHY an upheld CI verdict is NOT applied in-run (review #346 round 2):
+          // the gate trusts only the durable record, the bot reply that GitHub
+          // says github-actions[bot] posted on this head. Applying the verdict in
+          // memory first meant the gate could go green on a ruling whose record
+          // never landed, or was never posted, and every compensation for that
+          // was one more seam. The next review of this head reads the reply
+          // (classifyPrior) and settles the prior as ci-dismissed.
           settled: input.phaseB.settled,
           priors: input.phaseB.priors,
           verifyVerdicts: state.verifyVerdicts,
         });
+  state.gatePriors = assembled.gateRows;
   const filled: RereviewProvenance = {
     ...base,
     verified: state.verificationSpawned,

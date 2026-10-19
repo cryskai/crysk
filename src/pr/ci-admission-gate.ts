@@ -14,7 +14,11 @@
 // review already in flight on the same head. It lives here rather than
 // inline in reviewPr() so its ledger settlement is reachable from a test.
 
-import type { AdmissionRecord } from "#ci/admission-ledger";
+import {
+  type AdmissionRecord,
+  selectActiveReservation,
+} from "#ci/admission-ledger";
+import { writeCliRecord } from "#ci/cli-record";
 import {
   type AdmissionContext,
   planCiReviewManualRequired,
@@ -26,6 +30,7 @@ import {
   ciReviewManualRequiredDetail,
   ciReviewPolicyHash,
   ciReviewSkipDetail,
+  countableWorkflowHeads,
   deltaTouchesPriorFindings,
   evaluateCiReviewAdmission,
   formatCiAdmissionObserveNotice,
@@ -46,7 +51,9 @@ import {
   type CiAdmissionLedgerState,
   publishCiSkip,
   recordCiAdmissionGateSkip,
+  reserveCiAdmissionLedger,
   settleCiAdmissionLedger,
+  settleCiGateSkip,
 } from "#pr/admission";
 import {
   CommentsTruncatedError,
@@ -57,7 +64,14 @@ import {
   ghPrHeroWorkflowRunHeads,
   listAdmissionCheckRuns,
 } from "#pr/pr";
-import { findMarkedCommentId, isInFlightCommitStatus } from "#pr/preflight";
+import {
+  type CiMode,
+  type CommitStatusContext,
+  findMarkedCommentId,
+  IN_FLIGHT_TTL_MS,
+  inFlightContextsFor,
+  isInFlightCommitStatus,
+} from "#pr/preflight";
 import { parseStateBlock } from "#rereview/state";
 import type { CliOptions, LocalConfig } from "#review/preflight";
 import { log } from "#ui/primitives";
@@ -66,6 +80,7 @@ import {
   parsePrCommentMarker,
   summaryMarkerFields,
 } from "#watch/preflight";
+import { CliError } from "../errors";
 
 export interface CiAdmissionGateResult {
   ciPolicy: CiReviewPolicy;
@@ -83,6 +98,9 @@ export async function evaluateCiAdmissionGate(input: {
   headSha: string;
   config: LocalConfig;
   isCi: boolean;
+  // The run's one resolved CI mode (resolveCiMode, reviewPr): the footer of the
+  // admission skip's summary follows it.
+  ciMode: CiMode;
   options: CliOptions;
   // Test-only seams (defaults: the real Bun.spawn / recordCiAdmissionGateSkip).
   // Every gh() caller below already threads an invisible-to-production
@@ -169,9 +187,40 @@ export async function evaluateCiAdmissionGate(input: {
         : await ghPrHeroWorkflowRunHeads(operatorRoot, headBranch, {
             spawnFn,
           });
+    // #326: a run concluded `success` even when the gate skipped it (a skip
+    // exits 0), so the run list alone over-counts. Each workflow head's ledger
+    // rows say whether it spent. One read per distinct head: `gh run list`
+    // returns at most 20 runs by default, so that is at most 20 reads per gate
+    // evaluation. Each read fails open to [], which keeps that head counted (the
+    // pre-fix behavior), so a failed read can only over-count, never under-count.
+    // Each read asks for the head's full attempt history (`includeHistory`): the
+    // default returns only the newest row, which would hide a spent attempt
+    // behind a later skip.
+    //
+    // WHY every head reads history, the current head included: the current head
+    // can be a workflow head too (a prior concluded run on this same head), and
+    // its newest row alone can be a gate-skip that hides an earlier spent
+    // attempt. Reusing ledgerRecords (latest-only) here would drop that head and
+    // admit an extra paid review past ci_max_attempts. ledgerRecords itself stays
+    // latest-only because its other readers (the active-reservation check and
+    // countTerminalAttempts) want current state; changing them is a separate
+    // decision.
+    const ledgerByHead = new Map<string, readonly AdmissionRecord[]>();
+    await Promise.all(
+      [...workflowHeads].map(async (head) => {
+        ledgerByHead.set(
+          head,
+          await listAdmissionCheckRuns(operatorRoot, head, {
+            spawnFn,
+            includeHistory: true,
+          }),
+        );
+      }),
+    );
+    const countedHeads = countableWorkflowHeads(workflowHeads, ledgerByHead);
     const reviewCount = resolveCiAdmissionAttemptCount({
       stateCount,
-      workflowHeads,
+      workflowHeads: countedHeads,
       ledgerRecords,
     });
     let deltaTouchesPriorFindingsFlag = false;
@@ -258,10 +307,14 @@ export async function evaluateCiAdmissionGate(input: {
         blockingCount: admissionVerdict.prior.blocking,
         advisoryCount: admissionVerdict.prior.advisory,
       });
+      // S4: in gate mode the head inherits the verdict of the PR's own last reviewed commit, read from
+      // that commit's statuses (publishCiSkip, admissionSkipDecision): a skipped head never reads as one
+      // nobody decided about.
       const plan = planCiReviewSkip({
         prNumber,
         verdict: admissionVerdict,
         admission: admissionContext,
+        ciMode: input.ciMode,
       });
       const exitCode = await publishCiSkip({
         operatorRoot,
@@ -271,6 +324,14 @@ export async function evaluateCiAdmissionGate(input: {
         stepSummaryFlag: options.stepSummary,
         plan,
         noticeMessage: `pr-hero review skipped — ${skipReason}`,
+        ciMode: input.ciMode,
+        headSha,
+        spawnFn,
+        admission: {
+          reason: admissionVerdict.reason,
+          reviewedHead: summaryHead,
+          priorBlocking: admissionVerdict.prior.blocking,
+        },
       });
       return { ciPolicy, ciPolicyHash, ledgerRecords, exitCode };
     }
@@ -288,10 +349,12 @@ export async function evaluateCiAdmissionGate(input: {
         blockingCount: admissionVerdict.prior.blocking,
         advisoryCount: admissionVerdict.prior.advisory,
       });
+      // S4: manual-required is a failure in gate mode: its code was never reviewed.
       const plan = planCiReviewManualRequired({
         prNumber,
         verdict: admissionVerdict,
         admission: admissionContext,
+        ciMode: input.ciMode,
       });
       const exitCode = await publishCiSkip({
         operatorRoot,
@@ -301,6 +364,14 @@ export async function evaluateCiAdmissionGate(input: {
         stepSummaryFlag: options.stepSummary,
         plan,
         noticeMessage: `pr-hero review requires manual override — ${manualReason}`,
+        ciMode: input.ciMode,
+        headSha,
+        spawnFn,
+        admission: {
+          reason: admissionVerdict.reason,
+          reviewedHead: summaryHead,
+          priorBlocking: admissionVerdict.prior.blocking,
+        },
       });
       return { ciPolicy, ciPolicyHash, ledgerRecords, exitCode };
     }
@@ -326,6 +397,14 @@ export async function evaluateCiAdmissionGate(input: {
 // before. The check stays where it is, after the reservation, on purpose:
 // moving it earlier would change the CI path's ordering for every other exit.
 //
+// Which pendings stand the run down depends on its posture. A watcher child or a
+// local run (no --ci) reads every run context, because local runs and the watcher
+// post their pending on pr-hero/local and would otherwise double-spend on the
+// same head. A --ci run reads only the gate: it settles pr-hero alone, and a stand-
+// down on a local pending would leave pr-hero unwritten, since no local run writes
+// that context. action.yml runs CI as `review --ci --yes`, so the yield is live
+// there, and this is why the --ci narrowing matters.
+//
 // Returns the exit code when the run must stop here, `undefined` to proceed.
 // `spawnFn` and `nowMs` are test-only seams (defaults: the real Bun.spawn and
 // Date.now()). The one spawnFn reaches both gh calls made here: the
@@ -334,6 +413,8 @@ export async function yieldToInFlightReview(input: {
   operatorRoot: string;
   headSha: string;
   options: Pick<CliOptions, "yes" | "force">;
+  // The run's posture (resolveCiPosture): decides which pending contexts stand it down.
+  statusContext: CommitStatusContext;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   spawnFn?: typeof Bun.spawn;
   nowMs?: number;
@@ -342,7 +423,14 @@ export async function yieldToInFlightReview(input: {
   const statuses = await fetchCommitStatuses(operatorRoot, headSha, {
     spawnFn,
   });
-  if (!isInFlightCommitStatus(statuses, input.nowMs ?? Date.now())) {
+  if (
+    !isInFlightCommitStatus(
+      statuses,
+      input.nowMs ?? Date.now(),
+      IN_FLIGHT_TTL_MS,
+      inFlightContextsFor(input.statusContext),
+    )
+  ) {
     return undefined;
   }
   // `--yes` without `--force` is the watcher child: a second launch
@@ -359,6 +447,7 @@ export async function yieldToInFlightReview(input: {
       "another pr-hero review is already in flight on this head",
       { spawnFn },
     );
+    writeCliRecord({ v: 1, outcome: "yielded" });
     return 0;
   }
   log(
@@ -366,4 +455,120 @@ export async function yieldToInFlightReview(input: {
       "continuing",
   );
   return undefined;
+}
+
+// A configuration error that stops a CI run before it reviews anything: the
+// gotchas file (review/run.ts validateGotchas) or the prompt set (review/
+// preflight.ts). Both throw a CliError with a classified `cls`, and only those.
+// WHY the class and not the message: a wording change must not move an error
+// in or out of the budget rule.
+export function isCiConfigError(error: unknown): boolean {
+  if (!(error instanceof CliError) || error.cls === undefined) return false;
+  return error.cls.kind === "gotchas" || error.cls.kind === "prompt-set";
+}
+
+// WHY this writes a row: the attempt count reads each head's ledger rows, and a
+// head with no row counts as a spent attempt (its run is in the workflow-run
+// list). A run that stops on a configuration error before it reviews spent
+// nothing, so it writes the same `gate-skipped` row the size and budget gates
+// write (#326). The caller rethrows the ORIGINAL error after this returns, so
+// the error, the exit code and the outcome code are unchanged.
+// WHY every step is swallowed: the row is bookkeeping for a run that is already
+// failing. A gh or check-run failure here must not replace the configuration
+// error the operator needs to see. A head that cannot be recorded simply keeps
+// counting, which is the behavior before this function existed.
+// WHY an active reservation is left alone: settling it would finish another
+// run's reservation on the same head as if it were ours.
+export const CONFIG_SKIP_RECORD_TIMEOUT_MS = 15_000;
+
+export async function recordCiConfigErrorSkip(input: {
+  operatorRoot: string;
+  prNumber: number;
+  config: LocalConfig;
+  resolveHeadSha: () => Promise<string>;
+  reason: string;
+  spawnFn?: typeof Bun.spawn;
+  // Test-only seam: the bound on the READS before the reservation.
+  timeoutMs?: number;
+}): Promise<void> {
+  // WHY the deadline covers only the reads: the head lookup and the ledger list
+  // have no bound of their own, and the caller rethrows the configuration error
+  // right after this returns. Once a reservation exists, though, it must be
+  // settled, or it stays `reserved` and counts as a spent attempt forever. So the
+  // deadline ends before the reserve, and the settle always runs. Its gh calls
+  // are already bounded by the check-run upsert (ADMISSION_CHECK_RUN_TIMEOUT_MS,
+  // two attempts), and a failed settle is swallowed by tryPersistCiAdmissionLedger.
+  const reads = await readBeforeReservation(input);
+  if (reads === null) return;
+  try {
+    const active = selectActiveReservation(
+      reads.existing,
+      reads.headSha,
+      reads.ciPolicyHash,
+      reads.ciPolicy.reservationTtlSeconds,
+      new Date(),
+    );
+    if (active !== null) return;
+    // If the reserve fails there is no row, so there is nothing to settle.
+    const state = await reserveCiAdmissionLedger({
+      operatorRoot: input.operatorRoot,
+      prNumber: input.prNumber,
+      headSha: reads.headSha,
+      policy: reads.ciPolicy,
+      policyHash: reads.ciPolicyHash,
+      existing: reads.existing,
+      decisionReason: input.reason,
+      spawnFn: input.spawnFn,
+    });
+    await settleCiGateSkip(state, input.reason, { spawnFn: input.spawnFn });
+  } catch {
+    // Swallowed on purpose: see the WHY above.
+  }
+}
+
+// The reads before the reservation, under one deadline. Returns null when the
+// deadline wins or a read fails: nothing was reserved, so there is nothing to
+// settle, and the caller rethrows the original error.
+async function readBeforeReservation(input: {
+  operatorRoot: string;
+  config: LocalConfig;
+  resolveHeadSha: () => Promise<string>;
+  spawnFn?: typeof Bun.spawn;
+  timeoutMs?: number;
+}): Promise<{
+  headSha: string;
+  ciPolicy: CiReviewPolicy;
+  ciPolicyHash: string;
+  existing: AdmissionRecord[];
+} | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(
+      () => resolve("timeout"),
+      input.timeoutMs ?? CONFIG_SKIP_RECORD_TIMEOUT_MS,
+    );
+  });
+  const work = (async () => {
+    const headSha = await input.resolveHeadSha();
+    const ciPolicy = resolveCiReviewPolicy(input.config);
+    const ciPolicyHash = ciReviewPolicyHash(ciPolicy);
+    const existing = await listAdmissionCheckRuns(input.operatorRoot, headSha, {
+      spawnFn: input.spawnFn,
+    });
+    return { headSha, ciPolicy, ciPolicyHash, existing };
+  })();
+  try {
+    const outcome = await Promise.race([work, deadline]);
+    if (outcome === "timeout") {
+      log(
+        "config-error ledger row not recorded: GitHub did not answer in time",
+      );
+      return null;
+    }
+    return outcome;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }

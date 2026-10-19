@@ -925,3 +925,117 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
     expect(observation?.gateway).toBe("openrouter");
   });
 });
+
+describe("a pipeline whose hunters all fail with model_unavailable", () => {
+  // The hunters fail at the transport with the cause the CLI record needs; the
+  // route plan names the provider and the model the publisher will name.
+  test("reports each failed hunter's cause, provider and model", async () => {
+    const env = await setupTestEnvironment();
+    try {
+      const failingHunter = async (spec: StepSpec): Promise<StepResult> => {
+        if (!spec.name.startsWith("hunter-")) {
+          throw new Error(`unscripted step ${spec.name}`);
+        }
+        return {
+          name: spec.name,
+          status: "failed",
+          usage: {
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_total: 0,
+            wall_ms: 1,
+            cost_usd_est: 0,
+          },
+          attempts: 1,
+          stderrTail: "",
+          resultText: "",
+          failureCause: "model_unavailable",
+        };
+      };
+      const runner: StepRunner = { run: failingHunter };
+      const registry = new DefaultTransportRegistry();
+      registry.register("opencode", createCapableOpenCodeTransport());
+
+      const result = await runPipeline(
+        { ...env.input, routePlan: openCodeRoutePlan() },
+        {
+          runner,
+          transportRegistry: registry,
+          admissionEvidence: new Map<RunnerBackend, D1_11ReadinessEvidence>([
+            ["opencode", READY_OPENCODE_EVIDENCE],
+          ]),
+        },
+      );
+
+      expect(result.sessionFailed).toBe(true);
+      expect(result.hunterFailures?.length).toBeGreaterThan(0);
+      for (const failure of result.hunterFailures ?? []) {
+        expect(failure).toEqual({
+          name: expect.stringMatching(/^hunter-/),
+          cause: "model_unavailable",
+          provider: "openai",
+          model: "gpt-4o",
+        });
+      }
+    } finally {
+      await env.cleanup();
+    }
+  });
+});
+
+describe("a pipeline whose hunters all fail with a missing provider record", () => {
+  // The projection error reaches the step as the typed cause; the route plan names the
+  // provider and the model the publisher will name.
+  test("reports each failed hunter's cause, provider and model", async () => {
+    const env = await setupTestEnvironment();
+    try {
+      const failingHunter = async (spec: StepSpec): Promise<StepResult> => {
+        if (!spec.name.startsWith("hunter-")) {
+          throw new Error(`unscripted step ${spec.name}`);
+        }
+        return {
+          name: spec.name,
+          status: "failed",
+          usage: {
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_total: 0,
+            wall_ms: 1,
+            cost_usd_est: 0,
+          },
+          attempts: 1,
+          stderrTail: "",
+          resultText: "",
+          failureCause: "missing_provider_record",
+        };
+      };
+      const runner: StepRunner = { run: failingHunter };
+      const registry = new DefaultTransportRegistry();
+      registry.register("opencode", createCapableOpenCodeTransport());
+
+      const result = await runPipeline(
+        { ...env.input, routePlan: openCodeRoutePlan() },
+        {
+          runner,
+          transportRegistry: registry,
+          admissionEvidence: new Map<RunnerBackend, D1_11ReadinessEvidence>([
+            ["opencode", READY_OPENCODE_EVIDENCE],
+          ]),
+        },
+      );
+
+      expect(result.sessionFailed).toBe(true);
+      expect(result.hunterFailures?.length).toBeGreaterThan(0);
+      for (const failure of result.hunterFailures ?? []) {
+        expect(failure).toEqual({
+          name: expect.stringMatching(/^hunter-/),
+          cause: "missing_provider_record",
+          provider: "openai",
+          model: "gpt-4o",
+        });
+      }
+    } finally {
+      await env.cleanup();
+    }
+  });
+});

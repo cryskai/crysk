@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { discoveryHunters, resolvePrDiscovery } from "#pr/discovery";
 import { skippedDiscoveryMessage } from "#rereview/plan";
 import type { AgentSpec } from "#review/spec";
+import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { parseIgnoreFile } from "../../src/ignore-file";
 
 const HUNTER_A: AgentSpec = {
@@ -481,5 +482,216 @@ describe("resolvePrDiscovery — #206 body recovery keys by comment kind", () =>
     expect(result.verifyQueue[0]?.claim).toContain(
       "the retry loop never clears the prior timer",
     );
+  });
+});
+
+// T5b: `--adjudicate` makes discovery hand back the pending dismissals of
+// blocking priors. The queue is empty unless the flag is set, so a normal run
+// never spends an adjudicator call.
+describe("resolvePrDiscovery — T5b adjudication queue", () => {
+  const INLINE_BLOCKING =
+    `<!-- pr-hero-finding path=src%2Fa.ts line=10 head=${L} c=abc -->\n` +
+    "\n" +
+    "🔴 blocking · BLOCKER · introduced · reliability\n" +
+    "`src/a.ts:10`\n" +
+    "\n" +
+    "the retry loop never clears the prior timer\n";
+  const DISMISSED_REPLY =
+    `<!-- pr-hero-triage tag=dismissed head=${H} actor=agent verdict=upheld -->\n` +
+    "\n" +
+    "the timer is cleared in the caller\n";
+
+  type ReviewComment = NonNullable<
+    Parameters<typeof resolvePrDiscovery>[0]["reviewComments"]
+  >[number];
+
+  function run(adjudicate: boolean | undefined) {
+    return runWithReplies(adjudicate, []);
+  }
+
+  function runWithReplies(
+    adjudicate: boolean | undefined,
+    extraReplies: readonly ReviewComment[],
+  ) {
+    return resolvePrDiscovery({
+      diffFromSha: B,
+      headSha: H,
+      full: false,
+      baseRef: B,
+      headLabel: "PR #1 head",
+      isCi: true,
+      sizeGateOverrides: {},
+      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      prIgnore: { rules: [], found: false },
+      issueComments: [markerCommentForHead(L, true)],
+      postedFindings: [POSTED_FINDING],
+      reviewComments: [
+        {
+          id: POSTED_FINDING.id,
+          user: "pr-hero",
+          body: INLINE_BLOCKING,
+          path: "src/a.ts",
+          line: 10,
+          original_line: 10,
+          in_reply_to_id: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: 200,
+          user: "author",
+          body: DISMISSED_REPLY,
+          path: "src/a.ts",
+          line: 10,
+          original_line: 10,
+          in_reply_to_id: POSTED_FINDING.id,
+          created_at: "2026-01-02T00:00:00Z",
+        },
+        ...extraReplies,
+      ],
+      git: baseGit(),
+      log: () => {},
+      ...(adjudicate === undefined ? {} : { adjudicate }),
+    });
+  }
+
+  test("without --adjudicate the queue is empty", async () => {
+    const result = await run(false);
+    expect(result.adjudicationQueue).toEqual([]);
+  });
+
+  test("a CI verdict on another head does not take the dismissal out of the queue", async () => {
+    const otherHead = "c".repeat(40);
+    const result = await runWithReplies(true, [
+      {
+        id: 201,
+        user: CI_ADJUDICATOR_LOGIN,
+        body: adjudicationMarker({
+          verdict: "upheld",
+          reply: 200,
+          head: otherHead,
+        }),
+        path: "src/a.ts",
+        line: 10,
+        original_line: 10,
+        in_reply_to_id: POSTED_FINDING.id,
+        created_at: "2026-01-03T00:00:00Z",
+      },
+    ]);
+    expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
+  });
+
+  test("with --adjudicate a pending dismissal of a blocking prior is queued", async () => {
+    const result = await run(true);
+    expect(result.adjudicationQueue.map((s) => s.priorId)).toEqual(["R001"]);
+    expect(result.adjudicationQueue[0]?.threadId).toBe(POSTED_FINDING.id);
+    expect(result.adjudicationQueue[0]?.replyId).toBe(200);
+  });
+});
+
+// Inline anchoring (the review payload's path/line) must see the FULL PR
+// diff, not the discovery diff. On an incremental re-review the discovery
+// range is last-reviewed-head..head, so a finding on a line the push did not
+// touch is outside the delta yet inside the PR: it was published as an
+// "outside diff" comment with no review thread. `anchorPatch` is the PR-range
+// diff for that anchoring; the discovery diff itself keeps its narrow range.
+const SESSION_HUNK =
+  "diff --git a/src/session.ts b/src/session.ts\n" +
+  "index 3333333..4444444 100644\n" +
+  "--- a/src/session.ts\n" +
+  "+++ b/src/session.ts\n" +
+  "@@ -50 +50 @@\n" +
+  "-old\n" +
+  "+new\n";
+
+function rangeGit(outputs: Record<string, string>, calls: string[][]) {
+  return {
+    commitExists: () => Promise.resolve(true),
+    isAncestor: () => Promise.resolve(true),
+    nameOnly: (from: string, to: string) =>
+      Promise.resolve(
+        from === B && to === H ? ["src/a.ts", "src/session.ts"] : ["src/a.ts"],
+      ),
+    nameStatus: () => Promise.resolve(""),
+    runGit: (args: string[]) => {
+      calls.push(args);
+      if (args.includes("--numstat")) {
+        return Promise.resolve({
+          ok: true,
+          stdout: "1\t1\tsrc/a.ts\n",
+          stderr: "",
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        stdout: outputs[args[1]] ?? "",
+        stderr: "",
+      });
+    },
+  };
+}
+
+function discoveryFor(
+  git: ReturnType<typeof rangeGit>,
+  overrides: Partial<Parameters<typeof resolvePrDiscovery>[0]>,
+) {
+  return resolvePrDiscovery({
+    diffFromSha: B,
+    headSha: H,
+    full: false,
+    baseRef: B,
+    headLabel: "PR #1 head",
+    isCi: false,
+    sizeGateOverrides: {},
+    config: { parity_trigger_paths: [], suspicion_priors: [] },
+    prIgnore: { rules: [], found: false },
+    issueComments: [markerCommentForHead(L, true)],
+    postedFindings: [],
+    reviewComments: [],
+    git,
+    log: () => {},
+    ...overrides,
+  });
+}
+
+describe("resolvePrDiscovery — anchorPatch is the full PR diff (inline anchoring)", () => {
+  test("an incremental re-review anchors against merge-base..head, not the push delta", async () => {
+    const calls: string[][] = [];
+    const git = rangeGit(
+      { [`${L}..${H}`]: PATCH, [`${B}..${H}`]: PATCH + SESSION_HUNK },
+      calls,
+    );
+    const result = await discoveryFor(git, {});
+    expect(result.prepared.discoveryFrom).toBe(L);
+    expect(result.effectiveDiff.patch).not.toContain("src/session.ts");
+    expect(result.anchorPatch).toContain("src/session.ts");
+    expect(result.anchorPatch).toContain("+new");
+  });
+
+  test("a full pass anchors on the discovery patch itself, with no extra git diff", async () => {
+    const calls: string[][] = [];
+    const git = rangeGit({ [`${B}..${H}`]: PATCH }, calls);
+    const result = await discoveryFor(git, {
+      full: true,
+      issueComments: [],
+    });
+    expect(result.prepared.discoveryFrom).toBe(B);
+    expect(result.anchorPatch).toBe(result.effectiveDiff.patch);
+    const diffCalls = calls.filter(
+      (args) => args[0] === "diff" && !args.includes("--numstat"),
+    );
+    expect(diffCalls.map((args) => args[1])).toEqual([`${B}..${H}`]);
+  });
+
+  test("an empty delta still anchors on the full PR diff", async () => {
+    const calls: string[][] = [];
+    const git = rangeGit({ [`${B}..${H}`]: PATCH + SESSION_HUNK }, calls);
+    // Same-head re-review (case B): discovery is skipped, the delta is empty.
+    const result = await discoveryFor(git, {
+      issueComments: [markerCommentForHead(H, true)],
+      postedFindings: [],
+    });
+    expect(result.skipDiscovery).toBe(true);
+    expect(result.effectiveDiff.patch).toBe("");
+    expect(result.anchorPatch).toContain("src/session.ts");
   });
 });

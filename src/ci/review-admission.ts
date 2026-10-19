@@ -17,6 +17,7 @@ import type { LocalConfig } from "#review/preflight";
 import {
   type AdmissionRecord,
   countTerminalAttempts,
+  PROVABLY_UNSPENT_STATUSES,
 } from "./admission-ledger";
 import type { CiReviewPolicyMode } from "./review-policy";
 import {
@@ -194,6 +195,50 @@ export function resolveReviewAttemptCount(input: {
   return Math.max(input.stateCount, input.workflowHeads.size);
 }
 
+// #326: a workflow head counts toward the attempt budget only when its
+// pr-hero run could have spent. The run list cannot tell them apart, because a
+// gate skip exits 0 and concludes `success`. So each head's ledger rows decide:
+// a head is dropped only when it has ledger rows and EVERY row is provably
+// unspent (PROVABLY_UNSPENT_STATUSES: gate-skipped, yielded) or forced (a
+// comment-triggered run is outside the automatic budget). A `cancelled` row
+// is not proof: a cancel signal can land after the provider started, and a
+// `timeout-minutes` kill concludes the run `failure`, which this list does
+// include, so that head stays counted. (A run GitHub concludes `cancelled`
+// never reaches this function, because ghPrHeroWorkflowRunHeads keeps only
+// success and failure, COMPLETED_WORKFLOW_CONCLUSIONS.) A `reserved` row is not
+// proof either, because its provider-started settle is best-effort and the run
+// may have spent anyway, so that head stays counted, and so does any row with a
+// status this engine does not know. A head with no
+// ledger row at all stays counted, because it is a run older than the ledger
+// and the run list is the only evidence it spent. An unreadable ledger reads as
+// no rows (listAdmissionCheckRuns fails open to []), which keeps the head
+// counted, the pre-fix behavior. So a failed read can only over-count and
+// refuse a review early; it never admits one the budget would have refused.
+// A forced row (a `/pr-hero review` or `/pr-hero recheck` comment run) also
+// leaves the count whatever its status, so a head whose rows are all forced is
+// dropped as well. A head with one automatic row next to a forced one stays
+// counted, through that automatic row.
+export function countableWorkflowHeads(
+  workflowHeads: ReadonlySet<string>,
+  ledgerByHead: ReadonlyMap<string, readonly AdmissionRecord[]>,
+): Set<string> {
+  const countable = new Set<string>();
+  for (const head of workflowHeads) {
+    const rows = ledgerByHead.get(head);
+    const provablyUnspent =
+      rows !== undefined &&
+      rows.length > 0 &&
+      rows.every(
+        (row) =>
+          row.forced === true || PROVABLY_UNSPENT_STATUSES.has(row.status),
+      );
+    if (!provablyUnspent) {
+      countable.add(head);
+    }
+  }
+  return countable;
+}
+
 // Authoritative attempt count for admission: summary counter, workflow heads,
 // and durable ledger terminal rows — whichever is highest.
 export function resolveCiAdmissionAttemptCount(input: {
@@ -210,10 +255,17 @@ export function resolveCiAdmissionAttemptCount(input: {
   );
 }
 
+// WHY a forced run keeps the count, unfloored: the budget bounds AUTOMATIC
+// reviews. A writer's explicit comment (`/pr-hero review`, `/pr-hero recheck`)
+// is a deliberate spend outside that budget, so it must not move the counter
+// the budget reads. A forced FIRST review therefore writes 0, and the summary
+// it posts reads as zero automatic reviews (parseCiAdmissionBlock accepts 0 for
+// that reason). A floor of 1 here would charge that run one automatic attempt.
 export function nextStateReviewCount(input: {
   existingSummaryId: number | null;
   state: ParsedStateBlock | null;
   summaryBody?: string | null;
+  force?: boolean;
 }): number {
   const admission =
     input.summaryBody === undefined || input.summaryBody === null
@@ -224,6 +276,7 @@ export function nextStateReviewCount(input: {
     input.existingSummaryId !== null,
     admission,
   );
+  if (input.force === true) return current;
   return current + 1;
 }
 
@@ -342,7 +395,13 @@ export function parseCiAdmissionBlock(
       advisory < 0 ||
       typeof reviews !== "number" ||
       !Number.isInteger(reviews) ||
-      reviews < 1
+      // WHY 0 is valid here (and not in the state block's asStateReviews):
+      // the first summary a forced run posts carries no automatic review, so
+      // its count is 0. Rejecting 0 made the parse fail, and stateReviewCount
+      // then fell back to "a summary exists, so one review happened", charging
+      // that forced run an automatic attempt. renderStateBlock never writes 0,
+      // so the state block keeps requiring >= 1.
+      reviews < 0
     ) {
       return null;
     }
@@ -704,6 +763,22 @@ export function ciReviewSkipDetail(
       return `${counts}; re-review needs score ≥ ${minScore} to justify another run`;
     case "low-risk-delta":
       return `${counts}; delta touches only low-risk paths (docs, tests, fixtures)`;
+  }
+}
+
+// The short label a status description names for a coverage skip (the carry-forward in
+// src/pr/admission.ts). The same wording as the coverage comment (ci/gates.ts COVERAGE_REASON_LABEL,
+// which is not exported), kept here so a description reads the same as the comment beside it.
+export function ciReviewSkipLabel(
+  reason: "once-per-pr" | "below-threshold" | "low-risk-delta",
+): string {
+  switch (reason) {
+    case "once-per-pr":
+      return "once_per_pr policy allows one automatic review";
+    case "below-threshold":
+      return "prior findings below the re-review score floor";
+    case "low-risk-delta":
+      return "delta touches only low-risk paths";
   }
 }
 

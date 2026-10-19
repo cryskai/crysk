@@ -12,7 +12,9 @@
 // `publishCiSkip` is exercised FOR REAL (no seam): with `options.post` left
 // unset it never touches gh, only the two env-path files GITHUB_STEP_SUMMARY
 // and GITHUB_OUTPUT, so their content is asserted as the real observable
-// instead of a fake's captured args.
+// instead of a fake's captured args. The exception is gate mode, which reads the
+// reviewed head's status history and posts the carried verdict through the same
+// spawnFn (the last describe in this file asserts those calls).
 //
 // Every test runs through withGateEnv, which snapshots and restores all four
 // GitHub Actions env vars this gate reads. bun:test shares one process.env
@@ -21,7 +23,7 @@
 // would permanently erase Actions' own values for the rest of that run.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -30,18 +32,30 @@ import {
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
 import { renderCiAdmissionBlock } from "#ci/review-admission";
-import type { CiAdmissionLedgerState } from "#pr/admission";
+import {
+  type CiAdmissionLedgerState,
+  settleCiAdmissionLedger,
+  settleCiGateSkip,
+} from "#pr/admission";
 import {
   evaluateCiAdmissionGate,
+  isCiConfigError,
+  recordCiConfigErrorSkip,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
-import { CommentsTruncatedError } from "#pr/pr";
-import { COMMIT_STATUS_CONTEXT, PR_COMMENT_MARKER_PREFIX } from "#pr/preflight";
+import { CommentsTruncatedError, upsertAdmissionCheckRun } from "#pr/pr";
+import {
+  COMMIT_STATUS_CONTEXT,
+  type CommitStatusContext,
+  LOCAL_COMMIT_STATUS_CONTEXT,
+  PR_COMMENT_MARKER_PREFIX,
+} from "#pr/preflight";
 import {
   type CliOptions,
   EMPTY_LOCAL_CONFIG,
   type LocalConfig,
 } from "#review/preflight";
+import { CliError } from "../../src/errors";
 
 const PR = 42;
 const HEAD_A = "a".repeat(40);
@@ -215,6 +229,7 @@ describe("evaluateCiAdmissionGate — early no-op guards", () => {
   test("a dry run touches no gh call and resolves the default policy", async () => {
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -245,6 +260,7 @@ describe("evaluateCiAdmissionGate — early no-op guards", () => {
   test("outside CI, the gate is a pure pass-through", async () => {
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -288,6 +304,7 @@ describe("evaluateCiAdmissionGate — early no-op guards", () => {
     const recordCalls: unknown[] = [];
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -319,6 +336,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -353,6 +371,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -397,6 +416,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -443,6 +463,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
       () =>
         evaluateCiAdmissionGate({
+          ciMode: "advisory",
           operatorRoot: "/repo",
           prNumber: PR,
           headSha: HEAD_B,
@@ -470,6 +491,7 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
     const recordCalls: unknown[] = [];
     const result = await withGateEnv({}, () =>
       evaluateCiAdmissionGate({
+        ciMode: "advisory",
         operatorRoot: "/repo",
         prNumber: PR,
         headSha: HEAD_B,
@@ -492,6 +514,413 @@ describe("evaluateCiAdmissionGate — admission decisions", () => {
 // and the check-run upsert inside the real settleCiAdmissionLedger) go
 // through one fake, so the observables are the exit code, the ledger record,
 // the check-run request GitHub would receive, and the stderr line.
+// #326, end to end through the gate: the PR's first head was budget-skipped
+// (its run concluded success, spent nothing), the second was reviewed, and a
+// third head arrives. The gate must admit the third head, and it must read
+// each other head's ledger exactly once (the bounded-I/O half of the fix).
+describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an attempt (#326)", () => {
+  const HEAD_C = "c".repeat(40);
+
+  test("the gate admits the new head and reads each other workflow head's ledger once", async () => {
+    const gateSkipped = admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-gate-skip",
+      status: "gate-skipped",
+      decisionReason: "estimated cost exceeds the configured CI budget ceiling",
+    });
+    const checkRunLine = (record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name: "pr-hero/ci-admission",
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: {
+            stdout: JSON.stringify([
+              { headSha: HEAD_A, conclusion: "success" },
+              { headSha: HEAD_B, conclusion: "success" },
+            ]),
+          },
+        },
+        {
+          match: [`commits/${HEAD_A}/check-runs`],
+          response: { stdout: checkRunLine(gateSkipped) },
+        },
+        {
+          match: [`commits/${HEAD_B}/check-runs`],
+          response: { stdout: checkRunLine(admissionCheckRunRecord()) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: `${JSON.stringify(summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1))}\n`,
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const recordCalls: unknown[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/gate-skip",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          ciMode: "advisory",
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_C,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions({ head: HEAD_C }),
+          spawnFn,
+          recordSkip: async (recorded) => {
+            recordCalls.push(recorded);
+          },
+        }),
+    );
+
+    expect(result.exitCode).toBeUndefined();
+    expect(recordCalls).toEqual([]);
+    const readsOf = (head: string) =>
+      calls.filter((argv) =>
+        argv.join(" ").includes(`commits/${head}/check-runs`),
+      ).length;
+    expect(readsOf(HEAD_A)).toBe(1);
+    expect(readsOf(HEAD_B)).toBe(1);
+    expect(readsOf(HEAD_C)).toBe(1);
+  });
+
+  // F002: GitHub's check-runs endpoint defaults to filter=latest, which hides
+  // every earlier admission attempt on a head. The fake below answers with the
+  // newest row only unless the request carries filter=all, so this goes red
+  // unless the per-head read asks for history through the real shell.
+  test("keeps a head whose history has a completed attempt even though its latest row is gate-skipped", async () => {
+    const completed = admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-a-completed",
+      status: "completed",
+      attemptNumber: 1,
+    });
+    const gateSkipped = admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-a-gate-skip",
+      status: "gate-skipped",
+      attemptNumber: 2,
+      decisionReason: "estimated cost exceeds the configured CI budget ceiling",
+    });
+    const checkRunLine = (record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name: "pr-hero/ci-admission",
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: {
+            stdout: JSON.stringify([
+              { headSha: HEAD_A, conclusion: "success" },
+              { headSha: HEAD_B, conclusion: "success" },
+            ]),
+          },
+        },
+        {
+          // Listed before the plain entry below, which also matches this URL.
+          match: [`commits/${HEAD_A}/check-runs`, "filter=all"],
+          response: {
+            stdout: checkRunLine(completed) + checkRunLine(gateSkipped),
+          },
+        },
+        {
+          match: [`commits/${HEAD_A}/check-runs`],
+          response: { stdout: checkRunLine(gateSkipped) },
+        },
+        {
+          match: [`commits/${HEAD_B}/check-runs`],
+          response: { stdout: checkRunLine(admissionCheckRunRecord()) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: `${JSON.stringify(summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1))}\n`,
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const recordCalls: { reason: string }[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/gate-skip",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          ciMode: "advisory",
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_C,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions({ head: HEAD_C }),
+          spawnFn,
+          recordSkip: async (recorded) => {
+            recordCalls.push({ reason: recorded.reason });
+          },
+        }),
+    );
+
+    // HEAD_A and HEAD_B both spent an attempt, so maxAttempts (2) is exhausted
+    // and the gate records a manual-required skip. A dropped HEAD_A would leave
+    // one attempt and let the run through.
+    expect(recordCalls).toHaveLength(1);
+    expect(recordCalls[0]?.reason).toBe(
+      "automatic review budget exhausted (2/2 attempts on this PR).",
+    );
+    expect(result.exitCode).toBe(0);
+
+    const checkRunReads = (head: string) =>
+      calls
+        .map((argv) => argv.join(" "))
+        .filter((line) => line.includes(`commits/${head}/check-runs`));
+    // The per-head reads ask for history. HEAD_C is not a workflow head in this
+    // test, so its only read is the latest-only ledgerRecords read, which must
+    // not ask for history. The history read for a current head that IS a
+    // workflow head is asserted in the next test.
+    expect(checkRunReads(HEAD_A)).toHaveLength(1);
+    expect(checkRunReads(HEAD_A)[0]).toContain("filter=all");
+    expect(checkRunReads(HEAD_B)).toHaveLength(1);
+    expect(checkRunReads(HEAD_B)[0]).toContain("filter=all");
+    expect(checkRunReads(HEAD_C)).toHaveLength(1);
+    expect(checkRunReads(HEAD_C)[0]).not.toContain("filter=all");
+  });
+
+  // The current head can be a workflow head too (a prior concluded run on this
+  // same head). Its newest row alone is gate-skipped, which looks unspent, but
+  // its history holds a failed attempt that spent. The head must stay counted:
+  // dropping it would admit a review past the budget. The count map must read
+  // that history; ledgerRecords stays latest-only for its other readers.
+  test("keeps the current head when its latest row is gate-skipped but its history has a failed attempt", async () => {
+    const failed = admissionCheckRunRecord({
+      headSha: HEAD_C,
+      reservationId: "reservation-c-failed",
+      status: "failed",
+      attemptNumber: 1,
+    });
+    const gateSkipped = admissionCheckRunRecord({
+      headSha: HEAD_C,
+      reservationId: "reservation-c-gate-skip",
+      status: "gate-skipped",
+      attemptNumber: 2,
+      decisionReason: "estimated cost exceeds the configured CI budget ceiling",
+    });
+    const checkRunLine = (record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name: "pr-hero/ci-admission",
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: {
+            stdout: JSON.stringify([
+              { headSha: HEAD_B, conclusion: "success" },
+              { headSha: HEAD_C, conclusion: "success" },
+            ]),
+          },
+        },
+        {
+          // Listed before the plain entry below, which also matches this URL.
+          match: [`commits/${HEAD_C}/check-runs`, "filter=all"],
+          response: {
+            stdout: checkRunLine(failed) + checkRunLine(gateSkipped),
+          },
+        },
+        {
+          match: [`commits/${HEAD_C}/check-runs`],
+          response: { stdout: checkRunLine(gateSkipped) },
+        },
+        {
+          match: [`commits/${HEAD_B}/check-runs`],
+          response: { stdout: checkRunLine(admissionCheckRunRecord()) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: `${JSON.stringify(summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1))}\n`,
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const recordCalls: { reason: string }[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/gate-skip",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          ciMode: "advisory",
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_C,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions({ head: HEAD_C }),
+          spawnFn,
+          recordSkip: async (recorded) => {
+            recordCalls.push({ reason: recorded.reason });
+          },
+        }),
+    );
+
+    // HEAD_B (completed) and HEAD_C (failed, then gate-skipped) both spent, so
+    // maxAttempts (2) is exhausted and the gate records a manual-required skip.
+    // A dropped HEAD_C would leave one attempt and admit the review.
+    expect(recordCalls).toHaveLength(1);
+    expect(recordCalls[0]?.reason).toBe(
+      "automatic review budget exhausted (2/2 attempts on this PR).",
+    );
+    expect(result.exitCode).toBe(0);
+
+    const checkRunReads = (head: string) =>
+      calls
+        .map((argv) => argv.join(" "))
+        .filter((line) => line.includes(`commits/${head}/check-runs`));
+    // HEAD_C is read twice: the history read for the workflow-head count, and
+    // the latest-only read that ledgerRecords (reservation and terminal
+    // counting) still uses.
+    const headCReads = checkRunReads(HEAD_C);
+    expect(headCReads).toHaveLength(2);
+    expect(
+      headCReads.filter((line) => line.includes("filter=all")),
+    ).toHaveLength(1);
+    expect(
+      headCReads.filter((line) => !line.includes("filter=all")),
+    ).toHaveLength(1);
+  });
+});
+
+// #326: the SIZE gate and the BUDGET gate settle through settleCiGateSkip. The
+// row must say `gate-skipped`, not `skipped`: an admission skip keeps counting,
+// and a gate skip spent nothing.
+describe("settleCiGateSkip — a size or budget skip settles as gate-skipped (#326)", () => {
+  const GATE_REASON = "diff exceeds the configured size gate";
+
+  test("a reserved record takes the gate-skipped status and reason, and the check run carries it", async () => {
+    const state = gateLedgerState("reserved");
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await settleCiGateSkip(state, GATE_REASON, { spawnFn });
+
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(GATE_REASON);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toContain("output[summary]=gate-skipped (attempt 1)");
+  });
+
+  test("a null ledger (outside CI) is a no-op", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh([], calls);
+
+    await settleCiGateSkip(null, GATE_REASON, { spawnFn });
+
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("settleCiAdmissionLedger — a gate-skipped record is terminal (#326)", () => {
+  test("keeps its status and reason, and nothing is sent to GitHub", async () => {
+    const state = gateLedgerState("gate-skipped");
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await settleCiAdmissionLedger(state, "failed", "settled after the skip", {
+      spawnFn,
+    });
+
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(
+      "reason recorded before settlement",
+    );
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("upsertAdmissionCheckRun — a gate-skipped check run (#326)", () => {
+  test("concludes skipped, so GitHub renders it grey as the old skip did", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await upsertAdmissionCheckRun(
+      "/repo",
+      { headSha: HEAD_A, record: gateLedgerState("gate-skipped").record },
+      { spawnFn },
+    );
+
+    expect(calls[0]).toContain("conclusion=skipped");
+  });
+});
+
+function gateLedgerState(
+  status: AdmissionRecord["status"],
+): CiAdmissionLedgerState {
+  return {
+    record: admissionCheckRunRecord({
+      headSha: HEAD_A,
+      reservationId: "reservation-gate-skip",
+      status,
+      decisionReason: "reason recorded before settlement",
+    }),
+    checkRunId: 11,
+    headSha: HEAD_A,
+    operatorRoot: "/repo",
+  };
+}
+
 describe("yieldToInFlightReview", () => {
   // musive #1935's shape: another review set its pending status 47s before
   // this run looked. Well inside the 90-minute in-flight TTL.
@@ -504,13 +933,16 @@ describe("yieldToInFlightReview", () => {
     "warning: a pr-hero review is already in-flight on this head; continuing";
   const LEDGER_CHECK_RUN_ID = 11;
 
-  function commitStatus(state: "pending" | "success"): ScriptEntry {
+  function commitStatus(
+    state: "pending" | "success",
+    context: CommitStatusContext = COMMIT_STATUS_CONTEXT,
+  ): ScriptEntry {
     return {
       match: [`commits/${HEAD_B}/status`],
       response: {
         stdout: `${JSON.stringify({
           state,
-          context: COMMIT_STATUS_CONTEXT,
+          context,
           created_at: PENDING_AT,
         })}\n`,
       },
@@ -570,6 +1002,7 @@ describe("yieldToInFlightReview", () => {
         operatorRoot: "/repo",
         headSha: HEAD_B,
         options: { yes: true, force: false },
+        statusContext: COMMIT_STATUS_CONTEXT,
         ciAdmissionLedger: ledger,
         spawnFn,
         nowMs: NOW_MS,
@@ -587,6 +1020,43 @@ describe("yieldToInFlightReview", () => {
     expect(upserts[0]).toContain("output[summary]=yielded (attempt 1)");
   });
 
+  test("standing down writes a yielded outcome record in action mode, and nothing without the outcome directory", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-yield-record-"));
+    const saved = process.env.PRHERO_OUTCOME_DIR;
+    try {
+      const yieldOnce = () =>
+        capturingStderr(() =>
+          yieldToInFlightReview({
+            operatorRoot: "/repo",
+            headSha: HEAD_B,
+            options: { yes: true, force: false },
+            statusContext: COMMIT_STATUS_CONTEXT,
+            ciAdmissionLedger: reservedLedger(),
+            spawnFn: makeFakeGh([commitStatus("pending"), CHECK_RUN_PATCH], []),
+            nowMs: NOW_MS,
+          }),
+        );
+
+      process.env.PRHERO_OUTCOME_DIR = dir;
+      const withDir = await yieldOnce();
+      expect(withDir.result).toBe(0);
+      const written = await readFile(path.join(dir, "cli.json"), "utf8");
+      expect(JSON.parse(written)).toEqual({ v: 1, outcome: "yielded" });
+
+      delete process.env.PRHERO_OUTCOME_DIR;
+      const without = await yieldOnce();
+      expect(without).toEqual(withDir);
+      expect(await readFile(path.join(dir, "cli.json"), "utf8")).toBe(written);
+    } finally {
+      if (saved === undefined) {
+        delete process.env.PRHERO_OUTCOME_DIR;
+      } else {
+        process.env.PRHERO_OUTCOME_DIR = saved;
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("outside CI there is no ledger: the watcher child still stands down and writes no check run", async () => {
     const calls: string[][] = [];
     const spawnFn = makeFakeGh([commitStatus("pending")], calls);
@@ -596,6 +1066,7 @@ describe("yieldToInFlightReview", () => {
         operatorRoot: "/repo",
         headSha: HEAD_B,
         options: { yes: true, force: false },
+        statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
         ciAdmissionLedger: null,
         spawnFn,
         nowMs: NOW_MS,
@@ -620,6 +1091,7 @@ describe("yieldToInFlightReview", () => {
         operatorRoot: "/repo",
         headSha: HEAD_B,
         options: { yes: true, force: false },
+        statusContext: COMMIT_STATUS_CONTEXT,
         ciAdmissionLedger: ledger,
         spawnFn,
         nowMs: NOW_MS,
@@ -633,11 +1105,19 @@ describe("yieldToInFlightReview", () => {
   });
 
   test.each([
-    ["--force (the CI comment override)", { yes: true, force: true }],
-    ["an interactive run (no --yes)", { yes: false, force: false }],
+    [
+      "--force (the CI comment override)",
+      { yes: true, force: true },
+      COMMIT_STATUS_CONTEXT,
+    ],
+    [
+      "an interactive run (no --yes)",
+      { yes: false, force: false },
+      LOCAL_COMMIT_STATUS_CONTEXT,
+    ],
   ] as const)(
     "%s warns and continues over an in-flight review, leaving the reservation to the run",
-    async (_name, options) => {
+    async (_name, options, statusContext) => {
       const calls: string[][] = [];
       const spawnFn = makeFakeGh(
         [commitStatus("pending"), CHECK_RUN_PATCH],
@@ -650,6 +1130,7 @@ describe("yieldToInFlightReview", () => {
           operatorRoot: "/repo",
           headSha: HEAD_B,
           options,
+          statusContext,
           ciAdmissionLedger: ledger,
           spawnFn,
           nowMs: NOW_MS,
@@ -662,4 +1143,437 @@ describe("yieldToInFlightReview", () => {
       expect(checkRunCalls(calls)).toEqual([]);
     },
   );
+
+  // Fix D: a watcher child (--yes, no --ci) reads both run contexts, because the
+  // watcher and local runs post their pending on pr-hero/local. The fixture is the
+  // watcher child's own posture, so a local review already in flight stops the
+  // second paid review on the same head.
+  test("a watcher child stands down for a fresh pr-hero/local pending on the head", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [commitStatus("pending", LOCAL_COMMIT_STATUS_CONTEXT)],
+      calls,
+    );
+
+    const { result, logged } = await capturingStderr(() =>
+      yieldToInFlightReview({
+        operatorRoot: "/repo",
+        headSha: HEAD_B,
+        options: { yes: true, force: false },
+        statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
+        ciAdmissionLedger: null,
+        spawnFn,
+        nowMs: NOW_MS,
+      }),
+    );
+
+    expect(result).toBe(0);
+    expect(logged).toBe(`${SKIP_LINE}\n`);
+    expect(checkRunCalls(calls)).toEqual([]);
+  });
+
+  // The contested line, deliberately preserved: a --ci run must not stand down for
+  // a local pending. Its yield would leave the pr-hero gate unwritten, because only
+  // a --ci run writes that context and the local run never will. Review-pr.ts:388
+  // runs this check before the plan step and its pending post, so a pending the
+  // run itself posts can never reach this check.
+  test("a --ci run does not stand down for a pr-hero/local pending: the gate status stays its to write", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [commitStatus("pending", LOCAL_COMMIT_STATUS_CONTEXT), CHECK_RUN_PATCH],
+      calls,
+    );
+    const ledger = reservedLedger();
+
+    const { result, logged } = await capturingStderr(() =>
+      yieldToInFlightReview({
+        operatorRoot: "/repo",
+        headSha: HEAD_B,
+        options: { yes: true, force: false },
+        statusContext: COMMIT_STATUS_CONTEXT,
+        ciAdmissionLedger: ledger,
+        spawnFn,
+        nowMs: NOW_MS,
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(logged).toBe("");
+    expect(ledger.record.status).toBe("reserved");
+    expect(checkRunCalls(calls)).toEqual([]);
+  });
+});
+
+// Carry-forward in gate mode (the owner's decision): a head the admission gate
+// skips inherits the verdict of the last reviewed head, so the required check
+// never reads green on a push nobody reviewed. These run the real gate and
+// publishCiSkip; the only gh boundary is the fake.
+describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the reviewed verdict", () => {
+  const T1 = "2026-10-16T10:00:00Z";
+  const T2 = "2026-10-16T11:00:00Z";
+
+  // HEAD_A was reviewed (summary marker) and a docs-only push HEAD_B arrived. The
+  // risk-aware policy skips HEAD_B as a low-risk delta.
+  // The PR's commits, oldest first: HEAD_A is the earlier one, HEAD_B the head the gate evaluates.
+  const PR_COMMITS: ScriptEntry = {
+    match: [`pulls/${PR}/commits`],
+    response: { stdout: `${HEAD_A}\n${HEAD_B}\n` },
+  };
+
+  // `summaryHead` is the head the summary marker names (the reviewed head, unless a test forges it).
+  function gateScript(
+    statusesEntry: ScriptEntry,
+    summaryHead: string = HEAD_A,
+    extra: ScriptEntry[] = [],
+  ): ScriptEntry[] {
+    return [
+      EMPTY_CHECK_RUNS,
+      {
+        match: ["issues", "comments"],
+        response: {
+          stdout: `${JSON.stringify(summaryComment(1, summaryHead, { blocking: 0, advisory: 1 }, 1))}\n`,
+        },
+      },
+      EMPTY_REVIEW_COMMENTS,
+      REPO_VIEW,
+      compareResponse("docs/readme.md"),
+      PR_COMMITS,
+      statusesEntry,
+      ...extra,
+    ];
+  }
+
+  const statusRows = (rows: Array<Record<string, string>>): ScriptEntry => ({
+    match: [`commits/${HEAD_A}/statuses`],
+    response: {
+      stdout: rows.map((r) => `${JSON.stringify(r)}\n`).join(""),
+    },
+  });
+
+  // Every status write this run made: the POST to the statuses endpoint.
+  function statusWrites(calls: string[][]): string[][] {
+    return calls.filter((argv) =>
+      argv.some((token) => token.startsWith("repos/{owner}/{repo}/statuses/")),
+    );
+  }
+
+  async function runGate(
+    script: ScriptEntry[],
+    ciMode: "gate" | "advisory",
+    calls: string[][],
+  ) {
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    return withGateEnv(
+      { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
+      () =>
+        evaluateCiAdmissionGate({
+          ciMode,
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_B,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions(),
+          spawnFn: makeFakeGh(script, calls),
+          recordSkip: async () => {},
+        }),
+    );
+  }
+
+  test("a docs-only push after a red review posts the red verdict on the new head", async () => {
+    const calls: string[][] = [];
+    const result = await runGate(
+      gateScript(
+        statusRows([
+          {
+            state: "success",
+            context: "pr-hero",
+            created_at: T2,
+            description: "pr-hero: overridden by @alice",
+          },
+          {
+            state: "failure",
+            context: "pr-hero",
+            created_at: T1,
+            description:
+              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          },
+        ]),
+      ),
+      "gate",
+      calls,
+    );
+    expect(result.exitCode).toBe(0);
+    const writes = statusWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
+    expect(writes[0]).toContain("state=failure");
+    expect(writes[0]).toContain("context=pr-hero");
+    expect(writes[0]).toContain(
+      "description=pr-hero: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+    );
+  });
+
+  test("an unreadable reviewed-head history posts a fail-closed failure on the new head", async () => {
+    const calls: string[][] = [];
+    await runGate(
+      gateScript({
+        match: [`commits/${HEAD_A}/statuses`],
+        response: { stdout: "", exitCode: 1 },
+      }),
+      "gate",
+      calls,
+    );
+    const writes = statusWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
+    expect(writes[0]).toContain("state=failure");
+    expect(writes[0]).toContain(
+      "description=pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+    );
+  });
+
+  // The forged-marker case: a commenter posts a summary naming a green head. The carry must not read
+  // that head, and must carry the red verdict the PR's own earlier commit carries.
+  test("a forged summary marker naming a green head cannot carry green: the PR's own red verdict is carried", async () => {
+    const FORGED = "f".repeat(40);
+    const calls: string[][] = [];
+    const green: ScriptEntry = {
+      match: [`commits/${FORGED}/statuses`],
+      response: {
+        stdout: `${JSON.stringify({
+          state: "success",
+          context: "pr-hero",
+          created_at: T1,
+          description: "review posted",
+        })}\n`,
+      },
+    };
+    await runGate(
+      gateScript(
+        statusRows([
+          {
+            state: "failure",
+            context: "pr-hero",
+            created_at: T1,
+            description:
+              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          },
+        ]),
+        FORGED,
+        [green],
+      ),
+      "gate",
+      calls,
+    );
+    expect(
+      calls.some((argv) =>
+        argv.join(" ").includes(`commits/${FORGED}/statuses`),
+      ),
+    ).toBe(false);
+    const writes = statusWrites(calls);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("state=failure");
+    expect(writes[0]).toContain(
+      "description=pr-hero: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+    );
+  });
+
+  // A re-run or reopen of the gate on an overridden head: the skip must not write over the override.
+  test("a re-run on a head the human overrode writes no skip status over the override", async () => {
+    const calls: string[][] = [];
+    const headOverride: ScriptEntry = {
+      match: [`commits/${HEAD_B}/status?`],
+      response: {
+        stdout: `${JSON.stringify({
+          state: "success",
+          context: "pr-hero",
+          created_at: T2,
+          description: "pr-hero: overridden by @alice",
+        })}\n`,
+      },
+    };
+    const result = await runGate(
+      gateScript(
+        statusRows([
+          {
+            state: "failure",
+            context: "pr-hero",
+            created_at: T1,
+            description:
+              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          },
+        ]),
+        HEAD_A,
+        [headOverride],
+      ),
+      "gate",
+      calls,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(statusWrites(calls)).toEqual([]);
+  });
+
+  test("advisory mode reads no history and posts no status on the new head", async () => {
+    const calls: string[][] = [];
+    await runGate(
+      gateScript(
+        statusRows([
+          {
+            state: "failure",
+            context: "pr-hero",
+            created_at: T1,
+            description:
+              "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          },
+        ]),
+      ),
+      "advisory",
+      calls,
+    );
+    expect(statusWrites(calls)).toEqual([]);
+    expect(
+      calls.some((argv) => argv.some((t) => t.includes("/statuses?"))),
+    ).toBe(false);
+  });
+});
+
+// A CI run that exits on a configuration error (gotchas, prompt set) before it
+// reviews anything writes a gate-skipped row for its head, so that head does not
+// spend one of the PR's automatic attempts (#326 gives the gate skips the same
+// treatment). The error itself is rethrown by the caller, unchanged.
+describe("recordCiConfigErrorSkip — a configuration error before the review spends nothing", () => {
+  const CONFIG_REASON = "configuration error before the review";
+
+  test("writes a gate-skipped row for the head", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await recordCiConfigErrorSkip({
+      operatorRoot: "/repo",
+      prNumber: PR,
+      config: EMPTY_LOCAL_CONFIG,
+      resolveHeadSha: async () => HEAD_A,
+      reason: CONFIG_REASON,
+      spawnFn,
+    });
+
+    expect(
+      calls.some((argv) =>
+        argv.join(" ").includes("output[summary]=gate-skipped (attempt 1)"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a head lookup that fails writes nothing and does not throw", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh([], calls);
+
+    await expect(
+      recordCiConfigErrorSkip({
+        operatorRoot: "/repo",
+        prNumber: PR,
+        config: EMPTY_LOCAL_CONFIG,
+        resolveHeadSha: async () => {
+          throw new Error("gh pr view failed");
+        },
+        reason: CONFIG_REASON,
+        spawnFn,
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("isCiConfigError — only a classified configuration CliError qualifies", () => {
+  test.each([
+    { kind: "gotchas", reason: "empty" },
+    { kind: "gotchas", reason: "placeholder" },
+    { kind: "prompt-set" },
+  ] as const)("$kind is a configuration error", (cls) => {
+    expect(isCiConfigError(new CliError("bad config", { cls }))).toBe(true);
+  });
+
+  test("an unclassified error is not one", () => {
+    expect(isCiConfigError(new CliError("network down"))).toBe(false);
+    expect(isCiConfigError(new Error("boom"))).toBe(false);
+  });
+
+  test("a classified error of another class is not one", () => {
+    expect(
+      isCiConfigError(new CliError("no spend", { cls: { kind: "invariant" } })),
+    ).toBe(false);
+  });
+});
+
+// A gh call that never answers must not park the CI run: the caller is about to
+// rethrow the configuration error, and that error has to reach the operator.
+describe("recordCiConfigErrorSkip — a hung GitHub call is bounded", () => {
+  test("a head lookup that never answers gives up within the bound, writing nothing", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh([], calls);
+    const started = Date.now();
+
+    await recordCiConfigErrorSkip({
+      operatorRoot: "/repo",
+      prNumber: PR,
+      config: EMPTY_LOCAL_CONFIG,
+      resolveHeadSha: () => new Promise<string>(() => {}),
+      reason: "configuration error before the review",
+      spawnFn,
+      timeoutMs: 25,
+    });
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(calls).toEqual([]);
+  });
+});
+
+// Once the reservation exists, the settle must run to completion, even when it
+// is slower than the read deadline. Abandoning it would leave a `reserved` check
+// run that counts as a spent attempt forever.
+describe("recordCiConfigErrorSkip — a created reservation is always settled", () => {
+  test("a slow but bounded settle finishes before the call returns, as gate-skipped", async () => {
+    const calls: string[][] = [];
+    const base = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+    let settleFinished = false;
+    const spawnFn = ((argv: string[]) => {
+      const proc = base(argv);
+      if (!argv.join(" ").includes("PATCH")) return proc;
+      return {
+        ...proc,
+        exited: new Promise<number>((resolve) =>
+          setTimeout(() => {
+            settleFinished = true;
+            resolve(0);
+          }, 60),
+        ),
+      };
+    }) as unknown as typeof Bun.spawn;
+
+    await recordCiConfigErrorSkip({
+      operatorRoot: "/repo",
+      prNumber: PR,
+      config: EMPTY_LOCAL_CONFIG,
+      resolveHeadSha: async () => HEAD_A,
+      reason: "configuration error before the review",
+      spawnFn,
+      timeoutMs: 25,
+    });
+
+    expect(settleFinished).toBe(true);
+    expect(
+      calls.some(
+        (argv) =>
+          argv.join(" ").includes("PATCH") &&
+          argv.join(" ").includes("output[summary]=gate-skipped"),
+      ),
+    ).toBe(true);
+  });
 });

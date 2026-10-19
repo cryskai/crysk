@@ -23,6 +23,7 @@ import {
   normalizeUnavailableUsage,
   UsageModeMismatchError,
 } from "../execution/usage-normalized";
+import { CredentialProjectionError } from "../security/credential-broker";
 import { redactDiagnostic } from "../security/redact";
 
 // WHY there is no @opencode-ai dependency here: production enablement over the
@@ -43,6 +44,14 @@ const MAX_STDERR_TAIL_BYTES = 64 * 1024;
 // aborts the attempt as protocol_overflow. The spec fixes no number; 10 s is
 // the declared production default (injectable for offline tests).
 const DEFAULT_STALL_DEADLINE_MS = 10_000;
+
+// The setup deadline covers launch, qualification, mcp.status and
+// session.create, so it must outlast the layers it wraps or it fires first and
+// turns a recoverable slow start into a failure. Launch can take the server's
+// own 15 s startup timeout (opencode-server.ts), and qualification's worst case
+// is 19.5 s: health 3 x 2 s + /doc 3 x 4 s + 250 ms and 500 ms backoff. That
+// is 34.5 s before mcp.status and session.create. 45 s keeps headroom above it.
+const DEFAULT_SETUP_DEADLINE_MS = 45_000;
 
 // §5.2 line 272 (SDK row): session.abort() → provider-specific terminal
 // confirmation up to 5,000 ms → local cleanup up to 1,000 ms; the harness
@@ -439,6 +448,21 @@ function providerRefusalRetries(witness: string): boolean | undefined {
   return undefined;
 }
 
+// The provider's HTTP status, read from the fixed `status=` slot inside the
+// `(<name> status=<code>)` group that follows the retryable flag. The name is
+// the provider's own text, so the match is anchored right after the flag and
+// stops at the group's close paren: a message that says "status=404" cannot
+// reach this slot. "unknown" (no status was reported) returns undefined.
+function providerRefusalStatus(witness: string): string | undefined {
+  const at = witness.indexOf(MARKER_PROVIDER_REFUSAL);
+  if (at < 0) return undefined;
+  const rest = witness.slice(at + MARKER_PROVIDER_REFUSAL.length);
+  const slot = rest.match(
+    /^ retryable=(?:yes|no) \([^()]* status=(\d+|unknown)\): /,
+  );
+  return slot?.[1] === "unknown" ? undefined : slot?.[1];
+}
+
 // #157 (pr-157-8df2fca3-6): a hunter's tool call for a path OUTSIDE the
 // reviewed worktree tripped `permission.asked` for `external_directory`
 // twice in one run, and pr-hero never answered OpenCode's permission prompt
@@ -643,7 +667,7 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     this.clock = options.clock ?? systemClock;
     this.usefulProgressMs =
       options.usefulProgressMs ?? DEFAULT_USEFUL_PROGRESS_MS;
-    this.setupDeadlineMs = options.setupDeadlineMs ?? 10_000;
+    this.setupDeadlineMs = options.setupDeadlineMs ?? DEFAULT_SETUP_DEADLINE_MS;
     this.nowIso = options.nowIso ?? (() => new Date().toISOString());
     this.usageBillingMode = options.billingMode ?? "subscription";
   }
@@ -1094,6 +1118,14 @@ export class OpenCodeSdkTransport implements ProviderTransport {
             })
           : noSessionUsage(Date.now() - startedWall, this.usageBillingMode),
         stderrTail: `[pr-hero] opencode sdk: session creation failed: ${errorMessage(error)}`,
+        // WHY the typed error, not the message: the server launch projects the route's
+        // credential, and a provider with no record in the auth store is a typed broker
+        // refusal. Its witness text would classify as runtime_unavailable, the generic
+        // cause, so the instance carries the one class this transport can name.
+        ...(error instanceof CredentialProjectionError &&
+        error.failureClass === "missing_provider_record"
+          ? { failureCause: "missing_provider_record" as const }
+          : {}),
       };
     } finally {
       removeAbort?.();
@@ -2136,6 +2168,15 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     // not spend the format-reminder budget on an empty draft. isRetryable
     // true is the provider asking for another attempt; that is the transient
     // budget, never the format one.
+    // A refusal whose slot reports HTTP 404 names a model the provider does not
+    // serve: no retry can make it exist, and PRH-MODEL-UNAVAILABLE says so with
+    // the provider's name. Only the status slot decides, never the message.
+    if (
+      witness.includes(MARKER_PROVIDER_REFUSAL) &&
+      providerRefusalStatus(witness) === "404"
+    ) {
+      return "model_unavailable";
+    }
     if (witness.includes(MARKER_PROVIDER_REFUSAL)) {
       return providerRefusalRetries(witness) === true
         ? "network_transient"

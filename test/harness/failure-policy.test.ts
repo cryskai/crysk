@@ -58,6 +58,10 @@ const TABLE: ReadonlyArray<readonly [FailureCause, RetryDisposition]> = [
   ["output_limit_exceeded", { action: "terminal" }],
   ["safety_refusal", { action: "terminal" }],
   ["provider_configuration_invalid", { action: "terminal" }],
+  ["model_unavailable", { action: "terminal" }],
+  // WHY terminal: the route's provider has no entry in the OpenCode auth store, and no retry
+  // can create one; the fix is a credential change, so the same request fails again.
+  ["missing_provider_record", { action: "terminal" }],
   ["runtime_unavailable", { action: "terminal" }],
   // "terminal and transport conformance failure unless explicitly allowlisted"
   ["protocol_mismatch", { action: "terminal" }],
@@ -92,7 +96,7 @@ describe("§7 cause vocabulary", () => {
     ]
       .map((m) => m[1])
       .sort();
-    expect(declared.length).toBe(18);
+    expect(declared.length).toBe(20);
     const covered: string[] = TABLE.map(([cause]) => cause);
     expect(covered.sort()).toEqual(declared);
   });
@@ -390,6 +394,8 @@ describe("legacyClassificationFromCause", () => {
       "output_limit_exceeded",
       "safety_refusal",
       "provider_configuration_invalid",
+      "model_unavailable",
+      "missing_provider_record",
       "runtime_unavailable",
       "protocol_mismatch",
       "protocol_overflow",

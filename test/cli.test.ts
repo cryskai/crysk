@@ -25,6 +25,7 @@ import {
   type AdmissionRecord,
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
+import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
 import {
   evaluateCiReviewAdmission,
   resolveCiAdmissionAttemptCount,
@@ -59,6 +60,7 @@ import {
 } from "../src/cli";
 import { canonicalRemoteId } from "../src/home-preflight";
 import { readLocalIgnoreRules } from "../src/ignore-read";
+import { createSignalHandler } from "../src/signal-handler";
 
 // ---------------------------------------------------------------------------
 // FakeGh: records every call's argv AND stdin (decoded), in order. Routes
@@ -833,7 +835,7 @@ describe("settleHeldCommitStatusOnSignal", () => {
     expect(calls[0]?.operatorRoot).toBe(lock.operatorRoot);
     expect(calls[0]?.sha).toBe(lock.sha);
     expect(calls[0]?.request.state).toBe("error");
-    expect(calls[0]?.request.description).toBe("review did not finish");
+    expect(calls[0]?.request.description).toBe(CANCELLED_STATUS_DESCRIPTION);
     expect(calls[0]?.options).toEqual({
       attempts: 1,
       timeoutMs: CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
@@ -860,5 +862,137 @@ describe("settleHeldCommitStatusOnSignal", () => {
       throw new Error("missing permission (HTTP 403)");
     }) as unknown as typeof postCommitStatus;
     await expect(settleHeldCommitStatusOnSignal(post)).resolves.toBeUndefined();
+  });
+});
+
+// T2c unit A (odd/tasks/agent-first-ci.md, S3): the fatal exits of main() leave
+// cli.json in action mode. An early validation (a malformed argument) writes
+// nothing: it is a pre-review exit the publisher reads as stopped-before-reporting.
+describe("main — the outcome record in action mode", () => {
+  let savedOutcome: string | undefined;
+  let savedStderrWrite: typeof process.stderr.write;
+
+  beforeEach(() => {
+    savedOutcome = process.env.PRHERO_OUTCOME_DIR;
+    savedStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+  });
+
+  afterEach(() => {
+    process.stderr.write = savedStderrWrite;
+    if (savedOutcome === undefined) {
+      delete process.env.PRHERO_OUTCOME_DIR;
+    } else {
+      process.env.PRHERO_OUTCOME_DIR = savedOutcome;
+    }
+  });
+
+  test("a CliError from a command body records error, unclassified, and still exits 1", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-main-record-"));
+    const outcome = path.join(dir, "outcome");
+    const notARepo = path.join(dir, "not-a-repo");
+    await mkdir(notARepo, { recursive: true });
+    process.env.PRHERO_OUTCOME_DIR = outcome;
+    try {
+      const code = await main([
+        "post",
+        "--pr",
+        "5",
+        "--from",
+        dir,
+        "--repo",
+        notARepo,
+      ]);
+      expect(code).toBe(1);
+      const record = JSON.parse(
+        await Bun.file(path.join(outcome, "cli.json")).text(),
+      );
+      expect(record).toEqual({
+        v: 1,
+        outcome: "error",
+        cls: { kind: "unknown" },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed argument writes no record and still exits 2", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-main-noparse-"));
+    const outcome = path.join(dir, "outcome");
+    await mkdir(outcome, { recursive: true });
+    process.env.PRHERO_OUTCOME_DIR = outcome;
+    try {
+      expect(await main(["review", "--no-such-flag"])).toBe(2);
+      expect(await Bun.file(path.join(outcome, "cli.json")).exists()).toBe(
+        false,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // runCli's catch calls process.exit, so no test can reach it. This pins the
+  // write's place instead: the record is written inside that catch, before the
+  // rethrow that a local run takes when $GITHUB_OUTPUT is unset.
+  test("runCli's catch writes the fatal record before any rethrow", async () => {
+    const source = await Bun.file(
+      path.join(import.meta.dir, "../src/cli.ts"),
+    ).text();
+    const runCliAt = source.indexOf("export async function runCli(");
+    const writeAt = source.indexOf("writeFatalCliRecord(", runCliAt);
+    const rethrowAt = source.indexOf("throw error;", runCliAt);
+    expect(runCliAt).toBeGreaterThan(-1);
+    expect(writeAt).toBeGreaterThan(runCliAt);
+    expect(rethrowAt).toBeGreaterThan(writeAt);
+  });
+});
+
+describe("runCli exit hooks on a non-TTY stderr", () => {
+  // WHY: the cursor-restore escape is a terminal control. On a pipe or a CI
+  // log it prints as literal "[?25h" after every command. Only a terminal
+  // whose cursor the menu hid needs it restored.
+  test("a non-TTY run writes no cursor-restore escape", async () => {
+    const root = path.resolve(import.meta.dir, "..");
+    const proc = Bun.spawn(["bun", "bin/pr-hero.js", "--help"], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stderr, exitCode] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stderr.includes("\x1b[?25h")).toBe(false);
+  });
+});
+
+// A second signal must never cut the first one's settle short (Actions sends
+// SIGINT then SIGTERM; npx with a piped stdin can deliver SIGINT twice).
+describe("createSignalHandler", () => {
+  test("a second signal waits for the first settle, and the process exits once with the first code", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const events: string[] = [];
+    const onSignal = createSignalHandler({
+      settle: async () => {
+        events.push("settle-start");
+        await gate;
+        events.push("settle-end");
+      },
+      exit: (code) => {
+        events.push(`exit ${code}`);
+      },
+    });
+    const first = onSignal(130)();
+    const second = onSignal(143)();
+    await Promise.resolve();
+    expect(events).toEqual(["settle-start"]);
+    release();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["settle-start", "settle-end", "exit 130"]);
   });
 });

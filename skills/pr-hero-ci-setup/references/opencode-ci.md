@@ -130,11 +130,12 @@ The Action installs OpenCode CLI **1.18.30** in its **own** step when `opencode-
 
 ## Fail-closed edges
 
-- Fork PRs still skip (no secrets).
-- OpenCode-only (only `OPENCODE_AUTH_JSON`) **does** start the review job.
+- Fork pushes still skip (no secrets); a maintainer's `/pr-hero review` comment reviews a fork.
+- OpenCode-only (only `OPENCODE_AUTH_JSON`) counts as a credential and reviews.
+- No credential at all fails the run red, with the `gh secret set` commands in the step summary.
 - Claude credentials + OpenCode routing **without** `OPENCODE_AUTH_JSON` starts then **fails**.
 - Invalid routing/auth JSON fails loud.
 
 ## After setting DATA
 
-Open a **same-repo** PR (forks skip). Confirm the review job materializes person-layer `$HOME/.prhero/config.json` and 0600 auth, and that spend notices show metered when the OpenCode file is present.
+Open a **same-repo** PR (fork pushes skip). Confirm the review job materializes person-layer `$HOME/.prhero/config.json` and 0600 auth, and that spend notices show metered when the OpenCode file is present.

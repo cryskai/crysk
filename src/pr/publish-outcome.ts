@@ -25,6 +25,8 @@
 // reassigning the binding itself, so passing the reference through is enough.
 
 import path from "node:path";
+import { classifyCliError } from "#ci/classify-error";
+import { recordReviewDelivered, writeCliRecord } from "#ci/cli-record";
 import { ciExitCode } from "#ci/gates";
 import {
   ingestReviewMetrics,
@@ -33,6 +35,7 @@ import {
 } from "#config/config";
 import { gitRemoteWebUrl } from "#git/git";
 import { engineIdentity } from "#git/identity";
+import type { FreeRouteBilling } from "#model/free-discovery";
 import {
   type CiAdmissionLedgerState,
   settleCiAdmissionLedger,
@@ -41,7 +44,9 @@ import { publishCiReviewIfEligible } from "#pr/ci-publish";
 import { computeGreptileComparison } from "#pr/comparison";
 import type { PrDiscoveryResult } from "#pr/discovery";
 import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
-import { postFindingsIfEnabled } from "#pr/posting";
+import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
+import type { CiMode } from "#pr/preflight";
+import { unresolvedBlockingCount } from "#rereview/state";
 import type { Telemetry } from "#review/findings";
 import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
@@ -54,6 +59,7 @@ import {
 import { buildTelemetry, writeRunFindings, writeRunReport } from "#review/run";
 import { log, styleEnabled } from "#ui/primitives";
 import { type ResultLinks, renderResult } from "#ui/result";
+import { freeBillingMode } from "#ui/select";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 
@@ -81,18 +87,37 @@ export interface PublishRunOutcomeInput {
   gitDirOwner: string;
   worktreePath: string;
   isCi: boolean;
+  // The run's one resolved CI mode (resolveCiMode, reviewPr). The report, the
+  // summary comment and the step summary all name it; nothing re-resolves it.
+  ciMode: CiMode;
   estimate: ReturnType<typeof estimateCost>;
+  // W3-FOOTER: the plan's free-route count. Absent means no free share, and the
+  // footer keeps its subscription wording.
+  freeRoute?: FreeRouteBilling;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   // Fired the instant `posted` would have been assigned inside reviewPr()
   // itself — see the header above.
   onPosted: (posted: InlinePostOutcome | null) => void;
+  // S4's sibling sink, for the same reason as onPosted: the commit status
+  // (settleCommitStatusAndLedger) reads this count in reviewPr()'s finally,
+  // and a throw later in this tail must not leave it unknown. The count is the
+  // gate's UNRESOLVED blocking count (rereview/state.ts), not this run's survivors.
+  onBlockingCount: (count: number) => void;
+  // Test-only seam (default: the real postFindingsIfEnabled). The posting stage
+  // reaches gh with no offline seam of its own, so the suite passes a fake that
+  // rejects or resolves, the way it drives the throw and the delivery point.
+  postFindings?: typeof postFindingsIfEnabled;
 }
 
 export async function publishRunOutcome(
   input: PublishRunOutcomeInput,
 ): Promise<number> {
   if (input.result === undefined) {
-    throw new CliError("internal: pipeline returned no result");
+    // An engine invariant, not the reader's configuration: the record names it as
+    // the pr-hero defect class (T2d-1).
+    throw new CliError("internal: pipeline returned no result", {
+      cls: { kind: "invariant" },
+    });
   }
   const result = input.result;
   const wallMs = Math.round(performance.now() - input.started);
@@ -114,6 +139,18 @@ export async function publishRunOutcome(
     engine: await engineIdentity(),
     telemetry,
   });
+  // S4: the gate's unresolved count, read by the commit status in teardown.
+  // It is this run's blocking survivors PLUS every live blocking prior that no
+  // verifier verdict and no deletion cleared (rereview/state.ts owns the rule and
+  // its dedupe key). Counting only this run's survivors read green on a
+  // same-head forced re-review and on any re-review that carried a blocking
+  // prior. Computed once here, and fired the moment the doc exists, so a later
+  // throw still leaves the gate a count to read.
+  const blockingCount = unresolvedBlockingCount(
+    doc.findings,
+    result.gatePriors ?? [],
+  );
+  input.onBlockingCount(blockingCount);
   const reportPath = await writeRunReport({
     runDir: input.runDir,
     doc,
@@ -124,7 +161,15 @@ export async function publishRunOutcome(
     droppedPaths: input.droppedPaths,
     result,
     wallMs,
+    ciMode: input.ciMode,
   });
+  // The delivery point when posting is off: nothing is posted, so the written
+  // artifacts are the delivery. Written after writeRunReport, never before, so a
+  // failed artifact write leaves no record of a delivery. A failed session keeps the
+  // hunters-failed record that reviewPr wrote when the pipeline returned.
+  if (!input.postEnabled && !result.sessionFailed) {
+    recordReviewDelivered(input.headSha);
+  }
 
   // 13 — the Greptile head-to-head, then (13b) the comparison.json
   // read-back for the observability store. See computeGreptileComparison
@@ -172,18 +217,48 @@ export async function publishRunOutcome(
   // links must be built from the SAME web url the comments were
   // published against. See postFindingsIfEnabled (src/pr/posting.ts) for
   // the full rationale.
-  const postingResult = await postFindingsIfEnabled({
-    postEnabled: input.postEnabled,
-    sessionFailed: result.sessionFailed,
-    operatorRoot: input.operatorRoot,
-    pr: input.prNumber,
-    headSha: input.headSha,
-    doc,
-    diffPatch: input.diffPatch,
-    runDir: input.runDir,
-    rereview: input.rereview,
-    rereviewPriors: input.phaseB?.priors,
-  });
+  // Only the posting call is wrapped. A throw before the delivery point is the
+  // posting's own failure, so its record names the step and the publisher can say
+  // the review stopped while posting. A throw after it keeps reviewed (see
+  // onDelivered below), so no posting record replaces it.
+  // The error is rethrown unchanged, and no stage around this call is wrapped.
+  let postingResult: PostingStageResult;
+  let delivered = false;
+  try {
+    postingResult = await (input.postFindings ?? postFindingsIfEnabled)({
+      postEnabled: input.postEnabled,
+      sessionFailed: result.sessionFailed,
+      operatorRoot: input.operatorRoot,
+      pr: input.prNumber,
+      headSha: input.headSha,
+      doc,
+      diffPatch: input.diffPatch,
+      runDir: input.runDir,
+      rereview: input.rereview,
+      rereviewPriors: input.phaseB?.priors,
+      // A comment-triggered run: its summary counter stays where it was.
+      force: input.options.force === true,
+      // THE delivery point when posting is on: the findings POST has resolved, so
+      // the review is delivered. It fires before the local receipt is written, so a
+      // receipt write that throws is a failure after delivery. A failed session never
+      // reaches it.
+      onDelivered: () => {
+        recordReviewDelivered(input.headSha);
+        delivered = true;
+      },
+      ciMode: input.ciMode,
+    });
+  } catch (error) {
+    if (!delivered) {
+      writeCliRecord({
+        v: 1,
+        outcome: "error",
+        cls: classifyCliError(error),
+        params: { step: "posting the review" },
+      });
+    }
+    throw error;
+  }
   // The hazard this whole module exists for: fire the sink IMMEDIATELY, at
   // the exact point reviewPr() used to assign its own `posted` variable —
   // not at the end of this function, and not via the return value — so a
@@ -224,6 +299,9 @@ export async function publishRunOutcome(
     doc,
     costUsd: result.usage.cost_usd_est,
     ...notionalCostInput(result),
+    ...(input.freeRoute === undefined
+      ? {}
+      : { billing: freeBillingMode(input.freeRoute) }),
     wallMs,
     estimate: { low: input.estimate.low, high: input.estimate.high },
     runDir: input.runDir,
@@ -278,6 +356,7 @@ export async function publishRunOutcome(
     delta: posted?.delta,
     runDir: input.runDir,
     stepSummaryFlag: input.options.stepSummary,
+    ciMode: input.ciMode,
   });
   if (result.sessionFailed) {
     await settleCiAdmissionLedger(
@@ -300,7 +379,7 @@ export async function publishRunOutcome(
     ? ciExitCode({
         sessionFailed: result.sessionFailed,
         droppedFindingIds: posted?.droppedFindingIds.length ?? 0,
-        blockingCount: doc.findings.filter((f) => f.tier === "blocking").length,
+        blockingCount,
       })
     : postingExitCode(posted);
 }

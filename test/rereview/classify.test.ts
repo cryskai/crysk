@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   applyWorsening,
   classifyPrior,
+  type HeldStatus,
   type PhaseBContext,
   type PriorRecord,
 } from "#rereview/classify";
@@ -89,7 +90,7 @@ describe("rule 2 — rename before touched (R2-C1)", () => {
 });
 
 describe("rules 3–6 — triage outranks touched (O-3)", () => {
-  test("dismissed+upheld stays suppressed even when the site moved", () => {
+  test("dismissed+upheld is held, not settled, when the site moved", () => {
     const result = classifyPrior(
       prior({
         triage: {
@@ -100,8 +101,11 @@ describe("rules 3–6 — triage outranks touched (O-3)", () => {
       }),
       ctx({ touched: () => true }),
     );
-    expect(result.status).toBe("suppressed");
-    expect(result.trigger).toBeUndefined();
+    expect(result).toMatchObject({
+      status: "queued",
+      trigger: "touched",
+      held: "suppressed",
+    });
   });
 
   test("dismissed+rejected returns blocking, no verify", () => {
@@ -118,7 +122,7 @@ describe("rules 3–6 — triage outranks touched (O-3)", () => {
     expect(result.status).toBe("returned");
   });
 
-  test("deferred stays deferred without an issue number (S6)", () => {
+  test("deferred without an issue number (S6) is held while the site is touched", () => {
     const result = classifyPrior(
       prior({
         triage: {
@@ -129,7 +133,11 @@ describe("rules 3–6 — triage outranks touched (O-3)", () => {
       }),
       ctx({ touched: () => true }),
     );
-    expect(result.status).toBe("deferred");
+    expect(result).toMatchObject({
+      status: "queued",
+      trigger: "touched",
+      held: "deferred",
+    });
   });
 
   test("misclassified is re-tiered, not re-hunted", () => {
@@ -235,7 +243,7 @@ describe("case D/E — verify-all after triage settles", () => {
     expect(result).toMatchObject({ status: "queued", trigger: "verify_all" });
   });
 
-  test("dismissed+upheld still settles as suppressed (O-3)", () => {
+  test("dismissed+upheld is held as verify_all in case D (O-3 settles it after verification)", () => {
     const result = classifyPrior(
       prior({
         triage: {
@@ -246,7 +254,11 @@ describe("case D/E — verify-all after triage settles", () => {
       }),
       ctx({ case: "D" }),
     );
-    expect(result.status).toBe("suppressed");
+    expect(result).toMatchObject({
+      status: "queued",
+      trigger: "verify_all",
+      held: "suppressed",
+    });
   });
 
   test("a deleted file is still verified-gone, not verify_all", () => {
@@ -262,10 +274,10 @@ describe("case D/E — verify-all after triage settles", () => {
 // exactly like case D/E do, for ANY case — this is how a forced-full
 // re-review (case stays B or C; only discovery widens, per R2-C5) actually
 // re-verifies every prior instead of leaving `plan.verifyAll` a documented
-// but unread flag. Deterministic triage settlements (deleted files,
-// dismissed/deferred/misclassified) still short-circuit BEFORE verifyAll is
-// even consulted — a human's own triage call outranks the machine's
-// "the last run might have missed this" signal.
+// but unread flag. A triage settlement (dismissed/deferred/misclassified) is
+// held and queued the same way, so verification can see a fix that touched
+// the finding's code; it settles back to the held status only when the
+// verifier does not refute the finding (see the held describe block below).
 describe("verifyAll (rereview-coverage fix) — forces verify_all outside D/E", () => {
   test("case B with verifyAll queues verify_all even though case B alone would not", () => {
     const result = classifyPrior(prior(), ctx({ case: "B", verifyAll: true }));
@@ -280,7 +292,7 @@ describe("verifyAll (rereview-coverage fix) — forces verify_all outside D/E", 
     expect(result).toMatchObject({ status: "queued", trigger: "verify_all" });
   });
 
-  test("verifyAll does not override a deterministic triage settlement", () => {
+  test("verifyAll holds a triage settlement and queues it as verify_all", () => {
     const result = classifyPrior(
       prior({
         triage: {
@@ -291,7 +303,11 @@ describe("verifyAll (rereview-coverage fix) — forces verify_all outside D/E", 
       }),
       ctx({ case: "B", verifyAll: true }),
     );
-    expect(result.status).toBe("suppressed");
+    expect(result).toMatchObject({
+      status: "queued",
+      trigger: "verify_all",
+      held: "suppressed",
+    });
   });
 
   test("verifyAll does not override verified-gone", () => {
@@ -356,5 +372,135 @@ describe("W-worse — phase E lifts suppression only on strictly higher sev", ()
     expect(hits).toEqual([
       { priorId: "R001", priorSev: "WARNING", discoverySev: "CRITICAL" },
     ]);
+  });
+});
+
+// A held settlement is a triage outcome the prior would take without
+// verification. A push that touches the finding's code (or a verify-all
+// case) queues it, so a fix the author pushed is verified before the gate
+// counts the finding. The held status is what the verifier's "still present"
+// or "inconclusive" answer settles to (assembleLive in rereview/state.ts).
+describe("held triage — a touching push queues the settlement for verification", () => {
+  const triaged: Array<[string, PriorRecord["triage"], HeldStatus]> = [
+    [
+      "dismissed+rejected",
+      {
+        tag: "dismissed",
+        verdict: "rejected",
+        createdAt: "2026-08-21T00:00:00Z",
+      },
+      "returned",
+    ],
+    [
+      "dismissed+upheld",
+      {
+        tag: "dismissed",
+        verdict: "upheld",
+        createdAt: "2026-08-21T00:00:00Z",
+      },
+      "suppressed",
+    ],
+    [
+      "deferred",
+      { tag: "deferred", verdict: "upheld", createdAt: "2026-08-21T00:00:00Z" },
+      "deferred",
+    ],
+    [
+      "misclassified",
+      {
+        tag: "misclassified",
+        verdict: "upheld",
+        createdAt: "2026-08-21T00:00:00Z",
+      },
+      "re-tiered",
+    ],
+  ];
+  for (const [name, triage, held] of triaged) {
+    test(`${name}: untouched stays ${held} and is not queued`, () => {
+      const result = classifyPrior(prior({ triage }), ctx());
+      expect(result).toEqual({
+        id: "R001",
+        status: held,
+        locs: ["src/app.ts:10"],
+        renamed: false,
+      });
+    });
+
+    test(`${name}: touched is queued as touched, holding ${held}`, () => {
+      const result = classifyPrior(
+        prior({ triage }),
+        ctx({ touched: () => true }),
+      );
+      expect(result).toMatchObject({
+        status: "queued",
+        trigger: "touched",
+        held,
+      });
+    });
+
+    test(`${name}: case D is queued as verify_all, holding ${held}`, () => {
+      const result = classifyPrior(prior({ triage }), ctx({ case: "D" }));
+      expect(result).toMatchObject({
+        status: "queued",
+        trigger: "verify_all",
+        held,
+      });
+    });
+  }
+
+  test("ci-dismissed keeps its precedence over a touched site: never queued", () => {
+    const result = classifyPrior(
+      prior({
+        triage: {
+          tag: "dismissed",
+          verdict: "upheld",
+          ciVerdict: "upheld",
+          createdAt: "2026-08-21T00:00:00Z",
+        },
+      }),
+      ctx({ case: "D", touched: () => true }),
+    );
+    expect(result.status).toBe("ci-dismissed");
+    expect(result.held).toBeUndefined();
+  });
+
+  test("a deleted file keeps verified-gone precedence over a held settlement", () => {
+    const result = classifyPrior(
+      prior({
+        triage: {
+          tag: "deferred",
+          verdict: "upheld",
+          createdAt: "2026-08-21T00:00:00Z",
+        },
+      }),
+      ctx({ deletedFiles: new Set(["src/app.ts"]), touched: () => true }),
+    );
+    expect(result.status).toBe("verified-gone");
+  });
+
+  // applyWorsening runs before verification and used to see only a `suppressed`
+  // row. A held suppressed row must still be worsened: it stays queued (the
+  // verifier still runs on the touched code) and holds `returned`.
+  test("a worsening survivor turns a held suppressed row into a held returned row", () => {
+    const suppressed = prior({
+      triage: {
+        tag: "dismissed",
+        verdict: "upheld",
+        createdAt: "2026-08-21T00:00:00Z",
+      },
+    });
+    const worsened = applyWorsening({
+      settled: [classifyPrior(suppressed, ctx({ touched: () => true }))],
+      priors: [suppressed],
+      survivors: [
+        { path: "src/app.ts", line: 10, proof_refs: [], severity: "BLOCKER" },
+      ],
+    });
+    expect(worsened.hits).toHaveLength(1);
+    expect(worsened.settled[0]).toMatchObject({
+      status: "queued",
+      trigger: "touched",
+      held: "returned",
+    });
   });
 });

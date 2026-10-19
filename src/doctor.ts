@@ -21,6 +21,8 @@ import {
 } from "./agent-env";
 import {
   type EngineAssets,
+  isNpxCacheInvocation,
+  NPX_REGISTRATION_REFUSED,
   resolveEngineAssets,
   selfInvocation,
 } from "./assets";
@@ -521,7 +523,16 @@ export async function runDoctor(
         }
       }
 
-      if (env.mcpConfigFile) {
+      if (env.mcpConfigFile && isNpxCacheInvocation(self)) {
+        // Under npx the expected command is the temporary cache's path, which no
+        // registration holds, so an equality check would always report missing.
+        checks.push({
+          name: `mcp:${env.id}`,
+          severity: "degraded",
+          message: `MCP registration for ${env.displayName} is not checked from npx's temporary cache`,
+          hint: NPX_REGISTRATION_REFUSED,
+        });
+      } else if (env.mcpConfigFile) {
         const mcpOk = inspectMcpRegistration(env, mcpReg, { exists, readFile });
         if (mcpOk) {
           checks.push({

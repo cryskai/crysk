@@ -7,8 +7,10 @@ finding, and deterministic code — never a model — assigns blocking/advisory 
 Its measured profile, stated up front: **high precision, narrow coverage**. What it reports is
 almost always real (13% false positives measured); it specializes in lifecycle and state-machine
 defects — stuck loading latches, missing cleanups, re-entrancy, stalls — and says nothing about
-style or convention. It is an **assistant, not a merge gate**: every report closes with that
-disclaimer, and nothing in this tool blocks a merge.
+style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
+disclaimer, and nothing it prints blocks a merge. In CI its commit status is a gate by default: require the
+`pr-hero` check in branch protection, and blocking findings block the merge. `mode: advisory` keeps that check
+green.
 
 ## Requirements
 
@@ -50,10 +52,18 @@ pr-hero from: that single step is what moves a run from quota to invoice.
 # Option A: Standalone binary (macOS / Linux, bundles its own Bun — still needs claude and git)
 curl -fsSL https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh | bash
 
-# Option B: Global npm install (requires Bun >= 1.3 already on PATH)
+# Option B: Global npm install (brings Bun 1.3.14 as an optional dependency, or uses
+# the Bun >= 1.3 on PATH when npm skips optional dependencies)
 npm install -g pr-hero
 
-# Option C: From source / development
+# Option D: No install, for an agent or a one-off run (needs only Node). It cannot
+# register the MCP server or the launchd agents: npx's cache is temporary, so those
+# refuse and ask for option B. The launcher uses the bundled Bun only when it runs
+# (`bun --version` is checked first), otherwise the Bun on PATH, and exits 127 naming both if neither works.
+npx pr-hero doctor
+
+# Option C: From source / development (the bin runs on Node; on a machine with Bun
+# and no Node, run `bun bin/pr-hero.js` or use option A)
 git clone https://github.com/juanmaagd/pr-hero.git && cd pr-hero
 bun install && bun link
 ```
@@ -61,6 +71,8 @@ bun install && bun link
 See [Requirements](#requirements) above — `claude` and `git` are needed by every option.
 
 ## From install to first review
+
+Only want the CI review? You do not need to install anything: see [GitHub Actions — Quick path](docs/github-actions.md#quick-path) (`npx -y pr-hero setup --ci`, `npx -y pr-hero init`, one secret).
 
 Seven steps, in this order. Steps 2, 5 and 6 are the ones that get skipped, and
 each one breaks the step after it.
@@ -95,6 +107,9 @@ unattended. It is also optional for reviewing: `review` never checks whether it 
 only `pr-hero doctor` reports it. What it buys is the skills, the MCP registration and
 the repo scaffold; skip it and you scaffold the repo yourself with `pr-hero init`. It does
 **not** commit or `.gitignore` what it scaffolds, which is why step 5 exists.
+
+**Skill drift.** `setup` (and `upgrade`) installs the bundled skills into each agent's skills
+directory. A skill copy that differs from the bundled one and has no recorded digest is kept as it is and reported as drift, never overwritten, so your local edits survive; `pr-hero setup` prints each kept skill, and `pr-hero upgrade` replaces it.
 
 **On step 6.** `gotchas.md` is injected verbatim into every hunter's system prompt, and
 what `setup`/`init` write there is a placeholder: `- <subsystem>: <the thing that looks
@@ -214,7 +229,8 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 | `pr-hero activity [--kill <pid>]` | Inspect running reviews (with elapsed time, PID, repo/PR), watcher spend against daily cap, and completed run history. `--kill <pid>` safely terminates a running review. |
 | `pr-hero post --pr <n> --from <run-dir>` | Replay-publish a previous run's findings onto the PR (same plan as `--pr --post`). `--dry-run` previews at $0. |
 | `pr-hero triage --pr <n> --from <run-dir>` | Read reply threads and bind triage markers onto that run's `comparison.json` ledger rows. |
-| `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N --tag <tag> --body-file <path>` | Post one triage reply. The driver picks the parent from the posted `<!-- pr-hero-finding` marker (never path/line), renders the marker + badge, posts, and resolves the inline review thread. Reads `diff.patch` from the run dir to remap post lines the same way `--post` does. `--body-file` is reasoning only. |
+| `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N --tag <tag> --body-file <path>` | Post one triage reply. The driver picks the parent from the posted `<!-- pr-hero-finding` marker (never path/line), renders the marker + badge, posts, and resolves the inline review thread. Reads `anchor.patch` (else `diff.patch`) from the run dir to remap post lines the same way `--post` does. `--body-file` is reasoning only. |
+| `pr-hero status --pr <n> [--json]` | Read-only, through `gh` only: the PR's pr-hero gate, its posted findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `recheck`, `override-or-fix`, `done`). `--json` prints one `pr-hero.status/v1` object on stdout. See [`docs/github-actions.md`](docs/github-actions.md#reading-a-pr-with-pr-hero-status). |
 | `pr-hero config` | Read-only, $0: every config key with its value and **which layer decided it** (`repo` / `global` / `capped` / `default`), plus both file paths whether or not they exist. |
 | `pr-hero config set <key> <val> [--person\|--team\|--watch]` | Set a scalar configuration value in the selected layer (defaults to `--person`). Capped team keys accept and annotate over-ceiling values. |
 | `pr-hero config unset <key> [--person\|--team\|--watch]` | Remove a configuration value from the selected layer. |
@@ -238,8 +254,8 @@ Flags worth knowing: `--dry-run` (plan + cost band, creates nothing), `--yes`, `
 `--scout` / `--no-scout` (toggle pre-hunt reconnaissance scout),
 `--post` / `--no-post` (toggle PR comment publishing),
 `--force` (local only: review this diff even when the size gate would skip it;
-in GitHub Actions the same override is `gh workflow run pr-hero-force.yml -f pr=<n>`,
-which runs on the Actions runner),
+in GitHub Actions the same forced re-review is a `/pr-hero review` comment on the pull request,
+which runs on the Actions runner; `/pr-hero override` instead unlocks a red gate with no review),
 `--full` (run un-capped refuter verification steps),
 `--no-summary` (skip the summarizer; see `summary` in config above),
 `--out <dir>` (run dir for `review`), `--runs <dir>` (ledger's runs root),
@@ -285,8 +301,8 @@ Reviews launch two ways: **by hand**, or through the opt-in local watcher (`pr-h
 | --- | --- |
 | Manual CLI (`review`, `--pr`, `--post`, `ledger`) | **Available now** — this README. |
 | Auto-trigger on new PRs / new pushes (local watcher) | **Available now** — `pr-hero watch`, below. Deliberately opt-in: every review spends real money, so nothing fires until you `watch add` a repo AND `watch install` the agent. |
-| CI mode (GitHub Actions) | **Available now** — official `action.yml` at the repo root, canonical `.github/workflows/pr-hero.yml`, full setup in [`docs/github-actions.md`](docs/github-actions.md). Assistant posture (exit 0 on findings), the size/budget gates, and `pr-hero setup --ci` scaffolding all apply. |
-| Required status check that blocks merges | **Deliberately deferred.** At the engine's measured recall it has no business gating a merge — the disclaimer in every report is the contract. |
+| CI mode (GitHub Actions) | **Available now** — official `action.yml` at the repo root, canonical `.github/workflows/pr-hero.yml`, full setup in [`docs/github-actions.md`](docs/github-actions.md). The commit-status gate (`mode: gate`, the default; `mode: advisory` opts out), exit 0 on findings, the size/budget gates, and `pr-hero setup --ci` scaffolding all apply. |
+| Required status check that blocks merges | **Available in CI** — the `pr-hero` commit status is the check (`mode: gate`, the default). Require it in branch protection. Fail-closed for a head with no run stays deferred. |
 
 ## Watching PRs automatically — `pr-hero watch`
 
@@ -384,6 +400,7 @@ Run artifacts land **outside** the repo, in `~/.prhero/repos/<origin>/runs/<run>
 | `comparison.md` / `comparison.json` | PR mode only — the head-to-head against Greptile, three buckets. The JSON rows carry `verdict`/`reasoning` columns for triage; `pr-hero ledger` accumulates them. |
 | `diff.patch`, `pipeline.json`, `steps/` | The exact diff reviewed — after exclusions, so it is byte-for-byte what the hunters read — plus pipeline provenance (including the excluded paths), per-agent drafts and logs. |
 | `diff.raw.patch` | The unfiltered diff of the same range. Written **only** when exclusions actually dropped a file, since otherwise it would duplicate `diff.patch`. |
+| `anchor.patch` | The full PR diff (merge-base..head, after exclusions) that inline comments anchor against. On a first review it equals `diff.patch`; on an incremental re-review `diff.patch` is only the push delta, and this file still covers the whole PR, so a finding on an untouched line of the PR gets a review thread. |
 
 ## Cost and expectations
 
@@ -401,11 +418,11 @@ because an unattended watcher must not be the thing that discovers it.
 **It is not a claim about quality.** We have no evidence that a bigger diff reviews worse: attention
 dilution was tested and falsified (`fixtures/scale-probe.ts`), and the one measured Greptile-only
 miss came from a 7-file PR. If a large diff is worth its price, review it anyway.
-Locally that is `--force`. In GitHub Actions it is a separate workflow,
-`pr-hero-force.yml`, dispatched with `gh workflow run pr-hero-force.yml -f pr=<n>`.
-That command does not review on your machine; the Actions runner does. It also
-clears the CI admission rules and the budget ceiling for that one run. `gh run rerun`
-on the automatic workflow does not: it measures the gates again and skips again.
+Locally that is `--force`. In GitHub Actions it is a pull request comment, `/pr-hero review`,
+from a user with write access (a workflow scaffolded before the comment trigger uses
+`gh workflow run pr-hero-force.yml -f pr=<n>` instead). The comment does not review on your
+machine; the Actions runner does. It also clears the CI admission rules and the budget ceiling for
+that one run. `gh run rerun` on a skipped run does not: it measures the gates again and skips again.
 
 The gate counts **effective** changed lines (insertions + deletions) and files — excluded content is
 subtracted first, so a regenerated lockfile beside a ten-line change does not trip it. Excluded by
@@ -470,7 +487,8 @@ only ever over-count, never under-count.
 ```bash
 pr-hero review --pr 42 --dry-run          # prints the gate verdict, spends nothing
 pr-hero review --pr 42 --force            # local: review it anyway (does NOT skip the cost prompt)
-gh workflow run pr-hero-force.yml -f pr=42 # CI: same override, on the Actions runner
+gh pr comment 42 --body "/pr-hero review"  # CI: same forced re-review, on the Actions runner
+gh pr comment 42 --body "/pr-hero override"  # CI: unlock a red gate on this head, no review, $0
 pr-hero review --pr 42 --max-changed-lines 0   # 0 disables that limit entirely
 pr-hero watch add --max-changed-lines 800       # per-repo threshold for the watcher
 ```
@@ -484,7 +502,9 @@ PR makes it eligible again on the next tick, because the gate is recomputed ever
 - Findings vary run to run on the same tree. That is the nature of the instrument: treat single
   runs as evidence, not verdicts, and triage before acting.
 - Verify what it reports. Findings are claims with cited code, tiered by deterministic rules — the
-  report says so itself: *assistant report, not a merge gate; every line is a claim to verify.*
+  report says so itself. An advisory report reads *assistant report, not a merge gate; every line is a claim to
+  verify.* A CI report in gate mode backs the `pr-hero` commit status, the required check: a blocking finding
+  sets that status to failure.
 
 ## Isolation model
 

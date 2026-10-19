@@ -28,7 +28,15 @@ interface MigratedDomain {
 const MIGRATED_DOMAINS: MigratedDomain[] = [
   {
     domain: "rereview",
-    files: ["classify", "identity", "plan", "prepare", "state", "verify"],
+    files: [
+      "adjudicate",
+      "classify",
+      "identity",
+      "plan",
+      "prepare",
+      "state",
+      "verify",
+    ],
   },
   {
     domain: "ui",
@@ -50,13 +58,19 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
     domain: "ci",
     files: [
       "admission-ledger",
+      "classify-error",
+      "cli-record",
       "force-comment",
       "gates",
+      "outcome",
+      "override",
+      "publish",
       "reporter",
       "review-admission",
       "review-policy",
       "review-risk",
       "setup",
+      "trigger",
     ],
   },
   {
@@ -85,7 +99,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   },
   {
     domain: "triage",
-    files: ["reply", "triage", "write"],
+    files: ["adjudication", "reply", "triage", "write"],
   },
   {
     domain: "watch",
@@ -149,6 +163,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "plan",
       "pr",
       "posting",
+      "pr-status",
       "preflight",
       "publish-outcome",
       "range",

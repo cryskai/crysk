@@ -70,6 +70,20 @@ describe("parseAdmissionRecord / serializeAdmissionRecord", () => {
     expect(parseAdmissionRecord("not json")).toBeNull();
     expect(parseAdmissionRecord("{}")).toBeNull();
   });
+
+  test("a record written before postNonce existed still parses, without a nonce", () => {
+    const record = baseRecord({ status: "completed" });
+    const parsed = parseAdmissionRecord(serializeAdmissionRecord(record));
+    expect(parsed).toEqual(record);
+    expect(parsed).not.toHaveProperty("postNonce");
+  });
+
+  test("carries the POST nonce through a round-trip", () => {
+    const record = { ...baseRecord({ status: "reserved" }), postNonce: "n-1" };
+    expect(parseAdmissionRecord(serializeAdmissionRecord(record))).toEqual(
+      record,
+    );
+  });
 });
 
 describe("countTerminalAttempts", () => {
@@ -89,6 +103,39 @@ describe("countTerminalAttempts", () => {
     // yielded stood down for a review already in flight on this head: it
     // reviewed nothing, so it is not a spent attempt either (musive #1935).
     expect(countTerminalAttempts(records)).toBe(4);
+  });
+
+  // #326: a size or budget gate skip spent nothing and reviewed nothing, so
+  // its own row is not a spent attempt, the same as a cancellation.
+  test("does not count a gate skip (size or budget), the same as a cancellation", () => {
+    expect(
+      countTerminalAttempts([baseRecord({ status: "gate-skipped" })]),
+    ).toBe(0);
+  });
+});
+
+describe("gate-skipped rows read like the other non-spending statuses", () => {
+  test("a gate-skipped row round-trips through the check-run text", () => {
+    const record = baseRecord({
+      status: "gate-skipped",
+      decisionReason: "diff exceeds the configured size gate",
+    });
+    expect(parseAdmissionRecord(serializeAdmissionRecord(record))).toEqual(
+      record,
+    );
+  });
+
+  test("a gate-skipped row does not block the next reservation", () => {
+    const { record, created } = reserveAdmissionAttempt({
+      existing: [baseRecord({ status: "gate-skipped", attemptNumber: 1 })],
+      prNumber: PR,
+      headSha: HEAD,
+      policyHash: POLICY_HASH,
+      reservationTtlSeconds: 900,
+      now: new Date("2026-08-28T12:00:00.000Z"),
+    });
+    expect(created).toBe(true);
+    expect(record.attemptNumber).toBe(2);
   });
 });
 
@@ -240,5 +287,101 @@ describe("settleAdmissionAttempt", () => {
     expect(settled.status).toBe("completed");
     expect(settled.decisionReason).toBe("review complete");
     expect(settled.settledAt).toBe(settledAt.toISOString());
+  });
+});
+
+// A forced comment run (`/pr-hero review`, `/pr-hero recheck`) is a deliberate
+// spend outside the automatic budget, so its own rows never count. Its status
+// is no proof either way (the run may have reached the provider), which is why
+// the flag, not the status, decides.
+describe("a forced run's row is not an automatic attempt", () => {
+  test("countTerminalAttempts does not count a forced row, whatever its status", () => {
+    const records = [
+      baseRecord({ status: "completed", forced: true }),
+      baseRecord({
+        status: "provider-started",
+        forced: true,
+        attemptNumber: 2,
+      }),
+    ];
+    expect(countTerminalAttempts(records)).toBe(0);
+  });
+
+  test("an automatic completed row next to a forced one still counts once", () => {
+    const records = [
+      baseRecord({ status: "completed" }),
+      baseRecord({ status: "completed", forced: true, attemptNumber: 2 }),
+    ];
+    expect(countTerminalAttempts(records)).toBe(1);
+  });
+
+  test("reserveAdmissionAttempt marks a forced reservation, and the mark survives the check-run text", () => {
+    const { record } = reserveAdmissionAttempt({
+      existing: [],
+      prNumber: PR,
+      headSha: HEAD,
+      policyHash: POLICY_HASH,
+      forced: true,
+      reservationTtlSeconds: 600,
+    });
+    expect(record.forced).toBe(true);
+    expect(parseAdmissionRecord(serializeAdmissionRecord(record))?.forced).toBe(
+      true,
+    );
+  });
+
+  test("a row written before the flag existed parses as automatic", () => {
+    const legacy = serializeAdmissionRecord(
+      baseRecord({ status: "completed" }),
+    );
+    expect(parseAdmissionRecord(legacy)?.forced).toBeUndefined();
+    const parsed = parseAdmissionRecord(legacy);
+    expect(parsed).not.toBeNull();
+    expect(countTerminalAttempts(parsed === null ? [] : [parsed])).toBe(1);
+  });
+});
+
+// Race: a forced run reserves and goes in flight; an automatic run on the same
+// head reads the ledger and must not reuse the forced run's active row. If it
+// did, the automatic run's own completed row would carry `forced: true` and be
+// excluded from the attempt count, so one real automatic review would be free.
+describe("an automatic run never reuses a forced run's active reservation", () => {
+  test("forced reserve active, automatic reserves and completes: the automatic spend counts", () => {
+    const now = new Date();
+    const forcedReserved = reserveAdmissionAttempt({
+      existing: [],
+      prNumber: PR,
+      headSha: HEAD,
+      policyHash: POLICY_HASH,
+      reservationTtlSeconds: 3600,
+      forced: true,
+      now,
+    }).record;
+    const forcedInFlight = settleAdmissionAttempt(
+      forcedReserved,
+      "provider-started",
+      "forced run in flight",
+      now,
+    );
+
+    const automatic = reserveAdmissionAttempt({
+      existing: [forcedInFlight],
+      prNumber: PR,
+      headSha: HEAD,
+      policyHash: POLICY_HASH,
+      reservationTtlSeconds: 3600,
+      now,
+    }).record;
+    expect(automatic.forced).toBeUndefined();
+    expect(automatic.attemptNumber).toBe(2);
+
+    const automaticDone = settleAdmissionAttempt(
+      automatic,
+      "completed",
+      "admission: run",
+      now,
+    );
+    expect(automaticDone.forced).toBeUndefined();
+    expect(countTerminalAttempts([forcedInFlight, automaticDone])).toBe(1);
   });
 });

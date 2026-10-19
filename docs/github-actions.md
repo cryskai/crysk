@@ -1,26 +1,42 @@
 # GitHub Actions Integration
 
 pr-hero reviews every pull request automatically: a multi-agent hunt with adversarial refutation runs
-inside a GitHub Actions job, posts findings as PR comments, writes a step summary, and never blocks the
-merge on its own findings.
+inside a GitHub Actions job, posts findings as PR comments, and writes a step summary. Its commit status
+(`pr-hero`) is a gate by default: blocking findings turn it red, so require it in branch protection to
+block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mode-the-status-is-the-check).
 
 ## Quick path
 
 1. **Add one auth secret** (Settings → Secrets and variables → Actions → New repository secret):
    `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. Pick one — never both blank. Leave OpenCode unset:
    that is today's Claude CI.
-2. **Add the workflow files.** Run `pr-hero setup --ci` (or `pr-hero ci init`) in a clone of your repo.
-   That writes two consumer templates (`uses: juanmaagd/pr-hero@v0`): `.github/workflows/pr-hero.yml`
-   (automatic, on each push) and `.github/workflows/pr-hero-force.yml` (manual dispatch, always
-   `--force`). Do **not** copy this repository's
-   own `.github/workflows/pr-hero.yml`: that file is generated with `OWN_CI_WORKFLOW_OPTIONS` so this
-   repo can dogfood the checkout (`uses: ./` and `max-changed-lines: 5000`). `test/packaging.test.ts`
-   asserts each file against its own generator options; it does **not** assert the two files are
-   byte-identical. The consumer template already wires a credentials job plus quoted `routing` /
-   `opencode-auth` inputs; empty values are absent, so Claude-only repos keep those lines.
-3. **Open a pull request** from a branch in this repository (not a fork). pr-hero comments inline, posts
-   a summary review, and writes a `$GITHUB_STEP_SUMMARY` block within a few minutes.
-4. **Verify readiness any time** with `pr-hero doctor` — it checks for the required secrets when run
+2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
+   to `.github/workflows/pr-hero.yml`, or run `npx -y pr-hero setup --ci` (or `pr-hero ci init`) in a clone of
+   your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need pr-hero
+   installed locally: the file is the whole install. It reviews every push to a pull request, answers a
+   `/pr-hero review` comment (see [Re-review on demand](#re-review-on-demand)), and answers a
+   `/pr-hero override` comment (see [Overriding a red gate](#overriding-a-red-gate)). Do **not** copy this
+   repository's own `.github/workflows/pr-hero.yml`: that file is generated with
+   `OWN_CI_WORKFLOW_OPTIONS` so this repo can dogfood the checkout (`uses: ./`,
+   `max-changed-lines: 5000`, and a step that pins the pull request head on a comment run).
+   `test/packaging.test.ts` asserts each file against its own generator options; it does **not** assert
+   the two are byte-identical. The template wires quoted `routing` / `opencode-auth` inputs; empty
+   values are absent, so Claude-only repos keep those lines.
+3. **Write the repository gotchas.** Run `npx -y pr-hero init` in a clone of your repo: it creates
+   `.prhero/config.json` and `.prhero/gotchas.md`. Replace the placeholder lines in `gotchas.md` with real
+   facts about your repository (a deliberate oddity that looks like a bug, an invariant enforced outside
+   the diff, an ownership rule a newcomer would break), then delete the `human-attention-required` marker
+   line. Gotchas are injected into every hunter's prompt; without them the run fails
+   [`PRH-GOTCHAS-MISSING`](#prh-gotchas-missing).
+4. **Commit `.prhero/` to the default branch.** Comment-triggered runs read the base branch, so the file
+   must be there, not only on your feature branch.
+5. **Require the check.** In branch protection, require the `pr-hero` status check (the gate), not the
+   `review` job, which stays green even when it finds blocking issues. A private repository on GitHub Free
+   cannot require status checks (GitHub returns HTTP 403), so there the gate is advisory in practice.
+6. **Open a pull request** from a branch in this repository (not a fork). pr-hero comments inline, posts
+   a summary review, and writes a `$GITHUB_STEP_SUMMARY` block within a few minutes. If no credential
+   secret is set, the run fails red and its step summary lists the commands that set one.
+7. **Verify readiness any time** with `pr-hero doctor` — it checks for the required secrets when run
    inside Actions, and for the workflow file's presence locally.
 
 To review with OpenCode instead of (or mixed with) Claude, add `OPENCODE_AUTH_JSON` and
@@ -30,13 +46,13 @@ Action.
 ## What the workflow does
 
 ```yaml
+name: pr-hero Review
+
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-
-concurrency:
-  group: pr-hero-${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  issue_comment: # `/pr-hero review` — read from the default branch's copy of this file
+    types: [created]
 
 permissions:
   actions: read # admission gate lists this workflow's past runs
@@ -47,24 +63,18 @@ permissions:
   checks: write # admission attempt ledger
 
 jobs:
-  credentials:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      has_creds: ${{ steps.detect.outputs.has_creds }}
-    steps:
-      - id: detect
-        env:
-          # Secrets are legal in job env, never in a job-level `if`.
-          HAS_CREDS: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.OPENCODE_AUTH_JSON != '' }}
-        run: echo "has_creds=${HAS_CREDS}" >> "$GITHUB_OUTPUT"
-
   review:
-    needs: credentials
+    # Same-repo pushes, and comments that start with `/pr-hero review` or `/pr-hero override`. Never reads secrets.
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      needs.credentials.outputs.has_creds == 'true'
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero recheck')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))
+    concurrency:
+      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,25 +88,67 @@ jobs:
           claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           routing: "${{ vars.PRHERO_ROUTING }}"
           opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
-      - name: Upload pr-hero run directory # see "Triaging a CI review" below
-        if: always() && steps.pr-hero.outputs.run-dir != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr-hero-run-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-          path: ${{ steps.pr-hero.outputs.run-dir }}
-          include-hidden-files: true
-          if-no-files-found: warn
-          overwrite: true
-          retention-days: 7
 ```
 
-`pr-hero setup --ci` generates this operator-facing surface (credentials union, quoted routing var,
-OpenCode auth secret) plus skip-notice copy and comments — see `src/ci-setup.ts`'s
-`generateCiWorkflowTemplate`. It refuses to overwrite a customized workflow already at that path
-unless you pass `--force`. Keep every `with:` line even when you only use Claude: an unset secret or
-var expands to empty, which the Action treats as absent. Deleting the line for the credential you *did*
-set is what breaks. The quotes around `vars.PRHERO_ROUTING` are load-bearing — an unset repository
-variable must become the empty string, not broken YAML.
+`pr-hero setup --ci` generates this file, with comments explaining each piece — see
+`generateCiWorkflowTemplate` in `src/ci/setup.ts`. It refuses to overwrite a customized workflow already
+at that path unless you pass `--force`, and it never touches a `pr-hero-force.yml` scaffolded by an
+older version (that file keeps working; you can delete it once this one is on your default branch).
+
+The action does the rest: it checks that a credential is set (and fails the run red, with the commands
+that fix it, when none is), parses a `/pr-hero review` comment and checks that its author has write
+access, resolves the pull request and its head commit from the event, and uploads the run directory
+(see [Triaging a CI review](#triaging-a-ci-review)).
+
+Three choices in the job are load-bearing:
+
+- **Concurrency is per job and keyed on the pull request number.** A workflow-level group keyed on
+  `github.head_ref || github.ref` would put every comment on every pull request into one group, because
+  `head_ref` is empty on `issue_comment`, so any comment could cancel any in-flight review. A fork's
+  push, a comment that does not start with `/pr-hero review`, and a comment whose author GitHub does not
+  associate with the repository as `OWNER`, `MEMBER` or `COLLABORATOR` each get a unique group, so
+  those jobs never cancel or replace a review.
+- **Only a new push cancels.** The `if:` filter is a prefix, so a near-miss comment ("/pr-hero review
+  please") from an associated author lands in the pull request's group too; cancelling there would kill
+  a paid review in flight before the action ignores the comment. A comment run queues instead. A push
+  never waits: it cancels whatever is running, a forced review included, because that head is gone;
+  comment again on the new head. GitHub keeps one *pending* run per group and a newer run replaces it,
+  which is why a stranger's comment never enters the group: it could otherwise replace a maintainer's
+  queued review with a run the action then refuses. Known gap: an associated author's later comment (a
+  writer's near-miss or second real command, or a read-only member's or collaborator's refused one)
+  still replaces a comment run already waiting behind a running review, and `--full` followed by a plain
+  `/pr-hero review` loses the `--full`. Comment again to recover. The job `if:` does not check the
+  association, so a writer GitHub reports under another one (a private org member shown as
+  `CONTRIBUTOR`) still gets a review, because the action checks the real permission, but in its own
+  group, unserialized beside a review already running.
+- **Fork pushes are skipped.** GitHub gives fork `pull_request` runs no secrets. A maintainer comments
+  `/pr-hero review` instead; see [Fork pull requests](#fork-pull-requests).
+
+Keep every `with:` line even when you only use Claude: an unset secret or var expands to empty, which
+the Action treats as absent. Deleting the line for the credential you *did* set is what breaks. The
+quotes around `vars.PRHERO_ROUTING` are load-bearing — an unset repository variable must become the
+empty string, not broken YAML.
+
+**A run that cannot start the review still says so on the pull request.** When there is no
+model credential, the pull request number or head cannot be resolved, the commenter's permission
+cannot be verified, or an install step fails before pr-hero starts, pr-hero posts one `pr-hero`
+commit status (`error`) and one comment on the pull request. A review that starts and then fails also
+does, when the CLI reports an error or every review hunter fails; if the CLI takes the review's lock and then
+stops before it reports an outcome, pr-hero posts the comment, and its `error` status on the head that lock is on, when that head's `pr-hero` status is still `pending` or cannot be read. A review cancelled mid-review sets `error` `PRH-CANCELLED: not reviewed — /pr-hero review reviews this head` on its head, so a cancelled gate never stays pending. The `pending` status names its run: in Actions it links to that run's attempt, so the status's link opens the Actions run, and a cancel settles only the pending that names its own run. A `pending` from an older pr-hero, with no run link, is matched by its creation time instead. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
+or unclassified) and the command that fixes it.
+A newer comment replaces the older one from the same author. pr-hero removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/pr-hero review`
+comment posts no comment: the trigger reacts to it instead ([Reactions on a command](#reactions-on-a-command)). A review that ran keeps its own status. A size or budget skip sets a `failure`
+status in gate mode and none in advisory (see [Gate mode](#gate-mode-the-status-is-the-check)).
+
+### Reactions on a command
+
+The trigger answers a `/pr-hero` comment it does not review with a reaction on that comment, and no text reply:
+
+- 👀 (`eyes`): the command is accepted. That is a writer's `/pr-hero review`, an override that unlocks its gate, and an authorised review on a repository with no credential, which then fails for the credential and says why.
+- 👎 (`-1`): the command is refused. The commenter has no write or admin access, or the override is refused: on a fork, or when the lookup cannot say whether the pull request is a fork.
+- 😕 (`confused`): a near miss, a comment that starts like a command but is not one, such as `/pr-hero review please` or `/pr-hero override --force`. A near miss runs nothing: no permission lookup, no review and no override. Only an exact command runs.
+
+A commenter whose permission cannot be verified gets no reaction: its run is red, and its error comment explains why. A reaction is best effort. When GitHub refuses one, the run prints one warning, and its decision and exit code do not change. Only the first attempt of the comment's job reacts: a re-run (attempt 2 or later) keeps the decision, notices and exit code of the first attempt and adds no reaction, so the comment keeps the one the first attempt gave.
 
 ### Why `fetch-depth: 0`
 
@@ -115,7 +167,8 @@ trim it.
 | `OPENCODE_AUTH_JSON` | secret | One of the three credential secrets | Whole OpenCode `auth.json` blob (not a single key field). Cap **48 KB**. Never echo, log, or paste it into the workflow. The Action writes it `0600` at the OpenCode auth path. Leave unset for Claude-only CI. |
 | `PRHERO_ROUTING` | repository **variable** | OpenCode path (with the secret above) | JSON object with the same shape as `config.routing` — the routing object, not the whole `~/.prhero/config.json`. Quoted in workflow `with.routing`. Unset = empty string. Cap **48 KB**. Written to the person-layer `$HOME/.prhero/config.json` on the runner. Repo `.prhero/config.json` **rejects** `routing`. |
 
-The credentials job treats Anthropic key **or** Claude OAuth **or** `OPENCODE_AUTH_JSON` as present.
+The action treats Anthropic key **or** Claude OAuth **or** `OPENCODE_AUTH_JSON` as present. With none of
+the three set, the run fails red before any spend, and its step summary lists the commands that set one.
 Reference every secret **by name** (`${{ secrets.ANTHROPIC_API_KEY }}`, `${{ secrets.OPENCODE_AUTH_JSON }}`)
 — never paste a literal key into the workflow file, a log line, or a PR comment. The action itself
 follows the same rule: it never echoes, logs, or truncates a secret value anywhere in its output.
@@ -246,11 +299,13 @@ install and still starts.
 
 ### Edges
 
-- **Fork PRs** still skip: GitHub does not give forks repository secrets. The review job `if` never
-  reads `secrets` — see [Fork pull requests](#fork-pull-requests).
-- **OpenCode-only** (only `OPENCODE_AUTH_JSON` set, no Claude secret) **does** start the review job.
+- **Fork pushes** skip: GitHub does not give fork `pull_request` runs repository secrets. The review
+  job `if` never reads `secrets`. A maintainer's `/pr-hero review` comment reviews a fork — see
+  [Fork pull requests](#fork-pull-requests).
+- **OpenCode-only** (only `OPENCODE_AUTH_JSON` set, no Claude secret) counts as a credential and
+  reviews.
 - **Mismatch fails closed:** Claude credentials plus OpenCode routing but no `OPENCODE_AUTH_JSON`
-  starts the job (the skip union is already satisfied) and then **fails**, rather than skipping as a
+  passes the credential check (a Claude secret is set) and then **fails**, rather than skipping as a
   clean review.
 - **48 KB** is the GitHub secret/variable size cap for both `OPENCODE_AUTH_JSON` and `PRHERO_ROUTING`.
 
@@ -262,10 +317,14 @@ The workflow's `permissions:` block needs six scopes, each for a specific reason
 - **`pull-requests: write`** — posting inline findings, the summary review, and the step summary.
 - **`issues: write`** — resolving and replying on review threads. GitHub's API models every PR
   conversation as an issue thread, so this scope is required even though nothing here touches an issue.
-- **`statuses: write`** — updating the PR commit status context (pending, success, error).
+- **`statuses: write`** — updating the PR commit status context (pending, success, failure, error).
 - **`checks: write`** — durable CI admission ledger (attempt reservations and terminal outcomes on Check Runs).
 - **`actions: read`** — the admission gate lists this workflow's past runs (`gh run list`). A public
   repo serves that without the scope, so a missing grant only fails on a private repo, with HTTP 403.
+
+The workflow token may also be unable to resolve review threads, even with `issues: write`. GitHub returns
+`Resource not accessible by integration` for that mutation, and the log says so once per run. The
+verified-gone reply is still posted, and the gate is unaffected: the thread stays open for a person to close.
 
 ## Security considerations
 
@@ -276,22 +335,30 @@ security boundary to prevent untrusted pull requests from exfiltrating credentia
 budget. Repository **variables** (`PRHERO_ROUTING`) are visible; that is why routing must not contain
 credentials.
 
-The generated workflow still skips forks, then uses a credentials job so the review job `if` never
-reads `secrets`:
+So the generated workflow skips a fork's `pull_request` runs: they could never authenticate. To review
+a fork pull request, a user with write access comments `/pr-hero review` on it. That run is an
+`issue_comment` run in the base repository's context, with its secrets: the action fetches the fork's
+head commit and reviews it, while config and gotchas still come from the base checkout. A comment from
+a user without write access is refused, so nobody outside the repository can spend its credentials.
+If GitHub's API fails while checking that access (a 5xx, a rate limit, a timeout), the action retries
+once and then fails the run red, asking for the comment again: it never reviews unchecked, and never
+refuses silently.
+No `pull_request_target` is involved. If you wire `pull_request_target` yourself, the action reviews
+fork heads there too: that event runs in the base repository's context, with its secrets, so choosing
+it is choosing base-context reviews of forks. pr-hero reads the head as text and never runs its code.
 
-```yaml
-# credentials job — secrets are legal in this job's env, not in a job-level `if`
-HAS_CREDS: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.OPENCODE_AUTH_JSON != '' }}
+The job `if` never reads `secrets` (GitHub does not allow it there). Credential presence is checked
+inside the action instead: a same-repo pull request with none of the three credential secrets fails
+red, with the commands that fix it, rather than skipping green and reading as a clean review. A
+credential already on the runner counts too: a Claude session file in `$HOME` or the OpenCode
+`auth.json` store. A self-hosted runner with none of these is left to the engine's own credential
+check, which can also see a macOS keychain entry. `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` set
+in the job's own `env:` does not count: the action's run step binds both from its inputs, so wire the
+secret as an input.
 
-# review job — github + needs only
-if: >-
-  github.event.pull_request.head.repo.full_name == github.repository &&
-  needs.credentials.outputs.has_creds == 'true'
-```
-
-Same-repo PRs with none of the three credential secrets skip (with a notice that names all three)
-instead of failing. Fork PRs skip without that notice — they never receive secrets, so warning on
-every fork would be noise.
+In this repository only, a comment run checks out the pull request's head and runs that engine
+(`uses: ./`), so it refuses fork pull requests outright: there the fork would supply the engine and run
+it with this repository's secrets. See [Re-review on demand](#re-review-on-demand).
 
 ### Action version pinning
 The default workflow targets the floating major tag `uses: juanmaagd/pr-hero@v0`, which moves to every new 0.x release. While the major version is 0, a minor release may include breaking changes to the Action contract (see the pre-1.0 semantics in `docs/release-runbook.md`), so `@v0` is not a compatibility guarantee: read `CHANGELOG.md` before a new 0.x minor lands, or pin an exact tag or SHA. If your organization enforces strict immutable SHA pinning, you can pin the full commit SHA directly:
@@ -314,10 +381,10 @@ nothing:
 | Budget | `budget-usd` | route-derived (see below) | any value `<= 0` |
 
 Both gates exit 0 and leave a courteous PR comment plus step-summary note when they trip — they are cost
-gates, not quality gates, and never fail the job. The comment names the one-shot override:
-`gh workflow run pr-hero-force.yml -f pr=<n>`. That dispatches [the force workflow](#manual-override)
-on GitHub Actions. It does not change the ceilings for later pushes, and it does not review on the
-machine that sends the command.
+gates, not quality gates, and never fail the job. The comment names the one-shot override: comment
+`/pr-hero review` on the pull request (see [Re-review on demand](#re-review-on-demand)). That runs the review on
+GitHub Actions. It does not change the ceilings for later pushes, and it does not review on the machine
+of whoever comments.
 
 **Leaving `budget-usd` unset resolves the ceiling from how the run is billed.** A Claude
 subscription route (`CLAUDE_CODE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its
@@ -370,7 +437,7 @@ exclusions, see the README): under CI it is read from the PR's base ref, never t
 | `thresholded` | Re-review when the prior score reaches `ci_rereview_min_score`. |
 | `risk_aware` | Re-review when the delta touches risky paths **or** the prior score reaches the threshold. Recommended default. |
 | `every_push` | Review every push (still bounded by `ci_max_attempts`). |
-| `manual_only` | No automatic re-review; explicit override required. |
+| `manual_only` | No automatic re-review; a `/pr-hero review` comment is required. |
 
 Example:
 
@@ -386,74 +453,240 @@ Example:
 }
 ```
 
-### Manual override
+### Re-review on demand
 
-When CI skips a pull request — size gate, admission policy, or budget ceiling — dispatch the
-force workflow. The review runs on the GitHub Actions runner. The command does not review on
-the machine where you type it:
+When CI skips a pull request — size gate, admission policy, or budget ceiling — comment on the pull
+request:
 
-```bash
-gh workflow run pr-hero-force.yml -f pr=<number>
+```text
+/pr-hero review
 ```
 
-Write access on the repository is required (`workflow_dispatch`). A fork pull request is refused.
-`gh run rerun` on the automatic workflow re-evaluates the gates and does not force.
+The review runs on the GitHub Actions runner, not on the machine of whoever comments. The comment must
+start with `/pr-hero review` and be exactly that command (trailing whitespace and newlines are
+ignored; leading whitespace means no job starts at all); anything else, such as
+`/pr-hero review please`, starts a job that ends without reviewing. The commenter needs write access
+to the repository; a comment from anyone else is refused. `gh run rerun` on a skipped run re-evaluates
+the gates and does not force.
 
-A local agent (Claude Code) uses that same `gh workflow run`. It must not run
-`pr-hero review --pr <n> --force` when the goal is a CI review.
+A local agent (Claude Code) posts the same comment:
 
-The dispatched run passes `--force`. That bypasses the size gate, admission, and the budget
-ceiling for that run only. It does not reset the durable ledger. An empty effective diff
-(everything excluded) still does not review.
+```bash
+gh pr comment <number> --body "/pr-hero review"
+```
+
+It must not run `pr-hero review --pr <n> --force` when the goal is a CI review.
+
+The comment run passes `--force`. That bypasses the size gate, admission, and the budget ceiling for
+that run only. It does not reset the durable ledger. An empty effective diff (everything excluded)
+still does not review.
 
 `--force` never widens discovery. A re-review only hunts the commits since the last completed review,
 and that review is identified by the summary marker it posted for its head commit. So when a prior
 review of the **same head** was hollow or wrong (for example, its hunters returned nothing), every
-later run on that head reports "No changes to discover" and runs no hunter. Recover with the `full`
-dispatch input, which passes `--full` and re-discovers the whole pull request range:
+later run on that head reports "No changes to discover" and runs no hunter. Recover with `--full`,
+which re-discovers the whole pull request range:
 
-```bash
-gh workflow run pr-hero-force.yml -f pr=<number> -f full=true
+```text
+/pr-hero review --full
 ```
 
 Prior findings are still verified and triaged as usual; only discovery widens.
 
-In this repository, `pr-hero-force.yml` runs the pull request's own engine: it is generated with
-`OWN_CI_WORKFLOW_OPTIONS`, so its gate resolves the PR head commit first and checkout pins that commit
-before `uses: ./`. A dispatch starts on the default branch, so without the pin a forced review would
-run the default branch's engine instead of the one under review. Consumer workflows run the published
-`juanmaagd/pr-hero@v0`, where the checkout does not select the engine.
+**Fork pull requests** are reviewed only this way: their own pushes are skipped, and a maintainer's
+comment runs the review in the base repository's context (see
+[Fork pull requests](#fork-pull-requests)).
 
-- **When it takes effect.** `workflow_dispatch` reads the workflow file from the default branch, so in
-  this repository the engine pin and the `full` dispatch input work only once that YAML is on `main`;
-  in a consumer repository, `full` needs an action release that declares it, reached through the
-  `@v0` tag the workflow pins.
-- **`full` on older heads.** In this repository the forced review loads the PR head's own `action.yml`,
-  so on a head from before the `full` input existed `full=true` does nothing: merge or rebase the PR
-  onto a base that has it first.
-- **Trust.** In this repository a forced review runs the PR head's code, including its `bun install`,
-  with the workflow's secrets, so dispatch it only for heads you trust: on a bot-authored same-repo
-  branch (for example Dependabot's) it skips the secret withholding GitHub applies to that bot's
-  `pull_request` runs.
+**Workflows scaffolded before the comment trigger** have no `issue_comment` listener, so a comment does
+nothing there. They have a dispatch-only `.github/workflows/pr-hero-force.yml` instead, which still
+works because the action keeps the `pr-number`, `force`, and `full` inputs it sets:
+
+```bash
+gh workflow run pr-hero-force.yml -f pr=<number>              # force
+gh workflow run pr-hero-force.yml -f pr=<number> -f full=true # force and re-discover
+```
+
+Re-scaffold with `pr-hero ci init --force` to switch to the comment trigger. It rewrites
+`pr-hero.yml` only and leaves `pr-hero-force.yml` in place; delete that file yourself once the new
+`pr-hero.yml` is on the default branch.
+
+In this repository, a comment run reviews with the pull request's own engine: `pr-hero.yml` is
+generated with `OWN_CI_WORKFLOW_OPTIONS`, so on a comment a first step resolves the PR head commit and
+checkout pins that commit before `uses: ./`. A comment run starts on the default branch, so without the
+pin it would run the default branch's engine instead of the one under review. Consumer workflows run
+the published `juanmaagd/pr-hero@v0`, where the checkout does not select the engine.
+
+- **When it takes effect.** GitHub reads a comment-triggered workflow from the default branch, so the
+  comment trigger works only once `pr-hero.yml` with its `issue_comment` trigger is on the default
+  branch; in this repository that means `main`, not `dev`. Until then a comment starts nothing. In a
+  consumer repository, the comment handling also needs an action release that has it, reached through
+  the `@v0` tag the workflow pins.
+- **Minimum action version.** This workflow listens to comments, and only an action release that ships
+  the comment handling checks the command and the commenter's write access. An older action reviews on
+  ANY comment that starts with `/pr-hero review`, from anyone who can comment, with your secrets. Do
+  not pair this workflow with an action older than the release that adds it: if you pin a tag or a
+  commit sha instead of `@v0`, pin one at or after that release.
+- **Older heads (this repository).** The comment run loads the PR head's own `action.yml`, so on a head
+  from before the comment handling existed the run reviews without reading the comment: no `--force`
+  and no `--full`. Merge or rebase the PR onto a base that has it first.
+- **Trust (this repository).** A comment run here runs the PR head's code, including its
+  `bun install`, with the workflow's secrets. So the commenter's write access is checked twice: by the
+  workflow's own pre-checkout step, before any of the head's code runs, and again by the head's
+  `action.yml`. The first check fails closed, so an old branch whose `action.yml` predates the check
+  still refuses a commenter without write access.
 
 ### Check Runs ledger
 
 Admission attempts are persisted as Check Runs named `pr-hero/ci-admission` on the reviewed commit.
 The workflow needs **`checks: write`** (listed under [Token permissions](#token-permissions)) so pr-hero can
-reserve attempts before provider spend and record failed/cancelled outcomes. PR comments remain
-presentation only; the Check Run ledger is authoritative.
+reserve attempts before provider spend and record outcomes. PR comments remain presentation only; the
+Check Run ledger is authoritative.
+
+An attempt counts toward `ci_max_attempts` when its run reached the provider (completed, failed, or
+still in progress) or when admission itself skipped it. Two outcomes spend nothing and do not count: a
+run that stood down for a review already in flight on the same head, and a run the size gate or the
+budget ceiling skipped before any agent started. A run that stopped on a configuration error (a bad gotchas file or prompt set) before it reviewed anything spends nothing either, and so do forced comment runs (`/pr-hero review`, `/pr-hero recheck`): the budget bounds automatic reviews, and a deliberate comment is a spend outside it. A cancelled row does not count either, but it is not
+proof that nothing was spent: a cancel signal can arrive after the provider started, so a run that
+GitHub concludes as `failure` (for example one killed by `timeout-minutes`) still counts. A skipped run
+still shows as a skipped check on the commit.
 
 Skipped and manual-required outcomes include admission metadata in the step summary: decision, reason,
 current head, reviewed head, risk class, score, attempt count, remaining budget, policy mode, and a
 short policy hash.
 
-## Assistant posture: it never blocks your merge
+## Gate mode: the status is the check
 
-pr-hero is a reviewer, not a merge gate. The job exits `0` even when it finds blocking-tier issues —
-findings are published as comments and a summary, and the decision to act on them is yours. Nothing
-about *what* a review found can turn the job red.
+The `pr-hero` commit status is the check you require in branch protection. The job's exit code does not
+carry the review's findings: a finished review exits `0` even when it finds blocking-tier issues. Findings
+are published as comments and a summary, and the commit status decides the gate.
 
-Three things can. Only the first sets `status=error`:
+The action's `mode` input picks what the status says. It defaults to `gate`:
+
+- **`gate`** (the default): a finished review with blocking findings sets `failure`. A size or budget
+  skip also sets `failure`, so an unreviewed head cannot read as a clean one. A clean review, or one with
+  only advisory findings, sets `success`.
+- **`advisory`**: the status is `success` for every finished review, whatever it finds. This is the
+  posture pr-hero had before the gate. Skipped reviews post no status, as before.
+
+Either way, a crash, a failed session and a missing findings count set `error`, which is a red check too.
+The table shows the status and the job exit for each case:
+
+| Cause | `gate` status | `advisory` status | Exit |
+|---|---|---|---|
+| Finished review with unresolved blocking findings (see below) | `failure`: `pr-hero: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
+| Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/pr-hero override`) | `failure`: `pr-hero: review partial (N of M hunters failed, set abc123) — /pr-hero review retries it`, where `set abc123` is six hex of the failed hunters' names | `success` | `0` |
+| Finished review where the same hunters failed as on the head's previous finished partial review (the same N of M counts and the same set key), none blocking | `failure`: `pr-hero: review partial again (N of M hunters failed, set abc123) — fix the failing route or /pr-hero override` | `success` | `0` |
+| Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `0` |
+| Finished review, clean or advisory-only | `success` | `success` | `0` |
+| Size or budget skip (`/pr-hero review` reviews it anyway) | `failure`: `pr-hero skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
+| Admission skip for a low-risk or below-threshold delta, or once per PR | inherits the verdict of the pull request's last reviewed commit (see below): `success` `pr-hero: no review needed (<reason>); carried from <sha>`, or `failure` `pr-hero: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `pr-hero: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; with no readable verdict, `failure` `pr-hero skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
+| Same head, already reviewed | none (that head's own status already exists) | none | `0` |
+| Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `pr-hero: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
+| Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
+
+Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
+below keep their own status and exit, as they did before the gate.
+
+**A skipped head inherits the verdict of the last reviewed commit of its pull request.** When the admission gate
+skips a new head as a low-risk or below-threshold delta, or once per PR, the head takes the newest review verdict from
+this pull request's own commit statuses: a `pr-hero` success or failure that a finished review wrote, or a verdict
+carried from this pull request. The gate walks the pull request's commits newest-first from the head, skips each commit
+that carries no verdict, and stops at the first one that does, within the last 20 commits before the head. A skip's
+failure, a fail-closed, budget or manual-only failure, an error, a pending status, and an override are not verdicts, so
+the walk passes over them. The verdict never comes from comment content: a comment, a summary marker included, can name a head,
+but only a write-access actor can set a commit's status, so a comment naming a green head carries nothing. A verdict
+carried onto a skipped head may be carried again onto a later one, because it came from a real review. A red verdict
+stays red, with its count, until the head is reviewed (`/pr-hero review`) or overridden. A green one reads as no review
+needed. An override is never carried: it is a human's decision for the code at the head it names, and the skipped head
+was never reviewed, so carrying it would turn a new head green with no review behind it. With no readable verdict (no
+reviewed head, a failed read, a head missing from the pull request's commits, or no verdict within the last 20 commits),
+the head is `failure` and says so: a trivial push must not pass the gate without a verdict behind it. A manual
+re-review required is always `failure`, because its code was never reviewed, and carrying a green verdict over it would
+let an unreviewed push pass the gate. A head whose newest `pr-hero` status is an override keeps it: a re-run of the gate
+on that head writes no skip status over the override, when the head's statuses can be read. When they cannot, the skip's
+status is written as planned and the run logs a warning, because a head that reads as nothing decided is the original
+bug; that write can replace an override the run could not see. Advisory mode writes no status on a skipped head, as before.
+
+**What counts as unresolved.** The count behind a blocking `failure` is every blocking finding that is still
+open: this run's blocking findings, plus each blocking finding from an earlier review of the PR that has not
+been cleared (subject to the known gap at the end of this paragraph). A finding is still open when it is carried forward unchanged, when the verifier could not
+decide, when a triage reply deferred it, or when a triage reply dismissed it. A dismissal the adjudicator
+upheld counts too, until the next review of the same head: an upheld verdict takes effect in two steps, the recheck posts the ruling and the following same-head `/pr-hero review` stops counting the finding. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, or when every file it
+names was deleted. A dismissed, deferred or misclassified finding is re-verified when a push touches its code, and leaves the count when verified gone. Triage replies (`applied`, `dismissed`,
+`deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator checks them only when someone comments `/pr-hero recheck` (see [Rechecking a dismissal](#rechecking-a-dismissal)). The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. **State block.** From the second review on, the summary carries a `pr-hero-state` block: the merged live set of the pull request's open findings. It holds every surviving earlier finding and this run's findings, so a blocking finding first raised by a re-review still counts on the next review, including a same-head `/pr-hero review` that runs no hunters. A finding that a re-review verified gone leaves the block. Each row keeps its `R###` id. The block's `hw` field is the highest id ever assigned on the pull request, so a retired id is never reused. When the summary would exceed GitHub's comment size limit, the cap drops prior advisory findings first (unconfirmed, then carried), never a blocking finding, and the summary states how many finding identities it dropped from the block. Known gap: the first review writes no state block, so an outside-diff finding of the first review is not persisted. Its inline findings are recovered from their markers on the second review.
+
+
+**Unlocking a gate.** A `failure` for blocking findings clears in one of two ways. A fix pushed to a new head
+clears its own finding once the re-review verifies it gone. `/pr-hero override` from a user with write access
+turns the status green for that head with no new review. The re-review does not clear it by itself: a same-head
+`/pr-hero review` runs the same count, so the `failure` stays. The size and budget `failure` is the one that
+`/pr-hero review` clears, because that run passes both gates. `/pr-hero override` is described next.
+
+**Rechecking a dismissal.** Comment exactly `/pr-hero recheck` on the pull request. It is `/pr-hero review` plus the CI adjudicator:
+the same write-access check and the same forced review of the head, and then the adjudicator rules on each pending `dismissed` reply
+to a blocking finding, at most 5 per run. Only a dismissal the adjudicator upholds leaves the gate count. A `deferred` or
+`misclassified` reply never does, and a rejected or inconclusive verdict keeps the finding counted. The verdict is posted as a reply
+on the finding's thread by `github-actions[bot]`, and only replies from that login count, so a run with a custom token fails closed.
+A new dismissal reply is pending again. A verdict counts only on the head it was given, so a push needs a new recheck. An adjudicator step that fails posts nothing for that dismissal: it prints a notice and stays pending for the next recheck. The recheck run itself never changes the count: an upheld verdict leaves it from the next review of the same head (`/pr-hero review`), which reads the reply back, and only when GitHub recorded the reply under `github-actions[bot]`. If the reply did not land under that login, the recheck warns and the finding keeps counting. Dismissals never ruled on are adjudicated before retries of an inconclusive one. Not on fork pull requests: the adjudicator needs this repository's checkout of the head,
+so the comment is refused with a notice and a 👎 reaction.
+
+**Overriding a red gate.** Comment exactly `/pr-hero override` on the pull request. The same rule as
+`/pr-hero review` applies: a user with write or admin access may do it, and the pull request's author may too
+when they have that access. Anyone else is refused with a notice and a 👎 reaction on the comment, and nothing is posted. The override turns the `pr-hero` status on the head it names
+into `success`, with the description `pr-hero: overridden by @<login> — no review on this head`. It runs no
+review and spends nothing, and it needs no credential, so a repository without one can still unlock its gate.
+
+Every override is recorded. The status names who acted, and a pr-hero comment on the pull request names who,
+on which head, and when (UTC). It starts with `<!-- pr-hero-override`, and no later cleanup removes it, so the
+history of overrides stays on the pull request. The override also removes earlier outcome comments from the pull request, as a completed review does, and keeps every override record.
+
+An override is valid only for the head it names. The newest status on a head wins, so the override stands
+until one of two things happens: a new push creates a new head, which is reviewed on its own, or a later
+`/pr-hero review` on that same head posts a newer status. A `failure` from that review then replaces the
+override.
+
+**An override stands against a review that was already running when it was posted; a review started after it replaces it.**
+The rule holds for every verdict write (`success` or `failure`) of the review, including the publisher step's repost of a
+status the CLI could not write. Each verdict write checks the head's newest `pr-hero` status first. When that status is an
+override created after the review started, allowing 5 seconds of clock skew between the runner and GitHub, the write is
+skipped and the run logs one line that the override stands. When the review's own pending status did not land, the allowance
+is zero, because nothing else on the head shows when the review started. When the head's statuses cannot be read, the review's verdict is written and a warning is logged, since the override cannot be checked. A status row that does not parse is ignored and the valid rows decide, so a fresh override beside a malformed row still stands; only a failed read (GitHub's answer is an error or the lookup times out) counts as unreadable. The review's findings and comments are unchanged.
+A review that fails (for example, every hunter failed), is cancelled, or crashes can replace the override with its own
+`error` status; comment `/pr-hero override` again.
+
+Two limits. First, a fork pull request cannot be overridden: `/pr-hero override` is refused there with a notice and a 👎 reaction,
+because a fork's head can change after the comment, so the override would not be bound to the code you saw. Second, GitHub keeps one pending run per
+concurrency group, and that applies to an override from an `OWNER`, `MEMBER` or `COLLABORATOR`: such an
+override that is queued behind a running review is replaced if another comment on the same pull request
+arrives before it starts, and then no override comment appears. Comment `/pr-hero override` again when that
+happens. If the pull request lookup fails twice, the override is refused, since it cannot tell whether the
+pull request comes from a fork; comment again. A
+re-run of the comment's job (run attempt 2 or later) is refused with a notice and no reaction, because it would apply the
+override to the head as it is at the re-run; comment `/pr-hero override` again.
+
+**A failed final write.** In gate mode, when the review itself finished, the job fails with an `::error::`
+annotation if the final status cannot be written. When the review was also delivered, the CLI records the status
+it could not write, even if a step after delivery then failed, and the publisher step later in the same job posts that status once more, so the required
+check can settle without a new run. The job still fails with its `::error::` annotation. If that second write
+fails too, the publisher adds its own `::error::` annotation, and the head stays `pending` until a
+`/pr-hero review` comment forces a review. If the review had already failed before delivery, the job exits with that failure,
+and the failed status write is only logged, so it never replaces the review's own error. Either way the
+commit-status lock is still released. On an already-reviewed head, the same-head admission skip runs first and
+posts no status, so the head stays `pending` until a `/pr-hero review` comment forces a review, which writes the
+status again. The pending status, written when a review starts, is best-effort in both modes.
+
+**Local runs and the watcher post on `pr-hero/local`.** Only an explicit `--ci` run writes the `pr-hero`
+status, which is the required check. A `pr-hero review --pr` you run locally, and each review that
+`pr-hero watch` starts, post advisory statuses on `pr-hero/local` instead, so they cannot overwrite a red gate
+on the same head. Only the `--ci` flag makes a run post to the gate; `CI=1` in your shell does not. The watcher yields
+to a review in flight on either context, and it settles only its own leftover pending, on `pr-hero/local`. A `--ci`
+run stands down only for a pending on `pr-hero`, because only it writes that context, so a local pending never
+leaves the required check unsettled.
+
+Local statuses used to share the `pr-hero` name. A status a local run wrote there before this change stays in
+that head's history, and the next `--ci` run on the head is what settles the gate.
+
+Three things can make the job fail. Only the first sets `status=error`:
 
 | Cause | Exit | `status` |
 |---|---|---|
@@ -489,7 +722,7 @@ rather than silently absorbed into the enum (see
 `openspec/changes/pillar3-github-actions-ci/spec.md` §1.1's Phase 5 amendment for the full reasoning).
 
 **A review where every hunter died.** The job exits `1` and writes nothing, for the reason given under
-"Assistant posture" above: there is no outcome to report, and the alternative — a step summary reading
+"Gate mode" above: there is no outcome to report, and the alternative — a step summary reading
 "No findings detected" over a review that never ran — is worse than silence. Giving this case a status
 of its own is an open follow-up.
 
@@ -511,13 +744,15 @@ pr-hero triage reply --pr <n> --from <run-dir> --finding F001 \
 `comparison.json` there and reads `findings.json` to map `F001` onto the posted
 `<!-- pr-hero-finding` marker. Locally that directory is still on your disk. In Actions it lives on the
 runner at `~/.prhero/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` and **dies with the job**, so the
-workflow uploads it as an artifact.
+action uploads it as an artifact in its last step.
 
 ### Downloading the run directory
 
 ```bash
 # Find the review run for the PR (or read the run id off the checks tab)
 gh run list --workflow "pr-hero Review" --branch <head-branch> --limit 5
+# A `/pr-hero review` comment run is listed under the default branch instead
+gh run list --workflow "pr-hero Review" --event issue_comment --limit 5
 
 # Download the artifact into ./pr-hero-run/
 gh run download <run-id> \
@@ -529,20 +764,20 @@ pr-hero triage reply --pr <n> --from pr-hero-run --finding F001 \
   --tag applied --body-file reasoning.md
 ```
 
-The artifact name carries **both** the PR number and the full head sha (`<head-sha>` is
-`github.event.pull_request.head.sha`, not the 8-character prefix in the directory name), so a PR reviewed
-across several pushes has one unambiguous artifact per reviewed head. `gh run download` unpacks the run
+The artifact name carries **both** the PR number and the full head sha (`<head-sha>` is the pull
+request head the action resolved for the run, on a comment run too, not the 8-character prefix in the
+directory name), so a PR reviewed across several pushes has one unambiguous artifact per reviewed head. `gh run download` unpacks the run
 directory's *contents*, not the directory itself — point `--from` at whatever directory you downloaded
 into (`-D`), not at a `pr-<n>-<sha>-1` path inside it.
 
 ### What is in it, and how long it lives
 
-The run directory holds the reviewed diff (`diff.patch`), the rendered agent prompts, every hunter draft,
+The run directory holds the reviewed diff (`diff.patch`), the full PR diff that inline comments anchor against (`anchor.patch`; on an incremental re-review it is wider than `diff.patch`, which covers only the push delta), the rendered agent prompts, every hunter draft,
 `findings.json`, `pipeline.json`, `report.md`, and the per-attempt step logs. **On a public repository,
 workflow artifacts are downloadable by anyone** — which is why `retention-days: 7` is deliberately short:
 long enough to triage, short enough to bound exposure. Lengthen it only if you have weighed that.
 
-Three properties of the upload step are load-bearing:
+Three properties of the action's upload step are load-bearing:
 
 - **`if: always()`** — a *failed* review is when this directory matters most. When every hunter dies
   (e.g. bad credentials), the per-attempt logs under `steps/logs/` are the only record naming the cause.
@@ -551,8 +786,8 @@ Three properties of the upload step are load-bearing:
 - **`overwrite: true`** — artifact names are unique per workflow *run*, and `gh run rerun` reuses the run
   id, so a re-run's upload would otherwise conflict.
 
-> **Known gap.** Four outcomes publish no usable `run-dir`, so the `steps.pr-hero.outputs.run-dir != ''`
-> condition suppresses the upload for all of them:
+> **Known gap.** Four outcomes publish no usable `run-dir`, so the upload's empty-`run-dir` condition
+> suppresses it for all of them:
 >
 > - a **concurrent review** and a run where **every hunter died** — the two cases that leave `status`
 >   empty (see above), because no output is written at all;
@@ -566,13 +801,72 @@ Three properties of the upload step are load-bearing:
 > `always()` still earns its place for a review that ran but could not post, and for a later step in the
 > job failing.
 
+## Reading a PR with `pr-hero status`
+
+`pr-hero status --pr <n> [--json]` reads one PR's state through `gh`. It is read-only and writes nothing to
+GitHub, so a skill can drive review, reply, fix and wait from it instead of reading comments by hand. Without
+`--json` it prints a few lines on stderr. With `--json` it prints one object on stdout, and nothing else:
+
+```json
+{
+  "schema": "pr-hero.status/v1",
+  "pr": 12,
+  "head": "<40-hex headRefOid>",
+  "gate": { "state": "failure", "description": "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override", "target_url": "<run url>", "created_at": "<ISO time>", "pending_in_flight": false, "override": { "active": false, "by": null } },
+  "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null },
+  "findings": [
+    { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
+      "severity": "CRITICAL", "tier": "blocking", "blocking": true, "live_on_head": true,
+      "triage": { "tag": "dismissed", "verdict": "upheld", "actor": "agent", "head": "<40-hex>" },
+      "ci_verdict": null }
+  ],
+  "unresolved_blocking": 1,
+  "next_action": "triage",
+  "reason": "1 live blocking finding(s) on this head have no triage reply at the head they were posted on; triage them first."
+}
+```
+
+- `gate` is pr-hero's own commit status on the head. `state: "none"` means no `pr-hero` status is on it.
+- `findings` covers every posted `<!-- pr-hero-finding` comment, on every head. `channel` is `inline` for a review
+  thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread only.
+- A finding joins its state-block row the way the engine binds a prior to its comment: the comment's anchor must land
+  within the row's locations, and the claim fingerprint breaks only a tie. The anchor is the marker's path and line,
+  and the review comment's live path and line when GitHub has moved them (a rename, or a re-anchored line), so a row
+  the re-review rewrote to a new path still joins. A finding with no such row has `id: null`, and `live_on_head` is
+  true only when it was posted on the current head. A row that is found keeps the finding live, so a carried finding
+  from an older head stays live.
+- `tier` is the tier the comment's header badge or the state row reports: `blocking` or `advisory`, or `unrecoverable`
+  when neither can give one (the engine's own sentinel). It is never `null`. `blocking` is true for every tier but
+  `advisory`, because the gate counts an unrecoverable row as blocking too: a finding that cannot be read as advisory
+  is never read as clear. `unresolved_blocking` and `next_action` read `blocking`, never `tier`.
+- `unresolved_blocking` is the count in a red gate's description when it has one. Otherwise it is the number of
+  live blocking findings in `findings`.
+- `report.outcome_code` is the `PRH-*` code of the newest outcome comment, when that comment has one.
+
+`next_action` is decided in this order, and the first match wins:
+
+| `next_action` | When |
+| --- | --- |
+| `wait` | The gate is pending and in flight (less than 90 minutes old). |
+| `review` | No `pr-hero` status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`pr-hero: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
+| `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. |
+| `triage` | The gate is red and a live blocking finding on this head has no triage reply at the head it was posted on. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
+| `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. |
+| `recheck` | The gate is red and a live blocking inline finding is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. Comment `/pr-hero recheck`; the CI adjudicator rules on it. |
+| `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/pr-hero review`, and that review no longer counts them. |
+| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or an outside-diff finding, which has no thread to rule on). A skipped review (size or budget) also lands here. The gate is red over a partial review's repeat form (`pr-hero: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/pr-hero override`. Fix and push, or run `/pr-hero override`. |
+
+The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list, or a
+gate status it cannot read exits 1 with nothing on stdout, so a partial answer never looks like a clean PR.
+
 ## Optional inputs
 
 | Input | Default | Purpose |
 |---|---|---|
-| `pr-number` | resolved from the triggering event | Override when triggering from a non-`pull_request` event. `pr-hero-force.yml` sets this from the dispatch input. |
-| `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. `pr-hero-force.yml` sets it to `true`. |
-| `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
+| `pr-number` | resolved from the triggering event | Override when triggering from an event that carries no pull request. Only a legacy `pr-hero-force.yml` sets it, from its dispatch input; the current workflow passes nothing. |
+| `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. A `/pr-hero review` comment from a user with write access sets it on its own; a legacy `pr-hero-force.yml` sets it to `true`. A forced run that reviews a head clears a size or budget skip's `failure` status. |
+| `mode` | `gate` | The commit status the review sets: `gate` turns it `failure` on blocking findings and on a size or budget skip, `advisory` keeps it `success` for a finished review. See [Gate mode](#gate-mode-the-status-is-the-check). |
+| `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). A `/pr-hero review --full` comment sets it on its own; a legacy `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
 | `model` | engine default | Override every agent's model. |
 | `scout` | `false` | Experimental diff-only pre-hunt stage; off by default. |
 | `post` | `true` | Set `false` to run the review and write outputs/summary without posting to the PR. |
@@ -580,24 +874,672 @@ Three properties of the upload step are load-bearing:
 | `routing` | empty | Person-layer routing JSON (`config.routing` object). Wire from `vars.PRHERO_ROUTING` (quoted). See [OpenCode in CI](#opencode-in-ci). |
 | `opencode-auth` | empty | Whole OpenCode `auth.json` blob. Wire from `secrets.OPENCODE_AUTH_JSON`. Never echo. |
 
+## Error codes
+
+When the action stops with an error, the annotation and the job summary start with the owner, then say what is wrong, why, and the command that fixes it. The owner tells you whose fix it is: **Your configuration:** means a secret, a variable, a workflow permission or a repository file needs a change; **Provider `<name>`:** means the provider rejected, limited or failed the request; **pr-hero defect:** means pr-hero itself failed, and the fix reports it with the run URL; **Unclassified:** means pr-hero could not attribute the failure and says so instead of guessing. **Not reviewed:** is a notice for a run that a newer push superseded, not an error.
+
+### PRH-CRED-MISSING
+
+**Owner:** your configuration
+
+**What:** No credential for the {backend} route reached the action
+
+**Why:** pr-hero cannot authenticate, so it cannot review this PR
+
+**Fix**, on a Claude route:
+
+Set one credential for the route you use:
+
+```bash
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+gh secret set ANTHROPIC_API_KEY
+opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+If the secret is already set, check that the workflow passes it to the action under `with:`, for example `claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` or `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`: a secret the workflow does not pass never reaches pr-hero.
+
+Dependabot PRs read Dependabot secrets, so set this one too:
+
+```bash
+gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+**Fix**, on an OpenCode route:
+
+Set the OpenCode credential for the route you use:
+
+```bash
+opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+If the secret is already set, check that the workflow passes it to the action under `with:`, for example `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`: a secret the workflow does not pass never reaches pr-hero.
+
+An OpenCode route also needs the routing variable:
+
+```bash
+gh variable set PRHERO_ROUTING --body '<routing-object-json>'
+```
+
+Dependabot PRs read Dependabot secrets, so set this one too:
+
+```bash
+gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+### PRH-CRED-UNUSABLE
+
+**Owner:** your configuration
+
+**What:** The {backend}/{provider} route for {step} has no usable credential ({detail})
+
+**Why:** the credential store does not hold what this route needs
+
+**Fix**, by failure class:
+
+#### `missing_provider_record`
+
+**What:** The route {provider}/{model} has no usable credential record
+
+Every hunter of the run failed on the missing record, so the lead names the route. When the route is not known, the sentence reads "The {backend}/{provider} route for {step} has no usable credential ({detail})".
+
+Add {provider} to the OpenCode store, then re-set the secret:
+
+```bash
+opencode auth login
+gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+#### `missing_subscription_record`
+
+On the Claude route (`backend` is `claude-code`, or no OpenCode backend):
+
+Log in again with `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`:
+
+```bash
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+```
+
+On the OpenCode route (`backend` is `opencode`):
+
+Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then re-set the secret:
+
+```bash
+opencode auth login
+gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+Or rename the provider in PRHERO_ROUTING.
+
+#### `malformed_payload`
+
+**What:** The credential store is not usable: {detail}
+
+Check that the store is a JSON object:
+
+```bash
+jq -e 'type=="object"' ~/.local/share/opencode/auth.json
+```
+
+Then re-set the secret:
+
+```bash
+gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+#### `source_read_failed`
+
+Set the secret again:
+
+```bash
+gh secret set {secret}
+```
+
+#### `env-absent`
+
+Set the secret again:
+
+```bash
+gh secret set {secret}
+```
+
+### PRH-CRED-REJECTED
+
+**Owner:** your configuration
+
+**What:** provider {provider} rejected the credential in {secret}
+
+**Why:** it is expired, revoked, or a short-lived /login session token
+
+**Fix:**
+
+```bash
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Or, for OpenCode, re-export the auth store and re-set the secret:
+
+```bash
+gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/pr-hero review"
+```
+
+### PRH-ROUTING-MISSING
+
+**Owner:** your configuration
+
+**What:** OpenCode auth is set but PRHERO_ROUTING is empty, so the default Claude route is used
+
+**Why:** the run would fail later at the Claude credential check
+
+**Fix:**
+
+```bash
+gh variable set PRHERO_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"
+```
+
+### PRH-ROUTING-INVALID
+
+**Owner:** your configuration
+
+**What:** PRHERO_ROUTING is invalid: {detail}
+
+**Why:** pr-hero cannot tell which backend and model each agent should use
+
+**Fix:**
+
+Edit the JSON, then set it again:
+
+```bash
+gh variable set PRHERO_ROUTING --body "$(jq -c . routing.json)"
+```
+
+### PRH-ROUTE-UNRESOLVABLE
+
+**Owner:** your configuration
+
+**What:** Model routing for {step} has no usable route: {detail}
+
+**Why:** every agent needs exactly one backend, provider and model
+
+**Fix**, by reason:
+
+#### `unmapped`
+
+Add or complete this model's route in PRHERO_ROUTING, with an explicit `modelSnapshot`.
+
+#### `ambiguous`
+
+Remove the duplicate mapping for this route from PRHERO_ROUTING.
+
+#### `spend-disabled`
+
+Enable spend for this route in PRHERO_ROUTING.
+
+#### `multiple-opencode-providers`
+
+Keep one OpenCode provider per review in PRHERO_ROUTING.
+
+### PRH-MODEL-UNAVAILABLE
+
+**Owner:** provider
+
+**What:** Provider {provider} does not serve the model configured for {step}
+
+**Why:** the routing names a model this provider does not offer
+
+**Fix:**
+
+Fix the `modelSnapshot` for this step in PRHERO_ROUTING.
+
+List the models this provider serves:
+
+```bash
+opencode models {provider}
+```
+
+#### `every_hunter`
+
+**What:** the configured model {model} is not served by this provider
+
+Every hunter of the run was refused for the same model, so the lead names the provider and the sentence names the model. When the model is not known, the sentence says "the configured model" and nothing else. A run where any hunter failed another way keeps `PRH-HUNTERS-FAILED`.
+
+#### `provider_configuration_invalid`
+
+**Owner:** your configuration
+
+The `provider_configuration_invalid` cause shares this code. Its lead stays `Your configuration:`, and the fix is the one above.
+
+### PRH-PROMPTSET-INVALID
+
+**Owner:** your configuration
+
+**What:** The prompt set is invalid: {detail}
+
+**Why:** an agent file or PRHERO_EXTRA_HUNTERS entry cannot be loaded
+
+**Fix:**
+
+Fix the file or `agents_dir`, then check for free:
+
+```bash
+pr-hero review --pr {pr} --dry-run
+```
+
+### PRH-GOTCHAS-MISSING
+
+**Owner:** your configuration
+
+**What:** .prhero/gotchas.md is missing or still the scaffold
+
+**Why:** reviews need real repository facts to be accurate
+
+**Fix:**
+
+Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line, and commit the file to the base branch (comment-triggered runs read the base branch).
+
+### PRH-CONFIG-INVALID
+
+**Owner:** your configuration
+
+**What:** .prhero/config.json is invalid: {detail}
+
+**Why:** pr-hero refuses to guess repository settings
+
+**Fix:**
+
+Fix the file, then check it:
+
+```bash
+pr-hero review --pr {pr} --dry-run
+```
+
+### PRH-TOKEN-PERMISSION
+
+**Owner:** your configuration
+
+**What:** The workflow token lacks `{scope}: write`
+
+**Why:** pr-hero cannot post its result on the PR
+
+**Fix:**
+
+Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:
+
+```bash
+pr-hero ci init --force
+```
+
+#### `no-scope`
+
+When the scope is not known, pr-hero names the refusal and not a scope it cannot know.
+
+**What:** GitHub refused the workflow token (HTTP 403) during {step}
+
+**Why:** pr-hero cannot post its result on the PR
+
+**Fix:**
+
+Check that the workflow passes `github-token: ${{ secrets.GITHUB_TOKEN }}` on the action step, and keeps the `permissions:` block that `pr-hero ci init` scaffolds:
+
+```bash
+pr-hero ci init --force
+```
+
+### PRH-GITHUB-TOKEN-INVALID
+
+**Owner:** your configuration
+
+**What:** The github-token input is invalid
+
+**Why:** every GitHub API call is rejected
+
+**Fix:**
+
+Set `github-token: ${{ secrets.GITHUB_TOKEN }}` on the action step.
+
+### PRH-GITHUB-UNAVAILABLE
+
+**Owner:** provider
+
+**What:** the GitHub API failed (HTTP {detail})
+
+**Why** and **Fix**, by cause:
+
+#### `rate_limit`
+
+**What:** the GitHub API rate limit was reached
+
+**Why:** GitHub has throttled this token, so an immediate retry would fail the same way
+
+**Fix:**
+
+Wait for the limit to reset, then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+#### `server`
+
+**Why:** the failure happened on GitHub's side, and a retry may succeed
+
+**Fix:**
+
+Re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+### PRH-PR-UNRESOLVED
+
+**Owner:** your configuration
+
+**What:** pr-hero could not determine the pull request number or head
+
+**Why:** nothing can be posted on a PR it cannot identify
+
+**Fix:**
+
+Run from a pull_request or issue_comment event, or pass the `pr-number` input.
+
+#### `malformed-input`
+
+The `pr-number` input was given but is not a positive integer. pr-hero names the input and never echoes its value.
+
+**What:** pr-hero could not determine the pull request number or head ({detail})
+
+**Why:** nothing can be posted on a PR it cannot identify
+
+**Fix:**
+
+Pass a positive integer as the `pr-number` input.
+
+### PRH-STATUS-WRITE-FAILED
+
+**Owner:** unclassified
+
+**What:** pr-hero could not write its commit status ({detail})
+
+**Why:** the required check has no result for this head without it
+
+**Fix:**
+
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, report it.
+
+#### `permission`
+
+**Owner:** your configuration
+
+**Why:** the required check has no result for this head without it
+
+**Fix:**
+
+Add `statuses: write` to the job's `permissions:`, or re-scaffold the workflow:
+
+```bash
+pr-hero ci init --force
+```
+
+#### `server`
+
+**Owner:** provider
+
+**Why:** the required check has no result for this head without it
+
+**Fix:**
+
+Re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+### PRH-RUNTIME-UNAVAILABLE
+
+**Owner:** pr-hero in the action, your configuration locally
+
+**What:** a runtime pr-hero depends on is unusable: {detail}
+
+#### `action`
+
+**Why:** the action installs this runtime itself, so this is a pr-hero defect
+
+**Fix:**
+
+Report it with this run:
+
+```bash
+gh issue create -R juanmaagd/pr-hero --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"
+```
+
+#### `local`
+
+**Why:** a required tool is missing from your environment
+
+**Fix:**
+
+Reconcile the pr-hero install:
+
+```bash
+pr-hero upgrade --reconcile
+```
+
+### PRH-INSTALL-FAILED
+
+**Owner:** unclassified
+
+**What:** The {step} step failed
+
+**Why:** a download or install step failed, and pr-hero cannot tell which external cause it was
+
+**Fix:**
+
+Re-run only the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, report it.
+
+### PRH-PROVIDER-LIMITED
+
+**Owner:** provider
+
+**What:** rate limit or quota reached
+
+**Why:** the provider has throttled this account or key, so an immediate retry would fail the same way
+
+**Fix:**
+
+Wait, or raise the quota, then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/pr-hero review"
+```
+
+### PRH-PROVIDER-UNAVAILABLE
+
+**Owner:** provider
+
+**What:** unreachable
+
+**Why:** the request did not complete, and the provider's outcome cannot be confirmed from here
+
+**Fix:**
+
+Re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
+### PRH-PROVIDER-REFUSED
+
+**Owner:** provider
+
+**What:** the request was refused
+
+**Why:** the provider's safety system declined this input
+
+**Fix:**
+
+Ask for a new review once:
+
+```bash
+gh pr comment {pr} --body "/pr-hero review"
+```
+
+If it repeats, report it.
+
+### PRH-ENGINE-DEFECT
+
+**Owner:** pr-hero
+
+**What:** pr-hero hit an internal error ({detail}) in {step}
+
+**Why:** this is a defect in pr-hero, not in your configuration
+
+**Fix:**
+
+Report it, with this run:
+
+```bash
+gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"
+```
+
+### PRH-HUNTERS-FAILED
+
+**Owner:** unclassified
+
+**What:** Every review hunter failed in {step}: {detail}
+
+**Why:** no hunter returned a result, so there is no finding to report
+
+When every failed hunter shares a `model_unavailable` cause with its provider known, the run renders `PRH-MODEL-UNAVAILABLE` instead; when every failed hunter shares a `missing_provider_record` cause with its provider and model known, it renders `PRH-CRED-UNUSABLE`. Any other cause, a missing provider or model, a mix of causes, a hunter with no cause, or a `runtime_unavailable` cause keeps this code.
+
+**Fix:**
+
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, report it.
+
+### PRH-UNCLASSIFIED
+
+**Owner:** unclassified
+
+**What:** pr-hero stopped at {step} and could not tell why
+
+**Why:** rather than guess, it reports this honestly
+
+**Fix:**
+
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, read the log and report it:
+
+```bash
+gh run view {runId} --log-failed
+```
+
+#### `github`
+
+**What:** GitHub returned {detail} at {step}, and pr-hero cannot tell whose fix it is
+
+**Why:** pr-hero does not map this GitHub status to an owner, so it does not guess
+
+**Fix:**
+
+Re-run the failed jobs:
+
+```bash
+gh run rerun {runId} --failed
+```
+
+If it repeats, read the log and report it:
+
+```bash
+gh run view {runId} --log-failed
+```
+
+### PRH-CANCELLED
+
+**Owner:** unclassified
+
+**Shown as:** `Not reviewed:`, as a notice rather than an error
+
+**What:** The review was cancelled or superseded by a newer push
+
+**Why:** a newer run replaces this one, so this result would describe an outdated head
+
+**Fix:**
+
+Ask for a review of the current head:
+
+```bash
+gh pr comment {pr} --body "/pr-hero review"
+```
+
 ## Troubleshooting
 
 - **`pr-hero doctor`** locally reports whether `.github/workflows/pr-hero.yml` exists; inside Actions it
   reports whether the required secrets (or OpenCode auth file) are present (never their values).
-- **The review was skipped** (size, budget, or admission) — dispatch
-  `gh workflow run pr-hero-force.yml -f pr=<n>`. `gh run rerun` on `pr-hero.yml` re-evaluates the
-  gates and skips again. The force workflow has to be on the default branch before `workflow_dispatch`
-  can see it.
+- **The review was skipped** (size, budget, or admission) — comment `/pr-hero review` on the pull
+  request. `gh run rerun` on `pr-hero.yml` re-evaluates the gates and skips again. On a workflow
+  scaffolded before the comment trigger, run `gh workflow run pr-hero-force.yml -f pr=<n>` instead.
+- **A `/pr-hero review` comment did nothing** — the comment trigger reads `pr-hero.yml` from the
+  default branch, so it works only once that file (with its `issue_comment` trigger) is merged there.
+  The comment must be exactly `/pr-hero review` or `/pr-hero review --full`, and its author needs
+  write access to the repository. An older `pr-hero.yml` has no comment trigger at all: re-scaffold
+  with `pr-hero ci init --force`.
+- **The run is red and names a missing credential** — none of `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, or `OPENCODE_AUTH_JSON` is set. The step summary lists the `gh secret set`
+  commands; adding a secret does not re-run past workflows, so re-run that run afterwards.
 - **Every re-run says "No changes to discover" after a hollow review** — a prior review of the same
   head completed without really reviewing (for example, every hunter returned nothing within
   seconds), and its summary marker now scopes discovery to nothing. On a head that was genuinely
-  reviewed this message is expected and needs no action. Otherwise, dispatch `gh workflow run pr-hero-force.yml -f pr=<n> -f full=true` to re-discover the whole pull
-  request; see [Manual override](#manual-override).
+  reviewed this message is expected and needs no action. Otherwise, comment `/pr-hero review --full`
+  to re-discover the whole pull request; see [Re-review on demand](#re-review-on-demand).
 - **No comment appears on the PR** — check `permissions: pull-requests: write` is present, and that at
   least one of the three credential secrets is set (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or
-  `OPENCODE_AUTH_JSON`). Fork PRs never receive those secrets. OpenCode also needs `PRHERO_ROUTING`.
+  `OPENCODE_AUTH_JSON`). Fork pushes never receive those secrets; a maintainer's `/pr-hero review`
+  comment reviews them. OpenCode also needs `PRHERO_ROUTING`.
 - **The review job is red** — never because of findings. Read `status` to tell the three causes apart:
   `error` is a fatal failure and the `::error::` annotation in the log names it; an **empty** `status`
   means every hunter died (the log shows their failures); `reviewed` means the review itself succeeded
-  but some comments could not be posted. See "Assistant posture" above. OpenCode routing without
+  but some comments could not be posted. See "Gate mode" above. OpenCode routing without
   `OPENCODE_AUTH_JSON` fails closed rather than skipping.

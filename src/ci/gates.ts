@@ -61,12 +61,13 @@
 // markers into the idempotent find-or-create flow (`findMarkedCommentId`)
 // is Phase 3's job, once a real poster exists to consume them.
 
+import type { CiMode } from "#pr/preflight";
 import type { Finding, FindingsDocument } from "#review/findings";
 import type { PrCommentDelta } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
 import { CliUsageError } from "../errors";
 import { envBillsMetered } from "../execution/usage-normalized";
-import { ciForceReviewDispatchLine } from "./force-comment";
+import { ciForceReviewHintLine } from "./force-comment";
 import {
   type CiOutputs,
   type CiSummaryData,
@@ -187,7 +188,7 @@ function buildSizeSkipComment(data: SkipSizeSummary): string {
       "PR or raise `max-changed-lines` / `max-changed-files` to change the " +
       "limit for later pushes.",
     "",
-    ciForceReviewDispatchLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -203,7 +204,7 @@ function buildBudgetSkipComment(data: SkipBudgetSummary): string {
     "pr-hero did not run to stay within the configured `--budget-usd` " +
       "ceiling.",
     "",
-    ciForceReviewDispatchLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -443,11 +444,11 @@ export function budgetUnlimitedNoticeMessage(
 ): string | null {
   if (ceiling.source !== "unlimited-subscription") return null;
   return (
-    "no budget-usd ceiling was applied: this route authenticates against a " +
-    "Claude subscription, where a run draws on quota rather than a " +
-    "per-token invoice, so the estimated cost is not a dollar figure to " +
-    "gate on. The size gate still applies independently. Set `budget-usd: " +
-    "<n>` to impose a ceiling anyway."
+    "no budget-usd ceiling was applied: this route has no per-token invoice " +
+    "credential (a Claude subscription or a free route), so a run draws on " +
+    "quota rather than a per-token invoice and the estimated cost is not a " +
+    "dollar figure to gate on. The size gate still applies independently. " +
+    "Set `budget-usd: <n>` to impose a ceiling anyway."
   );
 }
 
@@ -495,20 +496,20 @@ export function ciGateSkipOutputs(
 }
 
 export function planCiSizeSkip(
-  input: CiSizeGateSkipInput,
+  input: CiSizeGateSkipInput & { ciMode: CiMode },
 ): CiGateSkipPlan | null {
   const skip = ciSizeGateSkip(input);
   if (skip === null) return null;
   return {
     comment: skip.comment,
     markerPrefix: SKIP_SIZE_COMMENT_MARKER,
-    summaryMarkdown: renderStepSummary(skip.summary),
+    summaryMarkdown: renderStepSummary(skip.summary, input.ciMode),
     outputs: ciGateSkipOutputs("skipped-size", 0),
   };
 }
 
 export function planCiBudgetSkip(
-  input: CiBudgetGateSkipInput & { force: boolean },
+  input: CiBudgetGateSkipInput & { force: boolean; ciMode: CiMode },
 ): CiGateSkipPlan | null {
   // CI `--force` is the `/pr-hero review` comment. It answers "run this one
   // anyway" for every CI skip, including the spend ceiling. Outside that
@@ -520,7 +521,7 @@ export function planCiBudgetSkip(
   return {
     comment: skip.comment,
     markerPrefix: SKIP_BUDGET_COMMENT_MARKER,
-    summaryMarkdown: renderStepSummary(skip.summary),
+    summaryMarkdown: renderStepSummary(skip.summary, input.ciMode),
     outputs: ciGateSkipOutputs("skipped-budget", input.estimatedCostUsd),
   };
 }
@@ -550,7 +551,7 @@ function buildCoverageSkipComment(data: SkipCoverageSummary): string {
     "The existing review comment still describes the last head pr-hero " +
       "reviewed.",
     "",
-    ciForceReviewDispatchLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -569,7 +570,7 @@ function buildManualRequiredComment(data: ManualRequiredSummary): string {
     "The existing review comment still describes the last head pr-hero " +
       "reviewed.",
     "",
-    ciForceReviewDispatchLine(data.prNumber),
+    ciForceReviewHintLine(data.prNumber),
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -628,6 +629,7 @@ export function planCiReviewSkip(input: {
   prNumber: number;
   verdict: Extract<CiReviewAdmissionVerdict, { action: "skip" }>;
   admission?: AdmissionContext;
+  ciMode: CiMode;
 }): CiGateSkipPlan {
   const detail = ciReviewSkipDetail(input.verdict);
   const summary: SkipCoverageSummary = {
@@ -644,7 +646,7 @@ export function planCiReviewSkip(input: {
   return {
     comment: buildCoverageSkipComment(summary),
     markerPrefix: SKIP_COVERAGE_COMMENT_MARKER,
-    summaryMarkdown: renderStepSummary(summary),
+    summaryMarkdown: renderStepSummary(summary, input.ciMode),
     outputs: ciGateSkipOutputs("skipped-coverage", 0),
   };
 }
@@ -653,6 +655,7 @@ export function planCiReviewManualRequired(input: {
   prNumber: number;
   verdict: Extract<CiReviewAdmissionVerdict, { action: "manual-required" }>;
   admission?: AdmissionContext;
+  ciMode: CiMode;
 }): CiGateSkipPlan {
   const detail = ciReviewManualRequiredDetail(input.verdict);
   const summary: ManualRequiredSummary = {
@@ -671,7 +674,7 @@ export function planCiReviewManualRequired(input: {
   return {
     comment: buildManualRequiredComment(summary),
     markerPrefix: MANUAL_REQUIRED_COMMENT_MARKER,
-    summaryMarkdown: renderStepSummary(summary),
+    summaryMarkdown: renderStepSummary(summary, input.ciMode),
     outputs: ciGateSkipOutputs("manual-required", 0),
   };
 }
@@ -721,6 +724,7 @@ export function planCiReview(input: {
   repoWebUrl?: string;
   delta?: PrCommentDelta;
   runDir: string;
+  ciMode: CiMode;
 }): { summaryMarkdown: string; outputs: CiOutputs } {
   const blockingCount = input.findings.filter(
     (f) => f.tier === "blocking",
@@ -737,7 +741,7 @@ export function planCiReview(input: {
     ...(input.delta === undefined ? {} : { delta: input.delta }),
   };
   return {
-    summaryMarkdown: renderStepSummary(summary),
+    summaryMarkdown: renderStepSummary(summary, input.ciMode),
     outputs: {
       status: "reviewed",
       findings_count: input.findings.length,

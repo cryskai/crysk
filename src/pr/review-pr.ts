@@ -19,6 +19,11 @@
 //     stay outside of.
 
 import path from "node:path";
+import {
+  cliHeadField,
+  hunterFailureRecords,
+  writeCliRecord,
+} from "#ci/cli-record";
 import { planCiSizeSkip } from "#ci/gates";
 import { withCiWorkflowGroup } from "#ci/reporter";
 import { pipelineConfigInput } from "#config/config";
@@ -37,9 +42,12 @@ import {
   publishCiSkip,
   reserveCiAdmissionLedger,
   settleCiAdmissionLedger,
+  settleCiGateSkip,
 } from "#pr/admission";
 import {
   evaluateCiAdmissionGate,
+  isCiConfigError,
+  recordCiConfigErrorSkip,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
 import { discoveryHunters, resolvePrDiscovery } from "#pr/discovery";
@@ -50,8 +58,14 @@ import {
   fetchPrComments,
   fetchPrReviewComments,
   ghPrFiles,
+  ghPrView,
+  postReviewCommentReply,
 } from "#pr/pr";
-import { createPrRunDir } from "#pr/preflight";
+import {
+  createPrRunDir,
+  resolveCiPosture,
+  resolvePrTarget,
+} from "#pr/preflight";
 import { publishRunOutcome } from "#pr/publish-outcome";
 import { resolveEagerLocalIgnore, resolvePrFetchAndRange } from "#pr/range";
 import {
@@ -63,7 +77,11 @@ import {
 } from "#pr/target";
 import { finalizePrReviewRun, settleCommitStatusAndLedger } from "#pr/teardown";
 import { setupPrWorktree } from "#pr/worktree-setup";
-import { type PipelineResult, runPipeline } from "#review/pipeline";
+import {
+  type HunterFailure,
+  type PipelineResult,
+  runPipeline,
+} from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import {
@@ -77,6 +95,11 @@ import {
 } from "#review/run";
 import { sizeGateConfigFor, sizeGateLine } from "#review/size-gate";
 import { registerActiveRun, unregisterActiveRun } from "#store/activity";
+import {
+  type AdjudicationOutcome,
+  adjudicationMarker,
+  CI_ADJUDICATOR_LOGIN,
+} from "#triage/adjudication";
 import { dryRunHunterCount, reviewingLine } from "#ui/plan";
 import { log, styleEnabled, terminalWidth } from "#ui/primitives";
 import { applySizeGate, startProgressRenderer } from "#ui/progress";
@@ -86,6 +109,151 @@ import { acquirePidLock } from "../home";
 import { worktreeLockPath } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
 import type { ProductionRuntime } from "../production-runtime";
+
+// The CLI's record for a pipeline whose every hunter failed (cli.json,
+// odd/tasks/agent-first-ci.md, T2c). reviewPr writes it right after the pipeline's
+// group closes, before publishRunOutcome. A completed pipeline writes NOTHING here:
+// the pipeline finishing is not the review being delivered, so reviewed is written by
+// publishRunOutcome at the delivery point (recordReviewDelivered). A failure while
+// posting therefore never leaves reviewed behind. A pipeline that never returned
+// writes nothing either: its throw reaches the fatal record instead.
+export function recordPipelineOutcome(
+  result:
+    | {
+        readonly sessionFailed: boolean;
+        readonly hunterFailures?: readonly HunterFailure[];
+      }
+    | undefined,
+  headSha: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): void {
+  if (result?.sessionFailed !== true) return;
+  // WHY the causes ride on the record: the publisher names the provider and the model
+  // when every hunter failed on the provider's side (PRH-MODEL-UNAVAILABLE). A run with
+  // no failed hunter list keeps the record as it was before the field existed.
+  const failures = result.hunterFailures ?? [];
+  writeCliRecord(
+    {
+      v: 1,
+      outcome: "hunters-failed",
+      ...cliHeadField(headSha),
+      ...(failures.length === 0
+        ? {}
+        : { hunter_failures: hunterFailureRecords(failures) }),
+    },
+    env,
+  );
+}
+
+// T5b: one reply per adjudication, on the finding's own thread. Posted after the
+// review is published. WHY a failed post only warns: no verdict changes this run's
+// gate. A reply that fails or does not land leaves the dismissal with no CI ruling,
+// so the next /pr-hero recheck rules on it again and the next review still counts
+// the finding, which fails closed.
+const ADJUDICATION_REPLY_TIMEOUT_MS = 30_000;
+
+const ADJUDICATION_BADGES = {
+  upheld:
+    "✅ **CI adjudication: upheld** — the dismissal stands; from the next review of this head (`/pr-hero review`) this finding no longer counts toward the gate.",
+  rejected:
+    "❌ **CI adjudication: rejected** — the finding stands and still counts.",
+  inconclusive:
+    "❔ **CI adjudication: inconclusive** — the repository did not settle it; the finding still counts.",
+} as const;
+
+// The author of a posted reply, read back from GitHub. The gh helper in pr.ts is
+// private to that module, so the one GET this needs runs here, with the same
+// spawn shape: cwd is the operator root, so gh resolves the repo from its remote.
+async function readCommentAuthor(input: {
+  operatorRoot: string;
+  commentId: number;
+  spawnFn?: typeof Bun.spawn;
+}): Promise<string> {
+  const spawn = input.spawnFn ?? Bun.spawn;
+  const proc = spawn(
+    [
+      "gh",
+      "api",
+      `repos/{owner}/{repo}/pulls/comments/${input.commentId}`,
+      "--jq",
+      ".user.login",
+    ],
+    {
+      cwd: input.operatorRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: ADJUDICATION_REPLY_TIMEOUT_MS,
+    },
+  );
+  const [stdout, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    proc.exited,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`gh api (read comment author) exited ${exitCode}`);
+  }
+  return stdout.trim();
+}
+
+export async function postAdjudicationReplies(input: {
+  operatorRoot: string;
+  pr: number;
+  headSha: string;
+  adjudications: readonly AdjudicationOutcome[];
+  spawnFn?: typeof Bun.spawn;
+}): Promise<void> {
+  for (const entry of input.adjudications) {
+    // No ruling exists: post nothing, so the dismissal stays pending for a later recheck.
+    if (entry.failed === true) {
+      process.stdout.write(
+        `::notice::pr-hero: the CI adjudicator could not rule on ${entry.priorId}; it stays pending for the next /pr-hero recheck\n`,
+      );
+      continue;
+    }
+    const marker = adjudicationMarker({
+      verdict: entry.verdict,
+      reply: entry.replyId,
+      head: input.headSha,
+    });
+    const evidence =
+      entry.evidence.length > 0
+        ? `\n\nEvidence:\n${entry.evidence.map((e) => `- \`${e}\``).join("\n")}`
+        : "";
+    const body = `${marker}\n\n${ADJUDICATION_BADGES[entry.verdict]}${evidence}`;
+    let commentId: number | undefined;
+    try {
+      commentId = await postReviewCommentReply({
+        operatorRoot: input.operatorRoot,
+        pr: input.pr,
+        inReplyTo: entry.threadId,
+        body,
+        spawnFn: input.spawnFn,
+        timeoutMs: ADJUDICATION_REPLY_TIMEOUT_MS,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stdout.write(
+        `::warning::pr-hero: could not post the CI adjudication for ${entry.priorId}: ${message}\n`,
+      );
+    }
+    // Only an upheld verdict can clear the finding on the next review, so only its
+    // landing is checked. A read that fails counts as not landed.
+    if (entry.verdict !== "upheld") continue;
+    const author =
+      commentId === undefined
+        ? undefined
+        : await readCommentAuthor({
+            operatorRoot: input.operatorRoot,
+            commentId,
+            spawnFn: input.spawnFn,
+          }).catch(() => undefined);
+    if (author !== CI_ADJUDICATOR_LOGIN) {
+      process.stdout.write(
+        `::warning::pr-hero: the CI adjudication for ${entry.priorId} was not recorded under ${CI_ADJUDICATOR_LOGIN}; the finding still counts toward the gate\n`,
+      );
+    }
+  }
+}
 
 export async function reviewPr(
   options: CliOptions,
@@ -99,6 +267,11 @@ export async function reviewPr(
   const step1 = await resolvePrRunOptions(options, prArg);
   options = step1.options;
   const { operatorRoot, prNumber, home, isCi, loaded, config, summary } = step1;
+  // S4 + T3 S7: the run's one posture. Every gate, skip, status, comment and
+  // summary below takes these values; nothing re-resolves them. Both key on the
+  // explicit --ci flag, never on `isCi` (which also folds in the CI/GITHUB_ACTIONS
+  // environment): a shell that exports CI=1 is advisory, on pr-hero/local.
+  const { ciMode, statusContext } = resolveCiPosture(options);
   // The eager, non-CI-only `.prheroignore` read (O-8). See
   // resolveEagerLocalIgnore (src/pr/range.ts) for the full rationale — under
   // CI this stays `undefined` on purpose; the CI read instead needs the
@@ -108,16 +281,36 @@ export async function reviewPr(
     operatorRoot,
     readLocal: readLocalIgnoreRules,
   });
-  const step2 = await resolvePrPromptSetAndBudget({
-    options,
-    loaded,
-    isCi,
-    operatorRoot,
-  });
+  let step2: Awaited<ReturnType<typeof resolvePrPromptSetAndBudget>>;
+  try {
+    step2 = await resolvePrPromptSetAndBudget({
+      options,
+      loaded,
+      isCi,
+      operatorRoot,
+    });
+    await validateGotchas(step2.gotchasPath);
+  } catch (error) {
+    // WHY a row before the rethrow: this run stops before the admission
+    // reservation below, so without one its head would count as a spent
+    // attempt (see recordCiConfigErrorSkip). Only CI writes it, the same way the
+    // size gate does, and never on a dry run, which writes nothing. The error
+    // itself is rethrown unchanged.
+    if (isCi && !options.dryRun && isCiConfigError(error)) {
+      await recordCiConfigErrorSkip({
+        operatorRoot,
+        prNumber,
+        config,
+        resolveHeadSha: async () =>
+          resolvePrTarget(await ghPrView(operatorRoot, prNumber)).headSha,
+        reason: "configuration error before the review; no provider spend",
+      });
+    }
+    throw error;
+  }
   const { ciBudgetCeiling, agents, spec, agentFiles, promptSet, gotchasPath } =
     step2;
   const { dir: agentsDir, source: agentsDirSource } = agents;
-  await validateGotchas(gotchasPath);
   // Local mode's dirty-tree and HEAD-match gates are both skipped here ON
   // PURPOSE: the hunters read the worktree and never this checkout, and the
   // worktree satisfies the HEAD gate by construction (created detached at
@@ -141,6 +334,7 @@ export async function reviewPr(
     headSha: target.headSha,
     config,
     isCi,
+    ciMode,
     options,
   });
   if (ciAdmissionGate.exitCode !== undefined) return ciAdmissionGate.exitCode;
@@ -212,6 +406,7 @@ export async function reviewPr(
         decisionReason: options.force
           ? "manual override (--force)"
           : "admission: run",
+        forced: options.force === true,
       });
       holdCiAdmissionLedger(ciAdmissionLedger);
     } catch (error) {
@@ -259,10 +454,12 @@ export async function reviewPr(
       skipDiscovery,
       rawDiff,
       effectiveDiff,
+      anchorPatch,
       gateConfig,
       rereview,
       verifyQueue,
       overlapCandidates,
+      adjudicationQueue,
       phaseB,
       diffStat,
       sizeGate,
@@ -270,6 +467,7 @@ export async function reviewPr(
       diffFromSha,
       headSha,
       full: options.full,
+      adjudicate: options.adjudicate === true,
       baseRef: target.baseRef,
       headLabel,
       isCi,
@@ -306,11 +504,11 @@ export async function reviewPr(
         prNumber,
         maxChangedLines: gateConfig.maxChangedLines,
         maxChangedFiles: gateConfig.maxChangedFiles,
+        ciMode,
       });
       if (sizePlan !== null) {
-        await settleCiAdmissionLedger(
+        await settleCiGateSkip(
           ciAdmissionLedger,
-          "skipped",
           "diff exceeds the configured size gate",
         );
         return await publishCiSkip({
@@ -322,6 +520,8 @@ export async function reviewPr(
           plan: sizePlan,
           noticeMessage:
             "pr-hero review skipped — diff exceeds the configured size gate",
+          ciMode,
+          headSha,
         });
       }
     }
@@ -360,6 +560,7 @@ export async function reviewPr(
       operatorRoot,
       headSha,
       options,
+      statusContext,
       ciAdmissionLedger,
     });
     if (inFlightExit !== undefined) return inFlightExit;
@@ -378,6 +579,10 @@ export async function reviewPr(
     // bytes, and only when the filter actually dropped something.
     const diffPath = path.join(runDir, "diff.patch");
     await Bun.write(diffPath, effectiveDiff.patch);
+    // anchor.patch is the full PR diff inline comments anchor against (see
+    // resolvePrDiscovery). post --from and triage read it, falling back to
+    // diff.patch for run dirs written before it existed.
+    await Bun.write(path.join(runDir, "anchor.patch"), anchorPatch);
     if (effectiveDiff.droppedPaths.length > 0) {
       await Bun.write(path.join(runDir, "diff.raw.patch"), rawDiff);
     }
@@ -421,6 +626,8 @@ export async function reviewPr(
       summary,
       loaded,
       isCi,
+      ciMode,
+      statusContext,
       ciBudgetCeiling,
       ciAdmissionLedger,
       skipDiscovery,
@@ -438,10 +645,17 @@ export async function reviewPr(
       maxVerificationSteps,
       estimate,
       statusTargetUrl,
+      freeRoute,
     } = planResult;
 
     let result: PipelineResult | undefined;
     let posted: InlinePostOutcome | null = null;
+    // S4: written by publishRunOutcome's onBlockingCount sink, read by the
+    // commit-status finally. Null until the findings doc exists.
+    let blockingCount: number | null = null;
+    // Set by the catch below, read by the commit-status finally: a body that threw
+    // must keep its own error, so a failed status write there only logs.
+    let bodyFailed = false;
     try {
       // 8-10 — the review root, its own codegraph index, and the MCP
       // registry the hunters read. See setupPrWorktree
@@ -559,6 +773,7 @@ export async function reviewPr(
               ...(rereview === undefined ? {} : { rereview }),
               ...(verifyQueue.length > 0 ? { verifyQueue } : {}),
               ...(overlapCandidates.length > 0 ? { overlapCandidates } : {}),
+              ...(adjudicationQueue.length > 0 ? { adjudicationQueue } : {}),
               maxVerificationSteps,
               ...(phaseB === undefined ? {} : { phaseB }),
             },
@@ -576,6 +791,7 @@ export async function reviewPr(
           }
         }
       });
+      recordPipelineOutcome(result, headSha);
       // 12-16 — everything from the artifact write through CI publishing and
       // the ledger's terminal settlement. See publishRunOutcome
       // (src/pr/publish-outcome.ts) for the full rationale, including the
@@ -584,7 +800,7 @@ export async function reviewPr(
       // inside publishRunOutcome itself), so the callback assigns it the
       // instant the posting stage resolves — never only at the end.
       //
-      // `return await`, never a bare `return publishRunOutcome(...)`: this
+      // `await`, never a bare `return publishRunOutcome(...)`: this
       // sits inside a try/finally, and a bare `return` hands back the
       // pending promise WITHOUT suspending here, so the `finally` below runs
       // synchronously right away — before publishRunOutcome has done
@@ -592,7 +808,7 @@ export async function reviewPr(
       // status (and read `posted`) against pre-run state on every call, not
       // just on a throw. The `await` is what makes this function actually
       // wait for publishRunOutcome to settle before the finally can run.
-      return await publishRunOutcome({
+      const exitCode = await publishRunOutcome({
         result,
         started,
         indexMs,
@@ -607,7 +823,7 @@ export async function reviewPr(
         baseRef: target.baseRef,
         diffStat,
         droppedPaths: effectiveDiff.droppedPaths,
-        diffPatch: effectiveDiff.patch,
+        diffPatch: anchorPatch,
         home,
         repoId: repoHome.repoId,
         postEnabled,
@@ -616,17 +832,38 @@ export async function reviewPr(
         gitDirOwner,
         worktreePath,
         isCi,
+        ciMode,
         estimate,
+        freeRoute,
         ciAdmissionLedger,
         onPosted: (outcome) => {
           posted = outcome;
         },
+        onBlockingCount: (count) => {
+          blockingCount = count;
+        },
       });
+      // T5b: the verdicts are posted only after the review itself published.
+      // Only a `--ci` run with posting on writes them to the PR.
+      if (postEnabled && options.ci === true) {
+        // The verdicts never change this run's count: the next review of this head
+        // reads them back (see fillRereviewProvenance).
+        await postAdjudicationReplies({
+          operatorRoot,
+          pr: prNumber,
+          headSha,
+          adjudications: result?.adjudications ?? [],
+        });
+      }
+      return exitCode;
+    } catch (error) {
+      bodyFailed = true;
+      throw error;
     } finally {
       // The commit status must settle BEFORE the lock is released, and the
       // ledger settlement must still run on throw or early return. See
       // settleCommitStatusAndLedger (src/pr/teardown.ts) for the full
-      // rationale.
+      // rationale, including why a failed write never replaces a body's error.
       await settleCommitStatusAndLedger({
         result,
         posted,
@@ -634,6 +871,10 @@ export async function reviewPr(
         headSha,
         statusTargetUrl,
         ciAdmissionLedger,
+        ciMode,
+        statusContext,
+        blockingCount,
+        bodyFailed,
       });
     }
   } finally {

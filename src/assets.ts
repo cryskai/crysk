@@ -66,7 +66,7 @@ function resolveVersion(): string {
     // Ignore read errors
   }
 
-  return "0.2.3";
+  return "0.2.4";
 }
 
 export function resolveEngineAssets(): EngineAssets {
@@ -106,6 +106,18 @@ export function selfInvocation(): SelfInvocation {
     command: process.execPath,
     args: [path.resolve(import.meta.dir, "cli.ts")],
   };
+}
+
+// WHY: `npx pr-hero` runs from npm's temporary cache (~/.npm/_npx/<hash>/), which npm
+// may delete at any time. An MCP config or a launchd plist that records that path
+// breaks silently once it is gone, so registration refuses it and names the fix.
+export const NPX_REGISTRATION_REFUSED =
+  "pr-hero is running from npx's temporary cache; install pr-hero (npm i -g pr-hero) to register";
+const NPX_CACHE_SEGMENT = /[\\/]_npx[\\/]/;
+export function isNpxCacheInvocation(invocation: SelfInvocation): boolean {
+  return [invocation.command, ...invocation.args].some((part) =>
+    NPX_CACHE_SEGMENT.test(part),
+  );
 }
 
 // Read through resolveEngineAssets() rather than the constants in index.ts:

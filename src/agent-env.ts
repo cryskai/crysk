@@ -10,7 +10,11 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { EngineAssets } from "./assets";
+import {
+  type EngineAssets,
+  isNpxCacheInvocation,
+  NPX_REGISTRATION_REFUSED,
+} from "./assets";
 
 export type AgentEnvId =
   | "claude"
@@ -63,12 +67,30 @@ export interface SyncSkillsOptions {
   exists?: (path: string) => boolean;
 }
 
+export type SkillSyncStatus =
+  | "installed"
+  | "updated"
+  | "current"
+  | "drift-kept";
+
+export interface SkillSyncOutcome {
+  skill: string;
+  status: SkillSyncStatus;
+  // Set for drift-kept: why the local copy was left alone.
+  reason?: string;
+}
+
 export interface SyncSkillsResult {
   synced: string[];
+  // One outcome per bundled skill, in sync order, for this agent environment.
+  skills: SkillSyncOutcome[];
   upToDate?: boolean;
   driftDetected?: boolean;
   errors: string[];
 }
+
+const NO_DIGEST_DRIFT_REASON =
+  "local copy differs and has no recorded digest; not overwritten — run `pr-hero upgrade` to replace it with the bundled copy";
 
 export interface RegisterMcpOptions {
   readFile?: (path: string) => string | undefined;
@@ -209,6 +231,24 @@ export async function detectAgentEnvironments(
   return results;
 }
 
+// Decision table for each bundled skill in an agent's skills dir. The disk and
+// the digest.json recorded by the last sync decide, file by file:
+//
+//   file on disk         | recorded digest for the file | action
+//   ---------------------+------------------------------+------------------------------------
+//   missing              | (any)                        | write it
+//   equals the bundle    | (any)                        | nothing to write
+//   differs from bundle  | none (no digest recorded)    | keep it: drift-kept unless force
+//   differs from bundle  | == disk hash (untouched)     | overwrite it: updated
+//   differs from bundle  | != disk hash (user edited)   | keep it: drift-kept unless force
+//
+// `force` overwrites every differing file. A skill with any kept file is
+// drift-kept as a whole and nothing of it is written, so one skill never ends up
+// half one version and half another. A skill whose files all match the bundle
+// and that has no digest records one (writing only digest.json) and reports
+// current; that is how a pre-digest install becomes protected. A kept file never
+// gets a digest recorded over it: that would make the user's bytes look like the
+// product of a sync, and the next sync would overwrite them.
 export async function syncSkills(
   env: AgentEnvDetection,
   assets: EngineAssets,
@@ -217,6 +257,7 @@ export async function syncSkills(
   if (!env.skillsDir) {
     return {
       synced: [],
+      skills: [],
       errors: ["No skills directory resolved for environment"],
     };
   }
@@ -253,7 +294,8 @@ export async function syncSkills(
 
   const allSynced: string[] = [];
   const allErrors: string[] = [];
-  let allUpToDate = true;
+  const outcomes: SkillSyncOutcome[] = [];
+  let driftDetected = false;
 
   for (const skill of skillsToSync) {
     const targetDir = path.join(env.skillsDir, skill.name);
@@ -281,6 +323,7 @@ export async function syncSkills(
       if (content === undefined) {
         return {
           synced: [],
+          skills: outcomes,
           errors: [`Missing upstream asset for ${logicalName} at ${srcPath}`],
         };
       }
@@ -288,66 +331,115 @@ export async function syncSkills(
       upstreamHashes[logicalName] = sha256(content);
     }
 
-    // 3. Drift detection
-    let isUpToDate = true;
+    // 3. Classify each file by the decision table above
+    let toWrite: string[] = [];
+    const keptReasons: string[] = [];
+    const existed = new Set<string>();
+    let fullyCurrent = true;
     for (const [logicalName, upstreamHash] of Object.entries(upstreamHashes)) {
       const destFile = path.join(targetDir, logicalName);
       if (!exists(destFile)) {
-        isUpToDate = false;
+        toWrite.push(logicalName);
+        fullyCurrent = false;
         continue;
       }
 
       const diskContent = readFile(destFile);
       if (diskContent === undefined) {
-        isUpToDate = false;
+        toWrite.push(logicalName);
+        fullyCurrent = false;
+        continue;
+      }
+      existed.add(logicalName);
+
+      const diskHash = sha256(diskContent);
+      if (diskHash === upstreamHash) continue;
+      fullyCurrent = false;
+
+      // The recorded hash is the disk hash of the last sync: equal means the
+      // file was never edited since, so upstream may replace it safely.
+      const recordedHash = existingDigest?.files?.[logicalName];
+      if (options.force || recordedHash === diskHash) {
+        toWrite.push(logicalName);
         continue;
       }
 
-      const diskHash = sha256(diskContent);
-      if (diskHash !== upstreamHash) {
-        isUpToDate = false;
-        const recordedHash = existingDigest?.files?.[logicalName];
-        if (recordedHash && diskHash !== recordedHash && !options.force) {
-          return {
-            synced: [],
-            driftDetected: true,
-            errors: [
-              `Local edits detected in ${destFile}. Pass force to overwrite.`,
-            ],
-          };
-        }
-      }
+      // A user edit since the last sync, or a copy that was never recorded.
+      const reason = existingDigest
+        ? `Local edits detected in ${destFile}. Pass force to overwrite.`
+        : NO_DIGEST_DRIFT_REASON;
+      keptReasons.push(reason);
+      allErrors.push(existingDigest ? reason : `${destFile}: ${reason}`);
     }
 
-    if (isUpToDate && existingDigest) {
+    // force overwrites everything: a skill that is not already fully current
+    // is rewritten whole, the same as before the decision table existed.
+    if (options.force && !(fullyCurrent && existingDigest)) {
+      toWrite = Object.keys(upstreamHashes);
+    }
+
+    if (keptReasons.length > 0) {
+      driftDetected = true;
+      outcomes.push({
+        skill: skill.name,
+        status: "drift-kept",
+        reason: keptReasons[0],
+      });
       continue;
     }
 
-    allUpToDate = false;
+    // 4. Nothing to write: record the digest of a copy that already matches
+    if (toWrite.length === 0) {
+      if (!existingDigest) {
+        const digest = {
+          files: upstreamHashes,
+          synced_at: new Date().toISOString(),
+          engine_version: assets.version,
+        };
+        await writeFile(digestFile, `${JSON.stringify(digest, null, 2)}\n`);
+      }
+      outcomes.push({ skill: skill.name, status: "current" });
+      continue;
+    }
 
-    // 4. Write synced files
-    for (const [logicalName, content] of Object.entries(upstreamContents)) {
-      const destFile = path.join(targetDir, logicalName);
-      await writeFile(destFile, content);
+    // 5. Write the files that need it, then the digest
+    for (const logicalName of toWrite) {
+      await writeFile(
+        path.join(targetDir, logicalName),
+        upstreamContents[logicalName],
+      );
       allSynced.push(logicalName);
     }
 
-    // Write digest
     const newDigest = {
       files: upstreamHashes,
       synced_at: new Date().toISOString(),
       engine_version: assets.version,
     };
     await writeFile(digestFile, `${JSON.stringify(newDigest, null, 2)}\n`);
+    outcomes.push({
+      skill: skill.name,
+      status: existed.size === 0 ? "installed" : "updated",
+    });
   }
 
-  if (allUpToDate && allSynced.length === 0) {
-    return { synced: [], upToDate: true, errors: [] };
-  }
+  const upToDate =
+    !driftDetected &&
+    allSynced.length === 0 &&
+    outcomes.every((o) => o.status === "current");
 
-  return { synced: allSynced, errors: allErrors };
+  return {
+    synced: allSynced,
+    skills: outcomes,
+    ...(upToDate ? { upToDate: true } : {}),
+    ...(driftDetected ? { driftDetected: true } : {}),
+    errors: allErrors,
+  };
 }
 
+// Reports whether the skills read as synced. A copy without a recorded digest is
+// not synced yet (the next sync records it), and a differing copy that is not
+// the untouched recorded one is drift: the same rule syncSkills applies.
 export function inspectSkillsSync(
   env: AgentEnvDetection,
   assets: EngineAssets,
@@ -380,18 +472,21 @@ export function inspectSkillsSync(
     });
   }
 
+  let everyDigestRecorded = true;
   for (const skill of skillsToCheck) {
     const targetDir = path.join(env.skillsDir, skill.name);
     const digestFile = path.join(targetDir, "digest.json");
 
-    if (!exists(digestFile)) return { synced: false, drift: false };
-
     let existingDigest: { files?: Record<string, string> } | undefined;
-    try {
-      const raw = readFile(digestFile);
-      if (raw) existingDigest = JSON.parse(raw);
-    } catch {
-      return { synced: false, drift: false };
+    if (exists(digestFile)) {
+      try {
+        const raw = readFile(digestFile);
+        if (raw) existingDigest = JSON.parse(raw);
+      } catch {
+        return { synced: false, drift: false };
+      }
+    } else {
+      everyDigestRecorded = false;
     }
 
     for (const [logicalName, srcPath] of Object.entries(skill.files)) {
@@ -404,22 +499,17 @@ export function inspectSkillsSync(
 
       const diskHash = sha256(destContent);
       const upstreamHash = sha256(srcContent);
-      const recordedHash = existingDigest?.files?.[logicalName];
+      if (diskHash === upstreamHash) continue;
 
-      if (
-        recordedHash &&
-        diskHash !== recordedHash &&
-        diskHash !== upstreamHash
-      ) {
+      const recordedHash = existingDigest?.files?.[logicalName];
+      if (diskHash !== recordedHash) {
         return { synced: false, drift: true };
       }
-      if (diskHash !== upstreamHash) {
-        return { synced: false, drift: false };
-      }
+      return { synced: false, drift: false };
     }
   }
 
-  return { synced: true, drift: false };
+  return { synced: everyDigestRecorded, drift: false };
 }
 
 export async function registerMcpServer(
@@ -432,6 +522,13 @@ export async function registerMcpServer(
       registered: false,
       configFile: "",
       error: "No MCP configuration file path resolved for environment",
+    };
+  }
+  if (isNpxCacheInvocation({ command: reg.command, args: reg.args })) {
+    return {
+      registered: false,
+      configFile: env.mcpConfigFile,
+      error: NPX_REGISTRATION_REFUSED,
     };
   }
 

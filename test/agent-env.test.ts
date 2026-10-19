@@ -7,7 +7,11 @@ import {
   registerMcpServer,
   syncSkills,
 } from "../src/agent-env";
-import { resolveEngineAssets, selfInvocation } from "../src/assets";
+import {
+  NPX_REGISTRATION_REFUSED,
+  resolveEngineAssets,
+  selfInvocation,
+} from "../src/assets";
 
 describe("Agent environment detector and sync", () => {
   const fakeAssets = {
@@ -315,9 +319,251 @@ describe("Agent environment detector and sync", () => {
       });
       expect(registered).toBe(true);
     });
+
+    test("registerMcpServer refuses an npx-cache registration before any read or write", async () => {
+      const env: AgentEnvDetection = {
+        id: "cursor",
+        displayName: "Cursor",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        mcpConfigFile: "/home/user/.cursor/mcp.json",
+      };
+      const reg = {
+        command: "/home/x/.npm/_npx/ab12/node_modules/bun/bin/bun",
+        args: ["/home/x/.npm/_npx/ab12/node_modules/pr-hero/src/cli.ts", "mcp"],
+      };
+      let touched = false;
+      const result = await registerMcpServer(env, reg, {
+        readFile: () => {
+          touched = true;
+          return undefined;
+        },
+        writeFile: async () => {
+          touched = true;
+        },
+      });
+      expect(result).toEqual({
+        registered: false,
+        configFile: "/home/user/.cursor/mcp.json",
+        error: NPX_REGISTRATION_REFUSED,
+      });
+      expect(touched).toBe(false);
+    });
+  });
+
+  describe("skills sync decision table (digest-less and digest-recorded copies)", () => {
+    const skillDir = "/home/user/.claude/skills/pr-hero-triage";
+    const bundled: Record<string, string> = {
+      "/abs/skills/pr-hero-triage/SKILL.md": "bundled SKILL.md",
+      "/abs/skills/pr-hero-triage/adjudicator.md": "bundled adjudicator.md",
+      "/abs/skills/pr-hero-ci-setup/SKILL.md": "bundled ci SKILL.md",
+    };
+    const assets = {
+      ...fakeAssets,
+      triageSkillFiles: {
+        "SKILL.md": "/abs/skills/pr-hero-triage/SKILL.md",
+        "adjudicator.md": "/abs/skills/pr-hero-triage/adjudicator.md",
+      },
+      ciSetupSkillFiles: {},
+    };
+    const env: AgentEnvDetection = {
+      id: "claude",
+      displayName: "Claude Code",
+      status: "active",
+      binaryFound: true,
+      auth: { authenticated: true, message: "ok" },
+      skillsDir: "/home/user/.claude/skills",
+    };
+
+    // A disk the sync reads and writes; `writes` records every path it wrote.
+    function fakeDisk(initial: Record<string, string>) {
+      const files: Record<string, string> = { ...initial };
+      const writes: string[] = [];
+      return {
+        files,
+        writes,
+        options: {
+          readFile: (p: string) => (p in bundled ? bundled[p] : files[p]),
+          writeFile: async (p: string, content: string) => {
+            files[p] = content;
+            writes.push(p);
+          },
+          exists: (p: string) => p in files || p in bundled,
+        },
+      };
+    }
+
+    const noDigestReason =
+      "local copy differs and has no recorded digest; not overwritten — run `pr-hero upgrade` to replace it with the bundled copy";
+
+    test("no digest + identical bytes: records the digest, writes no skill file, reports current", async () => {
+      const disk = fakeDisk({
+        [`${skillDir}/SKILL.md`]: "bundled SKILL.md",
+        [`${skillDir}/adjudicator.md`]: "bundled adjudicator.md",
+      });
+
+      const result = await syncSkills(env, assets, disk.options);
+
+      expect(disk.writes).toEqual([`${skillDir}/digest.json`]);
+      expect(disk.files[`${skillDir}/digest.json`]).toBeDefined();
+      expect(result.synced).toEqual([]);
+      expect(result.driftDetected).toBeFalsy();
+      expect(result.skills).toEqual([
+        { skill: "pr-hero-triage", status: "current" },
+      ]);
+    });
+
+    test("no digest + different bytes: not overwritten, not digested, reported as drift-kept with the reason", async () => {
+      const disk = fakeDisk({
+        [`${skillDir}/SKILL.md`]: "my local edit",
+        [`${skillDir}/adjudicator.md`]: "bundled adjudicator.md",
+      });
+
+      const result = await syncSkills(env, assets, disk.options);
+
+      expect(disk.writes).toEqual([]);
+      expect(disk.files[`${skillDir}/SKILL.md`]).toBe("my local edit");
+      expect(result.driftDetected).toBe(true);
+      expect(result.synced).toEqual([]);
+      expect(result.skills).toEqual([
+        {
+          skill: "pr-hero-triage",
+          status: "drift-kept",
+          reason: noDigestReason,
+        },
+      ]);
+    });
+
+    test("no digest + different bytes + force: overwritten and reported as updated", async () => {
+      const disk = fakeDisk({
+        [`${skillDir}/SKILL.md`]: "my local edit",
+        [`${skillDir}/adjudicator.md`]: "bundled adjudicator.md",
+      });
+
+      const result = await syncSkills(env, assets, {
+        ...disk.options,
+        force: true,
+      });
+
+      expect(disk.files[`${skillDir}/SKILL.md`]).toBe("bundled SKILL.md");
+      expect(result.synced).toEqual(["SKILL.md", "adjudicator.md"]);
+      expect(result.driftDetected).toBeFalsy();
+      expect(result.skills).toEqual([
+        { skill: "pr-hero-triage", status: "updated" },
+      ]);
+    });
+
+    test("no digest + nothing installed: installs and reports installed", async () => {
+      const disk = fakeDisk({});
+
+      const result = await syncSkills(env, assets, disk.options);
+
+      expect(disk.files[`${skillDir}/SKILL.md`]).toBe("bundled SKILL.md");
+      expect(result.skills).toEqual([
+        { skill: "pr-hero-triage", status: "installed" },
+      ]);
+    });
+
+    test("recorded digest: an untouched copy is updated, a locally edited one is drift-kept with its digest unchanged", async () => {
+      const crypto = await import("node:crypto");
+      const sha = (s: string) =>
+        crypto.createHash("sha256").update(s).digest("hex");
+      const recorded = JSON.stringify({
+        files: {
+          "SKILL.md": sha("old bundled SKILL.md"),
+          "adjudicator.md": sha("bundled adjudicator.md"),
+        },
+        engine_version: "1.0.0",
+      });
+
+      const untouched = fakeDisk({
+        [`${skillDir}/SKILL.md`]: "old bundled SKILL.md",
+        [`${skillDir}/adjudicator.md`]: "bundled adjudicator.md",
+        [`${skillDir}/digest.json`]: recorded,
+      });
+      const updated = await syncSkills(env, assets, untouched.options);
+      expect(untouched.files[`${skillDir}/SKILL.md`]).toBe("bundled SKILL.md");
+      expect(updated.skills).toEqual([
+        { skill: "pr-hero-triage", status: "updated" },
+      ]);
+
+      const edited = fakeDisk({
+        [`${skillDir}/SKILL.md`]: "user edit after sync",
+        [`${skillDir}/adjudicator.md`]: "bundled adjudicator.md",
+        [`${skillDir}/digest.json`]: recorded,
+      });
+      const kept = await syncSkills(env, assets, edited.options);
+      expect(edited.files[`${skillDir}/SKILL.md`]).toBe("user edit after sync");
+      expect(edited.writes).toEqual([]);
+      expect(kept.driftDetected).toBe(true);
+      expect(kept.skills).toEqual([
+        {
+          skill: "pr-hero-triage",
+          status: "drift-kept",
+          reason:
+            "Local edits detected in " +
+            `${skillDir}/SKILL.md. Pass force to overwrite.`,
+        },
+      ]);
+    });
+
+    test("a drift-kept skill does not stop the next skill from installing", async () => {
+      const disk = fakeDisk({
+        [`${skillDir}/SKILL.md`]: "my local edit",
+        [`${skillDir}/adjudicator.md`]: "bundled adjudicator.md",
+      });
+      const bothSkills = {
+        ...assets,
+        ciSetupSkillFiles: {
+          "SKILL.md": "/abs/skills/pr-hero-ci-setup/SKILL.md",
+        },
+      };
+
+      const result = await syncSkills(env, bothSkills, disk.options);
+
+      expect(
+        disk.files["/home/user/.claude/skills/pr-hero-ci-setup/SKILL.md"],
+      ).toBe("bundled ci SKILL.md");
+      expect(result.skills).toEqual([
+        {
+          skill: "pr-hero-triage",
+          status: "drift-kept",
+          reason: noDigestReason,
+        },
+        { skill: "pr-hero-ci-setup", status: "installed" },
+      ]);
+    });
   });
 
   describe("inspectSkillsSync", () => {
+    test("inspectSkillsSync reports drift when a copy differs and has no digest", () => {
+      const env: AgentEnvDetection = {
+        id: "claude",
+        displayName: "Claude Code",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        skillsDir: "/home/user/.claude/skills",
+      };
+      const disk: Record<string, string> = {
+        "/home/user/.claude/skills/pr-hero-triage/SKILL.md": "my local edit",
+        "/home/user/.claude/skills/pr-hero-triage/adjudicator.md": "x",
+      };
+
+      const status = inspectSkillsSync(env, fakeAssets, {
+        exists: (p) => p in disk || p.startsWith("/abs/"),
+        readFile: (p) =>
+          p.startsWith("/abs/")
+            ? p.endsWith("SKILL.md")
+              ? "bundled SKILL.md"
+              : "x"
+            : disk[p],
+      });
+      expect(status.synced).toBe(false);
+      expect(status.drift).toBe(true);
+    });
+
     test("inspectSkillsSync returns false when digest missing", () => {
       const env: AgentEnvDetection = {
         id: "claude",
