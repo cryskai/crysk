@@ -323,7 +323,7 @@ Look the run up by artifact name, not with `gh run list --branch`: a `/pr-hero r
 a branch listing never shows it, and that run usually holds the findings. Several runs can upload
 the same name for one head (the automatic review, then a forced review or recheck; `overwrite: true`
 in `action.yml` only dedupes within one run). Try the candidates newest first and keep the first one
-`npx -y pr-hero triage reply ... --dry-run` binds (it prints a "marker match" plan line).
+`npx -y pr-hero triage reply ... --dry-run` binds (its success line starts with `plan: reply to`; do not match on "marker match", which the "no posted … marker matches" error also contains).
 
 Then pass `--from pr-hero-run`. `gh run download` unpacks the run directory's *contents*, so the
 `--from` target is the directory you downloaded into — not a `pr-<n>-<sha>-1` path inside it. If
