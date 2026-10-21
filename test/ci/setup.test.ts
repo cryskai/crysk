@@ -1511,4 +1511,17 @@ describe("the scaffolded workflow accepts /pr-hero recheck", () => {
       template.split(review).length - 1,
     );
   });
+
+  test("the comments name /pr-hero recheck beside review and override", () => {
+    const template = generateCiWorkflowTemplate();
+    expect(template).toContain(
+      "A comment that is exactly\n# `/pr-hero recheck` reviews the head",
+    );
+    expect(template).toContain(
+      "BEGINS with `/pr-hero review`,\n    # `/pr-hero recheck` or `/pr-hero override`",
+    );
+    expect(template).toContain(
+      "starts with\n    # /pr-hero review, /pr-hero recheck or /pr-hero override",
+    );
+  });
 });

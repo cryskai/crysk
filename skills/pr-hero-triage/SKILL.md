@@ -100,11 +100,36 @@ it**. The four tags are peers. None is the default.
    - `recheck`: blocking findings are answered `dismissed` and the CI adjudicator has not ruled on
      them on this head (or ruled `inconclusive`). Comment `gh pr comment <n> --body "/pr-hero recheck"`
      and follow "Closing a dismissal" below.
-   - `override-or-fix`: the gate is red and every blocking finding is already answered, but none can
-     clear without a fix: a dismissal the CI adjudicator rejected, or a `deferred` / `misclassified`
-     tag. Fix and push, or ask a maintainer to override. Never override it yourself.
+   - `override-or-fix`: the gate is red and nothing is left for `triage` or `recheck`. Read the
+     `reason` and act on the case it names; never override it yourself:
+     - the head was size- or budget-skipped (the gate description starts "pr-hero skipped the
+       review"): comment `/pr-hero review`, which reviews it anyway;
+     - the review is "partial again" with the same hunters failing: fix the failing hunter's route
+       (model or credential), or ask a maintainer to override;
+     - every blocking finding is already answered but none can clear without a fix (a dismissal the
+       CI adjudicator rejected, a `deferred` / `misclassified` tag, or a `dismissed` finding with no
+       review thread, which no adjudicator can rule on): fix and push, or ask a maintainer to
+       override;
+     - the red gate names no live blocking finding on this head (the `reason` quotes the gate
+       description): read that description and act on what it says; when it names nothing you can
+       fix, ask a maintainer.
    - `done`: nothing is owed on this head. The gate passed (or an override unlocked it) and every
      finding posted on this head has a reply.
+
+   **Bound the forced runs.** `/pr-hero review` and `/pr-hero recheck` each run a full paid review
+   that bypasses the size, budget and admission gates (`ci_max_attempts` included), and a gate
+   `error` (expired token, missing credential, crash) makes step 0 say `review` again forever.
+   Before posting either, count the ones already on this head, never from memory: the comments in
+   `gh pr view <n> --json comments` whose body is exactly `/pr-hero review` or `/pr-hero recheck`
+   and whose `createdAt` is at or after the oldest `pr-hero` status on the head
+   (`gh api "repos/{owner}/{repo}/commits/<head>/statuses?per_page=100" --jq '[.[] | select(.context == "pr-hero")] | last.created_at'`;
+   no status yet means none counted). Each reason step 0 gives gets its command once per head:
+   one `/pr-hero review` each for a skipped head, a partial review, a used-up budget, a gate
+   `error`, and an `upheld` dismissal; one `/pr-hero recheck` per pending dismissal, plus one retry
+   when that run leaves no ruling or an `inconclusive` one. When the same reason comes back after
+   its command already ran (a second `error` with the same description, a second partial, a second
+   recheck with no ruling or `inconclusive` again), stop and hand it to a human. The hard ceiling
+   is six per head; reaching it goes to a human too.
 
    `findings[]` lists each posted finding with its `id`, `path`, `line`, `head`, `live_on_head`, and
    its newest `triage` (`null` when none), and `ci_verdict`. `comment_id` can be null: a live row of
@@ -180,10 +205,15 @@ adjudicator. When step 0 says `recheck`:
      now says `review`. Comment `/pr-hero review`, and that review no longer counts the finding.
    - `rejected`: the finding stands. Re-read the adjudicator's evidence. Fix it, or, if you still hold
      it is wrong, ask a human (they may override). Do not re-post the same argument.
-   - `inconclusive`: the repository did not settle it either way. Post a new `dismissed` reply with
-     stronger, cited evidence (a new reply is pending again), then recheck once more.
+   - `inconclusive`: the repository did not settle it either way. On the same head you cannot post
+     a stronger argument: the driver skips any second triage reply at a head that already has one
+     (`skip post: … already triaged at this head`), and the next recheck re-adjudicates your
+     original reply. Recheck once more; a second `inconclusive` on this head goes to a human. A
+     stronger argument needs a new head: after a push, reply `dismissed` again with the new
+     evidence, then recheck.
    - No ruling at all after the run: the adjudicator step failed. Nothing was posted and the
-     dismissal is still pending; recheck again.
+     dismissal is still pending; recheck once more. A second recheck with no ruling goes to a
+     human (see "Bound the forced runs" in step 0).
 4. A ruling counts only on the head it was given. After any push, step 0 asks for a recheck again.
 
 Only an inline finding can be rechecked: the CI adjudicator answers on the finding's own review
@@ -294,11 +324,22 @@ that is destroyed when the job ends. The workflow uploads it as an artifact; dow
 you triage:
 
 ```bash
-gh run list --workflow "pr-hero Review" --branch <head-branch> --limit 5
-gh run download <run-id> -n pr-hero-run-<pr>-<head-sha> -D pr-hero-run
+NAME=pr-hero-run-<pr>-<head-sha>
+gh api "repos/{owner}/{repo}/actions/artifacts?name=$NAME" \
+  --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[].workflow_run.id'
+gh run download <run-id> -n "$NAME" -D "pr-hero-run-<run-id>"
 ```
 
-Then pass `--from pr-hero-run`. `gh run download` unpacks the run directory's *contents*, so the
+Look the run up by artifact name, not with `gh run list --branch`: a `/pr-hero review` or
+`/pr-hero recheck` run is an `issue_comment` event, which GitHub files under the default branch, so
+a branch listing never shows it, and that run usually holds the findings. Several runs can upload
+the same name for one head (the automatic review, then a forced review or recheck; `overwrite: true`
+in `action.yml` only dedupes within one run). Try the candidates newest first and keep the first one
+`npx -y pr-hero triage reply ... --dry-run` binds (its success line starts with `plan: reply to`; do not match on "marker match", which the "no posted … marker matches" error also contains). Download each candidate
+into its own fresh directory, as above: reusing one directory mixes `findings.json` from one run
+with the patches of another, and the bind then judges files no single run wrote.
+
+Then pass `--from pr-hero-run-<run-id>` for the candidate that bound. `gh run download` unpacks the run directory's *contents*, so the
 `--from` target is the directory you downloaded into — not a `pr-<n>-<sha>-1` path inside it. If
 the artifact is missing (a size- or budget-gated review writes no run directory, and so does a
 run where every hunter died), you have no `--from` input: say so and stop rather than inventing
@@ -373,5 +414,7 @@ this PR. The engine typed it wrong, not the code.
   `--verdict` is equally malformed.
 - Never re-triage a finding whose head is unchanged since its last triage on this PR (the driver
   skips a same-head re-post).
+- Never post `/pr-hero review` or `/pr-hero recheck` past the bound in step 0: count the ones already
+  on the head (never from memory), six at most, and hand a repeated failure to a human sooner.
 - After 2 consecutive `inconclusive` heads — read off the finding's own prior triage markers, not
   memory — stop and hand the finding to a human.

@@ -270,8 +270,10 @@ export function generateCiWorkflowTemplate(
 # review again with the skip gates bypassed, and \`/pr-hero review --full\`
 # also re-discovers the whole range. A comment that is exactly
 # \`/pr-hero override\` turns the gate green on that head with no review and
-# no cost, and records who did it. The action parses the comment and refuses a
-# commenter without write access.
+# no cost, and records who did it. A comment that is exactly
+# \`/pr-hero recheck\` reviews the head and asks the CI adjudicator to rule on
+# pending dismissals of blocking findings. The action parses the comment and
+# refuses a commenter without write access.
 name: pr-hero Review
 
 on:
@@ -309,8 +311,8 @@ jobs:
     # instead, and that run (base-branch context, with secrets) reviews the
     # fork's head.
     #
-    # A comment starts the job only when it BEGINS with \`/pr-hero review\` or
-    # \`/pr-hero override\`. The action then requires an exact match after
+    # A comment starts the job only when it BEGINS with \`/pr-hero review\`,
+    # \`/pr-hero recheck\` or \`/pr-hero override\`. The action then requires an exact match after
     # trimming, so a near-miss such as "/pr-hero review please" starts a job the
     # action ends without reviewing or overriding.
     if: >-
@@ -332,7 +334,7 @@ jobs:
     #
     # GitHub keeps one PENDING run per group, and a newer run replaces it. So
     # a comment enters the pull request's group only when it starts with
-    # /pr-hero review or /pr-hero override, and GitHub associates its author
+    # /pr-hero review, /pr-hero recheck or /pr-hero override, and GitHub associates its author
     # with the repository as OWNER, MEMBER or COLLABORATOR; every other comment
     # gets its own group. Without that, anyone who can comment could replace a
     # maintainer's queued review with a run the action then refuses. The job
