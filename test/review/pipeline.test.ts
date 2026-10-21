@@ -1100,6 +1100,64 @@ describe("engine-owned effort", () => {
     expect(effortOf(runner, "verify-V001")).toBe("high");
   });
 
+  // The verifier runs as the refuter's agent, so it must run on the refuter's
+  // admitted route. Without it a routed run (any non-default `routing`) left
+  // `route` unset, the production runner found no binding for it, and every
+  // verify step failed "No admitted binding for step route" — observed live on
+  // an ai&/OpenCode re-review of musive #1717, 2026-10-21.
+  test("the rereview verifier inherits the refuter's routed model", async () => {
+    const runner = new FakeStepRunner({
+      verifier: (spec) =>
+        ok(spec, {
+          results: [
+            {
+              finding_id: "V001",
+              outcome: "refuted",
+              proof_refs: ["src/app.ts:10"],
+            },
+          ],
+        }),
+    });
+    const input = await makeInput({
+      skipDiscovery: true,
+      verifyQueue: [
+        {
+          priorId: "R001",
+          sev: "CRITICAL",
+          trigger: "touched",
+          claim: "a live defect",
+          locs: ["src/app.ts:10"],
+          authorReply: "",
+          commentBody: "",
+          triageTag: "",
+          deltaHunks: "",
+        },
+      ],
+    });
+
+    const result = await runPipeline(
+      {
+        ...input,
+        routingConfig: {
+          default: {
+            backend: "claude-code",
+            provider: "anthropic",
+            gateway: "direct",
+            modelSnapshot: "claude-routed-snapshot",
+          },
+        },
+      },
+      { runner },
+    );
+
+    const refuterRoute = result.routePlan?.steps.find(
+      (s) => s.stepKey === "refuter",
+    )?.route;
+    expect(refuterRoute?.modelSnapshot).toBe("claude-routed-snapshot");
+    const verify = runner.specs.find((s) => s.name === "verify-V001");
+    expect(verify?.route).toEqual(refuterRoute);
+  });
+
   test("pipeline.json records the effort each step was asked to run at", async () => {
     const runner = new FakeStepRunner(refuterScript);
     const input = await makeInput();
