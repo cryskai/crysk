@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The triage skill finds comment-triggered CI runs, names every `override-or-fix` case, and bounds forced runs**:
+  the run-dir artifact is looked up by name (a `/pr-hero review` or `/pr-hero recheck` run is an `issue_comment` event
+  that a branch listing never shows), `override-or-fix` lists its three causes with the right action for each, and
+  `/pr-hero review` / `/pr-hero recheck` are capped at four per head with a repeated failure going to a human.
+- **The scaffolded workflow's comments mention `/pr-hero recheck`** where they listed only `review` and `override`.
+
 ## [0.2.4] - 2026-10-19
 
 ### Fixed
