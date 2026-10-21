@@ -388,6 +388,7 @@ export async function review(options: CliOptions): Promise<number> {
         suspicionPriors: config.suspicion_priors,
         ...pipelineSummarizerInput(summary),
         ...pipelineScoutInput(options),
+        ...(options.sharedPrefix === true ? { sharedPrefix: true } : {}),
         ...pipelineConfigInput(loaded),
         ...(routePlan === undefined ? {} : { routePlan }),
         engine: await engineIdentity(),

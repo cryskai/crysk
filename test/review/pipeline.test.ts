@@ -4846,3 +4846,137 @@ describe("hunter read requirement (#299)", () => {
     );
   });
 });
+
+describe("shared prefix (--shared-prefix)", () => {
+  const WARMUP_OK: StepScript = {
+    ...HUNTERS_OK,
+    "warmup-1": (spec) => ok(spec, "OK"),
+  };
+
+  function specNamed(runner: FakeStepRunner, name: string): StepSpec {
+    const spec = runner.specs.find((s) => s.name === name);
+    if (!spec) throw new Error(`no step ${name} was spawned`);
+    return spec;
+  }
+
+  // A hunter file with no tools, so reliability falls into a group of its own
+  // while resilience keeps the shared tool set.
+  async function toolLessReliabilityDir(): Promise<string> {
+    const dir = await makeAgentsDir();
+    await Bun.write(
+      path.join(dir, "deep-review-reliability.md"),
+      [
+        "---",
+        "name: deep-review-reliability",
+        "description: a hunter configured with no tools",
+        "model: sonnet",
+        "---",
+        "",
+        "Hunt bugs in the diff.",
+        "",
+      ].join("\n"),
+    );
+    return dir;
+  }
+
+  test("flag on: hunters share a byte-identical system prompt that carries the patch, and their role moves to the user message", async () => {
+    const runner = new FakeStepRunner(HUNTERS_OK);
+    await runPipeline(await makeInput({ sharedPrefix: true }), { runner });
+
+    const reliability = specNamed(runner, "hunter-reliability");
+    const resilience = specNamed(runner, "hunter-resilience");
+    const systemA = await Bun.file(reliability.systemPromptPath).text();
+    const systemB = await Bun.file(resilience.systemPromptPath).text();
+    expect(systemA).toBe(systemB);
+    expect(systemA.startsWith(RUNTIME_PREAMBLE)).toBe(true);
+    expect(systemA).toContain("+new");
+
+    expect(reliability.prompt).not.toContain("+new");
+    expect(reliability.prompt).toContain("Hunt bugs in the diff.");
+    expect(reliability.prompt).toContain(
+      "Review the patch in the system prompt under the role above.",
+    );
+    expect(resilience.prompt).not.toContain("+new");
+  });
+
+  test("flag on: a warm-up for a shared group runs before any hunter, with the group's system bytes, settings and provenance", async () => {
+    const runner = new FakeStepRunner(WARMUP_OK);
+    const input = await makeInput({ sharedPrefix: true });
+    await runPipeline(input, { runner });
+
+    const names = runner.specs.map((s) => s.name);
+    expect(names.filter((n) => n.startsWith("warmup-"))).toEqual(["warmup-1"]);
+    expect(names.indexOf("warmup-1")).toBeLessThan(
+      names.findIndex((n) => n.startsWith("hunter-")),
+    );
+
+    const warmup = specNamed(runner, "warmup-1");
+    const hunter = specNamed(runner, "hunter-reliability");
+    expect(await Bun.file(warmup.systemPromptPath).text()).toBe(
+      await Bun.file(hunter.systemPromptPath).text(),
+    );
+    expect(warmup.model).toBe(hunter.model);
+    expect(warmup.effort).toBe(hunter.effort);
+    expect(warmup.tools).toEqual(hunter.tools);
+
+    const steps = await readSteps(input.runDir);
+    expect(stepNamed(steps, "warmup-1")?.status).toBe("ok");
+  });
+
+  test("flag on: a hunter alone in its group gets no warm-up, and still runs", async () => {
+    const runner = new FakeStepRunner(HUNTERS_OK);
+    const input = await makeInput(
+      { sharedPrefix: true },
+      { agentsDir: await toolLessReliabilityDir() },
+    );
+    await runPipeline(input, { runner });
+
+    expect(runner.specs.some((s) => s.name.startsWith("warmup-"))).toBe(false);
+    expect(specNamed(runner, "hunter-reliability").tools).toEqual([]);
+    expect(specNamed(runner, "hunter-resilience").name).toBe(
+      "hunter-resilience",
+    );
+  });
+
+  test("flag on: a failed warm-up is recorded and never stops the hunters or the run", async () => {
+    const runner = new FakeStepRunner({
+      ...HUNTERS_OK,
+      "warmup-1": (spec) => failed(spec),
+    });
+    const input = await makeInput({ sharedPrefix: true });
+    await runPipeline(input, { runner });
+
+    expect(runner.specs.some((s) => s.name === "hunter-reliability")).toBe(
+      true,
+    );
+    expect(runner.specs.some((s) => s.name === "hunter-resilience")).toBe(true);
+    const steps = await readSteps(input.runDir);
+    expect(stepNamed(steps, "warmup-1")?.status).toBe("failed");
+  });
+
+  test("flag on: each hunter's rendered body is written beside its draft as an audit artifact", async () => {
+    const runner = new FakeStepRunner(HUNTERS_OK);
+    const input = await makeInput({ sharedPrefix: true });
+    await runPipeline(input, { runner });
+
+    const body = await Bun.file(
+      path.join(input.runDir, "steps", "hunter-reliability.body.md"),
+    ).text();
+    expect(body).toContain("Hunt bugs in the diff.");
+    expect(body).toContain("G-01: seeded fixture values carry unit contracts.");
+    expect(body).not.toContain("+new");
+  });
+
+  test("flag off: no warm-up runs and no body artifact is written", async () => {
+    const runner = new FakeStepRunner(HUNTERS_OK);
+    const input = await makeInput();
+    await runPipeline(input, { runner });
+
+    expect(runner.specs.some((s) => s.name.startsWith("warmup-"))).toBe(false);
+    expect(
+      await Bun.file(
+        path.join(input.runDir, "steps", "hunter-reliability.body.md"),
+      ).exists(),
+    ).toBe(false);
+  });
+});

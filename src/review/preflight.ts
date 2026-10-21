@@ -89,6 +89,8 @@ export interface CliOptions {
   // The scout is tri-state at parse time: undefined means no flag,
   // so review can apply flag > config > default (false).
   scout?: boolean;
+  // `--shared-prefix` is a plain opt-in: undefined means off.
+  sharedPrefix?: boolean;
   // Independent model knob (§3.7), and NOT exercised by M6 — the whole
   // control corpus is sonnet, so ratifying this is ratifying a flag, not a
   // second variable. `--model` still outranks it (the JD override rule).
@@ -510,6 +512,10 @@ Options:
                       whether it earns its cost has not run yet
   --scout-model <m>   Model for the scout stage (default: the run's model).
                       Requires --scout
+  --shared-prefix     review only: put the patch and output contract in each
+                      hunter's system prompt, identical across hunters, and
+                      warm the prompt cache once per group before the fan-out.
+                      EXPERIMENTAL and off by default
   --full              review only: on a re-review, widen discovery to the
                       full PR range (B..H). Verification and triage still
                       run; the recorded case does not change. On GitHub,
@@ -720,6 +726,10 @@ export function parseArgs(argv: string[]): ParsedCli {
     }
     if (arg === "--no-scout") {
       options.scout = false;
+      continue;
+    }
+    if (arg === "--shared-prefix") {
+      options.sharedPrefix = true;
       continue;
     }
     if (arg === "--ci") {

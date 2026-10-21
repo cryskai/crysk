@@ -217,6 +217,13 @@ describe("parseArgs", () => {
     ).toBe(true);
   });
 
+  test("--shared-prefix is an opt-in flag: true with it, undefined without", () => {
+    expect(parseArgs(["review", "--shared-prefix"]).options.sharedPrefix).toBe(
+      true,
+    );
+    expect(parseArgs(["review"]).options.sharedPrefix).toBeUndefined();
+  });
+
   test("the scout is tri-state: undefined by default, true with --scout, false with --no-scout", () => {
     expect(parseArgs(["review"]).options.scout).toBeUndefined();
     expect(parseArgs(["review", "--scout"]).options.scout).toBe(true);

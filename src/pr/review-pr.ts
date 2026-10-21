@@ -787,6 +787,7 @@ export async function reviewPr(
               suspicionPriors: config.suspicion_priors,
               ...(skipDiscovery ? {} : pipelineSummarizerInput(summary)),
               ...(skipDiscovery ? {} : pipelineScoutInput(options)),
+              ...(options.sharedPrefix === true ? { sharedPrefix: true } : {}),
               // NOT gated on skipDiscovery: an empty-delta re-review still
               // classifies and verifies against this config, and a run whose
               // artifact cannot name its config inputs is the unpoolable case
