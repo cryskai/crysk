@@ -800,6 +800,74 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
     expect(transportCalls).toBe(1);
   });
 
+  // The same shape as the metered-transient test above, but the cause is a
+  // provider rate limit (429): the provider stated the cost of what it served,
+  // so the attempt settles at that figure, the retry runs, and a sibling step
+  // on the same credential bucket is not fenced (lab ledger, cost levers v2).
+  test("a metered rate-limited attempt with a provider-priced cost settles: it retries and fences nothing", async () => {
+    const dir = await tempDir();
+    const meteredPartial: NormalizedUsage = {
+      wallMs: 500,
+      tokens: { providerReportedTotal: 100 },
+      completeness: "partial",
+      billingMode: "metered",
+      costSource: "provider",
+      cashCostUsd: 0.05,
+    };
+    let transportCalls = 0;
+    const transport: ProviderTransport = {
+      backend: "opencode",
+      capabilities: async () => capabilities({ backend: "opencode" }),
+      execute: async () => {
+        transportCalls++;
+        if (transportCalls === 1) {
+          return {
+            completion: "failed" as const,
+            protocolIntegrity: "verified" as const,
+            finalText: "",
+            usage: meteredPartial,
+            stderrTail: "429 rate limit",
+          };
+        }
+        return okOutcome({
+          wallMs: 500,
+          tokens: { outputVisible: 10, outputKnown: 10, totalKnown: 110 },
+          completeness: "complete",
+          billingMode: "metered",
+          costSource: "provider",
+          cashCostUsd: 0.02,
+        });
+      },
+      classifyFailure: (outcome) =>
+        outcome.stderrTail.includes("429") ? "rate_limit" : undefined,
+    };
+    const ledger = new SpyLedger();
+    const harness = new StepExecutionHarness({
+      transport,
+      spendLedger: ledger,
+      spawnFn: fakeSpawn,
+    });
+
+    const result = await harness.run(await makeStep(dir, { maxAttempts: 3 }));
+
+    expect(result.status).toBe("ok");
+    expect(transportCalls).toBe(2);
+    expect(result.reservations?.map((r) => r.state)).toEqual([
+      "settled",
+      "settled",
+    ]);
+    expect(result.reservations?.[0]?.settledUsd).toBe(0.05);
+    expect(ledger.markUnresolvedCalls).toBe(0);
+
+    const sibling = await new StepExecutionHarness({
+      transport,
+      spendLedger: ledger,
+      spawnFn: fakeSpawn,
+    }).run(await makeStep(dir, { name: "hunter-resilience" }));
+    expect(sibling.status).toBe("ok");
+    expect(transportCalls).toBe(3);
+  });
+
   test("a delivered free attempt reporting priced cost stays delivered with the flip note appended", async () => {
     const dir = await tempDir();
     const flipped: NormalizedUsage = {

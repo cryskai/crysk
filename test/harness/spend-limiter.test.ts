@@ -333,6 +333,71 @@ describe("settlementFromUsage: priced work on a free-declared route is unresolve
   });
 });
 
+// A provider rate limit (HTTP 429) refuses a turn mid-attempt, so the stream
+// errors and usage is `partial` even though every message the provider DID
+// serve carries its own cost. Treating that as unknown spend fenced the whole
+// bucket: one 429 on ai& (100 RPM) killed the step's retry and every later
+// refuter in the run, unspawned (lab ledger, cost levers v2, 2026-10-21).
+describe("settlementFromUsage: a rate-limited attempt with a provider-priced cost settles", () => {
+  const ratePartial = (
+    overrides: Partial<Parameters<typeof normalizePartialUsage>[0]> = {},
+  ) =>
+    normalizePartialUsage({
+      wallMs: 17_664,
+      providerReportedTotal: 56_964,
+      billingMode: "metered",
+      costSource: "provider",
+      cashCostUsd: 0.00818624,
+      ...overrides,
+    });
+
+  test("partial metered usage priced by the provider settles at that cost when the cause is rate_limit", () => {
+    expect(
+      settlementFromUsage(ratePartial(), { failureCause: "rate_limit" }),
+    ).toEqual({ kind: "settle", actualUsd: 0.00818624 });
+  });
+
+  test("the same usage without a rate_limit cause is still unresolved", () => {
+    expect(
+      settlementFromUsage(ratePartial(), { failureCause: "network_transient" }),
+    ).toEqual({ kind: "unresolved", knownUsd: 0.00818624 });
+    expect(settlementFromUsage(ratePartial())).toEqual({
+      kind: "unresolved",
+      knownUsd: 0.00818624,
+    });
+  });
+
+  test("a cost not stated by the provider is not settlement-grade, rate limit or not", () => {
+    expect(
+      settlementFromUsage(ratePartial({ costSource: "unknown" }), {
+        failureCause: "rate_limit",
+      }),
+    ).toEqual({ kind: "unresolved", knownUsd: 0.00818624 });
+    expect(
+      settlementFromUsage(ratePartial({ cashCostUsd: undefined }), {
+        failureCause: "rate_limit",
+      }),
+    ).toEqual({ kind: "unresolved", knownUsd: undefined });
+  });
+
+  test("a free-declared route keeps its flip guard: priced partial work stays unresolved", () => {
+    expect(
+      settlementFromUsage(
+        ratePartial({ billingMode: "free", cashCostUsd: 0.06 }),
+        { failureCause: "rate_limit" },
+      ),
+    ).toEqual({ kind: "unresolved", knownUsd: 0.06 });
+  });
+
+  test("unavailable usage stays unresolved even when rate limited", () => {
+    expect(
+      settlementFromUsage(normalizeUnavailableUsage({ wallMs: 10 }), {
+        failureCause: "rate_limit",
+      }),
+    ).toEqual({ kind: "unresolved", knownUsd: undefined });
+  });
+});
+
 describe("settle() type gate (coupling 1 consumer)", () => {
   // 4.2 RED: settle()'s second argument is
   // Extract<SettlementDecision, {kind:"settle"}> — a raw number must fail

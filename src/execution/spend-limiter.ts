@@ -50,7 +50,7 @@
 //      Non-Terminal Disposition Starts A New Reserve+Admit Cycle").
 
 import { randomUUID } from "node:crypto";
-import type { RetryDisposition } from "./failure-policy";
+import type { FailureCause, RetryDisposition } from "./failure-policy";
 import { type NormalizedUsage, outputTokensKnown } from "./usage-normalized";
 
 // ---- Coupling 1: settlement decision ----
@@ -68,13 +68,35 @@ export type SettlementDecision =
     };
 
 // spec: "Non-Complete Usage Never Settles As A Number" — completeness other
-// than "complete" is ALWAYS the unresolved arm, carrying whatever cash cost
-// is already known (possibly none) rather than inventing a settled number.
+// than "complete" is the unresolved arm, carrying whatever cash cost is
+// already known (possibly none) rather than inventing a settled number.
 // This is the ONLY producer of SettlementDecision.
+//
+// ONE exception, and it is narrow on every axis: a METERED attempt that
+// failed with cause `rate_limit` and whose `partial` usage carries a cost the
+// PROVIDER stated. A 429 is the provider refusing a turn: that refused request
+// is unbilled, and every message it did serve carries its own provider price,
+// so the stated figure is the spend, not a guess. Leaving it unresolved fenced
+// the whole bucket for the run: one 429 on ai& (100 RPM) cost the step its
+// retry and every later refuter its spawn (lab ledger, cost levers v2,
+// 2026-10-21). Everything else still fails closed: any other cause, an
+// `unavailable` record, a cost not from the provider, an absent figure, and
+// free/subscription routes (a free route's flip guard below must keep seeing
+// priced partial work as unresolved). A rate-limited figure then passes the
+// same rules a complete one does, metered-zero included.
 export function settlementFromUsage(
   usage: NormalizedUsage,
+  context: { readonly failureCause?: FailureCause } = {},
 ): SettlementDecision {
-  if (usage.completeness !== "complete") {
+  const rateLimitedProviderPriced =
+    context.failureCause === "rate_limit" &&
+    usage.completeness === "partial" &&
+    usage.billingMode === "metered" &&
+    usage.costSource === "provider" &&
+    typeof usage.cashCostUsd === "number" &&
+    Number.isFinite(usage.cashCostUsd) &&
+    usage.cashCostUsd >= 0;
+  if (usage.completeness !== "complete" && !rateLimitedProviderPriced) {
     return { kind: "unresolved", knownUsd: usage.cashCostUsd };
   }
   if (usage.cashCostUsd === undefined) {

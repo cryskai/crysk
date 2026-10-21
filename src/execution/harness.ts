@@ -2137,7 +2137,13 @@ export class StepExecutionHarness implements StepRunner {
         decision: { kind: "unresolved", knownUsd: undefined },
       };
     }
-    const decision = settlementFromUsage(usage);
+    // The failure cause rides along for the one narrow exception in
+    // settlementFromUsage: a provider-priced attempt refused by a rate limit.
+    const decision = settlementFromUsage(usage, {
+      ...(result.kind === "failed" && result.resolution.kind === "cause"
+        ? { failureCause: result.resolution.cause }
+        : {}),
+    });
     if (decision.kind === "settle") {
       await ledger.settle(reservation.reservationId, decision, idempotencyKey);
       return {
