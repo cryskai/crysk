@@ -1590,7 +1590,10 @@ async function execute(
         systemPromptPath,
         `${SHARED_PREFIX_HEADER}\n\n${sharedBlock}`,
       );
-      await Bun.write(path.join(stepsDir, `${name}.body.md`), body);
+      const bodyPath = path.join(stepsDir, `${name}.body.md`);
+      await Bun.write(bodyPath, body);
+      // Same mode as the system prompt it was split from: it is half of it.
+      await chmod(bodyPath, 0o600);
     } else {
       await writeSystemPrompt(systemPromptPath, body);
     }
@@ -1794,6 +1797,7 @@ async function execute(
   // anything, so a lone hunter gets none. Warm-ups are awaited here, before the
   // fan-out, and a failed one costs only the cache saving: it never stops the
   // hunters or fails the run.
+  let abortedDuringWarmup = false;
   if (
     input.sharedPrefix === true &&
     huntersAdmitted &&
@@ -1860,13 +1864,28 @@ async function execute(
         recordStepFailure(warm.meta, outcome.reason);
       }
     }
+    // The warm-up was awaited after the fan-out's admission check, so a ceiling
+    // that fired during it must still stop the hunters. With a shared ceiling
+    // controller the harness would cancel them before their first attempt;
+    // without one (the degraded mode) nothing else would, and they would bill.
+    abortedDuringWarmup = ceilingAborted(deps, state);
   }
 
   const settled = await Promise.allSettled([
     ...hunterSpecs.map(({ agent, spec }) => {
       const key = agent.key;
       const startedAt = Date.now();
-      const promise = deps.runner.run(spec);
+      const promise: Promise<StepResult> = abortedDuringWarmup
+        ? Promise.resolve({
+            name: spec.name,
+            status: "failed",
+            usage: zeroUsage(),
+            attempts: 0,
+            stderrTail:
+              "pipeline ceiling fired during the shared-prefix warm-up; hunter not spawned",
+            resultText: "",
+          })
+        : deps.runner.run(spec);
       promise.then(
         (result) => {
           // The draft count is read off the SAME validated output the join
@@ -3172,6 +3191,10 @@ async function writePipelinePlan(
       ? {}
       : { boundary_nonce: state.boundaryNonce }),
     ...(state.scout === undefined ? {} : { scout: state.scout }),
+    // `--shared-prefix` arm identity, read off the artifact like `scout`: a run
+    // whose hunters all sit in groups of one has no warm-up row to tell it
+    // from control. Absent means the control layout, byte for byte.
+    ...(input.sharedPrefix === true ? { shared_prefix: true } : {}),
     ...(state.diversity === undefined
       ? {}
       : {

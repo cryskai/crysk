@@ -4879,6 +4879,42 @@ describe("shared prefix (--shared-prefix)", () => {
     return dir;
   }
 
+  // Arm identity is read off the artifact, never a directory name (the scout
+  // records `scout.enabled` the same way): without the key a shared-prefix run
+  // whose hunters all sit in groups of one is indistinguishable from control.
+  test("pipeline.json records shared_prefix when the flag is on, and nothing when it is off", async () => {
+    const on = await makeInput({ sharedPrefix: true });
+    await runPipeline(on, { runner: new FakeStepRunner(WARMUP_OK) });
+    expect((await readPlan(on.runDir)).shared_prefix).toBe(true);
+
+    const off = await makeInput();
+    await runPipeline(off, { runner: new FakeStepRunner(HUNTERS_OK) });
+    expect("shared_prefix" in (await readPlan(off.runDir))).toBe(false);
+  });
+
+  // The warm-up is awaited between the fan-out's admission check and the
+  // hunters' spawn, so a ceiling that fires during it must still stop them.
+  test("a ceiling that fires during the warm-up spawns no hunter", async () => {
+    const input = await makeInput({
+      sharedPrefix: true,
+      pipelineTimeoutMs: 50,
+      ceilingGraceMs: AMPLE_GRACE_MS,
+    });
+    const runner = new SlowStepRunner(
+      {
+        "warmup-1": (spec) => ok(spec, "OK"),
+        "hunter-reliability": (spec) => ok(spec, emptyDraft()),
+        "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      },
+      300,
+    );
+    const result = await runPipeline(input, { runner });
+    await Promise.allSettled(runner.inFlight);
+
+    expect(result.skillOutput.run_status).toBe("partial");
+    expect(runner.specs.map((s) => s.name)).toEqual(["warmup-1"]);
+  });
+
   test("flag on: hunters share a byte-identical system prompt that carries the patch, and their role moves to the user message", async () => {
     const runner = new FakeStepRunner(HUNTERS_OK);
     await runPipeline(await makeInput({ sharedPrefix: true }), { runner });
