@@ -48,6 +48,7 @@ import {
   preflightAgentsDir,
   resolveAgentsDir,
   resolveAgentsDirSetting,
+  resolveMaxConcurrentSteps,
   resolveMaxVerificationSteps,
   resolvePost,
   resolveScout,
@@ -1193,6 +1194,22 @@ describe("parseLocalConfig", () => {
     );
   });
 
+  test("max_concurrent_steps is optional; absent means unlimited, only positive integers are admitted", () => {
+    expect(parseLocalConfig("{}").max_concurrent_steps).toBeUndefined();
+    expect(resolveMaxConcurrentSteps(parseLocalConfig("{}"))).toBeUndefined();
+    expect(
+      resolveMaxConcurrentSteps(
+        parseLocalConfig('{"max_concurrent_steps": 4}'),
+      ),
+    ).toBe(4);
+    expect(() => parseLocalConfig('{"max_concurrent_steps": 0}')).toThrow(
+      "max_concurrent_steps must be a positive integer",
+    );
+    expect(() => parseLocalConfig('{"max_concurrent_steps": 1.5}')).toThrow(
+      CliUsageError,
+    );
+  });
+
   test("max_changed_lines and max_changed_files are optional in local and global configs", () => {
     expect(parseLocalConfig("{}").max_changed_lines).toBeUndefined();
     expect(parseLocalConfig("{}").max_changed_files).toBeUndefined();
@@ -1269,6 +1286,7 @@ const PRE_C5_LOCAL_KEYS = [
   "default_base",
   "max_changed_files",
   "max_changed_lines",
+  "max_concurrent_steps",
   "max_verification_steps",
   "parity_trigger_paths",
   "post",
@@ -1291,6 +1309,7 @@ describe("CONFIG_DIRECTION", () => {
       summary: { enabled: false, model: "opus" },
       routing: { mappings: [] },
       max_verification_steps: 3,
+      max_concurrent_steps: 4,
       max_changed_lines: 1500,
       max_changed_files: 150,
       scout: false,
@@ -1329,6 +1348,7 @@ describe("CONFIG_DIRECTION", () => {
       summary: "capped",
       routing: "person",
       max_verification_steps: "capped",
+      max_concurrent_steps: "capped",
       max_changed_lines: "capped",
       max_changed_files: "capped",
       scout: "capped",
@@ -1826,6 +1846,7 @@ describe("mergeConfig", () => {
       summary: { enabled: "default", model: "default" },
       routing: "default",
       max_verification_steps: "default",
+      max_concurrent_steps: "default",
       max_changed_lines: "default",
       max_changed_files: "default",
       scout: "default",

@@ -2436,6 +2436,7 @@ describe("assembly", () => {
         summary: { enabled: "capped" as const, model: "default" as const },
         routing: "default" as const,
         max_verification_steps: "capped" as const,
+        max_concurrent_steps: "default" as const,
         max_changed_lines: "default" as const,
         max_changed_files: "default" as const,
         scout: "default" as const,

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { GOTCHAS_PLACEHOLDER_MARKER, localReviewSpec } from "#review/preflight";
 import {
+  admissionGateFor,
   assertDistinctRange,
   buildTelemetry,
   CODEGRAPH_ONLY_MCP_CONFIG,
@@ -403,5 +404,39 @@ describe("computeDiffStatAndSizeGate", () => {
     });
     expect(diffStat).toEqual({ files: 1, insertions: 3, deletions: 0 });
     expect(sizeGate.ok).toBe(true);
+  });
+});
+
+describe("admissionGateFor (max_concurrent_steps wiring)", () => {
+  test("unset cap constructs no gate, so the runtime stays unlimited", () => {
+    expect(admissionGateFor(undefined)).toBeUndefined();
+  });
+
+  test("a cap of 2 holds the third attempt until one lease is released", async () => {
+    const gate = admissionGateFor(2);
+    expect(gate).toBeDefined();
+    if (gate === undefined) return;
+    const signal = new AbortController().signal;
+    const attempt = (n: number) =>
+      gate.acquire({
+        sessionId: "s",
+        attempt: n,
+        rateLimitBucketId: "aiand",
+        signal,
+      });
+    const first = await attempt(1);
+    const second = await attempt(2);
+    let thirdGranted = false;
+    const third = attempt(3).then((lease) => {
+      thirdGranted = true;
+      return lease;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(thirdGranted).toBe(false);
+    first.release();
+    const granted = await third;
+    expect(thirdGranted).toBe(true);
+    second.release();
+    granted.release();
   });
 });
