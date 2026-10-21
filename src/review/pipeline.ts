@@ -1825,7 +1825,10 @@ async function execute(
       const warmSpec: StepSpec = {
         name: warmName,
         systemPromptPath: path.join(stepsDir, `${warmName}.system.md`),
-        prompt: "Reply with exactly: OK",
+        // Explicitly tool-free: the shared system prompt mandates reading, and
+        // a bare "reply OK" made warm-ups run 6-13 tool calls and time out.
+        prompt:
+          "Do not call any tool. This is a cache warm-up, not the review. Reply with exactly: OK",
         tools: first.spec.tools,
         mcpConfigPath: first.spec.mcpConfigPath,
         model: first.spec.model,

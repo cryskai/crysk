@@ -4894,6 +4894,18 @@ describe("shared prefix (--shared-prefix)", () => {
 
   // The warm-up is awaited between the fan-out's admission check and the
   // hunters' spawn, so a ceiling that fires during it must still stop them.
+  // Under the shared system prompt (which mandates codegraph and reading) a bare
+  // "Reply with exactly: OK" made the warm-up run 6-13 tool calls, and 3 of 6
+  // live runs hit its 2-minute timeout (lab ledger, cost levers v6). The
+  // explicit no-tool instruction made the same call one turn, ~$0.10.
+  test("the warm-up asks for one tool-free turn", async () => {
+    const runner = new FakeStepRunner(WARMUP_OK);
+    await runPipeline(await makeInput({ sharedPrefix: true }), { runner });
+    expect(specNamed(runner, "warmup-1").prompt).toBe(
+      "Do not call any tool. This is a cache warm-up, not the review. Reply with exactly: OK",
+    );
+  });
+
   test("a ceiling that fires during the warm-up spawns no hunter", async () => {
     const input = await makeInput({
       sharedPrefix: true,
