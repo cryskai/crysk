@@ -128,7 +128,10 @@ import { startPanelRenderer } from "#ui/progress";
 export { startPanelRenderer };
 
 import { watchCommand } from "#watch/watch";
-import { killAllChildProcesses } from "./execution/spawned-process";
+import {
+  closeAllServers,
+  killAllChildProcesses,
+} from "./execution/spawned-process";
 import { isMachineOnboarded, runWizard } from "./wizard";
 
 // bin/pr-hero.js and the `import.meta.main` guard both go through the exported
@@ -302,6 +305,9 @@ export async function runCli(
       restoreCursor();
       try {
         killAllChildProcesses();
+        // The OpenCode server is closed, not killed: its close() also
+        // destroys the projected credential it runs under.
+        await closeAllServers();
         await unregisterActiveRun(process.pid);
       } catch {
         // Ignore

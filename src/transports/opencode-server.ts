@@ -16,7 +16,10 @@
 // the server actually prints.
 
 import type { CredentialKind } from "../execution/contracts";
-import type { SpawnedProcess } from "../execution/spawned-process";
+import {
+  ACTIVE_SERVER_CLOSERS,
+  type SpawnedProcess,
+} from "../execution/spawned-process";
 import type { CredentialBroker } from "../security/credential-broker";
 import { mcpConfigIsEmpty, type OpenCodeMcpConfig } from "./opencode-mcp";
 
@@ -462,6 +465,18 @@ export async function launchProjectedOpenCodeServer(
     throw error;
   }
 
+  // Registered for the signal path (spawned-process.ts closeAllServers), and
+  // removed by any close: a server already closed must not be closed twice.
+  const close = async (): Promise<void> => {
+    ACTIVE_SERVER_CLOSERS.delete(close);
+    try {
+      await handle.close();
+    } finally {
+      await projection.destroy();
+    }
+  };
+  ACTIVE_SERVER_CLOSERS.add(close);
+
   return {
     url: handle.url,
     pid: handle.pid,
@@ -473,12 +488,6 @@ export async function launchProjectedOpenCodeServer(
     // `gatewayAsk` here would empty the attestation `createSession` reads
     // in the ONE codepath production actually runs.
     gatewayAsk: handle.gatewayAsk,
-    close: async () => {
-      try {
-        await handle.close();
-      } finally {
-        await projection.destroy();
-      }
-    },
+    close,
   };
 }

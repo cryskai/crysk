@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { CredentialKind } from "../../src/execution/contracts";
+import {
+  ACTIVE_SERVER_CLOSERS,
+  closeAllServers,
+} from "../../src/execution/spawned-process";
 import type { CredentialBroker } from "../../src/security/credential-broker";
 import {
   composeOpenCodeServerEnv,
@@ -663,6 +667,61 @@ describe("projected server launch (#149)", () => {
     await closing;
 
     expect(proj.destroys()).toBe(1);
+  });
+
+  // A signal (Ctrl-C, a cancelled CI job) used to kill only the claude CLI
+  // children: the OpenCode server was in no registry, so it outlived pr-hero
+  // with its projected credential on disk and a session that could keep
+  // generating. Observed 2026-10-21: three `opencode serve` processes
+  // reparented to init after a SIGTERM'd bench run.
+  test("the signal path closes a live projected server and destroys its projection", async () => {
+    ACTIVE_SERVER_CLOSERS.clear();
+    const fake = fakeServer();
+    const proj = fakeBroker();
+    const pending = launchProjectedOpenCodeServer({
+      verifiedBinaryPath: BIN,
+      broker: proj.broker,
+      credentialKind: "opencode_chatgpt_oauth",
+      baseEnv: { PATH: "/usr/bin" },
+      spawnFn: fake.spawnFn,
+      killFn: fake.killFn,
+      termGraceMs: 5,
+    });
+    fake.emit(LISTENING);
+    await pending;
+
+    const closing = closeAllServers();
+    fake.finish(0);
+    await closing;
+
+    expect(fake.signals()).toContain("SIGTERM");
+    expect(proj.destroys()).toBe(1);
+    expect(ACTIVE_SERVER_CLOSERS.size).toBe(0);
+  });
+
+  test("a server already closed is not closed again on the signal path", async () => {
+    ACTIVE_SERVER_CLOSERS.clear();
+    const fake = fakeServer();
+    const proj = fakeBroker();
+    const pending = launchProjectedOpenCodeServer({
+      verifiedBinaryPath: BIN,
+      broker: proj.broker,
+      credentialKind: "opencode_chatgpt_oauth",
+      baseEnv: { PATH: "/usr/bin" },
+      spawnFn: fake.spawnFn,
+      killFn: fake.killFn,
+      termGraceMs: 5,
+    });
+    fake.emit(LISTENING);
+    const server = await pending;
+    const closing = server.close();
+    fake.finish(0);
+    await closing;
+
+    await closeAllServers();
+
+    expect(proj.destroys()).toBe(1);
+    expect(fake.signals()).toEqual(["SIGTERM"]);
   });
 
   test("the projection outlives the process it authenticates", async () => {
