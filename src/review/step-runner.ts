@@ -156,6 +156,7 @@ export function buildStepArgv(step: StepSpec): string[] {
     step.model,
     "--effort",
     step.effort,
+    "--exclude-dynamic-system-prompt-sections",
   ];
 }
 

@@ -172,6 +172,7 @@ describe("buildStepArgv", () => {
     );
     expect(flagValue(argv, "--permission-mode")).toBe("bypassPermissions");
     expect(flagValue(argv, "--model")).toBe(spec.model);
+    expect(argv).toContain("--exclude-dynamic-system-prompt-sections");
   });
 
   // §3.12 obligation 1, and the single mechanism §3.5 rests on: the scout's
