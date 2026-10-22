@@ -307,6 +307,7 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
         summary: { enabled: "repo", model: "default" },
         routing: "default",
         max_verification_steps: "default",
+        max_concurrent_steps: "default",
         max_changed_lines: "default",
         max_changed_files: "default",
         scout: "default",
@@ -361,6 +362,7 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
         summary: { enabled: "default", model: "default" },
         routing: "default",
         max_verification_steps: "default",
+        max_concurrent_steps: "default",
         max_changed_lines: "default",
         max_changed_files: "default",
         scout: "default",
@@ -641,6 +643,7 @@ describe("pipelineConfigInput — O-6", () => {
         summary: { enabled: "default" as const, model: "default" as const },
         routing: "default" as const,
         max_verification_steps: "default" as const,
+        max_concurrent_steps: "default" as const,
         max_changed_lines: "default" as const,
         max_changed_files: "default" as const,
         scout: "default" as const,
@@ -671,5 +674,23 @@ describe("pipelineConfigInput — O-6", () => {
       pipelineConfigInput({ ...loaded, globalPresent: false }).config
         .global_present,
     ).toBe(false);
+  });
+});
+
+describe("max_concurrent_steps layering", () => {
+  test("is capped: the lower layer wins, and the source names the cap", async () => {
+    const home = await tmpHome(JSON.stringify({ max_concurrent_steps: 4 }));
+    const repo = await tmpRoot(JSON.stringify({ max_concurrent_steps: 8 }));
+    try {
+      const loaded = await loadEffectiveConfig({
+        root: repo.root,
+        home: home.home,
+      });
+      expect(loaded.effective.max_concurrent_steps).toBe(4);
+      expect(loaded.sources.max_concurrent_steps).toBe("capped");
+    } finally {
+      await home.cleanup();
+      await repo.cleanup();
+    }
   });
 });

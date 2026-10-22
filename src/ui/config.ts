@@ -166,6 +166,10 @@ export function configRows(
       effective.max_verification_steps?.toString(),
       sources.max_verification_steps,
     ),
+    max_concurrent_steps: cell(
+      effective.max_concurrent_steps?.toString(),
+      sources.max_concurrent_steps,
+    ),
     max_changed_lines: cell(
       effective.max_changed_lines?.toString(),
       sources.max_changed_lines,

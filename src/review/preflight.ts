@@ -500,7 +500,9 @@ Options:
                       agents_dir, default_base, parity_trigger_paths and
                       suspicion_priors, optional summary settings, and
                       optional max_verification_steps (re-review verify cap;
-                      default 8; 0 pauses verification)
+                      default 8; 0 pauses verification), and optional
+                      max_concurrent_steps (cap on steps in flight at once;
+                      a positive integer; unset = unlimited)
   --model <model>     Override every agent's model
   --summary           Enable the engine-owned PR summary (default)
   --no-summary        Disable the engine-owned PR summary
@@ -2088,6 +2090,7 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   summary: "capped",
   routing: "person",
   max_verification_steps: "capped",
+  max_concurrent_steps: "capped",
   max_changed_lines: "capped",
   max_changed_files: "capped",
   scout: "capped",
@@ -2125,6 +2128,10 @@ export interface LocalConfig {
   // DEFAULT_MAX_VERIFICATION_STEPS. 0 is legal — every queued prior lands
   // `unconfirmed` (the pause switch, same shape as watch daily_cap).
   max_verification_steps?: number;
+  // Admission cap on in-flight steps (hunter, refuter, verify, adjudicate,
+  // scout, summarizer attempts). Absent means unlimited: no gate is built.
+  // Positive only: 0 would admit nothing and wedge every run.
+  max_concurrent_steps?: number;
   max_changed_lines?: number;
   max_changed_files?: number;
   scout?: boolean;
@@ -2341,6 +2348,11 @@ function parseConfigLayer(
     "max_verification_steps",
     file,
   );
+  const maxConcurrentSteps = parsePositiveInteger(
+    config.max_concurrent_steps,
+    "max_concurrent_steps",
+    file,
+  );
   const maxChangedLines = parseNonNegativeInteger(
     config.max_changed_lines,
     "max_changed_lines",
@@ -2412,6 +2424,9 @@ function parseConfigLayer(
     ...(maxVerificationSteps === undefined
       ? {}
       : { max_verification_steps: maxVerificationSteps }),
+    ...(maxConcurrentSteps === undefined
+      ? {}
+      : { max_concurrent_steps: maxConcurrentSteps }),
     ...(maxChangedLines === undefined
       ? {}
       : { max_changed_lines: maxChangedLines }),
@@ -2727,6 +2742,18 @@ function parseNonNegativeInteger(
   return value;
 }
 
+function parsePositiveInteger(
+  value: unknown,
+  key: string,
+  file: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new CliUsageError(`${file} ${key} must be a positive integer`);
+  }
+  return value;
+}
+
 function parseCiAdmissionInteger(
   value: unknown,
   key: string,
@@ -2769,6 +2796,14 @@ export function resolveMaxVerificationSteps(
   config: Pick<ConfigLayer, "max_verification_steps">,
 ): number {
   return config.max_verification_steps ?? DEFAULT_MAX_VERIFICATION_STEPS;
+}
+
+// Undefined, not a default: an absent cap means no gate is constructed at all,
+// which is today's unlimited behavior byte for byte.
+export function resolveMaxConcurrentSteps(
+  config: Pick<ConfigLayer, "max_concurrent_steps">,
+): number | undefined {
+  return config.max_concurrent_steps;
 }
 
 export function resolveSummary(
@@ -2922,6 +2957,12 @@ export function mergeConfig(
     (layer) => layer.max_verification_steps,
     Math.min,
   );
+  const maxConcurrentSteps = foldKey(
+    layers,
+    CONFIG_DIRECTION.max_concurrent_steps,
+    (layer) => layer.max_concurrent_steps,
+    Math.min,
+  );
   const narrowSizeLimit = (a: number, b: number): number => {
     if (a === 0) return b;
     if (b === 0) return a;
@@ -3024,6 +3065,9 @@ export function mergeConfig(
     ...(maxSteps.value === undefined
       ? {}
       : { max_verification_steps: maxSteps.value }),
+    ...(maxConcurrentSteps.value === undefined
+      ? {}
+      : { max_concurrent_steps: maxConcurrentSteps.value }),
     ...(maxLines.value === undefined
       ? {}
       : { max_changed_lines: maxLines.value }),
@@ -3067,6 +3111,7 @@ export function mergeConfig(
     summary: { enabled: summaryEnabled.source, model: summaryModel.source },
     routing: routing.source,
     max_verification_steps: maxSteps.source,
+    max_concurrent_steps: maxConcurrentSteps.source,
     max_changed_lines: maxLines.source,
     max_changed_files: maxFiles.source,
     scout: scout.source,

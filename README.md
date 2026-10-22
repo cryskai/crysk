@@ -191,6 +191,7 @@ never be able to enlarge *your* bill: on the two keys that spend, the team can o
 | `summary.enabled` | both — team may only turn it **off** | Whether the engine-owned summarizer runs. Defaults to `true`, because it spends money and a silent opt-out would make the bill differ from the plan. |
 | `summary.model` | both | Model for that step. Defaults to whatever `prompts/summarizer.md` declares (`haiku`). |
 | `max_verification_steps` | both — team may only **lower** it | Cap on re-review verification spawns (item 7). Defaults to `8`; `0` is legal and pauses verification. |
+| `max_concurrent_steps` | both — team may only **lower** it | Cap on steps (hunters, refuters, verify, scout, summarizer) in flight at once. Unset means unlimited. Set it below a provider's concurrency limit (e.g. `8` for one that allows 10 in-flight requests) so a refuter fan-out does not draw HTTP 429s. |
 | `max_changed_lines` | both — team may only **lower** it | Line budget threshold before the size gate skips a review. Defaults to `4000`; `0` disables line budget check. |
 | `max_changed_files` | both — team may only **lower** it | File count budget threshold before the size gate skips a review. Defaults to `150`; `0` disables file budget check. |
 | `scout` | both — team may only turn it **off** | Whether the reconnaissance scout hunter runs before review. Defaults to `false`. |
