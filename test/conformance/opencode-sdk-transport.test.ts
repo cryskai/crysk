@@ -4603,3 +4603,46 @@ describe("OpenCodeSdkTransport credentialProjection declaration (#150)", () => {
     expect(transport.credentialProjection).toBe("server-lifetime");
   });
 });
+
+// settlementFromUsage settles a rate-limited metered attempt only on
+// `partialCause: "terminal_failure"`: proof that the provider failed the
+// session while every served message reported its usage.
+describe("OpenCodeSdkTransport partialCause on a provider failure", () => {
+  const run = async (incomplete: boolean) => {
+    const handle = makeClient({
+      stream: streamOf([
+        {
+          kind: "usage",
+          mode: "snapshot",
+          inputTokens: 10,
+          outputTokens: 5,
+          costUsd: 0.1,
+          ...(incomplete ? { incomplete: true } : {}),
+        },
+        {
+          kind: "provider_limit",
+          reason: "account_rate_limit",
+          message: "429 Too Many Requests",
+        },
+      ]),
+    });
+    const rig = makeRig({ client: handle.client });
+    return rig.transport.execute(makeRequest(), {
+      signal: rig.controller.signal,
+      events: rig.sink,
+    });
+  };
+
+  test("a provider failure after fully reported usage carries the proof", async () => {
+    const outcome = await run(false);
+    expect(outcome.completion).toBe("failed");
+    expect(outcome.usage.completeness).toBe("partial");
+    expect(outcome.usage.partialCause).toBe("terminal_failure");
+  });
+
+  test("a usage gap before the failure leaves the partial unproven", async () => {
+    const outcome = await run(true);
+    expect(outcome.usage.completeness).toBe("partial");
+    expect(outcome.usage.partialCause).toBeUndefined();
+  });
+});

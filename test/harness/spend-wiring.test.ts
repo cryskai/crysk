@@ -808,8 +808,9 @@ describe("PR5b — SpendLedger wiring (§9.1 five-step order)", () => {
     const dir = await tempDir();
     const meteredPartial: NormalizedUsage = {
       wallMs: 500,
-      tokens: { providerReportedTotal: 100 },
+      tokens: { providerReportedTotal: 100, outputKnown: 10 },
       completeness: "partial",
+      partialCause: "terminal_failure",
       billingMode: "metered",
       costSource: "provider",
       cashCostUsd: 0.05,

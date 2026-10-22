@@ -1960,6 +1960,14 @@ export class OpenCodeSdkTransport implements ProviderTransport {
                 reason.kind === "bound"
                   ? "partial"
                   : "complete",
+              // Positive proof for settlementFromUsage's rate-limit exception:
+              // partial only because the provider failed the session, with no
+              // message missing its usage. Every other partial stays unproven.
+              ...(!effectiveIncomplete &&
+              (reason.kind === "stream_error" ||
+                reason.kind === "session_failed")
+                ? { partialCause: "terminal_failure" as const }
+                : {}),
               // 2026-09-02: the ROUTE's mode, not a hardcoded
               // "subscription". #133 established that an OpenCode route on
               // any provider but `openai` runs on a `provider_api_token`

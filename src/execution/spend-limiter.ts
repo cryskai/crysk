@@ -82,8 +82,11 @@ export type SettlementDecision =
 // 2026-10-21). Everything else still fails closed: any other cause, an
 // `unavailable` record, a cost not from the provider, an absent figure, and
 // free/subscription routes (a free route's flip guard below must keep seeing
-// priced partial work as unresolved). A rate-limited figure then passes the
-// same rules a complete one does, metered-zero included.
+// priced partial work as unresolved). The transport must also PROVE the
+// figure covers the attempt (`partialCause: "terminal_failure"`: no message
+// missing its usage, no conflict), and the output leaves must be known so the
+// metered-zero rule below can still see a zero that is not a real price. A
+// rate-limited figure then passes the same rules a complete one does.
 export function settlementFromUsage(
   usage: NormalizedUsage,
   context: { readonly failureCause?: FailureCause } = {},
@@ -91,6 +94,8 @@ export function settlementFromUsage(
   const rateLimitedProviderPriced =
     context.failureCause === "rate_limit" &&
     usage.completeness === "partial" &&
+    usage.partialCause === "terminal_failure" &&
+    outputTokensKnown(usage.tokens) !== undefined &&
     usage.billingMode === "metered" &&
     usage.costSource === "provider" &&
     typeof usage.cashCostUsd === "number" &&

@@ -23,6 +23,7 @@ import {
   settlementFromUsage,
 } from "../../src/execution/spend-limiter";
 import {
+  type NormalizedUsage,
   normalizeInclusiveUsage,
   normalizePartialUsage,
   normalizeUnavailableUsage,
@@ -339,10 +340,12 @@ describe("settlementFromUsage: priced work on a free-declared route is unresolve
 // bucket: one 429 on ai& (100 RPM) killed the step's retry and every later
 // refuter in the run, unspawned (lab ledger, cost levers v2, 2026-10-21).
 describe("settlementFromUsage: a rate-limited attempt with a provider-priced cost settles", () => {
+  // What the OpenCode transport emits for a 429: partial, proven to cover
+  // every served message, with the output leaves it accumulated.
   const ratePartial = (
     overrides: Partial<Parameters<typeof normalizePartialUsage>[0]> = {},
-  ) =>
-    normalizePartialUsage({
+  ): NormalizedUsage => {
+    const base = normalizePartialUsage({
       wallMs: 17_664,
       providerReportedTotal: 56_964,
       billingMode: "metered",
@@ -350,6 +353,12 @@ describe("settlementFromUsage: a rate-limited attempt with a provider-priced cos
       cashCostUsd: 0.00818624,
       ...overrides,
     });
+    return {
+      ...base,
+      tokens: { ...base.tokens, outputKnown: 1_200 },
+      partialCause: "terminal_failure",
+    };
+  };
 
   test("partial metered usage priced by the provider settles at that cost when the cause is rate_limit", () => {
     expect(
@@ -387,6 +396,31 @@ describe("settlementFromUsage: a rate-limited attempt with a provider-priced cos
         { failureCause: "rate_limit" },
       ),
     ).toEqual({ kind: "unresolved", knownUsd: 0.06 });
+  });
+
+  test("partial usage without proof that every message reported usage stays unresolved", () => {
+    const { partialCause: _dropped, ...unproven } = ratePartial();
+    expect(
+      settlementFromUsage(unproven, { failureCause: "rate_limit" }),
+    ).toEqual({ kind: "unresolved", knownUsd: 0.00818624 });
+  });
+
+  test("partial usage with no known output leaves stays unresolved, so a zero cannot settle unchecked", () => {
+    const noLeaves: NormalizedUsage = {
+      ...ratePartial({ cashCostUsd: 0 }),
+      tokens: { providerReportedTotal: 56_964 },
+    };
+    expect(
+      settlementFromUsage(noLeaves, { failureCause: "rate_limit" }),
+    ).toEqual({ kind: "unresolved", knownUsd: 0 });
+  });
+
+  test("a rate-limited metered zero with output tokens hits the metered-zero rule", () => {
+    expect(
+      settlementFromUsage(ratePartial({ cashCostUsd: 0 }), {
+        failureCause: "rate_limit",
+      }),
+    ).toEqual({ kind: "unresolved", knownUsd: undefined });
   });
 
   test("unavailable usage stays unresolved even when rate limited", () => {

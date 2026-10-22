@@ -175,6 +175,13 @@ export interface NormalizedUsage {
   readonly notionalCostUsd?: number;
   readonly costSource: UsageCostSource;
   readonly redactedRaw?: unknown;
+  // Why a `partial` record is partial, set ONLY when the transport can prove
+  // the narrow case: the session ended on a provider failure (a stream error
+  // or a failed session, which is how a 429 arrives) while every message it
+  // served reported usage, so the stated cost covers the whole attempt.
+  // Absent means unproven: a usage gap, a conflict, a flip, an unconfirmed
+  // abort, or a producer that never knows. `settlementFromUsage` reads it.
+  readonly partialCause?: "terminal_failure";
 }
 
 interface UsageCostInput {
