@@ -388,6 +388,13 @@ interface StepUsage {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly costUsd?: number;
+  // OpenCode's `info.tokens` leaves are disjoint-additive
+  // (packages/schema/src/token-usage.ts): total = input + output + reasoning
+  // + cache.read + cache.write. Carried so cache use is measurable on this
+  // route; absent stays absent, never a fabricated 0.
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly reasoningTokens?: number;
 }
 
 const MAX_TRACKED_PARTS = 4096;
@@ -656,11 +663,29 @@ function addUsage(base: StepUsage, step: StepUsage): StepUsage {
   const inputTokens = addField(base.inputTokens, step.inputTokens);
   const outputTokens = addField(base.outputTokens, step.outputTokens);
   const costUsd = addField(base.costUsd, step.costUsd);
+  const cacheReadTokens = addField(base.cacheReadTokens, step.cacheReadTokens);
+  const cacheWriteTokens = addField(
+    base.cacheWriteTokens,
+    step.cacheWriteTokens,
+  );
+  const reasoningTokens = addField(base.reasoningTokens, step.reasoningTokens);
   return {
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(outputTokens !== undefined ? { outputTokens } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
   };
+}
+
+function mergeLeaf(
+  existing: number | undefined,
+  next: number | undefined,
+): number | undefined {
+  return existing !== undefined || next !== undefined
+    ? Math.max(existing ?? 0, next ?? 0)
+    : undefined;
 }
 
 function rememberUsage(
@@ -708,10 +733,35 @@ function rememberUsage(
       existing.costUsd !== undefined || usage.costUsd !== undefined
         ? Math.max(existing.costUsd ?? 0, usage.costUsd ?? 0)
         : undefined;
+    // Cache and reasoning leaves merge like input/output (Math.max) but are
+    // deliberately left out of the conflict check above: a snapshot that
+    // momentarily reports fewer cache tokens must not flag the whole turn as
+    // conflicting usage.
+    const mergedCacheRead = mergeLeaf(
+      existing.cacheReadTokens,
+      usage.cacheReadTokens,
+    );
+    const mergedCacheWrite = mergeLeaf(
+      existing.cacheWriteTokens,
+      usage.cacheWriteTokens,
+    );
+    const mergedReasoning = mergeLeaf(
+      existing.reasoningTokens,
+      usage.reasoningTokens,
+    );
     state.usage.set(messageId, {
       ...(mergedInput !== undefined ? { inputTokens: mergedInput } : {}),
       ...(mergedOutput !== undefined ? { outputTokens: mergedOutput } : {}),
       ...(mergedCost !== undefined ? { costUsd: mergedCost } : {}),
+      ...(mergedCacheRead !== undefined
+        ? { cacheReadTokens: mergedCacheRead }
+        : {}),
+      ...(mergedCacheWrite !== undefined
+        ? { cacheWriteTokens: mergedCacheWrite }
+        : {}),
+      ...(mergedReasoning !== undefined
+        ? { reasoningTokens: mergedReasoning }
+        : {}),
     });
     return;
   }
@@ -1224,10 +1274,16 @@ export function reconcileMessages(
       const inputTokens = asNumber(tokens?.input);
       const outputTokens = asNumber(tokens?.output);
       const costUsd = asNumber(info.cost);
+      const cacheReadTokens = asNumber(asRecord(tokens?.cache)?.read);
+      const cacheWriteTokens = asNumber(asRecord(tokens?.cache)?.write);
+      const reasoningTokens = asNumber(tokens?.reasoning);
       if (
         inputTokens !== undefined ||
         outputTokens !== undefined ||
-        costUsd !== undefined
+        costUsd !== undefined ||
+        cacheReadTokens !== undefined ||
+        cacheWriteTokens !== undefined ||
+        reasoningTokens !== undefined
       ) {
         rememberUsage(
           state,
@@ -1236,6 +1292,9 @@ export function reconcileMessages(
             ...(inputTokens !== undefined ? { inputTokens } : {}),
             ...(outputTokens !== undefined ? { outputTokens } : {}),
             ...(costUsd !== undefined ? { costUsd } : {}),
+            ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+            ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
           },
           asNumber(asRecord(info.time)?.completed) !== undefined,
         );
@@ -1601,10 +1660,16 @@ export function mapOpenCodeEvents(
       const inputTokens = asNumber(tokens?.input);
       const outputTokens = asNumber(tokens?.output);
       const costUsd = asNumber(info.cost);
+      const cacheReadTokens = asNumber(asRecord(tokens?.cache)?.read);
+      const cacheWriteTokens = asNumber(asRecord(tokens?.cache)?.write);
+      const reasoningTokens = asNumber(tokens?.reasoning);
       if (
         inputTokens !== undefined ||
         outputTokens !== undefined ||
-        costUsd !== undefined
+        costUsd !== undefined ||
+        cacheReadTokens !== undefined ||
+        cacheWriteTokens !== undefined ||
+        reasoningTokens !== undefined
       ) {
         rememberUsage(
           state,
@@ -1613,6 +1678,9 @@ export function mapOpenCodeEvents(
             ...(inputTokens !== undefined ? { inputTokens } : {}),
             ...(outputTokens !== undefined ? { outputTokens } : {}),
             ...(costUsd !== undefined ? { costUsd } : {}),
+            ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+            ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+            ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
           },
           asNumber(asRecord(info.time)?.completed) !== undefined,
         );

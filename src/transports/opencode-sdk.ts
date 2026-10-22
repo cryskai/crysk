@@ -33,6 +33,90 @@ import { redactDiagnostic } from "../security/redact";
 // offline-conformance-testable; the D1-11 adapter wraps the actual SDK in
 // exactly this interface.
 
+// WHY the known sums: OpenCode's token leaves are disjoint-additive
+// (packages/schema/src/token-usage.ts: total = input + output + reasoning +
+// cache.read + cache.write), so the aggregate input is uncached + cache read +
+// cache write, and the output is visible + reasoning. Undefined leaves stay out
+// of the sum; with only input/output reported the result equals the old
+// `inputUncached`/`outputVisible` values exactly. The terminal-usage fallback
+// is kept for a stream that delivered no usage event.
+function sumDefinedLeaves(
+  ...values: readonly (number | undefined)[]
+): number | undefined {
+  let sum: number | undefined;
+  for (const value of values) {
+    if (value !== undefined) sum = (sum ?? 0) + value;
+  }
+  return sum;
+}
+
+// The reconciled message usage a poll terminal carries: the same leaves the
+// stream's usage events report (opencode-client.ts StepUsage).
+interface TerminalUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly costUsd?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly reasoningTokens?: number;
+}
+
+// The token leaves of a poll-only terminal, for a stream that delivered no
+// usage event: without them a poll-settled attempt would report its cache use
+// as absent and its input as the uncached count alone.
+function terminalLeaves(
+  terminal: TerminalUsage | undefined,
+): Partial<NormalizedTokens> {
+  if (terminal === undefined) return {};
+  return {
+    ...(terminal.inputTokens !== undefined
+      ? { inputUncached: terminal.inputTokens }
+      : {}),
+    ...(terminal.cacheReadTokens !== undefined
+      ? { inputCacheRead: terminal.cacheReadTokens }
+      : {}),
+    ...(terminal.cacheWriteTokens !== undefined
+      ? { inputCacheWrite: terminal.cacheWriteTokens }
+      : {}),
+    ...(terminal.outputTokens !== undefined
+      ? { outputVisible: terminal.outputTokens }
+      : {}),
+    ...(terminal.reasoningTokens !== undefined
+      ? { outputReasoning: terminal.reasoningTokens }
+      : {}),
+  };
+}
+
+function knownUsageSums(
+  streamed: Partial<NormalizedTokens> | undefined,
+  terminal: TerminalUsage | undefined,
+): {
+  inputKnown: number | undefined;
+  outputKnown: number | undefined;
+  totalKnown: number | undefined;
+} {
+  const fallback = terminalLeaves(terminal);
+  const inputKnown =
+    sumDefinedLeaves(
+      streamed?.inputUncached,
+      streamed?.inputCacheRead,
+      streamed?.inputCacheWrite,
+    ) ??
+    sumDefinedLeaves(
+      fallback.inputUncached,
+      fallback.inputCacheRead,
+      fallback.inputCacheWrite,
+    );
+  const outputKnown =
+    sumDefinedLeaves(streamed?.outputVisible, streamed?.outputReasoning) ??
+    sumDefinedLeaves(fallback.outputVisible, fallback.outputReasoning);
+  const totalKnown =
+    inputKnown !== undefined || outputKnown !== undefined
+      ? (inputKnown ?? 0) + (outputKnown ?? 0)
+      : undefined;
+  return { inputKnown, outputKnown, totalKnown };
+}
+
 // §4.2 line 191 hard content bounds: one delta ≤ 64 KiB, aggregate finalText
 // ≤ 1 MiB, stderr tail ≤ 64 KiB. Exceeding a bound TERMINATES the attempt —
 // content is never silently truncated and parsed.
@@ -131,6 +215,11 @@ export type OpenCodeClientEvent =
       readonly inputTokens?: number;
       readonly outputTokens?: number;
       readonly costUsd?: number;
+      // OpenCode's disjoint-additive token leaves (see opencode-client.ts
+      // StepUsage). Optional: a route that reports only input/output omits them.
+      readonly cacheReadTokens?: number;
+      readonly cacheWriteTokens?: number;
+      readonly reasoningTokens?: number;
       readonly incomplete?: boolean;
     }
   | {
@@ -207,11 +296,7 @@ export type OpenCodePollResult =
       readonly kind: "terminal";
       readonly proof: ProviderTerminalProof;
       readonly finalText?: string;
-      readonly usage?: {
-        readonly inputTokens?: number;
-        readonly outputTokens?: number;
-        readonly costUsd?: number;
-      };
+      readonly usage?: TerminalUsage;
       readonly usageIncomplete?: boolean;
       // #214, reshaped by pr-hero review F001: the callIDs this observer has
       // EVER seen reach "completed", read off opencode-client.ts's
@@ -924,24 +1009,14 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     let pollConfirmations = 0;
     let invalidProofs = 0;
     let terminalFinalText: string | undefined;
-    let terminalUsage:
-      | {
-          inputTokens?: number;
-          outputTokens?: number;
-          costUsd?: number;
-        }
-      | undefined;
+    let terminalUsage: TerminalUsage | undefined;
     let terminalUsageIncomplete = false;
 
     const onProviderTerminalCandidate = (
       proof: ProviderTerminalProof,
       source: "stream" | "poll",
       finalText?: string,
-      usage?: {
-        inputTokens?: number;
-        outputTokens?: number;
-        costUsd?: number;
-      },
+      usage?: TerminalUsage,
       incompleteUsage?: boolean,
       polledCompletedCallIds?: readonly string[],
     ): void => {
@@ -1362,6 +1437,15 @@ export class OpenCodeSdkTransport implements ProviderTransport {
                   ...(event.outputTokens !== undefined
                     ? { outputVisible: event.outputTokens }
                     : {}),
+                  ...(event.cacheReadTokens !== undefined
+                    ? { inputCacheRead: event.cacheReadTokens }
+                    : {}),
+                  ...(event.cacheWriteTokens !== undefined
+                    ? { inputCacheWrite: event.cacheWriteTokens }
+                    : {}),
+                  ...(event.reasoningTokens !== undefined
+                    ? { outputReasoning: event.reasoningTokens }
+                    : {}),
                 });
               } catch (error) {
                 if (error instanceof UsageModeMismatchError) {
@@ -1384,6 +1468,15 @@ export class OpenCodeSdkTransport implements ProviderTransport {
                   : {}),
                 ...(event.outputTokens !== undefined
                   ? { outputVisible: event.outputTokens }
+                  : {}),
+                ...(event.cacheReadTokens !== undefined
+                  ? { inputCacheRead: event.cacheReadTokens }
+                  : {}),
+                ...(event.cacheWriteTokens !== undefined
+                  ? { inputCacheWrite: event.cacheWriteTokens }
+                  : {}),
+                ...(event.reasoningTokens !== undefined
+                  ? { outputReasoning: event.reasoningTokens }
                   : {}),
                 ...(event.costUsd !== undefined
                   ? { cashCostUsd: event.costUsd }
@@ -1928,25 +2021,8 @@ export class OpenCodeSdkTransport implements ProviderTransport {
           : {
               wallMs: Date.now() - startedWall,
               tokens: {
-                ...(usageState?.tokens ?? {}),
-                inputKnown:
-                  usageState?.tokens.inputUncached ??
-                  terminalUsage?.inputTokens,
-                outputKnown:
-                  usageState?.tokens.outputVisible ??
-                  terminalUsage?.outputTokens,
-                totalKnown:
-                  (usageState?.tokens.inputUncached ??
-                    terminalUsage?.inputTokens) !== undefined ||
-                  (usageState?.tokens.outputVisible ??
-                    terminalUsage?.outputTokens) !== undefined
-                    ? (usageState?.tokens.inputUncached ??
-                        terminalUsage?.inputTokens ??
-                        0) +
-                      (usageState?.tokens.outputVisible ??
-                        terminalUsage?.outputTokens ??
-                        0)
-                    : undefined,
+                ...(usageState?.tokens ?? terminalLeaves(terminalUsage)),
+                ...knownUsageSums(usageState?.tokens, terminalUsage),
               },
               completeness:
                 effectiveIncomplete ||

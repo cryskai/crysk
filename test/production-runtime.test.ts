@@ -490,6 +490,7 @@ describe("production runtime PR1", () => {
         "sonnet",
         "--effort",
         "high",
+        "--exclude-dynamic-system-prompt-sections",
       ]);
     });
 

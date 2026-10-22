@@ -508,6 +508,85 @@ describe("OpenCodeSdkTransport §4.2 line 195 usage aggregation mode", () => {
     expect(usageEvents).toHaveLength(2);
   });
 
+  test("cache and reasoning leaves join the snapshot totals and reach the sink usage event", async () => {
+    const handle = makeClient({
+      stream: streamOf([
+        {
+          kind: "usage",
+          mode: "snapshot",
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 900,
+          cacheWriteTokens: 40,
+          reasoningTokens: 7,
+          costUsd: 0.1,
+        },
+        { kind: "delta", text: "text" },
+        { kind: "terminal", proof: completedProof("evt-usage-cache") },
+      ]),
+    });
+    const rig = makeRig({ client: handle.client });
+    const pending = rig.transport.execute(makeRequest(), {
+      signal: rig.controller.signal,
+      events: rig.sink,
+    });
+    await advance(rig.clock, 8);
+    const outcome = await pending;
+
+    expect(outcome.usage.tokens.inputUncached).toBe(10);
+    expect(outcome.usage.tokens.inputCacheRead).toBe(900);
+    expect(outcome.usage.tokens.inputCacheWrite).toBe(40);
+    expect(outcome.usage.tokens.outputVisible).toBe(5);
+    expect(outcome.usage.tokens.outputReasoning).toBe(7);
+    // OpenCode's token leaves are disjoint-additive (token-usage.ts), so the
+    // totals are sums of the defined leaves, not the uncached counts alone.
+    expect(outcome.usage.tokens.inputKnown).toBe(950);
+    expect(outcome.usage.tokens.outputKnown).toBe(12);
+    expect(outcome.usage.tokens.totalKnown).toBe(962);
+    const usageEvent = rig.sink.events.find((e) => e.type === "usage");
+    expect(usageEvent).toMatchObject({
+      usage: { inputCacheRead: 900 },
+    });
+  });
+
+  test("a poll-only terminal carries the cache and reasoning leaves too", async () => {
+    // No usage event on the stream: the poll's reconciled message usage is
+    // the only source, and it must not fall back to the uncached count.
+    const proof = completedProof("evt-poll-cache");
+    const handle = makeClient({
+      stream: streamOf([{ kind: "delta", text: "text" }]),
+      polls: [
+        {
+          kind: "terminal",
+          proof,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadTokens: 900,
+            cacheWriteTokens: 40,
+            reasoningTokens: 7,
+            costUsd: 0.1,
+          },
+        },
+      ],
+    });
+    const rig = makeRig({ client: handle.client });
+    const pending = rig.transport.execute(makeRequest(), {
+      signal: rig.controller.signal,
+      events: rig.sink,
+    });
+    await advance(rig.clock, 8);
+    const outcome = await pending;
+
+    expect(outcome.completion).toBe("success");
+    expect(outcome.usage.tokens.inputCacheRead).toBe(900);
+    expect(outcome.usage.tokens.inputCacheWrite).toBe(40);
+    expect(outcome.usage.tokens.outputReasoning).toBe(7);
+    expect(outcome.usage.tokens.inputKnown).toBe(950);
+    expect(outcome.usage.tokens.outputKnown).toBe(12);
+    expect(outcome.usage.tokens.totalKnown).toBe(962);
+  });
+
   test("delta mode accumulates disjoint increments", async () => {
     const handle = makeClient({
       stream: streamOf([
