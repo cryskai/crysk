@@ -625,3 +625,33 @@ describe("ClaudeCodeRunner cancellation signal (§5.3)", () => {
     expect(result.status).toBe("ok");
   });
 });
+
+describe("ClaudeCodeRunner attempt admission", () => {
+  test("forwards attemptAdmissionGate so a max_concurrent_steps cap holds on the legacy runner", async () => {
+    const { spawnFn } = makeFakeSpawn([
+      { stdout: envelope(JSON.stringify(GOOD_DRAFT)) },
+    ]);
+    const spec = await makeSpec();
+    const acquired: number[] = [];
+    let released = 0;
+    const runner = new ClaudeCodeRunner({
+      spawnFn,
+      attemptAdmissionGate: {
+        acquire: async (input) => {
+          acquired.push(input.attempt);
+          return {
+            leaseId: `${input.sessionId}#${input.attempt}`,
+            rateLimitBucketId: input.rateLimitBucketId,
+            release: () => {
+              released += 1;
+            },
+          };
+        },
+      },
+    });
+    const result = await runner.run(spec);
+    expect(result.status).toBe("ok");
+    expect(acquired).toEqual([1]);
+    expect(released).toBe(1);
+  });
+});

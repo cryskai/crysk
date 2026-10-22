@@ -439,4 +439,18 @@ describe("admissionGateFor (max_concurrent_steps wiring)", () => {
     second.release();
     granted.release();
   });
+
+  test("the cap gate never trips a breaker: an unconfirmed abort leaves later steps admitted", async () => {
+    const gate = admissionGateFor(1);
+    expect(gate).toBeDefined();
+    if (gate === undefined) return;
+    expect(gate.reportUnconfirmedRemote).toBeUndefined();
+    const lease = await gate.acquire({
+      sessionId: "s",
+      attempt: 1,
+      rateLimitBucketId: "aiand",
+      signal: new AbortController().signal,
+    });
+    lease.release();
+  });
 });

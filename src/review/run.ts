@@ -502,16 +502,25 @@ export async function enforceCapabilityGate(params: {
 // budget (OpenCode's aiand allows 10 in-flight; 14 simultaneous requests drew
 // HTTP 429 with x-ratelimit-policy: concurrency, which surfaced as
 // UnknownError and lost refuters), so there is no per-bucket split to honor.
+//
+// The gate is cap-only: it omits `reportUnconfirmedRemote`, so an attempt
+// whose abort the provider never confirmed does not trip the limiter's
+// permanent bucket breaker. Every bucket here is the one shared bucket, so a
+// breaker would refuse every remaining step of the review after one watchdog
+// timeout. Fencing unconfirmed spend is the spend ledger's job, and it
+// already fences a metered bucket on `unresolved_remote`; a concurrency cap
+// must not add a second fence the run never had without it.
 export function admissionGateFor(
   maxConcurrentSteps?: number,
 ): AttemptAdmissionGate | undefined {
   if (maxConcurrentSteps === undefined) return undefined;
-  return new ConcurrencyAttemptAdmissionGate(
+  const gate = new ConcurrencyAttemptAdmissionGate(
     new ConcurrencyLimiter({
       bucketCeiling: maxConcurrentSteps,
       globalCeiling: maxConcurrentSteps,
     }),
   );
+  return { acquire: (input) => gate.acquire(input) };
 }
 
 export interface PreparedPipelineRunner {
@@ -569,6 +578,9 @@ export async function prepareRunnerForRoute(params: {
           : new ClaudeCodeRunner({
               ...params.runnerAuthority.runnerOptions,
               signal: params.ceilingController.signal,
+              ...(attemptAdmissionGate === undefined
+                ? {}
+                : { attemptAdmissionGate }),
             }),
       ...(productionRuntime !== undefined
         ? {
