@@ -1563,11 +1563,15 @@ async function execute(
     agent: AgentSpec;
     spec: StepSpec;
     meta: StepMeta;
+    shared: boolean;
   }> = [];
   for (const hunter of huntersAdmitted ? hunters : []) {
     const agent = await parseAgentFile(agentPromptPath(input, hunter.file));
     const name = `hunter-${hunter.key}`;
     const systemPromptPath = path.join(stepsDir, `${name}.system.md`);
+    const shared =
+      input.sharedPrefix === true &&
+      routeSharesPrefix(routeForStepKey(routePlan, name));
     const body = renderAgentBody(agent.body, {
       priors: input.suspicionPriors,
       gotchas,
@@ -1585,7 +1589,7 @@ async function execute(
     // exact system prompt each step saw survives next to its draft. With the
     // shared prefix the body moves to the user message, so it is also written
     // as its own file, and the system prompt is the byte-identical shared block.
-    if (input.sharedPrefix === true) {
+    if (shared) {
       await writeSystemPrompt(
         systemPromptPath,
         `${SHARED_PREFIX_HEADER}\n\n${sharedBlock}`,
@@ -1600,10 +1604,7 @@ async function execute(
     const spec: StepSpec = {
       name,
       systemPromptPath,
-      prompt:
-        input.sharedPrefix === true
-          ? `${body}\n\n${SHARED_PREFIX_CLOSING}`
-          : sharedBlock,
+      prompt: shared ? `${body}\n\n${SHARED_PREFIX_CLOSING}` : sharedBlock,
       tools: agent.tools,
       mcpConfigPath: input.mcpConfigPath,
       model: resolveModel(input, hunter.model, agent.model, hunter.file),
@@ -1642,7 +1643,7 @@ async function execute(
       onRetry: (info) => emit(deps, { kind: "step-retry", ...info }),
     };
     const meta = stepMeta(spec);
-    hunterSpecs.push({ agent: hunter, spec, meta });
+    hunterSpecs.push({ agent: hunter, spec, meta, shared });
     state.steps.push(meta);
   }
 
@@ -1804,7 +1805,8 @@ async function execute(
     !ceilingAborted(deps, state)
   ) {
     const groups = new Map<string, Array<{ spec: StepSpec }>>();
-    for (const { spec } of hunterSpecs) {
+    for (const { spec, shared } of hunterSpecs) {
+      if (!shared) continue;
       const key = JSON.stringify([
         spec.model,
         spec.effort,
@@ -3359,6 +3361,23 @@ function failedAgentEntry(): PerAgentUsage {
     attempts: 0,
     status: "failed",
   };
+}
+
+// The shared prefix pays only where a cache WRITE is priced: Anthropic bills
+// it at 1.25x input, so hunters re-writing the same patch is the waste the
+// shared block removes (-28% on Claude, lab ledger cost levers v7). DeepSeek
+// on ai& prices a write like a miss and caches each hunter's own loop already;
+// there the warm-up was pure overhead (+9%, v8). An Anthropic model behind
+// OpenCode bills the same way, so the provider decides, not the backend. No
+// route is the legacy Claude-only path.
+export function routeSharesPrefix(
+  route: ResolvedModelRoute | undefined,
+): boolean {
+  return (
+    route === undefined ||
+    route.backend === "claude-code" ||
+    route.provider === "anthropic"
+  );
 }
 
 function routeForStepKey(

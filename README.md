@@ -254,7 +254,8 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 Flags worth knowing: `--dry-run` (plan + cost band, creates nothing), `--yes`, `--model <m>`,
 `--scout` / `--no-scout` (toggle pre-hunt reconnaissance scout),
 `--no-shared-prefix` (turn off the default shared hunter prefix: hunters share one cached system prompt
-holding the patch, their roles move to the user message and a one-turn warm-up writes the cache first),
+holding the patch, their roles move to the user message and a one-turn warm-up writes the cache first; Anthropic routes only,
+since other providers already cache each hunter's own loop),
 `--post` / `--no-post` (toggle PR comment publishing),
 `--force` (local only: review this diff even when the size gate would skip it;
 in GitHub Actions the same forced re-review is a `/pr-hero review` comment on the pull request,

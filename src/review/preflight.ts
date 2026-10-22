@@ -518,7 +518,8 @@ Options:
   --no-shared-prefix  review only: turn off the shared hunter prefix. By
                       default the patch and output contract sit in each
                       hunter's system prompt, identical across hunters, and the
-                      prompt cache is warmed once per group before the fan-out
+                      prompt cache is warmed once per group before the fan-out.
+                      Anthropic routes only; others keep per-hunter prompts
                       (--shared-prefix forces it on)
   --full              review only: on a re-review, widen discovery to the
                       full PR range (B..H). Verification and triage still

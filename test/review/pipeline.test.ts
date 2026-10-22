@@ -22,6 +22,7 @@ import {
   type PipelineProgressEvent,
   parityTriggered,
   RUNTIME_PREAMBLE,
+  routeSharesPrefix,
   runPipeline,
   stepFailureReason,
 } from "#review/pipeline";
@@ -4957,6 +4958,24 @@ describe("shared prefix (--shared-prefix)", () => {
   // "Reply with exactly: OK" made the warm-up run 6-13 tool calls, and 3 of 6
   // live runs hit its 2-minute timeout (lab ledger, cost levers v6). The
   // explicit no-tool instruction made the same call one turn, ~$0.10.
+  // Lab ledger, cost levers v8: on ai&/DeepSeek the shared prefix cost +9%
+  // (its automatic cache already serves each hunter's own loop, and the
+  // warm-up is pure overhead), while on Claude it cut 28% (v7). The saving is
+  // Anthropic's cache-write price, so only Anthropic routes share.
+  test("only Anthropic routes share the prefix", () => {
+    const route = (backend: "claude-code" | "opencode", provider: string) => ({
+      backend,
+      provider,
+      modelFamily: "sonnet",
+      modelSnapshot: "m",
+    });
+    expect(routeSharesPrefix(undefined)).toBe(true);
+    expect(routeSharesPrefix(route("claude-code", "anthropic"))).toBe(true);
+    expect(routeSharesPrefix(route("opencode", "anthropic"))).toBe(true);
+    expect(routeSharesPrefix(route("opencode", "aiand"))).toBe(false);
+    expect(routeSharesPrefix(route("opencode", "openai"))).toBe(false);
+  });
+
   test("the warm-up asks for one tool-free turn", async () => {
     const runner = new FakeStepRunner(WARMUP_OK);
     await runPipeline(await makeInput({ sharedPrefix: true }), { runner });
