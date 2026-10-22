@@ -2167,8 +2167,9 @@ export class StepExecutionHarness implements StepRunner {
     // fencing: no cash figure means no spend evidence on a free route, and a
     // terminal released_unstarted fences nothing — the same-step retry
     // reserves fine and sibling steps are unaffected. Coupling-1 is
-    // preserved: a non-complete usage still never settles as a number, it
-    // just releases instead of fencing. Cancelled/undefined-usage keeps the
+    // preserved: a non-complete free usage still never settles as a number,
+    // it just releases instead of fencing (the only non-complete settle is
+    // settlementFromUsage's proven rate-limited METERED partial). Cancelled/undefined-usage keeps the
     // fence (no usage means no evidence either way — fail closed), the
     // free_nonzero_cost reason keeps the fence (priced work may be real), and
     // the metered path below is untouched. Downstream-safe:

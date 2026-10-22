@@ -38,10 +38,11 @@
 // Two couplings the spec calls out as the easiest to lose across chained
 // PRs are made TYPE-unreachable here rather than asserted at runtime:
 //   1. `settle()`'s second argument is narrowed to the "settle" arm of
-//      SettlementDecision — an attempt whose usage completeness isn't
-//      "complete" can never be handed to `settle()` as a bare number; tsc
-//      refuses the call before any code runs (spec: "Non-Complete Usage
-//      Never Settles As A Number").
+//      SettlementDecision — a raw usage number can never be handed to
+//      `settle()`; only `settlementFromUsage` produces that arm, and tsc
+//      refuses any other call before code runs (spec: "Non-Complete Usage
+//      Never Settles As A Number"). Its one non-complete exception, a
+//      proven rate-limited partial, is documented on that function.
 //   2. `reserve()`'s second argument is a branded ReserveToken that only
 //      `beginStep()` (attempt 1) or `nextCycle()` on a NON-terminal
 //      RetryDisposition can produce. `nextCycle()` returns `undefined` for
