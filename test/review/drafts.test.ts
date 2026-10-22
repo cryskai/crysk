@@ -71,6 +71,28 @@ describe("extractJsonObject", () => {
     expect(extractJsonObject(wrapped)).toEqual(big);
   });
 
+  // A hunter's closing prose cites the code it read, and code is full of
+  // braces: `${id}.${codec}` put the first `{` inside a template literal, the
+  // first-to-last-brace slice failed to parse, and a valid two-finding draft
+  // (one of them the planted defect) was rejected as a format violation (lab
+  // ledger, cost levers v3, musive #965 hybrid r2, 2026-10-21).
+  test("parses the draft when the prose before it contains braces", () => {
+    const text = [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the model's literal prose, braces and all, is the input under test.
+      "Confirmed all four backend sites and the object key is `${id}.${codec}` (a UUID).",
+      "",
+      "I have both sides proven. Final findings.",
+      "",
+      JSON.stringify(payload),
+    ].join("\n");
+    expect(extractJsonObject(text)).toEqual(payload);
+  });
+
+  test("parses the draft when prose after it contains braces too", () => {
+    const text = `Before \`{a}\`.\n${JSON.stringify(payload)}\nAfter, see \`fn() {}\`.`;
+    expect(extractJsonObject(text)).toEqual(payload);
+  });
+
   test("returns undefined on garbage", () => {
     expect(extractJsonObject("no findings worth reporting")).toBeUndefined();
     expect(extractJsonObject("broken { not json ] here")).toBeUndefined();

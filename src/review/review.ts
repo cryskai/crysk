@@ -32,6 +32,7 @@ import {
   type CliOptions,
   createRunDir,
   emptyDiffMessage,
+  resolveMaxConcurrentSteps,
   resolveSharedPrefix,
 } from "#review/preflight";
 import { estimateCost } from "#review/report";
@@ -360,6 +361,7 @@ export async function review(options: CliOptions): Promise<number> {
       runnerAuthority,
       ceilingController,
       onProgress: progress.onProgress,
+      maxConcurrentSteps: resolveMaxConcurrentSteps(config),
     });
     productionRuntime = prepared.productionRuntime;
     result = await runPipeline(

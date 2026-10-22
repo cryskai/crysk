@@ -18,8 +18,10 @@ covers the two things that section does not: `routing` and credentials.
 
 | Layer | File | Holds |
 | --- | --- | --- |
-| Global / per-person | `~/.prhero/config.json` | `routing`, personal caps (`max_verification_steps`, `max_changed_lines`, `max_changed_files`) |
+| Global / per-person | `~/.prhero/config.json` | `routing`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
 | Repo | `<repo>/.prhero/config.json` | `agents_dir`, `default_base`, `parity_trigger_paths`, `suspicion_priors`, gotchas |
+
+`max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate, scout and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and pr-hero can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
 
 `routing` is a **person-layer-only** key. Put it in a repo file and the parser refuses it by name:
 

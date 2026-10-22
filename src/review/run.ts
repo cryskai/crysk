@@ -78,6 +78,11 @@ import {
 import { ClaudeCodeRunner } from "#review/step-runner";
 import { CliError, withRecordClass } from "../errors";
 import {
+  type AttemptAdmissionGate,
+  ConcurrencyAttemptAdmissionGate,
+} from "../execution/admission";
+import { ConcurrencyLimiter } from "../execution/concurrency-limiter";
+import {
   createProductionRuntime,
   type ProductionAdmissionContext,
   type ProductionRuntime,
@@ -490,6 +495,34 @@ export async function enforceCapabilityGate(params: {
   });
 }
 
+// The max_concurrent_steps cap, as the production runtime's admission gate.
+// Undefined means no gate is constructed at all, so an unset cap is today's
+// unlimited behavior byte for byte. The cap is one number for both bucket and
+// global ceilings: pr-hero's steps all share one provider's concurrency
+// budget (OpenCode's aiand allows 10 in-flight; 14 simultaneous requests drew
+// HTTP 429 with x-ratelimit-policy: concurrency, which surfaced as
+// UnknownError and lost refuters), so there is no per-bucket split to honor.
+//
+// The gate is cap-only: it omits `reportUnconfirmedRemote`, so an attempt
+// whose abort the provider never confirmed does not trip the limiter's
+// permanent bucket breaker. Every bucket here is the one shared bucket, so a
+// breaker would refuse every remaining step of the review after one watchdog
+// timeout. Fencing unconfirmed spend is the spend ledger's job, and it
+// already fences a metered bucket on `unresolved_remote`; a concurrency cap
+// must not add a second fence the run never had without it.
+export function admissionGateFor(
+  maxConcurrentSteps?: number,
+): AttemptAdmissionGate | undefined {
+  if (maxConcurrentSteps === undefined) return undefined;
+  const gate = new ConcurrencyAttemptAdmissionGate(
+    new ConcurrencyLimiter({
+      bucketCeiling: maxConcurrentSteps,
+      globalCeiling: maxConcurrentSteps,
+    }),
+  );
+  return { acquire: (input) => gate.acquire(input) };
+}
+
 export interface PreparedPipelineRunner {
   productionRuntime: ProductionRuntime | undefined;
   deps: PipelineDeps;
@@ -510,7 +543,9 @@ export async function prepareRunnerForRoute(params: {
   runnerAuthority: RunnerAuthorityResolution;
   ceilingController: AbortController;
   onProgress: PipelineDeps["onProgress"];
+  maxConcurrentSteps?: number;
 }): Promise<PreparedPipelineRunner> {
+  const attemptAdmissionGate = admissionGateFor(params.maxConcurrentSteps);
   const productionRuntime =
     params.routePlan === undefined || params.productionAdmission === undefined
       ? undefined
@@ -528,6 +563,11 @@ export async function prepareRunnerForRoute(params: {
             : { freeModelProbe: params.productionAdmission.freeModelProbe }),
           mode: "production",
           signal: params.ceilingController.signal,
+          // Absent when no cap is configured: the runtime then gets no gate,
+          // exactly as before this key existed.
+          ...(attemptAdmissionGate === undefined
+            ? {}
+            : { attemptAdmissionGate }),
         });
   return {
     productionRuntime,
@@ -538,6 +578,9 @@ export async function prepareRunnerForRoute(params: {
           : new ClaudeCodeRunner({
               ...params.runnerAuthority.runnerOptions,
               signal: params.ceilingController.signal,
+              ...(attemptAdmissionGate === undefined
+                ? {}
+                : { attemptAdmissionGate }),
             }),
       ...(productionRuntime !== undefined
         ? {

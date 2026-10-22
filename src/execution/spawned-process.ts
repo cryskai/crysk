@@ -31,3 +31,36 @@ export function killAllChildProcesses(): void {
   }
   ACTIVE_CHILD_PROCS.clear();
 }
+
+// Long-lived children that own more than a process. An OpenCode server holds a
+// projected credential directory too, and its `close()` both stops it (TERM,
+// bounded grace, KILL) and destroys that projection. `kill()` alone would leave
+// the credential on disk, so these are closed, not killed. cli.ts's signal
+// path awaits closeAllServers() right after killAllChildProcesses(): before
+// this registry existed the server was in no list at all, outlived a SIGTERM'd
+// pr-hero, and kept its session (and its spend) alive.
+export const ACTIVE_SERVER_CLOSERS = new Set<() => Promise<void>>();
+
+// Latched by the signal sweep and never reset in production: a server armed
+// after the sweep (a launch whose credential projection straddled the signal,
+// or a relaunch) would be in no registry anyone reads again, so launches
+// check this and refuse instead.
+let shuttingDown = false;
+
+export function serversShuttingDown(): boolean {
+  return shuttingDown;
+}
+
+// Tests run many sweeps in one process; production runs at most one.
+export function resetServerShutdownForTests(): void {
+  shuttingDown = false;
+}
+
+export async function closeAllServers(): Promise<void> {
+  shuttingDown = true;
+  const closers = [...ACTIVE_SERVER_CLOSERS];
+  ACTIVE_SERVER_CLOSERS.clear();
+  // allSettled: one server that fails to close must not keep the others (and
+  // their credentials) alive. Each close is already time-bounded.
+  await Promise.allSettled(closers.map((close) => close()));
+}

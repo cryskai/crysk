@@ -172,6 +172,7 @@ describe("buildStepArgv", () => {
     );
     expect(flagValue(argv, "--permission-mode")).toBe("bypassPermissions");
     expect(flagValue(argv, "--model")).toBe(spec.model);
+    expect(argv).toContain("--exclude-dynamic-system-prompt-sections");
   });
 
   // §3.12 obligation 1, and the single mechanism §3.5 rests on: the scout's
@@ -623,5 +624,35 @@ describe("ClaudeCodeRunner cancellation signal (§5.3)", () => {
     expect(calls).toHaveLength(1);
     expect(result.attempts).toBe(1);
     expect(result.status).toBe("ok");
+  });
+});
+
+describe("ClaudeCodeRunner attempt admission", () => {
+  test("forwards attemptAdmissionGate so a max_concurrent_steps cap holds on the legacy runner", async () => {
+    const { spawnFn } = makeFakeSpawn([
+      { stdout: envelope(JSON.stringify(GOOD_DRAFT)) },
+    ]);
+    const spec = await makeSpec();
+    const acquired: number[] = [];
+    let released = 0;
+    const runner = new ClaudeCodeRunner({
+      spawnFn,
+      attemptAdmissionGate: {
+        acquire: async (input) => {
+          acquired.push(input.attempt);
+          return {
+            leaseId: `${input.sessionId}#${input.attempt}`,
+            rateLimitBucketId: input.rateLimitBucketId,
+            release: () => {
+              released += 1;
+            },
+          };
+        },
+      },
+    });
+    const result = await runner.run(spec);
+    expect(result.status).toBe("ok");
+    expect(acquired).toEqual([1]);
+    expect(released).toBe(1);
   });
 });

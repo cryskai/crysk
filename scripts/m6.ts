@@ -27,8 +27,11 @@
 // blocks: models drift over a four-hour session, and two blocks would confound
 // that drift with the arm.
 //
-// It never passes --post. These are merged PRs on a real repository, and a
-// harness that could comment on them is a harness one flag away from doing it.
+// It always passes --no-post. These are merged PRs on a real repository, and
+// "never passing --post" stopped being enough the day `post` became a config
+// key: an operator whose ~/.prhero/config.json says `post: true` would have
+// had every review here comment on a merged musive PR (`resolvePost` reads
+// the flag first, then the config). Only an explicit --no-post outranks it.
 
 import path from "node:path";
 import {
@@ -269,6 +272,7 @@ async function review(
     "--pr",
     String(pr),
     "--yes",
+    "--no-post",
     "--out",
     runDirFor(pr, scout, replicate),
     ...(dryRun ? ["--dry-run"] : []),

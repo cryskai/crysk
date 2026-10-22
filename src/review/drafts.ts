@@ -162,13 +162,50 @@ export function extractJsonObject(finalText: string): unknown {
     if (parsed !== undefined) return parsed;
   }
 
-  // Last resort: the outermost brace span. Covers "Here is the result: {...}".
-  const first = finalText.indexOf("{");
-  const last = finalText.lastIndexOf("}");
-  if (first !== -1 && last > first) {
-    return tryParse(finalText.slice(first, last + 1));
+  // Last resort: the largest balanced `{...}` span that parses. Covers "Here is
+  // the result: {...}". It used to be first-`{`-to-last-`}`, which a single
+  // brace in the surrounding prose broke: a hunter's closing note cited
+  // `${id}.${codec}`, the slice started inside that template literal, and a
+  // valid two-finding draft (one of them the planted defect) was rejected as a
+  // format violation (lab ledger, cost levers v3, musive #965, 2026-10-21).
+  // Largest, not first: a stray `{}` in the prose also parses, and must never
+  // win over the draft.
+  let best: { length: number; end: number; value: unknown } | undefined;
+  for (let start = finalText.indexOf("{"); start !== -1; ) {
+    const end = matchingBrace(finalText, start);
+    if (end !== -1 && (best === undefined || end - start + 1 > best.length)) {
+      const value = tryParse(finalText.slice(start, end + 1));
+      if (value !== undefined) best = { length: end - start + 1, end, value };
+    }
+    // Braces inside an object already parsed (a claim quoting code) cannot
+    // start a larger one, so they are skipped rather than rescanned.
+    const from = best !== undefined && best.end > start ? best.end : start;
+    start = finalText.indexOf("{", from + 1);
   }
-  return undefined;
+  return best?.value;
+}
+
+// The index of the `}` closing the `{` at `start`, skipping braces inside JSON
+// strings (a claim quoting `fn() {}` must not close the object early), or -1
+// when the text ends first.
+function matchingBrace(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 function tryParse(text: string): unknown {

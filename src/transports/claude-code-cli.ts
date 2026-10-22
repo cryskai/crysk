@@ -746,6 +746,14 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
       spawnModelForClaudeCli(request.route, request.executionModel),
       "--effort",
       request.effort,
+      // Moves the per-machine sections (cwd, env info, git status) out of the
+      // system prompt into the first user message. Without it every worktree
+      // path changes the system prompt, so no spawn could reuse the cached
+      // tools + base prompt another review wrote: measured 2026-10-21 (lab
+      // ledger, prompt-cache layout probe), a second repo wrote 6.6k cache
+      // tokens without the flag and 1.4k with it. Nothing leaves the context;
+      // isolation is unchanged.
+      "--exclude-dynamic-system-prompt-sections",
     );
 
     const start = performance.now();

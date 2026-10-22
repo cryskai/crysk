@@ -16,7 +16,11 @@
 // the server actually prints.
 
 import type { CredentialKind } from "../execution/contracts";
-import type { SpawnedProcess } from "../execution/spawned-process";
+import {
+  ACTIVE_SERVER_CLOSERS,
+  type SpawnedProcess,
+  serversShuttingDown,
+} from "../execution/spawned-process";
 import type { CredentialBroker } from "../security/credential-broker";
 import { mcpConfigIsEmpty, type OpenCodeMcpConfig } from "./opencode-mcp";
 
@@ -104,6 +108,10 @@ export interface LaunchOpenCodeServerOptions {
   readonly termGraceMs?: number;
   readonly killReapMs?: number;
   readonly hostname?: string;
+  // Handed the server's own close right after spawn, before the startup wait:
+  // a signal in that window (up to startupTimeoutMs) must be able to stop a
+  // server that has not announced its URL yet.
+  readonly onSpawned?: (close: () => Promise<void>) => void;
 }
 
 export function openCodeServerArgv(
@@ -140,6 +148,7 @@ export async function launchOpenCodeServer(
     hostname = "127.0.0.1",
     mcp,
     freeTierGatewayAsk,
+    onSpawned,
   } = options;
 
   if (!verifiedBinaryPath.startsWith("/")) {
@@ -241,10 +250,21 @@ export async function launchOpenCodeServer(
   // stdout with none of the startup logic to disguise it.
   void drainToNowhere(proc.stderr);
 
-  let closed = false;
-  const close = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
+  // Memoized, not a boolean early return: a second caller (the projected
+  // wrapper after a startup failure already closed the server) must await the
+  // SAME stop, or it destroys the projection while the server is still alive.
+  let reaped = false;
+  void proc.exited.then(() => {
+    reaped = true;
+  });
+  let stopping: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    stopping ??= stop();
+    return stopping;
+  };
+  const stop = async (): Promise<void> => {
+    // A reaped pid can be recycled: never signal one.
+    if (reaped) return;
     try {
       killFn(proc.pid, "SIGTERM");
     } catch {
@@ -273,6 +293,8 @@ export async function launchOpenCodeServer(
       ]);
     }
   };
+
+  onSpawned?.(close);
 
   const url = await new Promise<string>((resolve, reject) => {
     let settled = false;
@@ -449,16 +471,51 @@ export async function launchProjectedOpenCodeServer(
     verifiedBinaryPath: launchOptions.verifiedBinaryPath,
   });
 
+  // The signal sweep already ran (during the `broker.project` await above, or
+  // before a relaunch): nothing would ever close a server armed now, so it is
+  // never launched and the projection does not outlive this call.
+  if (serversShuttingDown()) {
+    await projection.destroy();
+    throw new Error("opencode server launch refused: pr-hero is shutting down");
+  }
+
+  // Registered for the signal path (spawned-process.ts closeAllServers)
+  // BEFORE the launch, so a signal during startup still stops the spawned
+  // server and destroys the projection. One memoized close serves every
+  // caller: a signal arriving while a normal close is in flight awaits that
+  // same close instead of finding nothing to wait for. It leaves the registry
+  // only once the projection is gone.
+  let stopServer: (() => Promise<void>) | undefined;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    closing ??= (async () => {
+      try {
+        await stopServer?.();
+      } finally {
+        try {
+          await projection.destroy();
+        } finally {
+          ACTIVE_SERVER_CLOSERS.delete(close);
+        }
+      }
+    })();
+    return closing;
+  };
+  ACTIVE_SERVER_CLOSERS.add(close);
+
   let handle: OpenCodeServerHandle;
   try {
     handle = await launchOpenCodeServer({
       ...launchOptions,
       env: composeOpenCodeServerEnv(baseEnv, projection.env),
+      onSpawned: (stop) => {
+        stopServer = stop;
+      },
     });
   } catch (error) {
     // The client resets its launch promise on failure and will project again,
     // so a projection abandoned here is a credential left on disk per retry.
-    await projection.destroy();
+    await close();
     throw error;
   }
 
@@ -473,12 +530,6 @@ export async function launchProjectedOpenCodeServer(
     // `gatewayAsk` here would empty the attestation `createSession` reads
     // in the ONE codepath production actually runs.
     gatewayAsk: handle.gatewayAsk,
-    close: async () => {
-      try {
-        await handle.close();
-      } finally {
-        await projection.destroy();
-      }
-    },
+    close,
   };
 }

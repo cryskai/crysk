@@ -82,7 +82,11 @@ import {
   type PipelineResult,
   runPipeline,
 } from "#review/pipeline";
-import { type CliOptions, resolveSharedPrefix } from "#review/preflight";
+import {
+  type CliOptions,
+  resolveMaxConcurrentSteps,
+  resolveSharedPrefix,
+} from "#review/preflight";
 import { estimateCost } from "#review/report";
 import {
   pipelineScoutInput,
@@ -740,6 +744,7 @@ export async function reviewPr(
             runnerAuthority,
             ceilingController,
             onProgress: progress.onProgress,
+            maxConcurrentSteps: resolveMaxConcurrentSteps(config),
           });
           productionRuntime = prepared.productionRuntime;
           // registerActiveRun rides INSIDE this try, not before it: the

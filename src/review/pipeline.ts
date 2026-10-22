@@ -2474,6 +2474,19 @@ async function runVerify(
       outPath: path.join(dir, "result.json"),
       timeoutMs: options.stepTimeoutMs,
       maxAttempts: DEFAULT_STEP_MAX_ATTEMPTS,
+      // The verifier runs as the refuter's agent, so it takes the refuter's
+      // admitted route, as the refuter and adjudicator legs do. Left unset, a
+      // routed run had no binding for these steps and every one failed
+      // "No admitted binding for step route" before reaching a provider.
+      ...(routeForStepKey(state.routePlan, agentStepKey(options.agent)) ===
+      undefined
+        ? {}
+        : {
+            route: routeForStepKey(
+              state.routePlan,
+              agentStepKey(options.agent),
+            ),
+          }),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
