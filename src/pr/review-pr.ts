@@ -82,7 +82,11 @@ import {
   type PipelineResult,
   runPipeline,
 } from "#review/pipeline";
-import { type CliOptions, resolveMaxConcurrentSteps } from "#review/preflight";
+import {
+  type CliOptions,
+  resolveMaxConcurrentSteps,
+  resolveSharedPrefix,
+} from "#review/preflight";
 import { estimateCost } from "#review/report";
 import {
   pipelineScoutInput,
@@ -788,6 +792,7 @@ export async function reviewPr(
               suspicionPriors: config.suspicion_priors,
               ...(skipDiscovery ? {} : pipelineSummarizerInput(summary)),
               ...(skipDiscovery ? {} : pipelineScoutInput(options)),
+              ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
               // NOT gated on skipDiscovery: an empty-delta re-review still
               // classifies and verifies against this config, and a run whose
               // artifact cannot name its config inputs is the unpoolable case

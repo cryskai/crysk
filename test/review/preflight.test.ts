@@ -52,6 +52,7 @@ import {
   resolveMaxVerificationSteps,
   resolvePost,
   resolveScout,
+  resolveSharedPrefix,
   resolveSummary,
   runDirCandidate,
   SETUP_GOTCHAS_FALLBACK,
@@ -216,6 +217,24 @@ describe("parseArgs", () => {
     expect(
       parseArgs(["review", "--no-summary", "--summary"]).options.summary,
     ).toBe(true);
+  });
+
+  test("--shared-prefix is tri-state: undefined by default, true with it, false with --no-shared-prefix", () => {
+    expect(parseArgs(["review", "--shared-prefix"]).options.sharedPrefix).toBe(
+      true,
+    );
+    expect(
+      parseArgs(["review", "--no-shared-prefix"]).options.sharedPrefix,
+    ).toBe(false);
+    expect(parseArgs(["review"]).options.sharedPrefix).toBeUndefined();
+  });
+
+  // On by default since the 2026-10-22 Claude bench (−28% $/review, −27% wall,
+  // no recall loss): an unset flag resolves ON, only --no-shared-prefix is off.
+  test("the shared prefix resolves on unless --no-shared-prefix", () => {
+    expect(resolveSharedPrefix({})).toBe(true);
+    expect(resolveSharedPrefix({ sharedPrefix: true })).toBe(true);
+    expect(resolveSharedPrefix({ sharedPrefix: false })).toBe(false);
   });
 
   test("the scout is tri-state: undefined by default, true with --scout, false with --no-scout", () => {
