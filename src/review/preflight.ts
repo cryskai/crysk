@@ -89,7 +89,8 @@ export interface CliOptions {
   // The scout is tri-state at parse time: undefined means no flag,
   // so review can apply flag > config > default (false).
   scout?: boolean;
-  // `--shared-prefix` is a plain opt-in: undefined means off.
+  // `--shared-prefix` / `--no-shared-prefix`. Undefined means the default,
+  // which is ON (see resolveSharedPrefix).
   sharedPrefix?: boolean;
   // Independent model knob (§3.7), and NOT exercised by M6 — the whole
   // control corpus is sonnet, so ratifying this is ratifying a flag, not a
@@ -512,10 +513,11 @@ Options:
                       whether it earns its cost has not run yet
   --scout-model <m>   Model for the scout stage (default: the run's model).
                       Requires --scout
-  --shared-prefix     review only: put the patch and output contract in each
-                      hunter's system prompt, identical across hunters, and
-                      warm the prompt cache once per group before the fan-out.
-                      EXPERIMENTAL and off by default
+  --no-shared-prefix  review only: turn off the shared hunter prefix. By
+                      default the patch and output contract sit in each
+                      hunter's system prompt, identical across hunters, and the
+                      prompt cache is warmed once per group before the fan-out
+                      (--shared-prefix forces it on)
   --full              review only: on a re-review, widen discovery to the
                       full PR range (B..H). Verification and triage still
                       run; the recorded case does not change. On GitHub,
@@ -726,6 +728,10 @@ export function parseArgs(argv: string[]): ParsedCli {
     }
     if (arg === "--no-scout") {
       options.scout = false;
+      continue;
+    }
+    if (arg === "--no-shared-prefix") {
+      options.sharedPrefix = false;
       continue;
     }
     if (arg === "--shared-prefix") {
@@ -2790,6 +2796,15 @@ export function resolveSummary(
     enabled: options.summary ?? config.summary?.enabled ?? true,
     ...(model === undefined ? {} : { model }),
   };
+}
+
+// On by default since the 2026-10-22 Claude bench (musive 1722/1858/853, R=2,
+// one variable): −28% $/review, −27% wall, no recall loss on the known bugs or
+// the planted defect. Only an explicit --no-shared-prefix turns it off.
+export function resolveSharedPrefix(
+  options: Pick<CliOptions, "sharedPrefix">,
+): boolean {
+  return options.sharedPrefix !== false;
 }
 
 export function resolveScout(
