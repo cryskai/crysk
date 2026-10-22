@@ -41,7 +41,23 @@ export function killAllChildProcesses(): void {
 // pr-hero, and kept its session (and its spend) alive.
 export const ACTIVE_SERVER_CLOSERS = new Set<() => Promise<void>>();
 
+// Latched by the signal sweep and never reset in production: a server armed
+// after the sweep (a launch whose credential projection straddled the signal,
+// or a relaunch) would be in no registry anyone reads again, so launches
+// check this and refuse instead.
+let shuttingDown = false;
+
+export function serversShuttingDown(): boolean {
+  return shuttingDown;
+}
+
+// Tests run many sweeps in one process; production runs at most one.
+export function resetServerShutdownForTests(): void {
+  shuttingDown = false;
+}
+
 export async function closeAllServers(): Promise<void> {
+  shuttingDown = true;
   const closers = [...ACTIVE_SERVER_CLOSERS];
   ACTIVE_SERVER_CLOSERS.clear();
   // allSettled: one server that fails to close must not keep the others (and

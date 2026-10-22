@@ -3,6 +3,7 @@ import type { CredentialKind } from "../../src/execution/contracts";
 import {
   ACTIVE_SERVER_CLOSERS,
   closeAllServers,
+  resetServerShutdownForTests,
 } from "../../src/execution/spawned-process";
 import type { CredentialBroker } from "../../src/security/credential-broker";
 import {
@@ -676,6 +677,7 @@ describe("projected server launch (#149)", () => {
   // reparented to init after a SIGTERM'd bench run.
   test("the signal path closes a live projected server and destroys its projection", async () => {
     ACTIVE_SERVER_CLOSERS.clear();
+    resetServerShutdownForTests();
     const fake = fakeServer();
     const proj = fakeBroker();
     const pending = launchProjectedOpenCodeServer({
@@ -701,6 +703,7 @@ describe("projected server launch (#149)", () => {
 
   test("a server already closed is not closed again on the signal path", async () => {
     ACTIVE_SERVER_CLOSERS.clear();
+    resetServerShutdownForTests();
     const fake = fakeServer();
     const proj = fakeBroker();
     const pending = launchProjectedOpenCodeServer({
@@ -726,6 +729,7 @@ describe("projected server launch (#149)", () => {
 
   test("a signal during an in-flight close waits for that close to destroy the projection", async () => {
     ACTIVE_SERVER_CLOSERS.clear();
+    resetServerShutdownForTests();
     const fake = fakeServer();
     const proj = fakeBroker();
     const pending = launchProjectedOpenCodeServer({
@@ -757,6 +761,7 @@ describe("projected server launch (#149)", () => {
 
   test("a signal during startup stops the spawned server and destroys its projection", async () => {
     ACTIVE_SERVER_CLOSERS.clear();
+    resetServerShutdownForTests();
     const fake = fakeServer();
     const proj = fakeBroker();
     const pending = launchProjectedOpenCodeServer({
@@ -780,6 +785,76 @@ describe("projected server launch (#149)", () => {
     await expect(pending).rejects.toThrow();
     expect(proj.destroys()).toBe(1);
     expect(ACTIVE_SERVER_CLOSERS.size).toBe(0);
+  });
+
+  test("a launch after the signal sweep is refused and leaves no server or projection", async () => {
+    ACTIVE_SERVER_CLOSERS.clear();
+    resetServerShutdownForTests();
+    await closeAllServers();
+    const fake = fakeServer();
+    const proj = fakeBroker();
+    await expect(
+      launchProjectedOpenCodeServer({
+        verifiedBinaryPath: BIN,
+        broker: proj.broker,
+        credentialKind: "opencode_chatgpt_oauth",
+        baseEnv: { PATH: "/usr/bin" },
+        spawnFn: fake.spawnFn,
+        killFn: fake.killFn,
+        termGraceMs: 5,
+      }),
+    ).rejects.toThrow("shutting down");
+    expect(fake.argv()).toEqual([]);
+    expect(proj.destroys()).toBe(1);
+    expect(ACTIVE_SERVER_CLOSERS.size).toBe(0);
+    resetServerShutdownForTests();
+  });
+
+  test("a startup timeout destroys the projection only after the server is reaped", async () => {
+    ACTIVE_SERVER_CLOSERS.clear();
+    resetServerShutdownForTests();
+    const fake = fakeServer();
+    const order: string[] = [];
+    const proj = fakeBroker({ onDestroy: () => order.push("destroy") });
+    const pending = launchProjectedOpenCodeServer({
+      verifiedBinaryPath: BIN,
+      broker: proj.broker,
+      credentialKind: "opencode_chatgpt_oauth",
+      baseEnv: { PATH: "/usr/bin" },
+      spawnFn: fake.spawnFn,
+      killFn: fake.killFn,
+      startupTimeoutMs: 5,
+      termGraceMs: 1_000,
+    });
+    pending.catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(proj.destroys()).toBe(0);
+    order.push("exit");
+    fake.finish(0);
+    await expect(pending).rejects.toThrow();
+    expect(order).toEqual(["exit", "destroy"]);
+  });
+
+  test("a server that exited during startup is not signalled", async () => {
+    ACTIVE_SERVER_CLOSERS.clear();
+    resetServerShutdownForTests();
+    const fake = fakeServer();
+    const proj = fakeBroker();
+    const pending = launchProjectedOpenCodeServer({
+      verifiedBinaryPath: BIN,
+      broker: proj.broker,
+      credentialKind: "opencode_chatgpt_oauth",
+      baseEnv: { PATH: "/usr/bin" },
+      spawnFn: fake.spawnFn,
+      killFn: fake.killFn,
+      termGraceMs: 5,
+    });
+    pending.catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fake.finish(1);
+    await expect(pending).rejects.toThrow("exited during startup");
+    expect(fake.signals()).toEqual([]);
+    expect(proj.destroys()).toBe(1);
   });
 
   test("the projection outlives the process it authenticates", async () => {
