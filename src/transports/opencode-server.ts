@@ -107,6 +107,10 @@ export interface LaunchOpenCodeServerOptions {
   readonly termGraceMs?: number;
   readonly killReapMs?: number;
   readonly hostname?: string;
+  // Handed the server's own close right after spawn, before the startup wait:
+  // a signal in that window (up to startupTimeoutMs) must be able to stop a
+  // server that has not announced its URL yet.
+  readonly onSpawned?: (close: () => Promise<void>) => void;
 }
 
 export function openCodeServerArgv(
@@ -143,6 +147,7 @@ export async function launchOpenCodeServer(
     hostname = "127.0.0.1",
     mcp,
     freeTierGatewayAsk,
+    onSpawned,
   } = options;
 
   if (!verifiedBinaryPath.startsWith("/")) {
@@ -276,6 +281,8 @@ export async function launchOpenCodeServer(
       ]);
     }
   };
+
+  onSpawned?.(close);
 
   const url = await new Promise<string>((resolve, reject) => {
     let settled = false;
@@ -452,30 +459,45 @@ export async function launchProjectedOpenCodeServer(
     verifiedBinaryPath: launchOptions.verifiedBinaryPath,
   });
 
+  // Registered for the signal path (spawned-process.ts closeAllServers)
+  // BEFORE the launch, so a signal during startup still stops the spawned
+  // server and destroys the projection. One memoized close serves every
+  // caller: a signal arriving while a normal close is in flight awaits that
+  // same close instead of finding nothing to wait for. It leaves the registry
+  // only once the projection is gone.
+  let stopServer: (() => Promise<void>) | undefined;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    closing ??= (async () => {
+      try {
+        await stopServer?.();
+      } finally {
+        try {
+          await projection.destroy();
+        } finally {
+          ACTIVE_SERVER_CLOSERS.delete(close);
+        }
+      }
+    })();
+    return closing;
+  };
+  ACTIVE_SERVER_CLOSERS.add(close);
+
   let handle: OpenCodeServerHandle;
   try {
     handle = await launchOpenCodeServer({
       ...launchOptions,
       env: composeOpenCodeServerEnv(baseEnv, projection.env),
+      onSpawned: (stop) => {
+        stopServer = stop;
+      },
     });
   } catch (error) {
     // The client resets its launch promise on failure and will project again,
     // so a projection abandoned here is a credential left on disk per retry.
-    await projection.destroy();
+    await close();
     throw error;
   }
-
-  // Registered for the signal path (spawned-process.ts closeAllServers), and
-  // removed by any close: a server already closed must not be closed twice.
-  const close = async (): Promise<void> => {
-    ACTIVE_SERVER_CLOSERS.delete(close);
-    try {
-      await handle.close();
-    } finally {
-      await projection.destroy();
-    }
-  };
-  ACTIVE_SERVER_CLOSERS.add(close);
 
   return {
     url: handle.url,

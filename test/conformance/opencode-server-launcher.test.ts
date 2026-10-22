@@ -724,6 +724,64 @@ describe("projected server launch (#149)", () => {
     expect(fake.signals()).toEqual(["SIGTERM"]);
   });
 
+  test("a signal during an in-flight close waits for that close to destroy the projection", async () => {
+    ACTIVE_SERVER_CLOSERS.clear();
+    const fake = fakeServer();
+    const proj = fakeBroker();
+    const pending = launchProjectedOpenCodeServer({
+      verifiedBinaryPath: BIN,
+      broker: proj.broker,
+      credentialKind: "opencode_chatgpt_oauth",
+      baseEnv: { PATH: "/usr/bin" },
+      spawnFn: fake.spawnFn,
+      killFn: fake.killFn,
+      termGraceMs: 1_000,
+    });
+    fake.emit(LISTENING);
+    const server = await pending;
+    void server.close();
+
+    let signalSettled = false;
+    const signalClose = closeAllServers().then(() => {
+      signalSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(signalSettled).toBe(false);
+    expect(proj.destroys()).toBe(0);
+
+    fake.finish(0);
+    await signalClose;
+    expect(proj.destroys()).toBe(1);
+    expect(fake.signals()).toEqual(["SIGTERM"]);
+  });
+
+  test("a signal during startup stops the spawned server and destroys its projection", async () => {
+    ACTIVE_SERVER_CLOSERS.clear();
+    const fake = fakeServer();
+    const proj = fakeBroker();
+    const pending = launchProjectedOpenCodeServer({
+      verifiedBinaryPath: BIN,
+      broker: proj.broker,
+      credentialKind: "opencode_chatgpt_oauth",
+      baseEnv: { PATH: "/usr/bin" },
+      spawnFn: fake.spawnFn,
+      killFn: fake.killFn,
+      termGraceMs: 5,
+    });
+    pending.catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const closing = closeAllServers();
+    fake.finish(0);
+    await closing;
+
+    expect(fake.signals()).toContain("SIGTERM");
+    expect(proj.destroys()).toBe(1);
+    await expect(pending).rejects.toThrow();
+    expect(proj.destroys()).toBe(1);
+    expect(ACTIVE_SERVER_CLOSERS.size).toBe(0);
+  });
+
   test("the projection outlives the process it authenticates", async () => {
     const fake = fakeServer();
     const order: string[] = [];
