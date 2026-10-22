@@ -49,7 +49,7 @@ import {
   releaseCommitStatusLock,
   settleHeldCommitStatusOnSignal,
 } from "#pr/status";
-import { createSignalHandler } from "./signal-handler";
+import { createSignalHandler, settleOnSignal } from "./signal-handler";
 
 export {
   heldCommitStatusLock,
@@ -128,7 +128,10 @@ import { startPanelRenderer } from "#ui/progress";
 export { startPanelRenderer };
 
 import { watchCommand } from "#watch/watch";
-import { killAllChildProcesses } from "./execution/spawned-process";
+import {
+  closeAllServers,
+  killAllChildProcesses,
+} from "./execution/spawned-process";
 import { isMachineOnboarded, runWizard } from "./wizard";
 
 // bin/pr-hero.js and the `import.meta.main` guard both go through the exported
@@ -300,17 +303,18 @@ export async function runCli(
   const onSignal = createSignalHandler({
     settle: async () => {
       restoreCursor();
-      try {
-        killAllChildProcesses();
-        await unregisterActiveRun(process.pid);
-      } catch {
-        // Ignore
-      }
       // After killing the children (stop spending first), before exiting: the
       // in-flight lock this process took is released by its holder, or the next
-      // run skips the head for the rest of the 90-minute TTL (#146).
-      await settleHeldCommitStatusOnSignal();
-      await settleHeldAdmissionLedgerOnSignal();
+      // run skips the head for the rest of the 90-minute TTL (#146). The
+      // OpenCode server is closed, not killed: its close() also destroys the
+      // projected credential it runs under.
+      await settleOnSignal({
+        killChildren: killAllChildProcesses,
+        closeServers: closeAllServers,
+        unregisterRun: () => unregisterActiveRun(process.pid),
+        settleCommitStatus: settleHeldCommitStatusOnSignal,
+        settleAdmissionLedger: settleHeldAdmissionLedgerOnSignal,
+      });
     },
     exit: (code) => process.exit(code),
   });

@@ -60,7 +60,7 @@ import {
 } from "../src/cli";
 import { canonicalRemoteId } from "../src/home-preflight";
 import { readLocalIgnoreRules } from "../src/ignore-read";
-import { createSignalHandler } from "../src/signal-handler";
+import { createSignalHandler, settleOnSignal } from "../src/signal-handler";
 
 // ---------------------------------------------------------------------------
 // FakeGh: records every call's argv AND stdin (decoded), in order. Routes
@@ -994,5 +994,45 @@ describe("createSignalHandler", () => {
     release();
     await Promise.all([first, second]);
     expect(events).toEqual(["settle-start", "settle-end", "exit 130"]);
+  });
+});
+
+describe("settleOnSignal", () => {
+  test("the lock and ledger settles start while a slow server is still closing", async () => {
+    let releaseServer: () => void = () => {};
+    const serverGate = new Promise<void>((resolve) => {
+      releaseServer = resolve;
+    });
+    const events: string[] = [];
+    const settling = settleOnSignal({
+      killChildren: () => {
+        events.push("kill");
+      },
+      closeServers: async () => {
+        events.push("close-start");
+        await serverGate;
+        events.push("close-end");
+      },
+      unregisterRun: async () => {
+        events.push("unregister");
+      },
+      settleCommitStatus: async () => {
+        events.push("commit-status");
+      },
+      settleAdmissionLedger: async () => {
+        events.push("ledger");
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual([
+      "kill",
+      "close-start",
+      "unregister",
+      "commit-status",
+      "ledger",
+    ]);
+    releaseServer();
+    await settling;
+    expect(events.at(-1)).toBe("close-end");
   });
 });
