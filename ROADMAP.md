@@ -825,6 +825,56 @@ What is still manual, in the order it should be closed:
    (`fixtures/scale-probe.ts`), and these two results are not in conflict: nothing here says the
    hunter degrades with size, only that a narrowed diff concentrates it.
 
+   **UPDATED 2026-10-06 — sharding WITHOUT an oracle, measured: INCONCLUSIVE by its own
+   pre-registration, and every post-hoc direction points away from sharding.** g2's narrowed arm knew
+   where the bug was. `scripts/shard-probe.ts` removed the oracle: PR 1544 @`27e85937` (45 files, 4947
+   diff lines, golden G4 "stalled audio keeps loading"), lifecycle-v2 hunter, codegraph off, empty
+   priors, `claude-sonnet-5-5` observed on every call. One variable, how much of the diff each hunter
+   call sees: **A** one call over the full diff; **B** five calls over five blind zones (files sorted by
+   path, cut into contiguous line-balanced chunks; the golden's file landed in zone 3 beside one 99-line
+   neighbour); **C** five full-diff calls merged like B, the compute-matched control. Six replicates
+   (`../deep-review/bench/probes/shard-probe-1544.json`, re-score audit beside it as `.audit.json`):
+
+   | arm | G4 hits (judge) | site-aware | findings/run | novel/run | list cost, 6 runs |
+   |---|---|---|---|---|---|
+   | A full, 1 call | 3/6 | 3/6 | 1.67 | 1.17 | $6.55 |
+   | B sharded, 5 calls | 4/6 | 3/6 | 6.50 | 5.00 | $21.21 |
+   | C control, 5 calls | **6/6** | 6/6 | 10.83 | 8.50 | $39.59 |
+
+   **Verdict against the reading pre-registered before any spend** (support: B beats C by ≥3/6; no
+   effect: |B−C| ≤ 1): B−C = −2 hits neither branch, so the result is **inconclusive**. The
+   pre-registration had no branch for C beating B. That gap is for the next pre-registration to close,
+   not a reason to re-read this one.
+
+   **Post-hoc, labelled as such** — what the run shows beside the verdict:
+   1. Narrowing did not lift per-call recall here. The near-narrowed zone-3 call hit 3/6, the single
+      full-diff call 3/6, full-diff calls across C 14/30. g2's 0/8 → 4/8 did not replicate, but the
+      model, tree and base rate all changed at once, so nothing attributes the non-replication.
+   2. The base rate was ~50%, not the 0/3 of runs 531–533 (August sonnet) that the design was sized
+      on. Five calls at p≈0.5 reach ~97%, so C's 6/6 is mostly arithmetic. Measure the base rate under
+      the current model before sizing arms.
+   3. B is not five narrowed hunters. The worktree is full, so a zone changes where a hunter starts,
+      not what it can read: zone 0 (no AudioTrimmer file) found G4 at `AudioTrimmer/index.tsx:516`
+      and `:521`, and zone 2 (Styles only) found it at `:516` once.
+   4. Sharding moves the anchor. B's rep-1 hit is a single finding at `AudioTrimmer/Styles.ts:237`:
+      the right mechanism (a stalled fetch with no backstop), pinned to the spinner's line in the zone
+      it was given. The production gate (`src/compare/floor-test.ts:244`, same path ±25) scores that a
+      miss, hence site-aware B 3/6. Zone 4's two matches anchor in `WaveformStore.ts`, same story.
+   5. Instrument: a full re-score agrees with pass 1 on the hit in 16/16 scored arms. 2 of 18 arms
+      lost scoring to a judge JSON parse error (one bad pair throws the whole arm,
+      `../deep-review/runner/scorer.ts:243`) and were completed from their persisted scorable sets
+      with the same `scoreTree`. findings/novel above come from that re-score, the one pass covering
+      all 18 arms.
+   6. Per replicate, list basis: A ~$1.09, B ~$3.54, C ~$6.60 ($67.35 total, $0 cash under
+      subscription auth). By binomial extrapolation, not observation, three full-diff calls (~$3.3)
+      reach ~87% at p≈0.5 — above B's 4/6 at B's price.
+
+   **Limits, stated as loudly as the result**: one tree, one golden, n=6; the model differs from every
+   earlier measurement on this tree; cross-zone defects are untested (no corpus has a golden spanning
+   files); B and C merge findings without dedupe, so novel/run counts repeats. **What it changes**:
+   nothing in the engine. On this tree sharding has no evidence behind it; the lever the run points at
+   is replicates of the full-diff hunter, which needs no zoning and is the cheaper follow-up to test.
+
 6. **Speak where the conversation happens — the inline surface.** NOT BUILT. Named 2026-08-11, and
    **RE-SCOPED 2026-08-12 after measuring Greptile instead of theorising about it** (musive PR 1583).
    Today pr-hero posts once and leaves: `--post` creates or PATCHes one marked issue comment, and that
