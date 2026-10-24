@@ -626,6 +626,7 @@ const COVERAGE_REASON_LABEL: Record<
   "once-per-pr": "once_per_pr policy allows one automatic review",
   "below-threshold": "prior findings below the re-review score floor",
   "low-risk-delta": "delta touches only low-risk paths",
+  stopped: "automatic reviews stopped by a maintainer",
 };
 
 function buildCoverageSkipComment(data: SkipCoverageSummary): string {

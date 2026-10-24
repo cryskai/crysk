@@ -502,6 +502,7 @@ pr-hero review --pr 42 --dry-run          # prints the gate verdict, spends noth
 pr-hero review --pr 42 --force            # local: review it anyway (does NOT skip the cost prompt)
 gh pr comment 42 --body "/pr-hero review"  # CI: same forced re-review, on the Actions runner
 gh pr comment 42 --body "/pr-hero override"  # CI: unlock a red gate on this head, no review, $0
+gh pr comment 42 --body "/pr-hero stop"      # CI: skip automatic reviews on later pushes, until /pr-hero review
 pr-hero review --pr 42 --max-changed-lines 0   # 0 disables that limit entirely
 pr-hero watch add --max-changed-lines 800       # per-repo threshold for the watcher
 ```

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AdmissionRecord } from "#ci/admission-ledger";
 import {
+  activeStopAuthors,
   CI_REVIEW_POLICY_SCHEMA_VERSION,
   type CiReviewAdmissionInput,
   type CiReviewPolicy,
@@ -1385,5 +1386,75 @@ describe("a forced first review's summary reads as zero automatic reviews", () =
     expect(nextStateReviewCount({ existingSummaryId: null, state: null })).toBe(
       1,
     );
+  });
+});
+
+describe("evaluateCiReviewAdmission — stopped", () => {
+  const firstReview = {
+    currentHead: HEAD_A,
+    summaryHead: null,
+    markerSeen: false,
+    reviewCount: 0,
+    state: null,
+    admission: null,
+    postedFindings: null,
+    policy: DEFAULT_POLICY,
+  };
+
+  test("a stop skips even a PR's first review", () => {
+    const verdict = evaluateCiReviewAdmission(
+      admissionInput({ ...firstReview, stopped: true }),
+    );
+    expect(verdict.action === "skip" && verdict.reason).toBe("stopped");
+  });
+
+  test("an already reviewed head keeps its same-head reason under a stop", () => {
+    const verdict = evaluateCiReviewAdmission(
+      admissionInput({
+        ...firstReview,
+        summaryHead: HEAD_A,
+        markerSeen: true,
+        reviewCount: 1,
+        admission: parseCiAdmissionBlock(
+          admissionBody({ blocking: 2, advisory: 0 }),
+        ),
+        stopped: true,
+      }),
+    );
+    expect(verdict.action === "skip" && verdict.reason).toBe("same-head");
+  });
+
+  test("an explicit forced run beats a stop", () => {
+    expect(
+      evaluateCiReviewAdmission(
+        admissionInput({ ...firstReview, stopped: true, forceOverride: true }),
+      ),
+    ).toEqual({ action: "run" });
+  });
+});
+
+describe("activeStopAuthors", () => {
+  const c = (user: string, body: string) => ({ user, body });
+
+  test("collects stop authors after the last review command, newest first, once each", () => {
+    expect(
+      activeStopAuthors([
+        c("old", "/pr-hero stop"),
+        c("maint", "/pr-hero review --full"),
+        c("a", "/pr-hero stop"),
+        c("b", "  /pr-hero stop\n"),
+        c("a", "/pr-hero stop"),
+        c("x", "looks good"),
+      ]),
+    ).toEqual(["a", "b"]);
+  });
+
+  test("ignores near misses and returns nothing without a stop", () => {
+    expect(
+      activeStopAuthors([
+        c("a", "/pr-hero stop please"),
+        c("b", "/pr-hero  stop"),
+      ]),
+    ).toEqual([]);
   });
 });

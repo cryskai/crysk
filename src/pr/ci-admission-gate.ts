@@ -26,6 +26,7 @@ import {
 } from "#ci/gates";
 import { formatWorkflowCommand } from "#ci/reporter";
 import {
+  activeStopAuthors,
   type CiReviewPolicy,
   ciReviewManualRequiredDetail,
   ciReviewPolicyHash,
@@ -60,6 +61,7 @@ import {
   fetchCommitStatuses,
   fetchPrComments,
   fetchPrReviewComments,
+  ghCollaboratorPermission,
   ghCompareChangedFilesWithStatus,
   ghPrHeroWorkflowRunHeads,
   listAdmissionCheckRuns,
@@ -252,6 +254,11 @@ export async function evaluateCiAdmissionGate(input: {
         );
       }
     }
+    const stopped = await stoppedByMaintainer(
+      operatorRoot,
+      issueComments,
+      spawnFn,
+    );
     const admissionVerdict = evaluateCiReviewAdmission({
       currentHead: headSha,
       summaryHead,
@@ -265,6 +272,7 @@ export async function evaluateCiAdmissionGate(input: {
       deltaTouchesPriorFindings: deltaTouchesPriorFindingsFlag,
       deltaRisk,
       authorityFailOpen,
+      stopped,
     });
     const admissionContext: AdmissionContext = {
       currentHead: headSha,
@@ -273,7 +281,14 @@ export async function evaluateCiAdmissionGate(input: {
       policyHash: ciPolicyHash,
       deltaRisk,
     };
-    const observeOnly = config.ci_admission_observe_only === true;
+    // WHY a stop skips even in observe-only mode: observe-only is a rollout
+    // setting for automatic decisions, and a stop is a maintainer's explicit one.
+    const observeOnly =
+      config.ci_admission_observe_only === true &&
+      !(
+        admissionVerdict.action === "skip" &&
+        admissionVerdict.reason === "stopped"
+      );
     if (
       observeOnly &&
       (admissionVerdict.action === "skip" ||
@@ -571,4 +586,31 @@ async function readBeforeReservation(input: {
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Whether a write-access maintainer's `/pr-hero stop` is in force. Each still
+// active stop author is checked newest first, and one maintainer is enough.
+// Fails open: a stop whose author's permission cannot be read does not count,
+// so the review runs. A wrong skip loses a review someone wanted; a wrong run
+// only costs one.
+async function stoppedByMaintainer(
+  operatorRoot: string,
+  issueComments: readonly { user: string; body: string }[],
+  spawnFn: typeof Bun.spawn | undefined,
+): Promise<boolean> {
+  for (const login of activeStopAuthors(issueComments)) {
+    const permission = await ghCollaboratorPermission(operatorRoot, login, {
+      spawnFn,
+    });
+    if (permission === "admin" || permission === "write") return true;
+    if (permission === null) {
+      log(
+        formatWorkflowCommand(
+          "warning",
+          `Could not read the permission of ${login}, who posted /pr-hero stop, so the stop does not count and the review runs.`,
+        ),
+      );
+    }
+  }
+  return false;
 }

@@ -1577,3 +1577,210 @@ describe("recordCiConfigErrorSkip — a created reservation is always settled", 
     ).toBe(true);
   });
 });
+
+describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
+  // The prior review left 3 blocking findings (score 6, above the default
+  // re-review floor of 4) and a code delta, so without a stop this head runs.
+  const priorSummary = summaryComment(
+    1,
+    HEAD_A,
+    { blocking: 3, advisory: 0 },
+    1,
+  );
+  const comment = (id: number, user: string, body: string) => ({
+    id,
+    user,
+    body,
+  });
+  const permission = (login: string, response: ScriptEntry["response"]) => ({
+    match: ["collaborators", login, "permission"],
+    response,
+  });
+
+  async function runGate(
+    comments: { id: number; user: string; body: string }[],
+    extra: ScriptEntry[],
+    config: LocalConfig = EMPTY_LOCAL_CONFIG,
+    calls?: string[][],
+  ) {
+    const spawnFn = makeFakeGh(
+      [
+        EMPTY_CHECK_RUNS,
+        {
+          match: ["issues", "comments"],
+          response: {
+            stdout: `${comments.map((c) => JSON.stringify(c)).join("\n")}\n`,
+          },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/app.ts"),
+        ...extra,
+      ],
+      calls,
+    );
+    const recorded: string[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
+      () =>
+        evaluateCiAdmissionGate({
+          ciMode: "advisory",
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_B,
+          config,
+          isCi: true,
+          options: baseOptions(),
+          spawnFn,
+          recordSkip: async (skip) => {
+            recorded.push(skip.reason);
+          },
+        }),
+    );
+    const outputs = await readFile(outputPath, "utf8").catch(() => "");
+    return { exitCode: result.exitCode, recorded, outputs };
+  }
+
+  const STOP_REASON =
+    "a maintainer posted /pr-hero stop; /pr-hero review reviews this head";
+
+  test("without a stop, this head runs (the baseline every case below changes)", async () => {
+    const result = await runGate([priorSummary], []);
+    expect(result.exitCode).toBeUndefined();
+    expect(result.recorded).toEqual([]);
+  });
+
+  test("a stop from a write-access maintainer skips the review and records why", async () => {
+    const result = await runGate(
+      [priorSummary, comment(2, "maint", "/pr-hero stop")],
+      [permission("maint", { stdout: "write\n" })],
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.recorded).toEqual([STOP_REASON]);
+    expect(result.outputs).toContain("status=skipped-coverage");
+  });
+
+  test("an admin's stop counts too", async () => {
+    const result = await runGate(
+      [priorSummary, comment(2, "owner", "/pr-hero stop")],
+      [permission("owner", { stdout: "admin\n" })],
+    );
+    expect(result.recorded).toEqual([STOP_REASON]);
+  });
+
+  test("a stop from a read-only user does not count, so the review runs", async () => {
+    const result = await runGate(
+      [priorSummary, comment(2, "visitor", "/pr-hero stop")],
+      [permission("visitor", { stdout: "read\n" })],
+    );
+    expect(result.exitCode).toBeUndefined();
+    expect(result.recorded).toEqual([]);
+  });
+
+  test("a stop from a non-collaborator (404) does not count", async () => {
+    const result = await runGate(
+      [priorSummary, comment(2, "stranger", "/pr-hero stop")],
+      [permission("stranger", { stderr: "HTTP 404: Not Found", exitCode: 1 })],
+    );
+    expect(result.exitCode).toBeUndefined();
+    expect(result.recorded).toEqual([]);
+  });
+
+  test("a failed permission lookup fails open: the review runs", async () => {
+    const result = await runGate(
+      [priorSummary, comment(2, "maint", "/pr-hero stop")],
+      [permission("maint", { stderr: "HTTP 502: Bad Gateway", exitCode: 1 })],
+    );
+    expect(result.exitCode).toBeUndefined();
+    expect(result.recorded).toEqual([]);
+  });
+
+  test("a stranger's stop does not hide an older maintainer stop", async () => {
+    const result = await runGate(
+      [
+        priorSummary,
+        comment(2, "maint", "/pr-hero stop"),
+        comment(3, "stranger", "/pr-hero stop"),
+      ],
+      [
+        permission("stranger", { stdout: "read\n" }),
+        permission("maint", { stdout: "write\n" }),
+      ],
+    );
+    expect(result.recorded).toEqual([STOP_REASON]);
+  });
+
+  test("a review command after the stop lifts it, without a permission lookup", async () => {
+    const calls: string[][] = [];
+    const result = await runGate(
+      [
+        priorSummary,
+        comment(2, "maint", "/pr-hero stop"),
+        comment(3, "maint", "/pr-hero review"),
+      ],
+      [permission("maint", { stdout: "write\n" })],
+      EMPTY_LOCAL_CONFIG,
+      calls,
+    );
+    expect(result.exitCode).toBeUndefined();
+    expect(result.recorded).toEqual([]);
+    expect(calls.some((argv) => argv.join(" ").includes("collaborators"))).toBe(
+      false,
+    );
+  });
+
+  test("a recheck command after the stop lifts it too", async () => {
+    const result = await runGate(
+      [
+        priorSummary,
+        comment(2, "maint", "/pr-hero stop"),
+        comment(3, "maint", "/pr-hero recheck"),
+      ],
+      [permission("maint", { stdout: "write\n" })],
+    );
+    expect(result.exitCode).toBeUndefined();
+  });
+
+  test("a stop posted after a review command is in force again", async () => {
+    const result = await runGate(
+      [
+        priorSummary,
+        comment(2, "maint", "/pr-hero review"),
+        comment(3, "maint", "/pr-hero stop"),
+      ],
+      [permission("maint", { stdout: "write\n" })],
+    );
+    expect(result.recorded).toEqual([STOP_REASON]);
+  });
+
+  test("only the exact command stops: '/pr-hero stop please' does not", async () => {
+    const result = await runGate(
+      [priorSummary, comment(2, "maint", "/pr-hero stop please")],
+      [permission("maint", { stdout: "write\n" })],
+    );
+    expect(result.exitCode).toBeUndefined();
+  });
+
+  test("a stop outranks an exhausted budget: it skips instead of asking for a manual review", async () => {
+    const result = await runGate(
+      [
+        summaryComment(1, HEAD_A, { blocking: 3, advisory: 0 }, 2),
+        comment(2, "maint", "/pr-hero stop"),
+      ],
+      [permission("maint", { stdout: "write\n" })],
+    );
+    expect(result.recorded).toEqual([STOP_REASON]);
+    expect(result.outputs).toContain("status=skipped-coverage");
+  });
+
+  test("observe-only mode still honours a stop", async () => {
+    const result = await runGate(
+      [priorSummary, comment(2, "maint", "/pr-hero stop")],
+      [permission("maint", { stdout: "write\n" })],
+      { ...EMPTY_LOCAL_CONFIG, ci_admission_observe_only: true },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.recorded).toEqual([STOP_REASON]);
+  });
+});

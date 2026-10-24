@@ -281,6 +281,7 @@ export type AdmissionStatusReason =
   | "once-per-pr"
   | "below-threshold"
   | "low-risk-delta"
+  | "stopped"
   | "max-attempts-exhausted"
   | "manual-only-policy";
 
@@ -307,7 +308,11 @@ export interface CarriedVerdict {
   statuses: readonly CommitStatusFact[];
 }
 
-type CarriedReason = "once-per-pr" | "below-threshold" | "low-risk-delta";
+type CarriedReason =
+  | "once-per-pr"
+  | "below-threshold"
+  | "low-risk-delta"
+  | "stopped";
 
 function isCarriedReason(
   reason: AdmissionStatusReason,
@@ -315,7 +320,8 @@ function isCarriedReason(
   return (
     reason === "once-per-pr" ||
     reason === "below-threshold" ||
-    reason === "low-risk-delta"
+    reason === "low-risk-delta" ||
+    reason === "stopped"
   );
 }
 
@@ -367,6 +373,7 @@ const CARRY_REASONS: readonly CarriedReason[] = [
   "once-per-pr",
   "below-threshold",
   "low-risk-delta",
+  "stopped",
 ];
 
 function finishedSuccessMatches(description: string): boolean {
@@ -533,6 +540,7 @@ export function admissionSkipDecision(
     case "once-per-pr":
     case "below-threshold":
     case "low-risk-delta":
+    case "stopped":
       break;
   }
   const label = ciReviewSkipLabel(input.reason);

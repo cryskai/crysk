@@ -40,6 +40,11 @@ export const RECHECK_COMMAND = "/pr-hero recheck";
 // The human escape hatch (odd/tasks/agent-first-ci.md, S8). Exact, like the review
 // command: a loose match would let a quoted reply unlock a gate.
 export const OVERRIDE_COMMAND = "/pr-hero override";
+// Stops automatic reviews on the PR until the next review or recheck command.
+// It starts no workflow run: CI admission reads it on the next push and checks
+// the author's permission there (activeStopAuthors, ci-admission-gate.ts).
+// Exact, like the other commands.
+export const STOP_COMMAND = "/pr-hero stop";
 
 // A GitHub login: letters, digits, hyphens and underscores (an Enterprise Managed
 // User login is `handle_shortcode`), plus the `[bot]` suffix an app posts under. The
