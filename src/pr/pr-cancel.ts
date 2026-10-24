@@ -32,16 +32,27 @@ export interface WorkflowRunFact {
   head_sha: string;
   path: string;
   html_url: string;
+  display_title: string;
   pull_requests: readonly { number: number }[];
 }
 
-const CANCELABLE_STATUSES = new Set<CancelledRunFact["previous_status"]>([
+// One query each. A single recent page of every workflow in the repo drops an
+// in-flight pr-hero run once busier workflows fill it.
+export const CANCELABLE_RUN_STATUSES = [
   "queued",
   "in_progress",
   "waiting",
   "requested",
   "pending",
-]);
+] as const;
+
+const CANCELABLE_STATUSES = new Set<string>(CANCELABLE_RUN_STATUSES);
+
+// `run-name` on the workflow. A comment run's head_sha is the default branch,
+// and its pull_requests array stays empty, so the title is the attribution.
+export function commentRunDisplayTitle(pr: number): string {
+  return `pr #${pr}`;
+}
 
 const RUN_ID_IN_ACTIONS_URL = /\/actions\/runs\/(\d+)(?:\/|$|\?|#)/;
 
@@ -65,6 +76,7 @@ function isCancelableStatus(
 export function selectCancelableRuns(input: {
   pr: number;
   head: string;
+  prTitle: string;
   gateTargetUrl: string | null;
   gatePendingInFlight: boolean;
   workflowRuns: readonly WorkflowRunFact[];
@@ -82,8 +94,12 @@ export function selectCancelableRuns(input: {
       run.event === "pull_request" &&
       (run.head_sha === input.head ||
         run.pull_requests.some((pull) => pull.number === input.pr));
+    // head_sha on issue_comment is the default branch tip, not this PR.
     const onIssueComment =
-      run.event === "issue_comment" && (run.head_sha === input.head || gateRun);
+      run.event === "issue_comment" &&
+      (gateRun ||
+        run.display_title === commentRunDisplayTitle(input.pr) ||
+        (input.prTitle.length > 0 && run.display_title === input.prTitle));
     if (!onPullRequest && !onIssueComment) continue;
     if (byId.has(run.id)) continue;
     byId.set(run.id, {

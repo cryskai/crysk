@@ -785,6 +785,13 @@ function freshOverrideComment(
   return newest;
 }
 
+export function overrideDeniedByLaterOutcome(
+  issueComments: readonly PrStatusComment[],
+  overrideCommentId: number,
+): boolean {
+  return laterOutcomeDenies(overrideCommentId, issueComments);
+}
+
 function laterOutcomeDenies(
   overrideId: number,
   issueComments: readonly PrStatusComment[],

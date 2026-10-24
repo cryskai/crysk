@@ -24,6 +24,7 @@ function run(
     head_sha: HEAD,
     path: ".github/workflows/pr-hero.yml",
     html_url: url(overrides.id),
+    display_title: "",
     pull_requests: [],
     ...overrides,
   };
@@ -54,6 +55,7 @@ describe("selectCancelableRuns", () => {
     const selected = selectCancelableRuns({
       pr: 12,
       head: HEAD,
+      prTitle: "the title",
       gateTargetUrl: "https://github.com/o/r/actions/runs/50/attempts/2",
       gatePendingInFlight: true,
       workflowRuns: [
@@ -70,7 +72,27 @@ describe("selectCancelableRuns", () => {
           head_sha: OTHER,
           pull_requests: [{ number: 99 }],
         }),
-        run({ id: 15, status: "queued", event: "issue_comment" }),
+        run({
+          id: 15,
+          status: "queued",
+          event: "issue_comment",
+          head_sha: OTHER,
+          display_title: "the title",
+        }),
+        run({
+          id: 16,
+          status: "queued",
+          event: "issue_comment",
+          head_sha: HEAD,
+          display_title: "another pull request",
+        }),
+        run({
+          id: 17,
+          status: "queued",
+          event: "issue_comment",
+          head_sha: OTHER,
+          display_title: "pr #12",
+        }),
         run({
           id: 50,
           event: "issue_comment",
@@ -94,6 +116,12 @@ describe("selectCancelableRuns", () => {
         html_url: url(15),
       },
       {
+        run_id: 17,
+        previous_status: "queued",
+        settled: false,
+        html_url: url(17),
+      },
+      {
         run_id: 20,
         previous_status: "queued",
         settled: false,
@@ -112,10 +140,16 @@ describe("selectCancelableRuns", () => {
     const selected = selectCancelableRuns({
       pr: 12,
       head: HEAD,
+      prTitle: "the title",
       gateTargetUrl: url(50),
       gatePendingInFlight: false,
       workflowRuns: [
-        run({ id: 15, event: "issue_comment" }),
+        run({
+          id: 15,
+          event: "issue_comment",
+          head_sha: OTHER,
+          display_title: "pr #12",
+        }),
         run({
           id: 50,
           event: "issue_comment",

@@ -72,7 +72,7 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))
     concurrency:
       group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
-      cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && (github.event.comment.body == '/pr-hero override' || github.event.comment.body == '/pr-hero override\r\n' || github.event.comment.body == '/pr-hero override\n') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -108,7 +108,7 @@ Three choices in the job are load-bearing:
   push, a comment that does not start with `/pr-hero review`, and a comment whose author GitHub does not
   associate with the repository as `OWNER`, `MEMBER` or `COLLABORATOR` each get a unique group, so
   those jobs never cancel or replace a review.
-- **A push cancels, and so does an exact `/pr-hero override` from an OWNER, MEMBER, or COLLABORATOR; cancel-in-progress is an exact body match, so a near-miss such as `/pr-hero override please` queues and cannot kill a paid in-flight review.** The `if:` filter is a prefix, so a near-miss comment ("/pr-hero review
+- **Only a push cancels.** An `/pr-hero override` comment does not: `cancel-in-progress` runs before the job can check write access or that the pull request comes from this repository, so a refused override would kill the paid review and leave the gate at `PRH-CANCELLED`. `pr-hero cancel` stops the run through the API, which GitHub authorizes, then posts the override after the run has completed. The `if:` filter is a prefix, so a near-miss comment ("/pr-hero review
   please") from an associated author lands in the pull request's group too; cancelling there would kill
   a paid review in flight before the action ignores the comment. A comment run queues instead. A push
   never waits: it cancels whatever is running, a forced review included, because that head is gone;

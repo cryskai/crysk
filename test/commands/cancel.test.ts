@@ -88,6 +88,7 @@ function workflowRun(head: string) {
     head_sha: head,
     path: ".github/workflows/pr-hero.yml",
     html_url: RUN_URL,
+    display_title: "t",
     pull_requests: [{ number: 12 }],
   };
 }
@@ -120,6 +121,19 @@ const emptyStatuses: ScriptEntry = {
   responses: [{ stdout: "" }],
 };
 
+const overrideCanLand: ScriptEntry[] = [
+  { match: [".head.repo.fork"], responses: [{ stdout: "false\n" }] },
+  { match: [".permissions.push"], responses: [{ stdout: "true\n" }] },
+  {
+    match: ["vnd.github.raw"],
+    responses: [{ stdout: "on:\n  issue_comment:\n    types: [created]\n" }],
+  },
+];
+
+function five(payload: Scripted): Scripted[] {
+  return [payload, payload, payload, payload, payload];
+}
+
 function baseScript(extra: ScriptEntry[]): ScriptEntry[] {
   return [
     repoView,
@@ -129,7 +143,7 @@ function baseScript(extra: ScriptEntry[]): ScriptEntry[] {
     },
     emptyStatuses,
     {
-      match: ["per_page=30"],
+      match: ["per_page=100"],
       responses: [runsPayload(HEAD)],
     },
     {
@@ -278,6 +292,7 @@ describe("runCancelCommand", () => {
     const { spawnFn, calls } = makeFakeGh([
       repoView,
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
+      ...overrideCanLand,
       {
         match: [`commits/${HEAD}/status`],
         responses: [
@@ -286,7 +301,7 @@ describe("runCancelCommand", () => {
           { stdout: ndjson([overrideGate]) },
         ],
       },
-      { match: ["per_page=30"], responses: [runsPayload(HEAD)] },
+      { match: ["per_page=100"], responses: [runsPayload(HEAD)] },
       {
         match: ["run", "cancel", String(RUN_ID)],
         responses: [{ stdout: "" }],
@@ -364,8 +379,9 @@ describe("runCancelCommand", () => {
         match: ["pr", "view", "12"],
         responses: [prView(HEAD), prView(OTHER)],
       },
+      ...overrideCanLand,
       emptyStatuses,
-      { match: ["per_page=30"], responses: [runsPayload(HEAD)] },
+      { match: ["per_page=100"], responses: [runsPayload(HEAD)] },
       {
         match: ["run", "cancel", String(RUN_ID)],
         responses: [{ stdout: "" }],
@@ -391,6 +407,11 @@ describe("runCancelCommand", () => {
     ).rejects.toBeInstanceOf(CliError);
     expect(written).toEqual([]);
     expect(calls.some((call) => call.argv.includes("comment"))).toBe(false);
+    expect(
+      calls.some(
+        (call) => call.argv.includes("cancel") && call.argv.includes("run"),
+      ),
+    ).toBe(true);
   });
 
   test("polls up to 15s every 3s when the head was just pushed and no run is visible yet", async () => {
@@ -399,12 +420,8 @@ describe("runCancelCommand", () => {
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
       emptyStatuses,
       {
-        match: ["per_page=30"],
-        responses: [runsPayload(null), runsPayload(HEAD)],
-      },
-      {
-        match: ["committer.date"],
-        responses: [{ stdout: `${new Date(NOW - 5_000).toISOString()}\n` }],
+        match: ["per_page=100"],
+        responses: [...five(runsPayload(null)), runsPayload(HEAD)],
       },
       {
         match: ["run", "cancel", String(RUN_ID)],
@@ -441,16 +458,12 @@ describe("runCancelCommand", () => {
     ).toBe(true);
   });
 
-  test("does not poll when the head commit is older than 15s and nothing is cancelable", async () => {
+  test("polls the startup grace on --wait even when no run is visible yet", async () => {
     const { spawnFn, calls } = makeFakeGh([
       repoView,
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
       emptyStatuses,
-      { match: ["per_page=30"], responses: [runsPayload(null)] },
-      {
-        match: ["committer.date"],
-        responses: [{ stdout: `${new Date(NOW - 60_000).toISOString()}\n` }],
-      },
+      { match: ["per_page=100"], responses: [runsPayload(null)] },
       emptyComments,
       emptyReviewComments,
     ]);
@@ -469,7 +482,7 @@ describe("runCancelCommand", () => {
       out: (text) => written.push(text),
     });
     expect(code).toBe(0);
-    expect(sleeps).toEqual([]);
+    expect(sleeps).toEqual([3_000, 3_000, 3_000, 3_000, 3_000]);
     expect(JSON.parse(written[0] ?? "").cancelled_runs).toEqual([]);
     expect(
       calls.some(
@@ -477,8 +490,8 @@ describe("runCancelCommand", () => {
       ),
     ).toBe(false);
     expect(
-      calls.filter((call) => call.argv.join(" ").includes("per_page=30")),
-    ).toHaveLength(1);
+      calls.some((call) => call.argv.join(" ").includes("committer.date")),
+    ).toBe(false);
   });
 
   test("stops the startup poll at 15s when no run appears", async () => {
@@ -486,11 +499,7 @@ describe("runCancelCommand", () => {
       repoView,
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
       emptyStatuses,
-      { match: ["per_page=30"], responses: [runsPayload(null)] },
-      {
-        match: ["committer.date"],
-        responses: [{ stdout: `${new Date(NOW - 1_000).toISOString()}\n` }],
-      },
+      { match: ["per_page=100"], responses: [runsPayload(null)] },
       emptyComments,
       emptyReviewComments,
     ]);
@@ -513,14 +522,23 @@ describe("runCancelCommand", () => {
     expect(JSON.parse(written[0] ?? "").cancelled_runs).toEqual([]);
   });
 
-  test("throws CliError when the committer date is unreadable", async () => {
-    const { spawnFn } = makeFakeGh([
-      repoView,
-      { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
-      emptyStatuses,
-      { match: ["per_page=30"], responses: [runsPayload(null)] },
-      { match: ["committer.date"], responses: [{ stdout: "nope\n" }] },
-    ]);
+  test("does not treat a 409 inside a run id as already settled", async () => {
+    const { spawnFn } = makeFakeGh(
+      baseScript([]).map((entry) =>
+        entry.match.includes("cancel")
+          ? {
+              ...entry,
+              responses: [
+                {
+                  exitCode: 1,
+                  stderr:
+                    "HTTP 403: https://api.github.com/repos/acme/widgets/actions/runs/12409/cancel\n",
+                },
+              ],
+            }
+          : entry,
+      ),
+    );
     const written: string[] = [];
     await expect(
       runCancelCommand({
@@ -533,7 +551,7 @@ describe("runCancelCommand", () => {
         sleepFn: async () => {},
         out: (text) => written.push(text),
       }),
-    ).rejects.toBeInstanceOf(CliError);
+    ).rejects.toThrow(/gh run cancel 123 failed/);
     expect(written).toEqual([]);
   });
 
@@ -555,17 +573,14 @@ describe("runCancelCommand", () => {
     const { spawnFn, calls } = makeFakeGh([
       repoView,
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
+      ...overrideCanLand,
       {
         match: [`commits/${HEAD}/status`],
         responses: [{ stdout: "" }, { stdout: ndjson([overrideGate]) }],
       },
       {
-        match: ["per_page=30"],
-        responses: [runsPayload(null), runsPayload(HEAD)],
-      },
-      {
-        match: ["committer.date"],
-        responses: [{ stdout: `${new Date(NOW - 2_000).toISOString()}\n` }],
+        match: ["per_page=100"],
+        responses: [...five(runsPayload(null)), runsPayload(HEAD)],
       },
       {
         match: ["run", "cancel", String(RUN_ID)],
@@ -614,8 +629,9 @@ describe("runCancelCommand", () => {
     const { spawnFn, calls } = makeFakeGh([
       repoView,
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
+      ...overrideCanLand,
       emptyStatuses,
-      { match: ["per_page=30"], responses: [runsPayload(HEAD)] },
+      { match: ["per_page=100"], responses: [runsPayload(HEAD)] },
       {
         match: ["run", "cancel", String(RUN_ID)],
         responses: [{ stdout: "" }],
@@ -653,6 +669,7 @@ describe("runCancelCommand", () => {
     const { spawnFn } = makeFakeGh([
       repoView,
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
+      ...overrideCanLand,
       {
         match: [`commits/${HEAD}/status`],
         responses: [
@@ -670,7 +687,7 @@ describe("runCancelCommand", () => {
           },
         ],
       },
-      { match: ["per_page=30"], responses: [runsPayload(HEAD)] },
+      { match: ["per_page=100"], responses: [runsPayload(HEAD)] },
       {
         match: ["run", "cancel", String(RUN_ID)],
         responses: [{ stdout: "" }],
@@ -686,16 +703,17 @@ describe("runCancelCommand", () => {
       {
         match: ["issues/12/comments"],
         responses: [
+          { stdout: "" },
           {
             stdout: ndjson([
               {
-                id: 7,
+                id: 9,
                 user: "maintainer",
                 body: "/pr-hero override",
                 created_at: new Date(NOW - 1_000).toISOString(),
               },
               {
-                id: 8,
+                id: 10,
                 user: "github-actions[bot]",
                 body: outcome,
                 created_at: new Date(NOW - 100).toISOString(),
@@ -720,6 +738,93 @@ describe("runCancelCommand", () => {
       }),
     ).rejects.toThrow(/denied/);
     expect(written).toEqual([]);
+  });
+
+  test("refuses --override on a fork before cancelling", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      repoView,
+      { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
+      { match: [".head.repo.fork"], responses: [{ stdout: "true\n" }] },
+    ]);
+    const written: string[] = [];
+    await expect(
+      runCancelCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 12,
+        json: true,
+        override: true,
+        spawnFn,
+        nowMs: NOW,
+        sleepFn: async () => {},
+        out: (text) => written.push(text),
+      }),
+    ).rejects.toThrow(/from a fork/);
+    expect(written).toEqual([]);
+    expect(
+      calls.some(
+        (call) => call.argv.includes("cancel") && call.argv.includes("run"),
+      ),
+    ).toBe(false);
+  });
+
+  test("refuses --override without write access before cancelling", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      repoView,
+      { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
+      { match: [".head.repo.fork"], responses: [{ stdout: "false\n" }] },
+      { match: [".permissions.push"], responses: [{ stdout: "false\n" }] },
+    ]);
+    const written: string[] = [];
+    await expect(
+      runCancelCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 12,
+        json: true,
+        override: true,
+        spawnFn,
+        nowMs: NOW,
+        sleepFn: async () => {},
+        out: (text) => written.push(text),
+      }),
+    ).rejects.toThrow(/needs write access/);
+    expect(written).toEqual([]);
+    expect(
+      calls.some(
+        (call) => call.argv.includes("cancel") && call.argv.includes("run"),
+      ),
+    ).toBe(false);
+  });
+
+  test("refuses --override when the workflow has no issue_comment trigger", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      repoView,
+      { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
+      { match: [".head.repo.fork"], responses: [{ stdout: "false\n" }] },
+      { match: [".permissions.push"], responses: [{ stdout: "true\n" }] },
+      {
+        match: ["vnd.github.raw"],
+        responses: [{ stdout: "on:\n  pull_request:\n" }],
+      },
+    ]);
+    const written: string[] = [];
+    await expect(
+      runCancelCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 12,
+        json: true,
+        override: true,
+        spawnFn,
+        nowMs: NOW,
+        sleepFn: async () => {},
+        out: (text) => written.push(text),
+      }),
+    ).rejects.toThrow(/no issue_comment/);
+    expect(written).toEqual([]);
+    expect(
+      calls.some(
+        (call) => call.argv.includes("cancel") && call.argv.includes("run"),
+      ),
+    ).toBe(false);
   });
 
   test("without --json, stdout stays empty", async () => {

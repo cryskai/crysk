@@ -89,7 +89,9 @@ const WRITER_ASSOCIATION = `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]
 // T6 (S8): the group also admits `/pr-hero override` from the same associations.
 // S9's cancel rule, not this group, decides whether that run cancels or queues.
 const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero recheck') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
-const PUSH_OR_EXACT_OVERRIDE_CANCEL = `\${{ github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && (github.event.comment.body == '/pr-hero override' || github.event.comment.body == '/pr-hero override\\r\\n' || github.event.comment.body == '/pr-hero override\\n') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) }}`;
+const PUSH_ONLY_CANCEL = `\${{ github.event_name == 'pull_request' }}`;
+const PARSED_COMMENT_RUN_NAME = `pr #\${{ github.event.pull_request.number || github.event.issue.number }}`;
+const COMMENT_RUN_NAME = `run-name: "${PARSED_COMMENT_RUN_NAME}"`;
 
 describe("generateCiWorkflowTemplate (pure)", () => {
   test("produces syntactically valid YAML", () => {
@@ -145,14 +147,18 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     ["scaffolded", scaffolded],
     ["this repo's own", own],
   ])(
-    "the %s workflow's concurrency is per job and per pull request, and a push or an exact override cancels",
+    "the %s workflow's concurrency is per job and per pull request, and only a push cancels",
     (_label, template) => {
       const parsed = parseWorkflow(template());
       expect(parsed.concurrency).toBeUndefined();
       expect(parsed.jobs.review?.concurrency).toEqual({
         group: REVIEW_CONCURRENCY_GROUP,
-        "cancel-in-progress": PUSH_OR_EXACT_OVERRIDE_CANCEL,
+        "cancel-in-progress": PUSH_ONLY_CANCEL,
       });
+      expect(template()).toContain(COMMENT_RUN_NAME);
+      expect(
+        (parseWorkflow(template()) as { "run-name"?: string })["run-name"],
+      ).toBe(PARSED_COMMENT_RUN_NAME);
     },
   );
 

@@ -11,6 +11,7 @@ import {
   POSTING_GH_TIMEOUT_MS,
 } from "#pr/pr";
 import {
+  CANCELABLE_RUN_STATUSES,
   type CancelledRunFact,
   PR_CANCEL_SCHEMA,
   type PrCancelJson,
@@ -20,11 +21,11 @@ import {
 } from "#pr/pr-cancel";
 import {
   buildPrStatus,
+  overrideDeniedByLaterOutcome,
   type PrStatusComment,
   type PrStatusJson,
   STATUS_WAIT_MAX_MS,
   STATUS_WAIT_POLL_INTERVAL_MS,
-  shouldWaitPrStatus,
 } from "#pr/pr-status";
 import { resolvePrTarget } from "#pr/preflight";
 import type { CliOptions } from "#review/preflight";
@@ -93,6 +94,7 @@ export async function runCancelCommand(input: {
     await ghPrView(operatorRoot, pr, { spawnFn, timeoutMs: viewTimeoutMs }),
   );
   const headSha = target.headSha;
+  const prTitle = target.title;
   const slug = await ghRepoNameWithOwner(operatorRoot, {
     spawnFn,
     timeoutMs: ghTimeoutMs,
@@ -124,24 +126,25 @@ export async function runCancelCommand(input: {
     return selectCancelableRuns({
       pr,
       head: headSha,
+      prTitle,
       gateTargetUrl: gate.target_url,
       gatePendingInFlight: gate.pending_in_flight,
       workflowRuns: runs,
     });
   };
 
+  if (input.override === true) {
+    await assertOverrideCanLand(ghCall, slug, pr);
+  }
+
   let selected = await selectFrom();
   if (selected.length === 0 && wait) {
-    const committerMs = await readCommitterMs(ghCall, slug, headSha);
-    const ageMs = readNow() - committerMs;
-    if (ageMs >= 0 && ageMs < startupGraceMs) {
-      const graceStart = readNow();
-      while (selected.length === 0) {
-        if (readNow() - graceStart + pollIntervalMs > startupGraceMs) break;
-        await sleep(pollIntervalMs);
-        sleptMs += pollIntervalMs;
-        selected = await selectFrom();
-      }
+    const graceStart = readNow();
+    while (selected.length === 0) {
+      if (readNow() - graceStart + pollIntervalMs > startupGraceMs) break;
+      await sleep(pollIntervalMs);
+      sleptMs += pollIntervalMs;
+      selected = await selectFrom();
     }
   }
 
@@ -173,6 +176,12 @@ export async function runCancelCommand(input: {
         `pr-hero cancel: PR #${pr} head moved before /pr-hero override was posted`,
       );
     }
+    const before = await fetchPrComments(operatorRoot, pr, {
+      spawnFn,
+      timeoutMs: ghTimeoutMs,
+    });
+    let floor = 0;
+    for (const comment of before) floor = Math.max(floor, comment.id);
     const posted = await ghCall([
       "pr",
       "comment",
@@ -197,16 +206,11 @@ export async function runCancelCommand(input: {
       });
       status = snap.status;
       if (status.gate.override.active && status.head === headSha) break;
-      const visible = snap.issueComments.some(
-        (comment) => comment.body.trim() === OVERRIDE_BODY,
-      );
-      const waiting = shouldWaitPrStatus({
-        status,
-        issueComments: snap.issueComments,
-        nowMs,
-        elapsedMs: nowMs - overrideStart,
-      });
-      if (!waiting && visible) {
+      const postedId = newestOverrideIdAfter(snap.issueComments, floor);
+      if (
+        postedId !== null &&
+        overrideDeniedByLaterOutcome(snap.issueComments, postedId)
+      ) {
         throw new CliError(
           `pr-hero cancel: /pr-hero override on PR #${pr} was denied by a later outcome`,
         );
@@ -306,18 +310,26 @@ async function listWorkflowRuns(
   ghCall: GhCall,
   slug: string,
 ): Promise<WorkflowRunFact[]> {
-  const result = await ghCall([
-    "api",
-    `repos/${slug}/actions/runs?per_page=30`,
-  ]);
-  if (!result.ok) {
-    throw new CliError(
-      `gh api actions/runs failed: ${result.stderr.trim() || "gh failed"}`,
-    );
+  const byId = new Map<number, WorkflowRunFact>();
+  for (const status of CANCELABLE_RUN_STATUSES) {
+    const result = await ghCall([
+      "api",
+      `repos/${slug}/actions/workflows/pr-hero.yml/runs?per_page=100&status=${status}`,
+    ]);
+    if (!result.ok) {
+      throw new CliError(
+        `gh api actions/runs failed: ${result.stderr.trim() || "gh failed"}`,
+      );
+    }
+    for (const run of readWorkflowRuns(result.stdout)) byId.set(run.id, run);
   }
+  return [...byId.values()];
+}
+
+function readWorkflowRuns(stdout: string): WorkflowRunFact[] {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(result.stdout);
+    parsed = JSON.parse(stdout);
   } catch (error) {
     throw new CliError(
       `gh api actions/runs returned invalid JSON: ${(error as Error).message}`,
@@ -348,6 +360,7 @@ function readWorkflowRun(run: unknown): WorkflowRunFact {
   const headSha = record.head_sha;
   const path = record.path;
   const htmlUrl = record.html_url;
+  const displayTitle = record.display_title;
   if (
     typeof id !== "number" ||
     !Number.isInteger(id) ||
@@ -356,7 +369,8 @@ function readWorkflowRun(run: unknown): WorkflowRunFact {
     typeof event !== "string" ||
     typeof headSha !== "string" ||
     typeof path !== "string" ||
-    typeof htmlUrl !== "string"
+    typeof htmlUrl !== "string" ||
+    typeof displayTitle !== "string"
   ) {
     throw new CliError("unreadable workflow run from gh api");
   }
@@ -384,28 +398,68 @@ function readWorkflowRun(run: unknown): WorkflowRunFact {
     head_sha: headSha,
     path,
     html_url: htmlUrl,
+    display_title: displayTitle,
     pull_requests: pullRequests,
   };
 }
 
-async function readCommitterMs(
+function newestOverrideIdAfter(
+  issueComments: readonly PrStatusComment[],
+  floor: number,
+): number | null {
+  let postedId: number | null = null;
+  for (const comment of issueComments) {
+    if (comment.id <= floor) continue;
+    if (comment.body.trim() !== OVERRIDE_BODY) continue;
+    if (postedId === null || comment.id > postedId) postedId = comment.id;
+  }
+  return postedId;
+}
+
+async function assertOverrideCanLand(
   ghCall: GhCall,
   slug: string,
-  sha: string,
-): Promise<number> {
-  const result = await ghCall([
+  pr: number,
+): Promise<void> {
+  const fork = await ghCall([
     "api",
-    `repos/${slug}/commits/${sha}`,
+    `repos/${slug}/pulls/${pr}`,
     "--jq",
-    ".commit.committer.date",
+    ".head.repo.fork",
   ]);
-  const parsed = result.ok ? Date.parse(result.stdout.trim()) : Number.NaN;
-  if (!Number.isFinite(parsed)) {
+  const forkText = fork.ok ? fork.stdout.trim() : "";
+  if (forkText === "true") {
     throw new CliError(
-      `pr-hero cancel: could not read the committer date of ${sha.slice(0, 7)}`,
+      `pr-hero cancel: PR #${pr} is from a fork; /pr-hero override cannot land, so the review was not cancelled`,
     );
   }
-  return parsed;
+  if (forkText !== "false") {
+    throw new CliError(
+      `pr-hero cancel: could not read whether PR #${pr} is a fork`,
+    );
+  }
+  const permission = await ghCall([
+    "api",
+    `repos/${slug}`,
+    "--jq",
+    ".permissions.push",
+  ]);
+  if (!permission.ok || permission.stdout.trim() !== "true") {
+    throw new CliError(
+      `pr-hero cancel: /pr-hero override needs write access on ${slug}; the review was not cancelled`,
+    );
+  }
+  const workflow = await ghCall([
+    "api",
+    `repos/${slug}/contents/.github/workflows/pr-hero.yml`,
+    "-H",
+    "Accept: application/vnd.github.raw",
+  ]);
+  if (!workflow.ok || !workflow.stdout.includes("issue_comment:")) {
+    throw new CliError(
+      `pr-hero cancel: ${slug} has no issue_comment pr-hero workflow, so /pr-hero override would not run; the review was not cancelled`,
+    );
+  }
 }
 
 async function cancelAndSettle(input: {
@@ -428,7 +482,8 @@ async function cancelAndSettle(input: {
   ]);
   if (!cancelled.ok) {
     const stderr = cancelled.stderr;
-    if (stderr.includes("409") || stderr.includes(ALREADY_SETTLED)) return;
+    // A bare "409" also matches run ids such as 12409 in the error URL.
+    if (stderr.includes(ALREADY_SETTLED)) return;
     throw new CliError(
       `gh run cancel ${run.run_id} failed: ${stderr.trim() || "gh failed"}`,
     );
