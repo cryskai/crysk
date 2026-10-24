@@ -1983,4 +1983,86 @@ describe("shouldWaitPrStatus", () => {
       }),
     ).toBe(false);
   });
+
+  test("waits on a fresh /pr-hero override while the gate has not recorded it, even when the gate was written after the comment", () => {
+    const commentIso = new Date(NOW - 10_000).toISOString();
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "error",
+            "PRH-CANCELLED: not reviewed — /pr-hero review reviews this head",
+            1 / 60,
+          ),
+        ],
+      }),
+    );
+    expect(status.gate.override.active).toBe(false);
+    expect(Date.parse(status.gate.created_at ?? "")).toBeGreaterThan(
+      Date.parse(commentIso),
+    );
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [
+          { id: 10, body: "/pr-hero override", created_at: commentIso },
+        ],
+        nowMs: NOW,
+        elapsedMs: 0,
+      }),
+    ).toBe(true);
+  });
+
+  test("stops waiting on /pr-hero override once gate.override.active is true", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", OVERRIDE_DESCRIPTION, 0.5)],
+      }),
+    );
+    expect(status.gate.override.active).toBe(true);
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [
+          {
+            id: 10,
+            body: "/pr-hero override",
+            created_at: new Date(NOW - 10_000).toISOString(),
+          },
+        ],
+        nowMs: NOW,
+        elapsedMs: 0,
+      }),
+    ).toBe(false);
+  });
+
+  test("stops waiting on /pr-hero override when a later outcome comment names a PRH-* code", () => {
+    const commentIso = new Date(NOW - 10_000).toISOString();
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "error",
+            "PRH-CANCELLED: not reviewed — /pr-hero review reviews this head",
+            1 / 60,
+          ),
+        ],
+      }),
+    );
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [
+          { id: 10, body: "/pr-hero override", created_at: commentIso },
+          {
+            id: 11,
+            body: `<!-- pr-hero-outcome v=1 head=${CURRENT} run=1 attempt=1 -->\n\n### PRH-CANCELLED: not reviewed\n\nbody`,
+            created_at: new Date(NOW - 1_000).toISOString(),
+          },
+        ],
+        nowMs: NOW,
+        elapsedMs: 0,
+      }),
+    ).toBe(false);
+  });
 });

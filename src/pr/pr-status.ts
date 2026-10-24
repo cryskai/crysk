@@ -728,6 +728,11 @@ export function shouldWaitPrStatus(input: {
 }): boolean {
   const { status, issueComments, nowMs, elapsedMs } = input;
   const startupGraceMs = input.startupGraceMs ?? STATUS_WAIT_STARTUP_GRACE_MS;
+  const override = freshOverrideComment(issueComments, nowMs, startupGraceMs);
+  // A later PRH-* outcome denies the override even while next_action is "wait".
+  if (override !== null && laterOutcomeDenies(override.id, issueComments)) {
+    return false;
+  }
 
   if (status.next_action === "wait") return true;
 
@@ -754,6 +759,41 @@ export function shouldWaitPrStatus(input: {
     }
   }
 
+  // Settle's error status lands after the comment, so commentMs > gateMs must not end this.
+  if (override !== null && !status.gate.override.active) return true;
+
+  return false;
+}
+
+const OVERRIDE_COMMENT_BODY = "/pr-hero override";
+
+function freshOverrideComment(
+  issueComments: readonly PrStatusComment[],
+  nowMs: number,
+  startupGraceMs: number,
+): PrStatusComment | null {
+  let newest: PrStatusComment | null = null;
+  for (const comment of issueComments) {
+    if (comment.body.trim() !== OVERRIDE_COMMENT_BODY) continue;
+    if (comment.created_at === undefined) continue;
+    const commentMs = Date.parse(comment.created_at);
+    if (!Number.isFinite(commentMs)) continue;
+    const ageMs = nowMs - commentMs;
+    if (ageMs < 0 || ageMs >= startupGraceMs) continue;
+    if (newest === null || comment.id > newest.id) newest = comment;
+  }
+  return newest;
+}
+
+function laterOutcomeDenies(
+  overrideId: number,
+  issueComments: readonly PrStatusComment[],
+): boolean {
+  for (const comment of issueComments) {
+    if (comment.id <= overrideId) continue;
+    const code = parseOutcomeCode(comment.body);
+    if (code?.startsWith("PRH-")) return true;
+  }
   return false;
 }
 
