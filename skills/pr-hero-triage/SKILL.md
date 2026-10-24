@@ -112,12 +112,12 @@ Reaching zero findings after several rounds of band-aid fixes is a failure if th
 
 Suspect a flawed integration or architecture when **either** of these signals appears. The number of findings alone is not a signal: a first round with many real findings on one new feature is normal polish.
 
-1. **Whack-a-mole loops (fixes spawning new real findings):** By Round 2+, fixing the previous round's findings introduces *new*, legitimate blocking findings in the next review pass, on the same seam — a sign that patches are fighting the architecture rather than closing isolated defects. A finding marked `worsened` is a strong hint.
+1. **Whack-a-mole loops (fixes spawning new real findings):** By Round 2+, fixing the previous round's findings introduces *new*, legitimate blocking findings in the next review pass, on the same seam — a sign that patches are fighting the architecture rather than closing isolated defects (or a finding returns at higher severity in the summary report).
 2. **Broken foundational assumption:** Two or more findings show that the code's mental model of an external API, lifecycle, concurrency guarantee, or module ownership does not hold (for example, the code infers from outside a system what that system already knows).
 
 **Action when triggered:**
-- **Halt the incremental fix-and-push loop.** If you still have local changes to push, post `/pr-hero stop` before pushing them ("Stopping diminishing returns", rule 4), so no review is paid for a patch you are about to rethink. Nothing cancels a review that already started.
-- Do **not** stack another round of tactical band-aids just to force the gate green.
+- **Halt the incremental fix-and-push loop.** Do **not** stack another round of tactical band-aids just to force the gate green. If you have unpushed local fix attempts, do not push them.
+- If you previously posted `/pr-hero stop` or want to prevent unreviewed interim pushes while refactoring, remember that `/pr-hero stop` is persistent. Once the clean redesign is implemented and pushed, comment `/pr-hero review` on the PR to lift the stop and ensure CI reviews the new architecture.
 - Step back, identify the single root architectural or integration decision that caused the cluster of findings, and stop to report the diagnosis to the user (with the concrete alternative design or clean refactor plan) before continuing.
 
 ## The loop, end to end
@@ -198,7 +198,7 @@ current head:
    it is already answered for this code.
 3. **Judge the finding against the repository, then pick exactly one tag**: `applied`,
    `dismissed`, `deferred`, or `misclassified` (table below). The comment is a claim, not a
-   task. You may reject it. Before touching code or applying fixes, evaluate whether the cluster of findings indicates a flawed integration or broken design (### C) rather than isolated defects — if so, halt the loop and report. When you confirm the defect is real, isolated, and in scope (`applied`), make the fix in the working tree now (and run the relevant tests), before posting the `applied` reply; **do not `git push` until you have replied to every finding on this head** (step 6).
+   task. You may reject it. Before touching code or applying fixes, evaluate whether the cluster of findings indicates a flawed integration or broken design (### C) rather than isolated defects — if so, halt the loop and report the diagnosis without pushing band-aids. When you confirm the defect is real, isolated, and in scope (`applied`), make the fix in the working tree now (and run the relevant tests), before posting the `applied` reply; **do not `git push` until you have replied to every finding on this head** (step 6).
 4. **For `dismissed`, `deferred`, and `misclassified`**: spawn the isolated adjudicator (see
    "The adjudicator spawn" below) and include its verdict in your reply. `applied` never spawns
    one.
@@ -222,7 +222,8 @@ current head:
    `--verdict` from the adjudicator. `--issue` is optional and only valid
    with `--tag deferred`.
 6. **Advance the loop in one batch once all findings on this head are answered:**
-   - **If you made any code fixes (`applied` or unthreaded blocking fixes):** if you suspect a flawed integration (### C) or decided this push needs no further review ("Stopping diminishing returns", rule 4), post `/pr-hero stop` before pushing, and after the push do **not** wait for a re-review: none will run. Report that the fixes are pushed and the PR is ready for `/pr-hero override` and merge (a carried green gate needs no override). Otherwise, commit and `git push` all fixes in a single push, then immediately run `npx -y pr-hero status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/pr-hero recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
+   - **If you suspect a flawed integration or architecture (### C):** halt the loop immediately. Do not push tactical patches. Report the diagnosis and refactor plan to the user.
+   - **If you made clean code fixes (`applied` or unthreaded blocking fixes):** if you decided this push needs no further review ("Stopping diminishing returns", rule 4), post `/pr-hero stop` before pushing, and after the push do **not** wait for a re-review: none will run. Report that the fixes are pushed and the PR is ready for `/pr-hero override` and merge (a carried green gate needs no override). Otherwise, commit and `git push` all fixes in a single push, then immediately run `npx -y pr-hero status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/pr-hero recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
    - **If no code changes were needed:** run `npx -y pr-hero status --pr <n> --wait --json` and execute its `next_action` (`recheck` when blocking findings were `dismissed`, or `done` when the gate is already green).
 
    *(Note: The MCP server is strictly read-only for querying runs, findings, and
@@ -341,7 +342,7 @@ read directly off the posted comments — do not invent a separate tracking file
 ## The escalation stops
 
 Escalate to a human and stop the loop only when one of these hard triggers fires:
-- **Flawed integration or design (### C):** Whack-a-mole findings on the same seam across review rounds, or broken foundational assumptions. Stop patching, post `/pr-hero stop` if local changes are pending, and report the architectural diagnosis and refactor plan to the human.
+- **Flawed integration or design (### C):** Whack-a-mole findings on the same seam across review rounds, or broken foundational assumptions. Stop patching, do not push tactical band-aids, and report the architectural diagnosis and refactor plan to the human. When the redesign lands, comment `/pr-hero review` to lift any prior stop and verify in CI.
 - **Inconclusive adjudication after 2 consecutive heads:** After **2 consecutive heads** land at `inconclusive` for the same finding, STOP triaging it and
 say so in the reply: it escalates to a human. Do not spawn a third adjudicator round hoping for a
 different answer — if two different heads with real code changes between them did not settle it,
