@@ -632,7 +632,7 @@ turns the status green for that head with no new review. The re-review does not 
 should not be reviewed. On every later push, admission skips the automatic review with the reason
 `automatic reviews stopped by a maintainer`, and the head inherits the last reviewed commit's verdict like any
 other admission skip: a red gate stays red until `/pr-hero override`. The stop counts only when its author has
-write or admin access; admission looks the permission up when it reads the comment, and a stop whose
+write or admin access (a fork author usually has only read, so their own stop does not count); admission looks the permission up when it reads the comment, and a stop whose
 permission cannot be read does not count, so the review runs. A later `/pr-hero review` or `/pr-hero recheck`
 comment lifts the stop (that comment's own run is forced, so it is reviewed either way). The stop starts no
 workflow run, so it gets no reaction and costs nothing. It does not cancel a review that is already running.
