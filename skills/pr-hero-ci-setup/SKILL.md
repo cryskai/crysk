@@ -19,7 +19,7 @@ Load when the user asks to:
 
 - **Zero secret leakage:** NEVER print, `cat`, commit, or log API keys, tokens, or `OPENCODE_AUTH_JSON`. Reference `${{ secrets.* }}` names only. Inspect `auth.json` **keys and `type` only**.
 - **No per-provider GitHub secrets:** Do not create `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`. One secret `OPENCODE_AUTH_JSON` (whole store or a CI-only subset) + public variable `PRHERO_ROUTING`. Cap 48 KB each.
-- **No install needed:** run every pr-hero command as `npx -y pr-hero <command>` (Node is enough; the package brings its own Bun). A global `pr-hero` on PATH is the same command. CI itself needs no local CLI at all: the workflow runs the action. `npx -y pr-hero skills install` installs the triage and CI-setup skills into every detected coding agent, with no TTY and no MCP or launchd registration (neither is needed for the CI loop, and npx's temporary cache refuses them).
+- **No install needed:** run every pr-hero command as `npx -y pr-hero <command>` (Node is enough; the package brings its own Bun). A global `pr-hero` on PATH is the same command. CI itself needs no local CLI at all: the workflow runs the action. `npx -y pr-hero skills install` installs the pr-hero, triage, and CI-setup skills into every detected coding agent, with no TTY and no MCP or launchd registration (neither is needed for the CI loop, and npx's temporary cache refuses them).
 - **Deterministic scaffolding:** Run `npx -y pr-hero setup --ci` (or `npx -y pr-hero ci init`). It writes the one workflow file, `.github/workflows/pr-hero.yml`. Do not fabricate it from memory. Fallback: copy `assets/workflow.yml`. Never scaffold a `pr-hero-force.yml`; it is retired.
 - **`fetch-depth: 0` is mandatory** on `actions/checkout@v4`.
 - **Gate mode:** the `pr-hero` commit status is the required check. The scaffold writes `mode: gate` explicitly: blocking findings, a size or budget skip, and a crash set it red. `mode: advisory` keeps it green for a finished review. The job's exit code stays `0` on findings either way, so do not gate on the job.
@@ -74,9 +74,10 @@ Ask these in plain language; map answers to `.prhero/config.json`:
 
 1. **Attempts per PR?** Default `2` (`ci_max_attempts`). Same commit never double-reviews.
 2. **When should a push trigger re-review?** Balanced → `risk_aware`; score only → `thresholded`; once then stop → `once_per_pr`; every push → `every_push`; manual only → `manual_only`.
-3. **Score floor?** Default `4` with weights 2/1.
-4. **Observe first?** If unsure, `ci_admission_observe_only: true` for one PR cycle.
-5. **Non-default bot actor?** Collect GitHub logins for `ci_trusted_actors`.
+3. **Score floor?** Default `4` with weights 2/1 (`ci_rereview_min_score`, `ci_blocking_weight`, `ci_advisory_weight`).
+4. **Prior-finding verification cap?** Default `8` (`max_verification_steps`; `0` pauses verifying prior open findings on re-reviews).
+5. **Observe first?** If unsure, `ci_admission_observe_only: true` for one PR cycle.
+6. **Non-default bot actor?** Collect GitHub logins for `ci_trusted_actors`.
 
 Use `assets/admission-config.example.json`. Details: `references/ci-admission.md`.
 

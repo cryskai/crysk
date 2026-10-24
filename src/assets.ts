@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   BUNDLED_AGENT_FILES,
   CI_SETUP_SKILL_FILES,
+  GENERAL_SKILL_FILES,
   SCOUT_PROMPT_PATH,
   SUMMARIZER_PROMPT_PATH,
   TRIAGE_SKILL_FILES,
@@ -21,6 +22,7 @@ export interface EngineAssets {
   summarizerPromptPath: string;
   triageSkillFiles: Record<string, string>; // logical filename → path, from the manifest
   ciSetupSkillFiles: Record<string, string>; // logical filename → path, from the manifest
+  generalSkillFiles: Record<string, string>; // logical filename → path, from the manifest
   version: string; // baked at compile; package.json otherwise
 }
 
@@ -89,6 +91,7 @@ export function resolveEngineAssets(): EngineAssets {
     summarizerPromptPath: SUMMARIZER_PROMPT_PATH,
     triageSkillFiles: TRIAGE_SKILL_FILES,
     ciSetupSkillFiles: CI_SETUP_SKILL_FILES,
+    generalSkillFiles: GENERAL_SKILL_FILES,
     version,
   };
 }

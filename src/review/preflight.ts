@@ -132,6 +132,9 @@ export interface CliOptions {
   // `status` only (ROADMAP S9): print one JSON object on stdout instead of the human lines.
   // Refused on every other command, so the flag never parses and then does nothing.
   json?: boolean;
+  // `status` only: poll GitHub until an in-flight (or newly-triggered) PR review settles, then
+  // emit the settled status. Refused on every other command.
+  wait?: boolean;
   // The escape hatch for change 3's default. See resolveDiffRange's WHY: the
   // three-dot (merge-base) range is right almost always, and this flag exists
   // for the rare caller who genuinely wants the literal two-point diff.
@@ -317,7 +320,7 @@ Usage:
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed
   pr-hero skills install [--force]
-                             Install the triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
+                             Install the pr-hero, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
   pr-hero ci init [--force]  Same scaffolding as "setup --ci", as its own
                              command
   pr-hero doctor [options]   Check system tools and environment readiness
@@ -355,9 +358,11 @@ Usage:
                              badge, posts, and resolves the inline review
                              thread. --body-file is reasoning prose only.
                              --dry-run prints the parent and posts nothing
-  pr-hero status --pr <n> [--json]
+  pr-hero status --pr <n> [--wait] [--json]
                              Read the PR's pr-hero gate, posted findings and
                              next action, through gh only and read-only. With
+                             --wait, poll until an in-flight or newly-triggered
+                             review settles before printing. With
                              --json, one JSON object on stdout (schema
                              pr-hero.status/v1); without it, a few lines on
                              stderr. Exits 1 with no stdout when any read
@@ -711,6 +716,10 @@ export function parseArgs(argv: string[]): ParsedCli {
     }
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    if (arg === "--wait") {
+      options.wait = true;
       continue;
     }
     if (arg === "--dry-run") {
@@ -1107,14 +1116,24 @@ export function parseArgs(argv: string[]): ParsedCli {
       throw new CliUsageError("status requires --pr <n> (a PR number)");
     }
     for (const arg of argv) {
-      if (arg.startsWith("-") && arg !== "--pr" && arg !== "--json") {
+      if (
+        arg.startsWith("-") &&
+        arg !== "--pr" &&
+        arg !== "--json" &&
+        arg !== "--wait"
+      ) {
         throw new CliUsageError(
-          `status takes only --pr <n> and --json, not ${arg}`,
+          `status takes only --pr <n>, --json, and --wait, not ${arg}`,
         );
       }
     }
-  } else if (options.json) {
-    throw new CliUsageError("--json only applies to the status command");
+  } else {
+    if (options.json) {
+      throw new CliUsageError("--json only applies to the status command");
+    }
+    if (options.wait) {
+      throw new CliUsageError("--wait only applies to the status command");
+    }
   }
   // `post` (ROADMAP B6) and `triage` (ROADMAP B6c) share the same shape:
   // both read a PRIOR run's artifacts, named by --from, and act on the PR

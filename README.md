@@ -111,6 +111,15 @@ the repo scaffold; skip it and you scaffold the repo yourself with `pr-hero init
 **Skill drift.** `setup` (and `upgrade`) installs the bundled skills into each agent's skills
 directory. A skill copy that differs from the bundled one and has no recorded digest is kept as it is and reported as drift, never overwritten, so your local edits survive; `pr-hero setup` prints each kept skill, and `pr-hero upgrade` replaces it.
 
+**Skills without pr-hero.** The public skills are also on
+[skills.sh](https://skills.sh/juanmaagd/pr-hero), installable into any agent with the
+[skills CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add juanmaagd/pr-hero                            # pick interactively
+npx skills add juanmaagd/pr-hero --skill pr-hero            # or pr-hero-triage, pr-hero-ci-setup
+```
+
 **On step 6.** `gotchas.md` is injected verbatim into every hunter's system prompt, and
 what `setup`/`init` write there is a placeholder: `- <subsystem>: <the thing that looks
 like a bug but is deliberate, and why>`. A review that reads *that* is a review billed in
@@ -231,7 +240,7 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 | `pr-hero post --pr <n> --from <run-dir>` | Replay-publish a previous run's findings onto the PR (same plan as `--pr --post`). `--dry-run` previews at $0. |
 | `pr-hero triage --pr <n> --from <run-dir>` | Read reply threads and bind triage markers onto that run's `comparison.json` ledger rows. |
 | `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N --tag <tag> --body-file <path>` | Post one triage reply. The driver picks the parent from the posted `<!-- pr-hero-finding` marker (never path/line), renders the marker + badge, posts, and resolves the inline review thread. Reads `anchor.patch` (else `diff.patch`) from the run dir to remap post lines the same way `--post` does. `--body-file` is reasoning only. |
-| `pr-hero status --pr <n> [--json]` | Read-only, through `gh` only: the PR's pr-hero gate, its posted findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `recheck`, `override-or-fix`, `done`). `--json` prints one `pr-hero.status/v1` object on stdout. See [`docs/github-actions.md`](docs/github-actions.md#reading-a-pr-with-pr-hero-status). |
+| `pr-hero status --pr <n> [--wait] [--json]` | Read-only, through `gh` only: the PR's pr-hero gate, its posted findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `recheck`, `override-or-fix`, `done`). `--wait` polls until an in-flight or newly-triggered review settles before emitting; `--json` prints one `pr-hero.status/v1` object on stdout. See [`docs/github-actions.md`](docs/github-actions.md#reading-a-pr-with-pr-hero-status). |
 | `pr-hero config` | Read-only, $0: every config key with its value and **which layer decided it** (`repo` / `global` / `capped` / `default`), plus both file paths whether or not they exist. |
 | `pr-hero config set <key> <val> [--person\|--team\|--watch]` | Set a scalar configuration value in the selected layer (defaults to `--person`). Capped team keys accept and annotate over-ceiling values. |
 | `pr-hero config unset <key> [--person\|--team\|--watch]` | Remove a configuration value from the selected layer. |

@@ -271,6 +271,7 @@ function compiledAssets(
     summarizerPromptPath: `${EMBEDDED_ROOT}/summarizer-d4e5f600.md`,
     triageSkillFiles: {},
     ciSetupSkillFiles: {},
+    generalSkillFiles: {},
     version: "9.9.9",
   };
 }

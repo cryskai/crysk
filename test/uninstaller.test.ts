@@ -40,6 +40,16 @@ describe("uninstaller (lifecycle foundations)", () => {
       expect(plan.launchdServices).toContain("io.prhero.gc");
       expect(plan.rcFilesCleaned).toContain(path.join(home, ".zshrc"));
       expect(plan.binariesRemoved).toContain(standaloneBin);
+      // Every bundled skill is removed, the general pr-hero one included.
+      for (const skillName of [
+        "pr-hero-triage",
+        "pr-hero-ci-setup",
+        "pr-hero",
+      ]) {
+        expect(plan.agentEnvCleanups).toContain(
+          `Claude Code Skill: ${skillName}`,
+        );
+      }
     });
 
     test("generates full data purge plan when purge is true and no runs active", async () => {

@@ -49,6 +49,7 @@
     "prompts",
     "skills/pr-hero-triage",
     "skills/pr-hero-ci-setup",
+    "skills/pr-hero",
     "src",
     "LICENSE",
     "README.md"

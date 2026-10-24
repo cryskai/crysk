@@ -2577,6 +2577,22 @@ describe("parseArgs status", () => {
     );
   });
 
+  test("reads --wait on status and refuses it on every other command", () => {
+    const { command, options } = parseArgs([
+      "status",
+      "--pr",
+      "12",
+      "--wait",
+      "--json",
+    ]);
+    expect(command).toBe("status");
+    expect(options.wait).toBe(true);
+    expect(options.json).toBe(true);
+    expect(() => parseArgs(["review", "--pr", "12", "--wait"])).toThrow(
+      /--wait only applies to the status command/,
+    );
+  });
+
   test("a second word after status is an unexpected argument", () => {
     expect(() => parseArgs(["status", "status", "--pr", "12"])).toThrow(
       /unexpected argument/,
@@ -2620,7 +2636,7 @@ describe("skills install (non-interactive skill sync)", () => {
   test("help lists skills install next to setup", () => {
     expect(HELP_TEXT).toContain("pr-hero skills install");
     expect(HELP_TEXT).toContain(
-      "Install the triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
+      "Install the pr-hero, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
     );
   });
 

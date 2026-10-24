@@ -59,6 +59,12 @@ describe("resolveEngineAssets", () => {
       expect(existsSync(filePath)).toBe(true);
     }
 
+    // General pr-hero skill: a single SKILL.md, present on disk.
+    expect(Object.keys(assets.generalSkillFiles)).toEqual(["SKILL.md"]);
+    for (const filePath of Object.values(assets.generalSkillFiles)) {
+      expect(existsSync(filePath)).toBe(true);
+    }
+
     // defaultAgentsDir is populated in dev mode and points to existing directory
     expect(assets.defaultAgentsDir).toBeDefined();
     expect(existsSync(assets.defaultAgentsDir ?? "")).toBe(true);
