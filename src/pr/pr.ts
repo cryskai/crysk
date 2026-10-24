@@ -1470,7 +1470,7 @@ export async function ghCompareChangedFilesWithStatus(
 export async function ghCollaboratorPermission(
   operatorRoot: string,
   login: string,
-  options?: { spawnFn?: typeof Bun.spawn },
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
 ): Promise<string | null> {
   const result = await gh(
     operatorRoot,
@@ -1482,6 +1482,7 @@ export async function ghCollaboratorPermission(
     ],
     undefined,
     options?.spawnFn,
+    options?.timeoutMs,
   );
   if (!result.ok) {
     return result.stderr.includes("HTTP 404") ? "none" : null;

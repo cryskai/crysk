@@ -631,10 +631,12 @@ turns the status green for that head with no new review. The re-review does not 
 **Stopping automatic reviews.** Comment exactly `/pr-hero stop` on the pull request **before** the push that
 should not be reviewed. On every later push, admission skips the automatic review with the reason
 `automatic reviews stopped by a maintainer`, and the head inherits the last reviewed commit's verdict like any
-other admission skip: a red gate stays red until `/pr-hero override`. The stop counts only when its author has
-write or admin access (a fork author usually has only read, so their own stop does not count); admission looks the permission up when it reads the comment, and a stop whose
-permission cannot be read does not count, so the review runs. A later `/pr-hero review` or `/pr-hero recheck`
-comment lifts the stop (that comment's own run is forced, so it is reviewed either way). The stop starts no
+other admission skip: a red gate stays red until `/pr-hero override`. The newest `/pr-hero stop`, `/pr-hero review` or `/pr-hero recheck` comment from a user with write or admin
+access decides: a stop is in force until such a user comments a review or recheck. Commands from anyone else
+are passed over, so they can neither set a stop nor lift one (a fork author usually has only read access).
+Admission looks the permission up when it reads the comments, retrying once. When the permission cannot be
+read, a stop from that user does not count and a lift does, so the review runs. A stopped push spends no
+automatic attempt (`ci_max_attempts`), so the budget is intact when the stop is lifted. The stop starts no
 workflow run, so it gets no reaction and costs nothing. It does not cancel a review that is already running.
 
 **Rechecking a dismissal.** Comment exactly `/pr-hero recheck` on the pull request. It is `/pr-hero review` plus the CI adjudicator:

@@ -26,7 +26,6 @@ import {
 } from "#ci/gates";
 import { formatWorkflowCommand } from "#ci/reporter";
 import {
-  activeStopAuthors,
   type CiReviewPolicy,
   ciReviewManualRequiredDetail,
   ciReviewPolicyHash,
@@ -42,6 +41,7 @@ import {
   resolveCiTrustedActors,
   scanPostedFindingTiers,
   stateReviewCount,
+  stopCommandsNewestFirst,
   validateAdmissionAuthority,
 } from "#ci/review-admission";
 import {
@@ -115,6 +115,8 @@ export async function evaluateCiAdmissionGate(input: {
   // unset it never calls gh at all, only the two env-path file writers.
   spawnFn?: typeof Bun.spawn;
   recordSkip?: typeof recordCiAdmissionGateSkip;
+  // Test-only: the wait before a stop's permission lookup is retried.
+  sleepFn?: (ms: number) => Promise<void>;
 }): Promise<CiAdmissionGateResult> {
   const { operatorRoot, prNumber, headSha, config, isCi, options } = input;
   const spawnFn = input.spawnFn;
@@ -258,6 +260,7 @@ export async function evaluateCiAdmissionGate(input: {
       operatorRoot,
       issueComments,
       spawnFn,
+      input.sleepFn ?? Bun.sleep,
     );
     const admissionVerdict = evaluateCiReviewAdmission({
       currentHead: headSha,
@@ -321,6 +324,9 @@ export async function evaluateCiAdmissionGate(input: {
         priorScore: admissionVerdict.prior.score,
         blockingCount: admissionVerdict.prior.blocking,
         advisoryCount: admissionVerdict.prior.advisory,
+        // WHY unspent: a stop is lifted by the next maintainer review command, and
+        // stopped pushes counted as attempts would leave that PR with no budget.
+        unspent: admissionVerdict.reason === "stopped",
       });
       // S4: in gate mode the head inherits the verdict of the PR's own last reviewed commit, read from
       // that commit's statuses (publishCiSkip, admissionSkipDecision): a skipped head never reads as one
@@ -588,29 +594,67 @@ async function readBeforeReservation(input: {
   }
 }
 
-// Whether a write-access maintainer's `/pr-hero stop` is in force. Each still
-// active stop author is checked newest first, and one maintainer is enough.
-// Fails open: a stop whose author's permission cannot be read does not count,
-// so the review runs. A wrong skip loses a review someone wanted; a wrong run
+// Whether a write-access maintainer's `/pr-hero stop` is in force: the
+// newest stop, review or recheck command from a write or admin author decides.
+// Commands from anyone else are passed over, so a stranger can neither set a
+// stop nor lift one. Fails open: an author whose permission cannot be read
+// counts as a maintainer for a lift and as nobody for a stop, so either way
+// the review runs. A wrong skip loses a review someone wanted; a wrong run
 // only costs one.
 async function stoppedByMaintainer(
   operatorRoot: string,
   issueComments: readonly { user: string; body: string }[],
   spawnFn: typeof Bun.spawn | undefined,
+  sleepFn: (ms: number) => Promise<void>,
 ): Promise<boolean> {
-  for (const login of activeStopAuthors(issueComments)) {
-    const permission = await ghCollaboratorPermission(operatorRoot, login, {
-      spawnFn,
-    });
-    if (permission === "admin" || permission === "write") return true;
-    if (permission === null) {
+  const permissions = new Map<string, string | null>();
+  for (const command of stopCommandsNewestFirst(issueComments)) {
+    let permission = permissions.get(command.user);
+    if (!permissions.has(command.user)) {
+      permission = await stopAuthorPermission(
+        operatorRoot,
+        command.user,
+        spawnFn,
+        sleepFn,
+      );
+      permissions.set(command.user, permission ?? null);
+    }
+    if (permission === null || permission === undefined) {
+      if (command.kind === "lift") return false;
       log(
         formatWorkflowCommand(
           "warning",
-          `Could not read the permission of ${login}, who posted /pr-hero stop, so the stop does not count and the review runs.`,
+          `Could not read the permission of ${command.user}, who posted /pr-hero stop, so the stop does not count and the review runs.`,
         ),
       );
+      continue;
+    }
+    if (permission === "admin" || permission === "write") {
+      return command.kind === "stop";
     }
   }
   return false;
+}
+
+// Same bounds as the trigger's commenter lookup (lookupCommenterPermission):
+// one retry after a short wait, so a single API blip does not override a
+// maintainer's stop, and a timeout, so a hung gh call cannot stall admission.
+const STOP_PERMISSION_RETRY_DELAY_MS = 2_000;
+const STOP_PERMISSION_TIMEOUT_MS = 30_000;
+
+async function stopAuthorPermission(
+  operatorRoot: string,
+  login: string,
+  spawnFn: typeof Bun.spawn | undefined,
+  sleepFn: (ms: number) => Promise<void>,
+): Promise<string | null> {
+  const ask = () =>
+    ghCollaboratorPermission(operatorRoot, login, {
+      spawnFn,
+      timeoutMs: STOP_PERMISSION_TIMEOUT_MS,
+    });
+  const first = await ask();
+  if (first !== null) return first;
+  await sleepFn(STOP_PERMISSION_RETRY_DELAY_MS);
+  return ask();
 }

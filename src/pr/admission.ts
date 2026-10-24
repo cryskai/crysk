@@ -233,6 +233,9 @@ export async function recordCiAdmissionGateSkip(input: {
   priorScore: number | null;
   blockingCount: number | null;
   advisoryCount: number | null;
+  // A skip that spent nothing and must not count against ci_max_attempts
+  // (a /pr-hero stop): settled as "gate-skipped", like a size or budget skip.
+  unspent?: boolean;
 }): Promise<void> {
   try {
     const state = await reserveCiAdmissionLedger({
@@ -247,7 +250,11 @@ export async function recordCiAdmissionGateSkip(input: {
       blockingCount: input.blockingCount,
       advisoryCount: input.advisoryCount,
     });
-    await settleCiAdmissionLedger(state, "skipped", input.reason);
+    await settleCiAdmissionLedger(
+      state,
+      input.unspent === true ? "gate-skipped" : "skipped",
+      input.reason,
+    );
   } catch {
     // The skip notice is the operator-facing outcome; a check-run write must
     // not block publishing it.

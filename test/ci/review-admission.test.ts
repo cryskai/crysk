@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AdmissionRecord } from "#ci/admission-ledger";
 import {
-  activeStopAuthors,
   CI_REVIEW_POLICY_SCHEMA_VERSION,
   type CiReviewAdmissionInput,
   type CiReviewPolicy,
@@ -31,6 +30,7 @@ import {
   resolveReviewAttemptCount,
   scanPostedFindingTiers,
   stateReviewCount,
+  stopCommandsNewestFirst,
   validateAdmissionAuthority,
 } from "#ci/review-admission";
 import { CI_RISK_POLICY_VERSION, classifyChangedPaths } from "#ci/review-risk";
@@ -1424,6 +1424,21 @@ describe("evaluateCiReviewAdmission — stopped", () => {
     expect(verdict.action === "skip" && verdict.reason).toBe("same-head");
   });
 
+  test("a stop does not skip the retry of a partial review of this same head", () => {
+    expect(
+      evaluateCiReviewAdmission(
+        admissionInput({
+          ...firstReview,
+          summaryHead: HEAD_A,
+          summaryComplete: false,
+          markerSeen: true,
+          reviewCount: 1,
+          stopped: true,
+        }),
+      ),
+    ).toEqual({ action: "run" });
+  });
+
   test("an explicit forced run beats a stop", () => {
     expect(
       evaluateCiReviewAdmission(
@@ -1433,27 +1448,33 @@ describe("evaluateCiReviewAdmission — stopped", () => {
   });
 });
 
-describe("activeStopAuthors", () => {
+describe("stopCommandsNewestFirst", () => {
   const c = (user: string, body: string) => ({ user, body });
 
-  test("collects stop authors after the last review command, newest first, once each", () => {
+  test("lists exact stop, review and recheck commands newest first", () => {
     expect(
-      activeStopAuthors([
+      stopCommandsNewestFirst([
         c("old", "/pr-hero stop"),
         c("maint", "/pr-hero review --full"),
-        c("a", "/pr-hero stop"),
-        c("b", "  /pr-hero stop\n"),
-        c("a", "/pr-hero stop"),
+        c("a", "  /pr-hero stop\n"),
+        c("b", "/pr-hero recheck"),
         c("x", "looks good"),
+        c("y", "/pr-hero override"),
       ]),
-    ).toEqual(["a", "b"]);
+    ).toEqual([
+      { user: "b", kind: "lift" },
+      { user: "a", kind: "stop" },
+      { user: "maint", kind: "lift" },
+      { user: "old", kind: "stop" },
+    ]);
   });
 
-  test("ignores near misses and returns nothing without a stop", () => {
+  test("ignores near misses and comments with no author", () => {
     expect(
-      activeStopAuthors([
+      stopCommandsNewestFirst([
         c("a", "/pr-hero stop please"),
         c("b", "/pr-hero  stop"),
+        c("", "/pr-hero stop"),
       ]),
     ).toEqual([]);
   });

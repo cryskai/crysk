@@ -1602,6 +1602,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     extra: ScriptEntry[],
     config: LocalConfig = EMPTY_LOCAL_CONFIG,
     calls?: string[][],
+    sleeps: number[] = [],
   ) {
     const spawnFn = makeFakeGh(
       [
@@ -1620,6 +1621,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
       calls,
     );
     const recorded: string[] = [];
+    const unspent: (boolean | undefined)[] = [];
     const { summaryPath, outputPath } = await tmpCiFiles();
     const result = await withGateEnv(
       { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
@@ -1635,11 +1637,15 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
           spawnFn,
           recordSkip: async (skip) => {
             recorded.push(skip.reason);
+            unspent.push(skip.unspent);
+          },
+          sleepFn: async (ms) => {
+            sleeps.push(ms);
           },
         }),
     );
     const outputs = await readFile(outputPath, "utf8").catch(() => "");
-    return { exitCode: result.exitCode, recorded, outputs };
+    return { exitCode: result.exitCode, recorded, unspent, outputs };
   }
 
   const STOP_REASON =
@@ -1658,7 +1664,18 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.recorded).toEqual([STOP_REASON]);
+    // Recorded as spending nothing, so a later lift finds the budget intact.
+    expect(result.unspent).toEqual([true]);
     expect(result.outputs).toContain("status=skipped-coverage");
+  });
+
+  test("a skip for any other reason still spends an attempt, as before", async () => {
+    const result = await runGate(
+      [summaryComment(1, HEAD_B, { blocking: 0, advisory: 1 }, 1)],
+      [],
+    );
+    expect(result.recorded).toEqual(["this commit was already reviewed"]);
+    expect(result.unspent).toEqual([false]);
   });
 
   test("an admin's stop counts too", async () => {
@@ -1687,13 +1704,72 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     expect(result.recorded).toEqual([]);
   });
 
-  test("a failed permission lookup fails open: the review runs", async () => {
+  test("a permission lookup that fails twice fails open: the review runs", async () => {
+    const sleeps: number[] = [];
+    const calls: string[][] = [];
     const result = await runGate(
       [priorSummary, comment(2, "maint", "/pr-hero stop")],
       [permission("maint", { stderr: "HTTP 502: Bad Gateway", exitCode: 1 })],
+      EMPTY_LOCAL_CONFIG,
+      calls,
+      sleeps,
     );
     expect(result.exitCode).toBeUndefined();
     expect(result.recorded).toEqual([]);
+    expect(sleeps).toEqual([2_000]);
+    expect(
+      calls.filter((argv) => argv.join(" ").includes("collaborators")),
+    ).toHaveLength(2);
+  });
+
+  test("one failed lookup is retried, so a blip does not drop the stop", async () => {
+    const base = makeFakeGh([
+      EMPTY_CHECK_RUNS,
+      {
+        match: ["issues", "comments"],
+        response: {
+          stdout: `${[priorSummary, comment(2, "maint", "/pr-hero stop")].map((c) => JSON.stringify(c)).join("\n")}\n`,
+        },
+      },
+      EMPTY_REVIEW_COMMENTS,
+      REPO_VIEW,
+      compareResponse("src/app.ts"),
+    ]);
+    const blip = makeFakeGh([
+      permission("maint", { stderr: "HTTP 502: Bad Gateway", exitCode: 1 }),
+    ]);
+    const write = makeFakeGh([permission("maint", { stdout: "write\n" })]);
+    let lookups = 0;
+    const spawnFn = ((argv: string[], opts: unknown) => {
+      if (argv.join(" ").includes("collaborators")) {
+        lookups += 1;
+        return (lookups === 1 ? blip : write)(argv as never, opts as never);
+      }
+      return base(argv as never, opts as never);
+    }) as unknown as typeof Bun.spawn;
+    const recorded: string[] = [];
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    const result = await withGateEnv(
+      { GITHUB_STEP_SUMMARY: summaryPath, GITHUB_OUTPUT: outputPath },
+      () =>
+        evaluateCiAdmissionGate({
+          ciMode: "advisory",
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_B,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions(),
+          spawnFn,
+          recordSkip: async (skip) => {
+            recorded.push(skip.reason);
+          },
+          sleepFn: async () => {},
+        }),
+    );
+    expect(lookups).toBe(2);
+    expect(result.exitCode).toBe(0);
+    expect(recorded).toEqual([STOP_REASON]);
   });
 
   test("a stranger's stop does not hide an older maintainer stop", async () => {
@@ -1711,8 +1787,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     expect(result.recorded).toEqual([STOP_REASON]);
   });
 
-  test("a review command after the stop lifts it, without a permission lookup", async () => {
-    const calls: string[][] = [];
+  test("a maintainer's review command after the stop lifts it", async () => {
     const result = await runGate(
       [
         priorSummary,
@@ -1720,17 +1795,42 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
         comment(3, "maint", "/pr-hero review"),
       ],
       [permission("maint", { stdout: "write\n" })],
-      EMPTY_LOCAL_CONFIG,
-      calls,
     );
     expect(result.exitCode).toBeUndefined();
     expect(result.recorded).toEqual([]);
-    expect(calls.some((argv) => argv.join(" ").includes("collaborators"))).toBe(
-      false,
-    );
   });
 
-  test("a recheck command after the stop lifts it too", async () => {
+  test("a read-only user's review command does not lift a maintainer's stop", async () => {
+    const result = await runGate(
+      [
+        priorSummary,
+        comment(2, "maint", "/pr-hero stop"),
+        comment(3, "visitor", "/pr-hero review"),
+      ],
+      [
+        permission("visitor", { stdout: "read\n" }),
+        permission("maint", { stdout: "write\n" }),
+      ],
+    );
+    expect(result.recorded).toEqual([STOP_REASON]);
+  });
+
+  test("a lift whose author's permission cannot be read still lifts: the review runs", async () => {
+    const result = await runGate(
+      [
+        priorSummary,
+        comment(2, "maint", "/pr-hero stop"),
+        comment(3, "someone", "/pr-hero review"),
+      ],
+      [
+        permission("someone", { stderr: "HTTP 502", exitCode: 1 }),
+        permission("maint", { stdout: "write\n" }),
+      ],
+    );
+    expect(result.exitCode).toBeUndefined();
+  });
+
+  test("a maintainer's recheck command after the stop lifts it too", async () => {
     const result = await runGate(
       [
         priorSummary,
