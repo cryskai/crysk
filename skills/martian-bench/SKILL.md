@@ -5,6 +5,8 @@ license: MIT
 metadata:
   author: pr-hero
   version: "1.0"
+  # Lab-only (needs the private ../deep-review lab): hidden from skills.sh / `npx skills add`.
+  internal: true
 ---
 
 ## Activation Contract
