@@ -743,6 +743,24 @@ describe("planCiReviewSkip — stopped", () => {
     expect(comment).toContain("Attempts on this PR: 1/");
   });
 
+  test("a stopped skip's step summary names the stop, not the score", () => {
+    const summary = planCiReviewSkip({
+      prNumber: PR,
+      ciMode: "advisory",
+      verdict: verdictFor(true),
+      admission: {
+        currentHead: HEAD_B,
+        reviewedHead: HEAD_A,
+        policyMode: POLICY.mode,
+        policyHash: POLICY_HASH,
+        deltaRisk: classifyChangedPaths(["docs/readme.md"]),
+      },
+    }).summaryMarkdown;
+    expect(summary).toContain("a maintainer stopped automatic reviews");
+    expect(summary).not.toContain("does not justify");
+    expect(summary).not.toContain("Prior score");
+  });
+
   test("any other skip keeps the score wording", () => {
     const comment = planCiReviewSkip({
       prNumber: PR,
