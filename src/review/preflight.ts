@@ -317,7 +317,7 @@ Usage:
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed
   pr-hero skills install [--force]
-                             Install the triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
+                             Install the pr-hero, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
   pr-hero ci init [--force]  Same scaffolding as "setup --ci", as its own
                              command
   pr-hero doctor [options]   Check system tools and environment readiness

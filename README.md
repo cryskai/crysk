@@ -111,13 +111,13 @@ the repo scaffold; skip it and you scaffold the repo yourself with `pr-hero init
 **Skill drift.** `setup` (and `upgrade`) installs the bundled skills into each agent's skills
 directory. A skill copy that differs from the bundled one and has no recorded digest is kept as it is and reported as drift, never overwritten, so your local edits survive; `pr-hero setup` prints each kept skill, and `pr-hero upgrade` replaces it.
 
-**Skills without pr-hero.** The two public skills are also on
+**Skills without pr-hero.** The public skills are also on
 [skills.sh](https://skills.sh/juanmaagd/pr-hero), installable into any agent with the
 [skills CLI](https://github.com/vercel-labs/skills):
 
 ```bash
 npx skills add juanmaagd/pr-hero                            # pick interactively
-npx skills add juanmaagd/pr-hero --skill pr-hero-triage     # or pr-hero-ci-setup
+npx skills add juanmaagd/pr-hero --skill pr-hero            # or pr-hero-triage, pr-hero-ci-setup
 ```
 
 **On step 6.** `gotchas.md` is injected verbatim into every hunter's system prompt, and

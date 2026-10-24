@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A general `pr-hero` agent skill ships beside triage and CI setup**: `skills/pr-hero/SKILL.md` is bundled into the
+  package, `pr-hero setup`, `pr-hero skills install` and `pr-hero upgrade` install it into every detected coding agent
+  under the same digest-guarded drift rules, and `pr-hero uninstall` removes it.
+
 ### Fixed
 - **The triage skill finds comment-triggered CI runs, names every `override-or-fix` case, and bounds forced runs**:
   the run-dir artifact is looked up by name (a `/pr-hero review` or `/pr-hero recheck` run is an `issue_comment` event
