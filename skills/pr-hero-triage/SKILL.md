@@ -95,6 +95,8 @@ Later review passes hunt only the push delta. Once the real defects from pass 1 
 2. **Do not auto-force past `ci_max_attempts` on routine fix-ups.** The repository's `ci_max_attempts` (default `2`) exists specifically to stop diminishing-returns re-reviews. When step 0 returns `next_action: "review"` with reason *"The automatic review budget for this PR is used up"*, inspect `git diff <report.head>..<head>`: if the commits since `report.head` only applied straightforward fixes for already-triaged findings, **stop the loop**. Do not post `/pr-hero review`. Tell the user the PR has completed its review passes, the fixes are in place, and it is ready for `/pr-hero override` and merge.
 3. **Stop and recommend merge when only diminishing-returns items remain.** On `override-or-fix` (or pass 2+ when every real bug is fixed and the only remaining red-gate items are `deferred`, `misclassified`, or a contrived finding whose dismissal the adjudicator did not uphold), **do not cave in and edit the code**. Exit the loop, list the remaining finding(s) with a one-line explanation of why they are contrived/out-of-scope, and tell the user the PR is ready to `/pr-hero override` and merge.
 
+When that stop is already met and a push would start another review, cancel the in-flight run instead of waiting it out: `npx -y pr-hero cancel --pr <n> [--override] --wait --json`. Pass `--override` only when an override is already authorized; otherwise omit it and ask before overriding.
+
 ### B. Requesting or suggesting another review when workflow rules skipped it
 
 The opposite happens when a repository's workflow policy (`once_per_pr`, `thresholded`, `risk_aware` below the score floor, `ci_max_attempts` exhausted, or the size gate) suppresses an automatic review on a push that **genuinely changed load-bearing code**:
@@ -207,7 +209,7 @@ current head:
    `--verdict` from the adjudicator. `--issue` is optional and only valid
    with `--tag deferred`.
 6. **Advance the loop in one batch once all findings on this head are answered:**
-   - **If you made any code fixes (`applied` or unthreaded blocking fixes):** commit and `git push` all fixes in a single push, then immediately run `npx -y pr-hero status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/pr-hero recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
+   - **If you made any code fixes (`applied` or unthreaded blocking fixes):** commit and `git push` all fixes in a single push. If this round already met section A's diminishing-returns stop (round ≥ 2, zero blocking findings, only low-severity or contrived advisory nits, and the diff just pushed is a small routine fix-up), do not wait out the new `synchronize` review: `npx -y pr-hero cancel --pr <n> --wait --json` when you must ask before overriding, or `npx -y pr-hero cancel --pr <n> --override --wait --json` when an override is already authorized. Otherwise run `npx -y pr-hero status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/pr-hero recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
    - **If no code changes were needed:** run `npx -y pr-hero status --pr <n> --wait --json` and execute its `next_action` (`recheck` when blocking findings were `dismissed`, or `done` when the gate is already green).
 
    *(Note: The MCP server is strictly read-only for querying runs, findings, and

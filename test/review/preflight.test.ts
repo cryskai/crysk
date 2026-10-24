@@ -2611,6 +2611,52 @@ describe("parseArgs status", () => {
   });
 });
 
+describe("parseArgs cancel", () => {
+  test("accepts cancel --pr with --override, --wait, --json, and --repo", () => {
+    const { command, options } = parseArgs([
+      "cancel",
+      "--repo",
+      "/tmp/repo",
+      "--pr",
+      "12",
+      "--override",
+      "--wait",
+      "--json",
+    ]);
+    expect(command).toBe("cancel");
+    expect(options.pr).toBe(12);
+    expect(options.repo).toBe("/tmp/repo");
+    expect(options.override).toBe(true);
+    expect(options.wait).toBe(true);
+    expect(options.json).toBe(true);
+    expect(HELP_TEXT).toContain(
+      "pr-hero cancel --pr <n> [--override] [--wait] [--json]",
+    );
+  });
+
+  test("--override defaults --wait on, and --pr must be a positive integer", () => {
+    expect(parseArgs(["cancel", "--pr", "3", "--override"]).options.wait).toBe(
+      true,
+    );
+    expect(() => parseArgs(["cancel"])).toThrow(/cancel requires --pr/);
+    expect(() => parseArgs(["cancel", "--pr"])).toThrow(/cancel requires --pr/);
+    expect(() => parseArgs(["cancel", "--pr", "12abc"])).toThrow(CliUsageError);
+  });
+
+  test("rejects a flag cancel does not own, and --override on any other command", () => {
+    expect(() => parseArgs(["cancel", "--pr", "12", "--dry-run"])).toThrow(
+      /cancel takes only/,
+    );
+    expect(() => parseArgs(["cancel", "--pr", "12", "--post"])).toThrow(
+      CliUsageError,
+    );
+    expect(() => parseArgs(["review", "--override"])).toThrow(
+      /--override only applies to the cancel command/,
+    );
+    expect(() => parseArgs(["nope"])).toThrow(/"cancel"/);
+  });
+});
+
 describe("skills install (non-interactive skill sync)", () => {
   test("skills install parses to command skills with the install subcommand", () => {
     const parsed = parseArgs(["skills", "install"]);

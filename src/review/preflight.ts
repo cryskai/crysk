@@ -129,12 +129,13 @@ export interface CliOptions {
   // off disk) applied to publishing/triaging instead of aggregating.
   // Required by both; parseArgs enforces it.
   from?: string;
-  // `status` only (ROADMAP S9): print one JSON object on stdout instead of the human lines.
+  // `status` and `cancel`: print one JSON object on stdout instead of the human lines.
   // Refused on every other command, so the flag never parses and then does nothing.
   json?: boolean;
-  // `status` only: poll GitHub until an in-flight (or newly-triggered) PR review settles, then
-  // emit the settled status. Refused on every other command.
+  // `status` and `cancel`: poll until the read settles. `cancel --override` turns this on.
   wait?: boolean;
+  // `cancel` only: post `/pr-hero override` after the cancelled run has settled.
+  override?: boolean;
   // The escape hatch for change 3's default. See resolveDiffRange's WHY: the
   // three-dot (merge-base) range is right almost always, and this flag exists
   // for the rare caller who genuinely wants the literal two-point diff.
@@ -293,6 +294,7 @@ export interface ParsedCli {
     | "post"
     | "triage"
     | "status"
+    | "cancel"
     | "gc"
     | "usage"
     | "reverts"
@@ -368,6 +370,12 @@ Usage:
                              stderr. Exits 1 with no stdout when any read
                              fails. Skills drive review -> reply -> fix -> wait
                              from its next_action
+  pr-hero cancel --pr <n> [--override] [--wait] [--json]
+                             Cancel an in-flight or queued pr-hero review.
+                             --override posts /pr-hero override only after
+                             that run has settled (and implies --wait). With
+                             --json, one object on stdout (pr-hero.cancel/v1);
+                             without it, lines on stderr
   pr-hero reverts [options]  Mine the repo's default branch for PRs that were
                              later reverted or hotfixed, and write them as
                              markdown CANDIDATES for human confirmation. Runs
@@ -481,8 +489,10 @@ Options:
                       case-sensitive). Default: bug
   --runs <dir>        ledger only: the runs root to scan for comparison.json
                       files (default: ~/.prhero/repos/<origin>/runs)
-  --json              status only: print the status as one JSON object on
-                      stdout (schema pr-hero.status/v1)
+  --json              status and cancel: print one JSON object on stdout
+                      (pr-hero.status/v1 or pr-hero.cancel/v1)
+  --override          cancel only: after the cancelled run settles, post
+                      /pr-hero override and wait until the gate records it
   --from <dir>        post/triage only: the run dir to read findings.json and
                       anchor.patch or diff.patch (post and triage reply) or comparison.json
                       (triage bind) from (required). triage reply maps
@@ -655,6 +665,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     | "post"
     | "triage"
     | "status"
+    | "cancel"
     | "gc"
     | "usage"
     | "reverts"
@@ -720,6 +731,10 @@ export function parseArgs(argv: string[]): ParsedCli {
     }
     if (arg === "--wait") {
       options.wait = true;
+      continue;
+    }
+    if (arg === "--override") {
+      options.override = true;
       continue;
     }
     if (arg === "--dry-run") {
@@ -960,6 +975,7 @@ export function parseArgs(argv: string[]): ParsedCli {
       arg !== "post" &&
       arg !== "triage" &&
       arg !== "status" &&
+      arg !== "cancel" &&
       arg !== "gc" &&
       arg !== "usage" &&
       arg !== "reverts" &&
@@ -974,7 +990,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     ) {
       throw new CliUsageError(
         `unknown command: ${arg} (the commands are "menu", "review", "init", "setup", "doctor", ` +
-          '"activity", "ledger", "watch", "post", "triage", "status", "gc", "usage", ' +
+          '"activity", "ledger", "watch", "post", "triage", "status", "cancel", "gc", "usage", ' +
           '"reverts", "corpus", "config", "mcp", "upgrade", "uninstall", "ci" and "skills")',
       );
     }
@@ -1127,12 +1143,38 @@ export function parseArgs(argv: string[]): ParsedCli {
         );
       }
     }
+  } else if (command === "cancel") {
+    if (options.pr === undefined || options.pr === "current") {
+      throw new CliUsageError("cancel requires --pr <n> (a PR number)");
+    }
+    for (const arg of argv) {
+      if (
+        arg.startsWith("-") &&
+        arg !== "--pr" &&
+        arg !== "--override" &&
+        arg !== "--wait" &&
+        arg !== "--json" &&
+        arg !== "--repo"
+      ) {
+        throw new CliUsageError(
+          `cancel takes only --pr <n>, --override, --wait, --json, and --repo, not ${arg}`,
+        );
+      }
+    }
+    if (options.override === true) options.wait = true;
   } else {
     if (options.json) {
-      throw new CliUsageError("--json only applies to the status command");
+      throw new CliUsageError(
+        "--json only applies to the status command and the cancel command",
+      );
     }
     if (options.wait) {
-      throw new CliUsageError("--wait only applies to the status command");
+      throw new CliUsageError(
+        "--wait only applies to the status command and the cancel command",
+      );
+    }
+    if (options.override) {
+      throw new CliUsageError("--override only applies to the cancel command");
     }
   }
   // `post` (ROADMAP B6) and `triage` (ROADMAP B6c) share the same shape:
