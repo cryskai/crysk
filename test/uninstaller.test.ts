@@ -44,6 +44,7 @@ describe("uninstaller (lifecycle foundations)", () => {
       for (const skillName of [
         "pr-hero-triage",
         "pr-hero-ci-setup",
+        "pr-hero-pr",
         "pr-hero",
       ]) {
         expect(plan.agentEnvCleanups).toContain(

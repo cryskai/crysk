@@ -159,6 +159,7 @@ export async function planUninstallation(
       for (const skillName of [
         "pr-hero-triage",
         "pr-hero-ci-setup",
+        "pr-hero-pr",
         "pr-hero",
       ]) {
         const skillPath = path.join(env.skillsDir, skillName);
