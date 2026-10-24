@@ -62,12 +62,15 @@ jobs:
     # request into ONE group, because head_ref is empty on issue_comment, so
     # any comment anywhere could cancel any in-flight review.
     #
-    # Only a new push cancels. The group filter is a prefix, so a near-miss
-    # comment can claim the pull request's group too; cancelling there would
-    # kill a paid in-flight review before the action ignored the comment. A
-    # comment run queues instead. A push never waits: it cancels whatever is
-    # running, a forced comment run included, because the head it reviewed
-    # is gone (comment again on the new head).
+    # A push cancels, and so does an exact `/pr-hero override` from an
+    # OWNER, MEMBER, or COLLABORATOR; cancel-in-progress is an exact body
+    # match, so a near-miss such as `/pr-hero override please` queues and
+    # cannot kill a paid in-flight review. The group filter is a prefix, so
+    # a near-miss comment can claim the pull request's group too; cancelling
+    # there would kill a paid in-flight review before the action ignored the
+    # comment. A comment run queues instead. A push never waits: it cancels
+    # whatever is running, a forced comment run included, because the head
+    # it reviewed is gone (comment again on the new head).
     #
     # GitHub keeps one PENDING run per group, and a newer run replaces it. So
     # a comment enters the pull request's group only when it starts with
@@ -93,7 +96,7 @@ jobs:
     # skipped job can never cancel or replace a review.
     concurrency:
       group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && (github.event.comment.body == '/pr-hero override' || github.event.comment.body == '/pr-hero override\r\n' || github.event.comment.body == '/pr-hero override\n') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) }}
     runs-on: ubuntu-latest
     # Backstop for a HUNG runner, not a second review budget. pr-hero already
     # enforces its own 75-minute whole-pipeline ceiling, which closes
