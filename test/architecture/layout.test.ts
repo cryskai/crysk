@@ -163,6 +163,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "plan",
       "pr",
       "posting",
+      "pr-cancel",
       "pr-status",
       "preflight",
       "publish-outcome",
