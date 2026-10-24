@@ -126,7 +126,7 @@ export interface PrStatusComment {
 }
 
 export const STATUS_WAIT_POLL_INTERVAL_MS = 15_000;
-export const STATUS_WAIT_STARTUP_GRACE_MS = 90_000;
+export const STATUS_WAIT_STARTUP_GRACE_MS = 180_000;
 export const STATUS_WAIT_MAX_MS = IN_FLIGHT_TTL_MS;
 
 const TRIGGER_COMMENT_BODIES = new Set([

@@ -81,6 +81,30 @@ it**. The four tags are peers. None is the default.
   `deferred` (with a real scope argument) is the honest move. Rubber-stamping a fix you did
   not verify is the failure this section exists to prevent.
 
+## Review judgment: when to stop vs. when to request another pass
+
+You also own the judgment of whether the PR needs **zero more reviews** (stop and merge) or **one more forced review** (when workflow rules suppressed an automatic run on a risky change). Always compare `report.head` against `head` in `pr-hero status --pr <n> --json` and inspect `git diff <report.head>..<head>`:
+
+### A. Stopping diminishing returns (when to stop reviewing and merge)
+
+Later review passes hunt only the push delta. Once the real defects from pass 1 are fixed, hunters scanning a small fix-up commit can surface increasingly contrived, speculative, or nitpicky claims. **Fixing a contrived finding just to turn the gate green is worse than a wasted edit:** it creates a new push, triggers another review pass on an even smaller delta, and feeds an endless spiral of defensive code and absurd findings.
+
+1. **Never patch code to appease a contrived or over-severitied finding.**
+   - If the claimed bug requires an impossible precondition, contradicts an intentional invariant, or is already guarded: tag it `dismissed` with cited code and use `/pr-hero recheck` so the CI adjudicator clears it **without** a code change or a new push.
+   - If the observation is technically true but trivial, stylistic, pre-existing, or inflated to blocking: tag it `misclassified` or `deferred`. Never rewrite working code just to avoid asking for `/pr-hero override`.
+2. **Do not auto-force past `ci_max_attempts` on routine fix-ups.** The repository's `ci_max_attempts` (default `2`) exists specifically to stop diminishing-returns re-reviews. When step 0 returns `next_action: "review"` with reason *"The automatic review budget for this PR is used up"*, inspect `git diff <report.head>..<head>`: if the commits since `report.head` only applied straightforward fixes for already-triaged findings, **stop the loop**. Do not post `/pr-hero review`. Tell the user the PR has completed its review passes, the fixes are in place, and it is ready for `/pr-hero override` and merge.
+3. **Stop and recommend merge when only diminishing-returns items remain.** On `override-or-fix` (or pass 2+ when every real bug is fixed and the only remaining red-gate items are `deferred`, `misclassified`, or a contrived finding whose dismissal the adjudicator did not uphold), **do not cave in and edit the code**. Exit the loop, list the remaining finding(s) with a one-line explanation of why they are contrived/out-of-scope, and tell the user the PR is ready to `/pr-hero override` and merge.
+
+### B. Requesting or suggesting another review when workflow rules skipped it
+
+The opposite happens when a repository's workflow policy (`once_per_pr`, `thresholded`, `risk_aware` below the score floor, `ci_max_attempts` exhausted, or the size gate) suppresses an automatic review on a push that **genuinely changed load-bearing code**:
+- Under `once_per_pr`, `thresholded`, or `risk_aware`, a skipped push can inherit a carried `success` status from `report.head`, so `next_action` reads `"done"` even though `report.head !== head` (the commits `report.head..head` were never reviewed).
+- Under `ci_max_attempts` or the size/budget gate, the automatic run is blocked and `report.head !== head`.
+
+Whenever `report.head !== head`, inspect `git diff <report.head>..<head>`:
+- If that unreviewed delta introduced **new business logic, state-machine or concurrency changes, auth/security/isolation edits, or a non-trivial refactor** (for example, fixing a finding required redesigning a function rather than adding a guard), an extra review **is** justified:
+  - When `next_action` is `"review"` or `"override-or-fix"` (and within the forced-run bound below), trigger `gh pr comment <n> --body "/pr-hero review"` and subscribe with `npx -y pr-hero status --pr <n> --wait --json` — or, if `next_action` is `"done"` on a carried green status (or the forced-run bound is reached), explicitly **recommend running `/pr-hero review`** to the user and name the exact files/changes in `report.head..head` that warrant a fresh pass before merging.
+
 ## The loop, end to end
 
 **Run this as a continuous autonomous loop (`while next_action !== "done"`).** Never end your turn or stop to ask the human for permission between `triage`, fixing code, `git push`, `recheck`, `review`, and waiting for CI to finish. Stop only when `next_action === "done"` or one of the hard escalation stops below triggers (repeated gate/runner failure, 6 forced runs on one head, 2 consecutive `inconclusive` heads, or `override-or-fix` with nothing left you can fix).
@@ -99,7 +123,7 @@ it**. The four tags are peers. None is the default.
    - `wait`: if `--wait` was omitted, re-run with `--wait` and let it block until the review finishes.
    - `review`: no review has run on this head, the last one did not finish, the CI adjudicator
      upheld every dismissal and the next review will stop counting them, or the automatic review
-     budget for this PR is used up (or the review policy is manual-only). Check the forced-run bound
+     budget for this PR is used up (or the review policy is manual-only). **Exception — budget used up on a routine fix-up:** when the reason is that the automatic review budget is used up and the latest push only fixed already-triaged findings (see "Stopping diminishing returns" above), do **not** force another review; stop the loop and report that the PR is ready for `/pr-hero override` and merge. Otherwise check the forced-run bound
      below, comment `gh pr comment <n> --body "/pr-hero review"`, and immediately run step 0 with `--wait`.
    - `triage`: a live blocking finding on this head has no triage reply at the head it was posted
      on, or the gate is green and a finding posted on this head has no reply yet (advisory findings
@@ -116,13 +140,12 @@ it**. The four tags are peers. None is the default.
        (model or credential), or ask a maintainer to override;
      - every blocking finding is already answered but none can clear without a fix (a dismissal the
        CI adjudicator rejected, a `deferred` / `misclassified` tag, or a `dismissed` finding with no
-       review thread, which no adjudicator can rule on): fix, commit, and `git push` (then step 0 `--wait`), or ask a maintainer to
-       override;
+       review thread, which no adjudicator can rule on): if the adjudicator's rejection exposed a real defect you missed, fix, commit, and `git push` (then step 0 `--wait`); if the finding is `deferred`, `misclassified`, or still contrived/absurd ("Stopping diminishing returns" above), **do not edit code to appease it** — exit the loop and tell the maintainer the PR is ready for `/pr-hero override` and merge;
      - the red gate names no live blocking finding on this head (the `reason` quotes the gate
        description): read that description and act on what it says; when it names nothing you can
        fix, ask a maintainer.
    - `done`: nothing is owed on this head. The gate passed (or an override unlocked it) and every
-     finding posted on this head has a reply. Exit the loop and report the final summary to the user.
+     finding posted on this head has a reply. Before exiting, check whether `report.head !== head` (a green status carried over an unreviewed push under `once_per_pr`, `thresholded`, or `risk_aware`): if `git diff <report.head>..<head>` contains non-trivial logic or risky changes ("Requesting or suggesting another review" above), recommend `/pr-hero review` naming those changes; otherwise exit the loop and report that the PR is ready to merge.
 
    **Bound the forced runs.** `/pr-hero review` and `/pr-hero recheck` each run a full paid review
    that bypasses the size, budget and admission gates (`ci_max_attempts` included), and a gate

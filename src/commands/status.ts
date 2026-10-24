@@ -10,6 +10,7 @@
 
 import { resolveRepoRoot } from "#git/git";
 import {
+  CommentsTruncatedError,
   fetchCommitStatuses,
   fetchPrComments,
   fetchPrReviewComments,
@@ -78,47 +79,77 @@ export async function runStatusCommand(input: {
   const sleep =
     input.sleepFn ??
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  let elapsedMs = 0;
+  let sleptMs = 0;
   const baseNowMs = input.nowMs;
   const readNow =
     input.clock ??
-    (baseNowMs !== undefined ? () => baseNowMs + elapsedMs : () => Date.now());
+    (baseNowMs !== undefined ? () => baseNowMs + sleptMs : () => Date.now());
+  const startMs = readNow();
+  let lastHead: string | undefined;
+  let headStartMs = startMs;
+  let polls = 0;
+  let consecutivePollErrors = 0;
 
   let status: PrStatusJson;
   while (true) {
     const nowMs = readNow();
-    const target = resolvePrTarget(
-      await ghPrView(operatorRoot, pr, { spawnFn, timeoutMs: viewTimeoutMs }),
-    );
-    const head = target.headSha;
-    // Sequential on purpose: each read names its own failure, and a failed read stops the rest.
-    const statuses = await fetchCommitStatuses(operatorRoot, head, {
-      spawnFn,
-      failClosed: true,
-    });
-    const issueComments = await fetchPrComments(operatorRoot, pr, {
-      spawnFn,
-      timeoutMs: commentTimeoutMs,
-    });
-    const reviewComments = await fetchPrReviewComments(operatorRoot, pr, {
-      spawnFn,
-      timeoutMs: commentTimeoutMs,
-    });
-    status = buildPrStatus({
-      pr,
-      head,
-      nowMs,
-      statuses,
-      issueComments,
-      reviewComments,
-    });
+    const elapsedMs = nowMs - startMs;
+    polls += 1;
+    let issueComments: Awaited<ReturnType<typeof fetchPrComments>>;
+    try {
+      const target = resolvePrTarget(
+        await ghPrView(operatorRoot, pr, { spawnFn, timeoutMs: viewTimeoutMs }),
+      );
+      const head = target.headSha;
+      if (head !== lastHead) {
+        lastHead = head;
+        headStartMs = nowMs;
+      }
+      // Sequential on purpose: each read names its own failure, and a failed read stops the rest.
+      const statuses = await fetchCommitStatuses(operatorRoot, head, {
+        spawnFn,
+        failClosed: true,
+      });
+      issueComments = await fetchPrComments(operatorRoot, pr, {
+        spawnFn,
+        timeoutMs: commentTimeoutMs,
+      });
+      const reviewComments = await fetchPrReviewComments(operatorRoot, pr, {
+        spawnFn,
+        timeoutMs: commentTimeoutMs,
+      });
+      status = buildPrStatus({
+        pr,
+        head,
+        nowMs,
+        statuses,
+        issueComments,
+        reviewComments,
+      });
+      consecutivePollErrors = 0;
+    } catch (err) {
+      const retryable =
+        input.wait === true &&
+        polls > 1 &&
+        err instanceof CliError &&
+        !(err instanceof CliUsageError) &&
+        !(err instanceof CommentsTruncatedError) &&
+        consecutivePollErrors < 2 &&
+        elapsedMs + pollIntervalMs <= maxWaitMs;
+      if (!retryable) throw err;
+      consecutivePollErrors += 1;
+      await sleep(pollIntervalMs);
+      sleptMs += pollIntervalMs;
+      continue;
+    }
+    const headElapsedMs = nowMs - headStartMs;
     if (
       !input.wait ||
       !shouldWaitPrStatus({
         status,
         issueComments,
         nowMs,
-        elapsedMs,
+        elapsedMs: headElapsedMs,
         startupGraceMs: input.startupGraceMs,
       })
     ) {
@@ -130,7 +161,7 @@ export async function runStatusCommand(input: {
       );
     }
     await sleep(pollIntervalMs);
-    elapsedMs += pollIntervalMs;
+    sleptMs += pollIntervalMs;
   }
   if (input.json) {
     const write = input.out ?? ((text: string) => process.stdout.write(text));
