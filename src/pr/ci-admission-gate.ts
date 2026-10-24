@@ -607,8 +607,13 @@ async function stoppedByMaintainer(
   spawnFn: typeof Bun.spawn | undefined,
   sleepFn: (ms: number) => Promise<void>,
 ): Promise<boolean> {
+  const commands = stopCommandsNewestFirst(issueComments);
+  // Nothing older than the oldest stop can change the answer: with no stop
+  // left below it, the walk ends "not stopped" anyway. So a PR without a stop
+  // looks up nobody, however many review commands it has.
+  const oldestStop = commands.map((c) => c.kind).lastIndexOf("stop");
   const permissions = new Map<string, string | null>();
-  for (const command of stopCommandsNewestFirst(issueComments)) {
+  for (const command of commands.slice(0, oldestStop + 1)) {
     let permission = permissions.get(command.user);
     if (!permissions.has(command.user)) {
       permission = await stopAuthorPermission(

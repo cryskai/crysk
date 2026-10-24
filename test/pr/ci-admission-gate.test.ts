@@ -1830,6 +1830,24 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     expect(result.exitCode).toBeUndefined();
   });
 
+  test("review commands with no stop on the PR cost no permission lookup", async () => {
+    const calls: string[][] = [];
+    const result = await runGate(
+      [
+        priorSummary,
+        comment(2, "visitor", "/pr-hero review"),
+        comment(3, "maint", "/pr-hero recheck"),
+      ],
+      [],
+      EMPTY_LOCAL_CONFIG,
+      calls,
+    );
+    expect(result.exitCode).toBeUndefined();
+    expect(calls.some((argv) => argv.join(" ").includes("collaborators"))).toBe(
+      false,
+    );
+  });
+
   test("a maintainer's recheck command after the stop lifts it too", async () => {
     const result = await runGate(
       [
