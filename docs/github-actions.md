@@ -47,6 +47,7 @@ Action.
 
 ```yaml
 name: pr-hero Review
+run-name: "pr #${{ github.event.pull_request.number || github.event.issue.number }}"
 
 on:
   pull_request:

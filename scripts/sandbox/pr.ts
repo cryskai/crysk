@@ -166,6 +166,7 @@ async function stopPrRuns(
   const scope: RunScope = {
     branch: pr.headRefName,
     title: pr.title,
+    pr: pr.number,
     prCreatedAtMs: created,
     startedAtMs: created,
   };

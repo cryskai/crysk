@@ -13,11 +13,13 @@ import {
 import {
   CANCELABLE_RUN_STATUSES,
   type CancelledRunFact,
+  extractRunIdFromTargetUrl,
   PR_CANCEL_SCHEMA,
   type PrCancelJson,
   renderPrCancelLines,
   selectCancelableRuns,
   type WorkflowRunFact,
+  workflowAdmitsOverrideComment,
 } from "#pr/pr-cancel";
 import {
   buildPrStatus,
@@ -94,7 +96,7 @@ export async function runCancelCommand(input: {
     await ghPrView(operatorRoot, pr, { spawnFn, timeoutMs: viewTimeoutMs }),
   );
   const headSha = target.headSha;
-  const prTitle = target.title;
+  let prTitle = target.title;
   const slug = await ghRepoNameWithOwner(operatorRoot, {
     spawnFn,
     timeoutMs: ghTimeoutMs,
@@ -105,6 +107,10 @@ export async function runCancelCommand(input: {
 
   const ghCall = (args: string[]) =>
     gh(operatorRoot, args, spawnFn, ghTimeoutMs);
+
+  if (prTitle.length > 0) {
+    prTitle = await uniqueOpenPrTitle(ghCall, slug, pr, prTitle);
+  }
 
   const loadStatuses = () =>
     fetchCommitStatuses(operatorRoot, headSha, {
@@ -123,6 +129,13 @@ export async function runCancelCommand(input: {
       issueComments: [],
       reviewComments: [],
     }).gate;
+    const gateRunId = gate.pending_in_flight
+      ? extractRunIdFromTargetUrl(gate.target_url)
+      : null;
+    if (gateRunId !== null && !runs.some((run) => run.id === gateRunId)) {
+      const gateRun = await readListedRun(ghCall, slug, gateRunId);
+      if (gateRun !== null) runs.push(gateRun);
+    }
     return selectCancelableRuns({
       pr,
       head: headSha,
@@ -146,6 +159,15 @@ export async function runCancelCommand(input: {
       sleptMs += pollIntervalMs;
       selected = await selectFrom();
     }
+  }
+
+  let floor = 0;
+  if (input.override === true) {
+    const before = await fetchPrComments(operatorRoot, pr, {
+      spawnFn,
+      timeoutMs: ghTimeoutMs,
+    });
+    for (const comment of before) floor = Math.max(floor, comment.id);
   }
 
   const cancelled: CancelledRunFact[] = [];
@@ -176,12 +198,6 @@ export async function runCancelCommand(input: {
         `pr-hero cancel: PR #${pr} head moved before /pr-hero override was posted`,
       );
     }
-    const before = await fetchPrComments(operatorRoot, pr, {
-      spawnFn,
-      timeoutMs: ghTimeoutMs,
-    });
-    let floor = 0;
-    for (const comment of before) floor = Math.max(floor, comment.id);
     const posted = await ghCall([
       "pr",
       "comment",
@@ -195,6 +211,14 @@ export async function runCancelCommand(input: {
     overrideRequested = true;
     const overrideStart = readNow();
     while (true) {
+      const moved = resolvePrTarget(
+        await ghPrView(operatorRoot, pr, { spawnFn, timeoutMs: viewTimeoutMs }),
+      );
+      if (moved.headSha !== headSha) {
+        throw new CliError(
+          `pr-hero cancel: PR #${pr} head moved while waiting for /pr-hero override`,
+        );
+      }
       const nowMs = readNow();
       const snap = await readStatus({
         operatorRoot,
@@ -317,9 +341,11 @@ async function listWorkflowRuns(
       `repos/${slug}/actions/workflows/pr-hero.yml/runs?per_page=100&status=${status}`,
     ]);
     if (!result.ok) {
-      throw new CliError(
-        `gh api actions/runs failed: ${result.stderr.trim() || "gh failed"}`,
-      );
+      const detail = result.stderr.trim() || "gh failed";
+      // The workflow file is not on the default branch yet (a bootstrap PR),
+      // or it was renamed. The gate's own run is still cancellable.
+      if (byId.size === 0 && isMissingWorkflow(detail)) return [];
+      throw new CliError(`gh api actions/runs failed: ${detail}`);
     }
     for (const run of readWorkflowRuns(result.stdout)) byId.set(run.id, run);
   }
@@ -416,26 +442,83 @@ function newestOverrideIdAfter(
   return postedId;
 }
 
+function isMissingWorkflow(detail: string): boolean {
+  return /\b404\b/.test(detail) || detail.includes("Not Found");
+}
+
+async function readListedRun(
+  ghCall: GhCall,
+  slug: string,
+  runId: number,
+): Promise<WorkflowRunFact | null> {
+  const result = await ghCall(["api", `repos/${slug}/actions/runs/${runId}`]);
+  if (!result.ok) return null;
+  try {
+    return readWorkflowRun(JSON.parse(result.stdout));
+  } catch {
+    return null;
+  }
+}
+
+async function uniqueOpenPrTitle(
+  ghCall: GhCall,
+  slug: string,
+  pr: number,
+  title: string,
+): Promise<string> {
+  const listed = await ghCall([
+    "pr",
+    "list",
+    "--repo",
+    slug,
+    "--state",
+    "open",
+    "--json",
+    "number,title",
+    "--limit",
+    "200",
+  ]);
+  if (!listed.ok) return "";
+  let rows: unknown;
+  try {
+    rows = JSON.parse(listed.stdout);
+  } catch {
+    return "";
+  }
+  if (!Array.isArray(rows)) return "";
+  const same = rows.filter(
+    (row) =>
+      typeof row === "object" &&
+      row !== null &&
+      (row as { title?: unknown }).title === title,
+  );
+  const only = same.length === 1 ? (same[0] as { number?: unknown }) : null;
+  if (only?.number !== pr) return "";
+  return title;
+}
+
 async function assertOverrideCanLand(
   ghCall: GhCall,
   slug: string,
   pr: number,
 ): Promise<void> {
-  const fork = await ghCall([
+  const headRepo = await ghCall([
     "api",
     `repos/${slug}/pulls/${pr}`,
     "--jq",
-    ".head.repo.fork",
+    '.head.repo.full_name // "missing"',
   ]);
-  const forkText = fork.ok ? fork.stdout.trim() : "";
-  if (forkText === "true") {
-    throw new CliError(
-      `pr-hero cancel: PR #${pr} is from a fork; /pr-hero override cannot land, so the review was not cancelled`,
-    );
-  }
-  if (forkText !== "false") {
+  const headName = headRepo.ok ? headRepo.stdout.trim() : "";
+  if (headName.length === 0) {
     throw new CliError(
       `pr-hero cancel: could not read whether PR #${pr} is a fork`,
+    );
+  }
+  // `.head.repo.fork` is true for every PR in a repository that is itself
+  // a fork, including a same-repo PR. The workflow compares full names.
+  if (headName !== slug) {
+    throw new CliError(
+      `pr-hero cancel: PR #${pr} is from a fork; /pr-hero override cannot land, so the review was not cancelled`,
     );
   }
   const permission = await ghCall([
@@ -455,7 +538,7 @@ async function assertOverrideCanLand(
     "-H",
     "Accept: application/vnd.github.raw",
   ]);
-  if (!workflow.ok || !workflow.stdout.includes("issue_comment:")) {
+  if (!workflow.ok || !workflowAdmitsOverrideComment(workflow.stdout)) {
     throw new CliError(
       `pr-hero cancel: ${slug} has no issue_comment pr-hero workflow, so /pr-hero override would not run; the review was not cancelled`,
     );

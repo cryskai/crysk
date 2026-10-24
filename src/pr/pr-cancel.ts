@@ -54,6 +54,34 @@ export function commentRunDisplayTitle(pr: number): string {
   return `pr #${pr}`;
 }
 
+// The default-branch workflow must actually start on an override comment.
+// A raw substring matches a comment and misses `on: [pull_request, issue_comment]`.
+export function workflowAdmitsOverrideComment(text: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = Bun.YAML.parse(text);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== "object" || parsed === null) return false;
+  const on = (parsed as { on?: unknown }).on;
+  const hasIssueComment =
+    on === "issue_comment" ||
+    (Array.isArray(on) && on.includes("issue_comment")) ||
+    (typeof on === "object" &&
+      on !== null &&
+      !Array.isArray(on) &&
+      "issue_comment" in on);
+  if (!hasIssueComment) return false;
+  const review = (parsed as { jobs?: { review?: { if?: unknown } } }).jobs
+    ?.review;
+  if (review === undefined) return true;
+  if (review.if === undefined) return true;
+  return (
+    typeof review.if === "string" && review.if.includes("/pr-hero override")
+  );
+}
+
 const RUN_ID_IN_ACTIONS_URL = /\/actions\/runs\/(\d+)(?:\/|$|\?|#)/;
 
 export function extractRunIdFromTargetUrl(
@@ -95,6 +123,7 @@ export function selectCancelableRuns(input: {
       (run.head_sha === input.head ||
         run.pull_requests.some((pull) => pull.number === input.pr));
     // head_sha on issue_comment is the default branch tip, not this PR.
+    // prTitle is empty when another open PR shares it: the title is not unique.
     const onIssueComment =
       run.event === "issue_comment" &&
       (gateRun ||

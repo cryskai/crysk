@@ -122,7 +122,7 @@ const emptyStatuses: ScriptEntry = {
 };
 
 const overrideCanLand: ScriptEntry[] = [
-  { match: [".head.repo.fork"], responses: [{ stdout: "false\n" }] },
+  { match: [".head.repo.full_name"], responses: [{ stdout: `${SLUG}\n` }] },
   { match: [".permissions.push"], responses: [{ stdout: "true\n" }] },
   {
     match: ["vnd.github.raw"],
@@ -390,6 +390,7 @@ describe("runCancelCommand", () => {
         match: [`actions/runs/${RUN_ID}`],
         responses: [{ stdout: JSON.stringify({ status: "completed" }) }],
       },
+      emptyComments,
     ]);
     const written: string[] = [];
     await expect(
@@ -640,6 +641,7 @@ describe("runCancelCommand", () => {
         match: [`actions/runs/${RUN_ID}`],
         responses: [{ stdout: JSON.stringify({ status: "in_progress" }) }],
       },
+      emptyComments,
     ]);
     const written: string[] = [];
     await expect(
@@ -744,7 +746,10 @@ describe("runCancelCommand", () => {
     const { spawnFn, calls } = makeFakeGh([
       repoView,
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
-      { match: [".head.repo.fork"], responses: [{ stdout: "true\n" }] },
+      {
+        match: [".head.repo.full_name"],
+        responses: [{ stdout: "stranger/widgets\n" }],
+      },
     ]);
     const written: string[] = [];
     await expect(
@@ -771,7 +776,10 @@ describe("runCancelCommand", () => {
     const { spawnFn, calls } = makeFakeGh([
       repoView,
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
-      { match: [".head.repo.fork"], responses: [{ stdout: "false\n" }] },
+      {
+        match: [".head.repo.full_name"],
+        responses: [{ stdout: `${SLUG}\n` }],
+      },
       { match: [".permissions.push"], responses: [{ stdout: "false\n" }] },
     ]);
     const written: string[] = [];
@@ -799,7 +807,10 @@ describe("runCancelCommand", () => {
     const { spawnFn, calls } = makeFakeGh([
       repoView,
       { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
-      { match: [".head.repo.fork"], responses: [{ stdout: "false\n" }] },
+      {
+        match: [".head.repo.full_name"],
+        responses: [{ stdout: `${SLUG}\n` }],
+      },
       { match: [".permissions.push"], responses: [{ stdout: "true\n" }] },
       {
         match: ["vnd.github.raw"],
@@ -842,5 +853,163 @@ describe("runCancelCommand", () => {
     });
     expect(code).toBe(0);
     expect(written).toEqual([]);
+  });
+
+  test("stops waiting when the head moves after /pr-hero override was posted", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      repoView,
+      {
+        match: ["pr", "view", "12"],
+        responses: [prView(HEAD), prView(HEAD), prView(OTHER)],
+      },
+      ...overrideCanLand,
+      emptyStatuses,
+      { match: ["per_page=100"], responses: [runsPayload(HEAD)] },
+      {
+        match: ["run", "cancel", String(RUN_ID)],
+        responses: [{ stdout: "" }],
+      },
+      {
+        match: [`actions/runs/${RUN_ID}`],
+        responses: [{ stdout: JSON.stringify({ status: "completed" }) }],
+      },
+      emptyComments,
+      {
+        match: ["--body", "/pr-hero override"],
+        responses: [{ stdout: "" }],
+      },
+    ]);
+    const written: string[] = [];
+    await expect(
+      runCancelCommand({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 12,
+        json: true,
+        override: true,
+        spawnFn,
+        nowMs: NOW,
+        sleepFn: async () => {},
+        out: (text) => written.push(text),
+      }),
+    ).rejects.toThrow(/head moved while waiting/);
+    expect(written).toEqual([]);
+    expect(calls.some((call) => call.argv.includes("--body"))).toBe(true);
+  });
+
+  test("does not cancel another PR's comment run when the title is shared", async () => {
+    const shared = {
+      stdout: JSON.stringify({
+        workflow_runs: [
+          {
+            ...workflowRun(OTHER),
+            id: 77,
+            event: "issue_comment",
+            display_title: "t",
+            pull_requests: [],
+          },
+        ],
+      }),
+    };
+    const { spawnFn, calls } = makeFakeGh([
+      repoView,
+      { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
+      {
+        match: ["pr", "list"],
+        responses: [
+          {
+            stdout: JSON.stringify([
+              { number: 12, title: "t" },
+              { number: 13, title: "t" },
+            ]),
+          },
+        ],
+      },
+      emptyStatuses,
+      { match: ["per_page=100"], responses: [shared] },
+      emptyComments,
+      emptyReviewComments,
+    ]);
+    const written: string[] = [];
+    const code = await runCancelCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(written[0] ?? "").cancelled_runs).toEqual([]);
+    expect(
+      calls.some(
+        (call) => call.argv.includes("cancel") && call.argv.includes("run"),
+      ),
+    ).toBe(false);
+  });
+
+  test("cancels the pending gate run when the workflow list 404s", async () => {
+    const pending = {
+      state: "pending",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: new Date(NOW).toISOString(),
+      description: "pr-hero: review in progress",
+      target_url: RUN_URL,
+    };
+    const { spawnFn, calls } = makeFakeGh([
+      repoView,
+      { match: ["pr", "view", "12"], responses: [prView(HEAD)] },
+      {
+        match: [`commits/${HEAD}/status`],
+        responses: [{ stdout: ndjson([pending]) }],
+      },
+      {
+        match: ["per_page=100"],
+        responses: [
+          {
+            exitCode: 1,
+            stderr:
+              "HTTP 404: Not Found (https://api.github.com/repos/acme/widgets/actions/workflows/pr-hero.yml)\n",
+          },
+        ],
+      },
+      {
+        match: [`actions/runs/${RUN_ID}`],
+        responses: [
+          { stdout: JSON.stringify(workflowRun(HEAD)) },
+          { stdout: JSON.stringify({ status: "completed" }) },
+        ],
+      },
+      {
+        match: ["run", "cancel", String(RUN_ID)],
+        responses: [{ stdout: "" }],
+      },
+      emptyComments,
+      emptyReviewComments,
+    ]);
+    const written: string[] = [];
+    const code = await runCancelCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      spawnFn,
+      nowMs: NOW,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(written[0] ?? "").cancelled_runs).toEqual([
+      {
+        run_id: RUN_ID,
+        previous_status: "in_progress",
+        settled: true,
+        html_url: RUN_URL,
+      },
+    ]);
+    expect(
+      calls.some(
+        (call) => call.argv.includes("cancel") && call.argv.includes("run"),
+      ),
+    ).toBe(true);
   });
 });

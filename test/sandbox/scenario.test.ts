@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { GOTCHAS_TEMPLATE, gotchasUnusableReason } from "#review/preflight";
+import { WORKFLOW_NAME } from "../../scripts/sandbox/markers";
 import {
   assertGhArgs,
   RailViolation,
@@ -15,7 +16,11 @@ import {
   renderScenarioTable,
   type ScenarioResult,
 } from "../../scripts/sandbox/report";
-import { DEFAULT_TIMEOUT_MS } from "../../scripts/sandbox/runs";
+import {
+  DEFAULT_TIMEOUT_MS,
+  isPrCommentRun,
+  type RunListItem,
+} from "../../scripts/sandbox/runs";
 import { phaseReadsLog, runScenarios } from "../../scripts/sandbox/scenario";
 import { findScenario, type Phase } from "../../scripts/sandbox/scenarios";
 import {
@@ -1564,5 +1569,36 @@ describe("phaseReadsLog: every list a phase asserts counts (S1)", () => {
       }),
     ).toBe(false);
     expect(phaseReadsLog(base)).toBe(false);
+  });
+});
+
+describe("isPrCommentRun", () => {
+  const since = Date.parse("2026-10-16T00:00:00Z");
+
+  function commentRun(displayTitle: string): RunListItem {
+    return {
+      databaseId: 1,
+      headSha: "abc",
+      status: "completed",
+      conclusion: "success",
+      workflowName: WORKFLOW_NAME,
+      url: "https://example.test/run/1",
+      displayTitle,
+      createdAt: "2026-10-16T00:00:00Z",
+    };
+  }
+
+  test("a comment run named pr #<n> belongs to that PR and not to another", () => {
+    const run = commentRun("pr #12");
+    expect(isPrCommentRun(run, "other title", since, 12)).toBe(true);
+    expect(isPrCommentRun(run, "other title", since, 13)).toBe(false);
+    expect(isPrCommentRun(run, "other title", since)).toBe(false);
+  });
+
+  test("the PR title still matches when the run is not named pr #<n>", () => {
+    expect(isPrCommentRun(commentRun("Ship it"), "Ship it", since)).toBe(true);
+    expect(isPrCommentRun(commentRun("Ship it"), "Ship it", since, 12)).toBe(
+      true,
+    );
   });
 });

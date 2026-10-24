@@ -1108,9 +1108,10 @@ async function findRerun(
 
 // The issue_comment run of the comment. It runs main's workflow, so its head is
 // main's and it names no PR branch, and it is not found by sha. It is the one run
-// that shows this scenario's PR title and was created at or after the comment. The
-// title keeps out a run from another scenario; the time keeps out an earlier run
-// that carries this title, such as one left by a timed-out attempt.
+// that shows this scenario's PR title, or `pr #<n>`, and was created at or after
+// the comment. The title or number keeps out a run from another scenario; the time
+// keeps out an earlier run that carries this title, such as one left by a timed-out
+// attempt.
 async function findCommentRun(
   deps: SandboxDeps,
   live: Live,
@@ -1121,7 +1122,7 @@ async function findCommentRun(
   }
   const title = scenarioTitle(live);
   const fresh = (await listCommentRuns(deps)).filter((r) =>
-    isPrCommentRun(r, title, commentedAt),
+    isPrCommentRun(r, title, commentedAt, live.pr?.number),
   );
   if (fresh.length > 1) {
     live.candidates = fresh.map((r) => r.databaseId);
@@ -1421,6 +1422,7 @@ function runScope(live: Live, pushedAt: number): RunScope {
   return {
     branch: live.branch,
     title: scenarioTitle(live),
+    pr: live.pr?.number,
     prCreatedAtMs: live.prCreatedAt,
     startedAtMs: pushedAt,
   };

@@ -5,6 +5,7 @@ import {
   renderPrCancelLines,
   selectCancelableRuns,
   type WorkflowRunFact,
+  workflowAdmitsOverrideComment,
 } from "#pr/pr-cancel";
 import { buildPrStatus, renderPrStatusLines } from "#pr/pr-status";
 
@@ -159,6 +160,38 @@ describe("selectCancelableRuns", () => {
       ],
     });
     expect(selected.map((fact) => fact.run_id)).toEqual([15]);
+  });
+});
+
+describe("workflowAdmitsOverrideComment", () => {
+  test("accepts a map trigger, an array trigger, and a job if that names the override", () => {
+    expect(
+      workflowAdmitsOverrideComment(
+        "on:\n  issue_comment:\n    types: [created]\n",
+      ),
+    ).toBe(true);
+    expect(
+      workflowAdmitsOverrideComment("on: [pull_request, issue_comment]\n"),
+    ).toBe(true);
+    expect(
+      workflowAdmitsOverrideComment(
+        "on:\n  issue_comment:\njobs:\n  review:\n    if: startsWith(github.event.comment.body, '/pr-hero override')\n",
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects a comment that only mentions the trigger, a pull_request-only workflow, and an if that drops the override", () => {
+    expect(
+      workflowAdmitsOverrideComment(
+        "# issue_comment: kept for later\non:\n  pull_request:\n",
+      ),
+    ).toBe(false);
+    expect(workflowAdmitsOverrideComment("on:\n  pull_request:\n")).toBe(false);
+    expect(
+      workflowAdmitsOverrideComment(
+        "on:\n  issue_comment:\njobs:\n  review:\n    if: startsWith(github.event.comment.body, '/pr-hero review')\n",
+      ),
+    ).toBe(false);
   });
 });
 

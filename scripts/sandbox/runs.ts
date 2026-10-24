@@ -44,8 +44,9 @@ export interface RunListItem {
   workflowName: string;
   url: string;
   event?: string;
-  // The run's title, which for a PR-triggered run is the PR's title. A comment run
-  // shows the title of the PR it was started on.
+  // The run's title. A pull_request run shows the PR title. An issue_comment run
+  // shows that title, or `pr #<n>` once the workflow's run-name is on the default
+  // branch.
   displayTitle: string;
   createdAt: string;
 }
@@ -88,11 +89,13 @@ export function throwIfStopped(stop: Stop | undefined): void {
 
 // Which runs belong to one scenario PR. Its pull_request runs are on its branch. Its
 // issue_comment runs are on main and name no branch, so they are matched by the PR's
-// title, which is unique to one scenario branch, and by creation time: a run created
-// before the PR, less the skew, cannot be one of its runs.
+// title or by `pr #<n>`, and by creation time: a run created before the PR, less the
+// skew, cannot be one of its runs.
 export interface RunScope {
   branch: string;
   title: string;
+  // The PR number, when one is open. A comment run named `pr #<n>` matches it.
+  pr?: number;
   // When GitHub created the PR. Undefined before a PR is open: no comment run can
   // exist then, so only the branch is read.
   prCreatedAtMs?: number;
@@ -143,16 +146,21 @@ export async function listCommentRuns(
   ]);
 }
 
-// Whether a comment run belongs to the PR with this title, created at or after
-// `sinceMs` (less the clock skew between this machine and GitHub's run times).
+// Whether a comment run belongs to this PR, created at or after `sinceMs` (less the
+// clock skew between this machine and GitHub's run times). The title matches a run
+// started before `run-name` is on the default branch; `pr #<n>` matches one after.
 export function isPrCommentRun(
   run: RunListItem,
   title: string,
   sinceMs: number,
+  prNumber?: number,
 ): boolean {
+  const titled =
+    run.displayTitle === title ||
+    (prNumber !== undefined && run.displayTitle === `pr #${prNumber}`);
   return (
     run.workflowName === WORKFLOW_NAME &&
-    run.displayTitle === title &&
+    titled &&
     Date.parse(run.createdAt) >= sinceMs - COMMENT_RUN_CLOCK_SKEW_MS
   );
 }
@@ -168,7 +176,7 @@ export async function listPrRuns(
   const since = scope.prCreatedAtMs;
   if (since === undefined) return onBranch;
   const comments = (await listCommentRuns(deps)).filter((r) =>
-    isPrCommentRun(r, scope.title, since),
+    isPrCommentRun(r, scope.title, since, scope.pr),
   );
   return [...onBranch, ...comments];
 }
