@@ -75,6 +75,7 @@ import {
 } from "./reporter";
 import {
   type CiReviewAdmissionVerdict,
+  type CiReviewSkipReason,
   ciAdmissionRemainingBudget,
   ciReviewManualRequiredDetail,
   ciReviewSkipDetail,
@@ -626,19 +627,30 @@ const COVERAGE_REASON_LABEL: Record<
   "once-per-pr": "once_per_pr policy allows one automatic review",
   "below-threshold": "prior findings below the re-review score floor",
   "low-risk-delta": "delta touches only low-risk paths",
+  stopped: "automatic reviews stopped by a maintainer",
 };
 
-function buildCoverageSkipComment(data: SkipCoverageSummary): string {
+function buildCoverageSkipComment(
+  data: SkipCoverageSummary,
+  reason: CiReviewSkipReason,
+): string {
+  // A stop is a maintainer's decision, not a score: the score line would
+  // blame the push for a skip it did not cause.
+  const stopped = reason === "stopped";
   const lines = [
     SKIP_COVERAGE_COMMENT_MARKER,
     "## pr-hero review skipped",
     "",
-    "⚠️ This push did not justify another review run.",
+    stopped
+      ? "⏸️ A maintainer stopped automatic reviews on this pull request."
+      : "⚠️ This push did not justify another review run.",
     "",
     `**${data.detail}**`,
     "",
-    `Prior score: ${data.priorScore} (re-review needs ≥ ${data.minScore}). ` +
-      `Attempts on this PR: ${data.reviewCount}/${data.maxAttempts}.`,
+    stopped
+      ? `Attempts on this PR: ${data.reviewCount}/${data.maxAttempts}.`
+      : `Prior score: ${data.priorScore} (re-review needs ≥ ${data.minScore}). ` +
+        `Attempts on this PR: ${data.reviewCount}/${data.maxAttempts}.`,
     "",
     "The existing review comment still describes the last head pr-hero " +
       "reviewed.",
@@ -736,7 +748,7 @@ export function planCiReviewSkip(input: {
     ...skipAdmissionSummaryFields(input.verdict, input.admission),
   };
   return {
-    comment: buildCoverageSkipComment(summary),
+    comment: buildCoverageSkipComment(summary, input.verdict.reason),
     markerPrefix: SKIP_COVERAGE_COMMENT_MARKER,
     summaryMarkdown: renderStepSummary(summary, input.ciMode),
     outputs: ciGateSkipOutputs("skipped-coverage", 0),

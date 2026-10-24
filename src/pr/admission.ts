@@ -233,6 +233,9 @@ export async function recordCiAdmissionGateSkip(input: {
   priorScore: number | null;
   blockingCount: number | null;
   advisoryCount: number | null;
+  // A skip that spent nothing and must not count against ci_max_attempts
+  // (a /pr-hero stop): settled as "gate-skipped", like a size or budget skip.
+  unspent?: boolean;
 }): Promise<void> {
   try {
     const state = await reserveCiAdmissionLedger({
@@ -247,7 +250,11 @@ export async function recordCiAdmissionGateSkip(input: {
       blockingCount: input.blockingCount,
       advisoryCount: input.advisoryCount,
     });
-    await settleCiAdmissionLedger(state, "skipped", input.reason);
+    await settleCiAdmissionLedger(
+      state,
+      input.unspent === true ? "gate-skipped" : "skipped",
+      input.reason,
+    );
   } catch {
     // The skip notice is the operator-facing outcome; a check-run write must
     // not block publishing it.
@@ -281,6 +288,7 @@ export type AdmissionStatusReason =
   | "once-per-pr"
   | "below-threshold"
   | "low-risk-delta"
+  | "stopped"
   | "max-attempts-exhausted"
   | "manual-only-policy";
 
@@ -307,7 +315,11 @@ export interface CarriedVerdict {
   statuses: readonly CommitStatusFact[];
 }
 
-type CarriedReason = "once-per-pr" | "below-threshold" | "low-risk-delta";
+type CarriedReason =
+  | "once-per-pr"
+  | "below-threshold"
+  | "low-risk-delta"
+  | "stopped";
 
 function isCarriedReason(
   reason: AdmissionStatusReason,
@@ -315,7 +327,8 @@ function isCarriedReason(
   return (
     reason === "once-per-pr" ||
     reason === "below-threshold" ||
-    reason === "low-risk-delta"
+    reason === "low-risk-delta" ||
+    reason === "stopped"
   );
 }
 
@@ -367,6 +380,7 @@ const CARRY_REASONS: readonly CarriedReason[] = [
   "once-per-pr",
   "below-threshold",
   "low-risk-delta",
+  "stopped",
 ];
 
 function finishedSuccessMatches(description: string): boolean {
@@ -533,6 +547,7 @@ export function admissionSkipDecision(
     case "once-per-pr":
     case "below-threshold":
     case "low-risk-delta":
+    case "stopped":
       break;
   }
   const label = ciReviewSkipLabel(input.reason);

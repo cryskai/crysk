@@ -433,7 +433,7 @@ exclusions, see the README): under CI it is read from the PR's base ref, never t
 | `ci_blocking_weight` | `2` | Score weight for blocking-tier findings. |
 | `ci_advisory_weight` | `1` | Score weight for advisory-tier findings. |
 | `ci_trusted_actors` | `[]` (+ `GITHUB_ACTOR`) | GitHub logins whose finding markers count as authoritative. |
-| `ci_admission_observe_only` | `false` | When `true`, admission still evaluates and emits a `::notice::` with the would-be decision but **always runs** the review. Use during rollout. |
+| `ci_admission_observe_only` | `false` | When `true`, admission still evaluates and emits a `::notice::` with the would-be decision but **always runs** the review. Use during rollout. A `/pr-hero stop` still skips: it is a maintainer's decision, not an automatic one. |
 
 #### `ci_review_policy` modes
 
@@ -585,7 +585,7 @@ The table shows the status and the job exit for each case:
 | Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `0` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
 | Size or budget skip (`/pr-hero review` reviews it anyway) | `failure`: `pr-hero skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
-| Admission skip for a low-risk or below-threshold delta, or once per PR | inherits the verdict of the pull request's last reviewed commit (see below): `success` `pr-hero: no review needed (<reason>); carried from <sha>`, or `failure` `pr-hero: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `pr-hero: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; with no readable verdict, `failure` `pr-hero skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
+| Admission skip for a low-risk or below-threshold delta, once per PR, or a `/pr-hero stop` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `pr-hero: no review needed (<reason>); carried from <sha>`, or `failure` `pr-hero: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `pr-hero: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; with no readable verdict, `failure` `pr-hero skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
 | Same head, already reviewed | none (that head's own status already exists) | none | `0` |
 | Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `pr-hero: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
@@ -627,6 +627,17 @@ clears its own finding once the re-review verifies it gone. `/pr-hero override` 
 turns the status green for that head with no new review. The re-review does not clear it by itself: a same-head
 `/pr-hero review` runs the same count, so the `failure` stays. The size and budget `failure` is the one that
 `/pr-hero review` clears, because that run passes both gates. `/pr-hero override` is described next.
+
+**Stopping automatic reviews.** Comment exactly `/pr-hero stop` on the pull request **before** the push that
+should not be reviewed. On every later push, admission skips the automatic review with the reason
+`automatic reviews stopped by a maintainer`, and the head inherits the last reviewed commit's verdict like any
+other admission skip: a red gate stays red until `/pr-hero override`. The newest `/pr-hero stop`, `/pr-hero review` or `/pr-hero recheck` comment from a user with write or admin
+access decides: a stop is in force until such a user comments a review or recheck. Commands from anyone else
+are passed over, so they can neither set a stop nor lift one (a fork author usually has only read access).
+Admission looks the permission up when it reads the comments, retrying once. When the permission cannot be
+read, a stop from that user does not count and a lift does, so the review runs. A stopped push spends no
+automatic attempt (`ci_max_attempts`), so the budget is intact when the stop is lifted. The stop starts no
+workflow run, so it gets no reaction and costs nothing. It does not cancel a review that is already running.
 
 **Rechecking a dismissal.** Comment exactly `/pr-hero recheck` on the pull request. It is `/pr-hero review` plus the CI adjudicator:
 the same write-access check and the same forced review of the head, and then the adjudicator rules on each pending `dismissed` reply

@@ -30,6 +30,7 @@ import {
   resolveReviewAttemptCount,
   scanPostedFindingTiers,
   stateReviewCount,
+  stopCommandsNewestFirst,
   validateAdmissionAuthority,
 } from "#ci/review-admission";
 import { CI_RISK_POLICY_VERSION, classifyChangedPaths } from "#ci/review-risk";
@@ -1385,5 +1386,96 @@ describe("a forced first review's summary reads as zero automatic reviews", () =
     expect(nextStateReviewCount({ existingSummaryId: null, state: null })).toBe(
       1,
     );
+  });
+});
+
+describe("evaluateCiReviewAdmission — stopped", () => {
+  const firstReview = {
+    currentHead: HEAD_A,
+    summaryHead: null,
+    markerSeen: false,
+    reviewCount: 0,
+    state: null,
+    admission: null,
+    postedFindings: null,
+    policy: DEFAULT_POLICY,
+  };
+
+  test("a stop skips even a PR's first review", () => {
+    const verdict = evaluateCiReviewAdmission(
+      admissionInput({ ...firstReview, stopped: true }),
+    );
+    expect(verdict.action === "skip" && verdict.reason).toBe("stopped");
+  });
+
+  test("an already reviewed head keeps its same-head reason under a stop", () => {
+    const verdict = evaluateCiReviewAdmission(
+      admissionInput({
+        ...firstReview,
+        summaryHead: HEAD_A,
+        markerSeen: true,
+        reviewCount: 1,
+        admission: parseCiAdmissionBlock(
+          admissionBody({ blocking: 2, advisory: 0 }),
+        ),
+        stopped: true,
+      }),
+    );
+    expect(verdict.action === "skip" && verdict.reason).toBe("same-head");
+  });
+
+  test("a stop does not skip the retry of a partial review of this same head", () => {
+    expect(
+      evaluateCiReviewAdmission(
+        admissionInput({
+          ...firstReview,
+          summaryHead: HEAD_A,
+          summaryComplete: false,
+          markerSeen: true,
+          reviewCount: 1,
+          stopped: true,
+        }),
+      ),
+    ).toEqual({ action: "run" });
+  });
+
+  test("an explicit forced run beats a stop", () => {
+    expect(
+      evaluateCiReviewAdmission(
+        admissionInput({ ...firstReview, stopped: true, forceOverride: true }),
+      ),
+    ).toEqual({ action: "run" });
+  });
+});
+
+describe("stopCommandsNewestFirst", () => {
+  const c = (user: string, body: string) => ({ user, body });
+
+  test("lists exact stop, review and recheck commands newest first", () => {
+    expect(
+      stopCommandsNewestFirst([
+        c("old", "/pr-hero stop"),
+        c("maint", "/pr-hero review --full"),
+        c("a", "  /pr-hero stop\n"),
+        c("b", "/pr-hero recheck"),
+        c("x", "looks good"),
+        c("y", "/pr-hero override"),
+      ]),
+    ).toEqual([
+      { user: "b", kind: "lift" },
+      { user: "a", kind: "stop" },
+      { user: "maint", kind: "lift" },
+      { user: "old", kind: "stop" },
+    ]);
+  });
+
+  test("ignores near misses and comments with no author", () => {
+    expect(
+      stopCommandsNewestFirst([
+        c("a", "/pr-hero stop please"),
+        c("b", "/pr-hero  stop"),
+        c("", "/pr-hero stop"),
+      ]),
+    ).toEqual([]);
   });
 });

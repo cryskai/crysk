@@ -377,15 +377,22 @@ function admissionMetricRows(
 }
 
 function skipCoverageLines(data: CiSkipCoverageSummary): string[] {
+  // A stop is a maintainer's decision, not a score (same wording rule as the
+  // PR comment, gates.ts buildCoverageSkipComment).
+  const stopped = data.admissionReason === "stopped";
   return [
     `### ⚠️ pr-hero Review Skipped — PR #${data.prNumber}`,
     "",
-    "**Reason:** this push does not justify another review run.",
+    stopped
+      ? "**Reason:** a maintainer stopped automatic reviews on this pull request."
+      : "**Reason:** this push does not justify another review run.",
     "",
     "| Metric | Value |",
     "| --- | --- |",
     `| Skip reason | ${data.reason} |`,
-    `| Prior score | ${data.priorScore} (minimum ${data.minScore}) |`,
+    ...(stopped
+      ? []
+      : [`| Prior score | ${data.priorScore} (minimum ${data.minScore}) |`]),
     `| Attempts used | ${data.reviewCount}/${data.maxAttempts} |`,
     ...admissionMetricRows(data),
     "",

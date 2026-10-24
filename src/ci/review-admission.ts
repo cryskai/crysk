@@ -24,6 +24,7 @@ import {
   type DeltaRiskAssessment,
   deltaRiskTriggersReview,
 } from "./review-risk";
+import { parseReviewCommand, STOP_COMMAND } from "./trigger";
 
 export const CI_REVIEW_POLICY_SCHEMA_VERSION = 1;
 export const DEFAULT_CI_REVIEW_POLICY_MODE = "risk_aware" as const;
@@ -50,7 +51,8 @@ export type CiReviewSkipReason =
   | "same-head"
   | "below-threshold"
   | "low-risk-delta"
-  | "once-per-pr";
+  | "once-per-pr"
+  | "stopped";
 
 export type CiReviewManualRequiredReason =
   | "max-attempts-exhausted"
@@ -101,6 +103,11 @@ export interface CiReviewAdmissionInput {
   // not a verdict: it must not satisfy the same-head skip, or a CI re-run of
   // that commit is skipped before the re-review can force full coverage.
   summaryComplete?: boolean;
+  // A write-access maintainer posted `/pr-hero stop` and no review or recheck
+  // command came after it. The gate decides it (it owns the permission
+  // lookup); absent means not stopped, so every existing caller keeps today's
+  // verdicts.
+  stopped?: boolean;
 }
 
 type CiReviewAdmissionTerminalFields = {
@@ -656,9 +663,6 @@ export function evaluateCiReviewAdmission(
   if (input.forceOverride === true) {
     return { action: "run" };
   }
-  if (!input.markerSeen && input.summaryHead === null) {
-    return { action: "run" };
-  }
   const partialSameHead =
     input.summaryHead !== null &&
     input.summaryHead === input.currentHead &&
@@ -674,6 +678,24 @@ export function evaluateCiReviewAdmission(
       reason: "same-head",
       ...terminalFields(input, prior),
     };
+  }
+  // WHY before the attempt cap and the policy modes: a stop is a human's
+  // explicit decision that this PR needs no more automatic reviews, so it
+  // outranks every automatic reason to run one. It still skips, never passes:
+  // the skip carries the last verdict, and a red gate still needs an override.
+  // WHY not on a partial same head: that is a retry of a review that already
+  // ran here, not a new push. Skipping it would let the carry write an older
+  // commit's verdict over this head's own red partial status.
+  if (input.stopped === true && !partialSameHead) {
+    const prior = priorForAdmissionInput(input);
+    return {
+      action: "skip",
+      reason: "stopped",
+      ...terminalFields(input, prior),
+    };
+  }
+  if (!input.markerSeen && input.summaryHead === null) {
+    return { action: "run" };
   }
   if (input.reviewCount >= input.policy.maxAttempts) {
     const prior = priorForAdmissionInput(input);
@@ -763,6 +785,8 @@ export function ciReviewSkipDetail(
       return `${counts}; re-review needs score ≥ ${minScore} to justify another run`;
     case "low-risk-delta":
       return `${counts}; delta touches only low-risk paths (docs, tests, fixtures)`;
+    case "stopped":
+      return `a maintainer posted ${STOP_COMMAND}; /pr-hero review reviews this head`;
   }
 }
 
@@ -770,7 +794,7 @@ export function ciReviewSkipDetail(
 // src/pr/admission.ts). The same wording as the coverage comment (ci/gates.ts COVERAGE_REASON_LABEL,
 // which is not exported), kept here so a description reads the same as the comment beside it.
 export function ciReviewSkipLabel(
-  reason: "once-per-pr" | "below-threshold" | "low-risk-delta",
+  reason: "once-per-pr" | "below-threshold" | "low-risk-delta" | "stopped",
 ): string {
   switch (reason) {
     case "once-per-pr":
@@ -779,7 +803,35 @@ export function ciReviewSkipLabel(
       return "prior findings below the re-review score floor";
     case "low-risk-delta":
       return "delta touches only low-risk paths";
+    case "stopped":
+      return "automatic reviews stopped by a maintainer";
   }
+}
+
+export interface StopCommand {
+  user: string;
+  // "stop" sets the stop; "lift" is a review or recheck command, which ends it.
+  kind: "stop" | "lift";
+}
+
+// The exact stop, review and recheck commands on the PR, newest first.
+// `comments` is the PR's issue comments in API order (oldest first). The gate
+// walks them and lets the newest one from a write-access author decide, so a
+// stranger can neither set a stop nor lift a maintainer's.
+export function stopCommandsNewestFirst(
+  comments: readonly { user: string; body: string }[],
+): StopCommand[] {
+  const commands: StopCommand[] = [];
+  for (let i = comments.length - 1; i >= 0; i--) {
+    const comment = comments[i];
+    if (comment === undefined || comment.user === "") continue;
+    if (parseReviewCommand(comment.body) !== undefined) {
+      commands.push({ user: comment.user, kind: "lift" });
+    } else if (comment.body.trim() === STOP_COMMAND) {
+      commands.push({ user: comment.user, kind: "stop" });
+    }
+  }
+  return commands;
 }
 
 export function ciAdmissionRemainingBudget(

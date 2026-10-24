@@ -720,6 +720,46 @@ describe("publishCiSkip: the outcome record", () => {
         ]);
       });
 
+      // A stop skips like the other carried reasons: it inherits the last verdict, red or green, and
+      // never passes a head that has none.
+      test("a stopped skip carries the reviewed head's blocking failure, so the gate stays red", async () => {
+        const { calls } = await skipWith(
+          [row("failure", BLOCKING_2, T1)],
+          "stopped",
+        );
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            `pr-hero: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+          ],
+        ]);
+      });
+
+      test("a stopped skip carries the reviewed head's success, naming the stop", async () => {
+        const { calls } = await skipWith(
+          [row("success", "review posted", T1)],
+          "stopped",
+        );
+        const description = `pr-hero: no review needed (automatic reviews stopped by a maintainer); ${CARRIED_FROM}`;
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          ["success", description],
+        ]);
+        // The carried text is itself a verdict, so a later skip can chain from it.
+        expect(isReviewVerdictStatus({ state: "success", description })).toBe(
+          true,
+        );
+      });
+
+      test("a stopped skip with no earlier verdict fails closed", async () => {
+        const { calls } = await skipWith(null, "stopped");
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            "pr-hero skipped the review (automatic reviews stopped by a maintainer) and found no earlier verdict — /pr-hero review reviews it",
+          ],
+        ]);
+      });
+
       test("an override on the reviewed head is never carried: the failure under it is", async () => {
         const { calls } = await skipWith(
           [row("success", OVERRIDE, T2), row("failure", BLOCKING_2, T1)],

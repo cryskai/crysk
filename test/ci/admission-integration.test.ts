@@ -706,3 +706,68 @@ function makeFakeGh(script: ScriptEntry[]): {
   }) as unknown as typeof Bun.spawn;
   return { spawnFn };
 }
+
+describe("planCiReviewSkip — stopped", () => {
+  const verdictFor = (stopped: boolean) => {
+    const verdict = evaluateCiReviewAdmission(
+      admissionInput({
+        currentHead: HEAD_B,
+        summaryHead: HEAD_A,
+        markerSeen: true,
+        reviewCount: 1,
+        state: null,
+        admission: parseCiAdmissionBlock(
+          admissionBody(HEAD_A, { blocking: 0, advisory: 1 }),
+        ),
+        postedFindings: null,
+        policy: POLICY,
+        deltaRisk: classifyChangedPaths(["docs/readme.md"]),
+        stopped,
+      }),
+    );
+    if (verdict.action !== "skip") throw new Error("expected a skip");
+    return verdict;
+  };
+
+  test("a stopped skip's comment names the stop, not the score", () => {
+    const comment = planCiReviewSkip({
+      prNumber: PR,
+      ciMode: "advisory",
+      verdict: verdictFor(true),
+    }).comment;
+    expect(comment).toContain(
+      "A maintainer stopped automatic reviews on this pull request.",
+    );
+    expect(comment).not.toContain("did not justify");
+    expect(comment).not.toContain("Prior score");
+    expect(comment).toContain("Attempts on this PR: 1/");
+  });
+
+  test("a stopped skip's step summary names the stop, not the score", () => {
+    const summary = planCiReviewSkip({
+      prNumber: PR,
+      ciMode: "advisory",
+      verdict: verdictFor(true),
+      admission: {
+        currentHead: HEAD_B,
+        reviewedHead: HEAD_A,
+        policyMode: POLICY.mode,
+        policyHash: POLICY_HASH,
+        deltaRisk: classifyChangedPaths(["docs/readme.md"]),
+      },
+    }).summaryMarkdown;
+    expect(summary).toContain("a maintainer stopped automatic reviews");
+    expect(summary).not.toContain("does not justify");
+    expect(summary).not.toContain("Prior score");
+  });
+
+  test("any other skip keeps the score wording", () => {
+    const comment = planCiReviewSkip({
+      prNumber: PR,
+      ciMode: "advisory",
+      verdict: verdictFor(false),
+    }).comment;
+    expect(comment).toContain("This push did not justify another review run.");
+    expect(comment).toContain("Prior score: 1");
+  });
+});
