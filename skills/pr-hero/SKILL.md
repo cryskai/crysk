@@ -61,7 +61,7 @@ If pr-hero is not on `PATH`, run every command as `npx -y pr-hero <command>` (No
 
 **gotchas.md** — [gotchas.md](https://github.com/juanmaagd/pr-hero/blob/main/README.md#gotchasmd): required and must be real. Read the code and write the actual traps, then delete the `human-attention-required` marker line, or `review` and `doctor` refuse it.
 
-**Running a review** — [Commands](https://github.com/juanmaagd/pr-hero/blob/main/README.md#commands): `.prhero/` must be committed or gitignored (clean-tree gate). Expect roughly $2–5 and ~10 minutes per typical PR; the printed band ignores billing mode. Artifacts land in `~/.prhero/repos/<origin>/runs/<run>/`.
+**Running a review** — [Commands](https://github.com/juanmaagd/pr-hero/blob/main/README.md#commands): `.prhero/` must be committed or gitignored (clean-tree gate). Expect roughly $2–5 and ~10 minutes per typical PR; the printed band ignores billing mode. Artifacts land in `~/.prhero/repos/<origin>/runs/<run>/`. To check or wait on a PR's CI review state deterministically ($0, via `gh`), run `pr-hero status --pr <n> [--wait] [--json]`.
 
 **Watcher / GC** — [pr-hero watch](https://github.com/juanmaagd/pr-hero/blob/main/README.md#watching-prs-automatically--pr-hero-watch): `watch add [--post]`, preview with `watch --once --dry-run`, and only then `watch install`. `daily_cap` and `window` live in `~/.prhero/watch.json`. GC is separate: `pr-hero gc install`.
 

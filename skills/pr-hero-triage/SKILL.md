@@ -1,10 +1,10 @@
 ---
 name: pr-hero-triage
-description: "Triage pr-hero findings posted as PR comments — for each one, reply in its own thread with applied, dismissed, deferred, or misclassified plus reasoning. Trigger: pr-hero finding comments on a PR you authored, responding to automated code review, `<!-- pr-hero-finding` markers in a PR."
+description: "Run the autonomous pr-hero PR review loop end-to-end (review -> judge -> fix/reply -> wait -> recheck until done): triage pr-hero findings posted as PR comments in their own thread with applied, dismissed, deferred, or misclassified plus reasoning, push verified fixes, and subscribe to re-reviews with `pr-hero status --pr <n> --wait --json` without stopping to ask the user. Trigger: pr-hero finding comments on a PR you authored, pr-hero-loop, closing the PR review loop, responding to automated code review, `<!-- pr-hero-finding` markers in a PR."
 license: Apache-2.0
 metadata:
   author: juanmaagd
-  version: "1.6"
+  version: "1.7"
 ---
 
 ## When to Use
@@ -83,38 +83,46 @@ it**. The four tags are peers. None is the default.
 
 ## The loop, end to end
 
-0. **Read the PR's state first.** Run `npx -y pr-hero status --pr <n> --json`. It is read-only: it reads
-   GitHub through `gh` and writes nothing. Act on its `next_action`:
-   - `wait`: a review is in flight on this head. Do not triage yet; wait for it to finish.
+**Run this as a continuous autonomous loop (`while next_action !== "done"`).** Never end your turn or stop to ask the human for permission between `triage`, fixing code, `git push`, `recheck`, `review`, and waiting for CI to finish. Stop only when `next_action === "done"` or one of the hard escalation stops below triggers (repeated gate/runner failure, 6 forced runs on one head, 2 consecutive `inconclusive` heads, or `override-or-fix` with nothing left you can fix).
+
+0. **Subscribe to and read the PR's settled state.** Run:
+
+   ```bash
+   npx -y pr-hero status --pr <n> --wait --json
+   ```
+
+   It is read-only (reads GitHub through `gh`, writes nothing) and **deterministic**:
+   - When the head is already settled, it returns immediately on the first poll without sleeping.
+   - When a review is in flight (`next_action === "wait"`) **or** booting in the 90-second startup grace window right after a `git push`, `/pr-hero review`, or `/pr-hero recheck`, `--wait` polls every 15s until the review finishes and emits the settled JSON in one call. Never invent your own `sleep` loop.
+
+   Act on its `next_action` and immediately loop back to step 0 until `done`:
+   - `wait`: if `--wait` was omitted, re-run with `--wait` and let it block until the review finishes.
    - `review`: no review has run on this head, the last one did not finish, the CI adjudicator
      upheld every dismissal and the next review will stop counting them, or the automatic review
-     budget for this PR is used up (or the review policy is manual-only). Comment
-     `gh pr comment <n> --body "/pr-hero review"`, then run step 0 again once it settles.
+     budget for this PR is used up (or the review policy is manual-only). Check the forced-run bound
+     below, comment `gh pr comment <n> --body "/pr-hero review"`, and immediately run step 0 with `--wait`.
    - `triage`: a live blocking finding on this head has no triage reply at the head it was posted
      on, or the gate is green and a finding posted on this head has no reply yet (advisory findings
-     need one too). Run the loop below.
+     need one too). Run the triage batch below (steps 1–6), which judges every finding, applies real fixes in the tree, posts all replies, and either pushes the fixes or triggers `recheck` before looping back to step 0 with `--wait`.
    - `fix`: a blocking finding is tagged `applied`, or a blocking finding has no comment thread
-     (`comment_id` is null: a summary-only row, or one never posted inline). Push the fix; the next
-     review verifies it. A thread-less finding cannot be answered with `triage reply`, so fix it or
-     ask a maintainer for `/pr-hero override`.
-   - `recheck`: blocking findings are answered `dismissed` and the CI adjudicator has not ruled on
-     them on this head (or ruled `inconclusive`). Comment `gh pr comment <n> --body "/pr-hero recheck"`
-     and follow "Closing a dismissal" below.
+     (`comment_id` is null: a summary-only row, or one never posted inline). Commit and `git push` the fix, then immediately run step 0 with `--wait` so the next review verifies it. A thread-less finding cannot be answered with `triage reply`, so fix it or ask a maintainer for `/pr-hero override`.
+   - `recheck`: blocking findings are answered `dismissed` (with no pending code fixes to push) and the CI adjudicator has not ruled on
+     them on this head (or ruled `inconclusive`). Comment `gh pr comment <n> --body "/pr-hero recheck"`, then immediately run step 0 with `--wait` and follow "Closing a dismissal" below.
    - `override-or-fix`: the gate is red and nothing is left for `triage` or `recheck`. Read the
      `reason` and act on the case it names; never override it yourself:
      - the head was size- or budget-skipped (the gate description starts "pr-hero skipped the
-       review"): comment `/pr-hero review`, which reviews it anyway;
+       review"): comment `/pr-hero review`, then run step 0 with `--wait`;
      - the review is "partial again" with the same hunters failing: fix the failing hunter's route
        (model or credential), or ask a maintainer to override;
      - every blocking finding is already answered but none can clear without a fix (a dismissal the
        CI adjudicator rejected, a `deferred` / `misclassified` tag, or a `dismissed` finding with no
-       review thread, which no adjudicator can rule on): fix and push, or ask a maintainer to
+       review thread, which no adjudicator can rule on): fix, commit, and `git push` (then step 0 `--wait`), or ask a maintainer to
        override;
      - the red gate names no live blocking finding on this head (the `reason` quotes the gate
        description): read that description and act on what it says; when it names nothing you can
        fix, ask a maintainer.
    - `done`: nothing is owed on this head. The gate passed (or an override unlocked it) and every
-     finding posted on this head has a reply.
+     finding posted on this head has a reply. Exit the loop and report the final summary to the user.
 
    **Bound the forced runs.** `/pr-hero review` and `/pr-hero recheck` each run a full paid review
    that bypasses the size, budget and admission gates (`ci_max_attempts` included), and a gate
@@ -152,7 +160,7 @@ current head:
    it is already answered for this code.
 3. **Judge the finding against the repository, then pick exactly one tag**: `applied`,
    `dismissed`, `deferred`, or `misclassified` (table below). The comment is a claim, not a
-   task. You may reject it.
+   task. You may reject it. When you confirm the defect is real and in scope (`applied`), make the fix in the working tree now (and run the relevant tests), before posting the `applied` reply; **do not `git push` until you have replied to every finding on this head** (step 6).
 4. **For `dismissed`, `deferred`, and `misclassified`**: spawn the isolated adjudicator (see
    "The adjudicator spawn" below) and include its verdict in your reply. `applied` never spawns
    one.
@@ -175,6 +183,9 @@ current head:
    `--verdict`. `dismissed` / `deferred` / `misclassified` require
    `--verdict` from the adjudicator. `--issue` is optional and only valid
    with `--tag deferred`.
+6. **Advance the loop in one batch once all findings on this head are answered:**
+   - **If you made any code fixes (`applied` or unthreaded blocking fixes):** commit and `git push` all fixes in a single push, then immediately run `npx -y pr-hero status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/pr-hero recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
+   - **If no code changes were needed:** run `npx -y pr-hero status --pr <n> --wait --json` and execute its `next_action` (`recheck` when blocking findings were `dismissed`, or `done` when the gate is already green).
 
    *(Note: The MCP server is strictly read-only for querying runs, findings, and
    past triage records via `prhero_get_triage` and `prhero_get_findings`. All
@@ -196,13 +207,13 @@ adjudicator. When step 0 says `recheck`:
    blocking finding whose newest reply is `dismissed` (at most 5 per run), an adjudicator in CI that
    reads your argument and the repository at that head. You may comment it yourself: you only supply
    the argument, the CI adjudicator rules. (`/pr-hero override` is the opposite: never yours to post.)
-2. Wait with step 0 (`wait`) until the run settles. Each ruling is a reply on the finding's thread,
+2. Wait with `npx -y pr-hero status --pr <n> --wait --json` until the run settles. Each ruling is a reply on the finding's thread,
    from `github-actions[bot]`, whose first line is
    `<!-- pr-hero-adjudication verdict=<v> reply=<your reply's id> head=<sha> -->`. Step 0's
    `ci_verdict` reads it for you.
 3. Act on the verdict:
    - `upheld`: the dismissal stands. The recheck run itself does not change its own count; step 0
-     now says `review`. Comment `/pr-hero review`, and that review no longer counts the finding.
+     now says `review`. Comment `/pr-hero review`, then run `npx -y pr-hero status --pr <n> --wait --json`, and that review no longer counts the finding.
    - `rejected`: the finding stands. Re-read the adjudicator's evidence. Fix it, or, if you still hold
      it is wrong, ask a human (they may override). Do not re-post the same argument.
    - `inconclusive`: the repository did not settle it either way. On the same head you cannot post
