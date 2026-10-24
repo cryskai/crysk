@@ -79,6 +79,7 @@ bun run scripts/martian-judge.ts     # LIVE: Martian Surface A judge on existing
 
 - `skills/martian-bench/SKILL.md` — Martian Code Review Bench (n-vs-n vs Greptile/CodeRabbit on public PRs). Load on Cal.com evals, Surface A/B, or “how did we do” on that corpus. Flow + existing scores: `skills/martian-bench/references/`.
 - `skills/pr-hero/SKILL.md` — operate or configure pr-hero locally (models/routing, effort, credentials, config keys, gotchas, `.prheroignore`, reviews, watcher/GC, doctor).
+- `skills/pr-hero-pr/SKILL.md` — open or update a PR with a structured template and auto-subscribe to the pr-hero review loop.
 - `skills/pr-hero-triage/SKILL.md` — answer posted `<!-- pr-hero-finding` comments on a PR you authored.
 - `skills/pr-hero-ci-setup/SKILL.md` — scaffold GitHub Actions review workflow and configure repository secrets.
 

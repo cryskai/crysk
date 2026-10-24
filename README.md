@@ -117,7 +117,7 @@ directory. A skill copy that differs from the bundled one and has no recorded di
 
 ```bash
 npx skills add juanmaagd/pr-hero                            # pick interactively
-npx skills add juanmaagd/pr-hero --skill pr-hero            # or pr-hero-triage, pr-hero-ci-setup
+npx skills add juanmaagd/pr-hero --skill pr-hero            # or pr-hero-pr, pr-hero-triage, pr-hero-ci-setup
 ```
 
 **On step 6.** `gotchas.md` is injected verbatim into every hunter's system prompt, and

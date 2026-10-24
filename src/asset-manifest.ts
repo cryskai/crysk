@@ -41,6 +41,7 @@ import ciSetupOpenCodeRef from "../skills/pr-hero-ci-setup/references/opencode-c
 import ciSetupSkill from "../skills/pr-hero-ci-setup/SKILL.md" with {
   type: "file",
 };
+import prSkill from "../skills/pr-hero-pr/SKILL.md" with { type: "file" };
 import triageAdjudicator from "../skills/pr-hero-triage/adjudicator.md" with {
   type: "file",
 };
@@ -72,6 +73,10 @@ export const CI_SETUP_SKILL_FILES: Record<string, string> = {
   "assets/workflow.yml": ciSetupWorkflow,
   "references/ci-admission.md": ciSetupAdmissionRef,
   "references/opencode-ci.md": ciSetupOpenCodeRef,
+};
+
+export const PR_SKILL_FILES: Record<string, string> = {
+  "SKILL.md": prSkill,
 };
 
 export const GENERAL_SKILL_FILES: Record<string, string> = {

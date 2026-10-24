@@ -2636,7 +2636,7 @@ describe("skills install (non-interactive skill sync)", () => {
   test("help lists skills install next to setup", () => {
     expect(HELP_TEXT).toContain("pr-hero skills install");
     expect(HELP_TEXT).toContain(
-      "Install the pr-hero, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
+      "Install the pr-hero, pr-hero-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
     );
   });
 
