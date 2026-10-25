@@ -944,7 +944,7 @@ function summarizerPrompt(patch: string, nonce: string): string {
 // The finding travels as JSON, and JSON escaping is not a boundary: a `claim`
 // string is hunter prose about attacker-controlled code, so it is wrapped like
 // every other non-engine block (§3.4).
-function refuterPrompt(batchJson: string, nonce: string): string {
+export function refuterPrompt(batchJson: string, nonce: string): string {
   return [
     "Refute or corroborate this finding:",
     "",
