@@ -68,7 +68,7 @@ Lab ledger: `../deep-review/bench/METRICS.md` (append-only). Different instrumen
 
 Martian publishes `offline/results/<model>/evaluations.json` (Opus 4.5 / Sonnet 4.5 / GPT-5.2) and `offline/results/benchmark_data.json` (~22 MB stored reviews).
 
-Arm `dev-default` is injected into a **copy** (`scripts/martian-inject.ts`) and judged by their unmodified steps 2/2.5/3 with Opus 4.5 through `scripts/martian-claude-shim.ts` (no temperature; `LLM_CALL_TIMEOUT` 300 s, see flow.md). Among the 22 tools judged on the current 173 goldens: pr-hero **#1 on High+Critical recall 78.8% (52/66)**, recall 64.2% (#2), precision 28.8% (lowest of the leaders), F1 39.7%. Weak spot: Discourse security (5/12 H+C). Ledger: `docs/benchmarks/martian-bench.md` § Martian 50. A new arm on the 50 is a delta against **this** row; compare only against tools whose goldens total 173.
+Arm `dev-default` is injected into a **copy** (`scripts/martian-inject.ts`) and judged by their unmodified steps 2/2.5/3 with Opus 4.5 through `scripts/martian-claude-shim.ts` (no temperature; `LLM_CALL_TIMEOUT` 300 s, see flow.md). Among the 22 tools judged on the current 173 goldens: pr-hero **#1 on High+Critical recall 78.8% (52/66)**, recall 64.2% (#2), precision 28.8% (lowest of the leaders), F1 39.7%. Weak spot: Discourse, 5/12 High+Critical overall and 1/4 on its security goldens (three Critical security misses). Ledger: `docs/benchmarks/martian-bench.md` § Martian 50. A new arm on the 50 is a delta against **this** row; compare only against tools whose goldens total 173.
 
 Surface B = bucket our `martian-review.json` against those stored comments. Status: **not run**.
 
