@@ -66,6 +66,9 @@ interface ReplayCase {
   finding: string;
   expect: "keep" | "drop";
   label: string;
+  // "refuted": the finding lives in findings.json debug.refuted, not in the
+  // posted list (the run deleted it). Its id may collide with a posted one.
+  source?: "posted" | "refuted";
   note?: string;
 }
 
@@ -131,6 +134,7 @@ async function git(cwd: string, args: string[]): Promise<void> {
 }
 
 // One worktree per run dir (a run dir is one clone at one head).
+let worktreeLock: Promise<void> = Promise.resolve();
 const worktrees = new Map<string, Promise<{ clone: string; dir: string }>>();
 function worktreeFor(runDir: string, head: string) {
   let wt = worktrees.get(runDir);
@@ -138,7 +142,13 @@ function worktreeFor(runDir: string, head: string) {
     wt = (async () => {
       const clone = cloneFor(runDir);
       const dir = path.join(scratch, `wt-${worktrees.size}`);
-      await git(clone, ["worktree", "add", "--detach", dir, head]);
+      // Serialised: two concurrent `worktree add` on one clone race on its
+      // git lock and one of them fails.
+      const add = worktreeLock.then(() =>
+        git(clone, ["worktree", "add", "--detach", dir, head]),
+      );
+      worktreeLock = add.catch(() => {});
+      await add;
       return { clone, dir };
     })();
     worktrees.set(runDir, wt);
@@ -152,13 +162,16 @@ async function replay(c: ReplayCase) {
   const meta = (await Bun.file(
     path.join(c.run, "pipeline.json"),
   ).json()) as PipelineMeta;
-  const findings = (
-    (await Bun.file(path.join(c.run, "findings.json")).json()) as {
-      findings: Finding[];
-    }
-  ).findings;
-  const f = findings.find((x) => x.id === c.finding);
-  if (f === undefined) throw new Error(`${c.run}: no posted ${c.finding}`);
+  const doc = (await Bun.file(path.join(c.run, "findings.json")).json()) as {
+    findings: Finding[];
+    debug?: { refuted?: Finding[] };
+  };
+  const pool =
+    c.source === "refuted" ? (doc.debug?.refuted ?? []) : doc.findings;
+  const f = pool.find((x) => x.id === c.finding);
+  if (f === undefined) {
+    throw new Error(`${c.run}: no ${c.source ?? "posted"} ${c.finding}`);
+  }
 
   const oneJson = JSON.stringify(
     [
@@ -242,7 +255,7 @@ async function replay(c: ReplayCase) {
     model,
     severity: f.severity,
     tier: f.tier,
-    original_verdict: f.refuter_verdict,
+    original_verdict: c.source === "refuted" ? "refuted" : f.refuter_verdict,
     verdict,
     status: result.status,
     denial: result.denialCode ?? null,
