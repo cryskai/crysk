@@ -3,7 +3,8 @@
 // No hunters, no dedupe, no pipeline: one refuter step per case.
 //
 //   bun run scripts/refuter-replay.ts --cases <cases.json> --model opus|sonnet \
-//     --out <results.jsonl> [--concurrency 4]
+//     --out <results.jsonl> [--concurrency 4] [--system-prompt <file>]
+//     [--user-prompt-template <file>]
 //
 // cases.json: { "cases": [{ "run": "<run dir>", "finding": "F003",
 //   "expect": "keep" | "drop", "label": "speculative", "note": "..." }] }
@@ -26,6 +27,7 @@ import { appendFile, chmod, mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { Effort } from "#model/catalog";
+import { wrapBlock } from "#review/boundary";
 import {
   extractJsonObject,
   type RefuterResult,
@@ -55,6 +57,18 @@ const casesPath = argValue("--cases");
 const model = argValue("--model");
 const outPath = argValue("--out");
 const concurrency = Number(argValue("--concurrency") ?? 4);
+// Overrides every run's recorded refuter.system.md. Needed for runs whose
+// findings were all advisory (they never spawned a refuter, so recorded no
+// system prompt), and for replaying a candidate prompt.
+const systemPromptOverride = argValue("--system-prompt");
+// A candidate user prompt: a file whose {{FINDING}} line is replaced by the
+// nonce-wrapped finding block, in place of the engine's refuterPrompt. The
+// recorded SHA cannot match a candidate, so the check is skipped for it.
+const userPromptTemplatePath = argValue("--user-prompt-template");
+const userPromptTemplate =
+  userPromptTemplatePath === undefined
+    ? undefined
+    : await Bun.file(userPromptTemplatePath).text();
 if (!casesPath || !model || !outPath) {
   fail(
     "usage: bun run scripts/refuter-replay.ts --cases <cases.json> --model <model> --out <results.jsonl> [--concurrency 4]",
@@ -186,12 +200,19 @@ async function replay(c: ReplayCase) {
     null,
     2,
   );
-  const prompt = refuterPrompt(oneJson, meta.boundary_nonce);
+  const prompt =
+    userPromptTemplate === undefined
+      ? refuterPrompt(oneJson, meta.boundary_nonce)
+      : userPromptTemplate.replace(
+          "{{FINDING}}",
+          wrapBlock("finding", meta.boundary_nonce, oneJson),
+        );
   const evidence = Bun.file(
     path.join(c.run, "steps", `evidence.refuter-${f.id}.attempt1.request.json`),
   );
-  let promptCheck: "match" | "unrecorded" = "unrecorded";
-  if (await evidence.exists()) {
+  let promptCheck: "match" | "unrecorded" | "candidate" =
+    userPromptTemplate === undefined ? "unrecorded" : "candidate";
+  if (userPromptTemplate === undefined && (await evidence.exists())) {
     const recorded = ((await evidence.json()) as { userPromptSha256: string })
       .userPromptSha256;
     if (recorded !== sha256(prompt)) {
@@ -217,10 +238,19 @@ async function replay(c: ReplayCase) {
   const resolveProofRef = makeProofRefResolver(dir, patch);
   const caseDir = path.join(scratch, `${path.basename(c.run)}-${f.id}`);
   const systemPromptPath = path.join(caseDir, "refuter.system.md");
-  await Bun.write(
-    systemPromptPath,
-    await Bun.file(path.join(c.run, "steps", "refuter.system.md")).text(),
+  const recordedSystem = Bun.file(
+    path.join(c.run, "steps", "refuter.system.md"),
   );
+  const systemSource =
+    systemPromptOverride !== undefined
+      ? Bun.file(systemPromptOverride)
+      : recordedSystem;
+  if (!(await systemSource.exists())) {
+    throw new Error(
+      `${c.run}: no recorded refuter.system.md; pass --system-prompt`,
+    );
+  }
+  await Bun.write(systemPromptPath, await systemSource.text());
   await chmod(systemPromptPath, 0o600);
 
   const spec: StepSpec = {
