@@ -116,8 +116,10 @@ if (await outFile.exists()) {
       run: string;
       finding: string;
       model: string;
+      status: string;
     };
-    done.add(`${row.run}|${row.finding}|${row.model}`);
+    // A failed step (quota, auth, timeout) is not an answer: rerun it.
+    if (row.status === "ok") done.add(`${row.run}|${row.finding}|${row.model}`);
   }
 }
 
@@ -294,6 +296,8 @@ async function replay(c: ReplayCase) {
     refuter_proof_refs: entry?.proof_refs ?? [],
     status: result.status,
     denial: result.denialCode ?? null,
+    stderr_tail:
+      result.status === "ok" ? null : (result.stderrTail ?? "").slice(-400),
     expect: c.expect,
     label: c.label,
     prompt_check: promptCheck,
