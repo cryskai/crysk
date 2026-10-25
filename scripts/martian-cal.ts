@@ -1,4 +1,6 @@
-// Cal.com slice of Martian offline (`docs/martian-bench.md`).
+// Martian offline harness, one corpus at a time (`docs/martian-bench.md`).
+// `--corpus cal` (default) is the Cal.com slice; sentry, grafana, keycloak and
+// discourse are the other forty PRs (case files from scripts/martian-cases.ts).
 //
 //   bun run scripts/martian-cal.ts plan    # $0 — size gate + cost band
 //   bun run scripts/martian-cal.ts check   # $0 — fetch SHAs, dry-run the CLI
@@ -16,7 +18,6 @@
 
 import { existsSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import {
   findingsToMartianReview,
@@ -33,6 +34,13 @@ import {
 } from "#review/size-gate";
 import { writeJsonAtomically } from "../src/execution/atomic-write";
 import {
+  BENCH_HOME,
+  type CaseRow,
+  type CasesFile,
+  CORPORA,
+  corpusDocsFile,
+} from "./martian-corpora";
+import {
   type BenchmarkSchedule,
   freezeBenchmarkIdentity,
   loadBenchmarkSchedule,
@@ -43,26 +51,6 @@ const DEFAULT_LAB_AGENTS_DIR =
   "/Users/juanma/Desktop/deep-review/agents/slice3b-lifecycle-v6-clean";
 
 const ROOT = path.join(import.meta.dir, "..");
-const CASES_PATH = path.join(
-  ROOT,
-  "docs",
-  "benchmarks",
-  "martian-cal-cases.json",
-);
-const GOLDENS_PATH = path.join(
-  ROOT,
-  "docs",
-  "benchmarks",
-  "martian-cal-goldens.json",
-);
-const GOTCHAS_PATH = path.join(
-  ROOT,
-  "docs",
-  "benchmarks",
-  "martian-cal-gotchas.md",
-);
-const DEFAULT_REPO = path.join(homedir(), "Desktop", "martian-cal", "cal.com");
-const DEFAULT_RUNS = path.join(homedir(), "Desktop", "martian-cal", "runs");
 // Display/cost only (never affects which agents actually run — that is
 // localReviewSpec() itself, resolved fresh per CLI subprocess in review()
 // below). Derived rather than a hand-maintained literal so an unconditional
@@ -74,22 +62,6 @@ const DEFAULT_RUNS = path.join(homedir(), "Desktop", "martian-cal", "runs");
 const HUNTERS = localReviewSpec().agents.filter(
   (a) => a.role === "hunter" && a.trigger === undefined,
 ).length;
-
-interface CaseRow {
-  pr: number;
-  title: string;
-  additions: number;
-  deletions: number;
-  changedFiles: number;
-  baseSha: string;
-  headSha: string;
-}
-
-interface CasesFile {
-  repo: string;
-  pilot: number[];
-  prs: CaseRow[];
-}
 
 function fail(message: string): never {
   console.error(`martian-cal: ${message}`);
@@ -109,10 +81,20 @@ function argValue(flag: string): string | undefined {
 const mode = Bun.argv[2];
 if (mode !== "plan" && mode !== "check" && mode !== "run" && mode !== "score") {
   fail(
-    "usage: bun run scripts/martian-cal.ts plan|check|run|score [--all] [--only 14943,8330] [--arm <id>] [--model <logical>] [--hunter-model <l>] [--refuter-model <l>] [--repo …] [--runs …]",
+    "usage: bun run scripts/martian-cal.ts plan|check|run|score [--corpus cal|sentry|grafana|keycloak|discourse] [--all] [--only 14943,8330] [--arm <id>] [--model <logical>] [--hunter-model <l>] [--refuter-model <l>] [--repo …] [--runs …]",
   );
 }
 
+const corpusName = argValue("--corpus") ?? "cal";
+const corpus = CORPORA[corpusName];
+if (corpus === undefined) {
+  fail(`--corpus must be one of ${Object.keys(CORPORA).join(", ")}`);
+}
+const CASES_PATH = corpusDocsFile(corpusName, "cases.json");
+const GOLDENS_PATH = corpusDocsFile(corpusName, "goldens.json");
+const GOTCHAS_PATH = corpusDocsFile(corpusName, "gotchas.md");
+const DEFAULT_REPO = path.join(BENCH_HOME, corpus.clone);
+const DEFAULT_RUNS = path.join(BENCH_HOME, corpus.runs);
 const cases = (await Bun.file(CASES_PATH).json()) as CasesFile;
 const goldens = (await Bun.file(GOLDENS_PATH).json()) as MartianGoldenPr[];
 const repo = argValue("--repo") ?? DEFAULT_REPO;
@@ -120,7 +102,7 @@ const runsRoot = argValue("--runs") ?? DEFAULT_RUNS;
 const onlyRaw = argValue("--only");
 const all = Bun.argv.includes("--all");
 // New methodology arm (one variable vs the `hunters` baseline): the arm id is
-// the run-dir suffix (`cal-<pr>-<arm>`). Default keeps the frozen baseline
+// the run-dir suffix (`<corpus>-<pr>-<arm>`). Default keeps the frozen baseline
 // dirs byte-for-byte addressable. `run` skips dirs that already hold
 // findings.json, so a new arm never overwrites the baseline.
 const arm = argValue("--arm") ?? "hunters";
@@ -164,7 +146,7 @@ const rows: CaseRow[] = selected.map((pr) => {
 });
 
 function runDirFor(pr: number): string {
-  return path.join(runsRoot, `cal-${pr}-${arm}`);
+  return path.join(runsRoot, `${corpusName}-${pr}-${arm}`);
 }
 
 function git(args: string[]): { ok: boolean; stdout: string; stderr: string } {
@@ -181,17 +163,25 @@ function git(args: string[]): { ok: boolean; stdout: string; stderr: string } {
 
 async function ensureShas(row: CaseRow): Promise<void> {
   if (!existsSync(path.join(repo, ".git"))) {
-    fail(
-      `no clone at ${repo} — clone calcom/cal.com (blobless is fine) into that path`,
-    );
+    if (!corpus.shallow) {
+      fail(
+        `no clone at ${repo} — clone ${corpus.upstream} (blobless is fine) into that path`,
+      );
+    }
+    await mkdir(repo, { recursive: true });
+    const init = git(["init", "--quiet"]);
+    if (!init.ok) fail(`git init ${repo} failed: ${init.stderr.trim()}`);
   }
   const have = git(["cat-file", "-t", row.headSha]);
   const haveBase = git(["cat-file", "-t", row.baseSha]);
   if (have.ok && haveBase.ok) return;
+  // --two-dot only needs both commits, so a shallow corpus never pulls the
+  // history of Sentry, Grafana or Keycloak.
   const fetched = git([
     "fetch",
     "--filter=blob:none",
-    "origin",
+    ...(corpus.shallow ? ["--depth=1"] : []),
+    row.remote ?? (corpus.shallow ? corpus.upstream : "origin"),
     row.baseSha,
     row.headSha,
   ]);
@@ -234,6 +224,13 @@ async function review(
     ...(model === undefined ? [] : ["--model", model]),
     ...(hunterModel === undefined ? [] : ["--hunter-model", hunterModel]),
     ...(refuterModel === undefined ? [] : ["--refuter-model", refuterModel]),
+    // The shipped size gate, not the operator config: a benchmark scores what
+    // dev ships, and a laptop that lowered max_changed_lines would silently
+    // drop PRs every vendor reviewed (Sentry #5, 3195 effective lines).
+    "--max-changed-lines",
+    String(DEFAULT_SIZE_GATE.maxChangedLines),
+    "--max-changed-files",
+    String(DEFAULT_SIZE_GATE.maxChangedFiles),
     "--gotchas",
     GOTCHAS_PATH,
     "--out",
@@ -328,7 +325,7 @@ if (mode === "check") {
   }
   const failures: string[] = [];
   for (const row of rows) {
-    console.error(`\n=== cal ${row.pr} (dry run)`);
+    console.error(`\n=== ${corpusName} ${row.pr} (dry run)`);
     const code = await review(row, true);
     if (code !== 0) failures.push(`pr ${row.pr}: exit ${code}`);
   }
@@ -356,7 +353,7 @@ if (mode === "run") {
       id: `${arm}:${row.pr}:${i + 1}`,
       pr: row.pr,
       replicate: i + 1,
-      directory: `cal-${row.pr}-${arm}${reps === 1 ? "" : `-r${i + 1}`}`,
+      directory: `${corpusName}-${row.pr}-${arm}${reps === 1 ? "" : `-r${i + 1}`}`,
       headSha: row.headSha,
       baseSha: row.baseSha,
     })),
@@ -385,7 +382,7 @@ if (mode === "run") {
     const row = rows.find((r) => r.pr === attempt.pr);
     if (!row) continue;
     const dir = path.join(runsRoot, attempt.directory);
-    const label = `cal ${row.pr} replicate ${attempt.replicate}`;
+    const label = `${corpusName} ${row.pr} replicate ${attempt.replicate}`;
     await checkoutHead(row);
     const identity = await freezeBenchmarkIdentity({
       engineRoot: ROOT,

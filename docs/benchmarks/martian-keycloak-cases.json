@@ -1,0 +1,110 @@
+{
+  "repo": "keycloak/keycloak",
+  "pilot": [
+    1,
+    32918,
+    33832
+  ],
+  "prs": [
+    {
+      "pr": 1,
+      "title": "Fixing Re-authentication with passkeys",
+      "additions": 407,
+      "deletions": 24,
+      "changedFiles": 9,
+      "baseSha": "30f804af450dec523909a52f2a4b97302d27f5cc",
+      "headSha": "3214b188de808fdb0fff335556b686f1b0a63218",
+      "remote": "https://github.com/ai-code-review-evaluation/keycloak-greptile.git"
+    },
+    {
+      "pr": 32918,
+      "title": "Add cache for IdentityProviderStorageProvider.getForLogin",
+      "additions": 268,
+      "deletions": 3,
+      "changedFiles": 4,
+      "baseSha": "272cfc68dcc88615396ae62ed1571918e9c58ad3",
+      "headSha": "e944e2acf1e64421860a8e827f93ad06c169621b",
+      "remote": "https://github.com/keycloak/keycloak.git"
+    },
+    {
+      "pr": 33832,
+      "title": "Add AuthzClientCryptoProvider to authz-client in keycloak main reposi…",
+      "additions": 673,
+      "deletions": 9,
+      "changedFiles": 12,
+      "baseSha": "10aca5552314d6e5c9226f3c6d0107861c38c693",
+      "headSha": "79d11c4890cc4792e3dc3535af59e4e5f7a2739d",
+      "remote": "https://github.com/keycloak/keycloak.git"
+    },
+    {
+      "pr": 36882,
+      "title": "Feature flag: rolling-updates",
+      "additions": 70,
+      "deletions": 18,
+      "changedFiles": 11,
+      "baseSha": "1b28ac610dc16e0de14199f9ca5d2acdf7f3cc16",
+      "headSha": "62bf98939eda58f0d0a1a41a58aa6d4ecdc24dba",
+      "remote": "https://github.com/keycloak/keycloak.git"
+    },
+    {
+      "pr": 36880,
+      "title": "Add Client resource type and its scopes to authorization schema and e…",
+      "additions": 866,
+      "deletions": 138,
+      "changedFiles": 10,
+      "baseSha": "b7b84d75d16e91d3f56ec527a260c53c5dd4396c",
+      "headSha": "1950a511026d520a7329c7b6b9ee60a4af8f8b55",
+      "remote": "https://github.com/keycloak/keycloak.git"
+    },
+    {
+      "pr": 37038,
+      "title": "Add Groups resource type and scopes to authorization schema and evalu…",
+      "additions": 831,
+      "deletions": 126,
+      "changedFiles": 19,
+      "baseSha": "7ea067aae9be56cb2622bce6563864817c3dfeaf",
+      "headSha": "7355f05e6aafe2a7acc6434fb40c686665416606",
+      "remote": "https://github.com/keycloak/keycloak.git"
+    },
+    {
+      "pr": 37429,
+      "title": "Add a HTML sanitizer for translated message resources",
+      "additions": 343,
+      "deletions": 105,
+      "changedFiles": 48,
+      "baseSha": "f3c8e8f3487112f2c99aa78400430cce2d30be39",
+      "headSha": "02f48f776f43734d1ac8914d3ad6a7115acdcb33",
+      "remote": "https://github.com/keycloak/keycloak.git"
+    },
+    {
+      "pr": 37634,
+      "title": "Encoding context to access token IDs",
+      "additions": 722,
+      "deletions": 26,
+      "changedFiles": 28,
+      "baseSha": "c22f76867f595f0f7c327376a66a08dca01949e8",
+      "headSha": "daffb05b5ad091d3ec09933c3c99c2b54f448696",
+      "remote": "https://github.com/keycloak/keycloak.git"
+    },
+    {
+      "pr": 38446,
+      "title": "Create recovery keys in user storage or local",
+      "additions": 256,
+      "deletions": 31,
+      "changedFiles": 8,
+      "baseSha": "85737f52b59aa2e3403c9b8e48acf71ccc5bfae3",
+      "headSha": "ce2dcc537b4b1f98a335e88cfe8e0b804483252a",
+      "remote": "https://github.com/keycloak/keycloak.git"
+    },
+    {
+      "pr": 40940,
+      "title": "Fix NPE when accessing group concurrently",
+      "additions": 51,
+      "deletions": 11,
+      "changedFiles": 4,
+      "baseSha": "7fd37690c44c7068cb19ecee3aa6ff99c46a821d",
+      "headSha": "4def149a50c4b9b2c24fbb753ac60fe4f4df0cac",
+      "remote": "https://github.com/keycloak/keycloak.git"
+    }
+  ]
+}
