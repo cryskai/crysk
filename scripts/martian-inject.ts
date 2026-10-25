@@ -8,8 +8,9 @@
 // (renderInlineComment), not a bare claim: vendors were judged on the
 // comments they posted, so we are too. Only qualified runs are exported
 // (scripts/martian-evidence.ts); `--allow-unqualified` exports the rest and
-// lists them, for runs whose evidence predates a producer fix. Never point
-// --data at the upstream file you intend to keep pristine.
+// lists them, for runs whose evidence predates a producer fix. A partial arm
+// is refused and the file is left untouched. Never point --data at the
+// upstream file you intend to keep pristine.
 
 import path from "node:path";
 import { lookupGolden, type MartianGoldenPr } from "#compare/martian-adapter";
@@ -43,6 +44,12 @@ interface MartianEntry {
   reviews: Array<{ tool: string }>;
 }
 const data = (await Bun.file(dataPath).json()) as Record<string, MartianEntry>;
+// Drop every pr-hero review the copy already holds before adding this arm's:
+// replacing only the PRs this arm covers would leave another arm's review on
+// any PR this arm is missing, still labelled `pr-hero`.
+for (const entry of Object.values(data)) {
+  entry.reviews = entry.reviews.filter((r) => r.tool !== "pr-hero");
+}
 
 const missing: string[] = [];
 const unqualified: string[] = [];
@@ -76,7 +83,6 @@ for (const [name, corpus] of Object.entries(CORPORA)) {
       continue;
     }
     const findings = doc.findings;
-    entry.reviews = entry.reviews.filter((r) => r.tool !== "pr-hero");
     entry.reviews.push({
       tool: "pr-hero",
       pr_url: golden.url,
@@ -91,9 +97,16 @@ for (const [name, corpus] of Object.entries(CORPORA)) {
   }
 }
 
-await writeJsonAtomically(dataPath, data);
-console.error(`injected ${injected} pr-hero review(s) into ${dataPath}`);
 for (const line of unqualified)
   console.error(`  UNQUALIFIED (allowed) ${line}`);
 for (const line of missing) console.error(`  MISSING ${line}`);
-process.exit(missing.length === 0 ? 0 : 1);
+// A partial arm is never written: Martian would score it as the whole tool.
+if (missing.length > 0) {
+  console.error(
+    `not written: ${missing.length} PR(s) missing, ${dataPath} unchanged`,
+  );
+  process.exit(1);
+}
+await writeJsonAtomically(dataPath, data);
+console.error(`injected ${injected} pr-hero review(s) into ${dataPath}`);
+process.exit(0);

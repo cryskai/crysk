@@ -28,9 +28,19 @@ const concurrency = Number(argValue("--concurrency", "4"));
 
 let active = 0;
 const waiting: Array<() => void> = [];
-async function slot<T>(work: () => Promise<T>): Promise<T> {
+// A client that went away (Ctrl-C, timeout, retry) must not keep spending
+// quota: a waiter woken after its request aborted passes the slot on instead
+// of spawning, and a running child is killed on abort.
+async function slot<T>(
+  signal: AbortSignal,
+  work: () => Promise<T>,
+): Promise<T> {
   if (active >= concurrency) {
     await new Promise<void>((resolve) => waiting.push(resolve));
+  }
+  if (signal.aborted) {
+    waiting.shift()?.();
+    throw new Error("client went away before its turn");
   }
   active++;
   try {
@@ -49,6 +59,7 @@ interface ChatMessage {
 async function complete(
   model: string,
   messages: ChatMessage[],
+  signal: AbortSignal,
 ): Promise<{ text: string; model: string }> {
   const system = messages
     .filter((m) => m.role === "system")
@@ -76,11 +87,14 @@ async function complete(
     ],
     { stdin: new Blob([user]), stdout: "pipe", stderr: "pipe" },
   );
+  const kill = () => proc.kill();
+  signal.addEventListener("abort", kill, { once: true });
   const [out, err, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
-  ]);
+  ]).finally(() => signal.removeEventListener("abort", kill));
+  if (signal.aborted) throw new Error("client went away; claude killed");
   if (code !== 0) throw new Error(`claude exited ${code}: ${err.slice(-500)}`);
   const result = JSON.parse(out) as {
     is_error?: boolean;
@@ -121,8 +135,8 @@ Bun.serve({
       );
     }
     try {
-      const { text, model } = await slot(() =>
-        complete(exact, body.messages as ChatMessage[]),
+      const { text, model } = await slot(req.signal, () =>
+        complete(exact, body.messages as ChatMessage[], req.signal),
       );
       return Response.json({
         id: `shim-${crypto.randomUUID()}`,

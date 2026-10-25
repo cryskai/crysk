@@ -293,7 +293,7 @@ if (mode === "plan") {
   console.log(
     `${rows.length} PR(s). Estimated ${HUNTERS} hunters + refuter, summarizer off, scout off, parity never fires.`,
   );
-  console.log(`arm: ${arm}  (run dirs: cal-<pr>-${arm})`);
+  console.log(`arm: ${arm}  (run dirs: ${corpusName}-<pr>-${arm})`);
   console.log(
     `model: ${model ?? "(frontmatter)"}  (CLI --model precedence over frontmatter)`,
   );
