@@ -482,6 +482,65 @@ The judge ran from a temporary copy that falls back to the sibling file and stil
 The patch and raw data are in the lab, `bench/experiments/2026-10-25-martian-cal-dev-default/`. The engine fix is
 still owed.
 
+## Martian 50, arm `dev-default`, Opus 4.5 judge (2026-10-25, Martian's own pipeline)
+
+All 50 offline PRs (Cal.com, Sentry, Grafana, Keycloak, Discourse; 173 goldens, 66 High+Critical), reviewed by what
+`dev` ships and judged by **Martian's own steps 2, 2.5 and 3** with `anthropic/claude-opus-4-5-20251101`, the model
+behind their published vendor rows.
+
+- **Engine.** Cal.com 10 ran on `0ded569` (see the section above); the other 40 on `14e63f0`. `prompts/default` is
+  identical between the two (`git diff 0ded569 14e63f0 -- prompts/default` is empty). Hunters `sonnet` at `xhigh`,
+  refuter `opus`, scout and summarizer off, no codegraph, local `--two-dot`, never `--pr`.
+- **Qualification.** The 40 are qualified. Cal.com 10 predate the request-plan fix (#391) and were exported with
+  `--allow-unqualified`; their review behaviour is the same, only the evidence pointer is missing. keycloak 36880
+  first came out partial (a hunter lost both drafts to the bare-name proof-ref bug, fixed in #396) and was re-run
+  once on the same engine `14e63f0`, which qualified.
+- **Judge transport.** `scripts/martian-claude-shim.ts` turns each OpenAI call into `claude -p --model <exact id>`
+  on a Claude subscription. Two disclosed deviations: the CLI has no `temperature` (Martian sends `0.0`), and
+  `LLM_CALL_TIMEOUT` was raised from 30 s to 300 s in the working copy, because queued CLI calls overran it and
+  step 2.5 silently skipped dedup for 18 of 49 PRs (#398). Prompts, parsing and scoring are unchanged. Step 2.5
+  ended `49 succeeded, 0 fallbacks, 0 errors`. grafana 76186 had no findings, so it has no candidates.
+- **Extraction.** Our 347 posted comments became 406 Martian candidates (+17%), so some FPs are one finding split
+  into several issues.
+- **Cost.** About $93 notional for the 40 reviews plus the 36880 re-run, $21.87 for Cal.com 10; $0 cash
+  (subscription). Judge calls are not metered by the shim. Wall: 2h48m for the 40.
+- Unreplicated. Surface B: **not run**.
+
+**Comparable group only.** 22 tools in `evaluations.json` were judged against the current 173 goldens; 27 older
+rows used an earlier 137-golden set and are left out. Same judge model for every row; ours ran through the CLI.
+
+| # | tool | High+Critical recall | recall | precision | F1 | tp | fp |
+|---|---|---|---|---|---|---|---|
+| 1 | **pr-hero** | **78.8% (52/66)** | 64.2% | 28.8% | 39.7% | 111 | 275 |
+| 2 | augment | 74.2% (49/66) | 62.4% | 60.7% | 61.5% | 108 | 70 |
+| 3 | qodo-extended-v2 | 74.2% (49/66) | 61.3% | 67.9% | 64.4% | 106 | 50 |
+| 4 | cubic-v2 | 72.7% (48/66) | 62.4% | 62.4% | 62.4% | 108 | 65 |
+| 5 | copilot-v2 | 71.2% (47/66) | 66.5% | 40.6% | 50.4% | 115 | 168 |
+| 6 | qodo-v2 | 71.2% (47/66) | 59.0% | 56.4% | 57.6% | 102 | 79 |
+| 7 | greptile-v5 | 66.7% (44/66) | 45.1% | 40.2% | 42.5% | 78 | 116 |
+| 8 | coderabbit | 63.6% (42/66) | 59.5% | 34.7% | 43.8% | 103 | 194 |
+| 9 | macroscope | 63.6% (42/66) | 46.8% | 62.3% | 53.5% | 81 | 49 |
+| 10 | sourcery | 60.6% (40/66) | 54.9% | 43.2% | 48.3% | 95 | 125 |
+| 11 | bugbot | 60.6% (40/66) | 45.1% | 58.2% | 50.8% | 78 | 56 |
+| 15 | claude-code | 53.0% (35/66) | 48.6% | 48.8% | 48.7% | 84 | 88 |
+
+pr-hero per corpus (recall · High+Critical · fp): Cal.com 71% · 17/19 · 66; Sentry 61% · 12/12 · 55; Grafana 68% ·
+9/12 · 34; Keycloak 67% · 9/11 · 41; Discourse 56% · **5/12** · 79.
+
+**Reading.** First on the headline metric and second on overall recall (copilot-v2 66.5%), but precision is the
+lowest of the leading group: 275 FPs against 50-70 for augment, qodo-extended-v2 and cubic-v2, so F1 trails them.
+The weak spot is Discourse: three Critical security goldens missed on `discourse-graphite` #4 and #10 (SSRF via
+`open(feed_polling_url)`, an unescaped `referer` in JavaScript, SQL string interpolation), plus four High. Other
+High+Critical misses: grafana 76186 (two High, zero findings; the hunters did read the code), grafana 103633,
+keycloak 32918 (Critical, recursive provider lookup) and 36880, Cal.com 10967 and 14943.
+
+Bugs this run found in our own engine and harness, each fixed in its own PR: #391 (request-plan race), #393
+(merge-base diffs, mixed arms, shim spending after disconnect), #396 (bare file-name proof refs rejected),
+#397 (format retry now names the violated rule; a failed write no longer spends a paid retry), #398 (abandoned
+judge calls were silent).
+
+Raw data: lab `bench/experiments/2026-10-25-martian-50-dev-default/`.
+
 ## Benchmark qualification gates and metrics (Unit 7)
 
 Only **schema-valid, attributable completed attempts** qualify for resume and

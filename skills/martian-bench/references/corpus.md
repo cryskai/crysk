@@ -64,11 +64,11 @@ Pilot learning (n=12 musive): scout concentrated instead of widening; prompt-set
 
 Lab ledger: `../deep-review/bench/METRICS.md` (append-only). Different instrument.
 
-## 8. Vendor rows we do not yet own
+## 8. Vendor rows — Martian 50 with their own pipeline (2026-10-25)
 
 Martian publishes `offline/results/<model>/evaluations.json` (Opus 4.5 / Sonnet 4.5 / GPT-5.2) and `offline/results/benchmark_data.json` (~22 MB stored reviews).
 
-We have **not** injected `pr-hero` into that file and have **not** run their gateway. Pilot human read (3 PRs, their Opus 4.5 evals): Greptile matched us on 14943/8087 (1/2); Greptile+CodeRabbit **2/2 on 8330** (we 0/2). Do not generalise that slice to the ten.
+Arm `dev-default` is injected into a **copy** (`scripts/martian-inject.ts`) and judged by their unmodified steps 2/2.5/3 with Opus 4.5 through `scripts/martian-claude-shim.ts` (no temperature; `LLM_CALL_TIMEOUT` 300 s, see flow.md). Among the 22 tools judged on the current 173 goldens: pr-hero **#1 on High+Critical recall 78.8% (52/66)**, recall 64.2% (#2), precision 28.8% (lowest of the leaders), F1 39.7%. Weak spot: Discourse security (5/12 H+C). Ledger: `docs/benchmarks/martian-bench.md` § Martian 50. A new arm on the 50 is a delta against **this** row; compare only against tools whose goldens total 173.
 
 Surface B = bucket our `martian-review.json` against those stored comments. Status: **not run**.
 
