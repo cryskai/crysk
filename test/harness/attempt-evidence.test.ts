@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { StepSpec } from "#review/step-runner";
+import * as atomicWrite from "../../src/execution/atomic-write";
 import {
   evidenceSha256,
   freezeAttemptEvidenceIdentity,
@@ -636,4 +637,37 @@ test("the request plan says plainly when the backend could not apply the effort"
   const plan = JSON.parse(await readFile(planFile, "utf8"));
   expect(plan.effort).toBe("xhigh");
   expect(plan.effortApplied).toBe(false);
+});
+
+// Martian Cal.com `dev-default` arm, 2026-10-25: every run was quarantined as
+// "missing frozen request plan" although each `.request.json` was on disk.
+// Parallel steps hash the ~274 MB claude binary synchronously, so one step's
+// hash blocks the event loop past another step's 100 ms freeze timer, and the
+// freeze returned before it recorded the pointer. A plan write slower than the
+// timer reproduces that without depending on how warm the event loop is (an
+// earlier event-loop starver passed with the fix removed once the file had warmed up).
+test("the evidence points at the request plan even when the freeze timer wins the race", async () => {
+  const x = await setup();
+  x.step.timeoutMs = 10000;
+  const original = atomicWrite.writeJsonAtomically;
+  const slowPlan = spyOn(atomicWrite, "writeJsonAtomically").mockImplementation(
+    async (outPath, value, options) => {
+      if (outPath.endsWith(".request.json")) await Bun.sleep(300);
+      return original(outPath, value, options);
+    },
+  );
+  try {
+    await x.harness.run(x.step);
+  } finally {
+    slowPlan.mockRestore();
+  }
+  const e = await waitForEvidence(x.step);
+  const planFile = attemptEvidencePath(x.step.outPath, x.step.name, 1).replace(
+    /\.json$/,
+    ".request.json",
+  );
+  expect(e.requestPlan).toEqual({
+    relativePath: path.basename(planFile),
+    sha256: evidenceSha256(await readFile(planFile)),
+  });
 });
