@@ -4866,6 +4866,26 @@ describe("#152 makeProofRefResolver", () => {
     await rm(worktree, { recursive: true, force: true });
   });
 
+  test("a failed tree listing is retried, not cached for the run", async () => {
+    // pr-hero F001 on #396: the first bare-name miss arms the snapshot, and a
+    // listing that failed there (not a repo yet, a transient spawn error)
+    // must not pin `false` for every later retry of every step.
+    const worktree = await mkdtemp(path.join(tmpdir(), "pr-hero-tree-"));
+    const deep = path.join(worktree, "a", "b");
+    await mkdir(deep, { recursive: true });
+    await Bun.write(path.join(deep, "Late.java"), "class A {}\n");
+    const resolve = makeProofRefResolver(worktree, "");
+    expect(resolve("Late.java")).toBe(false);
+    for (const args of [
+      ["init", "-q"],
+      ["add", "-A"],
+    ]) {
+      Bun.spawnSync(["git", "-C", worktree, ...args]);
+    }
+    expect(resolve("Late.java")).toBe(true);
+    await rm(worktree, { recursive: true, force: true });
+  });
+
   test("resolves a bare file name the patch names deep in the tree", async () => {
     const worktree = await mkdtemp(path.join(tmpdir(), "pr-hero-tree-"));
     const patch = [

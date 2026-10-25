@@ -651,6 +651,27 @@ describe("format violation records why the draft was rejected", () => {
     );
   });
 
+  test("a write failure after a good parse is not reported as a parse error", async () => {
+    // pr-hero F002 on #396: the catch also wraps the artifact writes, so a
+    // persistence failure must not be logged as the parser's verdict.
+    const dir = await tempDir();
+    const { transport } = makeScriptedTransport([okOutcome()]);
+    const blocked = path.join(dir, "blocked");
+    await mkdir(blocked, { recursive: true });
+    const step = await makeStep(dir, { maxAttempts: 1, outPath: blocked });
+    const harness = new StepExecutionHarness({
+      transport,
+      spawnFn: (() => ({}) as unknown) as typeof Bun.spawn,
+      sleep: async () => {},
+    });
+
+    expect((await harness.run(step)).status).toBe("failed");
+    const log = await Bun.file(
+      path.join(dir, "logs", `${step.name}.1.log`),
+    ).text();
+    expect(log).not.toContain("parse_error:");
+  });
+
   test("a delivered attempt writes no parse_error line", async () => {
     const dir = await tempDir();
     const { transport } = makeScriptedTransport([okOutcome()]);

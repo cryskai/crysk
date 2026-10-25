@@ -2237,8 +2237,20 @@ export class StepExecutionHarness implements StepRunner {
       deadlineMs,
       harnessWatchdogMs,
       onData: async (outcome, settlement): Promise<AttemptDelivery> => {
+        // Set only when `step.parse` itself threw: the catch below also
+        // receives artifact-write failures, which are not the parser's verdict.
+        let parseError: string | undefined;
         try {
-          const parsed = step.parse(outcome.finalText);
+          let parsed: unknown;
+          try {
+            parsed = step.parse(outcome.finalText);
+          } catch (parseFailure) {
+            parseError =
+              parseFailure instanceof Error
+                ? parseFailure.message
+                : String(parseFailure);
+            throw parseFailure;
+          }
           if (
             isVacuousHunt({
               tools: step.tools,
@@ -2274,7 +2286,7 @@ export class StepExecutionHarness implements StepRunner {
             writeJsonAtomically(step.outPath, parsed),
           );
           return { delivered: true, parsed };
-        } catch (parseFailure) {
+        } catch {
           // D1-08 PR0: cause resolution now goes through the transport's OWN
           // failure classifier first (the second, previously unwired
           // mechanism this slice closes) before ever falling back to the
@@ -2299,9 +2311,7 @@ export class StepExecutionHarness implements StepRunner {
               resolution.kind === "cause"
                 ? resolution.cause
                 : "legacy_terminal",
-              parseFailure instanceof Error
-                ? parseFailure.message
-                : String(parseFailure),
+              parseError,
             ),
           ).catch(() => {});
           // Transient cleanup of the stale artifact is data-plane too, so it

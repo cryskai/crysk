@@ -630,6 +630,12 @@ export function makeProofRefResolver(
     // carries is still rejected; a ref with a directory must still be exact.
     if (!resolved && !candidate.includes("/")) {
       baseNames ??= treeBaseNames(worktree, named);
+      if (baseNames === undefined) {
+        // The listing failed: answer from the patch alone, and cache neither
+        // the snapshot nor this verdict, so a later retry lists again instead
+        // of inheriting the failure for the rest of the run.
+        return pathsHaveBaseName(named, candidate);
+      }
       resolved = baseNames.has(candidate);
     }
     memo.set(candidate, resolved);
@@ -640,24 +646,37 @@ export function makeProofRefResolver(
 // Every file name the reviewed tree carries: the patch's paths (deleted files
 // included) plus what git lists in the worktree, tracked and untracked but not
 // ignored, the same set `existsSync` above can vouch for. Built once, on the
-// first bare name that misses. Outside a git checkout the list is the patch's
-// alone, which only keeps the old exact-path answer. `spawnSync` THROWS on a
-// missing cwd rather than exiting non-zero, and a throw here would reach the
-// parse as a rejected draft, so the listing is best-effort by construction.
-function treeBaseNames(worktree: string, named: Set<string>): Set<string> {
-  const paths = [...named, ...gitListedPaths(worktree)];
+// first bare name that misses. `undefined` when git could not list the tree
+// (not a checkout, a transient failure): the caller then falls back to the
+// patch and caches nothing. `spawnSync` THROWS on a missing cwd rather than
+// exiting non-zero, and a throw here would reach the parse as a rejected
+// draft, so the listing is best-effort by construction.
+function treeBaseNames(
+  worktree: string,
+  named: Set<string>,
+): Set<string> | undefined {
+  const listed = gitListedPaths(worktree);
+  if (listed === undefined) return undefined;
+  const paths = [...named, ...listed];
   return new Set(paths.filter(Boolean).map((p) => path.posix.basename(p)));
 }
 
-function gitListedPaths(worktree: string): string[] {
+function pathsHaveBaseName(paths: Set<string>, name: string): boolean {
+  for (const p of paths) if (path.posix.basename(p) === name) return true;
+  return false;
+}
+
+function gitListedPaths(worktree: string): string[] | undefined {
   try {
     const listed = Bun.spawnSync(
       ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
       { cwd: worktree, stdout: "pipe", stderr: "ignore" },
     );
-    return listed.exitCode === 0 ? listed.stdout.toString().split("\0") : [];
+    return listed.exitCode === 0
+      ? listed.stdout.toString().split("\0")
+      : undefined;
   } catch {
-    return [];
+    return undefined;
   }
 }
 
