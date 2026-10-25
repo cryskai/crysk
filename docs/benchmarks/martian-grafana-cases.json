@@ -1,0 +1,110 @@
+{
+  "repo": "grafana/grafana",
+  "pilot": [
+    79265,
+    103633,
+    76186
+  ],
+  "prs": [
+    {
+      "pr": 79265,
+      "title": "Anonymous: Add configurable device limit",
+      "additions": 105,
+      "deletions": 37,
+      "changedFiles": 11,
+      "baseSha": "7ddcd0c9611882858701f4f876fb8e449fe73980",
+      "headSha": "bbd8c507cdf56f6b884373809e0b24abd4a2353d",
+      "remote": "https://github.com/grafana/grafana.git"
+    },
+    {
+      "pr": 103633,
+      "title": "AuthZService: improve authz caching",
+      "additions": 240,
+      "deletions": 33,
+      "changedFiles": 4,
+      "baseSha": "5634ca44f799a82161f0401dadc286452f3bdbf8",
+      "headSha": "7562f37880367411a62304bcdcdc178bced23906",
+      "remote": "https://github.com/grafana/grafana.git"
+    },
+    {
+      "pr": 76186,
+      "title": "Plugins: Chore: Renamed instrumentation middleware to metrics middleware",
+      "additions": 137,
+      "deletions": 78,
+      "changedFiles": 8,
+      "baseSha": "58ba11ecbd60863e2bfc6e32f0399ed4feb3927a",
+      "headSha": "303cdc2caf256aa5df660611120c2e3f7392365d",
+      "remote": "https://github.com/grafana/grafana.git"
+    },
+    {
+      "pr": 107534,
+      "title": "Query splitting: Interpolate queries at the start of the process",
+      "additions": 48,
+      "deletions": 15,
+      "changedFiles": 4,
+      "baseSha": "d9a8253640464014aa3662c91131278990cfb828",
+      "headSha": "1cab4143d443c33079566f6ca36931eb8468159f",
+      "remote": "https://github.com/grafana/grafana.git"
+    },
+    {
+      "pr": 106778,
+      "title": "Alerting: Remove ruler from alert list view2",
+      "additions": 542,
+      "deletions": 418,
+      "changedFiles": 14,
+      "baseSha": "15e1aa88551d925a80796a966e52f2b7a178203b",
+      "headSha": "8df850371034b73dc4dd9908cc30fa09f12a1f97",
+      "remote": "https://github.com/grafana/grafana.git"
+    },
+    {
+      "pr": 90045,
+      "title": "Dual writer: mode 3",
+      "additions": 524,
+      "deletions": 131,
+      "changedFiles": 5,
+      "baseSha": "66c4dff17e9147b11fb9b14c6ed63089a599da65",
+      "headSha": "e369f24665ec70e1e3700f457d25ef83301d931a",
+      "remote": "https://github.com/grafana/grafana.git"
+    },
+    {
+      "pr": 80329,
+      "title": "Annotations: Split cleanup into separate queries and deletes to avoid deadlocks on MySQL",
+      "additions": 199,
+      "deletions": 62,
+      "changedFiles": 3,
+      "baseSha": "a886bd3c79a417a70b51509384d1f1ec3e87e96b",
+      "headSha": "04cfa3bfd469c035ff8b35f9a66867c4e8d5dcf4",
+      "remote": "https://github.com/grafana/grafana.git"
+    },
+    {
+      "pr": 90939,
+      "title": "fix data race in GetWebAssets",
+      "additions": 13,
+      "deletions": 3,
+      "changedFiles": 1,
+      "baseSha": "cca9dee702ac4338ddc38aa56257273b8143e32e",
+      "headSha": "b1613e320acff00623e6efc59f00ee68c7684a97",
+      "remote": "https://github.com/grafana/grafana.git"
+    },
+    {
+      "pr": 94942,
+      "title": "ServerSideExpressions: Disable SQL Expressions to prevent RCE and LFI vulnerability",
+      "additions": 47,
+      "deletions": 34,
+      "changedFiles": 7,
+      "baseSha": "cbe1e7d63f098e306058c0fbcab2f5c30602fa7d",
+      "headSha": "f3317b329b4eb8fd96f99dd86525bc4a22d20248",
+      "remote": "https://github.com/grafana/grafana.git"
+    },
+    {
+      "pr": 97529,
+      "title": "Unified Storage: Init at startup, fix traces, and speed up indexing",
+      "additions": 25,
+      "deletions": 57,
+      "changedFiles": 5,
+      "baseSha": "871af07203177ce59a24e742107119409274f48a",
+      "headSha": "26fed312840cd76b766cbd2158e17a7e6c0ec548",
+      "remote": "https://github.com/grafana/grafana.git"
+    }
+  ]
+}
