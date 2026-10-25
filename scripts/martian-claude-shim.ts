@@ -35,7 +35,7 @@ const port = Number(argValue("--port", "8787"));
 const concurrency = Number(argValue("--concurrency", "4"));
 
 let active = 0;
-const waiting: Array<() => void> = [];
+const waiting: Array<{ wake: () => void; signal: AbortSignal }> = [];
 // A client that went away (Ctrl-C, timeout, retry) must not keep spending
 // quota: a waiter woken after its request aborted passes the slot on instead
 // of spawning, and a running child is killed on abort.
@@ -46,13 +46,16 @@ async function slot<T>(
 ): Promise<T> {
   const queuedAt = Date.now();
   const onAbort = () => reportAbandoned(queuedAt);
-  signal.addEventListener("abort", onAbort, { once: true });
+  // `abort` never fires for a signal that is already aborted, and the body
+  // read before this call is where a client can give up first.
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
   try {
     if (active >= concurrency) {
-      await new Promise<void>((resolve) => waiting.push(resolve));
+      await new Promise<void>((wake) => waiting.push({ wake, signal }));
     }
     if (signal.aborted) {
-      waiting.shift()?.();
+      waiting.shift()?.wake();
       throw new Error("client went away before its turn");
     }
     active++;
@@ -60,7 +63,7 @@ async function slot<T>(
       return await work();
     } finally {
       active--;
-      waiting.shift()?.();
+      waiting.shift()?.wake();
     }
   } finally {
     // Only an abort while this call is pending counts as abandoned.
@@ -70,15 +73,30 @@ async function slot<T>(
 
 // A client that gives up is a scoring problem, not noise: Martian falls back
 // or records an error for that review. Say how long it waited, every time.
+// The shim cannot tell a client timeout from a Ctrl-C or a dropped
+// connection, so the line names the likely cause instead of asserting it.
 function reportAbandoned(queuedAt: number): void {
   abandoned++;
   const seconds = Math.round((Date.now() - queuedAt) / 1000);
+  // Waiters whose client already left stay queued until woken; count the
+  // live ones.
+  const queued = waiting.filter((w) => !w.signal.aborted).length;
   console.error(
-    `ABANDONED call #${abandoned}: the client gave up after ${seconds}s ` +
-      `(${active} running, ${waiting.length} queued). Its timeout is shorter than ` +
-      `this shim's latency: raise LLM_CALL_TIMEOUT in the Martian working copy ` +
-      `and re-run the step with --force for this tool.`,
+    `ABANDONED call #${abandoned}: the client dropped it after ${seconds}s ` +
+      `(${active} running, ${queued} queued). Unless you interrupted the Martian ` +
+      `step, its timeout is shorter than this shim's latency: raise ` +
+      `LLM_CALL_TIMEOUT in the working copy and re-run the step with --force.`,
   );
+}
+
+// The total, for a run whose stderr scrolled away: printed on shutdown.
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    console.error(
+      `martian-claude-shim: ${abandoned} abandoned call(s) this run`,
+    );
+    process.exit(0);
+  });
 }
 
 interface ChatMessage {
