@@ -89,9 +89,14 @@ function reportAbandoned(queuedAt: number): void {
   );
 }
 
-// The total, for a run whose stderr scrolled away: printed on shutdown.
+// The total, for a run whose stderr scrolled away: printed on shutdown. The
+// shim usually runs as a background job stopped with `kill`, so it also kills
+// its in-flight CLI calls: exiting alone would orphan them, still spending
+// quota for answers nobody will read.
+const children = new Set<ReturnType<typeof Bun.spawn>>();
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
+    for (const child of children) child.kill();
     console.error(
       `martian-claude-shim: ${abandoned} abandoned call(s) this run`,
     );
@@ -135,13 +140,17 @@ async function complete(
     ],
     { stdin: new Blob([user]), stdout: "pipe", stderr: "pipe" },
   );
+  children.add(proc);
   const kill = () => proc.kill();
   signal.addEventListener("abort", kill, { once: true });
   const [out, err, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
-  ]).finally(() => signal.removeEventListener("abort", kill));
+  ]).finally(() => {
+    signal.removeEventListener("abort", kill);
+    children.delete(proc);
+  });
   if (signal.aborted) throw new Error("client went away; claude killed");
   if (code !== 0) throw new Error(`claude exited ${code}: ${err.slice(-500)}`);
   const result = JSON.parse(out) as {
