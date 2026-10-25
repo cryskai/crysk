@@ -15,6 +15,14 @@
 //
 // Known gap, disclosed in every ledger entry that uses this: the CLI exposes
 // no `temperature`, so Martian's `temperature=0.0` is not applied.
+//
+// Martian's steps 2.5 and 3 give each call 30 s (`LLM_CALL_TIMEOUT`) and send
+// batches of 20-30 at once. Each call here spawns a CLI and waits for a slot,
+// so queued calls overrun that budget and the client gives up. Step 2.5 then
+// silently falls back to "no dedup", which inflates our false positives
+// (Martian 50, 2026-10-25: 18 of 49 PRs, 80 abandoned calls). Raise
+// `LLM_CALL_TIMEOUT` in the working copy before judging, and read the
+// abandoned-call lines this shim prints: there must be none.
 
 const EXACT_MODEL = /^(?:anthropic\/)?(claude-[a-z0-9.-]+-\d{8})$/;
 
@@ -27,28 +35,73 @@ const port = Number(argValue("--port", "8787"));
 const concurrency = Number(argValue("--concurrency", "4"));
 
 let active = 0;
-const waiting: Array<() => void> = [];
+const waiting: Array<{ wake: () => void; signal: AbortSignal }> = [];
 // A client that went away (Ctrl-C, timeout, retry) must not keep spending
 // quota: a waiter woken after its request aborted passes the slot on instead
 // of spawning, and a running child is killed on abort.
+let abandoned = 0;
 async function slot<T>(
   signal: AbortSignal,
   work: () => Promise<T>,
 ): Promise<T> {
-  if (active >= concurrency) {
-    await new Promise<void>((resolve) => waiting.push(resolve));
-  }
-  if (signal.aborted) {
-    waiting.shift()?.();
-    throw new Error("client went away before its turn");
-  }
-  active++;
+  const queuedAt = Date.now();
+  const onAbort = () => reportAbandoned(queuedAt);
+  // `abort` never fires for a signal that is already aborted, and the body
+  // read before this call is where a client can give up first.
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
   try {
-    return await work();
+    if (active >= concurrency) {
+      await new Promise<void>((wake) => waiting.push({ wake, signal }));
+    }
+    if (signal.aborted) {
+      waiting.shift()?.wake();
+      throw new Error("client went away before its turn");
+    }
+    active++;
+    try {
+      return await work();
+    } finally {
+      active--;
+      waiting.shift()?.wake();
+    }
   } finally {
-    active--;
-    waiting.shift()?.();
+    // Only an abort while this call is pending counts as abandoned.
+    signal.removeEventListener("abort", onAbort);
   }
+}
+
+// A client that gives up is a scoring problem, not noise: Martian falls back
+// or records an error for that review. Say how long it waited, every time.
+// The shim cannot tell a client timeout from a Ctrl-C or a dropped
+// connection, so the line names the likely cause instead of asserting it.
+function reportAbandoned(queuedAt: number): void {
+  abandoned++;
+  const seconds = Math.round((Date.now() - queuedAt) / 1000);
+  // Waiters whose client already left stay queued until woken; count the
+  // live ones.
+  const queued = waiting.filter((w) => !w.signal.aborted).length;
+  console.error(
+    `ABANDONED call #${abandoned}: the client dropped it after ${seconds}s ` +
+      `(${active} running, ${queued} queued). Unless you interrupted the Martian ` +
+      `step, its timeout is shorter than this shim's latency: raise ` +
+      `LLM_CALL_TIMEOUT in the working copy and re-run the step with --force.`,
+  );
+}
+
+// The total, for a run whose stderr scrolled away: printed on shutdown. The
+// shim usually runs as a background job stopped with `kill`, so it also kills
+// its in-flight CLI calls: exiting alone would orphan them, still spending
+// quota for answers nobody will read.
+const children = new Set<ReturnType<typeof Bun.spawn>>();
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => {
+    for (const child of children) child.kill();
+    console.error(
+      `martian-claude-shim: ${abandoned} abandoned call(s) this run`,
+    );
+    process.exit(0);
+  });
 }
 
 interface ChatMessage {
@@ -87,13 +140,17 @@ async function complete(
     ],
     { stdin: new Blob([user]), stdout: "pipe", stderr: "pipe" },
   );
+  children.add(proc);
   const kill = () => proc.kill();
   signal.addEventListener("abort", kill, { once: true });
   const [out, err, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
-  ]).finally(() => signal.removeEventListener("abort", kill));
+  ]).finally(() => {
+    signal.removeEventListener("abort", kill);
+    children.delete(proc);
+  });
   if (signal.aborted) throw new Error("client went away; claude killed");
   if (code !== 0) throw new Error(`claude exited ${code}: ${err.slice(-500)}`);
   const result = JSON.parse(out) as {

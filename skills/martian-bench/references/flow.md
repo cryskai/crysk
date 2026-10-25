@@ -64,7 +64,7 @@ Each corpus is data in `scripts/martian-corpora.ts` plus three docs files:
 Judging like the vendor rows (no API key):
 
 ```bash
-bun run scripts/martian-claude-shim.ts --port 8787 &       # OpenAI-compatible -> claude -p
+bun run scripts/martian-claude-shim.ts --port 8787 2>~/Desktop/martian-cal/shim.log &   # OpenAI-compatible -> claude -p
 cp <martian>/offline/results/benchmark_data.json <copy>    # never mutate the upstream file
 bun run scripts/martian-inject.ts --arm <arm> --data <copy>
 MARTIAN_BASE_URL=http://127.0.0.1:8787/v1 MARTIAN_API_KEY=local \
@@ -73,6 +73,8 @@ MARTIAN_MODEL=anthropic/claude-opus-4-5-20251101 \
 ```
 
 The shim refuses aliases (`opus` is the newest model, not the judge of the published rows) and checks that the reply came from the requested model. The CLI has no `temperature`, so Martian's `temperature=0.0` is not applied: say so wherever these numbers appear.
+
+Before step 2.5, raise the per-call timeout in the **working copy** (not upstream): `sed -i '' -E 's/^LLM_CALL_TIMEOUT = 30([^0-9]|$)/LLM_CALL_TIMEOUT = 300\1/' code_review_benchmark/step2_5_dedup_candidates.py code_review_benchmark/step3_judge_comments.py` (anchored, so a second run leaves 300 alone). Martian sends batches of 20-30 calls with 30 s each; through the shim they queue behind CLI spawns, the client gives up, and step 2.5 falls back to "no dedup" without failing. That inflates our FPs (Martian 50: 18 of 49 PRs before the patch, 0 after). This changes transport only, not prompts, parsing or scoring; disclose it with the temperature gap. Acceptance: step 2.5 prints `Fallbacks : 0` and `Errors : 0`, and `grep -c ABANDONED ~/Desktop/martian-cal/shim.log` is 0 after each step (the shim also prints its total when stopped).
 
 ## Commands
 
