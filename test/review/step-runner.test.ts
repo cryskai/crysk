@@ -417,8 +417,15 @@ describe("ClaudeCodeRunner format-retry", () => {
     // The re-prompt travels the same channel as the first prompt (#314):
     // stdin, with nothing of it left in argv.
     expect(calls[0]?.stdin).toBe(spec.prompt);
-    expect(calls[1]?.stdin).toBe(spec.prompt + FORMAT_RETRY_REMINDER);
-    expect(calls[1]?.argv).not.toContain(spec.prompt + FORMAT_RETRY_REMINDER);
+    // The reminder now carries the parser's own message after the fixed
+    // suffix, so the model is told what to correct.
+    expect(calls[1]?.stdin).toStartWith(spec.prompt + FORMAT_RETRY_REMINDER);
+    expect(calls[1]?.stdin).toContain(
+      "Your previous final message was rejected:",
+    );
+    expect(
+      calls[1]?.argv.some((arg) => arg.includes(FORMAT_RETRY_REMINDER)),
+    ).toBe(false);
     expect(calls[1]?.argv[2]).toBe("--append-system-prompt-file");
   });
 

@@ -689,3 +689,63 @@ describe("format violation records why the draft was rejected", () => {
     expect(log).not.toContain("parse_error:");
   });
 });
+
+describe("a refused draft is retried with the reason, a failed write is not retried", () => {
+  test("the format-retry prompt names the rule the previous draft broke", async () => {
+    // Martian keycloak 36880: the validator refused unresolved proof refs, and
+    // the retry only said "no prose, no fences", so the model resent the same
+    // citations and lost the step a second time.
+    const dir = await tempDir();
+    const { transport, requests } = makeScriptedTransport([
+      { ...okOutcome(), finalText: "first" },
+      { ...okOutcome(), finalText: JSON.stringify({ findings: [] }) },
+    ]);
+    const step = await makeStep(dir, {
+      maxAttempts: 2,
+      parse: (text) => {
+        if (text === "first") {
+          throw new Error(
+            "finding F1 proof_refs cite paths absent from the reviewed tree: Foo.java:1",
+          );
+        }
+        return JSON.parse(text);
+      },
+    });
+    const harness = new StepExecutionHarness({
+      transport,
+      spawnFn: (() => ({}) as unknown) as typeof Bun.spawn,
+      sleep: async () => {},
+    });
+
+    expect((await harness.run(step)).status).toBe("ok");
+    expect(requests.length).toBe(2);
+    expect(requests[1]?.userPrompt).toContain(
+      "finding F1 proof_refs cite paths absent from the reviewed tree: Foo.java:1",
+    );
+    expect(requests[0]?.userPrompt).not.toContain("proof_refs");
+  });
+
+  test("a write failure after a good parse stops the step without a paid format retry", async () => {
+    const dir = await tempDir();
+    const { transport, requests } = makeScriptedTransport([okOutcome()]);
+    const blocked = path.join(dir, "blocked");
+    await mkdir(blocked, { recursive: true });
+    const step = await makeStep(dir, { maxAttempts: 2, outPath: blocked });
+    const harness = new StepExecutionHarness({
+      transport,
+      spawnFn: (() => ({}) as unknown) as typeof Bun.spawn,
+      sleep: async () => {},
+    });
+
+    const result = await harness.run(step);
+
+    expect(result.status).toBe("failed");
+    expect(requests.length).toBe(1);
+    const log = await Bun.file(
+      path.join(dir, "logs", `${step.name}.1.log`),
+    ).text();
+    expect(log).toContain("cause: legacy_terminal");
+    expect(log).not.toContain("cause: format_violation");
+    expect(log).toContain("persist_error: EISDIR");
+  });
+});
