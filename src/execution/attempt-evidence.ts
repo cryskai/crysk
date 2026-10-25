@@ -127,11 +127,7 @@ export async function persistAttemptEvidence(
     outcome?: TransportOutcome;
     receipt: SettlementReceipt;
     delivery?: { delivered: boolean };
-    frozenIdentity?: {
-      toolsConfigSha256?: string;
-      executableSha256?: string;
-      requestPlan?: { relativePath: string; sha256: string };
-    };
+    frozenIdentity?: FrozenAttemptIdentity;
   },
 ): Promise<void> {
   const file = attemptEvidencePath(step.outPath, step.name, request.attempt);
@@ -161,9 +157,14 @@ export async function persistAttemptEvidence(
       usage: outcome.usage,
     };
   if (execution.frozenIdentity) {
-    const { requestPlan, ...identity } = execution.frozenIdentity;
+    const { requestPlan, pendingRequestPlan, ...identity } =
+      execution.frozenIdentity;
     Object.assign(evidence.identity, identity);
-    if (requestPlan) evidence.requestPlan = requestPlan;
+    // The freeze may return before its plan write finished (see
+    // freezeAttemptEvidenceIdentity). By settlement that write is long done,
+    // so wait for it here instead of losing the pointer.
+    const plan = requestPlan ?? (await pendingRequestPlan);
+    if (plan) evidence.requestPlan = plan;
   }
   if (evidence.delivered) {
     evidence.outputSha256 = evidenceSha256(await readFile(step.outPath));
@@ -304,14 +305,20 @@ export async function readEvidenceFile(
   }
 }
 
-export async function freezeAttemptEvidenceIdentity(
-  request: TransportRequest,
-  step: StepSpec,
-): Promise<{
+export interface FrozenAttemptIdentity {
   toolsConfigSha256?: string;
   executableSha256?: string;
   requestPlan?: { relativePath: string; sha256: string };
-}> {
+  /** The plan write when it outlived the freeze timer; never rejects. */
+  pendingRequestPlan?: Promise<
+    { relativePath: string; sha256: string } | undefined
+  >;
+}
+
+export async function freezeAttemptEvidenceIdentity(
+  request: TransportRequest,
+  step: StepSpec,
+): Promise<FrozenAttemptIdentity> {
   const frozen: {
     toolsConfigSha256?: string;
     executableSha256?: string;
@@ -343,45 +350,52 @@ export async function freezeAttemptEvidenceIdentity(
     request.attempt,
   ).replace(/\.json$/, ".request.json");
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // The timer keeps the spawn from waiting on disk I/O, but losing the race
+  // must not lose the pointer: parallel steps hash the ~274 MB claude binary
+  // synchronously, and one step's hash can block the event loop past another
+  // step's timer (Martian dev-default arm, 2026-10-25: every run quarantined
+  // as "missing frozen request plan" with each plan file on disk). The write
+  // keeps going and persistAttemptEvidence awaits it at settlement.
+  const planWrite = (async () => {
+    const plan = {
+      schemaVersion: 1,
+      sessionId: request.sessionId,
+      attempt: request.attempt,
+      stepName: step.name,
+      route: request.route,
+      systemPromptSha256: request.systemPromptSha256,
+      userPromptSha256: evidenceSha256(request.userPrompt),
+      systemPromptPath: path.relative(
+        path.dirname(file),
+        step.systemPromptPath,
+      ),
+      // #299: the NAMES behind `toolsConfigSha256`. The hash can only
+      // confirm a list someone already has; when a hunter returned a clean
+      // bill without opening the code, the first question is whether it
+      // was ever offered tools, and a digest cannot answer it. Additive:
+      // the hash stays, and the plan's readers compare fields by name.
+      toolNames: [...request.tools],
+      // #299: the effort the engine REQUESTED, and whether this backend
+      // could apply it. The CLI's implicit default (medium on the 5.5
+      // family) is what the artifacts could not show before. OpenCode has
+      // no `--effort`, so there the level is intent only, and
+      // `effortApplied: false` keeps a reader from taking it as a fact
+      // about the run. Additive, and deliberately NOT in `identity` or the
+      // route fingerprint: those are compared across runs by the lab.
+      effort: request.effort,
+      effortApplied: request.route.backend === "claude-code",
+      ...frozen,
+    };
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeJsonAtomically(file, plan);
+    frozen.requestPlan = {
+      relativePath: path.basename(file),
+      sha256: evidenceSha256(await readFile(file)),
+    };
+  })();
   try {
     await Promise.race([
-      (async () => {
-        const plan = {
-          schemaVersion: 1,
-          sessionId: request.sessionId,
-          attempt: request.attempt,
-          stepName: step.name,
-          route: request.route,
-          systemPromptSha256: request.systemPromptSha256,
-          userPromptSha256: evidenceSha256(request.userPrompt),
-          systemPromptPath: path.relative(
-            path.dirname(file),
-            step.systemPromptPath,
-          ),
-          // #299: the NAMES behind `toolsConfigSha256`. The hash can only
-          // confirm a list someone already has; when a hunter returned a clean
-          // bill without opening the code, the first question is whether it
-          // was ever offered tools, and a digest cannot answer it. Additive:
-          // the hash stays, and the plan's readers compare fields by name.
-          toolNames: [...request.tools],
-          // #299: the effort the engine REQUESTED, and whether this backend
-          // could apply it. The CLI's implicit default (medium on the 5.5
-          // family) is what the artifacts could not show before. OpenCode has
-          // no `--effort`, so there the level is intent only, and
-          // `effortApplied: false` keeps a reader from taking it as a fact
-          // about the run. Additive, and deliberately NOT in `identity` or the
-          // route fingerprint: those are compared across runs by the lab.
-          effort: request.effort,
-          effortApplied: request.route.backend === "claude-code",
-          ...frozen,
-        };
-        await mkdir(path.dirname(file), { recursive: true });
-        await writeJsonAtomically(file, plan);
-        frozen.requestPlan = {
-          relativePath: path.basename(file),
-          sha256: evidenceSha256(await readFile(file)),
-        };
-      })(),
+      planWrite,
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, Math.min(100, Math.max(1, step.timeoutMs)));
       }),
@@ -390,5 +404,12 @@ export async function freezeAttemptEvidenceIdentity(
   } finally {
     clearTimeout(timer);
   }
-  return { ...frozen };
+  if (frozen.requestPlan) return { ...frozen };
+  return {
+    ...frozen,
+    pendingRequestPlan: planWrite.then(
+      () => frozen.requestPlan,
+      () => undefined,
+    ),
+  };
 }

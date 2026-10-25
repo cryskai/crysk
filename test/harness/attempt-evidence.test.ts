@@ -637,3 +637,34 @@ test("the request plan says plainly when the backend could not apply the effort"
   expect(plan.effort).toBe("xhigh");
   expect(plan.effortApplied).toBe(false);
 });
+
+// Martian Cal.com `dev-default` arm, 2026-10-25: every run was quarantined as
+// "missing frozen request plan" although each `.request.json` was on disk.
+// Parallel steps hash the ~274 MB claude binary synchronously, so one step's
+// hash blocks the event loop past another step's 100 ms freeze timer, and the
+// freeze returned before it recorded the pointer. The starver below blocks the
+// loop on every timers phase, which reproduces that deterministically: the
+// timer always fires before the plan write's I/O chain completes.
+test("the evidence points at the request plan even when the freeze timer wins the race", async () => {
+  const x = await setup();
+  x.step.timeoutMs = 10000;
+  const busyWait = (ms: number) => {
+    const end = performance.now() + ms;
+    while (performance.now() < end) {}
+  };
+  const starver = setInterval(() => busyWait(120), 0);
+  try {
+    await x.harness.run(x.step);
+  } finally {
+    clearInterval(starver);
+  }
+  const e = await waitForEvidence(x.step);
+  const planFile = attemptEvidencePath(x.step.outPath, x.step.name, 1).replace(
+    /\.json$/,
+    ".request.json",
+  );
+  expect(e.requestPlan).toEqual({
+    relativePath: path.basename(planFile),
+    sha256: evidenceSha256(await readFile(planFile)),
+  });
+});
