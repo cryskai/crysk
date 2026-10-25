@@ -275,6 +275,10 @@ async function replay(c: ReplayCase) {
   };
   const result = await runner.run(spec);
   // A failed step reads as `inconclusive`, exactly as runRefuter treats it.
+  const entry =
+    result.status === "ok"
+      ? (result.output as RefuterResult).results[0]
+      : undefined;
   const verdict =
     result.status === "ok"
       ? ((result.output as RefuterResult).results[0]?.outcome ?? "inconclusive")
@@ -287,6 +291,7 @@ async function replay(c: ReplayCase) {
     tier: f.tier,
     original_verdict: c.source === "refuted" ? "refuted" : f.refuter_verdict,
     verdict,
+    refuter_proof_refs: entry?.proof_refs ?? [],
     status: result.status,
     denial: result.denialCode ?? null,
     expect: c.expect,
