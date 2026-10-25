@@ -620,3 +620,51 @@ describe("vacuous hunt is not a delivered draft (#214, #299)", () => {
     expect(log).not.toContain("tool_invocations:");
   });
 });
+
+describe("format violation records why the draft was rejected", () => {
+  test("the attempt log carries the parse error, so triage need not reverse-engineer it", async () => {
+    const dir = await tempDir();
+    const { transport } = makeScriptedTransport([okOutcome()]);
+    const step = await makeStep(dir, {
+      maxAttempts: 1,
+      parse: () => {
+        throw new Error(
+          "finding RES-6 proof_refs cite paths absent from the reviewed tree: Foo.java:1",
+        );
+      },
+    });
+    const harness = new StepExecutionHarness({
+      transport,
+      spawnFn: (() => ({}) as unknown) as typeof Bun.spawn,
+      sleep: async () => {},
+    });
+
+    const result = await harness.run(step);
+
+    expect(result.status).toBe("failed");
+    const log = await Bun.file(
+      path.join(dir, "logs", `${step.name}.1.log`),
+    ).text();
+    expect(log).toContain("cause: format_violation");
+    expect(log).toContain(
+      "parse_error: finding RES-6 proof_refs cite paths absent from the reviewed tree: Foo.java:1",
+    );
+  });
+
+  test("a delivered attempt writes no parse_error line", async () => {
+    const dir = await tempDir();
+    const { transport } = makeScriptedTransport([okOutcome()]);
+    const step = await makeStep(dir, { maxAttempts: 1 });
+    const harness = new StepExecutionHarness({
+      transport,
+      spawnFn: (() => ({}) as unknown) as typeof Bun.spawn,
+      sleep: async () => {},
+    });
+
+    expect((await harness.run(step)).status).toBe("ok");
+    const log = await Bun.file(
+      path.join(dir, "logs", `${step.name}.1.log`),
+    ).text();
+    expect(log).not.toContain("parse_error:");
+  });
+});

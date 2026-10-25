@@ -616,14 +616,49 @@ export function makeProofRefResolver(
 ): (candidate: string) => boolean {
   const named = pathsNamedInDiff(patch);
   const memo = new Map<string, boolean>();
+  let baseNames: Set<string> | undefined;
   return (candidate) => {
     const cached = memo.get(candidate);
     if (cached !== undefined) return cached;
-    const resolved =
+    let resolved =
       named.has(candidate) || existsSync(path.join(worktree, candidate));
+    // A bare file name (`PermissionClientTest.java:78`) is a real citation
+    // spelled short, not an invented file, whenever some file in the tree
+    // carries that name. Java trees put files ten directories down, and a
+    // hunter there cited all 43 refs this way: the exact-path check rejected
+    // both of its drafts (Martian keycloak 36880, 2026-10-25). A name no file
+    // carries is still rejected; a ref with a directory must still be exact.
+    if (!resolved && !candidate.includes("/")) {
+      baseNames ??= treeBaseNames(worktree, named);
+      resolved = baseNames.has(candidate);
+    }
     memo.set(candidate, resolved);
     return resolved;
   };
+}
+
+// Every file name the reviewed tree carries: the patch's paths (deleted files
+// included) plus what git lists in the worktree, tracked and untracked but not
+// ignored, the same set `existsSync` above can vouch for. Built once, on the
+// first bare name that misses. Outside a git checkout the list is the patch's
+// alone, which only keeps the old exact-path answer. `spawnSync` THROWS on a
+// missing cwd rather than exiting non-zero, and a throw here would reach the
+// parse as a rejected draft, so the listing is best-effort by construction.
+function treeBaseNames(worktree: string, named: Set<string>): Set<string> {
+  const paths = [...named, ...gitListedPaths(worktree)];
+  return new Set(paths.filter(Boolean).map((p) => path.posix.basename(p)));
+}
+
+function gitListedPaths(worktree: string): string[] {
+  try {
+    const listed = Bun.spawnSync(
+      ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      { cwd: worktree, stdout: "pipe", stderr: "ignore" },
+    );
+    return listed.exitCode === 0 ? listed.stdout.toString().split("\0") : [];
+  } catch {
+    return [];
+  }
 }
 
 // CONTAINS-COMPATIBLE glob matching (JD finding): the prose rules say "path

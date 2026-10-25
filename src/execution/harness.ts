@@ -448,6 +448,11 @@ async function writeAttemptLog(
   // network failure — this line is what lets incident triage tell them
   // apart. Absent on a delivered ("ok") attempt.
   cause?: FailureCause | "legacy_terminal",
+  // Why `step.parse` rejected the final text. Without it a format_violation
+  // log says only THAT the draft was refused, and the result tail is capped,
+  // so the rule that fired (an unresolved proof ref, say) had to be rebuilt by
+  // hand from the validator source (Martian keycloak 36880, 2026-10-25).
+  parseError?: string,
 ): Promise<void> {
   const logPath = attemptLogPath(step.outPath, step.name, attempt);
   await mkdir(path.dirname(logPath), { recursive: true });
@@ -461,6 +466,11 @@ async function writeAttemptLog(
       `timed_out: ${outcome.timedOut ?? false}`,
       `classification: ${classification}`,
       ...(cause !== undefined ? [`cause: ${cause}`] : []),
+      ...(parseError !== undefined
+        ? [
+            `parse_error: ${redactEvidenceText(redactDiagnostic(parseError)).replace(/\s+/g, " ")}`,
+          ]
+        : []),
       ...(outcome.toolInvocations !== undefined
         ? [`tool_invocations: ${outcome.toolInvocations}`]
         : []),
@@ -2264,7 +2274,7 @@ export class StepExecutionHarness implements StepRunner {
             writeJsonAtomically(step.outPath, parsed),
           );
           return { delivered: true, parsed };
-        } catch {
+        } catch (parseFailure) {
           // D1-08 PR0: cause resolution now goes through the transport's OWN
           // failure classifier first (the second, previously unwired
           // mechanism this slice closes) before ever falling back to the
@@ -2289,6 +2299,9 @@ export class StepExecutionHarness implements StepRunner {
               resolution.kind === "cause"
                 ? resolution.cause
                 : "legacy_terminal",
+              parseFailure instanceof Error
+                ? parseFailure.message
+                : String(parseFailure),
             ),
           ).catch(() => {});
           // Transient cleanup of the stale artifact is data-plane too, so it
