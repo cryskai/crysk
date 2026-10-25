@@ -15,6 +15,14 @@
 //
 // Known gap, disclosed in every ledger entry that uses this: the CLI exposes
 // no `temperature`, so Martian's `temperature=0.0` is not applied.
+//
+// Martian's steps 2.5 and 3 give each call 30 s (`LLM_CALL_TIMEOUT`) and send
+// batches of 20-30 at once. Each call here spawns a CLI and waits for a slot,
+// so queued calls overrun that budget and the client gives up. Step 2.5 then
+// silently falls back to "no dedup", which inflates our false positives
+// (Martian 50, 2026-10-25: 18 of 49 PRs, 80 abandoned calls). Raise
+// `LLM_CALL_TIMEOUT` in the working copy before judging, and read the
+// abandoned-call lines this shim prints: there must be none.
 
 const EXACT_MODEL = /^(?:anthropic\/)?(claude-[a-z0-9.-]+-\d{8})$/;
 
@@ -31,24 +39,46 @@ const waiting: Array<() => void> = [];
 // A client that went away (Ctrl-C, timeout, retry) must not keep spending
 // quota: a waiter woken after its request aborted passes the slot on instead
 // of spawning, and a running child is killed on abort.
+let abandoned = 0;
 async function slot<T>(
   signal: AbortSignal,
   work: () => Promise<T>,
 ): Promise<T> {
-  if (active >= concurrency) {
-    await new Promise<void>((resolve) => waiting.push(resolve));
-  }
-  if (signal.aborted) {
-    waiting.shift()?.();
-    throw new Error("client went away before its turn");
-  }
-  active++;
+  const queuedAt = Date.now();
+  const onAbort = () => reportAbandoned(queuedAt);
+  signal.addEventListener("abort", onAbort, { once: true });
   try {
-    return await work();
+    if (active >= concurrency) {
+      await new Promise<void>((resolve) => waiting.push(resolve));
+    }
+    if (signal.aborted) {
+      waiting.shift()?.();
+      throw new Error("client went away before its turn");
+    }
+    active++;
+    try {
+      return await work();
+    } finally {
+      active--;
+      waiting.shift()?.();
+    }
   } finally {
-    active--;
-    waiting.shift()?.();
+    // Only an abort while this call is pending counts as abandoned.
+    signal.removeEventListener("abort", onAbort);
   }
+}
+
+// A client that gives up is a scoring problem, not noise: Martian falls back
+// or records an error for that review. Say how long it waited, every time.
+function reportAbandoned(queuedAt: number): void {
+  abandoned++;
+  const seconds = Math.round((Date.now() - queuedAt) / 1000);
+  console.error(
+    `ABANDONED call #${abandoned}: the client gave up after ${seconds}s ` +
+      `(${active} running, ${waiting.length} queued). Its timeout is shorter than ` +
+      `this shim's latency: raise LLM_CALL_TIMEOUT in the Martian working copy ` +
+      `and re-run the step with --force for this tool.`,
+  );
 }
 
 interface ChatMessage {
