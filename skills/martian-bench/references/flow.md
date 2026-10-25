@@ -49,6 +49,31 @@ Engine isolation stays: `--strict-mcp-config`, `--setting-sources ""`, no Write/
 
 One variable if you change any of those. Name the new arm.
 
+## The other four corpora (authorised 2026-10-25)
+
+`--corpus sentry|grafana|keycloak|discourse` selects the other forty PRs (`cal` is the default).
+Each corpus is data in `scripts/martian-corpora.ts` plus three docs files:
+`docs/benchmarks/martian-<corpus>-{cases.json,goldens.json,gotchas.md}`.
+
+- Case files come from `bun run scripts/martian-cases.ts <corpus>` (read-only `gh api`). Never hand-edit them; `test/martian-corpora.test.ts` checks them against the goldens.
+- Fifteen PRs live in synthetic forks (`ai-code-review-evaluation/*`). Their rows carry `remote`, and the SHAs are fetched from there.
+- The four new clones are empty repos that fetch only each PR's two commits (`--depth=1`, blobless). Sentry costs ~235 MB, not a full clone.
+- Runs land in `~/Desktop/martian-cal/runs-<corpus>/<corpus>-<pr>-<arm>/`.
+- The harness passes the **shipped** size gate (`DEFAULT_SIZE_GATE`, 4000 lines) explicitly, so an operator config that lowers it cannot drop a PR every vendor reviewed.
+
+Judging like the vendor rows (no API key):
+
+```bash
+bun run scripts/martian-claude-shim.ts --port 8787 &       # OpenAI-compatible -> claude -p
+cp <martian>/offline/results/benchmark_data.json <copy>    # never mutate the upstream file
+bun run scripts/martian-inject.ts --arm <arm> --data <copy>
+MARTIAN_BASE_URL=http://127.0.0.1:8787/v1 MARTIAN_API_KEY=local \
+MARTIAN_MODEL=anthropic/claude-opus-4-5-20251101 \
+  uv run python -m code_review_benchmark.step2_extract_comments --tool pr-hero   # then 2.5 and 3
+```
+
+The shim refuses aliases (`opus` is the newest model, not the judge of the published rows) and checks that the reply came from the requested model. The CLI has no `temperature`, so Martian's `temperature=0.0` is not applied: say so wherever these numbers appear.
+
 ## Commands
 
 ```bash

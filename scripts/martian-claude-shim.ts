@@ -1,0 +1,151 @@
+// OpenAI-compatible localhost shim over the Claude Code CLI, so Martian's own
+// offline pipeline (steps 2, 2.5 and 3) runs unmodified on a Claude
+// subscription instead of an API key.
+//
+//   bun run scripts/martian-claude-shim.ts [--port 8787] [--concurrency 4]
+//   MARTIAN_BASE_URL=http://127.0.0.1:8787/v1 MARTIAN_API_KEY=local \
+//   MARTIAN_MODEL=anthropic/claude-opus-4-5-20251101 uv run python -m ...
+//
+// Each chat completion becomes one `claude -p --model <exact id>` call. The
+// request's system message replaces Claude Code's system prompt, so the judge
+// sees what an API call would: no tools, no MCP, no settings, no CLAUDE.md.
+// The model id must be exact (`anthropic/claude-opus-4-5-20251101`), never an
+// alias: `opus` resolves to whatever is newest, and the published vendor rows
+// were judged by Opus 4.5.
+//
+// Known gap, disclosed in every ledger entry that uses this: the CLI exposes
+// no `temperature`, so Martian's `temperature=0.0` is not applied.
+
+const EXACT_MODEL = /^(?:anthropic\/)?(claude-[a-z0-9.-]+-\d{8})$/;
+
+function argValue(flag: string, fallback: string): string {
+  const i = Bun.argv.indexOf(flag);
+  return i < 0 ? fallback : (Bun.argv[i + 1] ?? fallback);
+}
+
+const port = Number(argValue("--port", "8787"));
+const concurrency = Number(argValue("--concurrency", "4"));
+
+let active = 0;
+const waiting: Array<() => void> = [];
+async function slot<T>(work: () => Promise<T>): Promise<T> {
+  if (active >= concurrency) {
+    await new Promise<void>((resolve) => waiting.push(resolve));
+  }
+  active++;
+  try {
+    return await work();
+  } finally {
+    active--;
+    waiting.shift()?.();
+  }
+}
+
+interface ChatMessage {
+  role: string;
+  content: string;
+}
+
+async function complete(
+  model: string,
+  messages: ChatMessage[],
+): Promise<{ text: string; model: string }> {
+  const system = messages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content)
+    .join("\n\n");
+  const user = messages
+    .filter((m) => m.role !== "system")
+    .map((m) => m.content)
+    .join("\n\n");
+  const proc = Bun.spawn(
+    [
+      "claude",
+      "-p",
+      "--model",
+      model,
+      "--output-format",
+      "json",
+      "--system-prompt",
+      system,
+      "--setting-sources",
+      "",
+      "--strict-mcp-config",
+      "--tools",
+      "",
+    ],
+    { stdin: new Blob([user]), stdout: "pipe", stderr: "pipe" },
+  );
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) throw new Error(`claude exited ${code}: ${err.slice(-500)}`);
+  const result = JSON.parse(out) as {
+    is_error?: boolean;
+    result?: string;
+    modelUsage?: Record<string, unknown>;
+  };
+  if (result.is_error || typeof result.result !== "string") {
+    throw new Error(`claude returned an error: ${out.slice(0, 500)}`);
+  }
+  // Refuse to hand back an answer from a model other than the one asked for.
+  const used = Object.keys(result.modelUsage ?? {});
+  if (!used.includes(model)) {
+    throw new Error(`asked for ${model}, claude used ${used.join(", ")}`);
+  }
+  return { text: result.result, model };
+}
+
+Bun.serve({
+  port,
+  hostname: "127.0.0.1",
+  idleTimeout: 0,
+  async fetch(req) {
+    const url = new URL(req.url);
+    if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
+      return new Response("not found", { status: 404 });
+    }
+    const body = (await req.json()) as {
+      model?: string;
+      messages?: ChatMessage[];
+    };
+    const exact = EXACT_MODEL.exec(body.model ?? "")?.[1];
+    if (exact === undefined || !Array.isArray(body.messages)) {
+      return Response.json(
+        {
+          error: { message: `need an exact dated model id, got ${body.model}` },
+        },
+        { status: 400 },
+      );
+    }
+    try {
+      const { text, model } = await slot(() =>
+        complete(exact, body.messages as ChatMessage[]),
+      );
+      return Response.json({
+        id: `shim-${crypto.randomUUID()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: text },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    } catch (error) {
+      console.error(String(error));
+      return Response.json(
+        { error: { message: String(error) } },
+        { status: 502 },
+      );
+    }
+  },
+});
+console.error(
+  `martian-claude-shim on http://127.0.0.1:${port}/v1 (concurrency ${concurrency})`,
+);
