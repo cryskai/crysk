@@ -4839,6 +4839,66 @@ describe("#152 makeProofRefResolver", () => {
     expect(resolve("ghost.ts")).toBe(false);
     await rm(worktree, { recursive: true, force: true });
   });
+
+  test("resolves a bare file name that a deep tracked file carries", async () => {
+    // Martian keycloak 36880 (2026-10-25): a hunter cited all 43 refs as
+    // `PermissionClientTest.java:78-83`, the file living eleven directories
+    // down. Each named a real file; the exact-path check called every one
+    // fabricated and threw away both attempts' drafts.
+    const worktree = await mkdtemp(path.join(tmpdir(), "pr-hero-tree-"));
+    const deep = path.join(worktree, "tests", "base", "src", "org");
+    await mkdir(deep, { recursive: true });
+    await Bun.write(
+      path.join(deep, "PermissionClientTest.java"),
+      "class A {}\n",
+    );
+    for (const args of [
+      ["init", "-q"],
+      ["add", "-A"],
+    ]) {
+      Bun.spawnSync(["git", "-C", worktree, ...args]);
+    }
+    const resolve = makeProofRefResolver(worktree, "");
+    expect(resolve("PermissionClientTest.java")).toBe(true);
+    expect(resolve("InventedTest.java")).toBe(false);
+    // A path with a directory still has to be the real one.
+    expect(resolve("wrong/dir/PermissionClientTest.java")).toBe(false);
+    await rm(worktree, { recursive: true, force: true });
+  });
+
+  test("a failed tree listing is retried, not cached for the run", async () => {
+    // pr-hero F001 on #396: the first bare-name miss arms the snapshot, and a
+    // listing that failed there (not a repo yet, a transient spawn error)
+    // must not pin `false` for every later retry of every step.
+    const worktree = await mkdtemp(path.join(tmpdir(), "pr-hero-tree-"));
+    const deep = path.join(worktree, "a", "b");
+    await mkdir(deep, { recursive: true });
+    await Bun.write(path.join(deep, "Late.java"), "class A {}\n");
+    const resolve = makeProofRefResolver(worktree, "");
+    expect(resolve("Late.java")).toBe(false);
+    for (const args of [
+      ["init", "-q"],
+      ["add", "-A"],
+    ]) {
+      Bun.spawnSync(["git", "-C", worktree, ...args]);
+    }
+    expect(resolve("Late.java")).toBe(true);
+    await rm(worktree, { recursive: true, force: true });
+  });
+
+  test("resolves a bare file name the patch names deep in the tree", async () => {
+    const worktree = await mkdtemp(path.join(tmpdir(), "pr-hero-tree-"));
+    const patch = [
+      "diff --git a/services/src/deep/ClientPermissionsV2.java b/services/src/deep/ClientPermissionsV2.java",
+      "--- a/services/src/deep/ClientPermissionsV2.java",
+      "+++ b/services/src/deep/ClientPermissionsV2.java",
+      "",
+    ].join("\n");
+    const resolve = makeProofRefResolver(worktree, patch);
+    expect(resolve("ClientPermissionsV2.java")).toBe(true);
+    expect(resolve("ClientPermissionsV3.java")).toBe(false);
+    await rm(worktree, { recursive: true, force: true });
+  });
 });
 
 // ---------------------------------------------------------------------------

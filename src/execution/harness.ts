@@ -448,6 +448,11 @@ async function writeAttemptLog(
   // network failure — this line is what lets incident triage tell them
   // apart. Absent on a delivered ("ok") attempt.
   cause?: FailureCause | "legacy_terminal",
+  // Why `step.parse` rejected the final text. Without it a format_violation
+  // log says only THAT the draft was refused, and the result tail is capped,
+  // so the rule that fired (an unresolved proof ref, say) had to be rebuilt by
+  // hand from the validator source (Martian keycloak 36880, 2026-10-25).
+  parseError?: string,
 ): Promise<void> {
   const logPath = attemptLogPath(step.outPath, step.name, attempt);
   await mkdir(path.dirname(logPath), { recursive: true });
@@ -461,6 +466,11 @@ async function writeAttemptLog(
       `timed_out: ${outcome.timedOut ?? false}`,
       `classification: ${classification}`,
       ...(cause !== undefined ? [`cause: ${cause}`] : []),
+      ...(parseError !== undefined
+        ? [
+            `parse_error: ${redactEvidenceText(redactDiagnostic(parseError)).replace(/\s+/g, " ")}`,
+          ]
+        : []),
       ...(outcome.toolInvocations !== undefined
         ? [`tool_invocations: ${outcome.toolInvocations}`]
         : []),
@@ -2227,8 +2237,20 @@ export class StepExecutionHarness implements StepRunner {
       deadlineMs,
       harnessWatchdogMs,
       onData: async (outcome, settlement): Promise<AttemptDelivery> => {
+        // Set only when `step.parse` itself threw: the catch below also
+        // receives artifact-write failures, which are not the parser's verdict.
+        let parseError: string | undefined;
         try {
-          const parsed = step.parse(outcome.finalText);
+          let parsed: unknown;
+          try {
+            parsed = step.parse(outcome.finalText);
+          } catch (parseFailure) {
+            parseError =
+              parseFailure instanceof Error
+                ? parseFailure.message
+                : String(parseFailure);
+            throw parseFailure;
+          }
           if (
             isVacuousHunt({
               tools: step.tools,
@@ -2289,6 +2311,7 @@ export class StepExecutionHarness implements StepRunner {
               resolution.kind === "cause"
                 ? resolution.cause
                 : "legacy_terminal",
+              parseError,
             ),
           ).catch(() => {});
           // Transient cleanup of the stale artifact is data-plane too, so it
