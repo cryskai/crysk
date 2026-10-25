@@ -441,7 +441,8 @@ function receiptPathFor(step: StepSpec, attempt: number): string {
 // was fine and broke a validation rule instead: on Martian keycloak 36880 the
 // model resent the same unresolved proof refs and lost the step twice. So the
 // validator's own message rides along, capped so a long one cannot crowd out
-// the prompt.
+// the prompt. Every retry is a fresh session that never saw the refused
+// draft, so the wording names an earlier attempt, not "your" message.
 const MAX_REJECTION_CHARS = 2000;
 function formatRetryReminder(parseError: string | undefined): string {
   if (parseError === undefined) return FORMAT_RETRY_REMINDER;
@@ -449,7 +450,7 @@ function formatRetryReminder(parseError: string | undefined): string {
     parseError.length > MAX_REJECTION_CHARS
       ? `${parseError.slice(0, MAX_REJECTION_CHARS)}…`
       : parseError;
-  return `${FORMAT_RETRY_REMINDER} Your previous final message was rejected: ${reason}`;
+  return `${FORMAT_RETRY_REMINDER} An earlier attempt at this same task was rejected by the output validator, so avoid this: ${reason}`;
 }
 
 async function writeAttemptLog(
@@ -2300,11 +2301,15 @@ export class StepExecutionHarness implements StepRunner {
               resolution: { kind: "legacy_terminal" },
             };
           }
-          await this.guardedDataPlaneWrite(settlement, () =>
-            writeAttemptLog(step, attempt, kind, outcome, "ok"),
-          );
+          // Artifact first, then the "ok" log: written the other way round, a
+          // failed artifact write on a full or read-only disk left a log
+          // reading `classification: ok` for a step that failed, whenever the
+          // failure log that should replace it hit the same disk.
           await this.guardedDataPlaneWrite(settlement, () =>
             writeJsonAtomically(step.outPath, parsed),
+          );
+          await this.guardedDataPlaneWrite(settlement, () =>
+            writeAttemptLog(step, attempt, kind, outcome, "ok"),
           );
           return { delivered: true, parsed };
         } catch (failure) {

@@ -420,9 +420,7 @@ describe("ClaudeCodeRunner format-retry", () => {
     // The reminder now carries the parser's own message after the fixed
     // suffix, so the model is told what to correct.
     expect(calls[1]?.stdin).toStartWith(spec.prompt + FORMAT_RETRY_REMINDER);
-    expect(calls[1]?.stdin).toContain(
-      "Your previous final message was rejected:",
-    );
+    expect(calls[1]?.stdin).toContain("rejected by the output validator");
     expect(
       calls[1]?.argv.some((arg) => arg.includes(FORMAT_RETRY_REMINDER)),
     ).toBe(false);
