@@ -434,6 +434,54 @@ design is still owed.
 | Inside some hunter's stated scope | 54% (and 7 of 8 H+C) |
 | Parity hunter fired | 0 of 20 runs |
 
+## Cal.com 10 arm `dev-default` (2026-10-25, Surface A)
+
+What `dev` ships, scored as-is for the landing page. Engine `0ded569`, bundled prompt set `prompts/default`
+(`sha256: 9d195dd80531f42c`): reliability, resilience, lifecycle and logic hunters on `sonnet` at `xhigh`, refuter on
+`opus` at `high`, parity never fired, scout off, summarizer off, no codegraph. Local `--two-dot`, never `--pr`. Effort
+was checked in every request plan, because the `s55` arm ran at the CLI's implicit `medium` without anyone noticing.
+**Several variables differ from `hunters`** (prompt set, effort, refuter model, logic hunter), so this is a snapshot
+of dev, not an ablation.
+
+Judge: Martian `JUDGE_PROMPT`, Claude Code CLI `sonnet`, `tools: []`, siblings at the same `path:line` not extra
+FPs. Not Martian's Opus 4.5 gateway, so these numbers never sit next to their published vendor rows. Unreplicated.
+Cal.com only. Surface B: **not run**.
+
+| | P | R | F1 | tp | fp | fn | gold |
+|---|---|---|---|---|---|---|---|
+| All | 0.38 | 0.71 | 0.49 | 29 | 48 | 12 | 41 |
+| **High+Critical recall (headline)** | — | **0.84** | — | 16 | — | 3 | 19 |
+
+| PR | tp/fp/fn |
+|---|---|
+| 8087 | 2/1/0 |
+| 8330 | 1/6/1 |
+| 10600 | 3/7/2 |
+| 10967 | 4/11/2 |
+| 11059 | 8/4/1 |
+| 7232 | 2/4/1 |
+| 14740 | 4/5/2 |
+| 14943 | 1/3/1 |
+| 22345 | 1/1/1 |
+| 22532 | 3/6/1 |
+
+Missed High+Critical: 10967 (undefined `credential` passed to `updateEvent`), 11059 (Salesforce checks `statusText`
+instead of `ok`), 14943 (stale `retryCount + 1` under concurrency).
+
+Same judge, same ten PRs, one run each: `hunters` (2026-08-19) H+C 13/19, R 0.41, P 0.44; `s55` (2026-10-02) H+C 17/19,
+R 0.71, P 0.53; `opush` (2026-10-02) H+C 19/19, R 0.71, P 0.47. `dev-default` matches their recall with lower
+precision, because it raises more advisory findings. A gap of 1–3 H+C is inside the run-to-run variance measured on
+2026-09-17.
+
+Cost: Claude subscription, $0 cash; 19.5M tokens, $21.87 at API prices for the ten reviews; judge $0.
+
+**Engine bug found by this run.** All ten runs completed and were quarantined as `missing frozen request plan`.
+`freezeAttemptEvidenceIdentity` (`src/execution/attempt-evidence.ts`) races the plan write against a 100 ms timer and
+returns before it sets `requestPlan`, so the evidence lacks the pointer while the sibling `.request.json` is on disk.
+The judge ran from a temporary copy that falls back to the sibling file and still runs every digest and field check.
+The patch and raw data are in the lab, `bench/experiments/2026-10-25-martian-cal-dev-default/`. The engine fix is
+still owed.
+
 ## Benchmark qualification gates and metrics (Unit 7)
 
 Only **schema-valid, attributable completed attempts** qualify for resume and
