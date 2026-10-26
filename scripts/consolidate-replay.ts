@@ -8,6 +8,7 @@
 //
 //   bun run scripts/consolidate-replay.ts --arm dev-default --tool pr-hero-consol \
 //     --out <dir> [--model sonnet] [--concurrency 4] [--only <label,...>]
+//     [--variant base|strict]
 //
 // Reads every Martian 50 run dir, writes <dir>/consolidation.jsonl (one audit
 // row per PR, resumable) and <dir>/injected-reviews.json: review entries in
@@ -48,6 +49,11 @@ const model = argValue("--model") ?? "sonnet";
 const concurrency = Number(argValue("--concurrency") ?? 4);
 // --only cal-8087,keycloak-37634: consolidate just these PRs (a smoke run).
 const only = argValue("--only")?.split(",");
+// --variant strict: asides survive only as a concrete defect, and the drafts
+// dedupe merged away are offered so a distinct defect they carry is rescued.
+const variant = argValue("--variant") ?? "base";
+if (variant !== "base" && variant !== "strict")
+  fail(`unknown --variant ${variant}`);
 
 const SYSTEM = `You consolidate the findings a code reviewer is about to post on one pull request, so that every posted comment states exactly ONE defect.
 
@@ -68,17 +74,44 @@ Rules:
 Final message: exactly one JSON object, no prose, no code fences:
 {"findings":[{"primary":"F001","sources":["F001","F004"],"split":false,"claim":"..."}]}`;
 
+const STRICT_RULES = `
+
+Two stricter rules apply on top of the above.
+
+A. An aside survives as its own output finding ONLY when it names a concrete defect with a consequence a user or operator would hit: wrong output or data, a crash, a lost or duplicated write, a security or permission hole, a resource leak, a broken build or deploy. Everything else in an aside is deleted: performance worries without a concrete trigger, robustness or defensive-coding suggestions, missing logging or metrics, test hygiene, naming, style, documentation, "consider", "could", "might also".
+
+B. You also receive "merged_drafts": findings an earlier mechanical dedupe merged INTO a posted finding ("merged_into"), so only the posted finding's claim would be published. Most restate the posted defect; ignore those. When a merged draft carries a DISTINCT defect that rule A would keep and that no output finding already states, emit it as its own output finding with "primary" set to its merged_into id, "split": true, and "draft" set to the draft's id. Never emit a draft that restates a posted defect.
+
+Final message shape for this variant (draft is optional):
+{"findings":[{"primary":"F001","sources":["F001"],"split":true,"draft":"RES-4","claim":"..."}]}`;
+
 interface PlanEntry {
   primary: string;
   sources: string[];
   split?: boolean;
+  // A rescued merged-away draft: its own location and evidence are posted.
+  draft?: string;
   claim: string;
+}
+
+interface MergedDraft {
+  id: string;
+  merged_into: string;
+  path: string;
+  line: number;
+  severity: Finding["severity"];
+  claim: string;
+  proof_refs: string[];
 }
 
 // Rejects a plan that drops a finding, names an unknown one, or detaches a
 // primary from its sources. A rejected plan falls back to the input as is,
 // so a bad call can cost precision but never recall.
-function validatePlan(raw: unknown, ids: string[]): PlanEntry[] {
+function validatePlan(
+  raw: unknown,
+  ids: string[],
+  draftIds: Set<string>,
+): PlanEntry[] {
   const plan = (raw as { findings?: unknown })?.findings;
   if (!Array.isArray(plan) || plan.length === 0) {
     throw new Error("no findings array");
@@ -100,6 +133,11 @@ function validatePlan(raw: unknown, ids: string[]): PlanEntry[] {
     if (typeof e.claim !== "string" || e.claim.trim().length === 0) {
       throw new Error(`${e.primary}: empty claim`);
     }
+    if (e.draft !== undefined) {
+      if (!draftIds.has(e.draft)) throw new Error(`unknown draft ${e.draft}`);
+      if (e.split !== true)
+        throw new Error(`${e.draft}: a rescue must be a split`);
+    }
     out.push({ ...e, split: e.split === true });
   }
   const missing = ids.filter((id) => !covered.has(id));
@@ -110,8 +148,13 @@ function validatePlan(raw: unknown, ids: string[]): PlanEntry[] {
 // One output finding per plan entry. A merge keeps the primary's location,
 // severity, tier and verdict, and pools the evidence. A split aside was never
 // refuted on its own, so it posts advisory with `not_submitted`.
-function applyPlan(findings: Finding[], plan: PlanEntry[]): Finding[] {
+function applyPlan(
+  findings: Finding[],
+  plan: PlanEntry[],
+  drafts: MergedDraft[],
+): Finding[] {
   const byId = new Map(findings.map((f) => [f.id, f]));
+  const draftById = new Map(drafts.map((d) => [d.id, d]));
   const splits = new Map<string, number>();
   return plan.map((e) => {
     const primary = byId.get(e.primary) as Finding;
@@ -123,11 +166,19 @@ function applyPlan(findings: Finding[], plan: PlanEntry[]): Finding[] {
     }
     const n = (splits.get(e.primary) ?? 0) + 1;
     splits.set(e.primary, n);
+    const draft = e.draft === undefined ? undefined : draftById.get(e.draft);
     return {
       ...primary,
       id: `${primary.id}s${n}`,
       claim: e.claim,
-      proof_refs: primary.proof_refs,
+      ...(draft === undefined
+        ? { proof_refs: primary.proof_refs }
+        : {
+            path: draft.path,
+            line: draft.line,
+            severity: draft.severity,
+            proof_refs: draft.proof_refs,
+          }),
       tier: "advisory",
       refuter_verdict: "not_submitted",
     };
@@ -139,6 +190,7 @@ interface PrJob {
   url: string;
   headSha: string;
   findings: Finding[];
+  drafts: MergedDraft[];
 }
 
 const jobs: PrJob[] = [];
@@ -154,12 +206,17 @@ for (const [name, corpus] of Object.entries(CORPORA)) {
     const dir = path.join(BENCH_HOME, corpus.runs, `${label}-${arm}`);
     const doc = (await Bun.file(path.join(dir, "findings.json")).json()) as {
       findings: Finding[];
+      debug?: { deduped?: MergedDraft[] };
     };
+    const posted = new Set(doc.findings.map((f) => f.id));
     jobs.push({
       label,
       url: lookupGolden(goldens, row.pr).url,
       headSha: row.headSha,
       findings: doc.findings,
+      drafts: (doc.debug?.deduped ?? []).filter((d) =>
+        posted.has(d.merged_into),
+      ),
     });
   }
 }
@@ -188,7 +245,10 @@ if (await auditFile.exists()) {
 const scratch = await mkdtemp(path.join(tmpdir(), "consolidate-"));
 const systemPromptPath = path.join(scratch, "system.md");
 const mcpConfigPath = path.join(scratch, "mcp.json");
-await Bun.write(systemPromptPath, SYSTEM);
+await Bun.write(
+  systemPromptPath,
+  variant === "strict" ? SYSTEM + STRICT_RULES : SYSTEM,
+);
 await chmod(systemPromptPath, 0o600);
 await Bun.write(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
 const authority = await resolveRunnerAuthority({ workspaceRoot: scratch });
@@ -220,7 +280,21 @@ async function consolidate(job: PrJob): Promise<AuditRow> {
   const result = await runner.run({
     name: `consolidate-${job.label}`,
     systemPromptPath,
-    prompt: `Findings:\n${JSON.stringify(input, null, 2)}`,
+    prompt:
+      variant === "strict"
+        ? `Findings:\n${JSON.stringify(input, null, 2)}\n\nmerged_drafts:\n${JSON.stringify(
+            job.drafts.map((d) => ({
+              id: d.id,
+              merged_into: d.merged_into,
+              path: d.path,
+              line: d.line,
+              severity: d.severity,
+              claim: d.claim,
+            })),
+            null,
+            2,
+          )}`
+        : `Findings:\n${JSON.stringify(input, null, 2)}`,
     tools: [],
     mcpConfigPath,
     model,
@@ -232,7 +306,11 @@ async function consolidate(job: PrJob): Promise<AuditRow> {
     parse: (finalText) => {
       const extracted = extractJsonObject(finalText);
       if (extracted === undefined) throw new Error("no JSON object");
-      return validatePlan(extracted, ids);
+      return validatePlan(
+        extracted,
+        ids,
+        new Set(variant === "strict" ? job.drafts.map((d) => d.id) : []),
+      );
     },
   });
   const cost = result.usageV2?.notionalCostUsd ?? null;
@@ -283,7 +361,7 @@ const reviews = jobs.map((job) => {
   const row = audit.get(job.label);
   const findings =
     row?.status === "ok" && row.plan !== undefined
-      ? applyPlan(job.findings, row.plan)
+      ? applyPlan(job.findings, row.plan, job.drafts)
       : job.findings;
   return {
     tool,
