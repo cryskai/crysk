@@ -172,6 +172,21 @@ function worktreeFor(runDir: string, head: string) {
   return wt;
 }
 
+// The `diff --git` section(s) of a unified patch that touch `file`.
+function patchForFile(patch: string, file: string): string {
+  return patch
+    .split(/^(?=diff --git )/m)
+    .filter((section) => {
+      const header = section.slice(0, section.indexOf("\n"));
+      return (
+        header === `diff --git a/${file} b/${file}` ||
+        header.endsWith(` b/${file}`)
+      );
+    })
+    .join("")
+    .trimEnd();
+}
+
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 async function replay(c: ReplayCase) {
@@ -202,13 +217,23 @@ async function replay(c: ReplayCase) {
     null,
     2,
   );
+  // {{PATCH}}: this PR's diff for the finding's file only, so a candidate
+  // prompt can judge PR causation (the refuter has no git and no base).
+  const fullPatch = await Bun.file(path.join(c.run, "diff.patch")).text();
+  const fileDiff = patchForFile(fullPatch, f.path);
   const prompt =
     userPromptTemplate === undefined
       ? refuterPrompt(oneJson, meta.boundary_nonce)
-      : userPromptTemplate.replace(
-          "{{FINDING}}",
-          wrapBlock("finding", meta.boundary_nonce, oneJson),
-        );
+      : userPromptTemplate
+          .replace(
+            "{{FINDING}}",
+            wrapBlock("finding", meta.boundary_nonce, oneJson),
+          )
+          .replace(
+            "{{PATCH}}",
+            wrapBlock("patch", meta.boundary_nonce, fileDiff) ||
+              "(this PR's diff does not touch the finding's file)",
+          );
   const evidence = Bun.file(
     path.join(c.run, "steps", `evidence.refuter-${f.id}.attempt1.request.json`),
   );
@@ -236,8 +261,7 @@ async function replay(c: ReplayCase) {
   ];
 
   const { dir } = await worktreeFor(c.run, meta.head_sha);
-  const patch = await Bun.file(path.join(c.run, "diff.patch")).text();
-  const resolveProofRef = makeProofRefResolver(dir, patch);
+  const resolveProofRef = makeProofRefResolver(dir, fullPatch);
   const caseDir = path.join(scratch, `${path.basename(c.run)}-${f.id}`);
   const systemPromptPath = path.join(caseDir, "refuter.system.md");
   const recordedSystem = Bun.file(
