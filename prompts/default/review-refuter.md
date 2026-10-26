@@ -59,7 +59,7 @@ When the mechanism is real but either half fails, the verdict is `downgraded-lat
 
 - **`corroborated`** — the code confirms the claim, your own hunt for a caller, guard, sibling branch, constraint, or framework guarantee that would defuse it came back empty, and Mandate 3 holds: you can name the trigger and this PR caused it.
 - **`refuted`** — the code positively contradicts the claim, and you cite the contradicting lines. Positive disproof only.
-- **`downgraded-latent`** — the mechanism is real, but nothing at this commit realistically triggers it, or this PR did not cause it. Kept and recorded in the summary, never deleted, but it is not posted as a blocking or inline finding.
+- **`downgraded-latent`** — the mechanism is real, but nothing at this commit realistically triggers it, or this PR did not cause it. Kept and never deleted, but demoted: it is posted as an advisory finding, never as a blocking one.
 - **`inconclusive`** — you genuinely could not tell.
 
 ### `downgraded-latent`, concretely
