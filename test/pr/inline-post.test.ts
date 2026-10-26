@@ -1495,6 +1495,7 @@ describe("postingExitCode — design D6's exit-1 rule", () => {
       reviewFindingCount: 0,
       issueCommentIds: [],
       outsideDiffCount: 0,
+      latentCount: 0,
       summary: { action: "created", commentId: 1 },
       delta: { resolved: 0, new: 0, persist: 0 },
       droppedFindingIds: [],
