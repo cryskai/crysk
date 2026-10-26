@@ -76,9 +76,7 @@ import {
   buildPostPlan,
   computeDroppedFindingIds,
   type InlinePostOutcome,
-  isSummaryOnly,
   matchPostedFindings,
-  type PostableFinding,
   type PostedFindingComment,
   type PostPlan,
   parseHunkAnchors,
@@ -2720,7 +2718,7 @@ export async function resolveInlinePostPlan(input: {
   // set the plan used, never a narrower one (CRIT-A, verify-report-pr3
   // #3305: re-matching a subset can dissolve a tie the plan already
   // resolved). See ReviewSubmissionOutcome's WHY in pr/pr.ts.
-  findingRefs: PostableFinding[];
+  findingRefs: PrHeroFindingRef[];
   posted: PostedFindingComment[];
 }> {
   const issueComments = await fetchPrComments(input.operatorRoot, input.pr, {
@@ -2739,19 +2737,14 @@ export async function resolveInlinePostPlan(input: {
     { spawnFn: input.spawnFn, timeoutMs: POSTING_GH_TIMEOUT_MS },
   );
   const anchors = parseHunkAnchors(input.diffPatch);
-  const findingRefs: PostableFinding[] = input.doc.findings.map((f) => {
-    // `refuter_verdict` is what routes a latent finding to the summary only
-    // (buildPostPlan, isSummaryOnly). Dropped here, every caller of this
-    // plan (CI, `--pr --post`, `post --from`, `post --dry-run`) would post
-    // it inline again.
-    const ref: PostableFinding = {
+  const findingRefs: PrHeroFindingRef[] = input.doc.findings.map((f) => {
+    const ref = {
       id: f.id,
       path: f.path,
       line: f.line,
       claim: f.claim,
       tier: f.tier,
       proof_refs: f.proof_refs,
-      refuter_verdict: f.refuter_verdict,
     };
     // Resolve here, not only inside buildPostPlan: postPrReview's 422
     // rematch uses this same list as `allFindings`, and CRIT-A requires
@@ -3077,13 +3070,8 @@ export async function postInlineFindings(input: {
   // stateBlockBudget). The findings are read off the same resolved refs the
   // plan posted from, so a fresh row's locs name the line the comment sits on.
   const lineById = new Map(findingRefs.map((ref) => [ref.id, ref.line]));
-  // A latent finding lives only in the summary, which is exactly what
-  // `outside` records (rereview/state.ts: its only copy is the state block).
-  // Recorded `inline`, the next re-review would look for a thread that does
-  // not exist. No new channel value: older readers reject any other string.
   const freshChannel = (id: string): FindingChannel =>
     plan.issueComments.some((f) => f.id === id) ||
-    plan.latentComments.some((f) => f.id === id) ||
     plan.persisting.some(
       (match) => match.finding.id === id && match.posted.channel === "issue",
     )
@@ -3091,11 +3079,7 @@ export async function postInlineFindings(input: {
       : "inline";
   const freshFindings: FreshStateFinding[] = doc.findings.map((f) => ({
     path: f.path,
-    // A latent finding posts no comment, so no re-anchored post line exists
-    // for it: the summary section shows its own line, and its locs match.
-    line: isSummaryOnly(f.refuter_verdict)
-      ? f.line
-      : (lineById.get(f.id) ?? f.line),
+    line: lineById.get(f.id) ?? f.line,
     proof_refs: f.proof_refs,
     tier: f.tier,
     severity: f.severity,
@@ -3275,17 +3259,12 @@ export async function postInlineFindings(input: {
   // prevent duplicate issue comments, and this slice posts none. Re-review
   // identity for the bucket is the next slice.
   for (const finding of outsideDiff) reachedIds.add(finding.id);
-  // Latent findings reached the summary too, in their own section, which
-  // renderPrComment derives from the same verdict on every render. They sit
-  // in the expected list below as well, so a latent finding that somehow
-  // reached neither channel would still fire droppedFindingIds.
-  for (const finding of plan.latentComments) reachedIds.add(finding.id);
 
   // Receipt shape unchanged this slice: issue_comment_ids stays [].
   const issueCommentIds: number[] = [];
 
   const droppedFindingIds = computeDroppedFindingIds(
-    [...plan.reviewComments, ...plan.issueComments, ...plan.latentComments],
+    [...plan.reviewComments, ...plan.issueComments],
     reachedIds,
   );
 
@@ -3488,7 +3467,6 @@ export async function postInlineFindings(input: {
     reviewFindingCount: reviewFindings.length,
     issueCommentIds,
     outsideDiffCount: outsideDiff.length,
-    latentCount: plan.latentComments.length,
     summary,
     delta: overlayDelta(plan.delta),
     droppedFindingIds,

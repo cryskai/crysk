@@ -9,7 +9,6 @@
 
 import { listPaths } from "#git/refs";
 import type { ResolvedModelRoute, ResolvedStepRoute } from "#model/routing";
-import { isSummaryOnly } from "#pr/inline";
 import {
   type CiMode,
   findingMarker,
@@ -830,20 +829,6 @@ export function renderPrComment(
     );
     out.push("");
   }
-  // WHY derived here from `doc.findings`, not passed in like
-  // `outsideDiffFindings`: that bucket depends on GitHub (a 422 grows it),
-  // this one depends only on the verdict, and buildPostPlan routes every
-  // finding through the same isSummaryOnly predicate. Nothing for a caller to
-  // forget (the WARN-3 rule above), and the state-block budget, sized from
-  // this same render, already counts the section. Never compacted: the size
-  // fallback shrinks only the Outside Diff entries the 422 added.
-  const latentFindings = doc.findings.filter((finding) =>
-    isSummaryOnly(finding.refuter_verdict),
-  );
-  if (latentFindings.length > 0) {
-    out.push(...latentSection(latentFindings, doc.head_sha, webUrl));
-    out.push("");
-  }
   // Omit the "since <sha>" clause when the previous head equals the current
   // one (Juanma's PR #2 feedback: "Δ since f933fda8" printed on head
   // f933fda8 is noise) — a re-run on an unchanged head, not a genuinely
@@ -1125,33 +1110,6 @@ function outsideDiffSection(
   return out;
 }
 
-// Refuter v3.2 posting policy (pr/inline.ts isSummaryOnly): a
-// `downgraded-latent` finding is posted here and nowhere else. Its own
-// heading because "Outside Diff" would be false for one that sits on a diff
-// line, and the one-line gloss tells the reader why a real finding has no
-// inline thread. Same full body as the Outside Diff entries, so it can be
-// read and fixed from the summary alone.
-function latentSection(
-  findings: readonly Finding[],
-  headSha: string,
-  webUrl: string | undefined,
-): string[] {
-  const out: string[] = [
-    `### Not posted inline: real but not reached at this commit (${findings.length})`,
-    "",
-  ];
-  for (const [i, finding] of findings.entries()) {
-    if (i > 0) out.push("");
-    out.push(...findingBodyLines(finding, headSha, webUrl, true));
-    out.push("");
-    out.push(
-      "The refuter judged this a real mechanism that this commit does not " +
-        "reach, or that this PR did not cause, so it is not posted inline.",
-    );
-  }
-  return out;
-}
-
 // Per-finding comment bodies (ROADMAP B6, reworked per Juanma's PR #2
 // feedback items 2-5). Every posted finding — anchored inline or standalone
 // — carries the pr/preflight.ts identity marker as its FIRST line, mirroring
@@ -1190,10 +1148,8 @@ function findingHeaderLine(finding: Finding): string {
 }
 
 // `not_submitted` is the engine's word for "the refuter never saw this
-// finding". Since refuter v3.2 every severity is submitted, so it now means a
-// run truncated before the refuter leg, or a spec with no refuter
-// configured (a failed step reads `inconclusive`). On a PR comment that reads as a submission failure, so it
-// renders as `unchecked`.
+// finding" (every WARNING/SUGGESTION, and blockers on a truncated run). On a
+// PR comment that reads as a submission failure, so it renders as `unchecked`.
 // Every other verdict renders verbatim, matching the ledger's vocabulary.
 function refuterLabel(verdict: RefuterVerdict): string {
   return verdict === "not_submitted" ? "unchecked" : verdict;
@@ -1250,8 +1206,8 @@ function tierExplanationLines(finding: Finding): string[] {
   // verdicts that can also land here (`inconclusive`, or an `insufficient`
   // evidence_class regardless of verdict) have no equally short gloss, so they
   // render with just the verdict name rather than a guessed one.
-  // `not_submitted` (the refuter never saw it: a run truncated before the
-  // refuter leg, or a spec with no refuter configured) has its own line above.
+  // `not_submitted` (unrefuted-inferential, or demoted because the run was
+  // truncated before the refuter leg ran) has its own line above.
   if (finding.refuter_verdict === "downgraded-latent") {
     lines.push("   (real, but no live trigger today)");
   }

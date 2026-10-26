@@ -12,7 +12,6 @@
 // plans.
 
 import type { PrHeroFindingRef } from "#compare/compare";
-import type { RefuterVerdict } from "#review/findings";
 import { extractAnchor } from "#review/root-cause";
 import { diffRecordPath, splitDiffRecords } from "#review/size-gate";
 import { claimFingerprint, type ParsedFindingMarker } from "./preflight";
@@ -21,24 +20,9 @@ import { claimFingerprint, type ParsedFindingMarker } from "./preflight";
 // off-hunk finding onto a hunter-cited in-diff line (Musive #1727). Optional
 // so existing PrHeroFindingRef[] call sites stay assignable; absent refs
 // mean "this finding's own path:line is the only candidate".
-// `refuter_verdict` decides the channel (isSummaryOnly below). Optional for
-// the same reason: a ref built without it posts exactly as it did before.
 export type PostableFinding = PrHeroFindingRef & {
   proof_refs?: readonly string[];
-  refuter_verdict?: RefuterVerdict;
 };
-
-// Refuter v3.2 posting policy (Juanma 2026-10-26: "solo `downgraded-latent`
-// va al resumen, y `inconclusive` sigue inline como hoy"). A latent verdict
-// says the mechanism is real but this commit does not reach it, or this PR
-// did not cause it. Martian 50's false-positive attribution showed those
-// inline comments were the noise a reviewer reads as wrong, so they live in
-// the summary only. `refuted` never gets here: the pipeline deletes it.
-// One predicate, shared with review/report.ts's summary section, so the plan
-// and the rendered summary cannot disagree about which findings are latent.
-export function isSummaryOnly(verdict: RefuterVerdict | undefined): boolean {
-  return verdict === "downgraded-latent";
-}
 
 // ---------------------------------------------------------------------------
 // 1. Anchorability
@@ -388,17 +372,11 @@ export interface PostPlan {
   // Un-anchorable, unmatched findings — go into the summary Outside Diff
   // section (issues #16/#17, Greptile-shaped), not one issue comment each.
   issueComments: PostableFinding[];
-  // `downgraded-latent` findings (isSummaryOnly), anchorable or not, fresh
-  // or matched to a prior comment. Summary only, in their own section: under
-  // "Outside Diff" a latent finding that sits on a diff line would be
-  // mislabelled.
-  latentComments: PostableFinding[];
   persisting: FindingMatch[];
   resolved: PostedFindingComment[];
-  // From the matcher, not a stored count (design D5): persist = matched and
-  // still inline, new = reviewComments.length + issueComments.length +
-  // latentComments.length, resolved = prior comments with nothing matched to
-  // them, plus the prior comment of a finding that turned latent.
+  // From the matcher, not a stored count (design D5): persist = matched,
+  // new = reviewComments.length + issueComments.length, resolved = prior
+  // comments with nothing matched to them.
   delta: { resolved: number; new: number; persist: number };
 }
 
@@ -425,52 +403,22 @@ export function buildPostPlan(input: {
     headSha: input.headSha,
     window: input.window,
   });
-  // By object identity, not id: the matcher hands back the very refs it was
-  // given, typed down to PrHeroFindingRef, and identity cannot collide.
-  const latent = new Set(
-    findings.filter((finding) => isSummaryOnly(finding.refuter_verdict)),
-  );
   const reviewComments: PostableFinding[] = [];
   const issueComments: PostableFinding[] = [];
-  const latentComments: PostableFinding[] = [];
   for (const finding of match.fresh) {
-    if (latent.has(finding)) {
-      latentComments.push(finding);
-      continue;
-    }
     const anchorability = classifyAnchorability(finding, input.anchors);
     if (anchorability === "anchorable") reviewComments.push(finding);
     else issueComments.push(finding);
   }
-  // WHY split AFTER matching, never by filtering the matcher's input: a
-  // latent finding still owns the prior comment it sits on. Dropped first,
-  // that comment becomes a candidate for a neighbour and can dissolve a tie
-  // the 422 rematch (postPrReview, over the FULL finding list) resolves the
-  // other way: CRIT-A, two adjudications for one PR. A persisting finding
-  // that turned latent leaves inline: the finding goes to the summary and
-  // its old comment is treated exactly like a prior comment nothing matched,
-  // `resolved`. Nothing deletes or edits a `resolved` comment today, so
-  // this adds no deletion path.
-  const persisting: FindingMatch[] = [];
-  const resolved = [...match.resolved];
-  for (const persist of match.persist) {
-    if (latent.has(persist.finding)) {
-      latentComments.push(persist.finding);
-      resolved.push(persist.posted);
-      continue;
-    }
-    persisting.push(persist);
-  }
   return {
     reviewComments,
     issueComments,
-    latentComments,
-    persisting,
-    resolved,
+    persisting: match.persist,
+    resolved: match.resolved,
     delta: {
-      resolved: resolved.length,
-      new: reviewComments.length + issueComments.length + latentComments.length,
-      persist: persisting.length,
+      resolved: match.resolved.length,
+      new: match.fresh.length,
+      persist: match.persist.length,
     },
   };
 }
@@ -496,10 +444,6 @@ export interface InlinePostOutcome {
   // issueCommentIds so the posted: log can name the bucket without lying
   // that those findings became issue comments.
   outsideDiffCount: number;
-  // `downgraded-latent` findings posted in the summary's own section, never
-  // inline (isSummaryOnly). Log-only, like outsideDiffCount: writePostReceipt
-  // names its fields one by one, so post.json is unchanged.
-  latentCount: number;
   summary: { action: "created" | "updated"; commentId: number };
   delta: PostPlan["delta"];
   // Finding ids the plan classified as fresh (reviewComments + issueComments)

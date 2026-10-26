@@ -213,7 +213,6 @@ export async function runPostCommand(input: {
     log(
       `plan: ${plan.reviewComments.length} review comment(s), ` +
         `${plan.issueComments.length} outside diff, ` +
-        `${plan.latentComments.length} summary-only (latent), ` +
         `${plan.persisting.length} already posted (skipped)` +
         (previousHeadSha === undefined
           ? `, ${plan.resolved.length} resolved`
@@ -234,9 +233,6 @@ export async function runPostCommand(input: {
     }
     for (const finding of plan.issueComments) {
       log(`  outside ${finding.path}:${finding.line} ${finding.id}`);
-    }
-    for (const finding of plan.latentComments) {
-      log(`  latent  ${finding.path}:${finding.line} ${finding.id}`);
     }
     log("dry run: nothing was fetched-for-mutation or posted.");
     return 0;
@@ -262,7 +258,6 @@ export async function runPostCommand(input: {
   log(
     `posted: review ${outcome.reviewOutcome} (${outcome.reviewFindingCount} ` +
       `finding(s)), ${outcome.outsideDiffCount} outside diff, ` +
-      `${outcome.latentCount} summary-only (latent), ` +
       `summary ${outcome.summary.action} comment ${outcome.summary.commentId}`,
   );
   // GitHub #39: `post --from` reaches the same `movedHeadSha` re-read inside

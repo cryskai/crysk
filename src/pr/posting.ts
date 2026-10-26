@@ -90,7 +90,6 @@ export async function postFindingsIfEnabled(input: {
     log(
       `posted: review ${posted.reviewOutcome} (${posted.reviewFindingCount} ` +
         `finding(s)), ${posted.outsideDiffCount} outside diff, ` +
-        `${posted.latentCount} summary-only (latent), ` +
         `summary ${posted.summary.action} comment ${posted.summary.commentId}`,
     );
     // GitHub #39: said at the MOMENT it happened, not only in the result
