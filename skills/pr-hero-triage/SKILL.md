@@ -21,8 +21,9 @@ Use it when you see comments whose FIRST line matches:
 Do not use it for ordinary human review comments, or for pr-hero's own summary comment
 (`<!-- pr-hero-report head=<sha> -->`). That comment is a status roll-up plus, since W2
 (issues #16/#17), a `### Comments Outside Diff` bucket for findings GitHub would not
-anchor. Those bucket findings have **no** `<!-- pr-hero-finding` marker and **no**
-review thread. Do not reply on the summary. Do not invent a `gh` comment for them.
+anchor, and a `### Not posted inline: real but not reached at this commit` section
+for findings the refuter judged `downgraded-latent`. Findings in either section have
+**no** `<!-- pr-hero-finding` marker and **no** review thread. Do not reply on the summary. Do not invent a `gh` comment for them.
 This skill only answers findings that already have their own `<!-- pr-hero-finding`
 comment — almost always an inline review comment on Files changed.
 
@@ -192,7 +193,8 @@ current head:
    text) and its GitHub comment id. New posts put that marker on an **inline review
    comment**. A leftover top-level issue comment with the same marker may still exist on
    an old PR (pre-W2); the driver still binds those by marker. A finding that appears
-   only under `Comments Outside Diff` in the summary is not in this list — skip it.
+   only under `Comments Outside Diff` or `Not posted inline` in the summary is not in this
+   list — skip it.
 2. **Read the marker's `head=`.** This IS the budget unit — see "One adjudication per finding per
    HEAD" below. If a triage reply already exists in this thread carrying the SAME head, skip it:
    it is already answered for this code.
@@ -458,8 +460,8 @@ this PR. The engine typed it wrong, not the code.
   `/pr-hero recheck` or `/pr-hero review` with `gh pr comment` is not a triage reply, and is how you ask for them.)
   If that command posted the reply and then failed to resolve, re-run the
   **same** command — same-head skip retries resolve only. Do not `gh`.
-- Never triage a finding that only exists under `### Comments Outside Diff` in the
-  summary. It has no thread this slice (W2). If `npx -y pr-hero triage reply` reports no
+- Never triage a finding that only exists under `### Comments Outside Diff` or
+  `### Not posted inline` in the summary. It has no thread this slice (W2). If `npx -y pr-hero triage reply` reports no
   matching marker, stop.
 - `dismissed`, `deferred`, and `misclassified` without `--verdict` are malformed. `applied` WITH
   `--verdict` is equally malformed.
