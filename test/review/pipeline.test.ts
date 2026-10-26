@@ -319,9 +319,30 @@ async function makeInput(
   };
 }
 
+// The shared refuter for tests that are not ABOUT the refuter. Since v3.2
+// every severity is submitted, so the default WARNING draft below reaches a
+// `refuter-F00x` step, and FakeStepRunner's unscripted throw must stay strict.
+// It corroborates whatever it is asked: the id comes off the step name, so a
+// multi-finding run gets one matching verdict per step.
+function corroborateAsked(spec: StepSpec): StepResult {
+  return ok(spec, {
+    results: [
+      {
+        finding_id: spec.name.slice("refuter-".length),
+        outcome: "corroborated",
+        proof_refs: [],
+      },
+    ],
+  } satisfies RefuterResult);
+}
+
+// The default script: one WARNING draft, and — since refuter v3.2 submits
+// every severity — the refuter step it now reaches, corroborated. A test that
+// is about the refuter overrides `refuter` by spreading this first.
 const HUNTERS_OK: StepScript = {
   "hunter-reliability": (spec) => ok(spec, { findings: [draft()] }),
   "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+  refuter: corroborateAsked,
 };
 
 // ---------------------------------------------------------------------------
@@ -621,9 +642,11 @@ describe("hunter fan-out", () => {
     const runner = new FakeStepRunner(HUNTERS_OK);
     const input = await makeInput();
     const result = await runPipeline(input, { runner });
+    // The refuter step is the WARNING draft's: v3.2 submits every severity.
     expect(runner.specs.map((s) => s.name)).toEqual([
       "hunter-reliability",
       "hunter-resilience",
+      "refuter-F001",
     ]);
     expect(result.skillOutput.parity_hunter_fired).toBe(false);
     // The user prompt carries the diff, the hop budget, the self-report
@@ -646,6 +669,7 @@ describe("hunter fan-out", () => {
       "hunter-reliability",
       "hunter-resilience",
       "hunter-parity",
+      "refuter-F001",
     ]);
     expect(result.skillOutput.parity_hunter_fired).toBe(true);
   });
@@ -696,6 +720,7 @@ describe("hunter fan-out", () => {
       "hunter-reliability": (spec) =>
         ok(spec, { findings: [draft({ hunter: "parity" })] }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
     expect(result.skillOutput.findings[0]?.hunter).toBe("reliability");
@@ -710,6 +735,7 @@ describe("hunter fan-out", () => {
     const runner = new FakeStepRunner({
       "hunter-security-leg": (spec) =>
         ok(spec, { findings: [draft({ id: "SEC-1", hunter: "wrong" })] }),
+      refuter: corroborateAsked,
     });
     const input = await makeInput({
       agentsDir,
@@ -730,8 +756,11 @@ describe("hunter fan-out", () => {
       },
     });
     const result = await runPipeline(input, { runner });
-    expect(runner.specs.map((s) => s.name)).toEqual(["hunter-security-leg"]);
-    expect(Object.keys(result.perAgent)).toEqual(["security-leg"]);
+    expect(runner.specs.map((s) => s.name)).toEqual([
+      "hunter-security-leg",
+      "refuter-F001",
+    ]);
+    expect(Object.keys(result.perAgent)).toEqual(["security-leg", "refuter"]);
     expect(result.skillOutput.findings[0]?.hunter).toBe("security");
   });
 
@@ -747,6 +776,7 @@ describe("hunter fan-out", () => {
       "hunter-reliability": (spec) =>
         ok(spec, spec.parse(JSON.stringify(rogue))),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
     expect(result.skillOutput.findings[0]?.hunter).toBe("reliability");
@@ -756,6 +786,7 @@ describe("hunter fan-out", () => {
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) => ok(spec, { findings: [draft()] }),
       "hunter-resilience": (spec) => failed(spec),
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
     expect(result.skillOutput.run_status).toBe("partial");
@@ -770,6 +801,7 @@ describe("hunter fan-out", () => {
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) => ok(spec, { findings: [draft()] }),
       "hunter-resilience": (spec) => failed(spec),
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
     expect(result.hunterCount).toBe(2);
@@ -780,6 +812,7 @@ describe("hunter fan-out", () => {
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) => ok(spec, { findings: [draft()] }),
       "hunter-resilience": (spec) => ok(spec, { findings: [] }),
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
     expect(result.noReviewerRan).toBe(false);
@@ -851,6 +884,7 @@ describe("engine-owned summarizer", () => {
           summarizerCalls++;
           throw new Error("summarizer process rejected");
         }
+        if (spec.name.startsWith("refuter-")) return corroborateAsked(spec);
         return spec.name === "hunter-reliability"
           ? ok(spec, { findings: [draft()] })
           : ok(spec, emptyDraft());
@@ -915,8 +949,9 @@ describe("engine-owned summarizer", () => {
       cost_usd_est: 0.07,
       status: "ok",
     });
-    expect(result.usage.tokens_total).toBe(1_000);
-    expect(result.usage.cost_usd_est).toBeCloseTo(0.09);
+    // 110 x 2 hunters + 110 for the WARNING's refuter step + 780.
+    expect(result.usage.tokens_total).toBe(1_110);
+    expect(result.usage.cost_usd_est).toBeCloseTo(0.1);
   });
 
   test("the bundled prompt has exactly Read, Grep, Glob tools and a model", async () => {
@@ -1354,6 +1389,7 @@ describe("engine-owned scout", () => {
           scoutCalls++;
           throw new Error("scout process rejected");
         }
+        if (spec.name.startsWith("refuter-")) return corroborateAsked(spec);
         return spec.name === "hunter-reliability"
           ? ok(spec, { findings: [draft()] })
           : ok(spec, emptyDraft());
@@ -1416,10 +1452,10 @@ describe("engine-owned scout", () => {
       cost_usd_est: 0.31,
       status: "ok",
     });
-    // 110 x 2 hunters + 40_300. No refuter leg: the seeded draft is a
-    // WARNING, and only severe findings are submitted.
-    expect(result.usage.tokens_total).toBe(40_520);
-    expect(result.usage.cost_usd_est).toBeCloseTo(0.33);
+    // 110 x 2 hunters + 110 for the refuter step (v3.2 submits the seeded
+    // WARNING too) + 40_300.
+    expect(result.usage.tokens_total).toBe(40_630);
+    expect(result.usage.cost_usd_est).toBeCloseTo(0.34);
   });
 
   test("§3.12.5 — a FAILED scout's tokens are still billed to the run", async () => {
@@ -1435,8 +1471,8 @@ describe("engine-owned scout", () => {
 
     // A run whose bill excludes a burned step under-reports its arm's cost,
     // which is one of the numbers M6 exists to compare.
-    // 110 x 2 hunters + the failed scout's 6.
-    expect(result.usage.tokens_total).toBe(226);
+    // 110 x 2 hunters + 110 for the refuter step + the failed scout's 6.
+    expect(result.usage.tokens_total).toBe(336);
   });
 
   test("§3.5 mechanism 1 — the engine forces `tools: []`, whatever the prompt asks for", async () => {
@@ -1867,6 +1903,7 @@ describe("dedupe integration", () => {
         ok(spec, {
           findings: [draft({ id: "RES-1", severity: "WARNING" })],
         }),
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
     expect(result.skillOutput.findings.length).toBe(1);
@@ -1911,9 +1948,12 @@ describe("refuter", () => {
       dedupe_key: `src/app.ts:sym${line}:1`,
     });
 
-  test("skips entirely when nothing reaches BLOCKER/CRITICAL", async () => {
-    // WARNING + SUGGESTION: neither can reach blocking tier, so neither needs the
-    // gate. Severity is now the whole eligibility test (ROADMAP A2).
+  // Refuter v3.2 (2026-10-26): every severity is submitted. The v3.2 refuter
+  // judges trigger and PR causation, not just "is the mechanism real", and the
+  // Martian 50 false positives it removes offline were mostly advisory — so a
+  // WARNING or a SUGGESTION needs the gate as much as a BLOCKER does. This test
+  // used to pin the opposite ("nothing severe → the refuter is skipped").
+  test("submits every severity — a WARNING and a SUGGESTION each get a refuter step", async () => {
     const runner = new FakeStepRunner({
       "hunter-reliability": (spec) =>
         ok(spec, {
@@ -1922,21 +1962,122 @@ describe("refuter", () => {
             draft({
               id: "REL-2",
               symbol: "other",
+              line: 40,
               severity: "SUGGESTION",
               evidence_class: "inferential",
+              claim:
+                "the retry helper swallows the final rejection and resolves " +
+                "undefined, so a caller awaiting it never learns the upload failed",
               dedupe_key: "src/app.ts:other:1",
             }),
           ],
         }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
-    expect(runner.specs.map((s) => s.name)).not.toContain("refuter");
+    const names = runner.specs.map((s) => s.name);
+    expect(names).toContain("refuter-F001");
+    expect(names).toContain("refuter-F002");
+    expect(result.skillOutput.findings).toHaveLength(2);
     for (const finding of result.skillOutput.findings) {
-      expect(finding.refuter_verdict).toBe("not_submitted");
+      expect(finding.refuter_verdict).toBe("corroborated");
+      // deriveTier is unchanged: a non-severe finding is advisory whatever
+      // the verdict, so judging it cannot promote it.
+      expect(finding.tier).toBe("advisory");
     }
-    expect(result.perAgent.refuter).toBeUndefined();
+    expect(result.perAgent.refuter?.status).toBe("ok");
     expect(result.skillOutput.run_status).toBe("complete");
+  });
+
+  test("a refuted WARNING leaves findings[] for debug.refuted", async () => {
+    const runner = new FakeStepRunner({
+      ...HUNTERS_OK,
+      refuter: (spec) =>
+        ok(spec, {
+          results: [
+            {
+              finding_id: "F001",
+              outcome: "refuted",
+              proof_refs: ["src/app.ts:3 the cached branch never scales"],
+            },
+          ],
+        } satisfies RefuterResult),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(runner.specs.map((s) => s.name)).toContain("refuter-F001");
+    expect(result.skillOutput.findings).toHaveLength(0);
+    expect(result.skillOutput.debug.refuted).toHaveLength(1);
+    expect(result.skillOutput.debug.refuted[0]?.severity).toBe("WARNING");
+    expect(result.skillOutput.debug.refuted[0]?.refuter_verdict).toBe(
+      "refuted",
+    );
+  });
+
+  // v3.2 judges PR causation, and the refuter has no git and no base: the
+  // finding file's slice of THIS PR's diff is the only place it can see what
+  // the PR changed. Wrapped like every other author-controlled block.
+  test("the refuter prompt carries the finding file's diff, wrapped in the run's patch tags", async () => {
+    const nonce = "a1b2c3d4";
+    const patch = [
+      "diff --git a/src/other.ts b/src/other.ts",
+      "--- a/src/other.ts",
+      "+++ b/src/other.ts",
+      "@@ -1 +1 @@",
+      "-unrelated old",
+      "+unrelated new",
+      "diff --git a/src/app.ts b/src/app.ts",
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -9,2 +9,2 @@",
+      "-const width = base;",
+      "+const width = base * ratio * ratio;",
+      "",
+    ].join("\n");
+    const runner = new FakeStepRunner({
+      ...HUNTERS_OK,
+      refuter: corroborateAsked,
+    });
+    await runPipeline(await makeInput({ boundaryNonce: nonce }, { patch }), {
+      runner,
+    });
+    const prompt = runner.specs.find((s) => s.name === "refuter-F001")?.prompt;
+    const appRecord = [
+      "diff --git a/src/app.ts b/src/app.ts",
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -9,2 +9,2 @@",
+      "-const width = base;",
+      "+const width = base * ratio * ratio;",
+    ].join("\n");
+    expect(prompt).toContain(
+      `This PR's diff for the finding's file (the base is the \`-\` side):\n\n<patch ${nonce}>\n${appRecord}\n</patch ${nonce}>\n`,
+    );
+    // Only the finding's file: the other record stays out of the prompt.
+    expect(prompt).not.toContain("unrelated new");
+    expect(prompt).toContain(`<finding ${nonce}>`);
+  });
+
+  test("the refuter prompt says so when the diff does not touch the finding's file", async () => {
+    const patch = [
+      "diff --git a/src/other.ts b/src/other.ts",
+      "--- a/src/other.ts",
+      "+++ b/src/other.ts",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    const runner = new FakeStepRunner({
+      ...HUNTERS_OK,
+      refuter: corroborateAsked,
+    });
+    await runPipeline(await makeInput({}, { patch }), { runner });
+    const prompt = runner.specs.find((s) => s.name === "refuter-F001")?.prompt;
+    expect(prompt).toContain(
+      "This PR's diff for the finding's file (the base is the `-` side):\n\n(this PR's diff does not touch the finding's file)\n",
+    );
+    expect(prompt).not.toContain("<patch ");
   });
 
   // ROADMAP A2, and the reason the whole item was re-scoped. Under the old
@@ -2235,6 +2376,7 @@ describe("root-cause clustering", () => {
           ],
         }),
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
     const findings = result.skillOutput.findings;
@@ -2550,15 +2692,17 @@ describe("assembly", () => {
     expect(plan.steps.map((s) => s.name)).toEqual([
       "hunter-reliability",
       "hunter-resilience",
+      "refuter-F001",
     ]);
     for (const step of plan.steps) {
       expect(step.model).toBe("sonnet");
-      expect(step.tools).toEqual([
-        "Read",
-        "Grep",
-        "Glob",
-        "mcp__codegraph__codegraph_explore",
-      ]);
+      // The refuter step carries its own frontmatter's tools (no codegraph in
+      // this fixture's refuter file); the hunters carry HUNTER_TOOLS.
+      expect(step.tools).toEqual(
+        String(step.name).startsWith("refuter-")
+          ? ["Read", "Grep", "Glob"]
+          : ["Read", "Grep", "Glob", "mcp__codegraph__codegraph_explore"],
+      );
       expect(typeof step.outPath).toBe("string");
       expect("prompt" in step).toBe(false);
     }
@@ -3013,9 +3157,12 @@ describe("assembly", () => {
           tokens_total: 220,
           cost_usd_est: 0.03,
         }),
+      // The WARNING draft reaches the refuter (v3.2), at usage()'s defaults.
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
     expect(Object.keys(result.perAgent).sort()).toEqual([
+      "refuter",
       "reliability",
       "resilience",
     ]);
@@ -3028,9 +3175,9 @@ describe("assembly", () => {
       attempts: 1,
       status: "ok",
     });
-    expect(result.usage.tokens_total).toBe(550);
-    expect(result.usage.wall_ms).toBe(3_500);
-    expect(result.usage.cost_usd_est).toBeCloseTo(0.08);
+    expect(result.usage.tokens_total).toBe(660);
+    expect(result.usage.wall_ms).toBe(4_500);
+    expect(result.usage.cost_usd_est).toBeCloseTo(0.09);
   });
 });
 
@@ -3167,20 +3314,48 @@ describe("progress events", () => {
     expect(events.map((e) => e.kind)).toContain("dedupe-finished");
   });
 
-  test("no refuter-started event when nothing severe survives", async () => {
+  // This used to be "no refuter-started event when nothing severe survives".
+  // Since refuter v3.2 every severity is submitted, so a lone WARNING starts
+  // the leg, and `severeFindings` counts it: the field now means "submitted".
+  test("a lone WARNING starts the refuter leg, and severeFindings counts it", async () => {
     const runner = new FakeStepRunner(HUNTERS_OK);
     const events: PipelineProgressEvent[] = [];
     await runPipeline(await makeInput(), {
       runner,
       onProgress: (event) => events.push(event),
     });
-    // HUNTERS_OK yields one WARNING draft — no severe batch, no refuter leg.
+    expect(events.map((e) => e.kind)).toEqual([
+      "hunters-started",
+      "hunter-finished",
+      "hunter-finished",
+      "dedupe-finished",
+      "refuter-started",
+      "refuter-step-finished",
+    ]);
+    expect(events.find((e) => e.kind === "refuter-started")).toEqual({
+      kind: "refuter-started",
+      severeFindings: 1,
+      findings: [{ id: "F001", location: "src/app.ts:10" }],
+    });
+  });
+
+  test("no refuter-started event when no finding survives", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, emptyDraft()),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+    });
+    const events: PipelineProgressEvent[] = [];
+    await runPipeline(await makeInput(), {
+      runner,
+      onProgress: (event) => events.push(event),
+    });
     expect(events.map((e) => e.kind)).toEqual([
       "hunters-started",
       "hunter-finished",
       "hunter-finished",
       "dedupe-finished",
     ]);
+    expect(runner.specs.map((s) => s.name)).not.toContain("refuter-F001");
   });
 
   // The swallow contract: emission must never change control flow, so a
@@ -3288,6 +3463,7 @@ describe("failure reasons on progress events (#314)", () => {
         ...failed(spec),
         stderrTail: `earlier noise\n${SPAWN_FAILED}`,
       }),
+      refuter: corroborateAsked,
     });
     const events: PipelineProgressEvent[] = [];
     await runPipeline(await makeInput(), {
@@ -3836,6 +4012,7 @@ describe("pipeline ceiling snapshot", () => {
     expect(plan.steps.map((s) => s.name)).toEqual([
       "hunter-reliability",
       "hunter-resilience",
+      "refuter-F001",
     ]);
     // D1-10c widened this test's "same content" property rather than replacing
     // it: the keys it already pinned still hold, and the ones the slice added
@@ -4654,6 +4831,7 @@ describe("#152 proof_refs resolvability wiring", () => {
         return ok(spec, spec.parse(JSON.stringify({ findings: [draft()] })));
       },
       "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: corroborateAsked,
     });
     const result = await runPipeline(await makeInput(), { runner });
     // Only holds if the fake ran to completion, i.e. the throw above was the

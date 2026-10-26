@@ -503,12 +503,15 @@ function plantedDraft(arm: ProbeArm): {
   const freshLine = lineOf(CACHE, CACHE_FRESHNESS_MARKER, "freshness test");
 
   // Everything except `line`, `claim`, `proof_refs` and the target trio is
-  // identical across the arms. Severity especially: BLOCKER/CRITICAL is what
-  // admits a finding to the refuter batch at all, so an arm-dependent severity
-  // would silently make one arm a no-op. `evidence_class` never reaches the
-  // refuter (its prompt carries id, location, severity, claim, proof_refs and
-  // nothing else), so it cannot be the variable either — it is fixed only to
-  // keep the tier arithmetic comparable between arms.
+  // identical across the arms. Severity especially: since refuter v3.2
+  // (2026-10-26) every severity is submitted, so it no longer decides
+  // admission, but it still decides the tier a verdict maps to (a corroborated
+  // CRITICAL blocks, a corroborated WARNING advises), and the refuter reads it
+  // — an arm-dependent severity would be a second variable. `evidence_class`
+  // never reaches the refuter (its prompt carries id, location, severity,
+  // claim, proof_refs and the finding file's diff, nothing else), so it cannot
+  // be the variable either — it is fixed only to keep the tier arithmetic
+  // comparable between arms.
   const common = {
     id: "RES-1",
     category: CATEGORY, // hunting-map: retry / idempotency

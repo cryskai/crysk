@@ -3,8 +3,8 @@
 // cannot disagree with the card above them. The builder is pure, so this runs
 // offline; confirm() itself only adds the styles read and the menu call.
 
-import { describe, expect, test } from "bun:test";
-import { confirmSpecFor } from "#ui/progress";
+import { afterEach, describe, expect, test } from "bun:test";
+import { confirmSpecFor, startLineRenderer } from "#ui/progress";
 
 const details = () => ["details"];
 
@@ -33,5 +33,36 @@ describe("confirmSpecFor", () => {
     expect(
       confirmSpecFor(2.85, 6.14, false, details, { free: 0, total: 3 }).billing,
     ).toBeUndefined();
+  });
+});
+
+// Refuter v3.2 (2026-10-26) submits every severity, so the refuter-started
+// event counts every submitted finding (its field keeps the published name
+// `severeFindings`). The line must not call a WARNING "severe".
+describe("startLineRenderer refuter-started line", () => {
+  const realWrite = process.stderr.write.bind(process.stderr);
+  afterEach(() => {
+    process.stderr.write = realWrite;
+  });
+
+  function linesFor(count: number): string[] {
+    const written: string[] = [];
+    process.stderr.write = ((chunk: unknown): boolean => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    startLineRenderer(performance.now()).onProgress({
+      kind: "refuter-started",
+      severeFindings: count,
+    });
+    process.stderr.write = realWrite;
+    return written.map((chunk) =>
+      chunk.replace(/^ {2}\[[^\]]*\] /, "").trimEnd(),
+    );
+  }
+
+  test("counts submitted findings without calling them severe", () => {
+    expect(linesFor(1)).toEqual(["refuter: 1 finding to judge"]);
+    expect(linesFor(3)).toEqual(["refuter: 3 findings to judge"]);
   });
 });

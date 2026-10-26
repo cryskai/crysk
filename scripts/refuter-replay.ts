@@ -11,11 +11,11 @@
 //
 // The step is built exactly as runRefuter builds it (src/review/pipeline.ts):
 // the run's own nonce, the same one-finding JSON, the same prompt. For a
-// finding the run submitted, the rebuilt prompt is checked against the
-// recorded userPromptSha256 before anything is spent, so a replay can never
-// silently ask a different question. Findings the run never submitted (the
-// advisory tier) are built from findings.json the same way, with no recorded
-// SHA to check.
+// finding the run submitted, the rebuilt prompt is compared with the recorded
+// userPromptSha256 and the row says how it came out (`prompt_check`): "match"
+// when the engine still builds that run's prompt, "engine-changed" when it does
+// not. Findings the run never submitted (the advisory tier before refuter v3.2)
+// are built from findings.json the same way, with no recorded SHA to check.
 //
 // The refuter gets what it got on the benchmark: a detached worktree of the
 // corpus clone at the head SHA and an empty MCP registry (no Martian clone
@@ -34,7 +34,11 @@ import {
   validateRefuterResult,
 } from "#review/drafts";
 import type { Finding } from "#review/findings";
-import { makeProofRefResolver, refuterPrompt } from "#review/pipeline";
+import {
+  fileDiffFor,
+  makeProofRefResolver,
+  refuterPrompt,
+} from "#review/pipeline";
 import {
   ClaudeCodeRunner,
   DEFAULT_STEP_MAX_ATTEMPTS,
@@ -172,21 +176,6 @@ function worktreeFor(runDir: string, head: string) {
   return wt;
 }
 
-// The `diff --git` section(s) of a unified patch that touch `file`.
-function patchForFile(patch: string, file: string): string {
-  return patch
-    .split(/^(?=diff --git )/m)
-    .filter((section) => {
-      const header = section.slice(0, section.indexOf("\n"));
-      return (
-        header === `diff --git a/${file} b/${file}` ||
-        header.endsWith(` b/${file}`)
-      );
-    })
-    .join("")
-    .trimEnd();
-}
-
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 async function replay(c: ReplayCase) {
@@ -217,13 +206,14 @@ async function replay(c: ReplayCase) {
     null,
     2,
   );
-  // {{PATCH}}: this PR's diff for the finding's file only, so a candidate
-  // prompt can judge PR causation (the refuter has no git and no base).
+  // {{PATCH}}: this PR's diff for the finding's file only, so the prompt can
+  // judge PR causation (the refuter has no git and no base). The engine's own
+  // slicer, so a replay sends the slice the engine would.
   const fullPatch = await Bun.file(path.join(c.run, "diff.patch")).text();
-  const fileDiff = patchForFile(fullPatch, f.path);
+  const fileDiff = fileDiffFor(fullPatch, f.path);
   const prompt =
     userPromptTemplate === undefined
-      ? refuterPrompt(oneJson, meta.boundary_nonce)
+      ? refuterPrompt(oneJson, meta.boundary_nonce, fileDiff)
       : userPromptTemplate
           .replace(
             "{{FINDING}}",
@@ -237,15 +227,18 @@ async function replay(c: ReplayCase) {
   const evidence = Bun.file(
     path.join(c.run, "steps", `evidence.refuter-${f.id}.attempt1.request.json`),
   );
-  let promptCheck: "match" | "unrecorded" | "candidate" =
+  // A mismatch is recorded, not thrown. It used to throw, which was right
+  // while the engine's prompt was the one every recorded run was built with;
+  // refuter v3.2 (2026-10-26) changed that prompt, so every run recorded
+  // before it now mismatches BY CONSTRUCTION, and a throw would make the
+  // replay unable to ask the current engine's question of any old finding.
+  // "engine-changed" says the row asked today's prompt, not the run's.
+  let promptCheck: "match" | "engine-changed" | "unrecorded" | "candidate" =
     userPromptTemplate === undefined ? "unrecorded" : "candidate";
   if (userPromptTemplate === undefined && (await evidence.exists())) {
     const recorded = ((await evidence.json()) as { userPromptSha256: string })
       .userPromptSha256;
-    if (recorded !== sha256(prompt)) {
-      throw new Error(`${c.run} ${f.id}: rebuilt prompt != recorded SHA`);
-    }
-    promptCheck = "match";
+    promptCheck = recorded === sha256(prompt) ? "match" : "engine-changed";
   }
 
   // Effort and tools come from the run's own refuter step when it had one;
