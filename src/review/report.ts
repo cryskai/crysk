@@ -103,6 +103,11 @@ export function estimateCost(
   // byte-identical. Priced as its own term (not folded into `agents`) so a
   // 40-finding re-review of a 2-file delta is not billed as 40 hunters.
   verificationSteps = 0,
+  // The post-refuter consolidation pass. LAST and defaulted OFF so every
+  // existing call shape compiles and keeps its band; the product paths pass
+  // true. One seat, the scout's rule: a claims-only sonnet call costs far
+  // less than a hunter, and over-quoting is the cheap direction to be wrong.
+  consolidateEnabled = false,
 ): CostEstimate {
   const files = Math.max(0, diffStat.files);
   const lines =
@@ -122,7 +127,10 @@ export function estimateCost(
   // it exists an invented per-scout coefficient would be false precision.
   const hunterSeats = Math.max(
     0,
-    hunterCount + (summarizerEnabled ? 1 : 0) + (scoutEnabled ? 1 : 0),
+    hunterCount +
+      (summarizerEnabled ? 1 : 0) +
+      (scoutEnabled ? 1 : 0) +
+      (consolidateEnabled ? 1 : 0),
   );
   const steps = Math.max(0, verificationSteps);
   // A zero-hunter, zero-verify call still needs a band (the hypothetical
@@ -150,6 +158,7 @@ export function estimateCost(
       "per-agent floor for hunters + refuter" +
       `${summarizerEnabled ? " + summarizer" : ""}` +
       `${scoutEnabled ? " + scout" : ""}` +
+      `${consolidateEnabled ? " + consolidation" : ""}` +
       `${steps > 0 ? ` + ${steps} verification step(s)` : ""} ` +
       "plus changed lines and files. An order-of-magnitude " +
       "guide, not a quote — the same tree has billed 34% apart across runs.",

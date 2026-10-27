@@ -180,6 +180,15 @@ requested level is still recorded in the run artifacts (`effort` in each attempt
 `pipeline.json`), next to `effortApplied: false` / `effort_applied: false`, so a run on OpenCode never reads
 as having run at that level.
 
+**Consolidation.** After the refuter, one more step reads the findings about to be posted and rewrites the
+list so each comment states one defect: findings that describe the same defect are merged into one
+primary finding (its location, tier and verdict are kept, and the evidence is pooled), and an unrelated aside inside a finding is split
+into its own advisory comment. It reads only the claims (no tools, no code), and a plan that drops or invents
+a finding is rejected, in which case the findings post unchanged. It is on by default in local and PR reviews,
+has no flag, and costs one `sonnet` call per review at `high` effort (`prompts/consolidate.md`). Measured
+offline on the Martian 50 it moved F1 from 39.7 to 42.3. Each run records the outcome under `consolidation`
+in `pipeline.json`.
+
 ## Credentials
 
 **pr-hero never stores a credential.** It reads them from wherever they already live and projects

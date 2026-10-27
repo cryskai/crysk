@@ -18,7 +18,8 @@ describe("resolveEngineAssets", () => {
     expect(assets.version).toBeDefined();
     expect(assets.version.length).toBeGreaterThan(0);
 
-    // Scout and summarizer paths exist
+    // Consolidate, scout and summarizer paths exist
+    expect(existsSync(assets.consolidatePromptPath)).toBe(true);
     expect(existsSync(assets.scoutPromptPath)).toBe(true);
     expect(existsSync(assets.summarizerPromptPath)).toBe(true);
 

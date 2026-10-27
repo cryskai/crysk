@@ -33,7 +33,7 @@ If pr-hero is not on `PATH`, run every command as `npx -y pr-hero <command>` (No
 - **The one rule:** the repo file beats the global one, **except on capped keys** (`max_*`, and the on/off switches `summary.enabled`, `scout`, `post`): there the team can only ask for *less*, so a committed file never enlarges a person's bill.
 - **Some keys live in exactly one layer** and the parser refuses the other by name: `routing` is person-only; `default_base`, `parity_trigger_paths`, `suspicion_priors` are repo-only. `--config <file>` replaces the repo layer only.
 - **Flags always win**, and may exceed a cap (`--base`, `--agents`, `--model`, `--summary`/`--no-summary`, `--force`).
-- **Models are logical names.** Bundled hunters declare `sonnet`, the refuter `opus`, the summarizer `haiku`. `routing` maps those names to a backend + provider; an unmapped name falls through to the Claude CLI.
+- **Models are logical names.** Bundled hunters declare `sonnet`, the refuter `opus`, the summarizer `haiku`, the post-refuter consolidation pass `sonnet` (always on, one claims-only call per review that merges duplicate findings and splits asides; its outcome is `consolidation` in `pipeline.json`). `routing` maps those names to a backend + provider; an unmapped name falls through to the Claude CLI.
 - **pr-hero never stores a credential.** It reads the Claude CLI's auth, ambient Anthropic keys, or OpenCode's `auth.json`, and projects an ephemeral copy into each step.
 
 ## Hard Rules

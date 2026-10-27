@@ -4,6 +4,7 @@
 // Every packaged asset is imported using `with { type: "file" }` so Bun's compiler embeds them.
 // compile.assets is a silent no-op on Bun 1.3.14 — this manifest is the permanent mechanism.
 
+import consolidatePrompt from "../prompts/consolidate.md" with { type: "file" };
 import lifecyclePrompt from "../prompts/default/deep-review-lifecycle.md" with {
   type: "file",
 };
@@ -22,7 +23,6 @@ import resiliencePrompt from "../prompts/default/deep-review-resilience.md" with
 import refuterPrompt from "../prompts/default/review-refuter.md" with {
   type: "file",
 };
-
 import scoutPrompt from "../prompts/scout.md" with { type: "file" };
 import summarizerPrompt from "../prompts/summarizer.md" with { type: "file" };
 import generalSkill from "../skills/pr-hero/SKILL.md" with { type: "file" };
@@ -58,6 +58,7 @@ export const BUNDLED_AGENT_FILES: Record<string, string> = {
   "review-refuter.md": refuterPrompt,
 };
 
+export const CONSOLIDATE_PROMPT_PATH = consolidatePrompt;
 export const SCOUT_PROMPT_PATH = scoutPrompt;
 export const SUMMARIZER_PROMPT_PATH = summarizerPrompt;
 

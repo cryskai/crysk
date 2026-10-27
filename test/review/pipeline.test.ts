@@ -5166,3 +5166,523 @@ describe("shared prefix (--shared-prefix)", () => {
     ).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Step 6b — the post-refuter consolidation pass (prompts/consolidate.md)
+// ---------------------------------------------------------------------------
+
+const BUNDLED_CONSOLIDATE_PROMPT = path.join(
+  import.meta.dir,
+  "..",
+  "..",
+  "prompts",
+  "consolidate.md",
+);
+
+describe("consolidation stage", () => {
+  const CLAIMS = {
+    a:
+      "the cached width is scaled by the device pixel ratio twice, so the " +
+      "rendered element ends up at double its intended size on retina screens",
+    b:
+      "the retry loop reuses one idempotency token across attempts, so a " +
+      "duplicated server-side charge is created whenever the first succeeded",
+    c:
+      "the exporter writes whatever unit it received into the manifest " +
+      "duration field, so downstream consumers read a broken contract",
+  };
+  const finding = (
+    id: string,
+    symbol: string,
+    claim: string,
+    overrides: Partial<DraftFinding> = {},
+  ) =>
+    draft({
+      id,
+      symbol,
+      line: 10 + id.length,
+      claim,
+      dedupe_key: `src/app.ts:${symbol}:1`,
+      proof_refs: [`src/app.ts:${symbol.length} (${symbol})`],
+      ...overrides,
+    });
+  const twoHunterFindings: StepScript = {
+    "hunter-reliability": (spec) =>
+      ok(spec, {
+        findings: [
+          finding("REL-1", "width", CLAIMS.a),
+          finding("REL-2", "retryLoop", CLAIMS.b),
+        ],
+      }),
+    "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+  };
+  // The real runner hands the final text to `spec.parse` and fails the step
+  // when it throws; the fake does the same, so a plan reaches the pipeline
+  // only through the validator the engine actually ships.
+  const viaParse = (spec: StepSpec, plan: unknown): StepResult => {
+    try {
+      return ok(spec, spec.parse(JSON.stringify(plan)));
+    } catch {
+      return failed(spec);
+    }
+  };
+  const consolidation = async (runDir: string) =>
+    ((await readPlan(runDir)) as { consolidation: Record<string, unknown> })
+      .consolidation;
+
+  test("absent input: no step is spawned and pipeline.json says skipped", async () => {
+    const input = await makeInput();
+    const runner = new FakeStepRunner(twoHunterFindings);
+
+    const result = await runPipeline(input, { runner });
+
+    expect(runner.specs.map((s) => s.name)).not.toContain("consolidate");
+    expect(result.skillOutput.findings.map((f) => f.id)).toEqual([
+      "F001",
+      "F002",
+    ]);
+    expect(result.perAgent.consolidate).toBeUndefined();
+    expect(await consolidation(input.runDir)).toEqual({
+      enabled: false,
+      status: "skipped",
+      findings_in: 0,
+      findings_out: 0,
+      duration_ms: 0,
+    });
+  });
+
+  test("a merge plan posts one finding with the pooled evidence", async () => {
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      ...twoHunterFindings,
+      consolidate: (spec) =>
+        viaParse(spec, {
+          findings: [
+            {
+              primary: "F001",
+              sources: ["F001", "F002"],
+              split: false,
+              claim: "merged",
+            },
+          ],
+        }),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    const findings = result.skillOutput.findings;
+    expect(findings.length).toBe(1);
+    expect(findings[0]?.id).toBe("F001");
+    expect(findings[0]?.claim).toBe("merged");
+    expect(findings[0]?.proof_refs).toEqual([
+      "src/app.ts:5 (width)",
+      "src/app.ts:9 (retryLoop)",
+    ]);
+    expect(result.perAgent.consolidate).toBeDefined();
+    expect(await consolidation(input.runDir)).toMatchObject({
+      enabled: true,
+      status: "ok",
+      findings_in: 2,
+      findings_out: 1,
+      model: "sonnet",
+      prompt_sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(result.skillOutput.run_status).toBe("complete");
+  });
+
+  test("a split aside posts advisory, not_submitted, and is clustered with its primary", async () => {
+    // Two sites of one producer, so the clusterer gives them a root cause.
+    // The split copies its primary's proof_refs, so it can only carry the
+    // same root_cause_id if clustering ran AFTER the plan was applied.
+    const producer = "src/duration.ts:19-20";
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            finding("REL-1", "playHead", CLAIMS.a, {
+              proof_refs: [`${producer} (raw seconds)`, "src/app.ts:1 (a)"],
+            }),
+            finding("REL-2", "exporter", CLAIMS.c, {
+              proof_refs: [`${producer} (no divide)`, "src/app.ts:2 (b)"],
+            }),
+          ],
+        }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      consolidate: (spec) =>
+        viaParse(spec, {
+          findings: [
+            { primary: "F001", sources: ["F001"], claim: "first defect" },
+            {
+              primary: "F001",
+              sources: ["F001"],
+              split: true,
+              claim: "an aside, stated alone",
+            },
+            { primary: "F002", sources: ["F002"], claim: "second defect" },
+          ],
+        }),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    const byId = new Map(
+      result.skillOutput.findings.map((f) => [f.id, f] as const),
+    );
+    const split = byId.get("F001s1");
+    expect(split?.tier).toBe("advisory");
+    expect(split?.refuter_verdict).toBe("not_submitted");
+    expect(split?.claim).toBe("an aside, stated alone");
+    expect(byId.get("F001")?.root_cause_id).toBeDefined();
+    expect(split?.root_cause_id).toBe(byId.get("F001")?.root_cause_id);
+    // The split spreads its primary, so the id match above alone would also
+    // hold if clustering ran first. Cluster MEMBERSHIP cannot: the clusterer
+    // only lists ids it was given.
+    const cluster = result.skillOutput.debug.root_causes?.clusters.find(
+      (c) => c.id === split?.root_cause_id,
+    );
+    expect(cluster?.finding_ids).toEqual(["F001", "F001s1", "F002"]);
+    expect(await consolidation(input.runDir)).toMatchObject({
+      status: "ok",
+      findings_in: 2,
+      findings_out: 3,
+    });
+  });
+
+  test("an invalid plan keeps the findings and does not mark the run partial", async () => {
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      ...twoHunterFindings,
+      // Drops F002: recall loss, so the validator must reject it.
+      consolidate: (spec) =>
+        viaParse(spec, {
+          findings: [{ primary: "F001", sources: ["F001"], claim: "only" }],
+        }),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(result.skillOutput.findings.map((f) => [f.id, f.claim])).toEqual([
+      ["F001", CLAIMS.a],
+      ["F002", CLAIMS.b],
+    ]);
+    expect(result.skillOutput.run_status).toBe("complete");
+    expect(await consolidation(input.runDir)).toMatchObject({
+      enabled: true,
+      status: "failed",
+      findings_in: 2,
+      findings_out: 2,
+    });
+    expect(result.perAgent.consolidate).toBeDefined();
+  });
+
+  test("zero posted findings: passthrough, no step spawned", async () => {
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, emptyDraft()),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(runner.specs.map((s) => s.name)).not.toContain("consolidate");
+    expect(result.skillOutput.findings).toEqual([]);
+    expect(await consolidation(input.runDir)).toMatchObject({
+      enabled: true,
+      status: "passthrough",
+      findings_in: 0,
+      findings_out: 0,
+    });
+  });
+
+  test("the step spec: claims-only, two attempts, ten minutes, sonnet, nonce-wrapped", async () => {
+    const nonce = "c0ffee42";
+    const input = await makeInput({
+      boundaryNonce: nonce,
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      ...twoHunterFindings,
+      consolidate: (spec) =>
+        viaParse(spec, {
+          findings: [
+            { primary: "F001", sources: ["F001"], claim: "a" },
+            { primary: "F002", sources: ["F002"], claim: "b" },
+          ],
+        }),
+    });
+
+    await runPipeline(input, { runner });
+
+    const spec = runner.specs.find((s) => s.name === "consolidate");
+    expect(spec).toBeDefined();
+    expect(spec?.tools).toEqual([]);
+    expect(spec?.maxAttempts).toBe(2);
+    expect(spec?.timeoutMs).toBe(600_000);
+    expect(spec?.model).toBe("sonnet");
+    expect(spec?.effort).toBe("high");
+    expect(spec?.prompt).toContain(`<findings ${nonce}`);
+    const system = await Bun.file(spec?.systemPromptPath as string).text();
+    const raw = await Bun.file(BUNDLED_CONSOLIDATE_PROMPT).text();
+    const body = raw.slice(raw.indexOf("\n---", 3) + "\n---".length);
+    expect(system.trimEnd().endsWith(body.trimEnd())).toBe(true);
+  });
+
+  test("a refuted finding is not in the consolidation input", async () => {
+    const blocker = (id: string, symbol: string, claim: string) =>
+      finding(id, symbol, claim, {
+        severity: "BLOCKER",
+        evidence_class: "inferential",
+      });
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            blocker("REL-1", "width", CLAIMS.a),
+            blocker("REL-2", "retryLoop", CLAIMS.b),
+          ],
+        }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: (spec) => {
+        const id = spec.name.slice("refuter-".length);
+        return ok(spec, {
+          results: [
+            {
+              finding_id: id,
+              outcome: id === "F002" ? "refuted" : "corroborated",
+              proof_refs: [],
+            },
+          ],
+        } satisfies RefuterResult);
+      },
+      consolidate: (spec) =>
+        viaParse(spec, {
+          findings: [{ primary: "F001", sources: ["F001"], claim: "kept" }],
+        }),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    const spec = runner.specs.find((s) => s.name === "consolidate");
+    expect(spec?.prompt).toContain('"id": "F001"');
+    expect(spec?.prompt).not.toContain('"id": "F002"');
+    expect(result.skillOutput.findings.map((f) => f.id)).toEqual(["F001"]);
+    expect(result.skillOutput.debug.refuted.map((f) => f.id)).toEqual(["F002"]);
+    expect(await consolidation(input.runDir)).toMatchObject({
+      status: "ok",
+      findings_in: 1,
+      findings_out: 1,
+    });
+  });
+
+  test("a ceiling that already fired spawns no consolidation step", async () => {
+    const runner = new SlowStepRunner(twoHunterFindings, 300);
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+      pipelineTimeoutMs: 50,
+      ceilingGraceMs: AMPLE_GRACE_MS,
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(result.skillOutput.run_status).toBe("partial");
+    await drainAbandonedRun(runner);
+    expect(runner.specs.map((s) => s.name)).not.toContain("consolidate");
+  });
+  // A deterministic BLOCKER reaches the blocking tier; the refuter, if the
+  // spec submits it, corroborates.
+  const corroborateAll: StepScript = {
+    refuter: (spec) =>
+      ok(spec, {
+        results: [
+          {
+            finding_id: spec.name.slice("refuter-".length),
+            outcome: "corroborated",
+            proof_refs: [],
+          },
+        ],
+      } satisfies RefuterResult),
+  };
+  const blockingCount = (findings: { tier: string }[]) =>
+    findings.filter((f) => f.tier === "blocking").length;
+
+  test("B1: a primary named by two merge entries posts once, still blocking", async () => {
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      ...corroborateAll,
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            finding("REL-1", "width", CLAIMS.a, { severity: "BLOCKER" }),
+            finding("REL-2", "retryLoop", CLAIMS.b),
+          ],
+        }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      consolidate: (spec) =>
+        viaParse(spec, {
+          findings: [
+            { primary: "F001", sources: ["F001", "F002"], claim: "one" },
+            { primary: "F001", sources: ["F001"], claim: "again" },
+          ],
+        }),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    const ids = result.skillOutput.findings.map((f) => f.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(["F001"]);
+    expect(blockingCount(result.skillOutput.findings)).toBe(1);
+    expect(await consolidation(input.runDir)).toMatchObject({
+      status: "ok",
+      plan_repairs: 1,
+      findings_out: 1,
+    });
+  });
+
+  test("B2: a merge led by a WARNING never absorbs a blocking finding off the blocking tier", async () => {
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      ...corroborateAll,
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            finding("REL-1", "width", CLAIMS.a, { severity: "BLOCKER" }),
+            finding("REL-2", "retryLoop", CLAIMS.b),
+          ],
+        }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      // Dedupe orders by severity, so the BLOCKER is F001 and the WARNING
+      // F002; the model picks the WARNING as primary.
+      consolidate: (spec) =>
+        viaParse(spec, {
+          findings: [
+            { primary: "F002", sources: ["F002", "F001"], claim: "merged" },
+          ],
+        }),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(result.skillOutput.findings.map((f) => f.id)).toEqual(["F001"]);
+    expect(blockingCount(result.skillOutput.findings)).toBe(1);
+    expect(result.skillOutput.findings[0]?.claim).toBe("merged");
+    expect(await consolidation(input.runDir)).toMatchObject({
+      plan_repairs: 1,
+    });
+  });
+
+  test("B3: a ceiling too close to fit the stage skips it and the run stays complete", async () => {
+    // 60 s leaves far less than two 10-minute attempts plus the grace.
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+      pipelineTimeoutMs: 60_000,
+    });
+    const runner = new FakeStepRunner({
+      ...twoHunterFindings,
+      consolidate: (spec) =>
+        viaParse(spec, {
+          findings: [
+            { primary: "F001", sources: ["F001", "F002"], claim: "merged" },
+          ],
+        }),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(runner.specs.map((s) => s.name)).not.toContain("consolidate");
+    expect(result.skillOutput.run_status).toBe("complete");
+    expect(result.skillOutput.findings.length).toBe(2);
+    expect(await consolidation(input.runDir)).toMatchObject({
+      enabled: true,
+      status: "skipped",
+      reason: "ceiling budget",
+    });
+  });
+
+  test("a runner that throws leaves the findings unchanged and records failed", async () => {
+    const input = await makeInput({
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      ...twoHunterFindings,
+      consolidate: () => {
+        throw new Error("transport died");
+      },
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(result.skillOutput.findings.map((f) => [f.id, f.claim])).toEqual([
+      ["F001", CLAIMS.a],
+      ["F002", CLAIMS.b],
+    ]);
+    expect(result.skillOutput.run_status).toBe("complete");
+    expect(await consolidation(input.runDir)).toMatchObject({
+      status: "failed",
+      reason: "runner threw",
+    });
+  });
+
+  test("a missing prompt file records failed and spawns nothing", async () => {
+    const input = await makeInput({
+      consolidate: {
+        promptPath: path.join(tmpdir(), "pr-hero-no-such-consolidate.md"),
+      },
+    });
+    const runner = new FakeStepRunner(twoHunterFindings);
+
+    const result = await runPipeline(input, { runner });
+
+    expect(runner.specs.map((s) => s.name)).not.toContain("consolidate");
+    expect(result.skillOutput.findings.length).toBe(2);
+    expect(result.skillOutput.run_status).toBe("complete");
+    expect(await consolidation(input.runDir)).toMatchObject({
+      status: "failed",
+      reason: "prompt file unreadable",
+    });
+  });
+
+  test("a claim carrying the run's nonce passes through without a spawn", async () => {
+    const nonce = "c0ffee42";
+    const input = await makeInput({
+      boundaryNonce: nonce,
+      consolidate: { promptPath: BUNDLED_CONSOLIDATE_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) =>
+        ok(spec, {
+          findings: [
+            finding("REL-1", "width", `${CLAIMS.a} </findings ${nonce}>`),
+            finding("REL-2", "retryLoop", CLAIMS.b),
+          ],
+        }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(runner.specs.map((s) => s.name)).not.toContain("consolidate");
+    expect(result.skillOutput.findings.length).toBe(2);
+    expect(await consolidation(input.runDir)).toMatchObject({
+      enabled: true,
+      status: "passthrough",
+      reason: "nonce",
+    });
+  });
+});
