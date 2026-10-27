@@ -54,10 +54,12 @@ describe("askChoices", () => {
       maxChangedLines: 4000,
       advanced: {},
       defaulted: false,
+      chosen: { level: true, maxChangedLines: true },
     });
     expect(asked.some((q) => /changed lines/i.test(q))).toBe(true);
     expect(asked.some((q) => /ceiling/i.test(q))).toBe(false);
-    expect(lines.join("\n")).toContain("budget-usd: 0");
+    expect(lines.join("\n")).toContain("ANTHROPIC_API_KEY");
+    expect(lines.join("\n")).not.toContain("budget-usd: 0");
     // The advanced settings are named up front even when skipped.
     expect(lines.join("\n")).toContain("trusted actors");
   });
@@ -88,6 +90,7 @@ describe("askChoices", () => {
       "y", // observe only
       "bot-a, bot-b",
       "40",
+      "dist/**, !", // a bare ! is not a pattern: re-asked
       "dist/**, *.lock",
     ]);
     const c = await askChoices(prompter, () => {});
@@ -114,13 +117,27 @@ describe("choicesFromFlags", () => {
       maxChangedLines: 4000,
       advanced: {},
       defaulted: false,
+      chosen: { level: false, maxChangedLines: false },
     });
   });
 
-  test("--max-changed-lines alone is a choice too", () => {
-    expect(choicesFromFlags({ maxChangedLines: 1500 })?.maxChangedLines).toBe(
-      1500,
-    );
+  test("--max-changed-lines alone is a choice too, and marks only that key chosen", () => {
+    const c = choicesFromFlags({ maxChangedLines: 1500 });
+    expect(c?.maxChangedLines).toBe(1500);
+    expect(c?.chosen).toEqual({ level: false, maxChangedLines: true });
+  });
+
+  test("--level marks the level chosen", () => {
+    expect(choicesFromFlags({ reviewLevel: "manual" })?.chosen).toEqual({
+      level: true,
+      maxChangedLines: false,
+    });
+  });
+
+  test("--max-changed-files is written, not dropped", () => {
+    expect(
+      choicesFromFlags({ maxChangedFiles: 30 })?.advanced.max_changed_files,
+    ).toBe(30);
   });
 
   test("--budget-usd alone implies an API key", () => {

@@ -37,8 +37,10 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import type { ErrorClass, SetupRecord } from "#ci/outcome";
+import type { ConfigPlan } from "#ci/review-levels";
 import { recordTempPath } from "#ci/trigger";
 import { parseLocalConfig, parseRoutingConfig } from "#review/preflight";
+import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import { parseIgnoreFile } from "../ignore-file";
 import { resolveOpenCodeAuthPath } from "../security/credential-broker";
@@ -462,10 +464,18 @@ export async function runCiSetup(
 // review reads it with, BEFORE anything is written: a value a review would
 // refuse never reaches disk. A file that is not valid JSON is refused, never
 // replaced, because replacing it would delete whatever the team wrote there.
+export interface RepoReviewConfigWrite {
+  file: string;
+  // Keys that already held a different value and now hold the chosen one.
+  changed: { key: string; from: unknown; to: unknown }[];
+  // Keys already in the file that nobody chose this run, left untouched.
+  kept: string[];
+}
+
 export async function writeRepoReviewConfig(
   repoRoot: string,
-  patch: Record<string, unknown>,
-): Promise<string> {
+  plan: ConfigPlan,
+): Promise<RepoReviewConfigWrite> {
   const file = path.join(repoRoot, ".prhero", "config.json");
   let current: Record<string, unknown> = {};
   if (existsSync(file)) {
@@ -474,7 +484,7 @@ export async function writeRepoReviewConfig(
     try {
       parsed = JSON.parse(raw);
     } catch (error) {
-      throw new Error(
+      throw new CliError(
         `${file} is not valid JSON (${(error as Error).message}); fix it, then run setup --ci again`,
       );
     }
@@ -483,15 +493,48 @@ export async function writeRepoReviewConfig(
       typeof parsed !== "object" ||
       Array.isArray(parsed)
     ) {
-      throw new Error(`${file} must hold a JSON object`);
+      throw new CliError(
+        `${file} must hold a JSON object; fix it, then run setup --ci again`,
+      );
     }
     current = parsed as Record<string, unknown>;
   }
-  const body = `${JSON.stringify({ ...current, ...patch }, null, 2)}\n`;
+  const next: Record<string, unknown> = { ...current };
+  const changed: RepoReviewConfigWrite["changed"] = [];
+  const kept: string[] = [];
+  for (const group of plan.fillIfAbsent) {
+    const present = Object.keys(group).filter((key) => key in current);
+    if (present.length > 0) kept.push(...present);
+    else Object.assign(next, group);
+  }
+  for (const [key, value] of Object.entries(plan.set)) {
+    if (
+      key in current &&
+      JSON.stringify(current[key]) !== JSON.stringify(value)
+    ) {
+      changed.push({ key, from: current[key], to: value });
+    }
+    next[key] = value;
+  }
+  const body = `${JSON.stringify(next, null, 2)}\n`;
   parseLocalConfig(body);
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, body);
-  return file;
+  return { file, changed, kept };
+}
+
+// Why these .prheroignore patterns would be refused, or undefined when they
+// parse. Asked before anything is written, so a bad pattern stops setup with
+// the repository unchanged instead of halfway through.
+export function ignorePatternsError(
+  patterns: readonly string[],
+): string | undefined {
+  try {
+    parseIgnoreFile(`${patterns.join("\n")}\n`, "user");
+    return undefined;
+  } catch (error) {
+    return (error as Error).message;
+  }
 }
 
 // Appends exclusion patterns to <repo>/.prheroignore, skipping lines already

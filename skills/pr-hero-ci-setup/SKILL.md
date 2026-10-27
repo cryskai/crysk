@@ -80,7 +80,7 @@ Before step 4, ask the human these questions in their language. Use the native q
    - **Manual**: nothing automatic after the first review; every re-review starts with `/pr-hero review`.
 2. **Gate or advisory**: gate turns the `pr-hero` check red on blocking findings (require it in branch protection to block merges); advisory keeps it green.
 3. **How CI pays**:
-   - **Claude subscription** (`CLAUDE_CODE_OAUTH_TOKEN`): do not ask for a budget. Tell them `budget-usd: 0` is written because a subscription review spends quota, not dollars.
+   - **Claude subscription** (`CLAUDE_CODE_OAUTH_TOKEN`): do not ask for a budget. Tell them no `budget-usd` is written: a subscription review spends quota, not dollars, and CI applies no ceiling while the repo has no `ANTHROPIC_API_KEY` secret (adding one brings back the $10 ceiling).
    - **API key** (`ANTHROPIC_API_KEY` or an OpenCode provider): ask for the spend ceiling per review in USD (default 10, `0` = none).
 4. **Changed-lines threshold**: a PR with more changed lines is skipped, not reviewed. Ask on any billing (default 4000, `0` = no limit, only if they say so): unlike the budget it matters on a subscription too, where an unset threshold means no limit at all.
 5. **Advanced settings**: name them, then ask whether to review them now. Each keeps a working default if skipped:
@@ -96,7 +96,7 @@ Then pass the answers to the scaffold as flags, never as hand-written YAML:
 npx -y pr-hero setup --ci --level <minimal|balanced|thorough|manual> --ci-mode <gate|advisory> --billing <subscription|api> --max-changed-lines <n> [--budget-usd <n>]
 ```
 
-It writes the workflow, merges the level's keys into `.prhero/config.json` (keeping other keys), and prints a summary of every setting. **Never run it without these flags**: with none it applies balanced and gate, and its summary says nobody chose them. Write any advanced answers into `.prhero/config.json` (and `.prheroignore`) afterwards, then run `npx -y pr-hero config` to verify. Show the human the printed summary. Details: `references/ci-admission.md`.
+It writes the workflow, merges the level's keys into `.prhero/config.json` (keeping other keys), and prints a summary of every setting. **Never run it without these flags**: with none it applies balanced and gate, and its summary says nobody chose them. Write any advanced answers into `.prhero/config.json` (and `.prheroignore`) afterwards, then run `npx -y pr-hero config` to verify. Show the human the printed summary, including any `Changed` and `Kept existing` lines: on a re-run (for example `--force` to refresh an old workflow) only the groups a flag names are overwritten, and keys nobody chose stay as the file had them. Details: `references/ci-admission.md`.
 
 ## Execution Steps
 

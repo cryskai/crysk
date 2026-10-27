@@ -3,13 +3,14 @@ import path from "node:path";
 import {
   budgetInput,
   type CiSetupChoices,
-  configPatch,
+  configPlan,
   defaultChoices,
   renderChoicesSummary,
 } from "#ci/review-levels";
 import {
   appendIgnorePatterns,
   CI_WORKFLOW_RELATIVE_PATH,
+  ignorePatternsError,
   runCiSetup,
   writeRepoReviewConfig,
 } from "#ci/setup";
@@ -20,6 +21,7 @@ import {
   gotchasUnusableReason,
 } from "#review/preflight";
 import { log } from "#ui/primitives";
+import { CliError } from "../errors";
 import {
   checkGhStatus,
   type InstallResult,
@@ -186,10 +188,10 @@ export async function ciSetupCommand(
   // The config first: it is the write that can refuse (an invalid existing
   // file, a value the review parser rejects), and refusing before the workflow
   // is written leaves the repository as it was.
-  const configPath = await writeRepoReviewConfig(
-    repoRoot,
-    configPatch(choices),
-  );
+  const patterns = choices.advanced.ignorePatterns ?? [];
+  const patternProblem = ignorePatternsError(patterns);
+  if (patternProblem !== undefined) throw new CliError(patternProblem);
+  const config = await writeRepoReviewConfig(repoRoot, configPlan(choices));
   const result = await runCiSetup({
     cwd: repoRoot,
     force: options.force,
@@ -210,13 +212,23 @@ export async function ciSetupCommand(
       ? `Overwrote ${result.path}`
       : `Created ${result.path}`,
   );
-  log(`Updated ${configPath}`);
-  const patterns = choices.advanced.ignorePatterns ?? [];
+  log(`Updated ${config.file}`);
   if (patterns.length > 0) {
     log(`Updated ${await appendIgnorePatterns(repoRoot, patterns)}`);
   }
   log();
   for (const line of renderChoicesSummary(choices)) log(line);
+  // The summary describes the choices; these lines say where the file differs.
+  for (const c of config.changed) {
+    log(
+      `Changed ${c.key}: ${JSON.stringify(c.from)} -> ${JSON.stringify(c.to)}`,
+    );
+  }
+  if (config.kept.length > 0) {
+    log(
+      `Kept existing ${config.kept.join(", ")} in .prhero/config.json: nobody chose them this run (pass --level or --max-changed-lines, or answer in a terminal, to change them)`,
+    );
+  }
   log();
   log("Next steps:");
   let step = 0;

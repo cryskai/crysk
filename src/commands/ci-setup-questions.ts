@@ -18,6 +18,7 @@ import {
   REVIEW_LEVELS,
   type ReviewLevel,
 } from "#ci/review-levels";
+import { ignorePatternsError } from "#ci/setup";
 import type { CliOptions } from "#review/preflight";
 
 export interface PromptOption<T extends string> {
@@ -42,7 +43,12 @@ export interface SetupPrompter {
 export function choicesFromFlags(
   options: Pick<
     CliOptions,
-    "reviewLevel" | "ciMode" | "billing" | "budgetUsd" | "maxChangedLines"
+    | "reviewLevel"
+    | "ciMode"
+    | "billing"
+    | "budgetUsd"
+    | "maxChangedLines"
+    | "maxChangedFiles"
   >,
 ): CiSetupChoices | undefined {
   const given =
@@ -50,7 +56,8 @@ export function choicesFromFlags(
     options.ciMode !== undefined ||
     options.billing !== undefined ||
     options.budgetUsd !== undefined ||
-    options.maxChangedLines !== undefined;
+    options.maxChangedLines !== undefined ||
+    options.maxChangedFiles !== undefined;
   if (!given) return undefined;
   const billing: Billing | undefined =
     options.billing ?? (options.budgetUsd !== undefined ? "api" : undefined);
@@ -62,8 +69,16 @@ export function choicesFromFlags(
       ? {}
       : { budgetUsd: options.budgetUsd }),
     maxChangedLines: options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES,
-    advanced: {},
+    advanced:
+      options.maxChangedFiles === undefined
+        ? {}
+        : { max_changed_files: options.maxChangedFiles },
     defaulted: false,
+    // Only what a flag named overrides the file; the rest fills gaps.
+    chosen: {
+      level: options.reviewLevel !== undefined,
+      maxChangedLines: options.maxChangedLines !== undefined,
+    },
   };
 }
 
@@ -111,6 +126,8 @@ export async function askChoices(
 ): Promise<CiSetupChoices> {
   const choices = defaultChoices();
   choices.defaulted = false;
+  // A person at a terminal answers every main question.
+  choices.chosen = { level: true, maxChangedLines: true };
 
   say();
   say("How should pr-hero re-review a pull request after new pushes?");
@@ -163,7 +180,7 @@ export async function askChoices(
   );
   if (choices.billing === "subscription") {
     say(
-      "  No spend ceiling: a subscription review spends quota, not dollars, so the workflow gets budget-usd: 0.",
+      "  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the repo has no ANTHROPIC_API_KEY secret. Adding one brings back the $10 ceiling.",
     );
   } else {
     choices.budgetUsd = await askValue(
@@ -270,13 +287,21 @@ async function askAdvanced(
   say(
     "Exclusions: files the review never reads (generated code, lockfiles, fixtures). They go in .prheroignore, one pattern per line, gitignore syntax.",
   );
-  const patterns = commaList(
-    await prompter.text(
-      "Patterns to exclude, comma-separated (empty = none)",
-      "",
-    ),
-  );
-  if (patterns.length > 0) advanced.ignorePatterns = patterns;
+  for (;;) {
+    const patterns = commaList(
+      await prompter.text(
+        "Patterns to exclude, comma-separated (empty = none)",
+        "",
+      ),
+    );
+    const problem = ignorePatternsError(patterns);
+    if (problem !== undefined) {
+      say(`  ${problem}`);
+      continue;
+    }
+    if (patterns.length > 0) advanced.ignorePatterns = patterns;
+    break;
+  }
 
   return advanced;
 }

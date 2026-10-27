@@ -253,7 +253,7 @@ describe("setup --ci review choices (CLI)", () => {
     try {
       expect(r.code).toBe(0);
       expect(r.workflow).toContain("mode: advisory");
-      expect(r.workflow).toContain("budget-usd: 0\n");
+      expect(r.workflow).not.toContain("budget-usd:");
       expect(r.config).toEqual({
         ci_review_policy: "every_push",
         ci_max_attempts: 4,
@@ -308,6 +308,67 @@ describe("setup --ci review choices (CLI)", () => {
       expect(r.output).toContain("not valid JSON");
       expect(r.workflow).toBe("");
       expect(r.config).toBe("{ nope");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  // The re-run the skill documents for an old template: nobody chose, so a
+  // tuned config must survive it.
+  test("--force with no flags keeps a tuned config and says so", async () => {
+    const tuned = {
+      ci_review_policy: "every_push",
+      ci_max_attempts: 5,
+      max_changed_lines: 9000,
+    };
+    const r = await runSetup(["--force"], async (dir) => {
+      await Bun.write(
+        path.join(dir, ".github", "workflows", "pr-hero.yml"),
+        "old\n",
+      );
+      await Bun.write(
+        path.join(dir, ".prhero", "config.json"),
+        JSON.stringify(tuned),
+      );
+    });
+    try {
+      expect(r.code).toBe(0);
+      expect(r.workflow).not.toBe("old\n");
+      expect(r.config).toEqual(tuned);
+      expect(r.output).toContain("Kept existing");
+      expect(r.output).toContain("ci_max_attempts");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--level alone changes the level keys, reports them, and keeps the line threshold", async () => {
+    const r = await runSetup(["--level", "minimal"], async (dir) => {
+      await Bun.write(
+        path.join(dir, ".prhero", "config.json"),
+        JSON.stringify({ ci_max_attempts: 5, max_changed_lines: 9000 }),
+      );
+    });
+    try {
+      expect(r.config).toMatchObject({
+        ci_review_policy: "once_per_pr",
+        ci_max_attempts: 1,
+        max_changed_lines: 9000,
+      });
+      expect(r.output).toContain("ci_max_attempts: 5 -> 1");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a non-object config is refused with a CLI error, not a stack trace, before the workflow is written", async () => {
+    const r = await runSetup([], async (dir) => {
+      await Bun.write(path.join(dir, ".prhero", "config.json"), "[]");
+    });
+    try {
+      expect(r.code).not.toBe(0);
+      expect(r.output).not.toContain("    at ");
+      expect(r.workflow).toBe("");
     } finally {
       await rm(r.dir, { recursive: true, force: true });
     }

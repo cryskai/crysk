@@ -117,6 +117,10 @@ export interface CiSetupChoices {
   advanced: AdvancedChoices;
   // True when no human or agent chose: the summary must say so.
   defaulted: boolean;
+  // Which groups someone chose this run. A chosen group overrides the file; an
+  // unchosen one only fills a group the file does not have yet, so re-running
+  // setup (say `--force` to refresh an old workflow) never resets tuned keys.
+  chosen: { level: boolean; maxChangedLines: boolean };
 }
 
 // The engine's own default threshold, so a chosen default and an inherited one agree.
@@ -129,34 +133,47 @@ export function defaultChoices(): CiSetupChoices {
     maxChangedLines: DEFAULT_MAX_CHANGED_LINES,
     advanced: {},
     defaulted: true,
+    chosen: { level: false, maxChangedLines: false },
   };
 }
 
 // The `budget-usd` workflow input for these choices, or undefined to write none.
-// A subscription gets an explicit 0 (no ceiling): a run there costs quota, not
-// dollars, and leaving it empty trusts a billing-mode resolution that resolved
-// this repo's own subscription as metered (see OWN_CI_WORKFLOW_OPTIONS in
-// setup.ts). 0 disables a ceiling and never imposes one, so it is not the
-// "raising a stranger's ceiling" the template refuses to do.
+// A subscription writes none. CI bills as metered only when a non-empty
+// ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) is present (envBillsMetered), so
+// a subscription-only repo already gets no ceiling. An explicit 0 would print
+// the disabled-ceiling warning on every run and, worse, stay an operator
+// override if an API key is added later, defeating the $10 fail-safe that the
+// key's mere presence is meant to bring back (gates.ts, CiBillingMode).
 export function budgetInput(choices: CiSetupChoices): string | undefined {
-  if (choices.billing === "subscription") return "0";
   if (choices.billing === "api") {
     return String(choices.budgetUsd ?? CI_DEFAULT_METERED_BUDGET_USD);
   }
   return undefined;
 }
 
-// The keys merged into .prhero/config.json. The level's keys are always there.
-export function configPatch(choices: CiSetupChoices): Record<string, unknown> {
+// How the choices land in .prhero/config.json. `set` overrides; each group in
+// `fillIfAbsent` is written only when the file has none of its keys, and kept
+// whole otherwise, so a tuned policy is never half-replaced by a preset.
+export interface ConfigPlan {
+  set: Record<string, unknown>;
+  fillIfAbsent: Record<string, unknown>[];
+}
+
+export function configPlan(choices: CiSetupChoices): ConfigPlan {
   const { ignorePatterns: _ignored, ...advanced } = choices.advanced;
-  const patch: Record<string, unknown> = {
-    ...REVIEW_LEVELS[choices.level].config,
-    max_changed_lines: choices.maxChangedLines,
-  };
+  const set: Record<string, unknown> = {};
+  const fillIfAbsent: Record<string, unknown>[] = [];
+  const levelKeys = { ...REVIEW_LEVELS[choices.level].config };
+  const lineKeys = { max_changed_lines: choices.maxChangedLines };
+  if (choices.chosen.level) Object.assign(set, levelKeys);
+  else fillIfAbsent.push(levelKeys);
+  if (choices.chosen.maxChangedLines) Object.assign(set, lineKeys);
+  else fillIfAbsent.push(lineKeys);
+  // An advanced key is present only because someone gave it.
   for (const [key, value] of Object.entries(advanced)) {
-    if (value !== undefined) patch[key] = value;
+    if (value !== undefined) set[key] = value;
   }
-  return patch;
+  return { set, fillIfAbsent };
 }
 
 // One line per choice, plus how to change it. Returned, never logged.
@@ -175,9 +192,11 @@ export function renderChoicesSummary(choices: CiSetupChoices): string[] {
     `  gate             ${choices.mode === "gate" ? "gate: blocking findings turn the pr-hero check red" : "advisory: the pr-hero check stays green"}`,
     `  budget           ${
       budget === undefined
-        ? "not set: resolved from how the review is paid (no ceiling on a subscription, $10 on an API key)"
+        ? choices.billing === "subscription"
+          ? "not set: no ceiling while the repo has no ANTHROPIC_API_KEY secret (a subscription spends quota, not dollars); adding one brings back the $10 ceiling"
+          : "not set: resolved from how the review is paid (no ceiling on a subscription, $10 on an API key)"
         : budget === "0"
-          ? "none (budget-usd: 0): a subscription spends quota, not dollars"
+          ? "none (budget-usd: 0)"
           : `$${budget} per review (budget-usd)`
     }`,
     `  score weights    blocking ${a.ci_blocking_weight ?? DEFAULT_CI_BLOCKING_WEIGHT}, advisory ${a.ci_advisory_weight ?? DEFAULT_CI_ADVISORY_WEIGHT}`,

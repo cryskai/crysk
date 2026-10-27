@@ -6,16 +6,22 @@ import path from "node:path";
 import {
   budgetInput,
   type CiSetupChoices,
-  configPatch,
+  configPlan,
   defaultChoices,
   REVIEW_LEVELS,
   renderChoicesSummary,
 } from "#ci/review-levels";
 import { appendIgnorePatterns, writeRepoReviewConfig } from "#ci/setup";
 import { parseLocalConfig } from "#review/preflight";
+import { CliError } from "../../src/errors";
 
 function choices(over: Partial<CiSetupChoices> = {}): CiSetupChoices {
-  return { ...defaultChoices(), defaulted: false, ...over };
+  return {
+    ...defaultChoices(),
+    defaulted: false,
+    chosen: { level: true, maxChangedLines: true },
+    ...over,
+  };
 }
 
 describe("review level presets", () => {
@@ -62,8 +68,13 @@ describe("review level presets", () => {
 });
 
 describe("budgetInput", () => {
-  test("subscription writes an explicit 0", () => {
-    expect(budgetInput(choices({ billing: "subscription" }))).toBe("0");
+  // A subscription-only repo already resolves to no ceiling; an explicit 0
+  // would warn on every run and outlive a later ANTHROPIC_API_KEY.
+  test("subscription writes nothing", () => {
+    expect(budgetInput(choices({ billing: "subscription" }))).toBeUndefined();
+  });
+  test("an API key with a 0 ceiling writes 0", () => {
+    expect(budgetInput(choices({ billing: "api", budgetUsd: 0 }))).toBe("0");
   });
   test("api writes the chosen ceiling, or the $10 default", () => {
     expect(budgetInput(choices({ billing: "api", budgetUsd: 7.5 }))).toBe(
@@ -76,10 +87,10 @@ describe("budgetInput", () => {
   });
 });
 
-describe("configPatch", () => {
-  test("carries the level's keys and only the advanced keys that were set", () => {
+describe("configPlan", () => {
+  test("chosen keys are set; nothing is kept back", () => {
     expect(
-      configPatch(
+      configPlan(
         choices({
           level: "thorough",
           advanced: {
@@ -90,12 +101,30 @@ describe("configPatch", () => {
         }),
       ),
     ).toEqual({
-      ci_review_policy: "every_push",
-      ci_max_attempts: 4,
-      max_verification_steps: 8,
-      max_changed_lines: 4000,
-      ci_blocking_weight: 3,
-      ci_trusted_actors: ["bot"],
+      set: {
+        ci_review_policy: "every_push",
+        ci_max_attempts: 4,
+        max_verification_steps: 8,
+        max_changed_lines: 4000,
+        ci_blocking_weight: 3,
+        ci_trusted_actors: ["bot"],
+      },
+      fillIfAbsent: [],
+    });
+  });
+
+  test("keys nobody chose only fill a group the file does not have yet", () => {
+    expect(configPlan(defaultChoices())).toEqual({
+      set: {},
+      fillIfAbsent: [
+        {
+          ci_review_policy: "risk_aware",
+          ci_max_attempts: 2,
+          ci_rereview_min_score: 4,
+          max_verification_steps: 8,
+        },
+        { max_changed_lines: 4000 },
+      ],
     });
   });
 });
@@ -126,10 +155,20 @@ describe("renderChoicesSummary", () => {
     expect(text).not.toContain("nobody chose");
     expect(text).toContain("once_per_pr, at most 1 automatic pass per PR");
     expect(text).toContain("advisory");
-    expect(text).toContain("budget-usd: 0");
+    expect(text).toContain(
+      "not set: no ceiling while the repo has no ANTHROPIC_API_KEY",
+    );
     expect(text).toContain("observe only     yes");
     expect(text).toContain("gen/**");
     expect(text).toContain("npx -y pr-hero config");
+  });
+
+  test("an API key with no ceiling is not described as a subscription", () => {
+    const text = renderChoicesSummary(
+      choices({ billing: "api", budgetUsd: 0 }),
+    ).join("\n");
+    expect(text).toContain("none (budget-usd: 0)");
+    expect(text).not.toContain("subscription");
   });
 
   test("carries no escape bytes", () => {
@@ -148,47 +187,85 @@ describe("writeRepoReviewConfig", () => {
       await rm(dir, { recursive: true, force: true });
     }
   }
+  const file = (dir: string) => path.join(dir, ".prhero", "config.json");
+  async function seed(dir: string, body: string) {
+    await mkdir(path.join(dir, ".prhero"));
+    await writeFile(file(dir), body);
+  }
 
-  test("creates the file when absent", async () => {
+  test("creates the file when absent, filling every group", async () => {
     await withRepo(async (dir) => {
-      const file = await writeRepoReviewConfig(dir, { ci_max_attempts: 1 });
-      expect(JSON.parse(await readFile(file, "utf-8"))).toEqual({
-        ci_max_attempts: 1,
+      const r = await writeRepoReviewConfig(dir, {
+        set: { ci_blocking_weight: 3 },
+        fillIfAbsent: [{ ci_max_attempts: 1 }, { max_changed_lines: 4000 }],
       });
+      expect(JSON.parse(await readFile(r.file, "utf-8"))).toEqual({
+        ci_blocking_weight: 3,
+        ci_max_attempts: 1,
+        max_changed_lines: 4000,
+      });
+      expect(r.changed).toEqual([]);
+      expect(r.kept).toEqual([]);
     });
   });
 
-  test("keeps the keys already there and overrides the ones it sets", async () => {
+  test("a group with any key already present is kept whole, never partly filled", async () => {
     await withRepo(async (dir) => {
-      await mkdir(path.join(dir, ".prhero"));
-      const file = path.join(dir, ".prhero", "config.json");
-      await writeFile(file, JSON.stringify({ post: true, ci_max_attempts: 9 }));
-      await writeRepoReviewConfig(dir, { ci_max_attempts: 2 });
-      expect(JSON.parse(await readFile(file, "utf-8"))).toEqual({
+      await seed(dir, JSON.stringify({ post: true, ci_max_attempts: 3 }));
+      const r = await writeRepoReviewConfig(dir, {
+        set: {},
+        fillIfAbsent: [
+          { ci_review_policy: "risk_aware", ci_max_attempts: 2 },
+          { max_changed_lines: 4000 },
+        ],
+      });
+      expect(JSON.parse(await readFile(file(dir), "utf-8"))).toEqual({
+        post: true,
+        ci_max_attempts: 3,
+        max_changed_lines: 4000,
+      });
+      expect(r.kept).toEqual(["ci_max_attempts"]);
+    });
+  });
+
+  test("a chosen key overrides and is reported with its old value", async () => {
+    await withRepo(async (dir) => {
+      await seed(dir, JSON.stringify({ post: true, ci_max_attempts: 9 }));
+      const r = await writeRepoReviewConfig(dir, {
+        set: { ci_max_attempts: 2, ci_review_policy: "risk_aware" },
+        fillIfAbsent: [],
+      });
+      expect(JSON.parse(await readFile(file(dir), "utf-8"))).toEqual({
         post: true,
         ci_max_attempts: 2,
+        ci_review_policy: "risk_aware",
       });
+      expect(r.changed).toEqual([{ key: "ci_max_attempts", from: 9, to: 2 }]);
     });
   });
 
-  test("refuses invalid JSON and leaves the file as it was", async () => {
+  test("refuses invalid JSON with a CLI error and leaves the file as it was", async () => {
     await withRepo(async (dir) => {
-      await mkdir(path.join(dir, ".prhero"));
-      const file = path.join(dir, ".prhero", "config.json");
-      await writeFile(file, "{ not json");
-      await expect(
-        writeRepoReviewConfig(dir, { ci_max_attempts: 2 }),
-      ).rejects.toThrow(/not valid JSON/);
-      expect(await readFile(file, "utf-8")).toBe("{ not json");
+      await seed(dir, "{ not json");
+      const attempt = writeRepoReviewConfig(dir, {
+        set: { ci_max_attempts: 2 },
+        fillIfAbsent: [],
+      });
+      await expect(attempt).rejects.toThrow(/not valid JSON/);
+      await expect(attempt).rejects.toBeInstanceOf(CliError);
+      expect(await readFile(file(dir), "utf-8")).toBe("{ not json");
     });
   });
 
   test("refuses a value the review parser rejects, writing nothing", async () => {
     await withRepo(async (dir) => {
       await expect(
-        writeRepoReviewConfig(dir, { ci_blocking_weight: 0 }),
+        writeRepoReviewConfig(dir, {
+          set: { ci_blocking_weight: 0 },
+          fillIfAbsent: [],
+        }),
       ).rejects.toThrow(/ci_blocking_weight/);
-      expect(existsSync(path.join(dir, ".prhero", "config.json"))).toBe(false);
+      expect(existsSync(file(dir))).toBe(false);
     });
   });
 });

@@ -433,7 +433,9 @@ and backed by a durable attempt ledger stored in GitHub Check Runs (`checks: wri
 | `thorough` | `every_push` | 4 | (unset) | 8 |
 | `manual` | `manual_only` | 1 | (unset) | 8 |
 
-Billing: `--billing subscription` writes `budget-usd: 0` (a subscription spends quota, not dollars); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the repo has no `ANTHROPIC_API_KEY`; an explicit 0 would warn on every run and outlive a later API key); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+
+Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines.
 
 Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). Unlike the budget it applies on any billing: left unset, a subscription route reviews a PR of any size.
 
