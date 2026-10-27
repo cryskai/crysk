@@ -115,11 +115,17 @@ if (await outFile.exists()) {
     const row = JSON.parse(line) as {
       run: string;
       finding: string;
+      source?: string;
       model: string;
       status: string;
     };
-    // A failed step (quota, auth, timeout) is not an answer: rerun it.
-    if (row.status === "ok") done.add(`${row.run}|${row.finding}|${row.model}`);
+    // A failed step (quota, auth, timeout) is not an answer: rerun it. The key
+    // carries the source because a refuted finding's id may collide with a
+    // posted one (see ReplayCase), and the two must not resume each other.
+    if (row.status === "ok")
+      done.add(
+        `${row.run}|${row.finding}|${row.source ?? "posted"}|${row.model}`,
+      );
   }
 }
 
@@ -221,17 +227,19 @@ async function replay(c: ReplayCase) {
   // prompt can judge PR causation (the refuter has no git and no base).
   const fullPatch = await Bun.file(path.join(c.run, "diff.patch")).text();
   const fileDiff = patchForFile(fullPatch, f.path);
+  // The function form inserts the text literally: a string replacement reads
+  // `$&`, `$$`, `` $` `` and `$'`, which claims and diffs contain.
   const prompt =
     userPromptTemplate === undefined
       ? refuterPrompt(oneJson, meta.boundary_nonce)
       : userPromptTemplate
-          .replace(
-            "{{FINDING}}",
+          .replace("{{FINDING}}", () =>
             wrapBlock("finding", meta.boundary_nonce, oneJson),
           )
           .replace(
             "{{PATCH}}",
-            wrapBlock("patch", meta.boundary_nonce, fileDiff) ||
+            () =>
+              wrapBlock("patch", meta.boundary_nonce, fileDiff) ||
               "(this PR's diff does not touch the finding's file)",
           );
   const evidence = Bun.file(
@@ -312,6 +320,7 @@ async function replay(c: ReplayCase) {
   return {
     run: c.run,
     finding: f.id,
+    source: c.source ?? "posted",
     model,
     severity: f.severity,
     tier: f.tier,
@@ -331,7 +340,7 @@ async function replay(c: ReplayCase) {
 }
 
 const pending = cases.filter(
-  (c) => !done.has(`${c.run}|${c.finding}|${model}`),
+  (c) => !done.has(`${c.run}|${c.finding}|${c.source ?? "posted"}|${model}`),
 );
 console.error(
   `${cases.length} cases, ${cases.length - pending.length} already in ${outPath}, ${pending.length} to run on ${model}`,
