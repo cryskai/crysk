@@ -107,7 +107,9 @@ const cases = (
 function cloneFor(runDir: string): string {
   const root = path.basename(path.dirname(runDir));
   const corpus = Object.values(CORPORA).find((c) => c.runs === root);
-  if (corpus === undefined) fail(`no corpus owns runs root ${root}`);
+  // Thrown, not fail(): process.exit would skip the worktree cleanup in the
+  // finally below, and the per-case catch already reports and counts it.
+  if (corpus === undefined) throw new Error(`no corpus owns runs root ${root}`);
   return path.join(BENCH_HOME, corpus.clone);
 }
 
@@ -379,7 +381,15 @@ try {
 } finally {
   for (const [, wt] of worktrees) {
     const { clone, dir } = await wt.catch(() => ({ clone: "", dir: "" }));
-    if (clone) await git(clone, ["worktree", "remove", "--force", dir]);
+    // One failed removal must not leave the others registered, skip the scratch
+    // removal, or replace the exit code with an unhandled rejection.
+    if (clone) {
+      await git(clone, ["worktree", "remove", "--force", dir]).catch(
+        (error) => {
+          console.error(`  cleanup: worktree remove ${dir} failed: ${error}`);
+        },
+      );
+    }
   }
   await rm(scratch, { recursive: true, force: true });
 }
