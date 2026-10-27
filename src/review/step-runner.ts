@@ -7,6 +7,7 @@
 
 import type { Effort } from "#model/catalog";
 import type { CredentialKind } from "#model/provider-capabilities";
+import type { AttemptAdmissionGate } from "../execution/admission";
 import type {
   AuthEvent,
   DenialCode,
@@ -156,6 +157,7 @@ export function buildStepArgv(step: StepSpec): string[] {
     step.model,
     "--effort",
     step.effort,
+    "--exclude-dynamic-system-prompt-sections",
   ];
 }
 
@@ -172,6 +174,10 @@ export interface ClaudeCodeRunnerOptions {
   executableAllowlist?: readonly ExecutableAllowlistEntry[];
   binaryPath?: string;
   admissionGate?: StepAdmissionGate;
+  // The max_concurrent_steps cap (run.ts admissionGateFor). The legacy
+  // runner is what a review without routing runs on, so the cap must reach
+  // it too or the key silently does nothing on the default Claude path.
+  attemptAdmissionGate?: AttemptAdmissionGate;
   onAuthEvent?: (event: AuthEvent) => void;
   // §6.1 D1-05 credential projection; forwarded to the harness.
   credentialBroker?: CredentialBroker;
@@ -206,6 +212,7 @@ export class ClaudeCodeRunner implements StepRunner {
       executableAllowlist: options.executableAllowlist,
       binaryPath: options.binaryPath,
       admissionGate: options.admissionGate,
+      attemptAdmissionGate: options.attemptAdmissionGate,
       onAuthEvent: options.onAuthEvent,
       credentialBroker: options.credentialBroker,
       childEnv: options.childEnv,

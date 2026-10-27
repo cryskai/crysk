@@ -122,7 +122,18 @@ export interface PrStatusJson {
 export interface PrStatusComment {
   id: number;
   body: string;
+  created_at?: string;
 }
+
+export const STATUS_WAIT_POLL_INTERVAL_MS = 15_000;
+export const STATUS_WAIT_STARTUP_GRACE_MS = 180_000;
+export const STATUS_WAIT_MAX_MS = IN_FLIGHT_TTL_MS;
+
+const TRIGGER_COMMENT_BODIES = new Set([
+  "/pr-hero review",
+  "/pr-hero review --full",
+  "/pr-hero recheck",
+]);
 
 // A review comment's live projection (pr/pr.ts PrReviewComment) carries the path and line
 // GitHub shows now, which follow a rename or a re-anchor. Optional, as the engine's own posted
@@ -704,6 +715,46 @@ function decideNext(
     next_action: "override-or-fix",
     reason: `The gate is red and names no live blocking finding on this head (${gate.description ?? "no description"}); read the gate description.`,
   };
+}
+
+// Pure predicate for `pr-hero status --pr <n> --wait`: whether the caller should keep polling
+// for a review to start or finish before emitting the settled status.
+export function shouldWaitPrStatus(input: {
+  status: PrStatusJson;
+  issueComments: PrStatusComment[];
+  nowMs: number;
+  elapsedMs: number;
+  startupGraceMs?: number;
+}): boolean {
+  const { status, issueComments, nowMs, elapsedMs } = input;
+  const startupGraceMs = input.startupGraceMs ?? STATUS_WAIT_STARTUP_GRACE_MS;
+
+  if (status.next_action === "wait") return true;
+
+  // Fresh push: no status on this head yet, within the initial startup grace window.
+  if (status.gate.state === "none" && elapsedMs < startupGraceMs) {
+    return true;
+  }
+
+  // Fresh `/pr-hero review` or `/pr-hero recheck` comment: posted within the startup grace
+  // window, and no pr-hero commit status has been posted since that comment.
+  const gateMs =
+    status.gate.created_at !== null
+      ? Date.parse(status.gate.created_at)
+      : Number.NEGATIVE_INFINITY;
+
+  for (const comment of issueComments) {
+    if (!TRIGGER_COMMENT_BODIES.has(comment.body.trim())) continue;
+    if (comment.created_at === undefined) continue;
+    const commentMs = Date.parse(comment.created_at);
+    if (!Number.isFinite(commentMs)) continue;
+    const ageMs = nowMs - commentMs;
+    if (ageMs >= 0 && ageMs < startupGraceMs && commentMs > gateMs) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // The human lines `pr-hero status` prints on stderr without --json. A renderer: it returns

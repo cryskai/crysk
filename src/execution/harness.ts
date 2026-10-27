@@ -437,6 +437,22 @@ function receiptPathFor(step: StepSpec, attempt: number): string {
   return settlementReceiptPath(step.outPath, step.name, attempt);
 }
 
+// The generic reminder ("no prose, no fences") cannot help a draft whose JSON
+// was fine and broke a validation rule instead: on Martian keycloak 36880 the
+// model resent the same unresolved proof refs and lost the step twice. So the
+// validator's own message rides along, capped so a long one cannot crowd out
+// the prompt. Every retry is a fresh session that never saw the refused
+// draft, so the wording names an earlier attempt, not "your" message.
+const MAX_REJECTION_CHARS = 2000;
+function formatRetryReminder(parseError: string | undefined): string {
+  if (parseError === undefined) return FORMAT_RETRY_REMINDER;
+  const reason =
+    parseError.length > MAX_REJECTION_CHARS
+      ? `${parseError.slice(0, MAX_REJECTION_CHARS)}…`
+      : parseError;
+  return `${FORMAT_RETRY_REMINDER} An earlier attempt at this same task was rejected by the output validator, so avoid this: ${reason}`;
+}
+
 async function writeAttemptLog(
   step: StepSpec,
   attempt: number,
@@ -448,6 +464,16 @@ async function writeAttemptLog(
   // network failure — this line is what lets incident triage tell them
   // apart. Absent on a delivered ("ok") attempt.
   cause?: FailureCause | "legacy_terminal",
+  // Why the attempt was refused. `parse_error`: `step.parse` rejected the
+  // final text. Without it a format_violation log says only THAT the draft
+  // was refused, and the result tail is capped, so the rule that fired (an
+  // unresolved proof ref, say) had to be rebuilt by hand from the validator
+  // source (Martian keycloak 36880, 2026-10-25). `persist_error`: the draft
+  // parsed and writing its artifacts failed.
+  rejection?: {
+    readonly label: "parse_error" | "persist_error";
+    readonly message: string;
+  },
 ): Promise<void> {
   const logPath = attemptLogPath(step.outPath, step.name, attempt);
   await mkdir(path.dirname(logPath), { recursive: true });
@@ -461,6 +487,11 @@ async function writeAttemptLog(
       `timed_out: ${outcome.timedOut ?? false}`,
       `classification: ${classification}`,
       ...(cause !== undefined ? [`cause: ${cause}`] : []),
+      ...(rejection !== undefined
+        ? [
+            `${rejection.label}: ${redactEvidenceText(redactDiagnostic(rejection.message)).replace(/\s+/g, " ")}`,
+          ]
+        : []),
       ...(outcome.toolInvocations !== undefined
         ? [`tool_invocations: ${outcome.toolInvocations}`]
         : []),
@@ -1790,7 +1821,8 @@ export class StepExecutionHarness implements StepRunner {
           maxAttempts: step.maxAttempts,
           reason: disposition.budget,
         });
-        pendingFormatPrompt = step.prompt + FORMAT_RETRY_REMINDER;
+        pendingFormatPrompt =
+          step.prompt + formatRetryReminder(attemptResult.parseError);
         // biome-ignore lint/style/noNonNullAssertion: guaranteed by nextCycle's own contract for a non-terminal disposition
         reserveToken = nextCycle(disposition)!;
         continue;
@@ -2227,8 +2259,20 @@ export class StepExecutionHarness implements StepRunner {
       deadlineMs,
       harnessWatchdogMs,
       onData: async (outcome, settlement): Promise<AttemptDelivery> => {
+        // Set only when `step.parse` itself threw: the catch below also
+        // receives artifact-write failures, which are not the parser's verdict.
+        let parseError: string | undefined;
         try {
-          const parsed = step.parse(outcome.finalText);
+          let parsed: unknown;
+          try {
+            parsed = step.parse(outcome.finalText);
+          } catch (parseFailure) {
+            parseError =
+              parseFailure instanceof Error
+                ? parseFailure.message
+                : String(parseFailure);
+            throw parseFailure;
+          }
           if (
             isVacuousHunt({
               tools: step.tools,
@@ -2257,23 +2301,46 @@ export class StepExecutionHarness implements StepRunner {
               resolution: { kind: "legacy_terminal" },
             };
           }
-          await this.guardedDataPlaneWrite(settlement, () =>
-            writeAttemptLog(step, attempt, kind, outcome, "ok"),
-          );
+          // Artifact first, then the "ok" log: written the other way round, a
+          // failed artifact write on a full or read-only disk left a log
+          // reading `classification: ok` for a step that failed, whenever the
+          // failure log that should replace it hit the same disk.
           await this.guardedDataPlaneWrite(settlement, () =>
             writeJsonAtomically(step.outPath, parsed),
           );
+          await this.guardedDataPlaneWrite(settlement, () =>
+            writeAttemptLog(step, attempt, kind, outcome, "ok"),
+          );
           return { delivered: true, parsed };
-        } catch {
+        } catch (failure) {
           // D1-08 PR0: cause resolution now goes through the transport's OWN
           // failure classifier first (the second, previously unwired
           // mechanism this slice closes) before ever falling back to the
           // legacy step-runner one.
-          const resolution = resolveFailureCause({
-            outcome,
-            classifyFailure: transport.classifyFailure,
-            parseThrew: true,
-          });
+          //
+          // Only a refused draft is a format violation. When the draft parsed
+          // and writing its artifacts threw (EISDIR, ENOSPC), a reminder retry
+          // pays for the same answer and hits the same disk, so the step stops.
+          // Routing it through `parseThrew: false` would not help: with a
+          // clean stderr the legacy classifier also answers "format".
+          const resolution: CauseResolution =
+            parseError !== undefined
+              ? resolveFailureCause({
+                  outcome,
+                  classifyFailure: transport.classifyFailure,
+                  parseThrew: true,
+                })
+              : { kind: "legacy_terminal" };
+          const rejection =
+            parseError !== undefined
+              ? { label: "parse_error" as const, message: parseError }
+              : {
+                  label: "persist_error" as const,
+                  message:
+                    failure instanceof Error
+                      ? failure.message
+                      : String(failure),
+                };
           const classification = legacyClassificationFromCause(resolution);
           // A failing diagnostic log must never escape the failure handler
           // itself — that second throw is what left settlements unwritten
@@ -2289,6 +2356,7 @@ export class StepExecutionHarness implements StepRunner {
               resolution.kind === "cause"
                 ? resolution.cause
                 : "legacy_terminal",
+              rejection,
             ),
           ).catch(() => {});
           // Transient cleanup of the stale artifact is data-plane too, so it
@@ -2303,7 +2371,11 @@ export class StepExecutionHarness implements StepRunner {
                 .catch(() => {}),
             );
           }
-          return { delivered: false, resolution };
+          return {
+            delivered: false,
+            resolution,
+            ...(parseError === undefined ? {} : { parseError }),
+          };
         }
       },
     });
@@ -2379,10 +2451,15 @@ export class StepExecutionHarness implements StepRunner {
       ).catch(() => {});
     }
 
+    const parseError =
+      execution.delivery?.delivered === false
+        ? execution.delivery.parseError
+        : undefined;
     return {
       kind: "failed",
       outcome,
       resolution,
+      ...(parseError === undefined ? {} : { parseError }),
     };
   }
 }
@@ -2396,7 +2473,13 @@ function completionToStatus(
 
 type AttemptDelivery =
   | { readonly delivered: true; readonly parsed: unknown }
-  | { readonly delivered: false; readonly resolution: CauseResolution };
+  | {
+      readonly delivered: false;
+      readonly resolution: CauseResolution;
+      // The validator's message when `step.parse` refused the draft: the
+      // format-retry prompt hands it back to the model.
+      readonly parseError?: string;
+    };
 
 // D1-08 PR0: `runAttempt`'s result — one attempt's outcome reduced to what
 // the retry loop needs to decide what happens next.
@@ -2417,5 +2500,6 @@ type AttemptRunResult =
       readonly kind: "failed";
       readonly outcome: TransportOutcome;
       readonly resolution: CauseResolution;
+      readonly parseError?: string;
       readonly reservation?: SpendReservation;
     };

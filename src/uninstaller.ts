@@ -156,7 +156,12 @@ export async function planUninstallation(
       });
     }
     if (env.skillsDir) {
-      for (const skillName of ["pr-hero-triage", "pr-hero-ci-setup"]) {
+      for (const skillName of [
+        "pr-hero-triage",
+        "pr-hero-ci-setup",
+        "pr-hero-pr",
+        "pr-hero",
+      ]) {
         const skillPath = path.join(env.skillsDir, skillName);
         if (exists(skillPath)) {
           agentEnvCleanups.push(`${env.displayName} Skill: ${skillName}`);

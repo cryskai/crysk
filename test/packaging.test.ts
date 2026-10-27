@@ -38,6 +38,8 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.files).toContain("prompts");
     expect(pkg.files).toContain("skills/pr-hero-triage");
     expect(pkg.files).toContain("skills/pr-hero-ci-setup");
+    expect(pkg.files).toContain("skills/pr-hero-pr");
+    expect(pkg.files).toContain("skills/pr-hero");
     expect(pkg.files).toContain("dist");
     expect(pkg.files).not.toContain("docs");
     expect(pkg.files).not.toContain("scripts");

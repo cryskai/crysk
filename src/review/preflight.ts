@@ -89,6 +89,9 @@ export interface CliOptions {
   // The scout is tri-state at parse time: undefined means no flag,
   // so review can apply flag > config > default (false).
   scout?: boolean;
+  // `--shared-prefix` / `--no-shared-prefix`. Undefined means the default,
+  // which is ON (see resolveSharedPrefix).
+  sharedPrefix?: boolean;
   // Independent model knob (§3.7), and NOT exercised by M6 — the whole
   // control corpus is sonnet, so ratifying this is ratifying a flag, not a
   // second variable. `--model` still outranks it (the JD override rule).
@@ -129,6 +132,9 @@ export interface CliOptions {
   // `status` only (ROADMAP S9): print one JSON object on stdout instead of the human lines.
   // Refused on every other command, so the flag never parses and then does nothing.
   json?: boolean;
+  // `status` only: poll GitHub until an in-flight (or newly-triggered) PR review settles, then
+  // emit the settled status. Refused on every other command.
+  wait?: boolean;
   // The escape hatch for change 3's default. See resolveDiffRange's WHY: the
   // three-dot (merge-base) range is right almost always, and this flag exists
   // for the rare caller who genuinely wants the literal two-point diff.
@@ -314,7 +320,7 @@ Usage:
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed
   pr-hero skills install [--force]
-                             Install the triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
+                             Install the pr-hero, pr-hero-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
   pr-hero ci init [--force]  Same scaffolding as "setup --ci", as its own
                              command
   pr-hero doctor [options]   Check system tools and environment readiness
@@ -352,9 +358,11 @@ Usage:
                              badge, posts, and resolves the inline review
                              thread. --body-file is reasoning prose only.
                              --dry-run prints the parent and posts nothing
-  pr-hero status --pr <n> [--json]
+  pr-hero status --pr <n> [--wait] [--json]
                              Read the PR's pr-hero gate, posted findings and
                              next action, through gh only and read-only. With
+                             --wait, poll until an in-flight or newly-triggered
+                             review settles before printing. With
                              --json, one JSON object on stdout (schema
                              pr-hero.status/v1); without it, a few lines on
                              stderr. Exits 1 with no stdout when any read
@@ -500,7 +508,9 @@ Options:
                       agents_dir, default_base, parity_trigger_paths and
                       suspicion_priors, optional summary settings, and
                       optional max_verification_steps (re-review verify cap;
-                      default 8; 0 pauses verification)
+                      default 8; 0 pauses verification), and optional
+                      max_concurrent_steps (cap on steps in flight at once;
+                      a positive integer; unset = unlimited)
   --model <model>     Override every agent's model
   --summary           Enable the engine-owned PR summary (default)
   --no-summary        Disable the engine-owned PR summary
@@ -510,6 +520,12 @@ Options:
                       whether it earns its cost has not run yet
   --scout-model <m>   Model for the scout stage (default: the run's model).
                       Requires --scout
+  --no-shared-prefix  review only: turn off the shared hunter prefix. By
+                      default the patch and output contract sit in each
+                      hunter's system prompt, identical across hunters, and the
+                      prompt cache is warmed once per group before the fan-out.
+                      Anthropic routes only; others keep per-hunter prompts
+                      (--shared-prefix forces it on)
   --full              review only: on a re-review, widen discovery to the
                       full PR range (B..H). Verification and triage still
                       run; the recorded case does not change. On GitHub,
@@ -702,6 +718,10 @@ export function parseArgs(argv: string[]): ParsedCli {
       options.json = true;
       continue;
     }
+    if (arg === "--wait") {
+      options.wait = true;
+      continue;
+    }
     if (arg === "--dry-run") {
       options.dryRun = true;
       continue;
@@ -720,6 +740,14 @@ export function parseArgs(argv: string[]): ParsedCli {
     }
     if (arg === "--no-scout") {
       options.scout = false;
+      continue;
+    }
+    if (arg === "--no-shared-prefix") {
+      options.sharedPrefix = false;
+      continue;
+    }
+    if (arg === "--shared-prefix") {
+      options.sharedPrefix = true;
       continue;
     }
     if (arg === "--ci") {
@@ -1088,14 +1116,24 @@ export function parseArgs(argv: string[]): ParsedCli {
       throw new CliUsageError("status requires --pr <n> (a PR number)");
     }
     for (const arg of argv) {
-      if (arg.startsWith("-") && arg !== "--pr" && arg !== "--json") {
+      if (
+        arg.startsWith("-") &&
+        arg !== "--pr" &&
+        arg !== "--json" &&
+        arg !== "--wait"
+      ) {
         throw new CliUsageError(
-          `status takes only --pr <n> and --json, not ${arg}`,
+          `status takes only --pr <n>, --json, and --wait, not ${arg}`,
         );
       }
     }
-  } else if (options.json) {
-    throw new CliUsageError("--json only applies to the status command");
+  } else {
+    if (options.json) {
+      throw new CliUsageError("--json only applies to the status command");
+    }
+    if (options.wait) {
+      throw new CliUsageError("--wait only applies to the status command");
+    }
   }
   // `post` (ROADMAP B6) and `triage` (ROADMAP B6c) share the same shape:
   // both read a PRIOR run's artifacts, named by --from, and act on the PR
@@ -2088,6 +2126,7 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   summary: "capped",
   routing: "person",
   max_verification_steps: "capped",
+  max_concurrent_steps: "capped",
   max_changed_lines: "capped",
   max_changed_files: "capped",
   scout: "capped",
@@ -2125,6 +2164,10 @@ export interface LocalConfig {
   // DEFAULT_MAX_VERIFICATION_STEPS. 0 is legal — every queued prior lands
   // `unconfirmed` (the pause switch, same shape as watch daily_cap).
   max_verification_steps?: number;
+  // Admission cap on in-flight steps (hunter, refuter, verify, adjudicate,
+  // scout, summarizer attempts). Absent means unlimited: no gate is built.
+  // Positive only: 0 would admit nothing and wedge every run.
+  max_concurrent_steps?: number;
   max_changed_lines?: number;
   max_changed_files?: number;
   scout?: boolean;
@@ -2341,6 +2384,11 @@ function parseConfigLayer(
     "max_verification_steps",
     file,
   );
+  const maxConcurrentSteps = parsePositiveInteger(
+    config.max_concurrent_steps,
+    "max_concurrent_steps",
+    file,
+  );
   const maxChangedLines = parseNonNegativeInteger(
     config.max_changed_lines,
     "max_changed_lines",
@@ -2412,6 +2460,9 @@ function parseConfigLayer(
     ...(maxVerificationSteps === undefined
       ? {}
       : { max_verification_steps: maxVerificationSteps }),
+    ...(maxConcurrentSteps === undefined
+      ? {}
+      : { max_concurrent_steps: maxConcurrentSteps }),
     ...(maxChangedLines === undefined
       ? {}
       : { max_changed_lines: maxChangedLines }),
@@ -2727,6 +2778,18 @@ function parseNonNegativeInteger(
   return value;
 }
 
+function parsePositiveInteger(
+  value: unknown,
+  key: string,
+  file: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new CliUsageError(`${file} ${key} must be a positive integer`);
+  }
+  return value;
+}
+
 function parseCiAdmissionInteger(
   value: unknown,
   key: string,
@@ -2771,6 +2834,14 @@ export function resolveMaxVerificationSteps(
   return config.max_verification_steps ?? DEFAULT_MAX_VERIFICATION_STEPS;
 }
 
+// Undefined, not a default: an absent cap means no gate is constructed at all,
+// which is today's unlimited behavior byte for byte.
+export function resolveMaxConcurrentSteps(
+  config: Pick<ConfigLayer, "max_concurrent_steps">,
+): number | undefined {
+  return config.max_concurrent_steps;
+}
+
 export function resolveSummary(
   options: Pick<CliOptions, "summary" | "model">,
   config: Pick<ConfigLayer, "summary">,
@@ -2780,6 +2851,15 @@ export function resolveSummary(
     enabled: options.summary ?? config.summary?.enabled ?? true,
     ...(model === undefined ? {} : { model }),
   };
+}
+
+// On by default since the 2026-10-22 Claude bench (musive 1722/1858/853, R=2,
+// one variable): −28% $/review, −27% wall, no recall loss on the known bugs or
+// the planted defect. Only an explicit --no-shared-prefix turns it off.
+export function resolveSharedPrefix(
+  options: Pick<CliOptions, "sharedPrefix">,
+): boolean {
+  return options.sharedPrefix !== false;
 }
 
 export function resolveScout(
@@ -2922,6 +3002,12 @@ export function mergeConfig(
     (layer) => layer.max_verification_steps,
     Math.min,
   );
+  const maxConcurrentSteps = foldKey(
+    layers,
+    CONFIG_DIRECTION.max_concurrent_steps,
+    (layer) => layer.max_concurrent_steps,
+    Math.min,
+  );
   const narrowSizeLimit = (a: number, b: number): number => {
     if (a === 0) return b;
     if (b === 0) return a;
@@ -3024,6 +3110,9 @@ export function mergeConfig(
     ...(maxSteps.value === undefined
       ? {}
       : { max_verification_steps: maxSteps.value }),
+    ...(maxConcurrentSteps.value === undefined
+      ? {}
+      : { max_concurrent_steps: maxConcurrentSteps.value }),
     ...(maxLines.value === undefined
       ? {}
       : { max_changed_lines: maxLines.value }),
@@ -3067,6 +3156,7 @@ export function mergeConfig(
     summary: { enabled: summaryEnabled.source, model: summaryModel.source },
     routing: routing.source,
     max_verification_steps: maxSteps.source,
+    max_concurrent_steps: maxConcurrentSteps.source,
     max_changed_lines: maxLines.source,
     max_changed_files: maxFiles.source,
     scout: scout.source,
@@ -3205,8 +3295,9 @@ export const INIT_GIT_REMINDER =
   "reads the checkout directly, so pr-hero refuses to run on a dirty tree — " +
   "and an untracked .prhero/ is exactly that.";
 
-// The token every scaffolded gotchas file carries, and the ONLY thing that
-// distinguishes "nobody has written this yet" from a real file. It is not a
+// The token every scaffolded gotchas file carries, and the primary signal
+// that distinguishes "nobody has written this yet" from a real file (the
+// exact-line rule further down is the only other one). It is not a
 // new invention: `pr-hero setup`'s fallback already wrote it (wizard.ts), it
 // simply had no reader. `pr-hero init`'s template now carries it too, so both
 // scaffolds are detectable by one token instead of by matching their prose.
@@ -3215,6 +3306,14 @@ export const INIT_GIT_REMINDER =
 // a marker is a file DECLARING itself unfinished. Anything inferred from the
 // prose would eventually reject somebody's real gotchas for looking generic,
 // and the cost of a false positive here is a refused review.
+//
+// The one inference allowed beside the marker is an EXACT one: a file whose
+// every non-blank line is a line one of our own scaffolds wrote. That is not
+// a heuristic about prose — no real gotchas file consists solely of our
+// template lines — and a real file that keeps one stray template line beside
+// real ones still passes. It exists because a scaffold without its marker
+// line — deleted by hand, or committed before the marker existed — reached
+// every hunter as if it were real.
 export const GOTCHAS_PLACEHOLDER_MARKER = "human-attention-required";
 
 export const GOTCHAS_TEMPLATE = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: delete THIS line once the gotchas below are real — pr-hero refuses to review while it is here. -->
@@ -3227,6 +3326,35 @@ verbatim into every hunter's system prompt, so keep them short and true.
 - <subsystem>: <the invariant that is enforced somewhere the diff does not show>
 - <subsystem>: <the naming/ownership rule a newcomer would violate>
 `;
+
+// `pr-hero setup`'s fallback scaffold (wizard.ts writes it when onboarding
+// collected zero invariants). It lives here, beside GOTCHAS_TEMPLATE, so the
+// gate below can recognise both scaffolds from one place.
+export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero invariants defined during onboarding -->\n\n# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Replace this with your project's real failure modes, then delete the marker line at the top — pr-hero refuses to review while it is there.)\n`;
+
+// Every non-blank line the two scaffolds write, minus the marker line. A file
+// made ONLY of these lines is a scaffold nobody filled in, whether its marker
+// was deleted or it predates the marker. musive committed the pre-marker
+// template, and its three `<subsystem>` lines were injected into every hunter.
+//
+// RETIRED lines are ones an earlier release's scaffold wrote and today's no
+// longer does. A repo may still have them committed, so when a scaffold's
+// wording changes, its old lines move here — otherwise that repo's scaffold
+// slips past the gate again. (GOTCHAS_TEMPLATE's body has never changed; the
+// setup fallback's sentence did, in 60c28c6.)
+const RETIRED_SCAFFOLD_LINES = [
+  "(No invariants defined during onboarding. Edit this file with project failure modes.)",
+];
+
+const SCAFFOLD_BODY_LINES = new Set([
+  ...[GOTCHAS_TEMPLATE, SETUP_GOTCHAS_FALLBACK]
+    .flatMap((scaffold) => scaffold.split("\n"))
+    .map((line) => line.trim())
+    .filter(
+      (line) => line.length > 0 && !line.includes(GOTCHAS_PLACEHOLDER_MARKER),
+    ),
+  ...RETIRED_SCAFFOLD_LINES,
+]);
 
 export type GotchasUnusableReason = "empty" | "placeholder";
 
@@ -3246,6 +3374,13 @@ export function gotchasUnusableReason(
 ): GotchasUnusableReason | undefined {
   if (text.trim().length === 0) return "empty";
   if (text.includes(GOTCHAS_PLACEHOLDER_MARKER)) return "placeholder";
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.every((line) => SCAFFOLD_BODY_LINES.has(line))) {
+    return "placeholder";
+  }
   return undefined;
 }
 
@@ -3300,10 +3435,11 @@ export function initGotchasInstructions(
     // layer down.
     return [
       "The .prhero/gotchas.md already on disk is still a scaffold: it carries " +
-        `the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line, and pr-hero ` +
-        "refuses to review while that line is present.",
+        `the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line or nothing but the ` +
+        "scaffold's own lines, and pr-hero refuses to review it.",
       "",
-      "Write facts about THIS repo into it, then delete the marker line.",
+      "Write facts about THIS repo into it, and delete the marker line if it " +
+        "is still there.",
     ];
   }
   if (reason === "empty") {
@@ -3346,13 +3482,13 @@ export function gotchasErrorMessage(
       "",
       ...why,
       "",
-      `It still carries the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line, which`,
-      "is how `pr-hero init` and `pr-hero setup` mark a file they wrote and",
-      "nobody has edited. Reviewing with it would spend real money feeding",
-      "every hunter placeholder text, and return a clean-LOOKING result.",
+      `It still carries the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line, or`,
+      "nothing but the lines `pr-hero init` and `pr-hero setup` scaffold.",
+      "Reviewing with it would spend real money feeding every hunter",
+      "placeholder text, and return a clean-LOOKING result.",
       "",
-      "Replace the placeholder lines with facts about THIS repo, then delete",
-      "the marker line at the top.",
+      "Replace the placeholder lines with facts about THIS repo, and delete",
+      "the marker line at the top if it is still there.",
     ].join("\n");
   }
   return [

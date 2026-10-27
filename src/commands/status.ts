@@ -10,18 +10,26 @@
 
 import { resolveRepoRoot } from "#git/git";
 import {
+  CommentsTruncatedError,
   fetchCommitStatuses,
   fetchPrComments,
   fetchPrReviewComments,
   ghPrView,
   POSTING_GH_TIMEOUT_MS,
 } from "#pr/pr";
-import { buildPrStatus, renderPrStatusLines } from "#pr/pr-status";
+import {
+  buildPrStatus,
+  type PrStatusJson,
+  renderPrStatusLines,
+  STATUS_WAIT_MAX_MS,
+  STATUS_WAIT_POLL_INTERVAL_MS,
+  shouldWaitPrStatus,
+} from "#pr/pr-status";
 import { resolvePrTarget } from "#pr/preflight";
 import type { CliOptions } from "#review/preflight";
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { log } from "#ui/primitives";
-import { CliUsageError } from "../errors";
+import { CliError, CliUsageError } from "../errors";
 
 export async function statusCommand(options: CliOptions): Promise<number> {
   // parseArgs already requires a numeric --pr for this command; the check is the type
@@ -34,6 +42,7 @@ export async function statusCommand(options: CliOptions): Promise<number> {
     operatorRoot,
     pr: options.pr,
     json: options.json === true,
+    wait: options.wait === true,
   });
 }
 
@@ -45,8 +54,14 @@ export async function runStatusCommand(input: {
   operatorRoot: string;
   pr: number;
   json: boolean;
+  wait?: boolean;
   spawnFn?: typeof Bun.spawn;
   nowMs?: number;
+  clock?: () => number;
+  sleepFn?: (ms: number) => Promise<void>;
+  pollIntervalMs?: number;
+  maxWaitMs?: number;
+  startupGraceMs?: number;
   // Overrides every bound below. The tests use it to see a timeout without waiting the real one.
   ghTimeoutMs?: number;
   out?: (text: string) => void;
@@ -59,31 +74,95 @@ export async function runStatusCommand(input: {
   // commit statuses carry their own bound (COMMIT_STATUS_TIMEOUT_MS) inside fetchCommitStatuses.
   const viewTimeoutMs = input.ghTimeoutMs ?? GH_PR_VIEW_TIMEOUT_MS;
   const commentTimeoutMs = input.ghTimeoutMs ?? POSTING_GH_TIMEOUT_MS;
-  const target = resolvePrTarget(
-    await ghPrView(operatorRoot, pr, { spawnFn, timeoutMs: viewTimeoutMs }),
-  );
-  const head = target.headSha;
-  // Sequential on purpose: each read names its own failure, and a failed read stops the rest.
-  const statuses = await fetchCommitStatuses(operatorRoot, head, {
-    spawnFn,
-    failClosed: true,
-  });
-  const issueComments = await fetchPrComments(operatorRoot, pr, {
-    spawnFn,
-    timeoutMs: commentTimeoutMs,
-  });
-  const reviewComments = await fetchPrReviewComments(operatorRoot, pr, {
-    spawnFn,
-    timeoutMs: commentTimeoutMs,
-  });
-  const status = buildPrStatus({
-    pr,
-    head,
-    nowMs: input.nowMs ?? Date.now(),
-    statuses,
-    issueComments,
-    reviewComments,
-  });
+  const pollIntervalMs = input.pollIntervalMs ?? STATUS_WAIT_POLL_INTERVAL_MS;
+  const maxWaitMs = input.maxWaitMs ?? STATUS_WAIT_MAX_MS;
+  const sleep =
+    input.sleepFn ??
+    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let sleptMs = 0;
+  const baseNowMs = input.nowMs;
+  const readNow =
+    input.clock ??
+    (baseNowMs !== undefined ? () => baseNowMs + sleptMs : () => Date.now());
+  const startMs = readNow();
+  let lastHead: string | undefined;
+  let headStartMs = startMs;
+  let polls = 0;
+  let consecutivePollErrors = 0;
+
+  let status: PrStatusJson;
+  while (true) {
+    const nowMs = readNow();
+    const elapsedMs = nowMs - startMs;
+    polls += 1;
+    let issueComments: Awaited<ReturnType<typeof fetchPrComments>>;
+    try {
+      const target = resolvePrTarget(
+        await ghPrView(operatorRoot, pr, { spawnFn, timeoutMs: viewTimeoutMs }),
+      );
+      const head = target.headSha;
+      if (head !== lastHead) {
+        lastHead = head;
+        headStartMs = nowMs;
+      }
+      // Sequential on purpose: each read names its own failure, and a failed read stops the rest.
+      const statuses = await fetchCommitStatuses(operatorRoot, head, {
+        spawnFn,
+        failClosed: true,
+      });
+      issueComments = await fetchPrComments(operatorRoot, pr, {
+        spawnFn,
+        timeoutMs: commentTimeoutMs,
+      });
+      const reviewComments = await fetchPrReviewComments(operatorRoot, pr, {
+        spawnFn,
+        timeoutMs: commentTimeoutMs,
+      });
+      status = buildPrStatus({
+        pr,
+        head,
+        nowMs,
+        statuses,
+        issueComments,
+        reviewComments,
+      });
+      consecutivePollErrors = 0;
+    } catch (err) {
+      const retryable =
+        input.wait === true &&
+        polls > 1 &&
+        err instanceof CliError &&
+        !(err instanceof CliUsageError) &&
+        !(err instanceof CommentsTruncatedError) &&
+        consecutivePollErrors < 2 &&
+        elapsedMs + pollIntervalMs <= maxWaitMs;
+      if (!retryable) throw err;
+      consecutivePollErrors += 1;
+      await sleep(pollIntervalMs);
+      sleptMs += pollIntervalMs;
+      continue;
+    }
+    const headElapsedMs = nowMs - headStartMs;
+    if (
+      !input.wait ||
+      !shouldWaitPrStatus({
+        status,
+        issueComments,
+        nowMs,
+        elapsedMs: headElapsedMs,
+        startupGraceMs: input.startupGraceMs,
+      })
+    ) {
+      break;
+    }
+    if (elapsedMs + pollIntervalMs > maxWaitMs) {
+      throw new CliError(
+        `Timed out after ${maxWaitMs} ms waiting for pr-hero status on PR #${pr} to settle.`,
+      );
+    }
+    await sleep(pollIntervalMs);
+    sleptMs += pollIntervalMs;
+  }
   if (input.json) {
     const write = input.out ?? ((text: string) => process.stdout.write(text));
     write(`${JSON.stringify(status)}\n`);

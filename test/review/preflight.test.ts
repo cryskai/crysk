@@ -48,11 +48,14 @@ import {
   preflightAgentsDir,
   resolveAgentsDir,
   resolveAgentsDirSetting,
+  resolveMaxConcurrentSteps,
   resolveMaxVerificationSteps,
   resolvePost,
   resolveScout,
+  resolveSharedPrefix,
   resolveSummary,
   runDirCandidate,
+  SETUP_GOTCHAS_FALLBACK,
   SUMMARY_DIRECTION,
   type SummaryConfig,
 } from "#review/preflight";
@@ -214,6 +217,24 @@ describe("parseArgs", () => {
     expect(
       parseArgs(["review", "--no-summary", "--summary"]).options.summary,
     ).toBe(true);
+  });
+
+  test("--shared-prefix is tri-state: undefined by default, true with it, false with --no-shared-prefix", () => {
+    expect(parseArgs(["review", "--shared-prefix"]).options.sharedPrefix).toBe(
+      true,
+    );
+    expect(
+      parseArgs(["review", "--no-shared-prefix"]).options.sharedPrefix,
+    ).toBe(false);
+    expect(parseArgs(["review"]).options.sharedPrefix).toBeUndefined();
+  });
+
+  // On by default since the 2026-10-22 Claude bench (−28% $/review, −27% wall,
+  // no recall loss): an unset flag resolves ON, only --no-shared-prefix is off.
+  test("the shared prefix resolves on unless --no-shared-prefix", () => {
+    expect(resolveSharedPrefix({})).toBe(true);
+    expect(resolveSharedPrefix({ sharedPrefix: true })).toBe(true);
+    expect(resolveSharedPrefix({ sharedPrefix: false })).toBe(false);
   });
 
   test("the scout is tri-state: undefined by default, true with --scout, false with --no-scout", () => {
@@ -1192,6 +1213,22 @@ describe("parseLocalConfig", () => {
     );
   });
 
+  test("max_concurrent_steps is optional; absent means unlimited, only positive integers are admitted", () => {
+    expect(parseLocalConfig("{}").max_concurrent_steps).toBeUndefined();
+    expect(resolveMaxConcurrentSteps(parseLocalConfig("{}"))).toBeUndefined();
+    expect(
+      resolveMaxConcurrentSteps(
+        parseLocalConfig('{"max_concurrent_steps": 4}'),
+      ),
+    ).toBe(4);
+    expect(() => parseLocalConfig('{"max_concurrent_steps": 0}')).toThrow(
+      "max_concurrent_steps must be a positive integer",
+    );
+    expect(() => parseLocalConfig('{"max_concurrent_steps": 1.5}')).toThrow(
+      CliUsageError,
+    );
+  });
+
   test("max_changed_lines and max_changed_files are optional in local and global configs", () => {
     expect(parseLocalConfig("{}").max_changed_lines).toBeUndefined();
     expect(parseLocalConfig("{}").max_changed_files).toBeUndefined();
@@ -1268,6 +1305,7 @@ const PRE_C5_LOCAL_KEYS = [
   "default_base",
   "max_changed_files",
   "max_changed_lines",
+  "max_concurrent_steps",
   "max_verification_steps",
   "parity_trigger_paths",
   "post",
@@ -1290,6 +1328,7 @@ describe("CONFIG_DIRECTION", () => {
       summary: { enabled: false, model: "opus" },
       routing: { mappings: [] },
       max_verification_steps: 3,
+      max_concurrent_steps: 4,
       max_changed_lines: 1500,
       max_changed_files: 150,
       scout: false,
@@ -1328,6 +1367,7 @@ describe("CONFIG_DIRECTION", () => {
       summary: "capped",
       routing: "person",
       max_verification_steps: "capped",
+      max_concurrent_steps: "capped",
       max_changed_lines: "capped",
       max_changed_files: "capped",
       scout: "capped",
@@ -1825,6 +1865,7 @@ describe("mergeConfig", () => {
       summary: { enabled: "default", model: "default" },
       routing: "default",
       max_verification_steps: "default",
+      max_concurrent_steps: "default",
       max_changed_lines: "default",
       max_changed_files: "default",
       scout: "default",
@@ -2146,11 +2187,12 @@ describe("gotchasUnusableReason", () => {
     expect(gotchasUnusableReason(real)).toBeUndefined();
   });
 
-  test("BACKCOMPAT — the pre-marker template a repo may already have committed still passes", () => {
-    // The honest limit of this fix, stated as a test rather than a hope: the
-    // marker is the ONLY signal, so a repo that committed the OLD raw
-    // template (before the marker existed) keeps reviewing blind. This fix
-    // bites new scaffolds; it does not retro-detect old ones.
+  test("the pre-marker template a repo may already have committed is a placeholder too", () => {
+    // This used to pin the marker's honest limit: a repo that committed the
+    // OLD raw template, before the marker existed, kept reviewing blind.
+    // musive did exactly that, and its three `<subsystem>` lines reached
+    // every hunter. The exact-line rule closes it — every line below is one
+    // the shipped scaffold writes.
     const preMarkerTemplate = [
       "# Repo gotchas",
       "",
@@ -2160,7 +2202,47 @@ describe("gotchasUnusableReason", () => {
       "- <subsystem>: <the thing that looks like a bug but is deliberate, and why>",
       "",
     ].join("\n");
-    expect(gotchasUnusableReason(preMarkerTemplate)).toBeUndefined();
+    expect(gotchasUnusableReason(preMarkerTemplate)).toBe("placeholder");
+  });
+
+  test("the template with only its marker line deleted is still a placeholder", () => {
+    const text = GOTCHAS_TEMPLATE.split("\n")
+      .filter((l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER))
+      .join("\n");
+    expect(gotchasUnusableReason(text)).toBe("placeholder");
+  });
+
+  test("the same scaffold re-indented and with extra blank lines is still a placeholder", () => {
+    const text = GOTCHAS_TEMPLATE.split("\n")
+      .filter((l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER))
+      .map((l) => `  ${l}`)
+      .join("\n\n");
+    expect(gotchasUnusableReason(text)).toBe("placeholder");
+  });
+
+  test("the setup fallback with its marker line deleted is still a placeholder", () => {
+    const text = SETUP_GOTCHAS_FALLBACK.split("\n")
+      .filter((l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER))
+      .join("\n");
+    expect(gotchasUnusableReason(text)).toBe("placeholder");
+  });
+
+  test("an earlier release's setup fallback with its marker line deleted is still a placeholder", () => {
+    // The exact bytes `pr-hero setup` wrote before 60c28c6, minus the marker.
+    const retired =
+      "# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Edit this file with project failure modes.)\n";
+    expect(gotchasUnusableReason(retired)).toBe("placeholder");
+  });
+
+  test("real gotchas that keep one stray template line still pass", () => {
+    const text =
+      "# Repo gotchas\n\n- billing: amounts are integer cents everywhere\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n";
+    expect(gotchasUnusableReason(text)).toBeUndefined();
+  });
+
+  test("a file of real gotchas passes", () => {
+    const text = "- billing: amounts are integer cents everywhere\n";
+    expect(gotchasUnusableReason(text)).toBeUndefined();
   });
 });
 
@@ -2495,6 +2577,22 @@ describe("parseArgs status", () => {
     );
   });
 
+  test("reads --wait on status and refuses it on every other command", () => {
+    const { command, options } = parseArgs([
+      "status",
+      "--pr",
+      "12",
+      "--wait",
+      "--json",
+    ]);
+    expect(command).toBe("status");
+    expect(options.wait).toBe(true);
+    expect(options.json).toBe(true);
+    expect(() => parseArgs(["review", "--pr", "12", "--wait"])).toThrow(
+      /--wait only applies to the status command/,
+    );
+  });
+
   test("a second word after status is an unexpected argument", () => {
     expect(() => parseArgs(["status", "status", "--pr", "12"])).toThrow(
       /unexpected argument/,
@@ -2538,7 +2636,7 @@ describe("skills install (non-interactive skill sync)", () => {
   test("help lists skills install next to setup", () => {
     expect(HELP_TEXT).toContain("pr-hero skills install");
     expect(HELP_TEXT).toContain(
-      "Install the triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
+      "Install the pr-hero, pr-hero-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
     );
   });
 

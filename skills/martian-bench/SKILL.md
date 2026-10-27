@@ -5,6 +5,8 @@ license: MIT
 metadata:
   author: pr-hero
   version: "1.0"
+  # Lab-only (needs the private ../deep-review lab): hidden from skills.sh / `npx skills add`.
+  internal: true
 ---
 
 ## Activation Contract
@@ -20,7 +22,7 @@ Do not load for musive H2H alone (`src/compare.ts`), M6 scout A/B on musive, or 
 - `--out` and `--gotchas` live **outside** the clone. Do not `codegraph init` on Cal.com.
 - One variable per arm. Name arm id + prompt-set sha. Cal.com 10 `*-hunters` dirs are the baseline — do not overwrite them for a new arm.
 - Do not headline All-profile F1. Report High+Critical recall. Martian F1 is not a launch gate. THE PIVOT holds.
-- Do not skip Cal.com for Keycloak/Sentry/Grafana/Discourse. Do not run the 50 without Juanma authorising that spend.
+- Do not skip Cal.com for Keycloak/Sentry/Grafana/Discourse. The 50 were authorised by Juanma on 2026-10-25 (arm `dev-default`, Opus 4.5 judge); any further 50-PR arm needs its own authorisation.
 - Job is not done until Surface A is written **and** Surface B is named ran or not.
 - Do not sit our Claude-CLI-sonnet judge next to Martian’s published Opus 4.5 vendor rows as the same judge.
 - Read `references/corpus.md` before any spend. Lab `../deep-review/dataset/test.jsonl` stays sealed.
@@ -33,7 +35,7 @@ Do not load for musive H2H alone (`src/compare.ts`), M6 scout A/B on musive, or 
 | Run / remaining / `--all` Cal.com | `plan` → `check` → `run` → judge → ledger |
 | New methodology (scout, prompt, model) | **New** run-dir suffix, one variable, same 10, vs `hunters` baseline |
 | Surface B | Location-only vs stored reviews; label if a semantic pass is added |
-| 50 PRs / other four repos | Refuse until Cal.com + explicit authorisation |
+| 50 PRs / other four repos | `--corpus <name>` (flow.md); a new 50-PR arm needs explicit authorisation |
 | Fork 50 + GitHub App | Refuse |
 | Refuter prompt edit | `refuter-probe` first, then fixture-eval, then Martian |
 

@@ -1485,6 +1485,11 @@ describe("ClaudeCodeCliTransport prompt delivery and isolation argv (#314)", () 
     expect(flagValue("--append-system-prompt-file")).toBe(
       "/tmp/pr-hero-test/system.md",
     );
+    // Per-machine sections (cwd, git status) leave the system prompt, so the
+    // engine-invariant prefix is cached across worktrees and repositories.
+    expect(
+      args.filter((a) => a === "--exclude-dynamic-system-prompt-sections"),
+    ).toHaveLength(1);
   });
 
   test("without an MCP config no MCP flag is emitted, and the rest still are", async () => {

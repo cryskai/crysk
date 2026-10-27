@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-27
+
+### Changed
+- **A consolidation pass runs after the refuter, on by default** (#400): one tool-free Sonnet call per review merges
+  findings that state the same defect and lifts "separately…" asides into their own findings, so each posted comment
+  states one defect. Any failure leaves the findings as they were, a blocking finding never loses its tier or posts
+  twice, and the stage stands down when the pipeline ceiling cannot fit it. On Martian's Code Review Bench (50 PRs,
+  Opus 4.5 judge) it moved F1 from 38.6 to 42.3 against a same-session control, with 30 fewer false positives and
+  52/66 High+Critical caught. `pipeline.json` records it under `consolidation`, and the cost band counts it.
+- **The refuter prompt is back to the pre-v3.2 version** (#400): judging every severity measured negative on the full
+  benchmark (F1 39.1 against 39.7), so only BLOCKER/CRITICAL findings are refuted, as before.
+- **Hunters share the cached patch prefix, on by default** (#384), and a review needs `codegraph_explore` when the
+  registry grants codegraph (#372).
+
+### Added
+- **`/pr-hero stop` on a PR skips its automatic reviews** until a `/pr-hero review` (#389).
+- **`max_concurrent_steps`** caps the steps a review runs at once (#383).
+- **The size gate reads its limits from the route's billing mode in CI** (#375).
+- **Each finding's header shows the refuter's verdict** (#373).
+- **A `pr-hero-pr` agent skill** opens or updates a PR and subscribes to its review loop (#390).
+- **A general `pr-hero` agent skill ships beside triage and CI setup**: `skills/pr-hero/SKILL.md` is bundled into the
+  package, `pr-hero setup`, `pr-hero skills install` and `pr-hero upgrade` install it into every detected coding agent
+  under the same digest-guarded drift rules, and `pr-hero uninstall` removes it.
+- **`pr-hero status --pr <n> --wait` deterministically subscribes until a PR review settles**: polls GitHub when a review
+  is in flight (`next_action: "wait"`) or within the 3-minute runner startup window after a fresh push or `/pr-hero review` /
+  `/pr-hero recheck` comment, then emits the settled status once. `pr-hero-triage` uses it to run the review → triage →
+  fix/recheck → wait loop continuously without stopping to ask the user between transitions.
+
+### Fixed
+- **A draft is extracted when the prose around it has braces** (#378), **bare file-name proof refs are accepted** and
+  a refused draft logs why (#396), and **a refused draft is retried with its reason while a failed write no longer
+  spends a paid retry** (#397).
+- **Verify steps run on the refuter's admitted route** (#381), **the OpenCode server closes on SIGINT and SIGTERM**
+  (#380), and **OpenCode cache tokens are recorded** with a machine-independent Claude prompt prefix (#385).
+- **The attempt evidence keeps its request plan pointer when the freeze timer wins** (#391).
+- **A gotchas scaffold whose marker line is gone is refused** (#374).
+- **The triage skill finds comment-triggered CI runs, names every `override-or-fix` case, and bounds forced runs**:
+  the run-dir artifact is looked up by name (a `/pr-hero review` or `/pr-hero recheck` run is an `issue_comment` event
+  that a branch listing never shows) into a fresh directory per candidate run, `override-or-fix` lists each of its
+  causes with the right action, `/pr-hero review` / `/pr-hero recheck` are counted from the head's first `pr-hero`
+  status and capped at six per head with a repeated reason going to a human, and the `inconclusive` path no longer
+  asks for a stronger reply on the same head, which the driver's same-head guard skips.
+- **The scaffolded workflow's comments mention `/pr-hero recheck`** where they listed only `review` and `override`.
+
 ## [0.2.4] - 2026-10-19
 
 ### Fixed
@@ -447,7 +491,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/juanmaagd/pr-hero/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/juanmaagd/pr-hero/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/juanmaagd/pr-hero/compare/v0.2.1...v0.2.2

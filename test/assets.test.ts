@@ -18,7 +18,8 @@ describe("resolveEngineAssets", () => {
     expect(assets.version).toBeDefined();
     expect(assets.version.length).toBeGreaterThan(0);
 
-    // Scout and summarizer paths exist
+    // Consolidate, scout and summarizer paths exist
+    expect(existsSync(assets.consolidatePromptPath)).toBe(true);
     expect(existsSync(assets.scoutPromptPath)).toBe(true);
     expect(existsSync(assets.summarizerPromptPath)).toBe(true);
 
@@ -56,6 +57,18 @@ describe("resolveEngineAssets", () => {
       assets.ciSetupSkillFiles,
     )) {
       expect(typeof logicalName).toBe("string");
+      expect(existsSync(filePath)).toBe(true);
+    }
+
+    // General pr-hero skill: a single SKILL.md, present on disk.
+    expect(Object.keys(assets.generalSkillFiles)).toEqual(["SKILL.md"]);
+    for (const filePath of Object.values(assets.generalSkillFiles)) {
+      expect(existsSync(filePath)).toBe(true);
+    }
+
+    // PR creation skill: a single SKILL.md, present on disk.
+    expect(Object.keys(assets.prSkillFiles)).toEqual(["SKILL.md"]);
+    for (const filePath of Object.values(assets.prSkillFiles)) {
       expect(existsSync(filePath)).toBe(true);
     }
 

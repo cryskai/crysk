@@ -194,6 +194,21 @@ describe("bundled prompts declare the intended model split", () => {
     expect(refuter.effort).toBe("high");
   });
 
+  // The engine mandates a codegraph_explore call whenever the run's registry
+  // grants codegraph, so a hunter that does not declare the tool would be
+  // told to use something it never listed (logic did, until 2026-10).
+  test("every bundled hunter prompt declares codegraph_explore", () => {
+    const hunterFiles = readdirSync(defaultDir)
+      .filter((f) => f.startsWith("deep-review-") && f.endsWith(".md"))
+      .sort();
+    expect(hunterFiles.length).toBeGreaterThan(0);
+    for (const file of hunterFiles) {
+      expect(parsedOf(file).tools, `${file} tools`).toContain(
+        "mcp__codegraph__codegraph_explore",
+      );
+    }
+  });
+
   test("every bundled hunter prompt declares sonnet at xhigh effort", () => {
     const hunterFiles = readdirSync(defaultDir)
       .filter((f) => f.startsWith("deep-review-") && f.endsWith(".md"))
@@ -252,10 +267,13 @@ function compiledAssets(
     // What resolveEngineAssets() actually computes when compiled: the dirname
     // of an embedded path. It is not a directory that exists.
     defaultAgentsDir: EMBEDDED_ROOT,
+    consolidatePromptPath: `${EMBEDDED_ROOT}/consolidate-c0n5011d.md`,
     scoutPromptPath: `${EMBEDDED_ROOT}/scout-a1b2c300.md`,
     summarizerPromptPath: `${EMBEDDED_ROOT}/summarizer-d4e5f600.md`,
     triageSkillFiles: {},
     ciSetupSkillFiles: {},
+    prSkillFiles: {},
+    generalSkillFiles: {},
     version: "9.9.9",
   };
 }

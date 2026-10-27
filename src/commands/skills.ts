@@ -1,7 +1,8 @@
 // `pr-hero skills install`: the non-interactive twin of the wizard's skills step. It installs
-// pr-hero's bundled agent skills (pr-hero-triage, and pr-hero-ci-setup when bundled) into every
-// detected coding agent that has a skills directory, so an agent can run it with no TTY. It never
-// registers the MCP server and never touches launchd; the wizard still owns those.
+// pr-hero's bundled agent skills (pr-hero-triage, plus pr-hero-ci-setup, pr-hero-pr, and the general pr-hero
+// skill when bundled) into every detected coding agent that has a skills directory, so an agent
+// can run it with no TTY. It never registers the MCP server and never touches launchd; the wizard
+// still owns those.
 
 import os from "node:os";
 import { detectAgentEnvironments, syncSkills } from "../agent-env";

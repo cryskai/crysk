@@ -5,6 +5,7 @@ import {
   GOTCHAS_PLACEHOLDER_MARKER,
   INIT_GIT_REMINDER,
   initConfigTemplate,
+  SETUP_GOTCHAS_FALLBACK,
 } from "#review/preflight";
 import {
   type AgentEnvDetection,
@@ -638,10 +639,9 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           if (state.gotchas.entries && state.gotchas.entries.length > 0) {
             gotchasContent = `# Repository Gotchas & Invariants\n\n${state.gotchas.entries.map((e) => `- ${e}`).join("\n")}\n`;
           } else {
-            // The marker is interpolated, not spelled out: it is the token
-            // `gotchasUnusableReason` refuses this file by, and two literals
-            // that must match are one edit away from not matching.
-            gotchasContent = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero invariants defined during onboarding -->\n\n# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Replace this with your project's real failure modes, then delete the marker line at the top — pr-hero refuses to review while it is there.)\n`;
+            // Shared with the gotchas gate (preflight.ts), so the gate still
+            // recognises this scaffold after its marker line is deleted.
+            gotchasContent = SETUP_GOTCHAS_FALLBACK;
             // Set HERE, in the branch that emits the marker, and nowhere
             // else: it is the marker that makes step 5's placeholder warning
             // true, so the flag is set by the code that writes the marker.

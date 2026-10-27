@@ -270,6 +270,13 @@ describe("renderStepSummary — skipped, size gate limit exceeded", () => {
     expect(out).toContain("| Changed files | 60 (limit 50) |");
   });
 
+  test("a knob that is off reads 'no limit', never 'limit 0'", () => {
+    const off = renderStepSummary({ ...data, maxChangedFiles: 0 });
+    expect(off).toContain("| Changed lines | 1200 (limit 1000) |");
+    expect(off).toContain("| Changed files | 60 (no limit) |");
+    expect(off).not.toContain("limit 0");
+  });
+
   test("does not mention budget, keeping the two skip reasons distinct", () => {
     expect(out).not.toContain("budget");
   });

@@ -1,0 +1,110 @@
+{
+  "repo": "discourse/discourse",
+  "pilot": [
+    1,
+    2,
+    3
+  ],
+  "prs": [
+    {
+      "pr": 1,
+      "title": "FEATURE: automatically downsize large images",
+      "additions": 20,
+      "deletions": 12,
+      "changedFiles": 3,
+      "baseSha": "3f71fa15c93bb0b751bb92abae1b5dc9a21bd4ca",
+      "headSha": "ffbaf8c54269df2ce510de91245760fddce09896",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    },
+    {
+      "pr": 2,
+      "title": "FEATURE: per-topic unsubscribe option in emails",
+      "additions": 156,
+      "deletions": 69,
+      "changedFiles": 18,
+      "baseSha": "56abd247e1829cb6de82dfcc8ce04deb5f0d1e91",
+      "headSha": "6669a2d94d76eea3b99b8c476d12b1eb66726b07",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    },
+    {
+      "pr": 3,
+      "title": "Add comprehensive email validation for blocked users",
+      "additions": 155,
+      "deletions": 23,
+      "changedFiles": 10,
+      "baseSha": "e25638dab0d4b98f99c8fe8976ccaae8f4fb9db3",
+      "headSha": "5f8a130277dbddc95d133cd2832be639baf89213",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    },
+    {
+      "pr": 4,
+      "title": "Enhance embed URL handling and validation system",
+      "additions": 653,
+      "deletions": 13,
+      "changedFiles": 28,
+      "baseSha": "62db063e1e1abe691313ab42682a68f796d63769",
+      "headSha": "4f8aed295a29954023b2849c060ef4fb299d1b5d",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    },
+    {
+      "pr": 5,
+      "title": "Optimize header layout performance with flexbox mixins",
+      "additions": 54,
+      "deletions": 13,
+      "changedFiles": 5,
+      "baseSha": "98fa098e6fade3097a11fe7f99a98a4e6ffb4728",
+      "headSha": "5b229316ee4c661836ed1161139692a3e8527444",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    },
+    {
+      "pr": 6,
+      "title": "UX: show complete URL path if website domain is same as instance domain",
+      "additions": 44,
+      "deletions": 12,
+      "changedFiles": 5,
+      "baseSha": "7a5fbae060bd0d3e29f3a4b5c6f2bfd8b2914dc7",
+      "headSha": "267d8be1f556ed59639ced396c885bb44586da19",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    },
+    {
+      "pr": 7,
+      "title": "scale-color $lightness must use $secondary for dark themes",
+      "additions": 115,
+      "deletions": 115,
+      "changedFiles": 32,
+      "baseSha": "7554b5e3c458dc79b591d5e874e79ab10cf30c2f",
+      "headSha": "d38c4d5f7443223c81529c22470293771baf9f38",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    },
+    {
+      "pr": 8,
+      "title": "FIX: proper handling of group memberships",
+      "additions": 389,
+      "deletions": 283,
+      "changedFiles": 16,
+      "baseSha": "4975fc28903a84418f546b2809370f19abf10e08",
+      "headSha": "060cda77729cb1c4a827560e09e89a7b22078ba9",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    },
+    {
+      "pr": 9,
+      "title": "FEATURE: Localization fallbacks (server-side)",
+      "additions": 31,
+      "deletions": 15,
+      "changedFiles": 7,
+      "baseSha": "728845d008f06828630a632e5c7d67e11bf15deb",
+      "headSha": "ecfa17b5a79dfdc91e7a4d50b42ae78a35d0a293",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    },
+    {
+      "pr": 10,
+      "title": "FEATURE: Can edit category/host relationships for embedding",
+      "additions": 449,
+      "deletions": 127,
+      "changedFiles": 36,
+      "baseSha": "913c3d6f636d02b3dd6c2c022ca1af2bec95d752",
+      "headSha": "d1c69189f3c90ecf56013a8da904da9bff9a8e19",
+      "remote": "https://github.com/ai-code-review-evaluation/discourse-graphite.git"
+    }
+  ]
+}

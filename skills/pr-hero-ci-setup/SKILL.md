@@ -19,13 +19,14 @@ Load when the user asks to:
 
 - **Zero secret leakage:** NEVER print, `cat`, commit, or log API keys, tokens, or `OPENCODE_AUTH_JSON`. Reference `${{ secrets.* }}` names only. Inspect `auth.json` **keys and `type` only**.
 - **No per-provider GitHub secrets:** Do not create `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`. One secret `OPENCODE_AUTH_JSON` (whole store or a CI-only subset) + public variable `PRHERO_ROUTING`. Cap 48 KB each.
-- **No install needed:** run every pr-hero command as `npx -y pr-hero <command>` (Node is enough; the package brings its own Bun). A global `pr-hero` on PATH is the same command. CI itself needs no local CLI at all: the workflow runs the action. `npx -y pr-hero skills install` installs the triage and CI-setup skills into every detected coding agent, with no TTY and no MCP or launchd registration (neither is needed for the CI loop, and npx's temporary cache refuses them).
+- **No install needed:** run every pr-hero command as `npx -y pr-hero <command>` (Node is enough; the package brings its own Bun). A global `pr-hero` on PATH is the same command. CI itself needs no local CLI at all: the workflow runs the action. `npx -y pr-hero skills install` installs the pr-hero, triage, and CI-setup skills into every detected coding agent, with no TTY and no MCP or launchd registration (neither is needed for the CI loop, and npx's temporary cache refuses them).
 - **Deterministic scaffolding:** Run `npx -y pr-hero setup --ci` (or `npx -y pr-hero ci init`). It writes the one workflow file, `.github/workflows/pr-hero.yml`. Do not fabricate it from memory. Fallback: copy `assets/workflow.yml`. Never scaffold a `pr-hero-force.yml`; it is retired.
 - **`fetch-depth: 0` is mandatory** on `actions/checkout@v4`.
 - **Gate mode:** the `pr-hero` commit status is the required check. The scaffold writes `mode: gate` explicitly: blocking findings, a size or budget skip, and a crash set it red. `mode: advisory` keeps it green for a finished review. The job's exit code stays `0` on findings either way, so do not gate on the job.
 - **Required permissions:** `contents: read`, `pull-requests: write`, `issues: write`, `statuses: write`, **`checks: write`**, **`actions: read`** (the admission gate lists past runs; a private repo 403s without it). Template in `assets/workflow.yml` includes all six.
 - **Retrigger is a PR comment: `gh pr comment <n> --body "/pr-hero review"`.** GitHub Actions runs the review on the runner with `--force`. The comment must be exactly `/pr-hero review` (or `/pr-hero review --full`), and its author needs write access; the action refuses anyone else. Do not run `pr-hero review --force` locally when the review should happen in CI. `gh run rerun` on a skipped run re-evaluates the gates and does not force. In this repo a comment run checks out the PR head commit before `uses: ./`, so it runs the PR's own engine, not the default branch's.
 - **`/pr-hero recheck` re-reviews the head and asks the CI adjudicator to rule on pending dismissals.** It is `/pr-hero review` plus `--adjudicate`, with the same permission check and reaction; refused on fork pull requests. See `docs/github-actions.md` ("Rechecking a dismissal").
+- **`/pr-hero stop` stops automatic reviews on the PR.** Post it before a push that should not be reviewed: CI admission skips every later automatic review, carrying the last verdict, until a `/pr-hero review` or `/pr-hero recheck` comment. It counts only from a user with write access (checked at admission), starts no run, and never turns the gate green. See `docs/github-actions.md` ("Stopping automatic reviews").
 - **`--force` never widens discovery; `--full` does.** When a prior review of the same head was hollow or wrong and re-runs report "No changes to discover", comment `/pr-hero review --full`. It passes `--full`, which re-discovers the whole PR range.
 - **When the comment trigger takes effect:** GitHub reads a comment-triggered workflow from the **default branch** (for this repo, `main`, not `dev`), so `/pr-hero review` works only once `pr-hero.yml` with its `issue_comment` trigger is merged there; a user repo also needs an action release that handles the comment, through the `@v0` it pins.
 - **Legacy scaffolds:** a `pr-hero.yml` scaffolded before the comment trigger has no `issue_comment` listener, so a comment does nothing. There, use `gh workflow run pr-hero-force.yml -f pr=<n>` (add `-f full=true` to re-discover), or re-scaffold with `pr-hero ci init --force`, which leaves `pr-hero-force.yml` in place.
@@ -50,7 +51,7 @@ Load when the user asks to:
 | Mixed OpenCode providers in one run | Out of scope (#195). One OpenCode provider per run. Mixed `claude-code` + one OpenCode provider is legal. |
 | OpenCode CLI pin | Action installs **1.18.30** iff `opencode-auth != ''` OR routing contains `opencode`. Never `latest`. |
 | Fork PRs | Their pushes skip (no secrets). A user with write access comments `/pr-hero review`, and that run (base context, with secrets) reviews the fork head. Review `if` never reads `secrets`; the action checks credentials (Anthropic **or** Claude OAuth **or** `OPENCODE_AUTH_JSON`). |
-| Spend gates | Defaults: `budget-usd: 10.00` on metered routes (Anthropic key **or** OpenCode auth file), `max-changed-lines: 4000`, `max-changed-files: 50`. Claude-only OAuth stays unlimited-subscription unless OpenCode auth is also present. |
+| Spend gates | Defaults: `budget-usd: 10.00` on metered routes (Anthropic key **or** OpenCode auth file), `max-changed-lines: 4000` and `max-changed-files: 50` on metered routes only; a Claude subscription route has no size limit unless the workflow or `.prhero/config.json` sets one. Claude-only OAuth stays unlimited-subscription unless OpenCode auth is also present. |
 | Existing workflow | `setup --ci` skips; ask before `--force` |
 | First-time admission | Recommend `ci_admission_observe_only: true` — `references/ci-admission.md` |
 | User wants max CI spend | Lower `ci_max_attempts` and/or raise `ci_rereview_min_score` |
@@ -74,9 +75,10 @@ Ask these in plain language; map answers to `.prhero/config.json`:
 
 1. **Attempts per PR?** Default `2` (`ci_max_attempts`). Same commit never double-reviews.
 2. **When should a push trigger re-review?** Balanced → `risk_aware`; score only → `thresholded`; once then stop → `once_per_pr`; every push → `every_push`; manual only → `manual_only`.
-3. **Score floor?** Default `4` with weights 2/1.
-4. **Observe first?** If unsure, `ci_admission_observe_only: true` for one PR cycle.
-5. **Non-default bot actor?** Collect GitHub logins for `ci_trusted_actors`.
+3. **Score floor?** Default `4` with weights 2/1 (`ci_rereview_min_score`, `ci_blocking_weight`, `ci_advisory_weight`).
+4. **Prior-finding verification cap?** Default `8` (`max_verification_steps`; `0` pauses verifying prior open findings on re-reviews).
+5. **Observe first?** If unsure, `ci_admission_observe_only: true` for one PR cycle.
+6. **Non-default bot actor?** Collect GitHub logins for `ci_trusted_actors`.
 
 Use `assets/admission-config.example.json`. Details: `references/ci-admission.md`.
 

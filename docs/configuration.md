@@ -18,8 +18,10 @@ covers the two things that section does not: `routing` and credentials.
 
 | Layer | File | Holds |
 | --- | --- | --- |
-| Global / per-person | `~/.prhero/config.json` | `routing`, personal caps (`max_verification_steps`, `max_changed_lines`, `max_changed_files`) |
+| Global / per-person | `~/.prhero/config.json` | `routing`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
 | Repo | `<repo>/.prhero/config.json` | `agents_dir`, `default_base`, `parity_trigger_paths`, `suspicion_priors`, gotchas |
+
+`max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate, scout and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and pr-hero can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
 
 `routing` is a **person-layer-only** key. Put it in a repo file and the parser refuses it by name:
 
@@ -177,6 +179,15 @@ Effort is a Claude Code CLI control. The OpenCode backend has no equivalent here
 requested level is still recorded in the run artifacts (`effort` in each attempt's request plan and in
 `pipeline.json`), next to `effortApplied: false` / `effort_applied: false`, so a run on OpenCode never reads
 as having run at that level.
+
+**Consolidation.** After the refuter, one more step reads the findings about to be posted and rewrites the
+list so each comment states one defect: findings that describe the same defect are merged into one
+primary finding (its location, tier and verdict are kept, and the evidence is pooled), and an unrelated aside inside a finding is split
+into its own advisory comment. It reads only the claims (no tools, no code), and a plan that drops or invents
+a finding is rejected, in which case the findings post unchanged. It is on by default in local and PR reviews,
+has no flag, and costs one `sonnet` call per review at `high` effort (`prompts/consolidate.md`). Measured
+offline on the Martian 50 it moved F1 from 39.7 to 42.3. Each run records the outcome under `consolidation`
+in `pipeline.json`.
 
 ## Credentials
 

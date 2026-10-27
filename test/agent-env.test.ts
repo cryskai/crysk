@@ -21,6 +21,8 @@ describe("Agent environment detector and sync", () => {
       "adjudicator.md": "/abs/skills/pr-hero-triage/adjudicator.md",
     },
     ciSetupSkillFiles: {},
+    prSkillFiles: {},
+    generalSkillFiles: {},
   };
 
   describe("detectAgentEnvironments", () => {
@@ -358,6 +360,8 @@ describe("Agent environment detector and sync", () => {
       "/abs/skills/pr-hero-triage/SKILL.md": "bundled SKILL.md",
       "/abs/skills/pr-hero-triage/adjudicator.md": "bundled adjudicator.md",
       "/abs/skills/pr-hero-ci-setup/SKILL.md": "bundled ci SKILL.md",
+      "/abs/skills/pr-hero-pr/SKILL.md": "bundled pr SKILL.md",
+      "/abs/skills/pr-hero/SKILL.md": "bundled general SKILL.md",
     };
     const assets = {
       ...fakeAssets,
@@ -366,6 +370,8 @@ describe("Agent environment detector and sync", () => {
         "adjudicator.md": "/abs/skills/pr-hero-triage/adjudicator.md",
       },
       ciSetupSkillFiles: {},
+      prSkillFiles: {},
+      generalSkillFiles: {},
     };
     const env: AgentEnvDetection = {
       id: "claude",
@@ -534,6 +540,52 @@ describe("Agent environment detector and sync", () => {
         { skill: "pr-hero-ci-setup", status: "installed" },
       ]);
     });
+
+    test("installs the general pr-hero skill beside the triage skill", async () => {
+      const disk = fakeDisk({});
+      const withGeneral = {
+        ...assets,
+        generalSkillFiles: {
+          "SKILL.md": "/abs/skills/pr-hero/SKILL.md",
+        },
+      };
+
+      const result = await syncSkills(env, withGeneral, disk.options);
+
+      expect(disk.files["/home/user/.claude/skills/pr-hero/SKILL.md"]).toBe(
+        "bundled general SKILL.md",
+      );
+      expect(
+        disk.files["/home/user/.claude/skills/pr-hero/digest.json"],
+      ).toBeDefined();
+      expect(result.skills).toEqual([
+        { skill: "pr-hero-triage", status: "installed" },
+        { skill: "pr-hero", status: "installed" },
+      ]);
+    });
+
+    test("installs the pr-hero-pr skill beside the triage skill", async () => {
+      const disk = fakeDisk({});
+      const withPrSkill = {
+        ...assets,
+        prSkillFiles: {
+          "SKILL.md": "/abs/skills/pr-hero-pr/SKILL.md",
+        },
+      };
+
+      const result = await syncSkills(env, withPrSkill, disk.options);
+
+      expect(disk.files["/home/user/.claude/skills/pr-hero-pr/SKILL.md"]).toBe(
+        "bundled pr SKILL.md",
+      );
+      expect(
+        disk.files["/home/user/.claude/skills/pr-hero-pr/digest.json"],
+      ).toBeDefined();
+      expect(result.skills).toEqual([
+        { skill: "pr-hero-triage", status: "installed" },
+        { skill: "pr-hero-pr", status: "installed" },
+      ]);
+    });
   });
 
   describe("inspectSkillsSync", () => {
@@ -664,6 +716,82 @@ describe("Agent environment detector and sync", () => {
       expect(res.skippedModified).toContain("custom.md");
       expect(deleted).toContain(`${skillDir}/SKILL.md`);
       expect(deleted).not.toContain(`${skillDir}/custom.md`);
+    });
+
+    test("removeSkills also removes the general pr-hero skill", async () => {
+      const deleted: string[] = [];
+      const env: AgentEnvDetection = {
+        id: "claude",
+        displayName: "Claude Code",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        skillsDir: "/home/user/.claude/skills",
+      };
+
+      const skillDir = "/home/user/.claude/skills/pr-hero";
+      const crypto = await import("node:crypto");
+      const hash = crypto
+        .createHash("sha256")
+        .update("general content")
+        .digest("hex");
+
+      const filesOnDisk: Record<string, string> = {
+        [`${skillDir}/digest.json`]: JSON.stringify({
+          files: { "SKILL.md": hash },
+        }),
+        [`${skillDir}/SKILL.md`]: "general content",
+      };
+
+      const res = await (await import("../src/agent-env")).removeSkills(env, {
+        exists: (p) => p === skillDir || p in filesOnDisk,
+        readFile: (p) => filesOnDisk[p],
+        unlink: (p) => {
+          deleted.push(p);
+          delete filesOnDisk[p];
+        },
+      });
+
+      expect(res.removed).toContain("SKILL.md");
+      expect(deleted).toContain(`${skillDir}/SKILL.md`);
+    });
+
+    test("removeSkills also removes the pr-hero-pr skill", async () => {
+      const deleted: string[] = [];
+      const env: AgentEnvDetection = {
+        id: "claude",
+        displayName: "Claude Code",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        skillsDir: "/home/user/.claude/skills",
+      };
+
+      const skillDir = "/home/user/.claude/skills/pr-hero-pr";
+      const crypto = await import("node:crypto");
+      const hash = crypto
+        .createHash("sha256")
+        .update("pr skill content")
+        .digest("hex");
+
+      const filesOnDisk: Record<string, string> = {
+        [`${skillDir}/digest.json`]: JSON.stringify({
+          files: { "SKILL.md": hash },
+        }),
+        [`${skillDir}/SKILL.md`]: "pr skill content",
+      };
+
+      const res = await (await import("../src/agent-env")).removeSkills(env, {
+        exists: (p) => p === skillDir || p in filesOnDisk,
+        readFile: (p) => filesOnDisk[p],
+        unlink: (p) => {
+          deleted.push(p);
+          delete filesOnDisk[p];
+        },
+      });
+
+      expect(res.removed).toContain("SKILL.md");
+      expect(deleted).toContain(`${skillDir}/SKILL.md`);
     });
   });
 });

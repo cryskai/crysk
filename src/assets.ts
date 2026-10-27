@@ -6,6 +6,9 @@ import path from "node:path";
 import {
   BUNDLED_AGENT_FILES,
   CI_SETUP_SKILL_FILES,
+  CONSOLIDATE_PROMPT_PATH,
+  GENERAL_SKILL_FILES,
+  PR_SKILL_FILES,
   SCOUT_PROMPT_PATH,
   SUMMARIZER_PROMPT_PATH,
   TRIAGE_SKILL_FILES,
@@ -17,10 +20,13 @@ export interface EngineAssets {
   mode: AssetMode;
   bundledAgentFiles: Record<string, string>; // logical filename → path, from the manifest (every mode)
   defaultAgentsDir: string; // the prompts/default dir in dev/npm, or embedded asset directory when compiled
+  consolidatePromptPath: string;
   scoutPromptPath: string;
   summarizerPromptPath: string;
   triageSkillFiles: Record<string, string>; // logical filename → path, from the manifest
   ciSetupSkillFiles: Record<string, string>; // logical filename → path, from the manifest
+  prSkillFiles: Record<string, string>; // logical filename → path, from the manifest
+  generalSkillFiles: Record<string, string>; // logical filename → path, from the manifest
   version: string; // baked at compile; package.json otherwise
 }
 
@@ -66,7 +72,7 @@ function resolveVersion(): string {
     // Ignore read errors
   }
 
-  return "0.2.4";
+  return "0.2.5";
 }
 
 export function resolveEngineAssets(): EngineAssets {
@@ -85,10 +91,13 @@ export function resolveEngineAssets(): EngineAssets {
     mode,
     bundledAgentFiles: BUNDLED_AGENT_FILES,
     defaultAgentsDir,
+    consolidatePromptPath: CONSOLIDATE_PROMPT_PATH,
     scoutPromptPath: SCOUT_PROMPT_PATH,
     summarizerPromptPath: SUMMARIZER_PROMPT_PATH,
     triageSkillFiles: TRIAGE_SKILL_FILES,
     ciSetupSkillFiles: CI_SETUP_SKILL_FILES,
+    prSkillFiles: PR_SKILL_FILES,
+    generalSkillFiles: GENERAL_SKILL_FILES,
     version,
   };
 }

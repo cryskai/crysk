@@ -111,6 +111,15 @@ the repo scaffold; skip it and you scaffold the repo yourself with `pr-hero init
 **Skill drift.** `setup` (and `upgrade`) installs the bundled skills into each agent's skills
 directory. A skill copy that differs from the bundled one and has no recorded digest is kept as it is and reported as drift, never overwritten, so your local edits survive; `pr-hero setup` prints each kept skill, and `pr-hero upgrade` replaces it.
 
+**Skills without pr-hero.** The public skills are also on
+[skills.sh](https://skills.sh/juanmaagd/pr-hero), installable into any agent with the
+[skills CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add juanmaagd/pr-hero                            # pick interactively
+npx skills add juanmaagd/pr-hero --skill pr-hero            # or pr-hero-pr, pr-hero-triage, pr-hero-ci-setup
+```
+
 **On step 6.** `gotchas.md` is injected verbatim into every hunter's system prompt, and
 what `setup`/`init` write there is a placeholder: `- <subsystem>: <the thing that looks
 like a bug but is deliberate, and why>`. A review that reads *that* is a review billed in
@@ -191,6 +200,7 @@ never be able to enlarge *your* bill: on the two keys that spend, the team can o
 | `summary.enabled` | both — team may only turn it **off** | Whether the engine-owned summarizer runs. Defaults to `true`, because it spends money and a silent opt-out would make the bill differ from the plan. |
 | `summary.model` | both | Model for that step. Defaults to whatever `prompts/summarizer.md` declares (`haiku`). |
 | `max_verification_steps` | both — team may only **lower** it | Cap on re-review verification spawns (item 7). Defaults to `8`; `0` is legal and pauses verification. |
+| `max_concurrent_steps` | both — team may only **lower** it | Cap on steps (hunters, refuters, verify, scout, summarizer) in flight at once. Unset means unlimited. Set it below a provider's concurrency limit (e.g. `8` for one that allows 10 in-flight requests) so a refuter fan-out does not draw HTTP 429s. |
 | `max_changed_lines` | both — team may only **lower** it | Line budget threshold before the size gate skips a review. Defaults to `4000`; `0` disables line budget check. |
 | `max_changed_files` | both — team may only **lower** it | File count budget threshold before the size gate skips a review. Defaults to `150`; `0` disables file budget check. |
 | `scout` | both — team may only turn it **off** | Whether the reconnaissance scout hunter runs before review. Defaults to `false`. |
@@ -230,7 +240,7 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 | `pr-hero post --pr <n> --from <run-dir>` | Replay-publish a previous run's findings onto the PR (same plan as `--pr --post`). `--dry-run` previews at $0. |
 | `pr-hero triage --pr <n> --from <run-dir>` | Read reply threads and bind triage markers onto that run's `comparison.json` ledger rows. |
 | `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N --tag <tag> --body-file <path>` | Post one triage reply. The driver picks the parent from the posted `<!-- pr-hero-finding` marker (never path/line), renders the marker + badge, posts, and resolves the inline review thread. Reads `anchor.patch` (else `diff.patch`) from the run dir to remap post lines the same way `--post` does. `--body-file` is reasoning only. |
-| `pr-hero status --pr <n> [--json]` | Read-only, through `gh` only: the PR's pr-hero gate, its posted findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `recheck`, `override-or-fix`, `done`). `--json` prints one `pr-hero.status/v1` object on stdout. See [`docs/github-actions.md`](docs/github-actions.md#reading-a-pr-with-pr-hero-status). |
+| `pr-hero status --pr <n> [--wait] [--json]` | Read-only, through `gh` only: the PR's pr-hero gate, its posted findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `recheck`, `override-or-fix`, `done`). `--wait` polls until an in-flight or newly-triggered review settles before emitting (a review that has not posted its first status within 3 minutes is not waited for: counted from the `/pr-hero` comment, or, after a push, from when `--wait` starts; a run still queued after that returns the current status); `--json` prints one `pr-hero.status/v1` object on stdout. See [`docs/github-actions.md`](docs/github-actions.md#reading-a-pr-with-pr-hero-status). |
 | `pr-hero config` | Read-only, $0: every config key with its value and **which layer decided it** (`repo` / `global` / `capped` / `default`), plus both file paths whether or not they exist. |
 | `pr-hero config set <key> <val> [--person\|--team\|--watch]` | Set a scalar configuration value in the selected layer (defaults to `--person`). Capped team keys accept and annotate over-ceiling values. |
 | `pr-hero config unset <key> [--person\|--team\|--watch]` | Remove a configuration value from the selected layer. |
@@ -252,6 +262,9 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 
 Flags worth knowing: `--dry-run` (plan + cost band, creates nothing), `--yes`, `--model <m>`,
 `--scout` / `--no-scout` (toggle pre-hunt reconnaissance scout),
+`--no-shared-prefix` (turn off the default shared hunter prefix: hunters share one cached system prompt
+holding the patch, their roles move to the user message and a one-turn warm-up writes the cache first; Anthropic routes only,
+since other providers already cache each hunter's own loop),
 `--post` / `--no-post` (toggle PR comment publishing),
 `--force` (local only: review this diff even when the size gate would skip it;
 in GitHub Actions the same forced re-review is a `/pr-hero review` comment on the pull request,
@@ -489,6 +502,7 @@ pr-hero review --pr 42 --dry-run          # prints the gate verdict, spends noth
 pr-hero review --pr 42 --force            # local: review it anyway (does NOT skip the cost prompt)
 gh pr comment 42 --body "/pr-hero review"  # CI: same forced re-review, on the Actions runner
 gh pr comment 42 --body "/pr-hero override"  # CI: unlock a red gate on this head, no review, $0
+gh pr comment 42 --body "/pr-hero stop"      # CI: skip automatic reviews on later pushes, until /pr-hero review
 pr-hero review --pr 42 --max-changed-lines 0   # 0 disables that limit entirely
 pr-hero watch add --max-changed-lines 800       # per-repo threshold for the watcher
 ```
@@ -521,6 +535,6 @@ bun run typecheck      # tsc --noEmit, strict
 bun run check          # biome over src + test
 ```
 
-The architecture in one line each lives in `CLAUDE.md`; the project's history, measurements and
-phase plan live in `ROADMAP.md`. The short version: the flow is data (`ReviewSpec`), agents are
+The architecture in one line each lives in `CLAUDE.md`; the stage plan lives in `ROADMAP.md`,
+and the earlier phases in `docs/history/`. The short version: the flow is data (`ReviewSpec`), agents are
 prompt files, orchestration is testable TypeScript — models judge, code governs.

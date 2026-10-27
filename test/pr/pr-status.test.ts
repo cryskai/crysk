@@ -11,6 +11,8 @@ import {
   type PrStatusInput,
   type PrStatusReviewComment,
   renderPrStatusLines,
+  STATUS_WAIT_STARTUP_GRACE_MS,
+  shouldWaitPrStatus,
 } from "#pr/pr-status";
 import {
   COMMIT_STATUS_CONTEXT,
@@ -1870,5 +1872,115 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
     expect(status.findings.filter((f) => f.comment_id === null)).toHaveLength(
       1,
     );
+  });
+});
+
+describe("shouldWaitPrStatus", () => {
+  test("waits when next_action is wait (in-flight pending gate)", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("pending", "pr-hero: review in progress")],
+      }),
+    );
+    expect(status.next_action).toBe("wait");
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [],
+        nowMs: NOW,
+        elapsedMs: 120_000,
+      }),
+    ).toBe(true);
+  });
+
+  test("waits on gate.state === none within the startup grace window, then stops once elapsed reaches grace", () => {
+    const status = buildPrStatus(input({ statuses: [] }));
+    expect(status.gate.state).toBe("none");
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [],
+        nowMs: NOW,
+        elapsedMs: 30_000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [],
+        nowMs: NOW,
+        elapsedMs: STATUS_WAIT_STARTUP_GRACE_MS,
+      }),
+    ).toBe(false);
+  });
+
+  test("waits when a /pr-hero review or /pr-hero recheck comment is newer than gate.created_at and within startup grace", () => {
+    const recentCommentIso = new Date(NOW - 10_000).toISOString();
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("failure", "pr-hero: 1 blocking finding(s)", 5)],
+      }),
+    );
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [
+          { id: 10, body: "/pr-hero recheck", created_at: recentCommentIso },
+        ],
+        nowMs: NOW,
+        elapsedMs: 0,
+      }),
+    ).toBe(true);
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [
+          {
+            id: 11,
+            body: "/pr-hero review --full",
+            created_at: recentCommentIso,
+          },
+        ],
+        nowMs: NOW,
+        elapsedMs: 0,
+      }),
+    ).toBe(true);
+  });
+
+  test("does not wait when the trigger comment is older than gate.created_at or older than startup grace", () => {
+    const olderCommentIso = new Date(NOW - 60_000).toISOString();
+    const expiredCommentIso = new Date(
+      NOW - STATUS_WAIT_STARTUP_GRACE_MS - 1_000,
+    ).toISOString();
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", "pr-hero: review passed", 0.5)],
+      }),
+    );
+    expect(
+      shouldWaitPrStatus({
+        status,
+        issueComments: [
+          { id: 10, body: "/pr-hero review", created_at: olderCommentIso },
+        ],
+        nowMs: NOW,
+        elapsedMs: 0,
+      }),
+    ).toBe(false);
+    const oldGateStatus = buildPrStatus(
+      input({
+        statuses: [gate("failure", "pr-hero: 1 blocking finding(s)", 10)],
+      }),
+    );
+    expect(
+      shouldWaitPrStatus({
+        status: oldGateStatus,
+        issueComments: [
+          { id: 12, body: "/pr-hero recheck", created_at: expiredCommentIso },
+        ],
+        nowMs: NOW,
+        elapsedMs: 0,
+      }),
+    ).toBe(false);
   });
 });

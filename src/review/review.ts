@@ -32,9 +32,12 @@ import {
   type CliOptions,
   createRunDir,
   emptyDiffMessage,
+  resolveMaxConcurrentSteps,
+  resolveSharedPrefix,
 } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import {
+  pipelineConsolidateInput,
   pipelineScoutInput,
   pipelineSummarizerInput,
 } from "#review/route-preflight";
@@ -224,6 +227,8 @@ export async function review(options: CliOptions): Promise<number> {
     hunterCount,
     summary.enabled,
     options.scout,
+    0,
+    true,
   );
   const productionRoute = await resolvePipelineRoute({
     routingConfigured: config.routing !== undefined,
@@ -359,6 +364,7 @@ export async function review(options: CliOptions): Promise<number> {
       runnerAuthority,
       ceilingController,
       onProgress: progress.onProgress,
+      maxConcurrentSteps: resolveMaxConcurrentSteps(config),
     });
     productionRuntime = prepared.productionRuntime;
     result = await runPipeline(
@@ -388,6 +394,8 @@ export async function review(options: CliOptions): Promise<number> {
         suspicionPriors: config.suspicion_priors,
         ...pipelineSummarizerInput(summary),
         ...pipelineScoutInput(options),
+        ...pipelineConsolidateInput(),
+        ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
         ...pipelineConfigInput(loaded),
         ...(routePlan === undefined ? {} : { routePlan }),
         engine: await engineIdentity(),

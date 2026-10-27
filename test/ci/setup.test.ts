@@ -1090,6 +1090,14 @@ describe("ci init gotchas steps (CLI)", () => {
     expect(output).toContain("Commit .prhero/ to the default branch");
   });
 
+  test("a scaffold whose marker line was deleted gets the same init steps", async () => {
+    const { output } = await runInit(
+      "# Repo gotchas\n\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n",
+    );
+    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("Commit .prhero/ to the default branch");
+  });
+
   test("real gotchas without the marker print no init steps, and still name the required check", async () => {
     const { output } = await runInit(
       "- auth: the token is refreshed by the proxy, not here\n",
@@ -1501,6 +1509,19 @@ describe("the scaffolded workflow accepts /pr-hero recheck", () => {
     expect(template.split(review).length - 1).toBeGreaterThan(0);
     expect(template.split(recheck).length - 1).toBe(
       template.split(review).length - 1,
+    );
+  });
+
+  test("the comments name /pr-hero recheck beside review and override", () => {
+    const template = generateCiWorkflowTemplate();
+    expect(template).toContain(
+      "A comment that is exactly\n# `/pr-hero recheck` reviews the head",
+    );
+    expect(template).toContain(
+      "BEGINS with `/pr-hero review`,\n    # `/pr-hero recheck` or `/pr-hero override`",
+    );
+    expect(template).toContain(
+      "starts with\n    # /pr-hero review, /pr-hero recheck or /pr-hero override",
     );
   });
 });

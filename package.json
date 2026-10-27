@@ -1,6 +1,6 @@
 {
   "name": "pr-hero",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": false,
   "license": "Apache-2.0",
   "repository": {
@@ -49,6 +49,8 @@
     "prompts",
     "skills/pr-hero-triage",
     "skills/pr-hero-ci-setup",
+    "skills/pr-hero-pr",
+    "skills/pr-hero",
     "src",
     "LICENSE",
     "README.md"

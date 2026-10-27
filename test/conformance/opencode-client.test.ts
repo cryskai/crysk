@@ -2795,6 +2795,36 @@ describe("Prompt-result reconcile must not advance emission ahead of the stream 
     };
   }
 
+  test("cache and reasoning tokens ride the emitted usage event beside input and output", () => {
+    const state = createTurnState(SESS, "msg_user_1", "/tmp/work");
+    const info = {
+      ...completedAssistant(),
+      tokens: {
+        input: 2,
+        output: 3,
+        reasoning: 1,
+        cache: { read: 50, write: 4 },
+      },
+    };
+
+    const events = mapOpenCodeEvents(
+      { type: "message.updated", properties: { sessionID: SESS, info } },
+      SESS,
+      state,
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "usage",
+        inputTokens: 2,
+        outputTokens: 3,
+        cacheReadTokens: 50,
+        cacheWriteTokens: 4,
+        reasoningTokens: 1,
+      }),
+    );
+  });
+
   test("emit:false ingests identity, usage and the text snapshot without advancing emittedText", () => {
     const state = createTurnState(SESS, "msg_user_1", "/tmp/work");
 

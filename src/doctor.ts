@@ -437,8 +437,8 @@ export async function runDoctor(
         message:
           "Repository gotchas file (.prhero/gotchas.md) is still the untouched scaffold",
         hint:
-          `Replace the placeholder lines with real repository invariants, then delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` ` +
-          "marker line at the top — pr-hero refuses to review while it is present.",
+          `Replace the placeholder lines with real repository invariants, and delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` ` +
+          "marker line at the top if it is still there — pr-hero refuses to review the scaffold.",
       });
     } else if (unusable !== undefined) {
       checks.push({

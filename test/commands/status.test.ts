@@ -471,3 +471,188 @@ describe("statusCommand argument guard", () => {
     ).rejects.toBeInstanceOf(CliUsageError);
   });
 });
+
+describe("runStatusCommand --wait", () => {
+  test("returns immediately on the first poll without sleeping when already settled", async () => {
+    const { spawnFn } = makeFakeGh(happyScript);
+    const sleeps: number[] = [];
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      wait: true,
+      spawnFn,
+      nowMs: NOW,
+      sleepFn: async (ms) => {
+        sleeps.push(ms);
+      },
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    expect(sleeps).toEqual([]);
+    expect(written).toHaveLength(1);
+    expect(JSON.parse(written[0] ?? "").next_action).toBe("triage");
+  });
+
+  test("polls through pending until the review settles and writes only the settled JSON", async () => {
+    let statusPolls = 0;
+    const base = makeFakeGh(happyScript).spawnFn;
+    const encoder = new TextEncoder();
+    const spawnFn = ((argv: string[], opts?: unknown) => {
+      if (argv.join(" ").includes(`commits/${HEAD}/status`)) {
+        statusPolls += 1;
+        if (statusPolls < 3) {
+          const pendingRow = {
+            state: "pending",
+            context: COMMIT_STATUS_CONTEXT,
+            created_at: new Date(NOW - 10_000).toISOString(),
+            description: "pr-hero: review in progress",
+            target_url: null,
+          };
+          const stream = (text: string) =>
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                if (text) controller.enqueue(encoder.encode(text));
+                controller.close();
+              },
+            });
+          return {
+            stdout: stream(ndjson([pendingRow])),
+            stderr: stream(""),
+            exited: Promise.resolve(0),
+            kill() {},
+          };
+        }
+      }
+      return (base as unknown as (a: string[], o?: unknown) => unknown)(
+        argv,
+        opts,
+      );
+    }) as unknown as typeof Bun.spawn;
+
+    const sleeps: number[] = [];
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      wait: true,
+      spawnFn,
+      nowMs: NOW,
+      pollIntervalMs: 1_000,
+      sleepFn: async (ms) => {
+        sleeps.push(ms);
+      },
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    expect(statusPolls).toBe(3);
+    expect(sleeps).toEqual([1_000, 1_000]);
+    expect(written).toHaveLength(1);
+    expect(JSON.parse(written[0] ?? "").next_action).toBe("triage");
+  });
+
+  test("throws a timeout CliError with nothing on stdout when maxWaitMs is exceeded", async () => {
+    const pendingRow = {
+      state: "pending",
+      context: COMMIT_STATUS_CONTEXT,
+      created_at: new Date(NOW - 5_000).toISOString(),
+      description: "pr-hero: review in progress",
+      target_url: null,
+    };
+    const { spawnFn } = makeFakeGh([
+      prView,
+      {
+        match: [`commits/${HEAD}/status`],
+        response: { stdout: ndjson([pendingRow]) },
+      },
+      ...happyScript.slice(2),
+    ]);
+    const written: string[] = [];
+    const sleeps: number[] = [];
+    const run = runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      wait: true,
+      spawnFn,
+      nowMs: NOW,
+      pollIntervalMs: 1_000,
+      maxWaitMs: 2_500,
+      sleepFn: async (ms) => {
+        sleeps.push(ms);
+      },
+      out: (text) => written.push(text),
+    });
+    await expect(run).rejects.toBeInstanceOf(CliError);
+    await expect(run).rejects.toThrow(/Timed out after 2500 ms/);
+    expect(sleeps).toEqual([1_000, 1_000]);
+    expect(written).toEqual([]);
+  });
+
+  test("retries a transient gh failure on a subsequent poll while waiting, then settles", async () => {
+    let statusPolls = 0;
+    const base = makeFakeGh(happyScript).spawnFn;
+    const encoder = new TextEncoder();
+    const spawnFn = ((argv: string[], opts?: unknown) => {
+      if (argv.join(" ").includes(`commits/${HEAD}/status`)) {
+        statusPolls += 1;
+        const stream = (text: string) =>
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              if (text) controller.enqueue(encoder.encode(text));
+              controller.close();
+            },
+          });
+        if (statusPolls === 1) {
+          return {
+            stdout: stream(
+              ndjson([
+                {
+                  state: "pending",
+                  context: COMMIT_STATUS_CONTEXT,
+                  created_at: new Date(NOW - 5_000).toISOString(),
+                  description: "pr-hero: review in progress",
+                  target_url: null,
+                },
+              ]),
+            ),
+            stderr: stream(""),
+            exited: Promise.resolve(0),
+            kill() {},
+          };
+        }
+        if (statusPolls === 2) {
+          return {
+            stdout: stream(""),
+            stderr: stream("HTTP 502 Bad Gateway"),
+            exited: Promise.resolve(1),
+            kill() {},
+          };
+        }
+      }
+      return (base as unknown as (a: string[], o?: unknown) => unknown)(
+        argv,
+        opts,
+      );
+    }) as unknown as typeof Bun.spawn;
+
+    const written: string[] = [];
+    const code = await runStatusCommand({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 12,
+      json: true,
+      wait: true,
+      spawnFn,
+      nowMs: NOW,
+      pollIntervalMs: 1_000,
+      sleepFn: async () => {},
+      out: (text) => written.push(text),
+    });
+    expect(code).toBe(0);
+    expect(statusPolls).toBe(3);
+    expect(written).toHaveLength(1);
+    expect(JSON.parse(written[0] ?? "").next_action).toBe("triage");
+  });
+});

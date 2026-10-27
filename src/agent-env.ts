@@ -291,6 +291,21 @@ export async function syncSkills(
       files: assets.ciSetupSkillFiles,
     });
   }
+  if (assets.prSkillFiles && Object.keys(assets.prSkillFiles).length > 0) {
+    skillsToSync.push({
+      name: "pr-hero-pr",
+      files: assets.prSkillFiles,
+    });
+  }
+  if (
+    assets.generalSkillFiles &&
+    Object.keys(assets.generalSkillFiles).length > 0
+  ) {
+    skillsToSync.push({
+      name: "pr-hero",
+      files: assets.generalSkillFiles,
+    });
+  }
 
   const allSynced: string[] = [];
   const allErrors: string[] = [];
@@ -469,6 +484,21 @@ export function inspectSkillsSync(
     skillsToCheck.push({
       name: "pr-hero-ci-setup",
       files: assets.ciSetupSkillFiles,
+    });
+  }
+  if (assets.prSkillFiles && Object.keys(assets.prSkillFiles).length > 0) {
+    skillsToCheck.push({
+      name: "pr-hero-pr",
+      files: assets.prSkillFiles,
+    });
+  }
+  if (
+    assets.generalSkillFiles &&
+    Object.keys(assets.generalSkillFiles).length > 0
+  ) {
+    skillsToCheck.push({
+      name: "pr-hero",
+      files: assets.generalSkillFiles,
     });
   }
 
@@ -772,7 +802,12 @@ export async function removeSkills(
     });
   const unlink = options.unlink ?? unlinkSync;
 
-  const skillNames = ["pr-hero-triage", "pr-hero-ci-setup"];
+  const skillNames = [
+    "pr-hero-triage",
+    "pr-hero-ci-setup",
+    "pr-hero-pr",
+    "pr-hero",
+  ];
   const removed: string[] = [];
   const skippedModified: string[] = [];
   const errors: string[] = [];

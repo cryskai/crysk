@@ -23,6 +23,7 @@ import {
 import type {
   Finding,
   FindingsDocument,
+  RefuterVerdict,
   RunStatus,
   Severity,
   Tier,
@@ -102,6 +103,11 @@ export function estimateCost(
   // byte-identical. Priced as its own term (not folded into `agents`) so a
   // 40-finding re-review of a 2-file delta is not billed as 40 hunters.
   verificationSteps = 0,
+  // The post-refuter consolidation pass. LAST and defaulted OFF so every
+  // existing call shape compiles and keeps its band; the product paths pass
+  // true. One seat, the scout's rule: a claims-only sonnet call costs far
+  // less than a hunter, and over-quoting is the cheap direction to be wrong.
+  consolidateEnabled = false,
 ): CostEstimate {
   const files = Math.max(0, diffStat.files);
   const lines =
@@ -121,7 +127,10 @@ export function estimateCost(
   // it exists an invented per-scout coefficient would be false precision.
   const hunterSeats = Math.max(
     0,
-    hunterCount + (summarizerEnabled ? 1 : 0) + (scoutEnabled ? 1 : 0),
+    hunterCount +
+      (summarizerEnabled ? 1 : 0) +
+      (scoutEnabled ? 1 : 0) +
+      (consolidateEnabled ? 1 : 0),
   );
   const steps = Math.max(0, verificationSteps);
   // A zero-hunter, zero-verify call still needs a band (the hypothetical
@@ -149,6 +158,7 @@ export function estimateCost(
       "per-agent floor for hunters + refuter" +
       `${summarizerEnabled ? " + summarizer" : ""}` +
       `${scoutEnabled ? " + scout" : ""}` +
+      `${consolidateEnabled ? " + consolidation" : ""}` +
       `${steps > 0 ? ` + ${steps} verification step(s)` : ""} ` +
       "plus changed lines and files. An order-of-magnitude " +
       "guide, not a quote — the same tree has billed 34% apart across runs.",
@@ -1121,7 +1131,7 @@ function outsideDiffSection(
 // see below):
 //   <marker>
 //
-//   🔴 blocking · CRITICAL · introduced · lifecycle
+//   🔴 blocking · CRITICAL · introduced · lifecycle · refuter: corroborated
 //   `path:line` — symbol()
 //
 //   <claim, as a single unbroken-but-readable paragraph — item 5: "es solo
@@ -1132,11 +1142,26 @@ function outsideDiffSection(
 //
 //   <details>Evidence (N)</details>
 //   <details>Prompt to fix with AI</details>
+//
+// The refuter's verdict is the header's LAST field (diagnosis 5.9): without
+// it, triage cannot tell a refuter-corroborated blocker from a warning that
+// never reached the refuter. Appended, never inserted, because the parsers
+// that read this line back (FINDING_HEADER_BADGE here, FINDING_HEADER_TIER in
+// ci/review-admission.ts) anchor on the leading fields only.
 function findingHeaderLine(finding: Finding): string {
   return (
     `${scanAidEmoji(finding)} ${finding.tier} · ${finding.severity} · ` +
-    `${finding.causal_disposition} · ${finding.hunter}`
+    `${finding.causal_disposition} · ${finding.hunter} · ` +
+    `refuter: ${refuterLabel(finding.refuter_verdict)}`
   );
+}
+
+// `not_submitted` is the engine's word for "the refuter never saw this
+// finding" (every WARNING/SUGGESTION, and blockers on a truncated run). On a
+// PR comment that reads as a submission failure, so it renders as `unchecked`.
+// Every other verdict renders verbatim, matching the ledger's vocabulary.
+function refuterLabel(verdict: RefuterVerdict): string {
+  return verdict === "not_submitted" ? "unchecked" : verdict;
 }
 
 function findingLocationLine(
@@ -1175,18 +1200,23 @@ function tierExplanationLines(finding: Finding): string[] {
   const isBlockerClass =
     finding.severity === "BLOCKER" || finding.severity === "CRITICAL";
   if (!isBlockerClass || finding.tier !== "advisory") return [];
+  // `not_submitted` never reached the refuter, so "the refuter returned" it
+  // would be false, and printing the engine's word here would contradict the
+  // header, which says `refuter: unchecked` (refuterLabel).
   const lines = [
-    "⚖️ Downgraded to advisory — the refuter returned " +
-      `\`${finding.refuter_verdict}\``,
+    finding.refuter_verdict === "not_submitted"
+      ? "⚖️ Downgraded to advisory — the refuter never checked it"
+      : "⚖️ Downgraded to advisory — the refuter returned " +
+        `\`${finding.refuter_verdict}\``,
   ];
   // `downgraded-latent` is the one verdict with a documented, human-legible
   // meaning worth spelling out inline (review/findings.ts's own WHY comment on the
   // type): a real defect the refuter could not currently trigger. The other
-  // verdicts that can also land here (`inconclusive`; `not_submitted`, either
-  // unrefuted-inferential or demoted because the run was truncated before the
-  // refuter leg ran; or an `insufficient` evidence_class regardless of
-  // verdict) have no equally short gloss, so they render with just the verdict
-  // name rather than a guessed one.
+  // verdicts that can also land here (`inconclusive`, or an `insufficient`
+  // evidence_class regardless of verdict) have no equally short gloss, so they
+  // render with just the verdict name rather than a guessed one.
+  // `not_submitted` (unrefuted-inferential, or demoted because the run was
+  // truncated before the refuter leg ran) has its own line above.
   if (finding.refuter_verdict === "downgraded-latent") {
     lines.push("   (real, but no live trigger today)");
   }

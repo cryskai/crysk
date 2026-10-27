@@ -1463,6 +1463,34 @@ export async function ghCompareChangedFilesWithStatus(
   return parseCompareChangedFilesWithStatus(result.stdout);
 }
 
+// The login's permission on the checkout's repository, or null when gh could
+// not answer (5xx, rate limit, no network). A 404 is GitHub's answer for a
+// login that is not a collaborator, so it is "none", not null. Callers that
+// let a permission withhold a review treat null as "no permission".
+export async function ghCollaboratorPermission(
+  operatorRoot: string,
+  login: string,
+  options?: { spawnFn?: typeof Bun.spawn; timeoutMs?: number },
+): Promise<string | null> {
+  const result = await gh(
+    operatorRoot,
+    [
+      "api",
+      `repos/{owner}/{repo}/collaborators/${encodeURIComponent(login)}/permission`,
+      "--jq",
+      ".permission",
+    ],
+    undefined,
+    options?.spawnFn,
+    options?.timeoutMs,
+  );
+  if (!result.ok) {
+    return result.stderr.includes("HTTP 404") ? "none" : null;
+  }
+  const permission = result.stdout.trim();
+  return permission === "" ? null : permission;
+}
+
 const PR_HERO_WORKFLOW_FILE = "pr-hero.yml";
 const COMPLETED_WORKFLOW_CONCLUSIONS = new Set(["success", "failure"]);
 

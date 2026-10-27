@@ -6,7 +6,7 @@ step per finding), and deterministic code assigns blocking/advisory tiers. Convo
 the flow is data (`ReviewSpec`), agents are prompt files, orchestration is testable TypeScript — LLMs
 judge, code governs. Born 2026-07-28/29 by extracting and redesigning the Deep Review v1 monolith.
 
-North star and phase order: `ROADMAP.md` (here). Current phase: **B (production wiring)** — Phase A closed 2026-08-10 and the golden dataset was retired as the benchmark in favour of a live head-to-head against Greptile on real PRs. See THE PIVOT in `ROADMAP.md`.
+North star and stage order: `ROADMAP.md` (here), redrawn 2026-10-27 after the Martian 50 milestone. Current stage: **0 → 1 (ship what is merged, then rebrand and launch)**; quieter, faster reviews come next as Stage 2. Ids like A2, C2 or B7 in code comments refer to the archived roadmap, `docs/history/ROADMAP-2026-07-to-10.md`.
 
 ## Instruction precedence (read this first)
 
@@ -28,7 +28,8 @@ been burned by a manual match that inflated a score by 50%.
 ## The two sibling folders (load-bearing context)
 
 - **`../deep-review/`** — the LAB. Owns the golden dataset (audited Greptile findings), the bench ledger
-  (`bench/METRICS.md`, append-only), the prompt sets (`agents/<set>/`, immutable once scored), the
+  (`bench/METRICS.md`, append-only, plus `bench/experiments/` for every live experiment's raw data —
+  see rule 6), the prompt sets (`agents/<set>/`, immutable once scored), the
   scorer, the replay/smoke CLI, and the musive target-repo config. It consumes this engine via
   `"pr-hero": "file:../../pr-hero"` and measures it. Its `CLAUDE.md` gotchas BIND any session that
   touches both repos — above all: **never read `../deep-review/dataset/test.jsonl`** and never edit a
@@ -77,6 +78,8 @@ bun run scripts/martian-judge.ts     # LIVE: Martian Surface A judge on existing
 ## Project skills
 
 - `skills/martian-bench/SKILL.md` — Martian Code Review Bench (n-vs-n vs Greptile/CodeRabbit on public PRs). Load on Cal.com evals, Surface A/B, or “how did we do” on that corpus. Flow + existing scores: `skills/martian-bench/references/`.
+- `skills/pr-hero/SKILL.md` — operate or configure pr-hero locally (models/routing, effort, credentials, config keys, gotchas, `.prheroignore`, reviews, watcher/GC, doctor).
+- `skills/pr-hero-pr/SKILL.md` — open or update a PR with a structured template and auto-subscribe to the pr-hero review loop.
 - `skills/pr-hero-triage/SKILL.md` — answer posted `<!-- pr-hero-finding` comments on a PR you authored.
 - `skills/pr-hero-ci-setup/SKILL.md` — scaffold GitHub Actions review workflow and configure repository secrets.
 
@@ -164,7 +167,11 @@ over** (found while wiring C5, 2026-08-23):
    validator stays closed (4 hunter names, `1-14`). So a new hunter key needs no schema change — but any
    further widening of a shared field still does, on both sides. Category 15 = local logic error (see
    `docs/research/local-logic-misses.md`); its lab mirror is still owed.
-6. **Every live run costs money → it lands in a ledger** (lab runs in `bench/`; local evals in the
-   commit/PR description).
+6. **Every live run costs money → it lands in the lab's ledger the day it runs**: a section in
+   `../deep-review/bench/METRICS.md` (question, arms, n, result, cost, PR) and the raw data under
+   `../deep-review/bench/experiments/<date>-<slug>/`. The lab is a private repo, so musive data is
+   safe there and never in this public one. The commit/PR description keeps a copy of the numbers,
+   never the only one: between the pivot and 2026-10-19 that was the only copy, and two months of
+   results scattered (the ledger's post-pivot index lists what was lost).
 7. **One variable per experiment**; replicates + N-of-M semantics; attribute misses (hunter/merge/
    refuter) before choosing a lever. The lab's variance is HIGH — single runs prove nothing.

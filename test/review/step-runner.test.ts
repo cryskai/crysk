@@ -172,6 +172,7 @@ describe("buildStepArgv", () => {
     );
     expect(flagValue(argv, "--permission-mode")).toBe("bypassPermissions");
     expect(flagValue(argv, "--model")).toBe(spec.model);
+    expect(argv).toContain("--exclude-dynamic-system-prompt-sections");
   });
 
   // §3.12 obligation 1, and the single mechanism §3.5 rests on: the scout's
@@ -416,8 +417,13 @@ describe("ClaudeCodeRunner format-retry", () => {
     // The re-prompt travels the same channel as the first prompt (#314):
     // stdin, with nothing of it left in argv.
     expect(calls[0]?.stdin).toBe(spec.prompt);
-    expect(calls[1]?.stdin).toBe(spec.prompt + FORMAT_RETRY_REMINDER);
-    expect(calls[1]?.argv).not.toContain(spec.prompt + FORMAT_RETRY_REMINDER);
+    // The reminder now carries the parser's own message after the fixed
+    // suffix, so the model is told what to correct.
+    expect(calls[1]?.stdin).toStartWith(spec.prompt + FORMAT_RETRY_REMINDER);
+    expect(calls[1]?.stdin).toContain("rejected by the output validator");
+    expect(
+      calls[1]?.argv.some((arg) => arg.includes(FORMAT_RETRY_REMINDER)),
+    ).toBe(false);
     expect(calls[1]?.argv[2]).toBe("--append-system-prompt-file");
   });
 
@@ -623,5 +629,35 @@ describe("ClaudeCodeRunner cancellation signal (§5.3)", () => {
     expect(calls).toHaveLength(1);
     expect(result.attempts).toBe(1);
     expect(result.status).toBe("ok");
+  });
+});
+
+describe("ClaudeCodeRunner attempt admission", () => {
+  test("forwards attemptAdmissionGate so a max_concurrent_steps cap holds on the legacy runner", async () => {
+    const { spawnFn } = makeFakeSpawn([
+      { stdout: envelope(JSON.stringify(GOOD_DRAFT)) },
+    ]);
+    const spec = await makeSpec();
+    const acquired: number[] = [];
+    let released = 0;
+    const runner = new ClaudeCodeRunner({
+      spawnFn,
+      attemptAdmissionGate: {
+        acquire: async (input) => {
+          acquired.push(input.attempt);
+          return {
+            leaseId: `${input.sessionId}#${input.attempt}`,
+            rateLimitBucketId: input.rateLimitBucketId,
+            release: () => {
+              released += 1;
+            },
+          };
+        },
+      },
+    });
+    const result = await runner.run(spec);
+    expect(result.status).toBe("ok");
+    expect(acquired).toEqual([1]);
+    expect(released).toBe(1);
   });
 });

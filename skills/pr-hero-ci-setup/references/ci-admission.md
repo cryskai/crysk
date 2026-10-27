@@ -20,10 +20,15 @@ Read this when configuring `.prhero/config.json` during CI setup. Full operator 
 | `ci_advisory_weight` | `1` | Score weight per advisory-tier finding |
 | `ci_trusted_actors` | `[]` | Extra GitHub logins for authoritative markers (+ `GITHUB_ACTOR`) |
 | `ci_admission_observe_only` | `false` | Log would-be skip/manual decisions but always run |
+| `max_verification_steps` | `8` | Max prior open findings verified per re-review (`0` pauses verification; capped key) |
 
 `ci_max_reviews` is legacy — use `ci_max_attempts` (same fallback).
 
 **Score:** `blocking × ci_blocking_weight + advisory × ci_advisory_weight`
+
+**How a re-review depends on the previous pass:**
+- **Whether it runs (admission):** in `risk_aware` and `thresholded` modes, the previous review's finding score (`blocking × 2 + advisory × 1` by default) is compared against `ci_rereview_min_score`, bounded by `ci_max_attempts` total automatic passes per PR.
+- **What it does when it runs:** discovery is incremental by default (hunters examine only commits since the last completed review's head SHA; `/pr-hero review --full` widens to the full PR), and up to `max_verification_steps` verifier steps check whether prior open findings were fixed by the new push.
 
 ## Policy modes
 

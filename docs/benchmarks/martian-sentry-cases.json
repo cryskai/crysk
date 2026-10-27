@@ -1,0 +1,110 @@
+{
+  "repo": "getsentry/sentry",
+  "pilot": [
+    1,
+    2,
+    3
+  ],
+  "prs": [
+    {
+      "pr": 1,
+      "title": "Enhanced Pagination Performance for High-Volume Audit Logs",
+      "additions": 128,
+      "deletions": 10,
+      "changedFiles": 3,
+      "baseSha": "74618671bff8114fcec8fe77c6260c9a2bc2864a",
+      "headSha": "8ab88145113dd23a930e23b9cbbcf8b30e4c0b17",
+      "remote": "https://github.com/ai-code-review-evaluation/sentry-greptile.git"
+    },
+    {
+      "pr": 2,
+      "title": "Optimize spans buffer insertion with eviction during insert",
+      "additions": 183,
+      "deletions": 29,
+      "changedFiles": 9,
+      "baseSha": "28e3db2520d4ea28c57b08da57b83917ba7b2e15",
+      "headSha": "8ab88145113dd23a930e23b9cbbcf8b30e4c0b17",
+      "remote": "https://github.com/ai-code-review-evaluation/sentry-greptile.git"
+    },
+    {
+      "pr": 3,
+      "title": "feat(upsampling) - Support upsampled error count with performance optimizations",
+      "additions": 480,
+      "deletions": 6,
+      "changedFiles": 8,
+      "baseSha": "83f40559985e1365a43f35ba3febb7ea4fabb5d5",
+      "headSha": "6ad6fe3899f630ccf922ce7ac681147dc7987435",
+      "remote": "https://github.com/ai-code-review-evaluation/sentry-greptile.git"
+    },
+    {
+      "pr": 67876,
+      "title": "fix(security): validate GitHub user during integration installation",
+      "additions": 247,
+      "deletions": 50,
+      "changedFiles": 3,
+      "baseSha": "f3b740199ef0b8057c2c68a377fd3b4d42346deb",
+      "headSha": "bb75657fc8f13923c1d7983f422290908a1e7310",
+      "remote": "https://github.com/getsentry/sentry.git"
+    },
+    {
+      "pr": 5,
+      "title": "Replays Self-Serve Bulk Delete System",
+      "additions": 2312,
+      "deletions": 981,
+      "changedFiles": 106,
+      "baseSha": "49a275847631e231672d01b5dcd66558c069d25b",
+      "headSha": "ea188e2d736fd6ed27c1dba8aae63b7268e2a7a9",
+      "remote": "https://github.com/ai-code-review-evaluation/sentry-greptile.git"
+    },
+    {
+      "pr": 93824,
+      "title": "ref(span-buffer): Introduce multiprocessed flusher",
+      "additions": 199,
+      "deletions": 50,
+      "changedFiles": 6,
+      "baseSha": "de11fb0166a7244115bb066edd65ec0d6b7e365c",
+      "headSha": "3162ad68a5c87666788b27a44eb31235025091a9",
+      "remote": "https://github.com/getsentry/sentry.git"
+    },
+    {
+      "pr": 77754,
+      "title": "fix(ecosystem): Breaks issue sync cycles",
+      "additions": 212,
+      "deletions": 15,
+      "changedFiles": 7,
+      "baseSha": "bb5a6837cb5b3d8d3b174e17d42ec14486ef8738",
+      "headSha": "9501091c52ae94e8d916f79b35d21975b3f9cadb",
+      "remote": "https://github.com/getsentry/sentry.git"
+    },
+    {
+      "pr": 80528,
+      "title": "ref(crons): Reorganize incident creation / issue occurrence logic",
+      "additions": 289,
+      "deletions": 264,
+      "changedFiles": 4,
+      "baseSha": "0cfc28e76ddc986d2d89dd9b9f63ee916a18a5f9",
+      "headSha": "dcdcadb771128e79259cc9eff9c70c38fc597976",
+      "remote": "https://github.com/getsentry/sentry.git"
+    },
+    {
+      "pr": 95633,
+      "title": "feat(uptime): Add ability to use queues to manage parallelism",
+      "additions": 1276,
+      "deletions": 6,
+      "changedFiles": 7,
+      "baseSha": "fd358e8a388939959369f08f616e29552cdaf96e",
+      "headSha": "9966ec5a13e331659c3ea00981f9b11b0faf821f",
+      "remote": "https://github.com/getsentry/sentry.git"
+    },
+    {
+      "pr": 80168,
+      "title": "feat(workflow_engine): Add in hook for producing occurrences from the stateful detector",
+      "additions": 249,
+      "deletions": 151,
+      "changedFiles": 4,
+      "baseSha": "bdd229e3f22e307fe40b30ef99e92ff3f6723da4",
+      "headSha": "8422030ef456e3a898415e96475b4d8ddfc7640f",
+      "remote": "https://github.com/getsentry/sentry.git"
+    }
+  ]
+}
