@@ -48,10 +48,18 @@ import {
   verifyStepName,
 } from "#rereview/verify";
 import {
+  BoundaryNonceError,
   blockForgesNonce,
   selectBoundaryNonce,
   wrapBlock,
 } from "#review/boundary";
+import {
+  applyPlan,
+  consolidationPrompt,
+  enforcePlanInvariants,
+  type PlanEntry,
+  validatePlan,
+} from "#review/consolidate";
 import {
   type DedupedSurvivor,
   type DedupeLoser,
@@ -242,6 +250,15 @@ export interface PipelineInput {
   // the prompt set, which is exactly what M6's one-variable property forbids.
   // ABSENT means the control pipeline, byte for byte.
   scout?: { promptPath: string; model?: string };
+  // Optional engine-owned consolidation pass over the POSTED findings, after
+  // the refuter (prompts/consolidate.md, measured on the Martian 50: F1
+  // 39.7 -> 42.3, lab bench/METRICS.md 2026-10-27). Opt-in on the engine input
+  // so the lab's direct `runPipeline` callers are unchanged; the CLI and PR
+  // paths turn it on. ABSENT means no consolidation step and findings exactly
+  // as before; pipeline.json still carries a `consolidation` record
+  // (`enabled: false`, `status: "skipped"`), the scout's rule, so the two
+  // arms are told apart from the artifact alone.
+  consolidate?: { promptPath: string; model?: string };
   // `--shared-prefix` (opt-in, off by default). Each hunter's system prompt
   // becomes the patch and output contract, which is byte-identical across
   // hunters that share settings, and its role moves to the user message. A
@@ -1112,6 +1129,27 @@ interface ScoutRecord {
   duration_ms: number;
 }
 
+// pipeline.json's `consolidation` key, written on every run for ScoutRecord's
+// reason: "the key is missing" is indistinguishable from "this run predates
+// the key". "skipped" means the stage was not asked for (or the ceiling cut
+// the run first); "passthrough" means it was asked for and had nothing it
+// could safely do (no posted findings, or a claim carrying the nonce), so it
+// never spawned; "failed" means it was asked for and its plan was not applied.
+interface ConsolidationRecord {
+  enabled: boolean;
+  status: "ok" | "failed" | "skipped" | "passthrough";
+  reason?: string;
+  // Plan entries enforcePlanInvariants changed in finish(): promoted, folded
+  // away, or appended. Present once a plan reached finish(); 0 means the
+  // model's plan already kept every rule.
+  plan_repairs?: number;
+  findings_in: number;
+  findings_out: number;
+  model?: string;
+  prompt_sha256?: string;
+  duration_ms: number;
+}
+
 // Mutated as steps complete so the pipeline-ceiling path can assemble
 // whatever exists at the moment the ceiling fires.
 interface RunState {
@@ -1124,6 +1162,16 @@ interface RunState {
   // check on exactly the leg that motivated the issue.
   resolveProofRef?: (candidate: string) => boolean;
   scout?: ScoutRecord;
+  consolidation?: ConsolidationRecord;
+  // Set only by a consolidation step that returned a VALID plan. finish()
+  // applies it; the ceiling path reaches finish() without one and so never
+  // consolidates.
+  consolidationPlan?: PlanEntry[];
+  // When the pipeline ceiling will fire (epoch ms). Set once in runPipeline;
+  // runConsolidation reads it to refuse a spawn that could outlive it.
+  ceilingDeadlineMs?: number;
+  // The ceiling's settle grace, as runPipeline computed it.
+  ceilingGraceMs?: number;
   diversity?: DiversityExecutionContext;
   // Set once, immediately after the two blocks it is drawn against are read.
   // Optional only because the pipeline ceiling can fire before `execute` got
@@ -1257,9 +1305,10 @@ export async function runPipeline(
   // `signal` — see src/cli.ts local and PR modes.
   const controller = deps.ceilingController ?? new AbortController();
   const legDeps: PipelineDeps = { ...deps, ceilingController: controller };
-  const graceMs =
-    input.ceilingGraceMs ??
-    DEFAULT_CANCELLATION_DEADLINE_MS + HARNESS_GRACE_MARGIN_MS;
+  const graceMs = ceilingGraceMs(input);
+  state.ceilingDeadlineMs =
+    Date.now() + (input.pipelineTimeoutMs ?? DEFAULT_PIPELINE_TIMEOUT_MS);
+  state.ceilingGraceMs = graceMs;
   // WHY the outcome capture instead of awaiting `execute()` directly: this
   // promise NEVER rejects, so a run that throws AFTER the ceiling has already
   // resolved cannot surface as an unhandled rejection — which in Bun takes the
@@ -1458,6 +1507,15 @@ async function execute(
         // ignore if not readable
       }
     }
+    let consolidateFrontmatter: string | undefined;
+    if (input.consolidate) {
+      try {
+        const parsed = await parseAgentFile(input.consolidate.promptPath);
+        consolidateFrontmatter = parsed.model;
+      } catch {
+        // ignore if not readable
+      }
+    }
     try {
       routePlan = buildResolvedRoutePlan({
         agents: diversityCtx.routeAgents,
@@ -1479,6 +1537,15 @@ async function execute(
                 model: input.scout.model,
                 frontmatterModel: scoutFrontmatter,
                 defaultModel: DEFAULT_SCOUT_MODEL,
+              },
+            }),
+        ...(input.consolidate === undefined
+          ? {}
+          : {
+              consolidate: {
+                model: input.consolidate.model,
+                frontmatterModel: consolidateFrontmatter,
+                defaultModel: DEFAULT_CONSOLIDATE_MODEL,
               },
             }),
       });
@@ -2215,6 +2282,15 @@ async function execute(
       nonce: boundaryNonce,
     });
   }
+
+  // Step 6b — consolidation, over exactly the findings finish() will post.
+  // Gated on the ceiling like every other leg: a run already cut short does
+  // not start a new paid step, and finish() only applies a plan already on
+  // state, so the ceiling path (which calls finish() directly) never spawns.
+  if (!ceilingAborted(deps, state)) {
+    await runConsolidation(input, deps, state, stepsDir, boundaryNonce);
+  }
+  state.consolidation ??= skippedConsolidation(input);
 
   // Steps 7 + 8 live in finish(), shared with the ceiling path.
   return finish(input, state);
@@ -3029,6 +3105,250 @@ async function runScout(
   return renderLeadsBlock(capped.leads);
 }
 
+// The consolidator's budgets, copied from the measurement that justified the
+// stage (scripts/consolidate-replay.ts): one claims-only call, so ten minutes
+// is generous, and two attempts because unlike the scout a lost answer here
+// is a lost precision gain on findings the run already paid for.
+const CONSOLIDATE_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Last resort in the model chain, the scout's rule: the frontmatter of
+// prompts/consolidate.md names sonnet too, and the Martian 50 measurement
+// ran on sonnet, so a frontmatter edit that drops the line cannot silently
+// move the stage onto an unmeasured model.
+export const DEFAULT_CONSOLIDATE_MODEL = "sonnet";
+
+// The effort the stage was measured at, pinned here rather than taken from the
+// "other" role default: a prompt edit that drops `effort:` must not silently
+// move the stage to an unmeasured level if that role default ever changes.
+const DEFAULT_CONSOLIDATE_EFFORT: Effort = "high";
+
+// The ceiling's settle grace: the caller's override, else the harness's own
+// bound. One helper so runPipeline and the consolidation budget check cannot
+// disagree about it.
+function ceilingGraceMs(input: PipelineInput): number {
+  return (
+    input.ceilingGraceMs ??
+    DEFAULT_CANCELLATION_DEADLINE_MS + HARNESS_GRACE_MARGIN_MS
+  );
+}
+
+function skippedConsolidation(input: PipelineInput): ConsolidationRecord {
+  return {
+    // `enabled` reports whether the stage was ASKED for, so a ceiling-cut
+    // run that wanted it reads as "enabled, skipped", not as the flag off.
+    enabled: input.consolidate !== undefined,
+    status: "skipped",
+    findings_in: 0,
+    findings_out: 0,
+    duration_ms: 0,
+  };
+}
+
+// Runs the consolidation pass and, on success, leaves a validated plan on
+// `state.consolidationPlan` for finish() to apply.
+//
+// NEVER sets `state.partial`, on any road. A failed consolidation leaves the
+// findings exactly as the refuter left them: the review is complete, it just
+// posts the unconsolidated list. It can cost precision, never recall, and
+// #42's incompleteness notice is about a review that LOST findings. The
+// failure is still never silent: `status`/`reason` in pipeline.json, the
+// step row, and `per_agent.consolidate`.
+async function runConsolidation(
+  input: PipelineInput,
+  deps: PipelineDeps,
+  state: RunState,
+  stepsDir: string,
+  nonce: string,
+): Promise<void> {
+  if (!input.consolidate) {
+    state.consolidation = skippedConsolidation(input);
+    return;
+  }
+  if (!state.survivors) {
+    const { survivors, deduped } = mergeAndDedupe(state.drafts);
+    state.survivors = survivors;
+    state.deduped = deduped;
+  }
+  // The POSTED list: the same ids, in the same order, that finish() puts in
+  // findings[]. Refuted findings never post, so they are never consolidated.
+  const posted: Finding[] = [];
+  for (const survivor of state.survivors) {
+    const verdict = state.verdicts.get(survivor.id) ?? "not_submitted";
+    if (verdict === "refuted") continue;
+    // `tier` is a placeholder: consolidationInput reads only id, path, line,
+    // severity, hunter and claim, and the real tier is derived in finish().
+    posted.push({ ...survivor, refuter_verdict: verdict, tier: "advisory" });
+  }
+  const ids = posted.map((f) => f.id);
+  // An optional precision pass must never be the step that turns a complete
+  // run partial. If the ceiling could fire inside the worst case of this step
+  // (two attempts at the full watchdog, plus the ceiling's settle grace), the
+  // stage stands down and the findings post as the refuter left them.
+  const deadline = state.ceilingDeadlineMs;
+  if (
+    deadline !== undefined &&
+    deadline - Date.now() <
+      CONSOLIDATE_TIMEOUT_MS * 2 +
+        (state.ceilingGraceMs ?? ceilingGraceMs(input))
+  ) {
+    state.consolidation = {
+      enabled: true,
+      status: "skipped",
+      reason: "ceiling budget",
+      findings_in: posted.length,
+      findings_out: posted.length,
+      duration_ms: 0,
+    };
+    return;
+  }
+  const record: ConsolidationRecord = {
+    enabled: true,
+    status: "passthrough",
+    findings_in: posted.length,
+    findings_out: posted.length,
+    duration_ms: 0,
+  };
+  state.consolidation = record;
+  if (posted.length === 0) return;
+
+  let prompt: string;
+  try {
+    prompt = consolidationPrompt(posted, nonce);
+  } catch (error) {
+    // A claim quoting the run's boundary tag back. The nonce cannot be
+    // re-drawn (every step of a run shares one), so the findings post as
+    // they are rather than hand the model a forged boundary.
+    if (error instanceof BoundaryNonceError) {
+      record.reason = "nonce";
+      return;
+    }
+    record.status = "failed";
+    record.reason = "prompt could not be composed";
+    return;
+  }
+
+  const name = "consolidate";
+  const systemPromptPath = path.join(stepsDir, `${name}.system.md`);
+  const outPath = path.join(stepsDir, `${name}.plan.json`);
+  const meta: StepMeta = {
+    name,
+    model: input.consolidate.model ?? input.model ?? "unresolved",
+    effort: defaultEffortForRole("other"),
+    // FORCED to empty, never read from the prompt's frontmatter, for the
+    // scout's reason: the stage is measured as claims-only, and a guarantee a
+    // prompt edit can revoke is not a guarantee.
+    tools: [],
+    systemPromptPath,
+    outPath,
+    status: "unsettled",
+  };
+  record.status = "failed";
+  const startedAt = Date.now();
+
+  const abandon = (reason: string, error?: unknown): void => {
+    // The scout's rule: keep the attempt count and pointers of a session that
+    // really ran; only a pre-attempt failure lands its reason on the step.
+    if (
+      (meta.attempts === undefined || meta.attempts < 1) &&
+      meta.failure === undefined
+    ) {
+      recordStepFailure(
+        meta,
+        error ?? "consolidate failed before its first attempt",
+      );
+    } else {
+      meta.status = "failed";
+    }
+    state.perAgent.consolidate ??= failedAgentEntry();
+    record.status = "failed";
+    record.reason = reason;
+    record.findings_out = posted.length;
+    record.duration_ms = Date.now() - startedAt;
+  };
+
+  let spec: StepSpec;
+  try {
+    // Read once, hashed and parsed from the same bytes.
+    const raw = await Bun.file(input.consolidate.promptPath).text();
+    const agent = parseAgentSource(raw);
+    await writeSystemPrompt(systemPromptPath, agent.body);
+    meta.model = resolveModel(
+      input,
+      input.consolidate.model,
+      agent.model ?? DEFAULT_CONSOLIDATE_MODEL,
+      input.consolidate.promptPath,
+    );
+    record.model = meta.model;
+    meta.effort = agent.effort ?? DEFAULT_CONSOLIDATE_EFFORT;
+    record.prompt_sha256 = new Bun.CryptoHasher("sha256")
+      .update(raw)
+      .digest("hex");
+    spec = {
+      name,
+      systemPromptPath,
+      prompt,
+      tools: meta.tools,
+      mcpConfigPath: input.mcpConfigPath,
+      model: meta.model,
+      effort: meta.effort,
+      cwd: input.worktree,
+      outPath,
+      timeoutMs: CONSOLIDATE_TIMEOUT_MS,
+      maxAttempts: 2,
+      ...(routeForStepKey(state.routePlan, name) === undefined
+        ? {}
+        : { route: routeForStepKey(state.routePlan, name) }),
+      parse: (finalText) => {
+        const extracted = extractJsonObject(finalText);
+        if (extracted === undefined) {
+          throw new Error("consolidation final message has no JSON object");
+        }
+        return validatePlan(extracted, ids, new Set());
+      },
+      onRetry: (info) => emit(deps, { kind: "step-retry", ...info }),
+    };
+  } catch (error) {
+    // A missing or malformed prompt file: visible in the plan as a failed
+    // step, so the artifact never reads like the stage was off.
+    state.steps.push(meta);
+    abandon("prompt file unreadable", error);
+    return;
+  }
+
+  if (spec.route !== undefined) {
+    meta.route = spec.route;
+    meta.effort_applied = spec.route.backend === "claude-code";
+    const routedModel = effectiveExecutionModel(spec);
+    meta.model = routedModel;
+    record.model = routedModel;
+  }
+  state.steps.push(meta);
+
+  let result: StepResult;
+  try {
+    result = await deps.runner.run(spec);
+  } catch (error) {
+    abandon("runner threw", error);
+    return;
+  }
+  // Usage in both seats whatever the verdict: a failed step still burned
+  // tokens.
+  state.perAgent.consolidate = perAgentEntry(result);
+  recordSettlement(meta, result, input.runDir);
+  state.usageTotal = sumUsage(state.usageTotal, result.usage);
+  accumulateUsageV2(state, result);
+  if (result.status !== "ok") {
+    abandon("step failed or plan invalid");
+    return;
+  }
+  const plan = result.output as PlanEntry[];
+  state.consolidationPlan = plan;
+  meta.status = "ok";
+  record.status = "ok";
+  record.findings_out = plan.length;
+  record.duration_ms = Date.now() - startedAt;
+}
+
 // Steps 7 + 8: map verdicts, assign tiers, assemble the SkillOutput draft and
 // write pipeline.json. Also the ceiling path's landing zone — it dedupes
 // whatever hunters completed so even a truncated run emits canonical ids.
@@ -3041,7 +3361,7 @@ async function finish(
     state.survivors = survivors;
     state.deduped = deduped;
   }
-  const findings: Finding[] = [];
+  let findings: Finding[] = [];
   const refuted: DebugRefutedFinding[] = [];
   for (const survivor of state.survivors) {
     const verdict: RefuterVerdict =
@@ -3105,6 +3425,42 @@ async function finish(
   // ends up scored as a precision collapse. Purely additive — the findings
   // above keep their ids, order, tiers and verdicts; only `root_cause_id` is
   // stamped on, and only when the clusterer actually placed the finding.
+  //
+  // Consolidation is applied FIRST, so the clusterer and everything after it
+  // see the list that is actually posted. The plan was validated against the
+  // ids runConsolidation sent; it is re-validated here against the ids this
+  // function produced, because the two lists are derived separately and a
+  // plan applied to a list it was not written for would merge the wrong
+  // findings. A mismatch keeps the findings as they are: precision lost,
+  // never recall.
+  if (state.consolidationPlan !== undefined) {
+    let plan: PlanEntry[] | undefined;
+    try {
+      plan = validatePlan(
+        { findings: state.consolidationPlan },
+        findings.map((f) => f.id),
+        new Set(),
+      );
+    } catch {
+      plan = undefined;
+    }
+    if (plan === undefined) {
+      if (state.consolidation !== undefined) {
+        state.consolidation.status = "failed";
+        state.consolidation.reason = "plan no longer matches findings";
+        state.consolidation.findings_out = findings.length;
+      }
+    } else {
+      const stats = { repairs: 0 };
+      plan = enforcePlanInvariants(plan, findings, stats);
+      if (state.consolidation !== undefined) {
+        state.consolidation.plan_repairs = stats.repairs;
+        state.consolidation.findings_out = plan.length;
+      }
+      findings = applyPlan(findings, plan, []);
+    }
+  }
+  state.consolidation ??= skippedConsolidation(input);
   const rootCauses = clusterByRootCause(findings);
   const rootCauseId = rootCauseIdByFinding(rootCauses);
   const clustered = findings.map((finding) => {
@@ -3263,6 +3619,9 @@ async function writePipelinePlan(
       ? {}
       : { boundary_nonce: state.boundaryNonce }),
     ...(state.scout === undefined ? {} : { scout: state.scout }),
+    ...(state.consolidation === undefined
+      ? {}
+      : { consolidation: state.consolidation }),
     // `--shared-prefix` arm identity, read off the artifact like `scout`: a run
     // whose hunters all sit in groups of one has no warm-up row to tell it
     // from control. Absent means the control layout, byte for byte.

@@ -31,7 +31,7 @@ import {
   type TransportRegistry,
 } from "../transport-registry";
 import type { OpenCodeSdkLike } from "../transports/opencode-client";
-import { DEFAULT_SCOUT_MODEL } from "./pipeline";
+import { DEFAULT_CONSOLIDATE_MODEL, DEFAULT_SCOUT_MODEL } from "./pipeline";
 import type { CliOptions, SummarySettings } from "./preflight";
 import { type ParsedAgent, parseAgentFile } from "./prompt-set";
 import type { ReviewSpec } from "./spec";
@@ -72,6 +72,19 @@ export function pipelineScoutInput(
     : {};
 }
 
+// The consolidation pass is ENGINE-owned like the scout, and on by default in
+// both product paths (local and PR/CI) with no flag: it was measured as a net
+// gain on the Martian 50 (lab bench/METRICS.md 2026-10-27), and a failed pass
+// falls back to the unconsolidated findings. The lab's direct `runPipeline`
+// callers do not go through here, so their pipeline is unchanged.
+export function pipelineConsolidateInput(): {
+  consolidate: { promptPath: string; model?: string };
+} {
+  return {
+    consolidate: { promptPath: resolveEngineAssets().consolidatePromptPath },
+  };
+}
+
 export async function buildCliRoutePlan(params: {
   spec: ReviewSpec;
   options: CliOptions;
@@ -80,9 +93,14 @@ export async function buildCliRoutePlan(params: {
   summary: SummarySettings;
   summarizerEnabled?: boolean;
   scoutEnabled?: boolean;
+  // Defaults ON, like the stage itself in both product paths; a re-review
+  // that skips discovery passes false, the scout's condition, so the plan
+  // never carries a route for a step that will not run.
+  consolidateEnabled?: boolean;
 }): Promise<ResolvedRoutePlan> {
   const summarizerEnabled = params.summarizerEnabled ?? params.summary.enabled;
   const scoutEnabled = params.scoutEnabled ?? params.options.scout;
+  const consolidateEnabled = params.consolidateEnabled ?? true;
   let summarizerFrontmatter: string | undefined;
   if (summarizerEnabled) {
     try {
@@ -106,6 +124,17 @@ export async function buildCliRoutePlan(params: {
       // Same contract as the summarizer branch above.
     }
   }
+  let consolidateFrontmatter: string | undefined;
+  if (consolidateEnabled) {
+    try {
+      const parsed = await parseAgentFile(
+        resolveEngineAssets().consolidatePromptPath,
+      );
+      consolidateFrontmatter = parsed.model;
+    } catch {
+      // Same contract as the summarizer branch above.
+    }
+  }
   return buildResolvedRoutePlan({
     agents: params.spec.agents,
     cliModel: params.options.model,
@@ -125,6 +154,14 @@ export async function buildCliRoutePlan(params: {
             model: params.options.scoutModel,
             frontmatterModel: scoutFrontmatter,
             defaultModel: DEFAULT_SCOUT_MODEL,
+          },
+        }
+      : {}),
+    ...(consolidateEnabled
+      ? {
+          consolidate: {
+            frontmatterModel: consolidateFrontmatter,
+            defaultModel: DEFAULT_CONSOLIDATE_MODEL,
           },
         }
       : {}),

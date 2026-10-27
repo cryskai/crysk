@@ -512,6 +512,11 @@ export interface BuildRoutePlanInput {
     frontmatterModel?: string;
     defaultModel?: string;
   };
+  readonly consolidate?: {
+    model?: string;
+    frontmatterModel?: string;
+    defaultModel?: string;
+  };
 }
 
 export function buildResolvedRoutePlan(
@@ -550,6 +555,18 @@ export function buildResolvedRoutePlan(
         cliModel: input.scout.model ?? input.cliModel,
         frontmatterModel:
           input.scout.frontmatterModel ?? input.scout.defaultModel,
+        routingConfig: input.routingConfig,
+      }),
+    );
+  }
+  if (input.consolidate) {
+    stepRoutes.push(
+      resolveStepRoute({
+        stepKey: "consolidate",
+        role: "other",
+        cliModel: input.consolidate.model ?? input.cliModel,
+        frontmatterModel:
+          input.consolidate.frontmatterModel ?? input.consolidate.defaultModel,
         routingConfig: input.routingConfig,
       }),
     );

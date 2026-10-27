@@ -89,6 +89,7 @@ import {
 } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import {
+  pipelineConsolidateInput,
   pipelineScoutInput,
   pipelineSummarizerInput,
 } from "#review/route-preflight";
@@ -387,6 +388,8 @@ export async function reviewPr(
       hunterCount,
       summary.enabled,
       options.scout,
+      0,
+      true,
     );
     const dryRunGateConfig = sizeGateConfigFor(
       sizeGateOverrides,
@@ -792,6 +795,7 @@ export async function reviewPr(
               suspicionPriors: config.suspicion_priors,
               ...(skipDiscovery ? {} : pipelineSummarizerInput(summary)),
               ...(skipDiscovery ? {} : pipelineScoutInput(options)),
+              ...(skipDiscovery ? {} : pipelineConsolidateInput()),
               ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
               // NOT gated on skipDiscovery: an empty-delta re-review still
               // classifies and verifies against this config, and a run whose

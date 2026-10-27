@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { aliasCanonical, lookupAlias } from "#model/catalog";
 import {
   AmbiguousMappingError,
+  buildResolvedRoutePlan,
   computeRouteFingerprint,
   createResolvedRoutePlan,
   freezeRoutePlan,
@@ -1077,5 +1078,51 @@ describe("#176 follow-up: the refusal is keyed on the gateway, not the backend",
     });
     expect(route.modelSnapshot).toBe("claude-sonnet-5");
     expect(route.gateway).toBe("configured");
+  });
+});
+
+describe("buildResolvedRoutePlan: the consolidate step", () => {
+  const agents = [{ key: "reliability", role: "hunter", model: "sonnet" }];
+  const step = (plan: ResolvedRoutePlan, key: string) =>
+    plan.steps.find((s) => s.stepKey === key);
+
+  test("a route is resolved for consolidate when enabled, like the scout", () => {
+    const plan = buildResolvedRoutePlan({
+      agents,
+      scout: { defaultModel: "sonnet" },
+      consolidate: { defaultModel: "sonnet" },
+    });
+    expect(step(plan, "consolidate")?.role).toBe("other");
+    expect(step(plan, "consolidate")?.logicalIdentity).toBe(
+      step(plan, "scout")?.logicalIdentity,
+    );
+  });
+
+  test("no consolidate route when the stage is not enabled", () => {
+    const plan = buildResolvedRoutePlan({ agents });
+    expect(step(plan, "consolidate")).toBeUndefined();
+  });
+
+  test("an OpenCode mapping gives consolidate the backend and model the scout gets", () => {
+    const routingConfig: RoutingConfig = {
+      mappings: [
+        {
+          logical: "sonnet",
+          backend: "opencode",
+          provider: "anthropic",
+          modelSnapshot: "claude-sonnet-5-20250219",
+        },
+      ],
+    };
+    const plan = buildResolvedRoutePlan({
+      agents,
+      routingConfig,
+      scout: { defaultModel: "sonnet" },
+      consolidate: { defaultModel: "sonnet" },
+    });
+    const consolidate = step(plan, "consolidate")?.route;
+    expect(consolidate?.backend).toBe("opencode");
+    expect(consolidate?.modelSnapshot).toBe("claude-sonnet-5-20250219");
+    expect(consolidate).toEqual(step(plan, "scout")?.route);
   });
 });

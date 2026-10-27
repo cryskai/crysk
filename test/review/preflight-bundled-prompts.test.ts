@@ -267,6 +267,7 @@ function compiledAssets(
     // What resolveEngineAssets() actually computes when compiled: the dirname
     // of an embedded path. It is not a directory that exists.
     defaultAgentsDir: EMBEDDED_ROOT,
+    consolidatePromptPath: `${EMBEDDED_ROOT}/consolidate-c0n5011d.md`,
     scoutPromptPath: `${EMBEDDED_ROOT}/scout-a1b2c300.md`,
     summarizerPromptPath: `${EMBEDDED_ROOT}/summarizer-d4e5f600.md`,
     triageSkillFiles: {},

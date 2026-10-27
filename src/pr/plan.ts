@@ -145,6 +145,7 @@ export async function resolvePrPlanAndConfirm(params: {
     params.summary.enabled && !params.skipDiscovery,
     params.options.scout && !params.skipDiscovery,
     queuedVerification,
+    !params.skipDiscovery,
   );
   // 7b(CI) — the budget gate, immediately after the estimate it reads and
   // BEFORE the plan card/confirm/"committed to spending" commit-status
@@ -211,6 +212,7 @@ export async function resolvePrPlanAndConfirm(params: {
     summary: params.summary,
     summarizerEnabled: params.summary.enabled && !params.skipDiscovery,
     scoutEnabled: params.options.scout && !params.skipDiscovery,
+    consolidateEnabled: !params.skipDiscovery,
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
