@@ -156,11 +156,7 @@ import {
   scoutPrompt,
   validateScoutLeads,
 } from "./scout";
-import {
-  diffRecordPath,
-  type ExcludedPath,
-  splitDiffRecords,
-} from "./size-gate";
+import type { ExcludedPath } from "./size-gate";
 import {
   DEFAULT_STEP_MAX_ATTEMPTS,
   DEFAULT_STEP_TIMEOUT_MS,
@@ -386,7 +382,6 @@ export type PipelineProgressEvent =
   | { kind: "dedupe-finished"; drafts: number; findings: number }
   | {
       kind: "refuter-started";
-      // The BLOCKER/CRITICAL findings submitted to the refuter.
       severeFindings: number;
       // The submitted batch, so a renderer can show the leg's full shape
       // before the first verdict lands (the count alone cannot name a leaf).
@@ -948,79 +943,31 @@ function summarizerPrompt(patch: string, nonce: string): string {
 
 // The finding travels as JSON, and JSON escaping is not a boundary: a `claim`
 // string is hunter prose about attacker-controlled code, so it is wrapped like
-// every other non-engine block (§3.4). So is `fileDiff`, which is the PR
-// author's own text.
-//
-// The text is refuter v3.2's user prompt (lab
-// `bench/experiments/2026-10-26-refuter-replay/refuter.user.v3.2.tmpl`), byte
-// for byte, so what ships is what the offline replay measured. Its last
-// paragraph IS `REFUTER_OUTPUT_CONTRACT` (checked byte-identical), and the
-// trailing "" reproduces the template file's final newline.
-//
-// WHY the finding file's diff: v3.2 asks whether THIS PR caused the defect,
-// and the refuter has no git and no base — the worktree is the head alone.
-// Without the diff, the blind v3/v3.1 prompts demoted real defects as
-// "pre-existing" (6-10 of 15 kept vs 14 of 15 with it; lab
-// `bench/METRICS.md`, 2026-10-26). Only the finding's file, not the whole
-// patch: that slice is what the replay measured, and the claim is about one
-// site. (Its `downgraded-latent` wording says "not posted"; the posting side
-// of that promise is the separate S2 slice.)
-export function refuterPrompt(
-  batchJson: string,
-  nonce: string,
-  fileDiff: string,
-): string {
+// every other non-engine block (§3.4).
+export function refuterPrompt(batchJson: string, nonce: string): string {
   return [
     "Refute or corroborate this finding:",
     "",
     wrapBlock("finding", nonce, batchJson),
-    "",
-    "This PR's diff for the finding's file (the base is the `-` side):",
-    "",
-    // An explicit line, never an empty gap: a refuter told nothing would
-    // read silence as "the PR touches nothing here" without knowing it was
-    // told so.
-    wrapBlock("patch", nonce, fileDiff) ||
-      "(this PR's diff does not touch the finding's file)",
     "",
     "Decide one of `corroborated`, `refuted`, `downgraded-latent`, or",
     "`inconclusive` against the code in this worktree.",
     "",
     // The engine states the semantics because the tier consequences are the
     // engine's, not the prompt set's: `refuted` DELETES the finding, so it
-    // demands positive disproof; `downgraded-latent` keeps it and demotes it.
-    // v3.2 widens `corroborated` to demand a concrete trigger AND PR
-    // causation, and sends the real-but-unreached or not-this-PR defect to
-    // `downgraded-latent` — the door that keeps a true claim on record
-    // without posting it.
+    // demands positive disproof; `downgraded-latent` keeps it and demotes it
+    // to advisory. Without this line a reviewer facing a real defect in
+    // unreachable code has only the two wrong doors — delete it, or block a
+    // merge on it.
     "`refuted` means the code positively contradicts the claim — cite the",
-    "contradicting lines. `corroborated` means the defect is real AND you can name",
-    "a concrete trigger that reaches it at this commit AND this PR's diff caused it",
-    "(introduced it, made it reachable, or made it worse) — cite both.",
-    "`downgraded-latent` means the mechanism is real but the defective code does",
-    "not realistically run at this commit, or this PR did not cause it: it is kept",
-    "and recorded, never deleted, but it is not posted as a finding. A race between",
-    "paths that already run concurrently, or a wrong value produced on a real path",
-    "even if nothing reads it yet, is triggered — not latent. `inconclusive`",
-    "means you could not tell — it is not a polite `refuted`.",
+    "contradicting lines. `downgraded-latent` means the claim is a REAL defect",
+    "that nothing can execute at this commit (no caller wires it up yet, the",
+    "branch is unreachable by construction): it is kept and recorded, never",
+    "deleted, but it will not block a merge. `inconclusive` means you could",
+    "not tell — it is not a polite `refuted`.",
     "",
     REFUTER_OUTPUT_CONTRACT,
-    "",
   ].join("\n");
-}
-
-// The finding file's slice of the run's patch: every `diff --git` record whose
-// path is `file`, joined, trailing whitespace trimmed (the shape the lab replay
-// measured). Path resolution is size-gate's `diffRecordPath` — the same one
-// inline anchoring uses (src/pr/inline.ts) — because a second resolver would
-// disagree with it on renames and C-quoted paths, the class c717fe4 fixed.
-// Exported for scripts/refuter-replay.ts, so a replay rebuilds the very slice
-// the engine sent.
-export function fileDiffFor(patch: string, file: string): string {
-  return splitDiffRecords(patch)
-    .filter((record) => diffRecordPath(record) === file)
-    .join("")
-    .trimEnd();
 }
 
 // Where an agent's prompt actually lives, for the three stages that read one.
@@ -2196,22 +2143,8 @@ async function execute(
   // evidence_class. Severity alone is the test, because severity alone decides
   // whether a finding can reach blocking tier, and the refuter is what earns
   // that tier its credibility. (Blocking tier gates no merge — see deriveTier
-  // in src/review/findings.ts. It is the report's loudest register, which is
-  // exactly why an unchecked claim must not wear it.)
-  //
-  // Refuter v3.2 (2026-10-26) widened this to every severity, on the theory
-  // that its two new questions — is there a concrete trigger at this commit,
-  // and did THIS PR cause it — decide whether ANY finding is worth a
-  // developer's attention: about 87 of the 275 Martian 50 false positives
-  // were advisory findings that never reached the gate, and an offline
-  // replay on 50 hard cases removed most of that noise. The full Martian 50
-  // re-judge (lab `bench/METRICS.md`, 2026-10-27) killed it: over all 347
-  // posted findings v3.2 refuted only 5; the 105 it marked latent still post
-  // inline (posting them to the summary instead cost 25 of 27 lost goldens,
-  // F1 39.7 → 39.1, and was reverted); so judging every severity roughly
-  // doubled the refuter's cost for a near-zero effect. The v3.2 prompt stays:
-  // on a severe finding, PR causation is exactly what should decide whether
-  // it earns blocking tier.
+  // in src/review/findings.ts. It is the report's loudest register, which is exactly
+  // why an unchecked claim must not wear it.)
   //
   // This used to also require `evidence_class === "inferential"`, on the theory
   // that a code-provable claim needs no adversary. The 2026-07-29 AudioTrimmer
@@ -2229,7 +2162,7 @@ async function execute(
   // the run stays complete.
   // §5.3 admission for the refuter leg — say what it actually leaves standing.
   // `finish()` reads a survivor missing from `state.verdicts` as
-  // `not_submitted`, so on a ceiling-truncated run EVERY survivor
+  // `not_submitted`, so on a ceiling-truncated run EVERY severe survivor
   // carries that verdict with no adversarial refutation behind it. This used
   // to ship at blocking tier — the dominant case, not a corner: the
   // AudioTrimmer data in the batch comment above put 26 of 26 blocking
@@ -2280,9 +2213,6 @@ async function execute(
       stepTimeoutMs,
       agent: refuterAgent,
       nonce: boundaryNonce,
-      // The patch already read at the top of execute(), not a second read of
-      // diffPath: the refuter must see the bytes the hunters reviewed.
-      patch,
     });
   }
 
@@ -2312,8 +2242,6 @@ async function runRefuter(
     stepTimeoutMs: number;
     agent: AgentSpec;
     nonce: string;
-    // The run's whole patch; each step gets its finding file's slice.
-    patch: string;
   },
 ): Promise<void> {
   // Kept as the audit manifest of everything submitted this run, even though
@@ -2353,9 +2281,7 @@ async function runRefuter(
   const effort = resolveEffort(agent.effort, "refuter");
   // A finding's content is composed LONG after the run's nonce was committed
   // — the hunters wrote its `claim` and `proof_refs` from the patch — so it is
-  // the one block `selectBoundaryNonce` could not be drawn against. The file
-  // diff needs no such guard: it is a slice of the patch the nonce WAS drawn
-  // against, so it cannot carry the nonce either. Guarded
+  // the one block `selectBoundaryNonce` could not be drawn against. Guarded
   // here, driver-side, rather than left to wrapBlock's throw: a throw at
   // prompt-composition time would kill a paid run at its last leg.
   //
@@ -2391,11 +2317,7 @@ async function runRefuter(
       systemPromptPath,
       // Finding CONTENT inline, not a path: the refuter's tool surface is
       // read-only over the worktree; its work order must arrive in the prompt.
-      prompt: refuterPrompt(
-        oneJson,
-        options.nonce,
-        fileDiffFor(options.patch, survivor.path),
-      ),
+      prompt: refuterPrompt(oneJson, options.nonce),
       tools: agent.tools,
       mcpConfigPath: input.mcpConfigPath,
       model,
@@ -2513,7 +2435,7 @@ async function runRefuter(
   // lands on that same conservative default rather than silently on
   // `not_submitted`: "the gate could not be asked" is a failure of this leg,
   // and `anyFailed` is what makes it visible in `run_status` and in
-  // `per_agent.refuter` instead of reading like a run with nothing submitted.
+  // `per_agent.refuter` instead of reading like a run with no severe findings.
   for (const id of forged) {
     anyFailed = true;
     state.verdicts.set(id, "inconclusive");
