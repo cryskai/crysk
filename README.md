@@ -37,9 +37,13 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    `pr-hero-ci-setup` sets up the workflow, `pr-hero-pr` opens a PR and waits for its review, and
    `pr-hero-triage` answers the findings. `pr-hero` covers the local CLI, which this path does not use.
 
-2. **Ask your agent to set up pr-hero CI** in the repository. `pr-hero-ci-setup` runs
-   `npx -y pr-hero setup --ci` (writes `.github/workflows/pr-hero.yml`) and `npx -y pr-hero init`
-   (writes `.prhero/config.json` and `.prhero/gotchas.md`), writes the repository gotchas, and stores
+2. **Ask your agent to set up pr-hero CI** in the repository. `pr-hero-ci-setup` first asks you how
+   re-reviews should work: a level (minimal, balanced, thorough or manual), gate or advisory, how CI
+   pays (a subscription gets no spend ceiling, an API key gets one you choose), and whether to tune the
+   advanced settings (score weights, observe-only, trusted actors, size limits, exclusions). Then it runs
+   `npx -y pr-hero setup --ci` with your answers (writes `.github/workflows/pr-hero.yml` and the
+   level's keys in `.prhero/config.json`, and prints a summary) and `npx -y pr-hero init`
+   (writes `.prhero/gotchas.md`), writes the repository gotchas, and stores
    one secret with `gh secret set`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription, from
    `claude setup-token`) or `ANTHROPIC_API_KEY` (pay as you go). Without an agent, run the same
    commands yourself and follow the [Quick path](docs/github-actions.md#quick-path).

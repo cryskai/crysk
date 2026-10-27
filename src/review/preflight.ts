@@ -320,15 +320,21 @@ Usage:
   pr-hero review [options]   Review a branch (zero flags inside a configured repo)
   pr-hero init [options]     Scaffold <repo>/.prhero/ (config.json + gotchas.md)
   pr-hero setup [options]    Run interactive onboarding wizard
-  pr-hero setup --ci [--force]
+  pr-hero setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
                              Scaffold .github/workflows/pr-hero.yml instead
                              of the wizard. Refuses to overwrite an existing
-                             workflow unless --force is passed. Then checks
-                             gh and, in a terminal, offers to install it and
-                             run gh auth login
+                             workflow unless --force is passed. Asks how CI
+                             re-reviews (in a terminal) or takes the flags:
+                             --level minimal|balanced|thorough|manual,
+                             --ci-mode gate|advisory, --billing
+                             subscription|api, --budget-usd (api only).
+                             Writes the level to .prhero/config.json and
+                             prints a summary. Then checks gh and, in a
+                             terminal, offers to install it and run gh auth
+                             login
   pr-hero skills install [--force]
                              Install the pr-hero, pr-hero-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
-  pr-hero ci init [--force]  Same scaffolding as "setup --ci", as its own
+  pr-hero ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
                              command
   pr-hero doctor [options]   Check system tools and environment readiness
   pr-hero activity [options] View currently running reviews and recent store history

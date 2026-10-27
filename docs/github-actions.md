@@ -422,6 +422,19 @@ On every `synchronize` push, pr-hero decides whether another review is worth the
 fetching the worktree or spawning agents. The decision is deterministic, logged in the job summary,
 and backed by a durable attempt ledger stored in GitHub Check Runs (`checks: write` permission).
 
+### Review levels (what setup --ci asks)
+
+`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode`, `--billing` and `--budget-usd`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
+
+| Level | `ci_review_policy` | `ci_max_attempts` | `ci_rereview_min_score` | `max_verification_steps` |
+|---|---|---|---|---|
+| `minimal` | `once_per_pr` | 1 | (unset) | 8 |
+| `balanced` (default) | `risk_aware` | 2 | 4 | 8 |
+| `thorough` | `every_push` | 4 | (unset) | 8 |
+| `manual` | `manual_only` | 1 | (unset) | 8 |
+
+Billing: `--billing subscription` writes `budget-usd: 0` (a subscription spends quota, not dollars); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+
 ### Policy configuration (`.prhero/config.json`)
 
 These keys live in the **repository** config (not the PR branch worktree). A PR author cannot change

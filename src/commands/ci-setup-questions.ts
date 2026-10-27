@@ -235,7 +235,7 @@ async function askAdvanced(
 
   say();
   say(
-    "Size limits: a PR above them is skipped, not reviewed. Empty keeps the default (none on a subscription, 50 files on an API key).",
+    "Size limits: a PR above them is skipped, not reviewed. Empty keeps the default (none on a subscription, 4000 lines and 50 files on an API key).",
   );
   const lines = await askValue(
     prompter,

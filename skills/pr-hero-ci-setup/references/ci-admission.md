@@ -30,6 +30,19 @@ Read this when configuring `.prhero/config.json` during CI setup. Full operator 
 - **Whether it runs (admission):** in `risk_aware` and `thresholded` modes, the previous review's finding score (`blocking × 2 + advisory × 1` by default) is compared against `ci_rereview_min_score`, bounded by `ci_max_attempts` total automatic passes per PR.
 - **What it does when it runs:** discovery is incremental by default (hunters examine only commits since the last completed review's head SHA; `/pr-hero review --full` widens to the full PR), and up to `max_verification_steps` verifier steps check whether prior open findings were fixed by the new push.
 
+## Review levels (what setup --ci asks)
+
+`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode`, `--billing` and `--budget-usd`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
+
+| Level | `ci_review_policy` | `ci_max_attempts` | `ci_rereview_min_score` | `max_verification_steps` |
+|---|---|---|---|---|
+| `minimal` | `once_per_pr` | 1 | (unset) | 8 |
+| `balanced` (default) | `risk_aware` | 2 | 4 | 8 |
+| `thorough` | `every_push` | 4 | (unset) | 8 |
+| `manual` | `manual_only` | 1 | (unset) | 8 |
+
+Billing: `--billing subscription` writes `budget-usd: 0` (a subscription spends quota, not dollars); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+
 ## Policy modes
 
 | Mode | Use when |
