@@ -3110,6 +3110,7 @@ async function runScout(
 // is generous, and two attempts because unlike the scout a lost answer here
 // is a lost precision gain on findings the run already paid for.
 const CONSOLIDATE_TIMEOUT_MS = 10 * 60 * 1000;
+const CONSOLIDATE_MAX_ATTEMPTS = 2;
 
 // Last resort in the model chain, the scout's rule: the frontmatter of
 // prompts/consolidate.md names sonnet too, and the Martian 50 measurement
@@ -3183,12 +3184,15 @@ async function runConsolidation(
   // An optional precision pass must never be the step that turns a complete
   // run partial. If the ceiling could fire inside the worst case of this step
   // (two attempts at the full watchdog, plus the ceiling's settle grace), the
-  // stage stands down and the findings post as the refuter left them.
+  // stage stands down and the findings post as the refuter left them. A
+  // format-violation retry draws on its own budget, separate from the
+  // transient attempts (src/execution/failure-policy.ts), so the worst case is
+  // maxAttempts + 1 full-watchdog attempts.
   const deadline = state.ceilingDeadlineMs;
   if (
     deadline !== undefined &&
     deadline - Date.now() <
-      CONSOLIDATE_TIMEOUT_MS * 2 +
+      CONSOLIDATE_TIMEOUT_MS * (CONSOLIDATE_MAX_ATTEMPTS + 1) +
         (state.ceilingGraceMs ?? ceilingGraceMs(input))
   ) {
     state.consolidation = {
@@ -3294,7 +3298,7 @@ async function runConsolidation(
       cwd: input.worktree,
       outPath,
       timeoutMs: CONSOLIDATE_TIMEOUT_MS,
-      maxAttempts: 2,
+      maxAttempts: CONSOLIDATE_MAX_ATTEMPTS,
       ...(routeForStepKey(state.routePlan, name) === undefined
         ? {}
         : { route: routeForStepKey(state.routePlan, name) }),
