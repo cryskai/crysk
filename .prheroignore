@@ -1,7 +1,7 @@
 # pr-hero's own exclusions, on top of the 9 shipped defaults (lockfiles, minified, snapshots).
 # Dialect: a gitignore(5) subset, read from the BASE ref under CI. Last matching rule wins.
 #
-# Scope: PROSE FILES ONLY, and only at the top level of two directories. Research notes, benchmark
+# Scope: PROSE FILES ONLY, and only at the top level of three directories. Research notes, benchmark
 # ledgers and the roadmap are argued in review comments and PR descriptions, not by a hunter, and
 # their diffs are large — reviewing them spends budget on text that cannot break at runtime.
 #
@@ -13,10 +13,11 @@
 # records that class is docs/research/local-logic-misses.md. Runbooks, workflows, prompts, README
 # and CLAUDE.md stay in scope everywhere.
 #
-# Known and accepted: a markdown file under these two directories is unreviewed even when it quotes
+# Known and accepted: a markdown file under these three directories is unreviewed even when it quotes
 # a command. docs/research/scout-design.md is the live example. Prose meant to be EXECUTED belongs
 # in docs/release-runbook.md or in a script, both of which are reviewed.
 
 docs/research/*.md
 docs/benchmarks/*.md
+docs/history/*.md
 ROADMAP.md

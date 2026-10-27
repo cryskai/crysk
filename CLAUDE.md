@@ -6,7 +6,7 @@ step per finding), and deterministic code assigns blocking/advisory tiers. Convo
 the flow is data (`ReviewSpec`), agents are prompt files, orchestration is testable TypeScript — LLMs
 judge, code governs. Born 2026-07-28/29 by extracting and redesigning the Deep Review v1 monolith.
 
-North star and phase order: `ROADMAP.md` (here). Current phase: **B (production wiring)** — Phase A closed 2026-08-10 and the golden dataset was retired as the benchmark in favour of a live head-to-head against Greptile on real PRs. See THE PIVOT in `ROADMAP.md`.
+North star and stage order: `ROADMAP.md` (here), redrawn 2026-10-27 after the Martian 50 milestone. Current stage: **0 → 1 (ship what is merged, then rebrand and launch)**; quieter, faster reviews come next as Stage 2. Ids like A2, C2 or B7 in code comments refer to the archived roadmap, `docs/history/ROADMAP-2026-07-to-10.md`.
 
 ## Instruction precedence (read this first)
 

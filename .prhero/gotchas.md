@@ -7,7 +7,8 @@ into every hunter's system prompt, so each line has to earn its tokens.
   and load-bearing: `src/findings.ts` mirrors the lab's validator, and hunter
   keys are pinned to the `reliability|resilience|parity|lifecycle` enum until a
   coordinated v1.1 bump. A key or field that looks "missing" is usually frozen
-  on purpose — check `ROADMAP.md` C2 before calling it a defect.
+  on purpose — check C2 in `docs/history/ROADMAP-2026-07-to-10.md` (the
+  archived roadmap) before calling it a defect.
 - The isolation flags in `src/step-runner.ts` (`--strict-mcp-config`,
   `--setting-sources ""`, no Write/Task/Bash for agents, driver owns every file
   write) are a threat model, not preferences. They look over-restrictive; each
