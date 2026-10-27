@@ -82,17 +82,18 @@ Before step 4, ask the human these questions in their language. Use the native q
 3. **How CI pays**:
    - **Claude subscription** (`CLAUDE_CODE_OAUTH_TOKEN`): do not ask for a budget. Tell them `budget-usd: 0` is written because a subscription review spends quota, not dollars.
    - **API key** (`ANTHROPIC_API_KEY` or an OpenCode provider): ask for the spend ceiling per review in USD (default 10, `0` = none).
-4. **Advanced settings**: name them, then ask whether to review them now. Each keeps a working default if skipped:
+4. **Changed-lines threshold**: a PR with more changed lines is skipped, not reviewed. Ask on any billing (default 4000, `0` = no limit, only if they say so): unlike the budget it matters on a subscription too, where an unset threshold means no limit at all.
+5. **Advanced settings**: name them, then ask whether to review them now. Each keeps a working default if skipped:
    - score weights: blocking 2, advisory 1 (integers >= 1; `ci_blocking_weight`, `ci_advisory_weight`), and the score floor 4 (`ci_rereview_min_score`); used only by the risk-aware and thresholded policies;
    - observe only (`ci_admission_observe_only`): log what the rules would skip, but review every push; good for one PR cycle;
    - trusted actors (`ci_trusted_actors`): extra GitHub logins whose pr-hero markers count;
-   - size limits (`max_changed_lines`, `max_changed_files`): a PR above them is skipped; unset = none on a subscription, 4000 lines and 50 files on an API key;
+   - changed-files limit (`max_changed_files`): a PR touching more files is skipped; unset = none on a subscription, 50 on an API key;
    - exclusions: patterns in `.prheroignore` (gitignore syntax) the review never reads.
 
 Then pass the answers to the scaffold as flags, never as hand-written YAML:
 
 ```bash
-npx -y pr-hero setup --ci --level <minimal|balanced|thorough|manual> --ci-mode <gate|advisory> --billing <subscription|api> [--budget-usd <n>]
+npx -y pr-hero setup --ci --level <minimal|balanced|thorough|manual> --ci-mode <gate|advisory> --billing <subscription|api> --max-changed-lines <n> [--budget-usd <n>]
 ```
 
 It writes the workflow, merges the level's keys into `.prhero/config.json` (keeping other keys), and prints a summary of every setting. **Never run it without these flags**: with none it applies balanced and gate, and its summary says nobody chose them. Write any advanced answers into `.prhero/config.json` (and `.prheroignore`) afterwards, then run `npx -y pr-hero config` to verify. Show the human the printed summary. Details: `references/ci-admission.md`.
@@ -105,7 +106,7 @@ It writes the workflow, merges the level's keys into `.prhero/config.json` (keep
 4. **Workflow:** run the interview above, then `npx -y pr-hero setup --ci` with its flags. It writes `.github/workflows/pr-hero.yml` and the level keys in `.prhero/config.json`. Confirm `checks: write` and `actions: read`, both `pull_request` and `issue_comment` triggers, quoted `routing` / `opencode-auth`. `--force` if an old template lacks them (an old `credentials` job or a missing `issue_comment` trigger means it predates the single workflow).
 5. **Gotchas (required before the first review):** if `.prhero/` is missing on the default branch, run `npx -y pr-hero init` in the clone. The agent writes the gotchas from the repository it has in context, not from the template: the deliberate oddity that looks like a bug, the invariant enforced outside the diff, the ownership rule a newcomer would break. Each line is injected verbatim into every hunter's prompt. Delete the `human-attention-required` marker line (pr-hero refuses to review while it is there), then commit `.prhero/` to the default branch. Without it the run fails `PRH-GOTCHAS-MISSING`.
 6. **Require the check:** in branch protection, require the `pr-hero` status check (the gate), not the `review` job. A private repository on GitHub Free cannot require status checks (HTTP 403): report that the gate is advisory there. With `gh`, and only after asking the human: read the current protection first (`gh api repos/<o>/<r>/branches/<default>/protection`), because the PUT replaces all of it; then `gh api -X PUT repos/<o>/<r>/branches/<default>/protection` with `required_status_checks` contexts `["pr-hero"]`.
-7. **Advanced settings:** write the answers from interview question 4 into `.prhero/config.json` (and `.prheroignore`); commit both to the default branch. **No `routing` key.** `npx -y pr-hero config` to verify.
+7. **Advanced settings:** write the answers from interview question 5 into `.prhero/config.json` (and `.prheroignore`); commit both to the default branch. **No `routing` key.** `npx -y pr-hero config` to verify.
 8. **Verify:** `npx -y pr-hero doctor`. `git status`. Confirm no openai `type:"api"` blob, no echoed auth, `modelSnapshot` matches `opencode models` when OpenCode is on.
 9. **Deploy:** Offer commit. Open a **same-repo** test PR (forks skip).
 

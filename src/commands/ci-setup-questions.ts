@@ -11,6 +11,7 @@ import {
   type AdvancedChoices,
   type Billing,
   type CiSetupChoices,
+  DEFAULT_MAX_CHANGED_LINES,
   DEFAULT_REVIEW_LEVEL,
   defaultChoices,
   REVIEW_LEVEL_ORDER,
@@ -39,13 +40,17 @@ export interface SetupPrompter {
 // Choices passed as flags, for an agent that already asked the person.
 // Any one of them means someone chose, so nothing is reported as a default.
 export function choicesFromFlags(
-  options: Pick<CliOptions, "reviewLevel" | "ciMode" | "billing" | "budgetUsd">,
+  options: Pick<
+    CliOptions,
+    "reviewLevel" | "ciMode" | "billing" | "budgetUsd" | "maxChangedLines"
+  >,
 ): CiSetupChoices | undefined {
   const given =
     options.reviewLevel !== undefined ||
     options.ciMode !== undefined ||
     options.billing !== undefined ||
-    options.budgetUsd !== undefined;
+    options.budgetUsd !== undefined ||
+    options.maxChangedLines !== undefined;
   if (!given) return undefined;
   const billing: Billing | undefined =
     options.billing ?? (options.budgetUsd !== undefined ? "api" : undefined);
@@ -56,6 +61,7 @@ export function choicesFromFlags(
     ...(options.budgetUsd === undefined
       ? {}
       : { budgetUsd: options.budgetUsd }),
+    maxChangedLines: options.maxChangedLines ?? DEFAULT_MAX_CHANGED_LINES,
     advanced: {},
     defaulted: false,
   };
@@ -175,7 +181,20 @@ export async function askChoices(
 
   say();
   say(
-    "Advanced settings: score weights, observe-only mode, trusted actors, size limits, and exclusions. Each has a default that works.",
+    "Size threshold: a PR with more changed lines than this is skipped, not reviewed. It applies on any billing: without it a subscription reviews any size.",
+  );
+  choices.maxChangedLines = await askValue(
+    prompter,
+    "Max changed lines per review (0 = no limit)",
+    String(DEFAULT_MAX_CHANGED_LINES),
+    integerAtLeast(0),
+    say,
+    "Enter a whole number, 0 or more.",
+  );
+
+  say();
+  say(
+    "Advanced settings: score weights, observe-only mode, trusted actors, the changed-files limit, and exclusions. Each has a default that works.",
   );
   if (await prompter.confirm("Review the advanced settings now?", false)) {
     choices.advanced = await askAdvanced(prompter, say);
@@ -235,17 +254,8 @@ async function askAdvanced(
 
   say();
   say(
-    "Size limits: a PR above them is skipped, not reviewed. Empty keeps the default (none on a subscription, 4000 lines and 50 files on an API key).",
+    "Changed-files limit: a PR touching more files is skipped. Empty keeps the default (none on a subscription, 50 on an API key).",
   );
-  const lines = await askValue(
-    prompter,
-    "Max changed lines (empty = default, 0 = no limit)",
-    "",
-    optionalLimit,
-    say,
-    "Enter a whole number, or leave it empty.",
-  );
-  if (lines !== null) advanced.max_changed_lines = lines;
   const files = await askValue(
     prompter,
     "Max changed files (empty = default, 0 = no limit)",

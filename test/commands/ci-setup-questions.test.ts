@@ -43,6 +43,7 @@ describe("askChoices", () => {
       "thorough",
       "advisory",
       "subscription",
+      "", // max changed lines: default 4000
       "n",
     ]);
     const c = await askChoices(prompter, (l = "") => lines.push(l));
@@ -50,9 +51,11 @@ describe("askChoices", () => {
       level: "thorough",
       mode: "advisory",
       billing: "subscription",
+      maxChangedLines: 4000,
       advanced: {},
       defaulted: false,
     });
+    expect(asked.some((q) => /changed lines/i.test(q))).toBe(true);
     expect(asked.some((q) => /ceiling/i.test(q))).toBe(false);
     expect(lines.join("\n")).toContain("budget-usd: 0");
     // The advanced settings are named up front even when skipped.
@@ -60,14 +63,15 @@ describe("askChoices", () => {
   });
 
   test("api: asks the ceiling, re-asks on a non-number, empty takes $10", async () => {
-    const { prompter } = scripted(["", "", "api", "lots", "7.5", "n"]);
+    const { prompter } = scripted(["", "", "api", "lots", "7.5", "2000", "n"]);
     const c = await askChoices(prompter, () => {});
     expect(c.billing).toBe("api");
     expect(c.budgetUsd).toBe(7.5);
     expect(c.level).toBe("balanced");
     expect(c.mode).toBe("gate");
+    expect(c.maxChangedLines).toBe(2000);
 
-    const { prompter: p2 } = scripted(["", "", "api", "", "n"]);
+    const { prompter: p2 } = scripted(["", "", "api", "", "", "n"]);
     expect((await askChoices(p2, () => {})).budgetUsd).toBe(10);
   });
 
@@ -76,13 +80,13 @@ describe("askChoices", () => {
       "balanced",
       "gate",
       "subscription",
+      "0", // no line limit, said explicitly
       "y",
       "", // blocking weight: default 2
       "0", // advisory weight 0: rejected, re-asked
       "3",
       "y", // observe only
       "bot-a, bot-b",
-      "", // max lines: default
       "40",
       "dist/**, *.lock",
     ]);
@@ -107,9 +111,16 @@ describe("choicesFromFlags", () => {
       level: "balanced",
       mode: "gate",
       billing: "subscription",
+      maxChangedLines: 4000,
       advanced: {},
       defaulted: false,
     });
+  });
+
+  test("--max-changed-lines alone is a choice too", () => {
+    expect(choicesFromFlags({ maxChangedLines: 1500 })?.maxChangedLines).toBe(
+      1500,
+    );
   });
 
   test("--budget-usd alone implies an API key", () => {

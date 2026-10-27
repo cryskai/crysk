@@ -8,6 +8,7 @@
 // keys it sets are always written to .prhero/config.json, so what a repo does
 // is visible in the file it versions, never inherited silently.
 
+import { DEFAULT_SIZE_GATE } from "#review/size-gate";
 import { CI_DEFAULT_METERED_BUDGET_USD } from "./gates";
 import {
   DEFAULT_CI_ADVISORY_WEIGHT,
@@ -96,7 +97,6 @@ export interface AdvancedChoices {
   ci_advisory_weight?: number;
   ci_admission_observe_only?: boolean;
   ci_trusted_actors?: string[];
-  max_changed_lines?: number;
   max_changed_files?: number;
   // Lines appended to .prheroignore; exclusions have no config key.
   ignorePatterns?: string[];
@@ -110,15 +110,23 @@ export interface CiSetupChoices {
   billing?: Billing;
   // Only with billing "api"; undefined there means the $10 default.
   budgetUsd?: number;
+  // Always written. Unlike the budget, a size threshold matters on any route:
+  // left unset, a subscription route resolves to NO limit, so a huge PR would
+  // run a review nobody asked for. 0 is the explicit, chosen "no limit".
+  maxChangedLines: number;
   advanced: AdvancedChoices;
   // True when no human or agent chose: the summary must say so.
   defaulted: boolean;
 }
 
+// The engine's own default threshold, so a chosen default and an inherited one agree.
+export const DEFAULT_MAX_CHANGED_LINES = DEFAULT_SIZE_GATE.maxChangedLines;
+
 export function defaultChoices(): CiSetupChoices {
   return {
     level: DEFAULT_REVIEW_LEVEL,
     mode: "gate",
+    maxChangedLines: DEFAULT_MAX_CHANGED_LINES,
     advanced: {},
     defaulted: true,
   };
@@ -143,6 +151,7 @@ export function configPatch(choices: CiSetupChoices): Record<string, unknown> {
   const { ignorePatterns: _ignored, ...advanced } = choices.advanced;
   const patch: Record<string, unknown> = {
     ...REVIEW_LEVELS[choices.level].config,
+    max_changed_lines: choices.maxChangedLines,
   };
   for (const [key, value] of Object.entries(advanced)) {
     if (value !== undefined) patch[key] = value;
@@ -174,7 +183,7 @@ export function renderChoicesSummary(choices: CiSetupChoices): string[] {
     `  score weights    blocking ${a.ci_blocking_weight ?? DEFAULT_CI_BLOCKING_WEIGHT}, advisory ${a.ci_advisory_weight ?? DEFAULT_CI_ADVISORY_WEIGHT}`,
     `  observe only     ${a.ci_admission_observe_only === true ? "yes: skip decisions are logged, every push is reviewed" : "no"}`,
     `  trusted actors   ${a.ci_trusted_actors && a.ci_trusted_actors.length > 0 ? a.ci_trusted_actors.join(", ") : "none beyond the workflow actor"}`,
-    `  size limit       ${a.max_changed_lines === undefined && a.max_changed_files === undefined ? "resolved from how the review is paid" : `${a.max_changed_lines ?? "default"} lines, ${a.max_changed_files ?? "default"} files`}`,
+    `  size limit       ${choices.maxChangedLines === 0 ? "no changed-lines limit (0)" : `${choices.maxChangedLines} changed lines`}, ${a.max_changed_files === undefined ? "files resolved from how the review is paid" : `${a.max_changed_files} files`}`,
     `  exclusions       ${a.ignorePatterns && a.ignorePatterns.length > 0 ? `${a.ignorePatterns.join(", ")} (.prheroignore)` : "none added (.prheroignore)"}`,
     "Change them later in .prhero/config.json and .github/workflows/pr-hero.yml (`npx -y pr-hero config` shows the effective values).",
   ];

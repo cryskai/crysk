@@ -56,6 +56,7 @@ describe("review level presets", () => {
     expect(d.level).toBe("balanced");
     expect(d.mode).toBe("gate");
     expect(d.billing).toBeUndefined();
+    expect(d.maxChangedLines).toBe(4000);
     expect(d.defaulted).toBe(true);
   });
 });
@@ -92,6 +93,7 @@ describe("configPatch", () => {
       ci_review_policy: "every_push",
       ci_max_attempts: 4,
       max_verification_steps: 8,
+      max_changed_lines: 4000,
       ci_blocking_weight: 3,
       ci_trusted_actors: ["bot"],
     });
@@ -103,6 +105,7 @@ describe("renderChoicesSummary", () => {
     const text = renderChoicesSummary(defaultChoices()).join("\n");
     expect(text).toContain("defaults: nobody chose them");
     expect(text).toContain("--level");
+    expect(text).toContain("size limit       4000 changed lines");
     expect(text).toContain(
       "risk_aware, at most 2 automatic passes per PR, score floor 4",
     );

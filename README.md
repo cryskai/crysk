@@ -39,8 +39,9 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
 
 2. **Ask your agent to set up pr-hero CI** in the repository. `pr-hero-ci-setup` first asks you how
    re-reviews should work: a level (minimal, balanced, thorough or manual), gate or advisory, how CI
-   pays (a subscription gets no spend ceiling, an API key gets one you choose), and whether to tune the
-   advanced settings (score weights, observe-only, trusted actors, size limits, exclusions). Then it runs
+   pays (a subscription gets no spend ceiling, an API key gets one you choose), the changed-lines
+   threshold above which a PR is skipped (default 4000, on any billing), and whether to tune the
+   advanced settings (score weights, observe-only, trusted actors, files limit, exclusions). Then it runs
    `npx -y pr-hero setup --ci` with your answers (writes `.github/workflows/pr-hero.yml` and the
    level's keys in `.prhero/config.json`, and prints a summary) and `npx -y pr-hero init`
    (writes `.prhero/gotchas.md`), writes the repository gotchas, and stores

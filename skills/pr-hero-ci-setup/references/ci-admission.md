@@ -32,7 +32,7 @@ Read this when configuring `.prhero/config.json` during CI setup. Full operator 
 
 ## Review levels (what setup --ci asks)
 
-`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode`, `--billing` and `--budget-usd`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
+`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode`, `--billing`, `--max-changed-lines` and `--budget-usd`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
 
 | Level | `ci_review_policy` | `ci_max_attempts` | `ci_rereview_min_score` | `max_verification_steps` |
 |---|---|---|---|---|
@@ -42,6 +42,8 @@ Read this when configuring `.prhero/config.json` during CI setup. Full operator 
 | `manual` | `manual_only` | 1 | (unset) | 8 |
 
 Billing: `--billing subscription` writes `budget-usd: 0` (a subscription spends quota, not dollars); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+
+Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). Unlike the budget it applies on any billing: left unset, a subscription route reviews a PR of any size.
 
 ## Policy modes
 

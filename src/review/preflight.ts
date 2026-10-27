@@ -327,7 +327,8 @@ Usage:
                              re-reviews (in a terminal) or takes the flags:
                              --level minimal|balanced|thorough|manual,
                              --ci-mode gate|advisory, --billing
-                             subscription|api, --budget-usd (api only).
+                             subscription|api, --budget-usd (api only),
+                             --max-changed-lines (default 4000).
                              Writes the level to .prhero/config.json and
                              prints a summary. Then checks gh and, in a
                              terminal, offers to install it and run gh auth

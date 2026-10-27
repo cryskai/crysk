@@ -231,6 +231,7 @@ describe("setup --ci review choices (CLI)", () => {
         ci_max_attempts: 2,
         ci_rereview_min_score: 4,
         max_verification_steps: 8,
+        max_changed_lines: 4000,
       });
       expect(r.output).toContain("defaults: nobody chose them");
     } finally {
@@ -246,6 +247,8 @@ describe("setup --ci review choices (CLI)", () => {
       "advisory",
       "--billing",
       "subscription",
+      "--max-changed-lines",
+      "2500",
     ]);
     try {
       expect(r.code).toBe(0);
@@ -255,6 +258,7 @@ describe("setup --ci review choices (CLI)", () => {
         ci_review_policy: "every_push",
         ci_max_attempts: 4,
         max_verification_steps: 8,
+        max_changed_lines: 2500,
       });
       expect(r.output).not.toContain("nobody chose");
       expect(r.output).toContain(
@@ -288,6 +292,7 @@ describe("setup --ci review choices (CLI)", () => {
         ci_review_policy: "once_per_pr",
         ci_max_attempts: 1,
         max_verification_steps: 8,
+        max_changed_lines: 4000,
       });
     } finally {
       await rm(r.dir, { recursive: true, force: true });
@@ -366,7 +371,7 @@ describe("ciSetupCommand at a terminal", () => {
     const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-tty-"));
     try {
       Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
-      const answers = ["manual", "advisory", "api", "3", "n"];
+      const answers = ["manual", "advisory", "api", "3", "1200", "n"];
       const asked: string[] = [];
       const take = (q: string) => {
         asked.push(q);
@@ -389,7 +394,7 @@ describe("ciSetupCommand at a terminal", () => {
         },
       );
       expect(code).toBe(0);
-      expect(asked).toHaveLength(5);
+      expect(asked).toHaveLength(6);
       const workflow = await Bun.file(
         path.join(dir, ".github", "workflows", "pr-hero.yml"),
       ).text();
@@ -398,8 +403,11 @@ describe("ciSetupCommand at a terminal", () => {
       expect(
         JSON.parse(
           await Bun.file(path.join(dir, ".prhero", "config.json")).text(),
-        ).ci_review_policy,
-      ).toBe("manual_only");
+        ),
+      ).toMatchObject({
+        ci_review_policy: "manual_only",
+        max_changed_lines: 1200,
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
