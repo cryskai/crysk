@@ -248,7 +248,7 @@ test("enforcePlanInvariants rule 1: a WARNING primary absorbing a blocking sourc
     stats,
   );
   expect(out).toEqual([
-    { primary: "F002", sources: ["F001", "F002"], split: false, claim: "m" },
+    { primary: "F002", sources: ["F002", "F001"], split: false, claim: "m" },
   ]);
   expect(stats.repairs).toBe(1);
 });
@@ -321,4 +321,51 @@ test("enforcePlanInvariants: a plan that keeps every rule comes back deep-equal,
   const stats = { repairs: -1 };
   expect(enforcePlanInvariants(plan, findings, stats)).toEqual(plan);
   expect(stats.repairs).toBe(0);
+});
+
+test("rule 0: a merge's sources are reordered primary-first", () => {
+  const findings = [advisoryF("F001"), advisoryF("F002")];
+  const stats = { repairs: -1 };
+  const out = enforcePlanInvariants(
+    [{ primary: "F002", sources: ["F001", "F002"], split: false, claim: "x" }],
+    findings,
+    stats,
+  );
+  expect(out).toEqual([
+    { primary: "F002", sources: ["F002", "F001"], split: false, claim: "x" },
+  ]);
+  expect(stats.repairs).toBe(0);
+});
+
+test("rule 4: a finding named only in a split's sources gets its own entry", () => {
+  const findings = [advisoryF("F001"), advisoryF("F002")];
+  const stats = { repairs: 0 };
+  const out = enforcePlanInvariants(
+    [
+      { primary: "F001", sources: ["F001"], split: false, claim: "a" },
+      { primary: "F001", sources: ["F001", "F002"], split: true, claim: "b" },
+    ],
+    findings,
+    stats,
+  );
+  expect(out).toContainEqual({
+    primary: "F002",
+    sources: ["F002"],
+    split: false,
+    claim: "advisory F002",
+  });
+  expect(stats.repairs).toBe(1);
+});
+
+test("applyPlan over the repaired plan posts every input finding", () => {
+  const findings = [advisoryF("F001"), advisoryF("F002")];
+  const repaired = enforcePlanInvariants(
+    [
+      { primary: "F001", sources: ["F001"], split: false, claim: "a" },
+      { primary: "F001", sources: ["F001", "F002"], split: true, claim: "b" },
+    ],
+    findings,
+  );
+  const out = applyPlan(findings, repaired, []);
+  expect(out.map((f) => f.id)).toContain("F002");
 });

@@ -139,11 +139,12 @@ export function consolidationPrompt(
 // the most severe source"; one output finding per defect), because the model
 // does not always keep them, and a slip must never move a blocking finding off
 // the blocking tier or post it twice. Measured effect: of the 49 Martian 50
-// plans, 2 change (sentry-3, discourse-4).
+// plans, 3 change (sentry-3, discourse-4, cal-11059).
 //
-// `stats`, when passed, receives the number of entries the three rules
-// changed: promoted, folded away, or appended. pipeline.json records it so a
-// repair is never silent.
+// `stats`, when passed, receives the number of entries the rules changed:
+// promoted, folded away, or appended. pipeline.json records it so a repair is
+// never silent. Rule 0 reorders evidence and changes no posted finding, so it
+// is not counted.
 export function enforcePlanInvariants(
   plan: PlanEntry[],
   findings: readonly Finding[],
@@ -154,15 +155,32 @@ export function enforcePlanInvariants(
   );
   let repairs = 0;
 
+  // Rule 0 — primary first: applyPlan pools proof_refs in sources order, and
+  // clusterByRootCause keys on proof_refs[0] ("where the defect lives",
+  // root-cause.ts), so the primary's own refs must lead, as the dedupe fold
+  // already does (dedupe.ts). Splits build from their primary alone, so they
+  // are left as they are.
+  const primaryFirst = (e: PlanEntry): PlanEntry =>
+    e.split || e.sources[0] === e.primary
+      ? e
+      : {
+          ...e,
+          sources: [e.primary, ...e.sources.filter((s) => s !== e.primary)],
+        };
+
   // Rule 1 — promotion: a merge whose primary is not blocking would post the
   // merged finding off the blocking tier, so the first blocking source leads.
-  const promoted = plan.map((e) => {
-    if (e.split || blocking.has(e.primary)) return e;
-    const first = e.sources.find((s) => blocking.has(s));
-    if (first === undefined) return e;
-    repairs += 1;
-    return { ...e, primary: first };
-  });
+  // Promotion changes the primary, so Rule 0 runs again on its output.
+  const promoted = plan
+    .map(primaryFirst)
+    .map((e) => {
+      if (e.split || blocking.has(e.primary)) return e;
+      const first = e.sources.find((s) => blocking.has(s));
+      if (first === undefined) return e;
+      repairs += 1;
+      return { ...e, primary: first };
+    })
+    .map(primaryFirst);
 
   // Rule 2 — fold: two non-split entries with one primary would post that
   // finding twice. Splits are asides with their own ids and never fold.
@@ -195,6 +213,25 @@ export function enforcePlanInvariants(
   );
   for (const f of findings) {
     if (f.tier !== "blocking" || covered.has(f.id)) continue;
+    folded.push({
+      primary: f.id,
+      sources: [f.id],
+      split: false,
+      claim: f.claim,
+    });
+    repairs += 1;
+  }
+
+  // Rule 4 — every finding keeps a home: validatePlan counts a split entry's
+  // sources as covered, but applyPlan builds a split from its primary alone, so
+  // a finding named only in a split's sources would be posted nowhere. The
+  // prompt forbids dropping a whole finding (1 of the 49 measured plans did:
+  // cal-11059).
+  const homed = new Set(
+    folded.filter((e) => !e.split).flatMap((e) => e.sources),
+  );
+  for (const f of findings) {
+    if (homed.has(f.id)) continue;
     folded.push({
       primary: f.id,
       sources: [f.id],
