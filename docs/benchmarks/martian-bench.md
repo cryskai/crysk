@@ -484,6 +484,16 @@ still owed.
 
 ## Martian 50, arm `dev-default`, Opus 4.5 judge (2026-10-25, Martian's own pipeline)
 
+> **Historical snapshot, before the consolidation stage.** These runs predate #400, which turned consolidation on by
+> default; with it, the same 50 PRs re-judged score P 31.4% / R 64.7% / F1 42.3 (52/66 High+Critical) against a
+> same-session control of F1 38.6 (lab `bench/METRICS.md`, 2026-10-27). The table below is what `dev` shipped on
+> 2026-10-25, not what it ships now.
+>
+> **One known-bad golden.** Sentry PR 1's golden "Importing non-existent OptimizedCursorPaginator" is wrong: the
+> recorded head defines `class OptimizedCursorPaginator` in `src/sentry/api/paginator.py:821`. The golden file keeps
+> Martian's upstream text unchanged, so every tool is scored against the same list; a correct review can only score
+> it as a miss.
+
 All 50 offline PRs (Cal.com, Sentry, Grafana, Keycloak, Discourse; 173 goldens, 66 High+Critical), reviewed by what
 `dev` ships and judged by **Martian's own steps 2, 2.5 and 3** with `anthropic/claude-opus-4-5-20251101`, the model
 behind their published vendor rows.
