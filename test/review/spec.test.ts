@@ -475,13 +475,6 @@ describe("pipeline with a custom spec", () => {
     };
     const runner = new FakeStepRunner({
       "hunter-security-leg": (s) => ok(s, { findings: [blocker] }),
-      // Refuter v3.2 submits every severity, so the WARNING reaches it.
-      "refuter-F001": (s) =>
-        ok(s, {
-          results: [
-            { finding_id: "F001", outcome: "corroborated", proof_refs: [] },
-          ],
-        }),
     });
     const agentsDir = await makeAgentsDir();
     await Bun.write(
@@ -501,11 +494,8 @@ describe("pipeline with a custom spec", () => {
       },
     });
     const result = await runPipeline(input, { runner });
-    expect(runner.specs.map((s) => s.name)).toEqual([
-      "hunter-security-leg",
-      "refuter-F001",
-    ]);
-    expect(Object.keys(result.perAgent)).toEqual(["security-leg", "refuter"]);
+    expect(runner.specs.map((s) => s.name)).toEqual(["hunter-security-leg"]);
+    expect(Object.keys(result.perAgent)).toEqual(["security-leg"]);
     expect(result.skillOutput.findings[0]?.hunter).toBe("security");
   });
 });

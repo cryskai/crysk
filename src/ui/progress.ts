@@ -180,9 +180,7 @@ export function startLineRenderer(startedAtMs: number): ProgressRenderer {
           return;
         case "refuter-started":
           line(
-            // `severeFindings` counts every submitted finding since refuter
-            // v3.2 (see its type), so the line no longer says "severe".
-            `refuter: ${event.severeFindings} finding` +
+            `refuter: ${event.severeFindings} severe finding` +
               `${event.severeFindings === 1 ? "" : "s"} to judge`,
           );
           return;

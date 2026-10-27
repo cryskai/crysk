@@ -36,9 +36,8 @@ describe("confirmSpecFor", () => {
   });
 });
 
-// Refuter v3.2 (2026-10-26) submits every severity, so the refuter-started
-// event counts every submitted finding (its field keeps the published name
-// `severeFindings`). The line must not call a WARNING "severe".
+// Only BLOCKER/CRITICAL findings are submitted to the refuter, so the
+// refuter-started count is a count of severe findings and the line says so.
 describe("startLineRenderer refuter-started line", () => {
   const realWrite = process.stderr.write.bind(process.stderr);
   afterEach(() => {
@@ -61,8 +60,8 @@ describe("startLineRenderer refuter-started line", () => {
     );
   }
 
-  test("counts submitted findings without calling them severe", () => {
-    expect(linesFor(1)).toEqual(["refuter: 1 finding to judge"]);
-    expect(linesFor(3)).toEqual(["refuter: 3 findings to judge"]);
+  test("counts the severe findings submitted", () => {
+    expect(linesFor(1)).toEqual(["refuter: 1 severe finding to judge"]);
+    expect(linesFor(3)).toEqual(["refuter: 3 severe findings to judge"]);
   });
 });

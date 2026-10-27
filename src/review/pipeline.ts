@@ -386,11 +386,7 @@ export type PipelineProgressEvent =
   | { kind: "dedupe-finished"; drafts: number; findings: number }
   | {
       kind: "refuter-started";
-      // Every finding submitted to the refuter. The name predates refuter v3.2
-      // (2026-10-26), when only BLOCKER/CRITICAL findings were submitted; since
-      // then every severity is, so this counts all of them. Kept rather than
-      // renamed because the type is published (src/index.ts re-exports this
-      // module) and a rename would break a consumer for a word.
+      // The BLOCKER/CRITICAL findings submitted to the refuter.
       severeFindings: number;
       // The submitted batch, so a renderer can show the leg's full shape
       // before the first verdict lands (the count alone cannot name a leaf).
@@ -2196,31 +2192,37 @@ async function execute(
       : adjudicationQueue.map((subject) => failedOutcome(subject));
   }
 
-  // Step 6 — one refuter batch: EVERY survivor, whatever its severity or
-  // evidence_class.
+  // Step 6 — one refuter batch: every BLOCKER/CRITICAL survivor, whatever its
+  // evidence_class. Severity alone is the test, because severity alone decides
+  // whether a finding can reach blocking tier, and the refuter is what earns
+  // that tier its credibility. (Blocking tier gates no merge — see deriveTier
+  // in src/review/findings.ts. It is the report's loudest register, which is
+  // exactly why an unchecked claim must not wear it.)
   //
-  // Severity used to be the whole test (BLOCKER/CRITICAL only), on the theory
-  // that only a finding that can reach blocking tier needs an adversary. That
-  // theory held while the refuter asked one question — "is the mechanism
-  // real?" — whose answer cannot change a WARNING's tier. Refuter v3.2
-  // (2026-10-26) asks two more: is there a concrete trigger at this commit,
-  // and did THIS PR cause it. Those decide whether a finding is worth a
-  // developer's attention at all, whatever its severity: about 87 of the 275
-  // Martian 50 false positives were advisory findings posted without ever
-  // reaching the gate (speculative, nit, pre-existing), and the offline v3.2
-  // replay removed every pre-existing and most nit cases while keeping 14 of
-  // 15 real defects (lab `bench/METRICS.md`, 2026-10-26: the Martian 50 FP
-  // attribution and refuter replay sections). So every finding is submitted. `deriveTier` is
-  // unchanged: a non-severe finding stays advisory whatever the verdict, and
-  // a `refuted` one leaves findings[] for debug.refuted, as severe ones do.
+  // Refuter v3.2 (2026-10-26) widened this to every severity, on the theory
+  // that its two new questions — is there a concrete trigger at this commit,
+  // and did THIS PR cause it — decide whether ANY finding is worth a
+  // developer's attention: about 87 of the 275 Martian 50 false positives
+  // were advisory findings that never reached the gate, and an offline
+  // replay on 50 hard cases removed most of that noise. The full Martian 50
+  // re-judge (lab `bench/METRICS.md`, 2026-10-27) killed it: over all 347
+  // posted findings v3.2 refuted only 5; the 105 it marked latent still post
+  // inline (posting them to the summary instead cost 25 of 27 lost goldens,
+  // F1 39.7 → 39.1, and was reverted); so judging every severity roughly
+  // doubled the refuter's cost for a near-zero effect. The v3.2 prompt stays:
+  // on a severe finding, PR causation is exactly what should decide whether
+  // it earns blocking tier.
   //
-  // The older filter, `evidence_class === "inferential"`, died earlier and
-  // for the same kind of reason: on the 2026-07-29 AudioTrimmer runs 26 of 26
-  // blocking findings were `deterministic`, so the batch was empty every
-  // time and the loudest tier in the report had no adversarial check behind
-  // it. (Blocking tier gates no merge — see deriveTier in
-  // src/review/findings.ts. It is the report's loudest register.)
-  const batch = survivors;
+  // This used to also require `evidence_class === "inferential"`, on the theory
+  // that a code-provable claim needs no adversary. The 2026-07-29 AudioTrimmer
+  // runs killed that theory with data: 26 of 26 blocking findings across six
+  // reviews were `deterministic`, so the batch was empty every single time and
+  // the refuter never ran — the loudest tier in the report had no adversarial
+  // check behind it at all. The label was not wrong (those defects
+  // really were locally provable); the filter was.
+  const batch = survivors.filter(
+    (s) => s.severity === "BLOCKER" || s.severity === "CRITICAL",
+  );
   // A spec with no refuter (allowed: "at most one") skips the leg entirely —
   // configured absence, not failure: every finding stays not_submitted (so
   // inferential BLOCKER/CRITICAL findings can never reach blocking tier) and
