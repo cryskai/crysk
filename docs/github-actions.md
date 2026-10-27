@@ -13,7 +13,10 @@ block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mo
 2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
    to `.github/workflows/pr-hero.yml`, or run `npx -y pr-hero setup --ci` (or `pr-hero ci init`) in a clone of
    your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need pr-hero
-   installed locally: the file is the whole install. It reviews every push to a pull request, answers a
+   installed locally: the file is the whole install. The command also checks the GitHub CLI: if `gh` is
+   missing or logged out, it prints why the CI loop needs it (`gh secret set`, `pr-hero status`,
+   `pr-hero triage reply`) and how to fix it, and in a terminal it offers to install it (macOS with
+   Homebrew) and to run `gh auth login`; the workflow is written either way. It reviews every push to a pull request, answers a
    `/pr-hero review` comment (see [Re-review on demand](#re-review-on-demand)), and answers a
    `/pr-hero override` comment (see [Overriding a red gate](#overriding-a-red-gate)). Do **not** copy this
    repository's own `.github/workflows/pr-hero.yml`: that file is generated with

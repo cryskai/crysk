@@ -318,7 +318,9 @@ Usage:
   pr-hero setup --ci [--force]
                              Scaffold .github/workflows/pr-hero.yml instead
                              of the wizard. Refuses to overwrite an existing
-                             workflow unless --force is passed
+                             workflow unless --force is passed. Then checks
+                             gh and, in a terminal, offers to install it and
+                             run gh auth login
   pr-hero skills install [--force]
                              Install the pr-hero, pr-hero-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
   pr-hero ci init [--force]  Same scaffolding as "setup --ci", as its own

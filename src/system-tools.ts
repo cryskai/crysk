@@ -154,29 +154,7 @@ export async function checkSystemTools(
   }
 
   // 3. gh
-  const ghBin = await which("gh");
-  let ghStatus: SystemToolStatus;
-  if (!ghBin) {
-    ghStatus = {
-      installed: false,
-      authOk: false,
-      hint: "Install GitHub CLI: brew install gh (macOS) or apt install gh (Linux)",
-    };
-  } else {
-    const versionRes = await exec([ghBin, "--version"]);
-    const versionMatch = versionRes.stdout.match(/gh version\s+([0-9.]+)/i);
-    const authRes = await exec([ghBin, "auth", "status"]);
-    const authOk = authRes.exitCode === 0;
-
-    ghStatus = {
-      installed: true,
-      version: versionMatch ? versionMatch[1] : undefined,
-      authOk,
-      hint: authOk
-        ? undefined
-        : "Run 'gh auth login' to authenticate with GitHub for PR reviews",
-    };
-  }
+  const ghStatus = await checkGhStatus({ which, exec });
 
   // 4. codegraph
   const codegraphBin = await which("codegraph");
@@ -206,6 +184,35 @@ export async function checkSystemTools(
     claude: claudeStatus,
     gh: ghStatus,
     codegraph: codegraphStatus,
+  };
+}
+
+// gh alone: whether it is on PATH and whether `gh auth status` passes. Shared by
+// checkSystemTools (doctor, the wizard) and `setup --ci`, which needs only gh.
+export async function checkGhStatus(
+  options: Pick<CheckSystemToolsOptions, "which" | "exec"> = {},
+): Promise<SystemToolStatus> {
+  const which = options.which ?? ((bin: string) => Bun.which(bin));
+  const exec = options.exec ?? defaultExec;
+  const ghBin = await which("gh");
+  if (!ghBin) {
+    return {
+      installed: false,
+      authOk: false,
+      hint: "Install GitHub CLI: brew install gh (macOS) or apt install gh (Linux)",
+    };
+  }
+  const versionRes = await exec([ghBin, "--version"]);
+  const versionMatch = versionRes.stdout.match(/gh version\s+([0-9.]+)/i);
+  const authRes = await exec([ghBin, "auth", "status"]);
+  const authOk = authRes.exitCode === 0;
+  return {
+    installed: true,
+    version: versionMatch ? versionMatch[1] : undefined,
+    authOk,
+    hint: authOk
+      ? undefined
+      : "Run 'gh auth login' to authenticate with GitHub for PR reviews",
   };
 }
 
