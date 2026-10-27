@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package, `pr-hero setup`, `pr-hero skills install` and `pr-hero upgrade` install it into every detected coding agent
   under the same digest-guarded drift rules, and `pr-hero uninstall` removes it.
 - **`pr-hero status --pr <n> --wait` deterministically subscribes until a PR review settles**: polls GitHub when a review
-  is in flight (`next_action: "wait"`) or within the 90-second runner startup window after a fresh push or `/pr-hero review` /
+  is in flight (`next_action: "wait"`) or within the 3-minute runner startup window after a fresh push or `/pr-hero review` /
   `/pr-hero recheck` comment, then emits the settled status once. `pr-hero-triage` uses it to run the review → triage →
   fix/recheck → wait loop continuously without stopping to ask the user between transitions.
 
