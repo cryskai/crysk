@@ -20,8 +20,16 @@ import { appendFile, chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { lookupGolden, type MartianGoldenPr } from "#compare/martian-adapter";
+import {
+  applyPlan,
+  consolidationInput,
+  type MergedDraft,
+  type PlanEntry,
+  validatePlan,
+} from "#review/consolidate";
 import { extractJsonObject } from "#review/drafts";
 import type { Finding } from "#review/findings";
+import { parseAgentSource } from "#review/prompt-set";
 import { renderInlineComment } from "#review/report";
 import { ClaudeCodeRunner } from "#review/step-runner";
 import { resolveRunnerAuthority } from "../src/runner-authority";
@@ -55,24 +63,12 @@ const variant = argValue("--variant") ?? "base";
 if (variant !== "base" && variant !== "strict")
   fail(`unknown --variant ${variant}`);
 
-const SYSTEM = `You consolidate the findings a code reviewer is about to post on one pull request, so that every posted comment states exactly ONE defect.
-
-You receive the findings as JSON: id, path, line, severity, hunter, claim. You have no tools and no code: work only from the claims.
-
-Do exactly two things.
-
-1. Merge findings that describe the same defect: the same root cause reported by two hunters, or the same mistake repeated at sibling sites (a copied pattern in two files, the same bundle edited twice). Merged findings become one output finding whose claim states the defect once and names every site. Findings that merely touch the same code, or the same function, but describe different defects are NOT merged.
-
-2. Split asides. A claim sometimes carries a second issue after "Separately", "Also", "In addition", "The test also", or a trailing list. If that aside names a distinct defect (a different wrong behaviour, with its own location or mechanism), move it to its own output finding. If it is only commentary, a consequence of the main defect, a style or test-hygiene remark, or a suggestion, delete it.
-
-Rules:
-- Never add a defect that is not in the input claims. Never judge whether a claim is correct, likely or important. Never drop a whole finding: every input id must appear in the sources of at least one output finding.
-- Keep the reviewer's wording. Copy sentences; trim them; do not paraphrase into something new. Keep code identifiers, line references and the concrete consequence.
-- Each output claim states one defect, its mechanism, and its consequence, in at most about 120 words.
-- For a merge, "primary" is the most severe source (BLOCKER > CRITICAL > WARNING > SUGGESTION), ties broken by the first in input order. For a split aside, "primary" is the finding it came from and "split" is true.
-
-Final message: exactly one JSON object, no prose, no code fences:
-{"findings":[{"primary":"F001","sources":["F001","F004"],"split":false,"claim":"..."}]}`;
+// The body of prompts/consolidate.md is the measured prompt, byte for byte.
+const SYSTEM = parseAgentSource(
+  await Bun.file(
+    path.join(import.meta.dir, "..", "prompts", "consolidate.md"),
+  ).text(),
+).body;
 
 const STRICT_RULES = `
 
@@ -84,106 +80,6 @@ B. You also receive "merged_drafts": findings an earlier mechanical dedupe merge
 
 Final message shape for this variant (draft is optional):
 {"findings":[{"primary":"F001","sources":["F001"],"split":true,"draft":"RES-4","claim":"..."}]}`;
-
-interface PlanEntry {
-  primary: string;
-  sources: string[];
-  split?: boolean;
-  // A rescued merged-away draft: its own location and evidence are posted.
-  draft?: string;
-  claim: string;
-}
-
-interface MergedDraft {
-  id: string;
-  merged_into: string;
-  path: string;
-  line: number;
-  severity: Finding["severity"];
-  claim: string;
-  proof_refs: string[];
-}
-
-// Rejects a plan that drops a finding, names an unknown one, or detaches a
-// primary from its sources. A rejected plan falls back to the input as is,
-// so a bad call can cost precision but never recall.
-function validatePlan(
-  raw: unknown,
-  ids: string[],
-  draftIds: Set<string>,
-): PlanEntry[] {
-  const plan = (raw as { findings?: unknown })?.findings;
-  if (!Array.isArray(plan) || plan.length === 0) {
-    throw new Error("no findings array");
-  }
-  const known = new Set(ids);
-  const covered = new Set<string>();
-  const out: PlanEntry[] = [];
-  for (const e of plan as PlanEntry[]) {
-    if (typeof e?.primary !== "string" || !known.has(e.primary)) {
-      throw new Error(`unknown primary ${String(e?.primary)}`);
-    }
-    if (!Array.isArray(e.sources) || !e.sources.includes(e.primary)) {
-      throw new Error(`${e.primary}: primary missing from sources`);
-    }
-    for (const s of e.sources) {
-      if (!known.has(s)) throw new Error(`unknown source ${s}`);
-      covered.add(s);
-    }
-    if (typeof e.claim !== "string" || e.claim.trim().length === 0) {
-      throw new Error(`${e.primary}: empty claim`);
-    }
-    if (e.draft !== undefined) {
-      if (!draftIds.has(e.draft)) throw new Error(`unknown draft ${e.draft}`);
-      if (e.split !== true)
-        throw new Error(`${e.draft}: a rescue must be a split`);
-    }
-    out.push({ ...e, split: e.split === true });
-  }
-  const missing = ids.filter((id) => !covered.has(id));
-  if (missing.length > 0) throw new Error(`dropped ${missing.join(",")}`);
-  return out;
-}
-
-// One output finding per plan entry. A merge keeps the primary's location,
-// severity, tier and verdict, and pools the evidence. A split aside was never
-// refuted on its own, so it posts advisory with `not_submitted`.
-function applyPlan(
-  findings: Finding[],
-  plan: PlanEntry[],
-  drafts: MergedDraft[],
-): Finding[] {
-  const byId = new Map(findings.map((f) => [f.id, f]));
-  const draftById = new Map(drafts.map((d) => [d.id, d]));
-  const splits = new Map<string, number>();
-  return plan.map((e) => {
-    const primary = byId.get(e.primary) as Finding;
-    const proofRefs = [
-      ...new Set(e.sources.flatMap((s) => byId.get(s)?.proof_refs ?? [])),
-    ];
-    if (!e.split) {
-      return { ...primary, claim: e.claim, proof_refs: proofRefs };
-    }
-    const n = (splits.get(e.primary) ?? 0) + 1;
-    splits.set(e.primary, n);
-    const draft = e.draft === undefined ? undefined : draftById.get(e.draft);
-    return {
-      ...primary,
-      id: `${primary.id}s${n}`,
-      claim: e.claim,
-      ...(draft === undefined
-        ? { proof_refs: primary.proof_refs }
-        : {
-            path: draft.path,
-            line: draft.line,
-            severity: draft.severity,
-            proof_refs: draft.proof_refs,
-          }),
-      tier: "advisory",
-      refuter_verdict: "not_submitted",
-    };
-  });
-}
 
 interface PrJob {
   label: string;
@@ -269,14 +165,7 @@ async function consolidate(job: PrJob): Promise<AuditRow> {
       notional_usd: null,
     };
   }
-  const input = job.findings.map((f) => ({
-    id: f.id,
-    path: f.path,
-    line: f.line,
-    severity: f.severity,
-    hunter: f.hunter,
-    claim: f.claim,
-  }));
+  const input = consolidationInput(job.findings);
   const result = await runner.run({
     name: `consolidate-${job.label}`,
     systemPromptPath,

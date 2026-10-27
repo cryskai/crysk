@@ -132,6 +132,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
     domain: "review",
     files: [
       "boundary",
+      "consolidate",
       "dedupe",
       "drafts",
       "findings",

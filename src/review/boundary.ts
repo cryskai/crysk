@@ -24,6 +24,7 @@ export type BoundaryTag =
   | "patch"
   | "scout_leads"
   | "finding"
+  | "findings"
   | "gotchas"
   | "priors"
   | "previous_finding"
