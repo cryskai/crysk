@@ -16,13 +16,14 @@
 // the given tool name, ready to splice into a COPY of benchmark_data.json.
 // Goldens are used only to key the entry by PR URL; the model never sees them.
 
-import { appendFile, chmod, mkdtemp, rm } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { lookupGolden, type MartianGoldenPr } from "#compare/martian-adapter";
 import {
   applyPlan,
   consolidationInput,
+  enforcePlanInvariants,
   type MergedDraft,
   type PlanEntry,
   validatePlan,
@@ -55,6 +56,10 @@ const tool = argValue("--tool") ?? fail("--tool is required");
 const outDir = argValue("--out") ?? fail("--out is required");
 const model = argValue("--model") ?? "sonnet";
 const concurrency = Number(argValue("--concurrency") ?? 4);
+if (!Number.isInteger(concurrency) || concurrency < 1)
+  fail(
+    `--concurrency must be a positive integer, got ${argValue("--concurrency")}`,
+  );
 // --only cal-8087,keycloak-37634: consolidate just these PRs (a smoke run).
 const only = argValue("--only")?.split(",");
 // --variant strict: asides survive only as a concrete defect, and the drafts
@@ -99,6 +104,9 @@ for (const [name, corpus] of Object.entries(CORPORA)) {
   ).json()) as MartianGoldenPr[];
   for (const row of cases.prs) {
     const label = `${name}-${row.pr}`;
+    // --only is a smoke filter: skip before reading the run's files, so an
+    // unlisted PR with a missing run dir cannot fail a smoke run.
+    if (only !== undefined && !only.includes(label)) continue;
     const dir = path.join(BENCH_HOME, corpus.runs, `${label}-${arm}`);
     const doc = (await Bun.file(path.join(dir, "findings.json")).json()) as {
       findings: Finding[];
@@ -115,6 +123,22 @@ for (const [name, corpus] of Object.entries(CORPORA)) {
       ),
     });
   }
+}
+
+await mkdir(outDir, { recursive: true });
+// The audit is keyed by PR label only, so reusing --out with another arm,
+// variant or model would read the wrong experiment's plans. Pin the config.
+const configPath = path.join(outDir, "config.json");
+const config = { arm, tool, model, variant };
+const prior = Bun.file(configPath);
+if (await prior.exists()) {
+  const seen = await prior.json();
+  if (JSON.stringify(seen) !== JSON.stringify(config))
+    fail(
+      `${configPath} records ${JSON.stringify(seen)}; this run is ${JSON.stringify(config)}. Use a fresh --out.`,
+    );
+} else {
+  await Bun.write(configPath, JSON.stringify(config));
 }
 
 const auditPath = path.join(outDir, "consolidation.jsonl");
@@ -248,9 +272,15 @@ try {
 
 const reviews = jobs.map((job) => {
   const row = audit.get(job.label);
+  // The bench must render what the engine posts. The 2026-10-26 artifacts were
+  // produced before this guard existed; it repairs 3 of their 49 plans.
   const findings =
     row?.status === "ok" && row.plan !== undefined
-      ? applyPlan(job.findings, row.plan, job.drafts)
+      ? applyPlan(
+          job.findings,
+          enforcePlanInvariants(row.plan, job.findings),
+          job.drafts,
+        )
       : job.findings;
   return {
     tool,

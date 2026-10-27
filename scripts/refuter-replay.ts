@@ -57,6 +57,10 @@ const casesPath = argValue("--cases");
 const model = argValue("--model");
 const outPath = argValue("--out");
 const concurrency = Number(argValue("--concurrency") ?? 4);
+if (!Number.isInteger(concurrency) || concurrency < 1)
+  fail(
+    `--concurrency must be a positive integer, got ${argValue("--concurrency")}`,
+  );
 // Overrides every run's recorded refuter.system.md. Needed for runs whose
 // findings were all advisory (they never spawned a refuter, so recorded no
 // system prompt), and for replaying a candidate prompt.
@@ -270,7 +274,12 @@ async function replay(c: ReplayCase) {
 
   const { dir } = await worktreeFor(c.run, meta.head_sha);
   const resolveProofRef = makeProofRefResolver(dir, fullPatch);
-  const caseDir = path.join(scratch, `${path.basename(c.run)}-${f.id}`);
+  // The source is part of the key: a refuted id may collide with a posted one,
+  // and two such cases would otherwise share a scratch dir and outPath.
+  const caseDir = path.join(
+    scratch,
+    `${path.basename(c.run)}-${c.source ?? "posted"}-${f.id}`,
+  );
   const systemPromptPath = path.join(caseDir, "refuter.system.md");
   const recordedSystem = Bun.file(
     path.join(c.run, "steps", "refuter.system.md"),
