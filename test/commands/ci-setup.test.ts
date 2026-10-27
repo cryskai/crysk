@@ -7,7 +7,7 @@ import {
   type GhPreflightDeps,
   ghPreflight,
 } from "#commands/ci-setup";
-import type { CliOptions } from "#review/preflight";
+import { type CliOptions, parseArgs } from "#review/preflight";
 import type { SystemToolStatus } from "../../src/system-tools";
 
 const MISSING: SystemToolStatus = { installed: false, authOk: false };
@@ -158,7 +158,7 @@ describe("ciSetupCommand with gh missing", () => {
       const { deps, lines } = fakeDeps([MISSING]);
       const code = await ciSetupCommand(
         { repo: dir, repoExplicit: true } as CliOptions,
-        deps,
+        { gh: deps, interactive: false },
       );
       expect(code).toBe(0);
       expect(
@@ -167,6 +167,239 @@ describe("ciSetupCommand with gh missing", () => {
         ).exists(),
       ).toBe(true);
       expect(lines.join("\n")).toContain("GitHub CLI (gh) is not installed");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// The parsed config, or its raw text when it is not JSON (a test wrote it so).
+async function readConfig(file: string): Promise<unknown> {
+  if (!(await Bun.file(file).exists())) return undefined;
+  const raw = await Bun.file(file).text();
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+// End to end through the CLI, with no TTY: the agent's path.
+describe("setup --ci review choices (CLI)", () => {
+  async function runSetup(
+    args: string[],
+    prepare?: (dir: string) => Promise<void>,
+  ): Promise<{
+    code: number;
+    output: string;
+    workflow: string;
+    config: unknown;
+    dir: string;
+  }> {
+    const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-levels-"));
+    Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+    await prepare?.(dir);
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        path.join(import.meta.dir, "../../src/cli.ts"),
+        "setup",
+        "--ci",
+        ...args,
+      ],
+      { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
+    );
+    const wf = path.join(dir, ".github", "workflows", "pr-hero.yml");
+    const cfg = path.join(dir, ".prhero", "config.json");
+    return {
+      code: result.exitCode,
+      output: `${result.stdout}${result.stderr}`,
+      workflow: (await Bun.file(wf).exists()) ? await Bun.file(wf).text() : "",
+      config: await readConfig(cfg),
+      dir,
+    };
+  }
+
+  test("no flags: balanced and gate are written, no budget line, and the summary says nobody chose", async () => {
+    const r = await runSetup([]);
+    try {
+      expect(r.code).toBe(0);
+      expect(r.workflow).toContain("mode: gate");
+      expect(r.workflow).not.toContain("budget-usd:");
+      expect(r.config).toEqual({
+        ci_review_policy: "risk_aware",
+        ci_max_attempts: 2,
+        ci_rereview_min_score: 4,
+        max_verification_steps: 8,
+      });
+      expect(r.output).toContain("defaults: nobody chose them");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("flags: the level, mode and subscription reach the workflow and the config", async () => {
+    const r = await runSetup([
+      "--level",
+      "thorough",
+      "--ci-mode",
+      "advisory",
+      "--billing",
+      "subscription",
+    ]);
+    try {
+      expect(r.code).toBe(0);
+      expect(r.workflow).toContain("mode: advisory");
+      expect(r.workflow).toContain("budget-usd: 0\n");
+      expect(r.config).toEqual({
+        ci_review_policy: "every_push",
+        ci_max_attempts: 4,
+        max_verification_steps: 8,
+      });
+      expect(r.output).not.toContain("nobody chose");
+      expect(r.output).toContain(
+        "CLAUDE_CODE_OAUTH_TOKEN (create it with `claude setup-token`)",
+      );
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an API key with a ceiling writes it", async () => {
+    const r = await runSetup(["--billing", "api", "--budget-usd", "7.5"]);
+    try {
+      expect(r.workflow).toContain("budget-usd: 7.5\n");
+      expect(r.output).toContain("$7.5 per review");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an existing config keeps its other keys", async () => {
+    const r = await runSetup(["--level", "minimal"], async (dir) => {
+      await Bun.write(
+        path.join(dir, ".prhero", "config.json"),
+        JSON.stringify({ post: true }),
+      );
+    });
+    try {
+      expect(r.config).toEqual({
+        post: true,
+        ci_review_policy: "once_per_pr",
+        ci_max_attempts: 1,
+        max_verification_steps: 8,
+      });
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an invalid existing config is refused before the workflow is written", async () => {
+    const r = await runSetup([], async (dir) => {
+      await Bun.write(path.join(dir, ".prhero", "config.json"), "{ nope");
+    });
+    try {
+      expect(r.code).not.toBe(0);
+      expect(r.output).toContain("not valid JSON");
+      expect(r.workflow).toBe("");
+      expect(r.config).toBe("{ nope");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an existing workflow without --force writes nothing at all", async () => {
+    const r = await runSetup(["--level", "minimal"], async (dir) => {
+      await Bun.write(
+        path.join(dir, ".github", "workflows", "pr-hero.yml"),
+        "keep\n",
+      );
+    });
+    try {
+      expect(r.code).toBe(1);
+      expect(r.workflow).toBe("keep\n");
+      expect(r.config).toBeUndefined();
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("parseArgs: --level and --billing", () => {
+  test("accepted on setup --ci and ci init", () => {
+    expect(
+      parseArgs(["setup", "--ci", "--level", "manual"]).options.reviewLevel,
+    ).toBe("manual");
+    expect(parseArgs(["ci", "init", "--billing", "api"]).options.billing).toBe(
+      "api",
+    );
+  });
+  test("an unknown value fails loud", () => {
+    expect(() => parseArgs(["setup", "--ci", "--level", "max"])).toThrow(
+      /--level must be/,
+    );
+    expect(() => parseArgs(["setup", "--ci", "--billing", "free"])).toThrow(
+      /--billing must be/,
+    );
+  });
+  test("rejected outside the scaffold commands", () => {
+    expect(() => parseArgs(["review", "--level", "manual"])).toThrow(
+      /only apply with setup --ci or ci init/,
+    );
+  });
+  test("a subscription with a ceiling is a contradiction, rejected", () => {
+    expect(() =>
+      parseArgs([
+        "setup",
+        "--ci",
+        "--billing",
+        "subscription",
+        "--budget-usd",
+        "5",
+      ]),
+    ).toThrow(/does not apply with --billing subscription/);
+  });
+});
+
+describe("ciSetupCommand at a terminal", () => {
+  test("asks the questions and writes the answers", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-tty-"));
+    try {
+      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      const answers = ["manual", "advisory", "api", "3", "n"];
+      const asked: string[] = [];
+      const take = (q: string) => {
+        asked.push(q);
+        return answers.shift() ?? "";
+      };
+      const { deps } = fakeDeps([READY]);
+      const code = await ciSetupCommand(
+        { repo: dir, repoExplicit: true } as CliOptions,
+        {
+          gh: deps,
+          interactive: true,
+          prompter: {
+            choose: async (q, options) => {
+              const a = take(q);
+              return options.find((o) => o.value === a)?.value as never;
+            },
+            confirm: async (q) => take(q) === "y",
+            text: async (q) => take(q),
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(asked).toHaveLength(5);
+      const workflow = await Bun.file(
+        path.join(dir, ".github", "workflows", "pr-hero.yml"),
+      ).text();
+      expect(workflow).toContain("mode: advisory");
+      expect(workflow).toContain("budget-usd: 3\n");
+      expect(
+        JSON.parse(
+          await Bun.file(path.join(dir, ".prhero", "config.json")).text(),
+        ).ci_review_policy,
+      ).toBe("manual_only");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

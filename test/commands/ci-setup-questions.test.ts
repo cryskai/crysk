@@ -1,0 +1,118 @@
+import { describe, expect, test } from "bun:test";
+import {
+  askChoices,
+  choicesFromFlags,
+  type SetupPrompter,
+} from "#commands/ci-setup-questions";
+
+// Answers are consumed in order; `choose` takes the option value, `confirm`
+// "y"/"n", `text` the raw string ("" = default).
+function scripted(answers: string[]): {
+  prompter: SetupPrompter;
+  asked: string[];
+} {
+  const asked: string[] = [];
+  const next = (q: string) => {
+    asked.push(q);
+    const a = answers.shift();
+    if (a === undefined) throw new Error(`no scripted answer for: ${q}`);
+    return a;
+  };
+  return {
+    asked,
+    prompter: {
+      choose: async (q, options, def) => {
+        const a = next(q);
+        return (
+          a === "" ? def : options.find((o) => o.value === a)?.value
+        ) as never;
+      },
+      confirm: async (q, def) => {
+        const a = next(q);
+        return a === "" ? def : a === "y";
+      },
+      text: async (q) => next(q),
+    },
+  };
+}
+
+describe("askChoices", () => {
+  test("subscription: no budget question, explains why, skips advanced", async () => {
+    const lines: string[] = [];
+    const { prompter, asked } = scripted([
+      "thorough",
+      "advisory",
+      "subscription",
+      "n",
+    ]);
+    const c = await askChoices(prompter, (l = "") => lines.push(l));
+    expect(c).toEqual({
+      level: "thorough",
+      mode: "advisory",
+      billing: "subscription",
+      advanced: {},
+      defaulted: false,
+    });
+    expect(asked.some((q) => /ceiling/i.test(q))).toBe(false);
+    expect(lines.join("\n")).toContain("budget-usd: 0");
+    // The advanced settings are named up front even when skipped.
+    expect(lines.join("\n")).toContain("trusted actors");
+  });
+
+  test("api: asks the ceiling, re-asks on a non-number, empty takes $10", async () => {
+    const { prompter } = scripted(["", "", "api", "lots", "7.5", "n"]);
+    const c = await askChoices(prompter, () => {});
+    expect(c.billing).toBe("api");
+    expect(c.budgetUsd).toBe(7.5);
+    expect(c.level).toBe("balanced");
+    expect(c.mode).toBe("gate");
+
+    const { prompter: p2 } = scripted(["", "", "api", "", "n"]);
+    expect((await askChoices(p2, () => {})).budgetUsd).toBe(10);
+  });
+
+  test("advanced: writes only what differs from the defaults", async () => {
+    const { prompter } = scripted([
+      "balanced",
+      "gate",
+      "subscription",
+      "y",
+      "", // blocking weight: default 2
+      "0", // advisory weight 0: rejected, re-asked
+      "3",
+      "y", // observe only
+      "bot-a, bot-b",
+      "", // max lines: default
+      "40",
+      "dist/**, *.lock",
+    ]);
+    const c = await askChoices(prompter, () => {});
+    expect(c.advanced).toEqual({
+      ci_advisory_weight: 3,
+      ci_admission_observe_only: true,
+      ci_trusted_actors: ["bot-a", "bot-b"],
+      max_changed_files: 40,
+      ignorePatterns: ["dist/**", "*.lock"],
+    });
+  });
+});
+
+describe("choicesFromFlags", () => {
+  test("no flags: undefined, so setup asks or defaults", () => {
+    expect(choicesFromFlags({})).toBeUndefined();
+  });
+
+  test("any flag is a choice; the rest fall back to balanced and gate", () => {
+    expect(choicesFromFlags({ billing: "subscription" })).toEqual({
+      level: "balanced",
+      mode: "gate",
+      billing: "subscription",
+      advanced: {},
+      defaulted: false,
+    });
+  });
+
+  test("--budget-usd alone implies an API key", () => {
+    expect(choicesFromFlags({ budgetUsd: 5 })?.billing).toBe("api");
+  });
+});

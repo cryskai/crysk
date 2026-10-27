@@ -1,5 +1,18 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { runCiSetup } from "#ci/setup";
+import {
+  budgetInput,
+  type CiSetupChoices,
+  configPatch,
+  defaultChoices,
+  renderChoicesSummary,
+} from "#ci/review-levels";
+import {
+  appendIgnorePatterns,
+  CI_WORKFLOW_RELATIVE_PATH,
+  runCiSetup,
+  writeRepoReviewConfig,
+} from "#ci/setup";
 import { resolveOptionalRepoRoot } from "#config/config";
 import {
   type CliOptions,
@@ -13,6 +26,12 @@ import {
   installSystemTool,
   type SystemToolStatus,
 } from "../system-tools";
+import {
+  askChoices,
+  choicesFromFlags,
+  type SetupPrompter,
+  terminalPrompter,
+} from "./ci-setup-questions";
 
 // What the gh check talks to, injectable so its every branch runs offline.
 export interface GhPreflightDeps {
@@ -120,31 +139,97 @@ function defaultGhPreflightDeps(): GhPreflightDeps {
 // spec.md §4.1 / ci/setup.ts's header comment), not a usage error, so it
 // returns 1 rather than throwing CliUsageError: the invocation was valid,
 // the outcome is just "nothing was written".
+export interface CiSetupDeps {
+  gh: GhPreflightDeps;
+  // A person at a terminal gets the questions; anyone else gets flags or defaults.
+  interactive: boolean;
+  prompter: SetupPrompter;
+}
+
+function defaultCiSetupDeps(): CiSetupDeps {
+  const gh = defaultGhPreflightDeps();
+  return { gh, interactive: gh.interactive, prompter: terminalPrompter() };
+}
+
+// Flags win (an agent already asked the person), then a terminal's answers,
+// then the defaults, which the summary reports as nobody's choice.
+async function resolveChoices(
+  options: CliOptions,
+  deps: CiSetupDeps,
+): Promise<CiSetupChoices> {
+  const fromFlags = choicesFromFlags(options);
+  if (fromFlags !== undefined) return fromFlags;
+  if (deps.interactive) return await askChoices(deps.prompter, log);
+  return defaultChoices();
+}
+
 export async function ciSetupCommand(
   options: CliOptions,
-  ghDeps: GhPreflightDeps = defaultGhPreflightDeps(),
+  overrides: Partial<CiSetupDeps> = {},
 ): Promise<number> {
+  const deps = { ...defaultCiSetupDeps(), ...overrides };
   const repoRoot = (await resolveOptionalRepoRoot(options)) ?? process.cwd();
-  const result = await runCiSetup({ cwd: repoRoot, force: options.force });
 
+  // Before any question: an existing workflow without --force writes nothing,
+  // so asking first would collect answers that are then thrown away.
+  const target = path.join(repoRoot, CI_WORKFLOW_RELATIVE_PATH);
+  if (existsSync(target) && !options.force) {
+    log(`${target} already exists.`);
+    log(
+      `${CI_WORKFLOW_RELATIVE_PATH} already exists; pass --force to overwrite it`,
+    );
+    return 1;
+  }
+
+  const choices = await resolveChoices(options, deps);
+  const budget = budgetInput(choices);
+  // The config first: it is the write that can refuse (an invalid existing
+  // file, a value the review parser rejects), and refusing before the workflow
+  // is written leaves the repository as it was.
+  const configPath = await writeRepoReviewConfig(
+    repoRoot,
+    configPatch(choices),
+  );
+  const result = await runCiSetup({
+    cwd: repoRoot,
+    force: options.force,
+    template: {
+      mode: choices.mode,
+      ...(budget === undefined ? {} : { budgetUsd: budget }),
+    },
+  });
   if (result.status === "skipped-existing") {
     log(`${result.path} already exists.`);
     log(result.hint);
     return 1;
   }
 
+  log();
   log(
     result.status === "overwritten"
       ? `Overwrote ${result.path}`
       : `Created ${result.path}`,
   );
+  log(`Updated ${configPath}`);
+  const patterns = choices.advanced.ignorePatterns ?? [];
+  if (patterns.length > 0) {
+    log(`Updated ${await appendIgnorePatterns(repoRoot, patterns)}`);
+  }
+  log();
+  for (const line of renderChoicesSummary(choices)) log(line);
   log();
   log("Next steps:");
   let step = 0;
   const next = () => `  ${++step}.`;
-  log(`${next()} Commit .github/workflows/pr-hero.yml`);
+  log(`${next()} Commit .github/workflows/pr-hero.yml and .prhero/config.json`);
   log(
-    `${next()} Add a repository secret: ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)`,
+    `${next()} Add a repository secret: ${
+      choices.billing === "subscription"
+        ? "CLAUDE_CODE_OAUTH_TOKEN (create it with `claude setup-token`)"
+        : choices.billing === "api"
+          ? "ANTHROPIC_API_KEY (or OPENCODE_AUTH_JSON for an OpenCode provider)"
+          : "ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)"
+    }`,
   );
   // The first PR of a new repository goes red without gotchas: every hunter's
   // prompt carries them, and PRH-GOTCHAS-MISSING refuses the review while the
@@ -181,6 +266,6 @@ export async function ciSetupCommand(
     `${next()} Comment /pr-hero review on a pull request to force a review; it works once this file is on the default branch`,
   );
   // Last, so a prompt it may show comes after everything above is printed.
-  await ghPreflight(ghDeps);
+  await ghPreflight(deps.gh);
   return 0;
 }
