@@ -1106,17 +1106,28 @@ function parseStatusRow(line: string): HeadStatusRow | undefined {
 // The stuck name may be the repository's required check, and the readers below take the
 // newest row across both names, so nothing else would ever settle it. Only the stuck name
 // is written: the verdict, which may be a human's override, is never replaced. A failed
-// copy is a warning, and the run goes on as it would have.
+// copy is a warning, and the run goes on as it would have. Returns the verdict whenever
+// the pair is stranded, copied or not: it, not the stuck pending row, is the gate's state,
+// and the readers' newest-row pick could still choose the stuck row on a same-second tie.
 function repairStrandedPair(
   deps: PublishDeps,
   repo: string,
   sha: string,
   statuses: readonly HeadStatusRow[],
-): void {
+): HeadStatusRow | undefined {
   const pair = strandedStatusPair(statuses, STATUS_CONTEXT);
-  if (pair === undefined) return;
+  if (pair === undefined) return undefined;
   const state = pair.verdict.state;
-  if (state !== "success" && state !== "failure" && state !== "error") return;
+  const description = pair.verdict.description;
+  // A verdict this step cannot reproduce faithfully is not copied: a blank description
+  // would not even read as the override it may have been.
+  if (
+    (state !== "success" && state !== "failure" && state !== "error") ||
+    typeof description !== "string" ||
+    description === ""
+  ) {
+    return pair.verdict;
+  }
   const posted = postStatusOn(
     deps,
     repo,
@@ -1124,7 +1135,7 @@ function repairStrandedPair(
     {
       state,
       context: STATUS_CONTEXT,
-      description: pair.verdict.description ?? "",
+      description,
       targetUrl: pair.verdict.targetUrl ?? actionsRunUrl(deps.env) ?? "",
     },
     pair.stranded.context,
@@ -1141,6 +1152,7 @@ function repairStrandedPair(
           `the ${pair.stranded.context} status is still pending behind the ${pair.verdict.context} verdict; copying it failed`,
         ),
   );
+  return pair.verdict;
 }
 
 function readLatestCliStatusState(
@@ -1150,8 +1162,9 @@ function readLatestCliStatusState(
 ): LatestStatusState {
   const read = readHeadStatuses(deps, repo, sha);
   if (!read.ok) return "unknown";
-  repairStrandedPair(deps, repo, sha, read.statuses);
-  const latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
+  const latest =
+    repairStrandedPair(deps, repo, sha, read.statuses) ??
+    newestStatusInContext(read.statuses, STATUS_CONTEXT);
   if (latest === undefined) return "unknown";
   if (latest.state === "pending") return "pending";
   return SETTLED_STATES.has(latest.state) ? "settled" : "unknown";
@@ -1486,8 +1499,9 @@ export function runCancelSettle(deps: PublishDeps): number {
       );
       return 0;
     }
-    repairStrandedPair(deps, repository, head, read.statuses);
-    const newest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
+    const newest =
+      repairStrandedPair(deps, repository, head, read.statuses) ??
+      newestStatusInContext(read.statuses, STATUS_CONTEXT);
     // newestStatusInContext returns the row it was given, so the row's target is found by identity.
     latest =
       newest === undefined

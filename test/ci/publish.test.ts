@@ -1417,6 +1417,63 @@ describe("runPublish — the shell", () => {
     },
   );
 
+  // Same second: the readers break a tie toward crysk, so the stale rows would still read
+  // the stuck crysk name as pending after the copy. The verdict decides the gate.
+  test("a stuck crysk row tied in time with a pr-hero override gets the override copied, and no error follows", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+      latestStatus: statusRows(
+        [
+          "crysk",
+          "pending",
+          "2026-10-16T10:00:00Z",
+          "crysk reviewing",
+          RUN_URL,
+        ],
+        [
+          "pr-hero",
+          "success",
+          "2026-10-16T10:00:00Z",
+          "pr-hero: overridden by @alice",
+          RUN_URL,
+        ],
+      ),
+      list: listing(),
+    });
+    const statuses = statusCalls(run.calls);
+    expect(statuses).toHaveLength(1);
+    expect(statusFlags(statuses[0]?.args ?? []).context).toBe("crysk");
+    expect(statuses[0]?.args).toContain("state=success");
+  });
+
+  test("a verdict with no description is not copied", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+      latestStatus: statusRows(
+        [
+          "pr-hero",
+          "pending",
+          "2026-10-16T10:00:00Z",
+          "crysk reviewing",
+          RUN_URL,
+        ],
+        ["crysk", "success", "2026-10-16T10:05:00Z", null, RUN_URL],
+      ),
+      list: listing(),
+    });
+    expect(
+      statusCalls(run.calls).filter(
+        (call) =>
+          statusFlags(call.args).context === "pr-hero" &&
+          call.args.includes("state=success"),
+      ),
+    ).toEqual([]);
+  });
+
   test("a human override on crysk is copied onto a stuck pr-hero, never overwritten with an error", () => {
     const run = runPublishIn({
       record: record({ head_sha: TRIGGER_HEAD }),
