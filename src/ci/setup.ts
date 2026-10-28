@@ -27,12 +27,22 @@
 // keeps the inputs it sets.
 
 import { existsSync } from "node:fs";
-import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import type { ErrorClass, SetupRecord } from "#ci/outcome";
+import type { ConfigPlan } from "#ci/review-levels";
 import { recordTempPath } from "#ci/trigger";
-import { parseRoutingConfig } from "#review/preflight";
+import { parseLocalConfig, parseRoutingConfig } from "#review/preflight";
+import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
+import { parseIgnoreFile } from "../ignore-file";
 import { resolveOpenCodeAuthPath } from "../security/credential-broker";
 
 export const CI_WORKFLOW_RELATIVE_PATH = path.join(
@@ -412,6 +422,8 @@ export interface RunCiSetupOptions {
   cwd?: string;
   force?: boolean;
   exists?: (p: string) => boolean;
+  // What the person chose in setup --ci; absent keeps the template's defaults.
+  template?: Pick<CiWorkflowTemplateOptions, "mode" | "budgetUsd">;
 }
 
 export type CiSetupResult =
@@ -439,12 +451,115 @@ export async function runCiSetup(
   // Only this one file. A legacy pr-hero-force.yml next to it is left as it
   // is: it still works, and deleting a file the user may dispatch is not a
   // scaffolder's call (see the header comment).
-  await writeFile(targetPath, generateCiWorkflowTemplate());
+  await writeFile(targetPath, generateCiWorkflowTemplate(options.template));
 
   return {
     status: alreadyExisted ? "overwritten" : "created",
     path: targetPath,
   };
+}
+
+// Merges the setup choices into <repo>/.prhero/config.json, keeping every key
+// already there. The merged file goes through parseLocalConfig, the parser a
+// review reads it with, BEFORE anything is written: a value a review would
+// refuse never reaches disk. A file that is not valid JSON is refused, never
+// replaced, because replacing it would delete whatever the team wrote there.
+export interface RepoReviewConfigWrite {
+  file: string;
+  // Keys that already held a different value and now hold the chosen one.
+  changed: { key: string; from: unknown; to: unknown }[];
+  // Keys already in the file that nobody chose this run, left untouched, with
+  // the value they keep.
+  kept: Record<string, unknown>;
+}
+
+export async function writeRepoReviewConfig(
+  repoRoot: string,
+  plan: ConfigPlan,
+): Promise<RepoReviewConfigWrite> {
+  const file = path.join(repoRoot, ".prhero", "config.json");
+  let current: Record<string, unknown> = {};
+  if (existsSync(file)) {
+    const raw = await readFile(file, "utf-8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new CliError(
+        `${file} is not valid JSON (${(error as Error).message}); fix it, then run setup --ci again`,
+      );
+    }
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      throw new CliError(
+        `${file} must hold a JSON object; fix it, then run setup --ci again`,
+      );
+    }
+    current = parsed as Record<string, unknown>;
+  }
+  const next: Record<string, unknown> = { ...current };
+  const changed: RepoReviewConfigWrite["changed"] = [];
+  const kept: Record<string, unknown> = {};
+  for (const group of plan.fillIfAbsent) {
+    const present = Object.keys(group).filter((key) => key in current);
+    if (present.length === 0) Object.assign(next, group);
+    for (const key of present) kept[key] = current[key];
+  }
+  for (const [key, value] of Object.entries(plan.set)) {
+    if (
+      key in current &&
+      JSON.stringify(current[key]) !== JSON.stringify(value)
+    ) {
+      changed.push({ key, from: current[key], to: value });
+    }
+    next[key] = value;
+  }
+  const body = `${JSON.stringify(next, null, 2)}\n`;
+  parseLocalConfig(body);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, body);
+  return { file, changed, kept };
+}
+
+// Why these .prheroignore patterns would be refused, or undefined when they
+// parse. Asked before anything is written, so a bad pattern stops setup with
+// the repository unchanged instead of halfway through.
+// `existing` is the current .prheroignore text: the file is parsed whole after
+// the append, so a line already broken there must stop setup here too.
+export function ignorePatternsError(
+  patterns: readonly string[],
+  existing = "",
+): string | undefined {
+  if (patterns.length === 0) return undefined;
+  try {
+    parseIgnoreFile(`${existing}\n${patterns.join("\n")}\n`, "user");
+    return undefined;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
+// Appends exclusion patterns to <repo>/.prheroignore, skipping lines already
+// there. Validated with the same parser a review uses, before writing.
+export async function appendIgnorePatterns(
+  repoRoot: string,
+  patterns: readonly string[],
+): Promise<string> {
+  const file = path.join(repoRoot, ".prheroignore");
+  const current = existsSync(file) ? await readFile(file, "utf-8") : "";
+  const present = new Set(current.split("\n").map((line) => line.trim()));
+  const added = patterns
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0 && !present.has(p));
+  if (added.length === 0) return file;
+  const prefix = current.length === 0 || current.endsWith("\n") ? "" : "\n";
+  const body = `${current}${prefix}${added.join("\n")}\n`;
+  parseIgnoreFile(body, "user");
+  await writeFile(file, body);
+  return file;
 }
 
 export interface MaterializeCiOpenCodeDataOptions {
