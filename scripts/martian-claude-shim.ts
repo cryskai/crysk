@@ -94,11 +94,14 @@ function reportAbandoned(queuedAt: number): void {
 // its in-flight CLI calls: exiting alone would orphan them, still spending
 // quota for answers nobody will read.
 const children = new Set<ReturnType<typeof Bun.spawn>>();
+// What the CLI reports per call. Under subscription auth it is notional; with
+// ANTHROPIC_API_KEY in the shim's environment it is billed to that key.
+let spentUsd = 0;
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
     for (const child of children) child.kill();
     console.error(
-      `martian-claude-shim: ${abandoned} abandoned call(s) this run`,
+      `martian-claude-shim: ${abandoned} abandoned call(s) this run, $${spentUsd.toFixed(4)} reported by the CLI`,
     );
     process.exit(0);
   });
@@ -157,7 +160,9 @@ async function complete(
     is_error?: boolean;
     result?: string;
     modelUsage?: Record<string, unknown>;
+    total_cost_usd?: number;
   };
+  spentUsd += result.total_cost_usd ?? 0;
   if (result.is_error || typeof result.result !== "string") {
     throw new Error(`claude returned an error: ${out.slice(0, 500)}`);
   }
@@ -218,5 +223,5 @@ Bun.serve({
   },
 });
 console.error(
-  `martian-claude-shim on http://127.0.0.1:${port}/v1 (concurrency ${concurrency})`,
+  `martian-claude-shim (credential: ${process.env.ANTHROPIC_API_KEY ? "ANTHROPIC_API_KEY" : "subscription"}) on http://127.0.0.1:${port}/v1 (concurrency ${concurrency})`,
 );
