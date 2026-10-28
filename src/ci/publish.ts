@@ -79,10 +79,10 @@ import {
   STATUS_DESCRIPTION_MAX,
 } from "./outcome";
 import {
-  newestStatusInContext,
   OVERRIDE_DESCRIPTION_PREFIX,
   type OverrideStatusFact,
   overrideStandsOverRun,
+  pendingFirstStatusInContext,
 } from "./override";
 import { OVERRIDE_COMMAND, REVIEW_COMMAND } from "./trigger";
 
@@ -1108,7 +1108,7 @@ function readLatestCliStatusState(
 ): LatestStatusState {
   const read = readHeadStatuses(deps, repo, sha);
   if (!read.ok) return "unknown";
-  const latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
+  const latest = pendingFirstStatusInContext(read.statuses, STATUS_CONTEXT);
   if (latest === undefined) return "unknown";
   if (latest.state === "pending") return "pending";
   return SETTLED_STATES.has(latest.state) ? "settled" : "unknown";
@@ -1443,8 +1443,8 @@ export function runCancelSettle(deps: PublishDeps): number {
       );
       return 0;
     }
-    const newest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
-    // newestStatusInContext returns the row it was given, so the row's target is found by identity.
+    const newest = pendingFirstStatusInContext(read.statuses, STATUS_CONTEXT);
+    // pendingFirstStatusInContext returns the row it was given, so the row's target is found by identity.
     latest =
       newest === undefined
         ? undefined

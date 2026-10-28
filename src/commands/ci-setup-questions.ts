@@ -175,13 +175,12 @@ export async function askChoices(
         value: "gate",
         label: "Gate",
         description:
-          "Blocking findings turn the pr-hero check red. Require it in branch protection to block merges.",
+          "Blocking findings turn the crysk check red. Require it in branch protection to block merges.",
       },
       {
         value: "advisory",
         label: "Advisory",
-        description:
-          "The pr-hero check stays green; findings are comments only.",
+        description: "The crysk check stays green; findings are comments only.",
       },
     ],
     current.workflow.mode ?? "gate",

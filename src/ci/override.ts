@@ -11,6 +11,7 @@ import {
   isLegacyStatusContext,
   isStatusContext,
   STATUS_CONTEXT,
+  statusContextForms,
 } from "../brand";
 
 // The start of an override's status description. The publisher writes an override with
@@ -131,6 +132,25 @@ export function overrideActorOf(description: string): string | null {
 // verdict that is older than it. Two rows with the same time are a pair one run wrote, with
 // identical content, so either would do; the crysk row is taken so the answer never depends
 // on the order of the list.
+// The row a repair pass must act on. Every write posts the pair, so a name whose newest
+// row is still pending while the other name settled is a half-landed write: the pending
+// name may be the repository's required check, and the newest row across both would hide
+// it. A pending newest row on either name therefore wins, `crysk` first; otherwise this is
+// the newest row across both, as newestStatusInContext picks it.
+export function pendingFirstStatusInContext(
+  statuses: readonly OverrideStatusFact[],
+  context: string,
+): OverrideStatusFact | undefined {
+  for (const name of statusContextForms(context)) {
+    const newest = newestStatusInContext(
+      statuses.filter((status) => status.context === name),
+      context,
+    );
+    if (newest?.state === "pending") return newest;
+  }
+  return newestStatusInContext(statuses, context);
+}
+
 export function newestStatusInContext(
   statuses: readonly OverrideStatusFact[],
   context: string,

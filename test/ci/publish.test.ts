@@ -1375,14 +1375,44 @@ describe("runPublish — the shell", () => {
     },
   );
 
-  test("a settled crysk row newer than a stale pending pr-hero row is a finished CLI: nothing is replaced", () => {
+  // Every write posts the pair, so a name whose newest row is still pending while the
+  // other settled is a half-landed final write: the pending name may be the required
+  // check, and it must not hide behind the settled one (the #418 review, F001).
+  test.each([
+    ["pr-hero", "crysk"],
+    ["crysk", "pr-hero"],
+  ])(
+    "a pending %s row left behind a newer settled %s row is still a CLI that never settled: both contexts are replaced",
+    (pendingName, settledName) => {
+      const run = runPublishIn({
+        record: record({ head_sha: TRIGGER_HEAD }),
+        cliStarted: true,
+        cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+        latestStatus: statusRows(
+          [pendingName, "pending", "2026-10-16T10:00:00Z"],
+          [settledName, "success", "2026-10-16T10:05:00Z"],
+        ),
+        list: listing(),
+      });
+      const statuses = statusCalls(run.calls);
+      expect(statuses.map((call) => statusFlags(call.args).context)).toEqual([
+        "crysk",
+        "pr-hero",
+      ]);
+      expect(statuses[0]?.args).toContain("state=error");
+    },
+  );
+
+  test("a settled pair is a finished CLI: nothing is replaced", () => {
     const run = runPublishIn({
       record: record({ head_sha: TRIGGER_HEAD }),
       cliStarted: true,
       cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
       latestStatus: statusRows(
         ["pr-hero", "pending", "2026-10-16T10:00:00Z"],
+        ["crysk", "pending", "2026-10-16T10:00:00Z"],
         ["crysk", "success", "2026-10-16T10:05:00Z"],
+        ["pr-hero", "success", "2026-10-16T10:05:00Z"],
       ),
       list: listing(),
     });
@@ -3178,6 +3208,24 @@ describe("runCancelSettle — the shell (SB3)", () => {
       "target_url=https://github.com/acme/widgets/actions/runs/4242",
     );
     expect(run.stdout).toContain("the pr-hero status is now PRH-CANCELLED");
+  });
+
+  // A half-landed pair: this run's pending on pr-hero stayed behind a later crysk row.
+  // The pending name may be the required check, so the settle still writes the pair.
+  test("this run's pending pr-hero row behind a later settled crysk row is still settled on both", () => {
+    const later = new Date(Date.parse(PENDING_ISO) + 60_000).toISOString();
+    const run = runCancelSettleIn({
+      cliRecord: liveRecordText,
+      statuses: statusRows(
+        ["pr-hero", "pending", PENDING_ISO],
+        ["crysk", "success", later],
+      ),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(
+      statusCalls(run.calls).map((call) => statusFlags(call.args).context),
+    ).toEqual(["crysk", "pr-hero"]);
+    expect(statusCalls(run.calls)[0]?.args).toContain("state=error");
   });
 
   test("an unreadable pending-at still exits 0 and writes nothing", () => {
