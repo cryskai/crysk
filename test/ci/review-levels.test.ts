@@ -8,6 +8,8 @@ import {
   type CiSetupChoices,
   configPlan,
   defaultChoices,
+  parseWorkflowChoices,
+  presetMatching,
   REVIEW_LEVELS,
   renderChoicesSummary,
 } from "#ci/review-levels";
@@ -19,7 +21,7 @@ function choices(over: Partial<CiSetupChoices> = {}): CiSetupChoices {
   return {
     ...defaultChoices(),
     defaulted: false,
-    chosen: { level: true, maxChangedLines: true },
+    chosen: { level: true, maxChangedLines: true, mode: true, billing: true },
     ...over,
   };
 }
@@ -171,6 +173,16 @@ describe("renderChoicesSummary", () => {
     expect(text).not.toContain("subscription");
   });
 
+  test("a kept group shows the file's values, not the preset nobody wrote", () => {
+    const text = renderChoicesSummary(defaultChoices(), {
+      ci_max_attempts: 5,
+      max_changed_lines: 9000,
+    }).join("\n");
+    expect(text).toContain("kept the existing settings: ci_max_attempts 5");
+    expect(text).not.toContain("risk_aware");
+    expect(text).toContain("9000 changed lines (kept)");
+  });
+
   test("carries no escape bytes", () => {
     expect(renderChoicesSummary(defaultChoices()).join("\n")).not.toContain(
       "\x1b",
@@ -205,7 +217,7 @@ describe("writeRepoReviewConfig", () => {
         max_changed_lines: 4000,
       });
       expect(r.changed).toEqual([]);
-      expect(r.kept).toEqual([]);
+      expect(r.kept).toEqual({});
     });
   });
 
@@ -224,7 +236,7 @@ describe("writeRepoReviewConfig", () => {
         ci_max_attempts: 3,
         max_changed_lines: 4000,
       });
-      expect(r.kept).toEqual(["ci_max_attempts"]);
+      expect(r.kept).toEqual({ ci_max_attempts: 3 });
     });
   });
 
@@ -282,5 +294,34 @@ describe("appendIgnorePatterns", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("presetMatching", () => {
+  test("no level keys: undefined", () => {
+    expect(presetMatching({ post: true })).toBeUndefined();
+  });
+  test("exactly a preset's keys: that preset", () => {
+    expect(presetMatching({ ...REVIEW_LEVELS.thorough.config })).toBe(
+      "thorough",
+    );
+  });
+  test("tuned keys that match no preset: custom", () => {
+    expect(
+      presetMatching({ ...REVIEW_LEVELS.balanced.config, ci_max_attempts: 5 }),
+    ).toBe("custom");
+  });
+});
+
+describe("parseWorkflowChoices", () => {
+  test("reads the mode and the ceiling setup writes", () => {
+    expect(
+      parseWorkflowChoices(
+        "        with:\n          budget-usd: 7.5\n          mode: advisory\n",
+      ),
+    ).toEqual({ mode: "advisory", budgetUsd: "7.5" });
+  });
+  test("a workflow without them reads as empty", () => {
+    expect(parseWorkflowChoices("name: x\n")).toEqual({});
   });
 });

@@ -54,7 +54,7 @@ describe("askChoices", () => {
       maxChangedLines: 4000,
       advanced: {},
       defaulted: false,
-      chosen: { level: true, maxChangedLines: true },
+      chosen: { level: true, maxChangedLines: true, mode: true, billing: true },
     });
     expect(asked.some((q) => /changed lines/i.test(q))).toBe(true);
     expect(asked.some((q) => /ceiling/i.test(q))).toBe(false);
@@ -77,17 +77,17 @@ describe("askChoices", () => {
     expect((await askChoices(p2, () => {})).budgetUsd).toBe(10);
   });
 
-  test("advanced: writes only what differs from the defaults", async () => {
+  test("advanced: every answer is written, the default ones included", async () => {
     const { prompter } = scripted([
       "balanced",
       "gate",
       "subscription",
       "0", // no line limit, said explicitly
       "y",
-      "", // blocking weight: default 2
+      "", // blocking weight: Enter takes the default 2, still written
       "0", // advisory weight 0: rejected, re-asked
       "3",
-      "y", // observe only
+      "n", // observe only: an explicit no is written as false
       "bot-a, bot-b",
       "40",
       "dist/**, !", // a bare ! is not a pattern: re-asked
@@ -95,12 +95,68 @@ describe("askChoices", () => {
     ]);
     const c = await askChoices(prompter, () => {});
     expect(c.advanced).toEqual({
+      ci_blocking_weight: 2,
       ci_advisory_weight: 3,
-      ci_admission_observe_only: true,
+      ci_admission_observe_only: false,
       ci_trusted_actors: ["bot-a", "bot-b"],
       max_changed_files: 40,
       ignorePatterns: ["dist/**", "*.lock"],
     });
+  });
+
+  test("a re-run starts from the repository: Enter keeps a tuned config and workflow", async () => {
+    const asked: { q: string; def: string }[] = [];
+    const enter: SetupPrompter = {
+      choose: async (q, options, def) => {
+        asked.push({
+          q,
+          def: `${def} of ${options.map((o) => o.value).join("|")}`,
+        });
+        return def;
+      },
+      confirm: async (_q, def) => def,
+      text: async (q, def) => {
+        asked.push({ q, def });
+        return "";
+      },
+    };
+    const c = await askChoices(enter, () => {}, {
+      config: {
+        ci_review_policy: "every_push",
+        ci_max_attempts: 5,
+        max_changed_lines: 9000,
+      },
+      workflow: { mode: "advisory", budgetUsd: "7" },
+    });
+    expect(asked[0]?.def).toContain(
+      "keep of minimal|balanced|thorough|manual|keep",
+    );
+    expect(c.chosen.level).toBe(false);
+    expect(c.mode).toBe("advisory");
+    expect(c.billing).toBe("api");
+    expect(c.budgetUsd).toBe(7);
+    expect(c.maxChangedLines).toBe(9000);
+  });
+
+  test("a config that spells a preset defaults to that preset", async () => {
+    let levelDefault = "";
+    const enter: SetupPrompter = {
+      choose: async (q, _o, def) => {
+        if (q === "Re-review level") levelDefault = String(def);
+        return def;
+      },
+      confirm: async (_q, def) => def,
+      text: async () => "",
+    };
+    await askChoices(enter, () => {}, {
+      config: {
+        ci_review_policy: "once_per_pr",
+        ci_max_attempts: 1,
+        max_verification_steps: 8,
+      },
+      workflow: {},
+    });
+    expect(levelDefault).toBe("minimal");
   });
 });
 
@@ -117,20 +173,32 @@ describe("choicesFromFlags", () => {
       maxChangedLines: 4000,
       advanced: {},
       defaulted: false,
-      chosen: { level: false, maxChangedLines: false },
+      chosen: {
+        level: false,
+        maxChangedLines: false,
+        mode: false,
+        billing: true,
+      },
     });
   });
 
   test("--max-changed-lines alone is a choice too, and marks only that key chosen", () => {
     const c = choicesFromFlags({ maxChangedLines: 1500 });
     expect(c?.maxChangedLines).toBe(1500);
-    expect(c?.chosen).toEqual({ level: false, maxChangedLines: true });
+    expect(c?.chosen).toEqual({
+      level: false,
+      maxChangedLines: true,
+      mode: false,
+      billing: false,
+    });
   });
 
   test("--level marks the level chosen", () => {
     expect(choicesFromFlags({ reviewLevel: "manual" })?.chosen).toEqual({
       level: true,
       maxChangedLines: false,
+      mode: false,
+      billing: false,
     });
   });
 

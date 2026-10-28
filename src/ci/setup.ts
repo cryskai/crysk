@@ -468,8 +468,9 @@ export interface RepoReviewConfigWrite {
   file: string;
   // Keys that already held a different value and now hold the chosen one.
   changed: { key: string; from: unknown; to: unknown }[];
-  // Keys already in the file that nobody chose this run, left untouched.
-  kept: string[];
+  // Keys already in the file that nobody chose this run, left untouched, with
+  // the value they keep.
+  kept: Record<string, unknown>;
 }
 
 export async function writeRepoReviewConfig(
@@ -501,11 +502,11 @@ export async function writeRepoReviewConfig(
   }
   const next: Record<string, unknown> = { ...current };
   const changed: RepoReviewConfigWrite["changed"] = [];
-  const kept: string[] = [];
+  const kept: Record<string, unknown> = {};
   for (const group of plan.fillIfAbsent) {
     const present = Object.keys(group).filter((key) => key in current);
-    if (present.length > 0) kept.push(...present);
-    else Object.assign(next, group);
+    if (present.length === 0) Object.assign(next, group);
+    for (const key of present) kept[key] = current[key];
   }
   for (const [key, value] of Object.entries(plan.set)) {
     if (
@@ -526,11 +527,15 @@ export async function writeRepoReviewConfig(
 // Why these .prheroignore patterns would be refused, or undefined when they
 // parse. Asked before anything is written, so a bad pattern stops setup with
 // the repository unchanged instead of halfway through.
+// `existing` is the current .prheroignore text: the file is parsed whole after
+// the append, so a line already broken there must stop setup here too.
 export function ignorePatternsError(
   patterns: readonly string[],
+  existing = "",
 ): string | undefined {
+  if (patterns.length === 0) return undefined;
   try {
-    parseIgnoreFile(`${patterns.join("\n")}\n`, "user");
+    parseIgnoreFile(`${existing}\n${patterns.join("\n")}\n`, "user");
     return undefined;
   } catch (error) {
     return (error as Error).message;

@@ -120,7 +120,63 @@ export interface CiSetupChoices {
   // Which groups someone chose this run. A chosen group overrides the file; an
   // unchosen one only fills a group the file does not have yet, so re-running
   // setup (say `--force` to refresh an old workflow) never resets tuned keys.
-  chosen: { level: boolean; maxChangedLines: boolean };
+  // `mode` and `billing` guard the workflow the same way: on a --force refresh
+  // an unchosen one keeps what the old workflow said.
+  chosen: {
+    level: boolean;
+    maxChangedLines: boolean;
+    mode: boolean;
+    billing: boolean;
+  };
+}
+
+// What the repository already says, read before asking: the defaults a
+// re-run should start from, so pressing Enter changes nothing.
+export interface CurrentSettings {
+  config: Record<string, unknown>;
+  workflow: { mode?: "gate" | "advisory"; budgetUsd?: string };
+}
+
+export const NO_CURRENT_SETTINGS: CurrentSettings = {
+  config: {},
+  workflow: {},
+};
+
+const LEVEL_KEYS = [
+  "ci_review_policy",
+  "ci_max_attempts",
+  "ci_rereview_min_score",
+  "max_verification_steps",
+] as const;
+
+// The preset the file's level keys spell exactly, "custom" when they are set
+// but match none, undefined when the file sets none of them.
+export function presetMatching(
+  config: Record<string, unknown>,
+): ReviewLevel | "custom" | undefined {
+  if (!LEVEL_KEYS.some((key) => key in config)) return undefined;
+  for (const level of REVIEW_LEVEL_ORDER) {
+    const preset = REVIEW_LEVELS[level].config as Record<string, unknown>;
+    if (LEVEL_KEYS.every((key) => config[key] === preset[key])) return level;
+  }
+  return "custom";
+}
+
+// The two inputs setup writes into the workflow, read back from an existing one.
+export function parseWorkflowChoices(
+  text: string,
+): CurrentSettings["workflow"] {
+  const mode = /^\s+mode:\s*(gate|advisory)\s*$/m.exec(text)?.[1] as
+    | "gate"
+    | "advisory"
+    | undefined;
+  const budgetUsd = /^\s+budget-usd:\s*['"]?([0-9.]+)['"]?\s*$/m.exec(
+    text,
+  )?.[1];
+  return {
+    ...(mode === undefined ? {} : { mode }),
+    ...(budgetUsd === undefined ? {} : { budgetUsd }),
+  };
 }
 
 // The engine's own default threshold, so a chosen default and an inherited one agree.
@@ -133,7 +189,12 @@ export function defaultChoices(): CiSetupChoices {
     maxChangedLines: DEFAULT_MAX_CHANGED_LINES,
     advanced: {},
     defaulted: true,
-    chosen: { level: false, maxChangedLines: false },
+    chosen: {
+      level: false,
+      maxChangedLines: false,
+      mode: false,
+      billing: false,
+    },
   };
 }
 
@@ -177,8 +238,14 @@ export function configPlan(choices: CiSetupChoices): ConfigPlan {
 }
 
 // One line per choice, plus how to change it. Returned, never logged.
-export function renderChoicesSummary(choices: CiSetupChoices): string[] {
+// `kept` holds the file's values for keys nobody chose this run; where a group
+// was kept the summary shows those values, never the preset it did not write.
+export function renderChoicesSummary(
+  choices: CiSetupChoices,
+  kept: Record<string, unknown> = {},
+): string[] {
   const preset = REVIEW_LEVELS[choices.level];
+  const levelKept = LEVEL_KEYS.filter((key) => key in kept);
   const c = preset.config;
   const a = choices.advanced;
   const budget = budgetInput(choices);
@@ -186,9 +253,15 @@ export function renderChoicesSummary(choices: CiSetupChoices): string[] {
     choices.defaulted
       ? "Review settings (defaults: nobody chose them; pass --level, --ci-mode and --billing, or run setup --ci in a terminal, to choose):"
       : "Review settings:",
-    `  level            ${choices.level}: ${preset.description}`,
-    `  policy           ${c.ci_review_policy}, at most ${c.ci_max_attempts} automatic pass${c.ci_max_attempts === 1 ? "" : "es"} per PR${c.ci_rereview_min_score === undefined ? "" : `, score floor ${c.ci_rereview_min_score}`}`,
-    `  verification     up to ${c.max_verification_steps} prior findings checked per re-review`,
+    ...(levelKept.length > 0
+      ? [
+          `  level            kept the existing settings: ${levelKept.map((key) => `${key} ${JSON.stringify(kept[key])}`).join(", ")}`,
+        ]
+      : [
+          `  level            ${choices.level}: ${preset.description}`,
+          `  policy           ${c.ci_review_policy}, at most ${c.ci_max_attempts} automatic pass${c.ci_max_attempts === 1 ? "" : "es"} per PR${c.ci_rereview_min_score === undefined ? "" : `, score floor ${c.ci_rereview_min_score}`}`,
+          `  verification     up to ${c.max_verification_steps} prior findings checked per re-review`,
+        ]),
     `  gate             ${choices.mode === "gate" ? "gate: blocking findings turn the pr-hero check red" : "advisory: the pr-hero check stays green"}`,
     `  budget           ${
       budget === undefined
@@ -202,7 +275,7 @@ export function renderChoicesSummary(choices: CiSetupChoices): string[] {
     `  score weights    blocking ${a.ci_blocking_weight ?? DEFAULT_CI_BLOCKING_WEIGHT}, advisory ${a.ci_advisory_weight ?? DEFAULT_CI_ADVISORY_WEIGHT}`,
     `  observe only     ${a.ci_admission_observe_only === true ? "yes: skip decisions are logged, every push is reviewed" : "no"}`,
     `  trusted actors   ${a.ci_trusted_actors && a.ci_trusted_actors.length > 0 ? a.ci_trusted_actors.join(", ") : "none beyond the workflow actor"}`,
-    `  size limit       ${choices.maxChangedLines === 0 ? "no changed-lines limit (0)" : `${choices.maxChangedLines} changed lines`}, ${a.max_changed_files === undefined ? "files resolved from how the review is paid" : `${a.max_changed_files} files`}`,
+    `  size limit       ${"max_changed_lines" in kept ? `${JSON.stringify(kept.max_changed_lines)} changed lines (kept)` : choices.maxChangedLines === 0 ? "no changed-lines limit (0)" : `${choices.maxChangedLines} changed lines`}, ${a.max_changed_files === undefined ? "files resolved from how the review is paid" : `${a.max_changed_files} files`}`,
     `  exclusions       ${a.ignorePatterns && a.ignorePatterns.length > 0 ? `${a.ignorePatterns.join(", ")} (.prheroignore)` : "none added (.prheroignore)"}`,
     "Change them later in .prhero/config.json and .github/workflows/pr-hero.yml (`npx -y pr-hero config` shows the effective values).",
   ];

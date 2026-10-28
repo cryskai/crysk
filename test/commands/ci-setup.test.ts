@@ -8,6 +8,7 @@ import {
   ghPreflight,
 } from "#commands/ci-setup";
 import { type CliOptions, parseArgs } from "#review/preflight";
+import { CliError } from "../../src/errors";
 import type { SystemToolStatus } from "../../src/system-tools";
 
 const MISSING: SystemToolStatus = { installed: false, authOk: false };
@@ -342,6 +343,23 @@ describe("setup --ci review choices (CLI)", () => {
     }
   });
 
+  test("--force with no flags keeps the old workflow's mode and ceiling", async () => {
+    const r = await runSetup(["--force"], async (dir) => {
+      await Bun.write(
+        path.join(dir, ".github", "workflows", "pr-hero.yml"),
+        "jobs:\n  review:\n    steps:\n      - with:\n          budget-usd: 7.5\n          mode: advisory\n",
+      );
+    });
+    try {
+      expect(r.code).toBe(0);
+      expect(r.workflow).toContain("mode: advisory");
+      expect(r.workflow).toContain("budget-usd: 7.5\n");
+      expect(r.workflow).toContain("issue_comment");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
   test("--level alone changes the level keys, reports them, and keeps the line threshold", async () => {
     const r = await runSetup(["--level", "minimal"], async (dir) => {
       await Bun.write(
@@ -469,6 +487,60 @@ describe("ciSetupCommand at a terminal", () => {
         ci_review_policy: "manual_only",
         max_changed_lines: 1200,
       });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ciSetupCommand with a broken .prheroignore", () => {
+  test("a new pattern over a broken file stops before anything is written", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-ignore-"));
+    try {
+      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+      await Bun.write(path.join(dir, ".prheroignore"), "!\n");
+      const answers = [
+        "balanced",
+        "gate",
+        "subscription",
+        "",
+        "y",
+        "",
+        "",
+        "n",
+        "",
+        "",
+        "dist/**",
+      ];
+      const take = () => answers.shift() ?? "";
+      const { deps } = fakeDeps([READY]);
+      await expect(
+        ciSetupCommand({ repo: dir, repoExplicit: true } as CliOptions, {
+          gh: deps,
+          interactive: true,
+          prompter: {
+            choose: async (_q, options, def) => {
+              const a = take();
+              return (
+                a === "" ? def : options.find((o) => o.value === a)?.value
+              ) as never;
+            },
+            confirm: async (_q, def) => {
+              const a = take();
+              return a === "" ? def : a === "y";
+            },
+            text: async () => take(),
+          },
+        }),
+      ).rejects.toBeInstanceOf(CliError);
+      expect(
+        await Bun.file(
+          path.join(dir, ".github", "workflows", "pr-hero.yml"),
+        ).exists(),
+      ).toBe(false);
+      expect(
+        await Bun.file(path.join(dir, ".prhero", "config.json")).exists(),
+      ).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

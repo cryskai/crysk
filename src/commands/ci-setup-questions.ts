@@ -11,9 +11,12 @@ import {
   type AdvancedChoices,
   type Billing,
   type CiSetupChoices,
+  type CurrentSettings,
   DEFAULT_MAX_CHANGED_LINES,
   DEFAULT_REVIEW_LEVEL,
   defaultChoices,
+  NO_CURRENT_SETTINGS,
+  presetMatching,
   REVIEW_LEVEL_ORDER,
   REVIEW_LEVELS,
   type ReviewLevel,
@@ -78,6 +81,8 @@ export function choicesFromFlags(
     chosen: {
       level: options.reviewLevel !== undefined,
       maxChangedLines: options.maxChangedLines !== undefined,
+      mode: options.ciMode !== undefined,
+      billing: billing !== undefined,
     },
   };
 }
@@ -120,26 +125,48 @@ function commaList(raw: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+// Every default comes from `current`, so a person re-running setup who presses
+// Enter through it changes nothing.
 export async function askChoices(
   prompter: SetupPrompter,
   say: (line?: string) => void,
+  current: CurrentSettings = NO_CURRENT_SETTINGS,
 ): Promise<CiSetupChoices> {
   const choices = defaultChoices();
   choices.defaulted = false;
   // A person at a terminal answers every main question.
-  choices.chosen = { level: true, maxChangedLines: true };
+  choices.chosen = {
+    level: true,
+    maxChangedLines: true,
+    mode: true,
+    billing: true,
+  };
+  const cfg = current.config;
 
   say();
   say("How should pr-hero re-review a pull request after new pushes?");
-  choices.level = await prompter.choose<ReviewLevel>(
-    "Re-review level",
+  const matching = presetMatching(cfg);
+  const levelOptions: PromptOption<ReviewLevel | "keep">[] =
     REVIEW_LEVEL_ORDER.map((value) => ({
       value,
       label: REVIEW_LEVELS[value].label,
       description: REVIEW_LEVELS[value].description,
-    })),
-    DEFAULT_REVIEW_LEVEL,
+    }));
+  if (matching === "custom") {
+    levelOptions.push({
+      value: "keep",
+      label: "Keep current settings",
+      description:
+        "The re-review keys in .prhero/config.json match no preset; leave them as they are.",
+    });
+  }
+  const level = await prompter.choose<ReviewLevel | "keep">(
+    "Re-review level",
+    levelOptions,
+    matching === "custom" ? "keep" : (matching ?? DEFAULT_REVIEW_LEVEL),
   );
+  if (level === "keep") choices.chosen.level = false;
+  else choices.level = level;
 
   choices.mode = await prompter.choose<"gate" | "advisory">(
     "Should blocking findings block the merge?",
@@ -157,7 +184,7 @@ export async function askChoices(
           "The pr-hero check stays green; findings are comments only.",
       },
     ],
-    "gate",
+    current.workflow.mode ?? "gate",
   );
 
   choices.billing = await prompter.choose<Billing>(
@@ -176,7 +203,7 @@ export async function askChoices(
           "ANTHROPIC_API_KEY or an OpenCode provider. Reviews are billed per token.",
       },
     ],
-    "subscription",
+    current.workflow.budgetUsd === undefined ? "subscription" : "api",
   );
   if (choices.billing === "subscription") {
     say(
@@ -186,7 +213,7 @@ export async function askChoices(
     choices.budgetUsd = await askValue(
       prompter,
       "Spend ceiling per review in USD (0 = none)",
-      String(CI_DEFAULT_METERED_BUDGET_USD),
+      current.workflow.budgetUsd ?? String(CI_DEFAULT_METERED_BUDGET_USD),
       (raw) => {
         const n = Number(raw);
         return raw !== "" && Number.isFinite(n) ? n : undefined;
@@ -203,7 +230,11 @@ export async function askChoices(
   choices.maxChangedLines = await askValue(
     prompter,
     "Max changed lines per review (0 = no limit)",
-    String(DEFAULT_MAX_CHANGED_LINES),
+    String(
+      typeof cfg.max_changed_lines === "number"
+        ? cfg.max_changed_lines
+        : DEFAULT_MAX_CHANGED_LINES,
+    ),
     integerAtLeast(0),
     say,
     "Enter a whole number, 0 or more.",
@@ -214,16 +245,21 @@ export async function askChoices(
     "Advanced settings: score weights, observe-only mode, trusted actors, the changed-files limit, and exclusions. Each has a default that works.",
   );
   if (await prompter.confirm("Review the advanced settings now?", false)) {
-    choices.advanced = await askAdvanced(prompter, say);
+    choices.advanced = await askAdvanced(prompter, say, cfg);
   }
   return choices;
 }
 
+// Every answer is written, the default ones included: a person answered, and
+// an answer equal to the default must still replace a tuned value in the file.
 async function askAdvanced(
   prompter: SetupPrompter,
   say: (line?: string) => void,
+  cfg: Record<string, unknown>,
 ): Promise<AdvancedChoices> {
   const advanced: AdvancedChoices = {};
+  const num = (key: string, fallback: number): string =>
+    String(typeof cfg[key] === "number" ? cfg[key] : fallback);
 
   say();
   say(
@@ -232,42 +268,48 @@ async function askAdvanced(
   const blocking = await askValue(
     prompter,
     "Weight of a blocking finding",
-    String(DEFAULT_CI_BLOCKING_WEIGHT),
+    num("ci_blocking_weight", DEFAULT_CI_BLOCKING_WEIGHT),
     integerAtLeast(1),
     say,
     "Enter a whole number, 1 or more.",
   );
-  if (blocking !== DEFAULT_CI_BLOCKING_WEIGHT) {
-    advanced.ci_blocking_weight = blocking;
-  }
+  advanced.ci_blocking_weight = blocking;
   const advisory = await askValue(
     prompter,
     "Weight of an advisory finding",
-    String(DEFAULT_CI_ADVISORY_WEIGHT),
+    num("ci_advisory_weight", DEFAULT_CI_ADVISORY_WEIGHT),
     integerAtLeast(1),
     say,
     "Enter a whole number, 1 or more.",
   );
-  if (advisory !== DEFAULT_CI_ADVISORY_WEIGHT) {
-    advanced.ci_advisory_weight = advisory;
-  }
+  advanced.ci_advisory_weight = advisory;
 
   say();
   say(
     "Observe only: log what the re-review rules would skip, but review every push anyway. Useful for one PR cycle while you tune them.",
   );
-  if (await prompter.confirm("Turn on observe-only mode?", false)) {
-    advanced.ci_admission_observe_only = true;
-  }
+  advanced.ci_admission_observe_only = await prompter.confirm(
+    "Turn on observe-only mode?",
+    cfg.ci_admission_observe_only === true,
+  );
 
   say();
   say(
     "Trusted actors: extra GitHub logins (bots, other automation) whose pr-hero markers count, besides the workflow's own actor.",
   );
-  const actors = commaList(
-    await prompter.text("Trusted actors, comma-separated (empty = none)", ""),
-  );
-  if (actors.length > 0) advanced.ci_trusted_actors = actors;
+  const currentActors = Array.isArray(cfg.ci_trusted_actors)
+    ? (cfg.ci_trusted_actors as string[]).join(", ")
+    : "";
+  const actorsRaw = (
+    await prompter.text(
+      "Trusted actors, comma-separated (empty = keep, none = clear)",
+      currentActors,
+    )
+  ).trim();
+  advanced.ci_trusted_actors =
+    actorsRaw.toLowerCase() === "none"
+      ? []
+      : commaList(actorsRaw === "" ? currentActors : actorsRaw);
 
   say();
   say(
@@ -276,7 +318,9 @@ async function askAdvanced(
   const files = await askValue(
     prompter,
     "Max changed files (empty = default, 0 = no limit)",
-    "",
+    typeof cfg.max_changed_files === "number"
+      ? String(cfg.max_changed_files)
+      : "",
     optionalLimit,
     say,
     "Enter a whole number, or leave it empty.",
