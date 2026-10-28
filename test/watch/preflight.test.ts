@@ -1119,7 +1119,7 @@ describe("decideTick", () => {
   });
 
   // (c) It does not arm the on_push "one review per PR" state. That state
-  // is armed by a comparison.json or a marker comment — both of which only
+  // is armed by a findings.json or a marker comment — both of which only
   // a review that RAN produces — so under the default policy a previously
   // skipped PR is still a first review, not a repeat.
   test("(c) a too-large skip never arms the one-review-per-PR state", () => {
@@ -1138,7 +1138,7 @@ describe("decideTick", () => {
     expect(decision.launch?.pr).toBe(4);
   });
 
-  // The local half alone also blocks under the default: any comparison.json
+  // The local half alone also blocks under the default: any findings.json
   // with the same PR number, whatever head it reviewed.
   test("a local prior-head review blocks without on_push, by itself", () => {
     const facts = {

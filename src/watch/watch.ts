@@ -3,7 +3,7 @@
 // review spawn, the macOS notification, and launchd install/uninstall —
 // every side effect `pr-hero watch` needs. Same contract as cli.ts and
 // pr/pr.ts: untested by construction, and every decision it acts on is a pure
-// function in watch/preflight.ts (or compare/ledger.ts), where the tests live.
+// function in watch/preflight.ts, where the tests live.
 //
 // The tick never daemonizes. launchd (or cron) is the supervisor and the
 // scheduler; one invocation is one pass over the configured repos, at most
@@ -13,7 +13,6 @@ import { existsSync } from "node:fs";
 import { appendFile, mkdir, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { parseComparisonJson } from "#compare/ledger";
 import { git, resolveRepoRoot } from "#git/git";
 import {
   fetchCommitStatuses,
@@ -32,6 +31,7 @@ import {
   prHtmlUrl,
   RUN_STATUS_CONTEXTS,
 } from "#pr/preflight";
+import { validateFindingsDocument } from "#review/findings";
 import {
   type CliOptions,
   DEFAULT_WATCH_INTERVAL_MIN,
@@ -60,7 +60,7 @@ import {
   NPX_REGISTRATION_REFUSED,
   selfInvocation,
 } from "../assets";
-import { CliError, CliUsageError } from "../errors";
+import { CliError } from "../errors";
 import { resolveRepoHome } from "../home";
 import type { IgnoreRule } from "../ignore-file";
 import {
@@ -450,12 +450,15 @@ export async function gatherRepoFacts(
   return repos;
 }
 
-// One level deep, like the ledger scan: run dirs are flat children of the
-// runs root. comparison.json is read through the LEDGER's loud parser — the
-// reviewed-local set must come from parsed artifact fields (pr + head_sha),
-// never from directory names — while pipeline.json feeds the tolerant
-// attempts counter (see the WHY on countAttempts in watch/preflight.ts).
-async function scanRunDirs(runsRoot: string): Promise<{
+// One level deep: run dirs are flat children of the runs root. The
+// reviewed-local set comes from each dir's findings.json, read through the
+// same validator the post and triage verbs use — the set must come from parsed
+// artifact fields (pr + head_sha), never from directory names. A run counts
+// only when it is a PR review (pr > 0) that did not fail its session: a
+// sessionFailed run never reached a verdict, and a local run (pr 0) names no
+// PR to dedupe against. pipeline.json feeds the tolerant attempts counter (see
+// the WHY on countAttempts in watch/preflight.ts).
+export async function scanRunDirs(runsRoot: string): Promise<{
   facts: RunDirFact[];
   localReviews: { pr: number; head: string }[];
 }> {
@@ -465,21 +468,21 @@ async function scanRunDirs(runsRoot: string): Promise<{
   for (const entry of await readdir(runsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = path.join(runsRoot, entry.name);
-    const comparisonPath = path.join(dir, "comparison.json");
-    if (existsSync(comparisonPath)) {
+    const findingsPath = path.join(dir, "findings.json");
+    if (existsSync(findingsPath)) {
       try {
-        const comparison = parseComparisonJson(
-          await Bun.file(comparisonPath).text(),
+        const doc = validateFindingsDocument(
+          JSON.parse(await Bun.file(findingsPath).text()),
         );
-        localReviews.push({ pr: comparison.pr, head: comparison.head_sha });
-      } catch (error) {
-        // The pure parser names the field; only the shell knows the file —
-        // the same wrap ledgerCommand uses. Loud on purpose: a mis-read
-        // comparison.json would silently re-review (and re-bill) a PR.
-        if (error instanceof CliUsageError) {
-          throw new CliError(`${comparisonPath}: ${error.message}`);
+        if (doc.pr > 0 && doc.sessionFailed !== true) {
+          localReviews.push({ pr: doc.pr, head: doc.head_sha });
         }
-        throw error;
+      } catch (error) {
+        // Loud on purpose: a mis-read findings.json would silently re-review
+        // (and re-bill) a PR. The message leads with the file so the operator
+        // knows which run to inspect.
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new CliError(`${findingsPath}: ${reason}`);
       }
     }
     const pipelinePath = path.join(dir, "pipeline.json");
