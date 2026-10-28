@@ -1,0 +1,69 @@
+import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { readBrandEnv } from "../src/brand";
+
+describe("readBrandEnv", () => {
+  test("reads the new CRYSK_ name first", () => {
+    expect(
+      readBrandEnv(
+        { CRYSK_AGENTS_DIR: "new", PRHERO_AGENTS_DIR: "old" },
+        "AGENTS_DIR",
+      ),
+    ).toEqual({ value: "new", name: "CRYSK_AGENTS_DIR" });
+  });
+
+  test("falls back to the legacy PRHERO_ name", () => {
+    expect(readBrandEnv({ PRHERO_AGENTS_DIR: "old" }, "AGENTS_DIR")).toEqual({
+      value: "old",
+      name: "PRHERO_AGENTS_DIR",
+    });
+  });
+
+  test("returns undefined when neither name is set", () => {
+    expect(readBrandEnv({}, "AGENTS_DIR")).toBeUndefined();
+  });
+
+  test("an empty CRYSK_ value falls back to a non-empty legacy value", () => {
+    expect(
+      readBrandEnv(
+        { CRYSK_AGENTS_DIR: "", PRHERO_AGENTS_DIR: "/x" },
+        "AGENTS_DIR",
+      ),
+    ).toEqual({ value: "/x", name: "PRHERO_AGENTS_DIR" });
+  });
+
+  test("a variable set but empty still counts as set when nothing has a value", () => {
+    expect(readBrandEnv({ CRYSK_NO_TUI: "" }, "NO_TUI")).toEqual({
+      value: "",
+      name: "CRYSK_NO_TUI",
+    });
+    expect(
+      readBrandEnv({ CRYSK_NO_TUI: "", PRHERO_NO_TUI: "" }, "NO_TUI"),
+    ).toEqual({ value: "", name: "CRYSK_NO_TUI" });
+  });
+});
+
+// init reads the real home dir and the bare entry reads the real TTY, so
+// neither can be driven end to end here. This guard pins the wiring instead:
+// a direct read of a user-set PRHERO_ variable would skip the CRYSK_ name.
+describe("user-set env vars go through readBrandEnv", () => {
+  test("no src file reads them straight from the environment", () => {
+    const srcDir = path.resolve(import.meta.dir, "../src");
+    const files = readdirSync(srcDir, {
+      recursive: true,
+      encoding: "utf8",
+    }).filter((file) => file.endsWith(".ts"));
+    // Dot access, bracket access, or a destructure of any PRHERO_ variable.
+    // OUTCOME_DIR and PUBLISH_MODE are the action's own wiring, set and read
+    // inside action.yml, and are renamed with it.
+    const internal = "(?!OUTCOME_DIR\\b|PUBLISH_MODE\\b)";
+    const direct = new RegExp(
+      `env(?:\\.|\\[\\s*["'\`])PRHERO_${internal}|\\{[^}]*\\bPRHERO_${internal}\\w+[^}]*\\}\\s*=\\s*[\\w.]*env\\b`,
+    );
+    const offenders = files.filter((file) =>
+      direct.test(readFileSync(path.join(srcDir, file), "utf8")),
+    );
+    expect(offenders).toEqual([]);
+  });
+});

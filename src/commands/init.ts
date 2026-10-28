@@ -15,6 +15,7 @@ import {
   initTemplateOmissions,
 } from "#review/preflight";
 import { log } from "#ui/primitives";
+import { readBrandEnv } from "../brand";
 
 // `pr-hero init` — the other half of making `pr-hero review` a zero-flag
 // command. It writes the two files local mode looks for and nothing else, and
@@ -30,11 +31,11 @@ export async function init(options: CliOptions): Promise<number> {
   // config to read yet — it is writing one — and a missing prompt set must
   // still produce a usable scaffold. When no flag or env is given, agents_dir
   // is omitted entirely so the repo uses the engine's bundled default.
-  const agentsFromEnv = process.env.PRHERO_AGENTS_DIR;
+  const agentsFromEnv = readBrandEnv(process.env, "AGENTS_DIR");
   const agentsSeed = options.agents
     ? { dir: path.resolve(options.agents), source: "--agents" }
-    : agentsFromEnv
-      ? { dir: path.resolve(agentsFromEnv), source: "PRHERO_AGENTS_DIR" }
+    : agentsFromEnv?.value
+      ? { dir: path.resolve(agentsFromEnv.value), source: agentsFromEnv.name }
       : undefined;
   const baseSeed = resolveBaseRef({
     flag: options.base,

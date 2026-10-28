@@ -127,6 +127,7 @@ import { startPanelRenderer } from "#ui/progress";
 export { startPanelRenderer };
 
 import { watchCommand } from "#watch/watch";
+import { readBrandEnv } from "./brand";
 import {
   closeAllServers,
   killAllChildProcesses,
@@ -142,7 +143,7 @@ import { isMachineOnboarded, runWizard } from "./wizard";
 export async function main(argv: string[]): Promise<number> {
   // Bare zero-argument entry
   if (argv.length === 0) {
-    if (process.env.PRHERO_NO_TUI !== undefined) {
+    if (readBrandEnv(process.env, "NO_TUI") !== undefined) {
       log(HELP_TEXT);
       return 0;
     }
