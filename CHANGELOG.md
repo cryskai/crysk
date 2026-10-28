@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-28
+
+0.2.5 reached npm but was never tagged on GitHub, so it has no GitHub Release and the `v0` Action tag stayed on
+0.2.4. This release moves `v0` straight from 0.2.4 to 0.2.6; CI repositories on `@v0` get both releases' changes.
+
+### Added
+- **`setup --ci` asks how CI re-reviews a pull request** (#409): a level preset (`minimal`, `balanced`, `thorough`,
+  `manual`), gate or advisory, how CI pays, the changed-lines threshold, and whether to tune the advanced settings
+  (score weights, observe-only, trusted actors, files limit, `.prheroignore` exclusions). The level's keys and
+  `max_changed_lines` (default 4000, on any billing) are always written to `.prhero/config.json`, validated by the
+  review's own parser first, and a summary prints every setting. A subscription writes no `budget-usd`; an API key
+  writes the ceiling you choose. At a terminal the CLI asks; an agent passes `--level`, `--ci-mode`, `--billing`,
+  `--max-changed-lines` and `--budget-usd`; with neither, `balanced` and `gate` apply and the summary says nobody
+  chose them. Re-runs start from what the repository already says: keys and workflow inputs nobody chose this run
+  are kept, and setup prints `Changed` and `Kept existing` lines.
+- **`setup --ci` checks the GitHub CLI** (#409): a missing or logged-out `gh` is reported with why the CI loop needs
+  it, and at a terminal setup offers to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks.
+
+### Changed
+- **The `pr-hero-ci-setup` skill asks the human the review settings** and passes them to `setup --ci` as flags,
+  replacing its six-question admission interview (#409).
+- **The README describes a CI-only path**: install the skills from skills.sh, add one workflow, no local install
+  (#409).
+
 ## [0.2.5] - 2026-10-27
 
 ### Changed
@@ -491,8 +515,9 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.5...HEAD
-[0.2.5]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...v0.2.5
+[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...v0.2.6
+[0.2.5]: https://www.npmjs.com/package/pr-hero/v/0.2.5
 [0.2.4]: https://github.com/juanmaagd/pr-hero/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/juanmaagd/pr-hero/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/juanmaagd/pr-hero/compare/v0.2.1...v0.2.2
