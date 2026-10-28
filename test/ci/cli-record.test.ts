@@ -1,5 +1,5 @@
 // T2c unit A (odd/tasks/agent-first-ci.md, S3): the CLI's outcome record writer.
-// In action mode (PRHERO_OUTCOME_DIR set) writeCliRecord leaves cli.json for the
+// In action mode (CRYSK_OUTCOME_DIR set) writeCliRecord leaves cli.json for the
 // publisher; without it nothing is written and nothing is printed. A write that
 // cannot land must never throw, because the review's own result is not the
 // record's to block.
@@ -63,15 +63,15 @@ describe("writeCliRecord", () => {
 
   const record: CliRecord = { v: 1, outcome: "reviewed", head_sha: SHA };
 
-  test("with PRHERO_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
+  test("with CRYSK_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
     const { chunks } = captureStderr(() => writeCliRecord(record, {}));
     expect(chunks).toEqual([]);
     expect(existsSync(path.join(root, CLI_RECORD_FILE))).toBe(false);
   });
 
-  test("with PRHERO_OUTCOME_DIR empty, it behaves exactly as when unset", () => {
+  test("with CRYSK_OUTCOME_DIR empty, it behaves exactly as when unset", () => {
     const { chunks } = captureStderr(() =>
-      writeCliRecord(record, { PRHERO_OUTCOME_DIR: "" }),
+      writeCliRecord(record, { CRYSK_OUTCOME_DIR: "" }),
     );
     expect(chunks).toEqual([]);
     expect(existsSync(path.join(root, CLI_RECORD_FILE))).toBe(false);
@@ -80,9 +80,9 @@ describe("writeCliRecord", () => {
   // CHANGED (F003 on #330): the temp name is unique per write, so a leftover can
   // sit under any name. The check looks for any `.tmp` entry instead of the old
   // fixed `cli.json.tmp`, which a unique name would never produce.
-  test("with PRHERO_OUTCOME_DIR set, cli.json parses back to the same record and leaves no temp file", () => {
+  test("with CRYSK_OUTCOME_DIR set, cli.json parses back to the same record and leaves no temp file", () => {
     const dir = path.join(root, "outcome");
-    writeCliRecord(record, { PRHERO_OUTCOME_DIR: dir });
+    writeCliRecord(record, { CRYSK_OUTCOME_DIR: dir });
     const written = readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
     expect(parseCliRecord(written)).toEqual(record);
     expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual(
@@ -97,7 +97,7 @@ describe("writeCliRecord", () => {
     const dir = path.join(root, "outcome");
     mkdirSync(path.join(dir, `${CLI_RECORD_FILE}.tmp`), { recursive: true });
     const { chunks } = captureStderr(() =>
-      writeCliRecord(record, { PRHERO_OUTCOME_DIR: dir }),
+      writeCliRecord(record, { CRYSK_OUTCOME_DIR: dir }),
     );
     expect(chunks).toEqual([]);
     expect(
@@ -110,7 +110,7 @@ describe("writeCliRecord", () => {
   // on the trigger's head, not the one the lock is on. The reviewing record is this
   // run's own statement of that head, so the terminal record carries it forward.
   test("a terminal record with no head of its own takes the head of this run's reviewing record", () => {
-    const env = { PRHERO_OUTCOME_DIR: path.join(root, "outcome") };
+    const env = { CRYSK_OUTCOME_DIR: path.join(root, "outcome") };
     recordReviewing(SHA, env);
     const posting = {
       v: 1,
@@ -121,25 +121,19 @@ describe("writeCliRecord", () => {
     writeCliRecord(posting, env);
     expect(
       parseCliRecord(
-        readFileSync(
-          path.join(env.PRHERO_OUTCOME_DIR, CLI_RECORD_FILE),
-          "utf8",
-        ),
+        readFileSync(path.join(env.CRYSK_OUTCOME_DIR, CLI_RECORD_FILE), "utf8"),
       ),
     ).toEqual({ ...posting, head_sha: SHA });
   });
 
   test("a terminal record that names its own head keeps it over the reviewing record's", () => {
-    const env = { PRHERO_OUTCOME_DIR: path.join(root, "outcome") };
+    const env = { CRYSK_OUTCOME_DIR: path.join(root, "outcome") };
     const other = "f".repeat(40);
     recordReviewing(SHA, env);
     writeCliRecord({ v: 1, outcome: "reviewed", head_sha: other }, env);
     expect(
       parseCliRecord(
-        readFileSync(
-          path.join(env.PRHERO_OUTCOME_DIR, CLI_RECORD_FILE),
-          "utf8",
-        ),
+        readFileSync(path.join(env.CRYSK_OUTCOME_DIR, CLI_RECORD_FILE), "utf8"),
       ),
     ).toEqual({ v: 1, outcome: "reviewed", head_sha: other });
   });
@@ -155,7 +149,7 @@ describe("writeCliRecord", () => {
     let chunks: string[] = [];
     try {
       ({ chunks } = captureStderr(() =>
-        writeCliRecord(record, { PRHERO_OUTCOME_DIR: dir }),
+        writeCliRecord(record, { CRYSK_OUTCOME_DIR: dir }),
       ));
     } catch (error) {
       thrown = error;
@@ -177,7 +171,7 @@ describe("writeFatalCliRecord", () => {
   beforeEach(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-fatal-"));
     dir = path.join(root, "outcome");
-    env = { PRHERO_OUTCOME_DIR: dir };
+    env = { CRYSK_OUTCOME_DIR: dir };
   });
 
   afterEach(() => {
@@ -291,7 +285,7 @@ describe("writeFatalCliRecord", () => {
     expect(chunks).toEqual([]);
   });
 
-  test("with PRHERO_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
+  test("with CRYSK_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
     const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, {}));
     expect(chunks).toEqual([]);
     expect(existsSync(dir)).toBe(false);
@@ -302,7 +296,7 @@ describe("writeFatalCliRecord", () => {
     // should be. The read of the earlier record fails too, and must not throw.
     const blocker = path.join(root, "blocker");
     writeFileSync(blocker, "");
-    const blocked = { PRHERO_OUTCOME_DIR: path.join(blocker, "outcome") };
+    const blocked = { CRYSK_OUTCOME_DIR: path.join(blocker, "outcome") };
     let thrown: unknown;
     let chunks: string[] = [];
     try {
@@ -327,7 +321,7 @@ describe("recordReviewDelivered", () => {
   beforeEach(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-delivered-"));
     dir = path.join(root, "outcome");
-    env = { PRHERO_OUTCOME_DIR: dir };
+    env = { CRYSK_OUTCOME_DIR: dir };
   });
 
   afterEach(() => {
@@ -352,7 +346,7 @@ describe("recordReviewDelivered", () => {
     expect(parseCliRecord(onDisk())).toEqual({ v: 1, outcome: "reviewed" });
   });
 
-  test("with PRHERO_OUTCOME_DIR unset, nothing is written", () => {
+  test("with CRYSK_OUTCOME_DIR unset, nothing is written", () => {
     recordReviewDelivered(SHA, {});
     expect(existsSync(dir)).toBe(false);
   });
@@ -373,7 +367,7 @@ describe("recordPendingCreatedAt (SB3)", () => {
 
   test("writes the pending's created_at in action mode", () => {
     recordPendingCreatedAt("2026-10-17T10:00:00Z", {
-      PRHERO_OUTCOME_DIR: dir,
+      CRYSK_OUTCOME_DIR: dir,
     });
     expect(readFileSync(path.join(dir, PENDING_AT_FILE), "utf8")).toBe(
       "2026-10-17T10:00:00Z\n",
@@ -394,7 +388,7 @@ describe("recordReviewing", () => {
   beforeEach(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-reviewing-"));
     dir = path.join(root, "outcome");
-    env = { PRHERO_OUTCOME_DIR: dir };
+    env = { CRYSK_OUTCOME_DIR: dir };
   });
 
   afterEach(() => {
@@ -423,7 +417,7 @@ describe("recordReviewing", () => {
     expect(existsSync(path.join(dir, CLI_RECORD_FILE))).toBe(false);
   });
 
-  test("with PRHERO_OUTCOME_DIR unset, nothing is written", () => {
+  test("with CRYSK_OUTCOME_DIR unset, nothing is written", () => {
     recordReviewing(SHA, {});
     expect(existsSync(dir)).toBe(false);
   });
@@ -446,7 +440,7 @@ describe("recordUnsettledStatus", () => {
   beforeEach(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "prhero-cli-unsettled-"));
     dir = path.join(root, "outcome");
-    env = { PRHERO_OUTCOME_DIR: dir };
+    env = { CRYSK_OUTCOME_DIR: dir };
   });
 
   afterEach(() => {
@@ -525,7 +519,7 @@ describe("recordUnsettledStatus", () => {
     });
   });
 
-  test("with PRHERO_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
+  test("with CRYSK_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
     const { chunks } = captureStderr(() =>
       recordUnsettledStatus(SHA, UNSETTLED, {}),
     );

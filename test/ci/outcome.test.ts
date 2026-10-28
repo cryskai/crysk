@@ -873,7 +873,7 @@ describe("renderCode and renderError: the annotation", () => {
     ).toBe(true);
     expect(rendered.summary[0]?.toLowerCase()).toContain("not reviewed");
     expect(rendered.summary.join("\n")).toContain(
-      'gh pr comment 7 --body "/pr-hero review"',
+      'gh pr comment 7 --body "/crysk review"',
     );
   });
 
@@ -1063,7 +1063,7 @@ describe("renderCode and renderError: the annotation", () => {
     );
   });
 
-  test("the missing-credential summary names the with: input for every route, and PRHERO_ROUTING for OpenCode only", () => {
+  test("the missing-credential summary names the with: input for every route, and CRYSK_ROUTING for OpenCode only", () => {
     const claude = renderError(
       { kind: "trigger", check: "no-credential" },
       { backend: "claude-code", runId: "123" },
@@ -1076,8 +1076,8 @@ describe("renderCode and renderError: the annotation", () => {
     );
     expect(claude.summary.join("\n")).toContain("with:");
     expect(opencode.summary.join("\n")).toContain("with:");
-    expect(claude.summary.join("\n")).not.toContain("PRHERO_ROUTING");
-    expect(opencode.summary.join("\n")).toContain("PRHERO_ROUTING");
+    expect(claude.summary.join("\n")).not.toContain("CRYSK_ROUTING");
+    expect(opencode.summary.join("\n")).toContain("CRYSK_ROUTING");
   });
 
   test("the missing-credential with: example follows the backend: opencode-auth on OpenCode, claude-token otherwise", () => {
@@ -1166,7 +1166,7 @@ describe("renderCode and renderError: the annotation", () => {
     const expected: Array<[string, string]> = [
       [
         renderCode("PRH-PROVIDER-LIMITED", FULL, "action").annotation,
-        "wait for the limit to reset or raise the quota, then comment /pr-hero review on the PR",
+        "wait for the limit to reset or raise the quota, then comment /crysk review (or /pr-hero review on a workflow set up before the rename) on the PR",
       ],
       [
         renderCode("PRH-TOKEN-PERMISSION", FULL, "action").annotation,
@@ -1371,7 +1371,7 @@ describe("renderCode and renderError: the annotation", () => {
     }
     const providerLimited = renderCode("PRH-PROVIDER-LIMITED", {}, "action");
     expect(providerLimited.summary.join("\n")).toContain(
-      'gh pr comment <pr> --body "/pr-hero review"',
+      'gh pr comment <pr> --body "/crysk review"',
     );
   });
 
@@ -2320,5 +2320,20 @@ describe("actionsRunUrl — the run a pending belongs to", () => {
     ] as const) {
       expect(actionsRunUrl({ ...IN_ACTIONS, [key]: "" })).toBeUndefined();
     }
+  });
+});
+
+// A workflow scaffolded before the rename passes only vars.PRHERO_ROUTING to
+// the action, so the routing fixes must name it, not only CRYSK_ROUTING.
+describe("routing fixes name the pre-rename variable too", () => {
+  test("PRH-ROUTING-MISSING points a pre-rename workflow at PRHERO_ROUTING", () => {
+    const rendered = renderError(
+      { kind: "trigger", check: "routing-missing" },
+      {},
+      "action",
+    );
+    expect(rendered.what).not.toContain("CRYSK_ROUTING is empty");
+    expect(rendered.summary.join("\n")).toContain("reads PRHERO_ROUTING");
+    expect(rendered.annotation).toContain("PRHERO_ROUTING");
   });
 });

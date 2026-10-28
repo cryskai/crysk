@@ -73,3 +73,53 @@ export function findMarker(
   }
   return best;
 }
+
+// PR comment commands. Every command constant is written in the new form
+// (`/crysk review`); the legacy `/pr-hero` form is derived from it here, so
+// a maintainer's muscle memory and old docs keep working for one version.
+const COMMAND_PREFIX = "/crysk";
+const LEGACY_COMMAND_PREFIX = "/pr-hero";
+
+// Both written forms of a command, new name first. The workflow template
+// lists each one, because an Actions expression cannot match a pattern.
+export function commandForms(command: string): string[] {
+  if (!command.startsWith(`${COMMAND_PREFIX} `)) {
+    throw new Error(`not a crysk command: ${JSON.stringify(command)}`);
+  }
+  return [
+    command,
+    LEGACY_COMMAND_PREFIX + command.slice(COMMAND_PREFIX.length),
+  ];
+}
+
+// Exact match after trimming, and nothing else: no case folding, no inner
+// whitespace tolerance, no trailing words. A loose match is how a quoted reply
+// would start a paid review.
+export function isCommand(text: string, command: string): boolean {
+  const trimmed = text.trim();
+  return commandForms(command).includes(trimmed);
+}
+
+// For near-miss detection: the text begins like the command, in either name.
+export function startsWithCommand(text: string, command: string): boolean {
+  const trimmed = text.trim();
+  return commandForms(command).some((form) => trimmed.startsWith(form));
+}
+
+// The legacy spelling of a command. Every workflow accepts it during the
+// rename, including one set up before it, which filters only `/pr-hero`, so it
+// is the one to name where there is room for a single spelling.
+export function legacyCommand(command: string): string {
+  return commandForms(command)[1] as string;
+}
+
+// Both spellings for a hint a person or an agent will act on. A workflow set
+// up before the rename ignores `/crysk`, and floating action tags deliver the
+// new hints to it, so a hint naming only `/crysk` would send the reader to a
+// command that starts nothing.
+export function commandHint(command: string, quote = "`"): string {
+  return (
+    `${quote}${command}${quote} (or ${quote}${legacyCommand(command)}${quote} ` +
+    "on a workflow set up before the rename)"
+  );
+}

@@ -464,7 +464,7 @@ describe("planCiSizeSkip", () => {
     if (plan === null) throw new Error("unreachable");
     expect(plan.markerPrefix).toBe(SKIP_SIZE_COMMENT_MARKER);
     expect(plan.comment.startsWith(SKIP_SIZE_COMMENT_MARKER)).toBe(true);
-    expect(plan.comment).toContain("Comment `/pr-hero review`");
+    expect(plan.comment).toContain("Comment `/crysk review`");
     expect(plan.comment).toContain(ciForceReviewDispatch(55));
     expect(plan.summaryMarkdown).toContain("PR #55");
     expect(plan.outputs).toEqual({
@@ -518,7 +518,7 @@ describe("planCiBudgetSkip", () => {
     if (plan === null) throw new Error("unreachable");
     expect(plan.markerPrefix).toBe(SKIP_BUDGET_COMMENT_MARKER);
     expect(plan.comment.startsWith(SKIP_BUDGET_COMMENT_MARKER)).toBe(true);
-    expect(plan.comment).toContain("Comment `/pr-hero review`");
+    expect(plan.comment).toContain("Comment `/crysk review`");
     expect(plan.comment).toContain(ciForceReviewDispatch(56));
     expect(plan.summaryMarkdown).toContain("PR #56");
     expect(plan.outputs.status).toBe("skipped-budget");

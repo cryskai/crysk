@@ -44,7 +44,7 @@ inputs:
     required: false
     default: ''
   mode:
-    description: 'gate (default): the pr-hero commit status, the required check, turns failure on blocking findings or a size/budget skip and error on a crash, and success on a clean or advisory-only review. Comment /pr-hero review to review a skipped head anyway. advisory: the status is always success for a finished review, as before.'
+    description: 'gate (default): the pr-hero commit status, the required check, turns failure on blocking findings or a size/budget skip and error on a crash, and success on a clean or advisory-only review. Comment /crysk review to review a skipped head anyway. advisory: the status is always success for a finished review, as before.'
     required: false
     default: 'gate'
   post:
@@ -56,11 +56,11 @@ inputs:
     required: false
     default: 'true'
   force:
-    description: 'Bypass CI skip gates for this run: the size gate, review-policy admission, and the budget ceiling. A pull request comment that is exactly `/pr-hero review` (or `/pr-hero review --full`) from a user with write access sets it on its own, with no input; a workflow_dispatch caller, such as a pr-hero-force.yml scaffolded before the comment trigger, can still pass it explicitly.'
+    description: 'Bypass CI skip gates for this run: the size gate, review-policy admission, and the budget ceiling. A pull request comment that is exactly `/crysk review` (or `/crysk review --full`) from a user with write access sets it on its own, with no input; a workflow_dispatch caller, such as a pr-hero-force.yml scaffolded before the comment trigger, can still pass it explicitly.'
     required: false
     default: 'false'
   full:
-    description: 'On a re-review, widen discovery to the full pull request range instead of only the commits since the last completed review. Use it when a prior review of the same head was hollow or wrong and later runs report "No changes to discover"; `force` alone never widens discovery. A `/pr-hero review --full` comment sets it on its own.'
+    description: 'On a re-review, widen discovery to the full pull request range instead of only the commits since the last completed review. Use it when a prior review of the same head was hollow or wrong and later runs report "No changes to discover"; `force` alone never widens discovery. A `/crysk review --full` comment sets it on its own.'
     required: false
     default: 'false'
 
@@ -105,9 +105,9 @@ runs:
     # instead of a dependency install (that is also why src/ci/trigger.ts
     # imports only builtins). The calling workflow listens to `pull_request`
     # and `issue_comment`, and its job `if:` already drops fork PRs and
-    # comments that do not start with `/pr-hero review`. This step re-checks
+    # comments that do not start with `/crysk review`. This step re-checks
     # all of it instead of trusting the caller: a comment must be exactly
-    # `/pr-hero review` or `/pr-hero review --full`, from a user with write
+    # `/crysk review` or `/crysk review --full`, from a user with write
     # or admin access, and at least one credential must be set. A same-repo
     # run with none goes RED here instead of skipping green. It also resolves
     # the PR number, `force`, `full` and the head sha, and every later step
@@ -143,7 +143,7 @@ runs:
         # The trigger writes its decision to trigger.json here; the publish
         # step reads it. The run step writes the cli-started marker here too.
         # One path, bound the same way in all three steps (T2b).
-        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         # Presence only, never the routing text: whether the routing names
         # OpenCode, the same test the OpenCode install step makes. It names the
         # backend of a no-credential outcome.
@@ -180,7 +180,7 @@ runs:
         OPENCODE_AUTH_INPUT: ${{ inputs.opencode-auth }}
         # A malformed routing or auth input leaves setup.json here, so the publish
         # step names that input instead of reporting "an install step failed".
-        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
       run: bun "${{ github.action_path }}/src/ci/setup.ts"
 
     # Pin 1.18.30 as its own step so GITHUB_PATH updates later steps only
@@ -205,7 +205,7 @@ runs:
         # on a `pull_request_target`-triggered workflow; splicing it
         # straight into the script would be a command-injection hole.
         GITHUB_TOKEN: ${{ inputs.github-token }}
-        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
         GITHUB_ACTIONS: 'true'
@@ -227,7 +227,7 @@ runs:
         POST_INPUT: ${{ inputs.post }}
         STEP_SUMMARY_INPUT: ${{ inputs.step-summary }}
       run: |
-        : > "$PRHERO_OUTCOME_DIR/cli-started"
+        : > "$CRYSK_OUTCOME_DIR/cli-started"
         # The line above is the first thing this step does, before anything
         # else can fail. WHY: the publish step must tell "an earlier step failed"
         # (no marker) from "the CLI ran and owns its own output" (marker). It
@@ -306,7 +306,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
-        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_RUN_ID: ${{ github.run_id }}
         # Bound like the run id: a record of another attempt of this run is
@@ -326,12 +326,12 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
-        PRHERO_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}
         # The run id builds the status's target URL. The lock is this run's
         # because the trigger clears the outcome directory at job start.
         GITHUB_RUN_ID: ${{ github.run_id }}
-        PRHERO_PUBLISH_MODE: cancelled
+        CRYSK_PUBLISH_MODE: cancelled
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
     # Without this step the triage half of the review loop has no input.

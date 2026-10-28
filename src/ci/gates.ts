@@ -604,7 +604,7 @@ export function planCiSizeSkip(
 export function planCiBudgetSkip(
   input: CiBudgetGateSkipInput & { force: boolean; ciMode: CiMode },
 ): CiGateSkipPlan | null {
-  // CI `--force` is the `/pr-hero review` comment. It answers "run this one
+  // CI `--force` is the `/crysk review` comment. It answers "run this one
   // anyway" for every CI skip, including the spend ceiling. Outside that
   // explicit comment the ceiling still holds. Local `--force` never reaches
   // here: the caller only invokes this plan when `isCi` is set.

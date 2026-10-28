@@ -41,7 +41,7 @@ const CREDENTIAL_LINES = [
   `          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}`,
 ] as const;
 
-const ROUTING_LINE = `          routing: "\${{ vars.PRHERO_ROUTING }}"`;
+const ROUTING_LINE = `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`;
 
 // A literal that is valid YAML and invalid routing JSON. The setup step rejects
 // it as config-parse/routing, which the publisher renders as PRH-ROUTING-INVALID.

@@ -16,7 +16,7 @@ Load when the user wants to **operate or configure pr-hero on their machine or r
 - Set up the watcher (`pr-hero watch`) or worktree GC (`pr-hero gc`).
 - Diagnose a broken install or a refused run (`pr-hero doctor`, `pr-hero config`).
 
-Route away: GitHub Actions, CI secrets, `PRHERO_ROUTING`, `/pr-hero review` comments → load `pr-hero-ci-setup`. Replying to posted `<!-- crysk-finding` comments → load `pr-hero-triage`.
+Route away: GitHub Actions, CI secrets, `CRYSK_ROUTING`, `/crysk review` comments → load `pr-hero-ci-setup`. Replying to posted `<!-- crysk-finding` comments → load `pr-hero-triage`.
 
 ## Source of Truth
 

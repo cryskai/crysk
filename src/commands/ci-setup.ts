@@ -346,11 +346,11 @@ export async function ciSetupCommand(
   );
   log(`${next()} Open a pull request to trigger the workflow`);
   // GitHub reads a comment-triggered workflow from the DEFAULT branch, so a
-  // `/pr-hero review` on a pull request that only ADDS this file starts
+  // `/crysk review` on a pull request that only ADDS this file starts
   // nothing, with no error anywhere. Said here because this is where a new
   // user first reads how to force a review.
   log(
-    `${next()} Comment /pr-hero review on a pull request to force a review; it works once this file is on the default branch`,
+    `${next()} Comment /crysk review on a pull request to force a review; it works once this file is on the default branch`,
   );
   // Last, so a prompt it may show comes after everything above is printed.
   await ghPreflight(deps.gh);

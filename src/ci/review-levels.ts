@@ -31,13 +31,13 @@ export interface ReviewLevelPreset {
 }
 
 // Every preset verifies prior findings (8): even `minimal` and `manual` can be
-// re-reviewed by hand with /pr-hero review, and a forced pass that confirms
+// re-reviewed by hand with /crysk review, and a forced pass that confirms
 // nothing it fixed would be worse than useless.
 export const REVIEW_LEVELS: Record<ReviewLevel, ReviewLevelPreset> = {
   minimal: {
     label: "Minimal",
     description:
-      "One automatic review per PR. Later pushes are reviewed only when you comment /pr-hero review.",
+      "One automatic review per PR. Later pushes are reviewed only when you comment /crysk review.",
     config: {
       ci_review_policy: "once_per_pr",
       ci_max_attempts: 1,
@@ -68,7 +68,7 @@ export const REVIEW_LEVELS: Record<ReviewLevel, ReviewLevelPreset> = {
   manual: {
     label: "Manual",
     description:
-      "No automatic reviews after the first. Every re-review starts with a /pr-hero review comment.",
+      "No automatic reviews after the first. Every re-review starts with a /crysk review comment.",
     config: {
       ci_review_policy: "manual_only",
       ci_max_attempts: 1,

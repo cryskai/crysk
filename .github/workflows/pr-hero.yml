@@ -3,14 +3,15 @@
 # unless you pass --force.
 #
 # This one file is the whole install. It reviews every push to a pull
-# request. A pull request comment that is exactly `/pr-hero review` runs the
-# review again with the skip gates bypassed, and `/pr-hero review --full`
+# request. A pull request comment that is exactly `/crysk review` runs the
+# review again with the skip gates bypassed, and `/crysk review --full`
 # also re-discovers the whole range. A comment that is exactly
-# `/pr-hero override` turns the gate green on that head with no review and
+# `/crysk override` turns the gate green on that head with no review and
 # no cost, and records who did it. A comment that is exactly
-# `/pr-hero recheck` reviews the head and asks the CI adjudicator to rule on
+# `/crysk recheck` reviews the head and asks the CI adjudicator to rule on
 # pending dismissals of blocking findings. The action parses the comment and
-# refuses a commenter without write access.
+# refuses a commenter without write access. The older `/pr-hero ...` forms
+# of these commands still work for one version.
 name: pr-hero Review
 
 on:
@@ -44,16 +45,20 @@ jobs:
     # fix it, instead of a skipped job that reads as a clean review.
     #
     # Fork pull_request runs are skipped: GitHub gives them no secrets, so
-    # they could never authenticate. A maintainer comments `/pr-hero review`
+    # they could never authenticate. A maintainer comments `/crysk review`
     # instead, and that run (base-branch context, with secrets) reviews the
     # fork's head.
     #
-    # A comment starts the job only when it BEGINS with `/pr-hero review`,
-    # `/pr-hero recheck` or `/pr-hero override`. The action then requires an exact match after
-    # trimming, so a near-miss such as "/pr-hero review please" starts a job the
+    # A comment starts the job only when it BEGINS with `/crysk review`,
+    # `/crysk recheck` or `/crysk override` (or the older `/pr-hero` forms
+    # of the three). The action then requires an exact match after
+    # trimming, so a near-miss such as "/crysk review please" starts a job the
     # action ends without reviewing or overriding.
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/crysk review')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/crysk recheck')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/crysk override')) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero recheck')) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))
@@ -71,7 +76,7 @@ jobs:
     #
     # GitHub keeps one PENDING run per group, and a newer run replaces it. So
     # a comment enters the pull request's group only when it starts with
-    # /pr-hero review, /pr-hero recheck or /pr-hero override, and GitHub associates its author
+    # /crysk review, /crysk recheck or /crysk override (or the older /pr-hero forms), and GitHub associates its author
     # with the repository as OWNER, MEMBER or COLLABORATOR; every other comment
     # gets its own group. Without that, anyone who can comment could replace a
     # maintainer's queued review with a run the action then refuses. The job
@@ -82,7 +87,7 @@ jobs:
     # near-miss or second real command, or a read-only member's or
     # collaborator's refused one) still replaces a comment run waiting
     # behind a running review, and `--full` followed by a plain
-    # `/pr-hero review` loses the `--full`; comment again to recover. A
+    # `/crysk review` loses the `--full`; comment again to recover. A
     # writer reported under another association runs unserialized, beside
     # any review already running.
     #
@@ -92,7 +97,7 @@ jobs:
     # other event gets a unique per-run group for the same reason, so a
     # skipped job can never cancel or replace a review.
     concurrency:
-      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/crysk review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/crysk recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/crysk override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     # Backstop for a HUNG runner, not a second review budget. pr-hero already
@@ -148,7 +153,7 @@ jobs:
               *"HTTP 404"*) break ;;
             esac
             if [ "$attempt" = 2 ]; then
-              echo "::error title=pr-hero::could not verify the commenter's write access: the GitHub API call failed twice, so nothing was reviewed or overridden. Comment /pr-hero review, /pr-hero recheck or /pr-hero override again to retry"
+              echo "::error title=pr-hero::could not verify the commenter's write access: the GitHub API call failed twice, so nothing was reviewed or overridden. Comment /crysk review, /crysk recheck or /crysk override again to retry"
               exit 1
             fi
             sleep 2
@@ -156,7 +161,7 @@ jobs:
           case "$permission" in
             admin|write) ;;
             *)
-              echo "::notice title=pr-hero::only users with write access to this repository can run /pr-hero review, /pr-hero recheck or /pr-hero override"
+              echo "::notice title=pr-hero::only users with write access to this repository can run /crysk review, /crysk recheck or /crysk override"
               echo "proceed=false" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
@@ -228,11 +233,12 @@ jobs:
           #     one here yields a secret that works for a day and then breaks
           #     reviews with no signal.
           #   OPENCODE_AUTH_JSON      — whole OpenCode auth.json store
-          #   vars.PRHERO_ROUTING     — person-layer routing JSON; quoted so an
-          #     unset var is the empty string rather than broken YAML
+          #   vars.CRYSK_ROUTING      — person-layer routing JSON; quoted so an
+          #     unset var is the empty string rather than broken YAML. The
+          #     older vars.PRHERO_ROUTING is read when this one is unset.
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          routing: "${{ vars.PRHERO_ROUTING }}"
+          routing: "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"
           opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
           max-changed-lines: 5000
           budget-usd: 0

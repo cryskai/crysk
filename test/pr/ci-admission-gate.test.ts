@@ -1022,7 +1022,7 @@ describe("yieldToInFlightReview", () => {
 
   test("standing down writes a yielded outcome record in action mode, and nothing without the outcome directory", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-yield-record-"));
-    const saved = process.env.PRHERO_OUTCOME_DIR;
+    const saved = process.env.CRYSK_OUTCOME_DIR;
     try {
       const yieldOnce = () =>
         capturingStderr(() =>
@@ -1037,21 +1037,21 @@ describe("yieldToInFlightReview", () => {
           }),
         );
 
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      process.env.CRYSK_OUTCOME_DIR = dir;
       const withDir = await yieldOnce();
       expect(withDir.result).toBe(0);
       const written = await readFile(path.join(dir, "cli.json"), "utf8");
       expect(JSON.parse(written)).toEqual({ v: 1, outcome: "yielded" });
 
-      delete process.env.PRHERO_OUTCOME_DIR;
+      delete process.env.CRYSK_OUTCOME_DIR;
       const without = await yieldOnce();
       expect(without).toEqual(withDir);
       expect(await readFile(path.join(dir, "cli.json"), "utf8")).toBe(written);
     } finally {
       if (saved === undefined) {
-        delete process.env.PRHERO_OUTCOME_DIR;
+        delete process.env.CRYSK_OUTCOME_DIR;
       } else {
-        process.env.PRHERO_OUTCOME_DIR = saved;
+        process.env.CRYSK_OUTCOME_DIR = saved;
       }
       await rm(dir, { recursive: true, force: true });
     }
@@ -1649,7 +1649,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
   }
 
   const STOP_REASON =
-    "a maintainer posted /pr-hero stop; /pr-hero review reviews this head";
+    "a maintainer stopped automatic reviews; /pr-hero review reviews this head";
 
   test("without a stop, this head runs (the baseline every case below changes)", async () => {
     const result = await runGate([priorSummary], []);
@@ -1667,6 +1667,24 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     // Recorded as spending nothing, so a later lift finds the budget intact.
     expect(result.unspent).toEqual([true]);
     expect(result.outputs).toContain("status=skipped-coverage");
+  });
+
+  test("a /crysk stop and a later /crysk review work like the legacy spellings", async () => {
+    const stopped = await runGate(
+      [priorSummary, comment(2, "maint", "/crysk stop")],
+      [permission("maint", { stdout: "write\n" })],
+    );
+    expect(stopped.exitCode).toBe(0);
+    expect(stopped.recorded).toEqual([STOP_REASON]);
+    const lifted = await runGate(
+      [
+        priorSummary,
+        comment(2, "maint", "/crysk stop"),
+        comment(3, "maint", "/crysk review"),
+      ],
+      [permission("maint", { stdout: "write\n" })],
+    );
+    expect(lifted.recorded).toEqual([]);
   });
 
   test("a skip for any other reason still spends an attempt, as before", async () => {

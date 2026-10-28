@@ -594,7 +594,7 @@ async function readBeforeReservation(input: {
   }
 }
 
-// Whether a write-access maintainer's `/pr-hero stop` is in force: the
+// Whether a write-access maintainer's `/crysk stop` is in force: the
 // newest stop, review or recheck command from a write or admin author decides.
 // Commands from anyone else are passed over, so a stranger can neither set a
 // stop nor lift one. Fails open: an author whose permission cannot be read
@@ -629,7 +629,7 @@ async function stoppedByMaintainer(
       log(
         formatWorkflowCommand(
           "warning",
-          `Could not read the permission of ${command.user}, who posted /pr-hero stop, so the stop does not count and the review runs.`,
+          `Could not read the permission of ${command.user}, who posted a stop command, so the stop does not count and the review runs.`,
         ),
       );
       continue;

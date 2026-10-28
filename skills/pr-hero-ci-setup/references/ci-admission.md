@@ -28,7 +28,7 @@ Read this when configuring `.prhero/config.json` during CI setup. Full operator 
 
 **How a re-review depends on the previous pass:**
 - **Whether it runs (admission):** in `risk_aware` and `thresholded` modes, the previous review's finding score (`blocking × 2 + advisory × 1` by default) is compared against `ci_rereview_min_score`, bounded by `ci_max_attempts` total automatic passes per PR.
-- **What it does when it runs:** discovery is incremental by default (hunters examine only commits since the last completed review's head SHA; `/pr-hero review --full` widens to the full PR), and up to `max_verification_steps` verifier steps check whether prior open findings were fixed by the new push.
+- **What it does when it runs:** discovery is incremental by default (hunters examine only commits since the last completed review's head SHA; `/crysk review --full` widens to the full PR), and up to `max_verification_steps` verifier steps check whether prior open findings were fixed by the new push.
 
 ## Review levels (what setup --ci asks)
 
@@ -63,7 +63,7 @@ Size threshold: `max_changed_lines` is always written (default 4000, `--max-chan
 |---|---|
 | Review runs | Normal pipeline |
 | **Skipped** | Push did not justify spend (same head, low score, docs-only delta, etc.) — **not** “clean” |
-| **Manual required** | Budget exhausted or `manual_only` — comment `/pr-hero review` on the PR |
+| **Manual required** | Budget exhausted or `manual_only` — comment `/crysk review` on the PR |
 
 Skipped and manual-required posts include admission metadata in the step summary.
 
@@ -97,13 +97,13 @@ Skipped and manual-required posts include admission metadata in the step summary
 
 ## Manual override
 
-Comment `/pr-hero review` on the pull request. GitHub Actions runs the review with `--force`. Posting the comment does not review anything on the machine that sends it:
+Comment `/crysk review` on the pull request. GitHub Actions runs the review with `--force`. Posting the comment does not review anything on the machine that sends it:
 
 ```bash
-gh pr comment <n> --body "/pr-hero review"
+gh pr comment <n> --body "/crysk review"
 ```
 
-`/pr-hero review --full` also re-discovers the whole range. The comment must be exactly one of those two, and it works only once `pr-hero.yml` (with its `issue_comment` trigger) is on the default branch.
+`/crysk review --full` also re-discovers the whole range. The comment must be exactly one of those two, and it works only once `pr-hero.yml` (with its `issue_comment` trigger) is on the default branch.
 
 It bypasses the size gate, the admission rules (same commit, `once_per_pr`, score, low-risk delta, exhausted attempts, `manual_only`), and the budget ceiling. It does not reset the ledger.
 
@@ -113,10 +113,10 @@ A workflow scaffolded before the comment trigger has no `issue_comment` listener
 
 A local agent posts the comment. It does not run `pr-hero review --pr <n> --force` when the review should happen in CI.
 
-A red gate with blocking findings that the team accepts is unlocked by commenting exactly `/pr-hero override` on the pull request, not by `/pr-hero review`. In gate mode a same-head review re-runs the same blocking count and leaves the `failure` in place, so the gate clears only when a pushed fix is verified gone or the override is posted:
+A red gate with blocking findings that the team accepts is unlocked by commenting exactly `/crysk override` on the pull request, not by `/crysk review`. In gate mode a same-head review re-runs the same blocking count and leaves the `failure` in place, so the gate clears only when a pushed fix is verified gone or the override is posted:
 
 ```bash
-gh pr comment <n> --body "/pr-hero override"
+gh pr comment <n> --body "/crysk override"
 ```
 
-The override sets the `pr-hero` status on that head to `success` with no review, no spend, and no credential, and only a user with write or admin access may post it. Each override is recorded: the status names who acted, and a `<!-- crysk-override` comment names who, which head, and when. It is valid only for the head it names, so a new push or a later `/pr-hero review` on that head replaces it, and it works only on pull requests from this repository, never on forks.
+The override sets the `pr-hero` status on that head to `success` with no review, no spend, and no credential, and only a user with write or admin access may post it. Each override is recorded: the status names who acted, and a `<!-- crysk-override` comment names who, which head, and when. It is valid only for the head it names, so a new push or a later `/crysk review` on that head replaces it, and it works only on pull requests from this repository, never on forks.

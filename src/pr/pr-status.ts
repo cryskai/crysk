@@ -13,6 +13,12 @@
 import { OUTCOME_MARKER_PREFIX, parseOutcomeCode } from "#ci/outcome";
 import { isOverrideStatus, overrideActorOf } from "#ci/override";
 import {
+  OVERRIDE_COMMAND,
+  RECHECK_COMMAND,
+  REVIEW_COMMAND,
+  REVIEW_FULL_COMMAND,
+} from "#ci/trigger";
+import {
   COMMIT_STATUS_CONTEXT,
   type CommitStatusFact,
   findMarkedCommentId,
@@ -43,7 +49,7 @@ import {
   type TriageVerdict,
 } from "#triage/triage";
 import { parsePrCommentMarker } from "#watch/preflight";
-import { matchMarkerPrefix } from "../brand";
+import { commandHint, isCommand, matchMarkerPrefix } from "../brand";
 
 export const PR_STATUS_SCHEMA = "pr-hero.status/v1" as const;
 
@@ -130,11 +136,7 @@ export const STATUS_WAIT_POLL_INTERVAL_MS = 15_000;
 export const STATUS_WAIT_STARTUP_GRACE_MS = 180_000;
 export const STATUS_WAIT_MAX_MS = IN_FLIGHT_TTL_MS;
 
-const TRIGGER_COMMENT_BODIES = new Set([
-  "/pr-hero review",
-  "/pr-hero review --full",
-  "/pr-hero recheck",
-]);
+const TRIGGER_COMMANDS = [REVIEW_COMMAND, REVIEW_FULL_COMMAND, RECHECK_COMMAND];
 
 // A review comment's live projection (pr/pr.ts PrReviewComment) carries the path and line
 // GitHub shows now, which follow a rename or a re-anchor. Optional, as the engine's own posted
@@ -583,8 +585,7 @@ function decideNext(
     if (summary.head === head && summary.complete === false) {
       return {
         next_action: "review",
-        reason:
-          "The last review of this head was partial (some reviewers failed); run /pr-hero review.",
+        reason: `The last review of this head was partial (some reviewers failed); run ${commandHint(REVIEW_COMMAND, "")}.`,
       };
     }
     // The triage skill answers every finding, advisory included, so a green gate is not the
@@ -613,8 +614,7 @@ function decideNext(
   if (REVIEW_TRIGGER_GATE.test(gate.description ?? "")) {
     return {
       next_action: "review",
-      reason:
-        "The automatic review budget for this PR is used up, or the review policy is manual (ci_review_policy is manual_only); comment /pr-hero review to review this head.",
+      reason: `The automatic review budget for this PR is used up, or the review policy is manual (ci_review_policy is manual_only); comment ${commandHint(REVIEW_COMMAND, "")} to review this head.`,
     };
   }
   // A row with no comment has no thread a triage reply could land in, so it is never "untriaged".
@@ -638,7 +638,7 @@ function decideNext(
     const ids = unthreaded.map((a) => a.finding.id ?? "unnamed").join(", ");
     return {
       next_action: "fix",
-      reason: `${unthreaded.length} live blocking finding(s) (${ids}) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /pr-hero override.`,
+      reason: `${unthreaded.length} live blocking finding(s) (${ids}) have no comment thread to answer (summary-only or never posted inline); fix them and push, or ${commandHint(OVERRIDE_COMMAND, "")}.`,
     };
   }
   const applied = liveBlocking.filter(
@@ -667,7 +667,7 @@ function decideNext(
   if (pendingRulings.length > 0) {
     return {
       next_action: "recheck",
-      reason: `${pendingRulings.length} live blocking finding(s) are answered dismissed with no CI ruling on this head (or an inconclusive one); comment /pr-hero recheck so the CI adjudicator rules on them.`,
+      reason: `${pendingRulings.length} live blocking finding(s) are answered dismissed with no CI ruling on this head (or an inconclusive one); comment ${commandHint(RECHECK_COMMAND, "")} so the CI adjudicator rules on them.`,
     };
   }
   // WHY the gate's own count is checked too (review #348 F002): the gate can count a blocking
@@ -682,14 +682,13 @@ function decideNext(
   ) {
     return {
       next_action: "review",
-      reason:
-        "The CI adjudicator upheld every dismissal on this head; run /pr-hero review, and that review no longer counts them.",
+      reason: `The CI adjudicator upheld every dismissal on this head; run ${commandHint(REVIEW_COMMAND, "")}, and that review no longer counts them.`,
     };
   }
   if (gate.description?.startsWith("pr-hero skipped the review") === true) {
     return {
       next_action: "override-or-fix",
-      reason: `The review on this head was skipped (${gate.description}); run /pr-hero review to review it anyway, or override the gate.`,
+      reason: `The review on this head was skipped (${gate.description}); run ${commandHint(REVIEW_COMMAND, "")} to review it anyway, or override the gate.`,
     };
   }
   // S6: a red gate that is a partial review (its own text, or the carried form) is not a finding to fix.
@@ -697,15 +696,13 @@ function decideNext(
   if (PARTIAL_REVIEW_AGAIN_GATE.test(gate.description ?? "")) {
     return {
       next_action: "override-or-fix",
-      reason:
-        "The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /pr-hero override.",
+      reason: `The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run ${commandHint(OVERRIDE_COMMAND, "")}.`,
     };
   }
   if (PARTIAL_REVIEW_GATE.test(gate.description ?? "")) {
     return {
       next_action: "review",
-      reason:
-        "The last review of this head was partial (some reviewers failed); run /pr-hero review, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
+      reason: `The last review of this head was partial (some reviewers failed); run ${commandHint(REVIEW_COMMAND, "")}, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.`,
     };
   }
   if (liveBlocking.length > 0) {
@@ -739,7 +736,7 @@ export function shouldWaitPrStatus(input: {
     return true;
   }
 
-  // Fresh `/pr-hero review` or `/pr-hero recheck` comment: posted within the startup grace
+  // Fresh `/crysk review` or `/crysk recheck` comment: posted within the startup grace
   // window, and no pr-hero commit status has been posted since that comment.
   const gateMs =
     status.gate.created_at !== null
@@ -747,7 +744,9 @@ export function shouldWaitPrStatus(input: {
       : Number.NEGATIVE_INFINITY;
 
   for (const comment of issueComments) {
-    if (!TRIGGER_COMMENT_BODIES.has(comment.body.trim())) continue;
+    if (!TRIGGER_COMMANDS.some((command) => isCommand(comment.body, command))) {
+      continue;
+    }
     if (comment.created_at === undefined) continue;
     const commentMs = Date.parse(comment.created_at);
     if (!Number.isFinite(commentMs)) continue;

@@ -51,7 +51,7 @@
 
 import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { MARKER_OPEN, matchMarkerPrefix } from "../brand";
+import { commandHint, MARKER_OPEN, matchMarkerPrefix } from "../brand";
 import type {
   CliRecord,
   ErrorParams,
@@ -78,6 +78,7 @@ import {
   type OverrideStatusFact,
   overrideStandsOverRun,
 } from "./override";
+import { OVERRIDE_COMMAND, REVIEW_COMMAND } from "./trigger";
 
 // The commit status context. The required check reads this name, so it must
 // equal COMMIT_STATUS_CONTEXT in src/pr/preflight.ts (a test pins the two).
@@ -1150,7 +1151,7 @@ function overrideCommentBody(
       "",
       `pr-hero's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. ` +
         "The `pr-hero` status on that head is now success, with no review of this head. " +
-        "A new push or a later `/pr-hero review` on this head replaces it.",
+        `A new push or a later ${commandHint(REVIEW_COMMAND)} on this head replaces it.`,
     ].join("\n");
   }
   const where =
@@ -1160,7 +1161,7 @@ function overrideCommentBody(
   return [
     marker,
     "",
-    `@${plan.actor} asked to override pr-hero's gate at ${when}, but no commit status could be set${where}, so the gate is unchanged. Comment \`/pr-hero override\` again to retry.`,
+    `@${plan.actor} asked to override pr-hero's gate at ${when}, but no commit status could be set${where}, so the gate is unchanged. Comment ${commandHint(OVERRIDE_COMMAND)} again to retry.`,
   ].join("\n");
 }
 
@@ -1225,7 +1226,7 @@ function publishOverride(
 }
 
 export function runPublish(deps: PublishDeps): number {
-  const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = deps.env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return 0;
   const recordText = readIfExists(path.join(dir, RECORD_FILE));
   if (recordText === undefined) return 0;
@@ -1385,7 +1386,7 @@ export function runPublish(deps: PublishDeps): number {
 // and it never fails the job: a cancel is not a failure, and a status it cannot write is a
 // warning. Its only write is this run's own pending on the head the CLI locked.
 export function runCancelSettle(deps: PublishDeps): number {
-  const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = deps.env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return 0;
   const record = readCliRecord(dir);
   // Guarded like readCliRecord: this step must exit 0 whatever the file system does.
@@ -1470,7 +1471,7 @@ export function runCancelSettle(deps: PublishDeps): number {
 if (import.meta.main) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY ?? "";
   const run =
-    process.env.PRHERO_PUBLISH_MODE === "cancelled"
+    process.env.CRYSK_PUBLISH_MODE === "cancelled"
       ? runCancelSettle
       : runPublish;
   process.exit(
