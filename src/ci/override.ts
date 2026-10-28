@@ -132,30 +132,41 @@ export function overrideActorOf(description: string): string | null {
 // verdict that is older than it. Two rows with the same time are a pair one run wrote, with
 // identical content, so either would do; the crysk row is taken so the answer never depends
 // on the order of the list.
-// The row a repair pass must act on. Every write posts the pair, so a name whose newest
-// row is still pending while the other name settled is a half-landed write: the pending
-// name may be the repository's required check, and the newest row across both would hide
-// it. A pending newest row on either name therefore wins, `crysk` first; otherwise this is
-// the newest row across both, as newestStatusInContext picks it.
-export function pendingFirstStatusInContext(
-  statuses: readonly OverrideStatusFact[],
+// A half-landed pair. Every write posts both names, so a name whose newest row is still
+// pending while the other name holds a later settled row missed that write. The settled
+// row is the verdict (a finished review, or a human's override), and the stuck name is
+// what a repair copies it onto. Undefined when the two names agree.
+export function strandedStatusPair<T extends OverrideStatusFact>(
+  statuses: readonly T[],
   context: string,
-): OverrideStatusFact | undefined {
-  for (const name of statusContextForms(context)) {
-    const newest = newestStatusInContext(
+): { stranded: T; verdict: T } | undefined {
+  const [first, second] = statusContextForms(context).map((name) =>
+    newestStatusInContext(
       statuses.filter((status) => status.context === name),
       context,
-    );
-    if (newest?.state === "pending") return newest;
+    ),
+  );
+  for (const [stranded, verdict] of [
+    [first, second],
+    [second, first],
+  ]) {
+    if (
+      stranded?.state === "pending" &&
+      verdict !== undefined &&
+      verdict.state !== "pending" &&
+      Date.parse(verdict.created_at) >= Date.parse(stranded.created_at)
+    ) {
+      return { stranded, verdict };
+    }
   }
-  return newestStatusInContext(statuses, context);
+  return undefined;
 }
 
-export function newestStatusInContext(
-  statuses: readonly OverrideStatusFact[],
+export function newestStatusInContext<T extends OverrideStatusFact>(
+  statuses: readonly T[],
   context: string,
-): OverrideStatusFact | undefined {
-  let latest: OverrideStatusFact | undefined;
+): T | undefined {
+  let latest: T | undefined;
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const status of statuses) {
     if (!isStatusContext(status.context, context)) continue;

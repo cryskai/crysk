@@ -79,10 +79,11 @@ import {
   STATUS_DESCRIPTION_MAX,
 } from "./outcome";
 import {
+  newestStatusInContext,
   OVERRIDE_DESCRIPTION_PREFIX,
   type OverrideStatusFact,
   overrideStandsOverRun,
-  pendingFirstStatusInContext,
+  strandedStatusPair,
 } from "./override";
 import { OVERRIDE_COMMAND, REVIEW_COMMAND } from "./trigger";
 
@@ -1101,6 +1102,47 @@ function parseStatusRow(line: string): HeadStatusRow | undefined {
 // The head's newest pr-hero status, as the three states the table needs. The newest row is
 // picked by its time, not by its place in the answer. A failed read, no pr-hero row, or a
 // state the table does not name is unknown, which the table answers with the status.
+// Copies the verdict of a half-landed pair onto the name that missed it (strandedStatusPair).
+// The stuck name may be the repository's required check, and the readers below take the
+// newest row across both names, so nothing else would ever settle it. Only the stuck name
+// is written: the verdict, which may be a human's override, is never replaced. A failed
+// copy is a warning, and the run goes on as it would have.
+function repairStrandedPair(
+  deps: PublishDeps,
+  repo: string,
+  sha: string,
+  statuses: readonly HeadStatusRow[],
+): void {
+  const pair = strandedStatusPair(statuses, STATUS_CONTEXT);
+  if (pair === undefined) return;
+  const state = pair.verdict.state;
+  if (state !== "success" && state !== "failure" && state !== "error") return;
+  const posted = postStatusOn(
+    deps,
+    repo,
+    sha,
+    {
+      state,
+      context: STATUS_CONTEXT,
+      description: pair.verdict.description ?? "",
+      targetUrl: pair.verdict.targetUrl ?? actionsRunUrl(deps.env) ?? "",
+    },
+    pair.stranded.context,
+    2,
+  );
+  deps.stdout(
+    posted.ok
+      ? workflowCommand(
+          "notice",
+          `the ${pair.stranded.context} status missed the ${pair.verdict.context} verdict; copied it`,
+        )
+      : workflowCommand(
+          "warning",
+          `the ${pair.stranded.context} status is still pending behind the ${pair.verdict.context} verdict; copying it failed`,
+        ),
+  );
+}
+
 function readLatestCliStatusState(
   deps: PublishDeps,
   repo: string,
@@ -1108,7 +1150,8 @@ function readLatestCliStatusState(
 ): LatestStatusState {
   const read = readHeadStatuses(deps, repo, sha);
   if (!read.ok) return "unknown";
-  const latest = pendingFirstStatusInContext(read.statuses, STATUS_CONTEXT);
+  repairStrandedPair(deps, repo, sha, read.statuses);
+  const latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
   if (latest === undefined) return "unknown";
   if (latest.state === "pending") return "pending";
   return SETTLED_STATES.has(latest.state) ? "settled" : "unknown";
@@ -1443,8 +1486,9 @@ export function runCancelSettle(deps: PublishDeps): number {
       );
       return 0;
     }
-    const newest = pendingFirstStatusInContext(read.statuses, STATUS_CONTEXT);
-    // pendingFirstStatusInContext returns the row it was given, so the row's target is found by identity.
+    repairStrandedPair(deps, repository, head, read.statuses);
+    const newest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
+    // newestStatusInContext returns the row it was given, so the row's target is found by identity.
     latest =
       newest === undefined
         ? undefined
