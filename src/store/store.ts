@@ -59,14 +59,17 @@ export function openProductStore(dbPath: string): Database {
 }
 
 // `generated_at` on conflict: a live re-run into the same run dir (an explicit
-// --out) is a new run, so its timestamp moves with its cost and head. Only the
-// historical backfill keeps the stored one, because it re-derives the time
-// from artifacts and must not rewrite when a run happened.
+// --out) is a new run, so its timestamp moves with its cost and head. The
+// historical backfill keeps the stored one only for the SAME run (same head):
+// it re-derives the time from artifacts and must not rewrite when that run
+// happened. A different head is a later run whose live persist was missed, so
+// it takes the artifact's own time along with its cost and head.
 function runUpsertSql(keepGeneratedAt: boolean): string {
   return RUN_UPSERT_SQL.replace(
     "generated_at = runs.generated_at",
     keepGeneratedAt
-      ? "generated_at = runs.generated_at"
+      ? "generated_at = CASE WHEN excluded.head_sha = runs.head_sha " +
+          "THEN runs.generated_at ELSE excluded.generated_at END"
       : "generated_at = excluded.generated_at",
   );
 }

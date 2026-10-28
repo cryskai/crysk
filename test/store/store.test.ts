@@ -391,6 +391,44 @@ describe("saveRunTransaction and round-trip fidelity", () => {
     }
   });
 
+  // A backfill keeps the stored time only for the SAME run. A different head
+  // in the same run dir is a later run whose live persist was missed, so its
+  // own time comes with its own cost and head.
+  test("a backfill re-save with a different head takes the artifact's generated_at", async () => {
+    const dbPath = await tmpDbPath();
+    const db = openProductStore(dbPath);
+    try {
+      const id = saveRunTransaction(
+        db,
+        projectCompleteRun({
+          doc: sampleDoc(),
+          perAgent: SAMPLE_PER_AGENT,
+          repoId: REPO_ID,
+          runDir: RUN_DIR,
+          checkoutPath: "/Users/juanma/Desktop/pr-hero",
+          generatedAt: "2026-08-23T18:00:00.000Z",
+        }),
+      );
+      saveRunTransaction(
+        db,
+        projectCompleteRun({
+          doc: { ...sampleDoc(), head_sha: "d".repeat(40) },
+          perAgent: SAMPLE_PER_AGENT,
+          repoId: REPO_ID,
+          runDir: RUN_DIR,
+          checkoutPath: "/Users/juanma/Desktop/pr-hero",
+          generatedAt: "2026-08-24T09:00:00.000Z",
+        }),
+        { keepGeneratedAt: true },
+      );
+      const row = getRunById(db, id);
+      expect(row?.head_sha).toBe("d".repeat(40));
+      expect(row?.generated_at).toBe("2026-08-24T09:00:00.000Z");
+    } finally {
+      db.close();
+    }
+  });
+
   test("a backfill re-save (keepGeneratedAt) keeps diff_from_sha, greptile_found and generated_at", async () => {
     const dbPath = await tmpDbPath();
     const db = openProductStore(dbPath);
