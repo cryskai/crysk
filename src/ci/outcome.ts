@@ -1109,7 +1109,7 @@ const OPENCODE_SUBSCRIPTION_FIXES = [
   "Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then re-set the secret:",
   "$ opencode auth login",
   OPENCODE_STORE,
-  "Or rename the provider in CRYSK_ROUTING.",
+  "Or rename the provider in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
 ];
 // Only the OpenCode route stores a ChatGPT login; any other backend, or none, is
 // the Claude route.
@@ -1119,12 +1119,12 @@ function isOpencodeRoute(params: ErrorParams): boolean {
 const MODEL_NOT_SERVED: CatalogVariant = {
   why: "the routing names a model this provider does not offer",
   fixes: [
-    "Fix the `modelSnapshot` for this step in CRYSK_ROUTING.",
+    "Fix the `modelSnapshot` for this step in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
     "List the models this provider serves:",
     "$ opencode models {provider}",
   ],
   annotationFix:
-    "fix the `modelSnapshot` for {step} in CRYSK_ROUTING to a model that {provider} serves",
+    "fix the `modelSnapshot` for {step} in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename) to a model that {provider} serves",
 };
 
 const ROUTE_WHY = "every agent needs exactly one backend, provider and model";
@@ -1202,10 +1202,10 @@ const CREDENTIAL_UNUSABLE_ENV: CatalogVariant = {
 const ROUTE_UNMAPPED: CatalogVariant = {
   why: ROUTE_WHY,
   fixes: [
-    "Add or complete this model's route in CRYSK_ROUTING, with an explicit `modelSnapshot`.",
+    "Add or complete this model's route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename), with an explicit `modelSnapshot`.",
   ],
   annotationFix:
-    "add or complete this model's route in CRYSK_ROUTING, with an explicit `modelSnapshot`",
+    "add or complete this model's route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename), with an explicit `modelSnapshot`",
 };
 
 const RUNTIME_LOCAL: CatalogVariant = {
@@ -1272,7 +1272,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
             : CLAUDE_SUBSCRIPTION_FIXES,
         annotationFix: (params) =>
           isOpencodeRoute(params)
-            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then re-set OPENCODE_AUTH_JSON, or rename the provider in CRYSK_ROUTING"
+            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then re-set OPENCODE_AUTH_JSON, or rename the provider in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename)"
             : "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
       },
       malformed_payload: {
@@ -1347,20 +1347,26 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       ambiguous: {
         why: ROUTE_WHY,
         fixes: [
-          "Remove the duplicate mapping for this route from CRYSK_ROUTING.",
+          "Remove the duplicate mapping for this route from CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
         ],
         annotationFix:
-          "remove the duplicate mapping for this route from CRYSK_ROUTING",
+          "remove the duplicate mapping for this route from CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename)",
       },
       "spend-disabled": {
         why: ROUTE_WHY,
-        fixes: ["Enable spend for this route in CRYSK_ROUTING."],
-        annotationFix: "enable spend for this route in CRYSK_ROUTING",
+        fixes: [
+          "Enable spend for this route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
+        ],
+        annotationFix:
+          "enable spend for this route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename)",
       },
       "multiple-opencode-providers": {
         why: ROUTE_WHY,
-        fixes: ["Keep one OpenCode provider per review in CRYSK_ROUTING."],
-        annotationFix: "keep one OpenCode provider per review in CRYSK_ROUTING",
+        fixes: [
+          "Keep one OpenCode provider per review in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
+        ],
+        annotationFix:
+          "keep one OpenCode provider per review in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename)",
       },
       default: ROUTE_UNMAPPED,
     },

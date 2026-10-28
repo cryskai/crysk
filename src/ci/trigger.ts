@@ -31,7 +31,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { isCommand, startsWithCommand } from "../brand";
+import { commandHint, isCommand, startsWithCommand } from "../brand";
 
 // Commands are written in the new `/crysk` form. The matchers in ../brand
 // also accept the legacy `/pr-hero` spelling for one version.
@@ -365,7 +365,7 @@ function overrideDecision(input: CiTriggerInput): CiTriggerDecision {
       kind: "denied",
       reason:
         "pr-hero did not override the gate: an override applies to the head at " +
-        "the time of the comment; comment `/crysk override` again.",
+        `the time of the comment; comment ${commandHint(OVERRIDE_COMMAND)} again.`,
     };
   }
   if (!GITHUB_LOGIN.test(input.commenterLogin)) {
@@ -1027,21 +1027,18 @@ const HEAD_RETRY_DELAY_MS = 2_000;
 
 // The notice a refused override prints. docs/github-actions.md ("Overriding a red
 // gate") describes the same refusal in prose, so keep the two in step.
-const OVERRIDE_FORK_REFUSAL =
-  "`/crysk override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/crysk review` and merge it with your repository's own rules.";
+const OVERRIDE_FORK_REFUSAL = `An override is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with ${commandHint(REVIEW_COMMAND)} and merge it with your repository's own rules.`;
 
 // The notice for an answer that does not say whether the pull request is a fork (a
 // failed or invalid lookup). It is not a claim that the pull request is one, so it gets
 // its own text: the same refusal, with the way to retry.
-const OVERRIDE_UNKNOWN_FORK_REFUSAL =
-  "`/crysk override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/crysk override` again.";
+const OVERRIDE_UNKNOWN_FORK_REFUSAL = `The override could not confirm whether this pull request comes from a fork, so it was refused; comment ${commandHint(OVERRIDE_COMMAND)} again.`;
 
 // The notices a refused recheck prints: the same refusal as an override on a fork,
 // with the adjudicator's reason. The unknown answer gets its own text, as the override does.
 const RECHECK_FORK_REFUSAL =
-  "/crysk recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
-const RECHECK_UNKNOWN_FORK_REFUSAL =
-  "/crysk recheck could not confirm whether this pull request comes from a fork, so it was refused; comment `/crysk recheck` again.";
+  "A recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
+const RECHECK_UNKNOWN_FORK_REFUSAL = `The recheck could not confirm whether this pull request comes from a fork, so it was refused; comment ${commandHint(RECHECK_COMMAND)} again.`;
 
 // What the override's one lookup says. `crossRepository` is undefined when the
 // answer does not say (a failed call, output that is not JSON, or a field that is

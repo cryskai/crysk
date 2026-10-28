@@ -1031,7 +1031,7 @@ opencode auth login
 gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 ```
 
-Or rename the provider in CRYSK_ROUTING.
+Or rename the provider in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
 
 #### `malformed_payload`
 
@@ -1139,19 +1139,19 @@ A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, 
 
 #### `unmapped`
 
-Add or complete this model's route in CRYSK_ROUTING, with an explicit `modelSnapshot`.
+Add or complete this model's route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename), with an explicit `modelSnapshot`.
 
 #### `ambiguous`
 
-Remove the duplicate mapping for this route from CRYSK_ROUTING.
+Remove the duplicate mapping for this route from CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
 
 #### `spend-disabled`
 
-Enable spend for this route in CRYSK_ROUTING.
+Enable spend for this route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
 
 #### `multiple-opencode-providers`
 
-Keep one OpenCode provider per review in CRYSK_ROUTING.
+Keep one OpenCode provider per review in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
 
 ### PRH-MODEL-UNAVAILABLE
 
@@ -1163,7 +1163,7 @@ Keep one OpenCode provider per review in CRYSK_ROUTING.
 
 **Fix:**
 
-Fix the `modelSnapshot` for this step in CRYSK_ROUTING.
+Fix the `modelSnapshot` for this step in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
 
 List the models this provider serves:
 

@@ -495,7 +495,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
     expect(rerun.record).not.toHaveProperty("actor");
     expect(rerun.ghCalls.filter((args) => args[0] === "pr")).toEqual([]);
     expect(rerun.stdout).toContain(
-      "an override applies to the head at the time of the comment; comment `/crysk override` again",
+      "an override applies to the head at the time of the comment; comment `/crysk override` (or `/pr-hero override` on a workflow set up before the rename) again",
     );
 
     const first = outcomeRun(
@@ -1125,12 +1125,12 @@ const overrideHead = (sha: string, crossRepository: boolean): GhResult =>
 
 // The notice a refused override prints, verbatim.
 const FORK_OVERRIDE_REFUSAL =
-  "`/crysk override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/crysk review` and merge it with your repository's own rules.";
+  "An override is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) and merge it with your repository's own rules.";
 
 // The notice an override prints when the lookup could not say whether the pull request is
 // a fork. Distinct from the fork notice: a lookup that failed is not a proven fork.
 const UNKNOWN_FORK_OVERRIDE_REFUSAL =
-  "`/crysk override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/crysk override` again.";
+  "The override could not confirm whether this pull request comes from a fork, so it was refused; comment `/crysk override` (or `/pr-hero override` on a workflow set up before the rename) again.";
 
 // Runs the shell with CRYSK_OUTCOME_DIR pointed at a fresh directory that does
 // not exist yet (the trigger must create it), then reads trigger.json back.
@@ -2378,7 +2378,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("false");
     expect(run.stdout).toContain(
-      "an override applies to the head at the time of the comment; comment `/crysk override` again",
+      "an override applies to the head at the time of the comment; comment `/crysk override` (or `/pr-hero override` on a workflow set up before the rename) again",
     );
   });
 
@@ -2596,7 +2596,7 @@ describe("runCiTrigger — /pr-hero recheck", () => {
           ? overrideHead(head, false)
           : ok(`${head}\n`);
   const RECHECK_FORK_REFUSAL =
-    "/crysk recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
+    "A recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
 
   test("a writer's recheck reviews the head with adjudicate true and force", () => {
     const run = outcomeRun(commentEnv(RECHECK_COMMAND), recheckGh(OTHER_SHA));
@@ -2641,7 +2641,7 @@ describe("runCiTrigger — /pr-hero recheck", () => {
       scriptedGh(ok("write"), ok("not json")),
     );
     expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
-    expect(run.stdout).toContain("/crysk recheck could not confirm");
+    expect(run.stdout).toContain("The recheck could not confirm");
     expect(run.ghCalls).toContainEqual(reactionArgv("-1"));
   });
 });

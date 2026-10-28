@@ -31,7 +31,7 @@ export function ciForceReviewDispatch(prNumber: number): string {
 export function ciForceReviewHintLine(prNumber: number): string {
   return (
     `Comment ${commandHint(CI_REVIEW_COMMENT)} on this pull request to run it ` +
-    `on GitHub Actions anyway (\`${CI_REVIEW_FULL_COMMENT}\` re-discovers the ` +
+    `on GitHub Actions anyway (${commandHint(CI_REVIEW_FULL_COMMENT)} re-discovers the ` +
     "whole range). On a workflow scaffolded before comment triggers, run " +
     `\`${ciForceReviewDispatch(prNumber)}\` instead, or re-scaffold with ` +
     "`pr-hero ci init --force`."
