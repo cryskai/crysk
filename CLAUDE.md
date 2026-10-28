@@ -118,8 +118,8 @@ over** (found while wiring C5, 2026-08-23):
 - `src/cli.ts` + `src/preflight.ts` + `src/report.ts` — local mode (B0): the I/O shell, its pure
   decisions (all offline-tested), and the cost band + report renderer.
 - `src/pr.ts` + `src/pr-preflight.ts` — PR mode (B1, `--pr <n>`): gh/worktree/codegraph I/O shell and
-  its pure decisions — PR record → range, the worktree reuse gate, comparison.json (B4's seed).
-- `src/compare/compare.ts` — shared PR path normalization and the default line window, used by the comparison.json rows and the floor test.
+  its pure decisions — PR record → range, the worktree reuse gate.
+- `src/compare/compare.ts` — shared PR path normalization and the default line window, used by the floor test.
 - `src/floor-test.ts` — M6's primary instrument, pure: the case list's validator, the per-case gate (a
   refuter-CORROBORATED finding within compare.ts's ±25 of the site), the per-arm tally, the table. Arm
   identity is read off `pipeline.json`'s `scout.enabled`, never a directory name. Cases live in
@@ -143,8 +143,6 @@ over** (found while wiring C5, 2026-08-23):
   renderer has tests over its lines, one of them asserting zero `\x1b` bytes with styles off; and
   nothing is exported without a real consumer (a module or a test — biome does not flag unused
   *exported* symbols, so an `export` for a hypothetical consumer is how dead code hides).
-- `src/ledger.ts` — B4 pure half (`pr-hero ledger`): comparison.json read-back, one-vote-per-PR
-  aggregation, as-is verdict tally, markdown ledger with the pending-triage list.
 - `src/assets.ts` + `src/asset-manifest.ts` — bundled productized prompts, triage skills, and self-invocation resolution.
 - `src/system-tools.ts` — pure and system checkers for git, claude CLI auth, gh, and codegraph.
 - `src/doctor.ts` — tri-state (`healthy | degraded | blocking`) environment diagnostic report evaluator and renderer.

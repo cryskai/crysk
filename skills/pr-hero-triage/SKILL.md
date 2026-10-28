@@ -324,8 +324,7 @@ adjudicator that inherited your context would simply agree with itself.
 The adjudicator returns exactly one of `upheld`, `rejected`, or `inconclusive` — see
 `adjudicator.md` for what each means and the burden-of-proof rule behind them. Pass that
 exact word as `--verdict` on `npx -y pr-hero triage reply` (and mention it in the reasoning
-prose). The driver writes it on the marker; the ledger and the escalation rule read it
-back from there.
+prose). The driver writes it on the marker; the escalation rule reads it back from there.
 
 ## One adjudication per finding per HEAD
 

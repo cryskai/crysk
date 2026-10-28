@@ -438,7 +438,6 @@ export async function review(options: CliOptions): Promise<number> {
     checkoutPath: repoRoot,
     doc,
     perAgent: result.perAgent,
-    comparison: null,
     log,
   });
   ingestReviewMetrics({
@@ -448,7 +447,6 @@ export async function review(options: CliOptions): Promise<number> {
     checkoutPath: repoRoot,
     doc,
     perAgent: result.perAgent,
-    comparison: null,
     log,
   });
 

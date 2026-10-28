@@ -119,14 +119,8 @@ export interface CliOptions {
   // undefined means no flag, resolved via flag > config > default (false).
   // Requires --pr (parseArgs enforces it): a comment needs a PR to land on.
   post?: boolean;
-  // ledger only (ROADMAP B4): the runs root to scan for comparison.json
-  // files. Unset means defaultRunRoot(home, repoId) — the shell resolves it,
-  // because the default needs origin + ~/.prhero and parseArgs stays pure.
-  runs?: string;
   // post/triage only (ROADMAP B6/B6c): the run dir to read findings.json +
-  // diff.patch (post) or comparison.json (triage) from, instead of
-  // producing a new run — the `ledger` verb's precedent (read run artifacts
-  // off disk) applied to publishing/triaging instead of aggregating.
+  // diff.patch (post and triage reply) from, instead of producing a new run.
   // Required by both; parseArgs enforces it.
   from?: string;
   // `status` only (ROADMAP S9): print one JSON object on stdout instead of the human lines.
@@ -174,9 +168,10 @@ export interface CliOptions {
   // distinct value that DISABLES the limit, so these cannot default to 0.
   maxChangedLines?: number;
   maxChangedFiles?: number;
-  // `triage reply` sub-word (W1). Unset means the existing bind-ledger
-  // `triage` verb. Same pattern as watch's sub-words: `reply` is not its
-  // own command, so `pr-hero reply` still fails as unknown.
+  // `triage reply` sub-word (W1). Required for the triage command: the bare
+  // `triage --pr --from` verb was removed with comparison.json, so parseArgs rejects `triage` without it. Same pattern as watch's
+  // sub-words: `reply` is not its own command, so `pr-hero reply` still fails
+  // as unknown.
   triage?: "reply";
   finding?: string;
   tag?: TriageTag;
@@ -293,7 +288,6 @@ export interface ParsedCli {
     | "doctor"
     | "menu"
     | "activity"
-    | "ledger"
     | "watch"
     | "post"
     | "triage"
@@ -343,8 +337,6 @@ Usage:
                              Safely terminate a running review (checks process identity)
   pr-hero upgrade [options]  Upgrade pr-hero to latest version & sync agent assets
   pr-hero uninstall [opts]   Remove pr-hero daemons, MCP registrations & skills
-  pr-hero ledger [options]   Accumulate every run's comparison.json into one
-                             markdown ledger (the three buckets as a rate)
   pr-hero mcp [options]      Start the read-only Model Context Protocol (MCP)
                              server over stdio for AI coding assistants. Read-only, $0
   pr-hero post --pr <n> --from <run-dir> [--dry-run]
@@ -356,14 +348,6 @@ Usage:
                              and posts nothing (the only way to preview a
                              plan, since --pr --dry-run returns before any
                              findings exist)
-  pr-hero triage --pr <n> --from <run-dir> [--dry-run]
-                             Read the PR's reply threads, bind every triage
-                             reply (ROADMAP B6b's marker) to its finding's
-                             row in that run's comparison.json, and write
-                             verdict/reasoning/actor back — the ledger's two
-                             null columns, filled from the loop instead of by
-                             hand. --dry-run reports what would be bound and
-                             writes nothing
   pr-hero triage reply --pr <n> --from <run-dir> --finding <id> --tag <tag>
                    --body-file <path> [--verdict <v>] [--issue <n>] [--dry-run]
                              Post one triage reply. The driver resolves the
@@ -450,8 +434,8 @@ Options:
   --pr [n]            Review GitHub PR #n — or, with no number, the PR that
                       belongs to the current branch. head and base come from
                       gh, the review runs in a detached worktree with its
-                      own codegraph index, and the result is written to
-                      comparison.json with pr-hero's findings. Excludes --base,
+                      own codegraph index, and the result is written to the
+                      run directory's findings.json. Excludes --base,
                       --head and --two-dot
   --post              With --pr only: publish the review to the PR as one
                       marked comment — created the first time, updated in
@@ -467,8 +451,8 @@ Options:
                       file), then PRHERO_AGENTS_DIR
   --out <dir>         Run directory; must live OUTSIDE the reviewed repo
                       (default: ~/.prhero/repos/<origin>/runs/<sha>-<n>).
-                      For ledger, reverts and corpus: the file to write
-                      instead of stdout
+                      For reverts and corpus: the file to write instead of
+                      stdout
   --since <git-date>  reverts and corpus only: how far back to scan the
                       default branch, in any form git's --since accepts
                       ("6 months ago", "2025-01-01"). Default: 24 months ago
@@ -493,13 +477,10 @@ Options:
   --bug-labels <csv>  corpus only: with --issues, issue labels that mark a
                       referenced issue as a bug (comma-separated,
                       case-sensitive). Default: bug
-  --runs <dir>        ledger only: the runs root to scan for comparison.json
-                      files (default: ~/.prhero/repos/<origin>/runs)
   --json              status only: print the status as one JSON object on
                       stdout (schema pr-hero.status/v1)
   --from <dir>        post/triage only: the run dir to read findings.json and
-                      anchor.patch or diff.patch (post and triage reply) or comparison.json
-                      (triage bind) from (required). triage reply maps
+                      anchor.patch or diff.patch from (required). triage reply maps
                       --finding F00N onto the posted marker via the same
                       post-line remapping post uses
   --finding <id>      triage reply only: the finding id in that run's
@@ -614,7 +595,6 @@ const VALUE_FLAGS = new Set([
   "--head",
   "--agents",
   "--out",
-  "--runs",
   "--from",
   "--gotchas",
   "--config",
@@ -666,7 +646,6 @@ export function parseArgs(argv: string[]): ParsedCli {
     | "doctor"
     | "menu"
     | "activity"
-    | "ledger"
     | "watch"
     | "post"
     | "triage"
@@ -971,7 +950,6 @@ export function parseArgs(argv: string[]): ParsedCli {
       arg !== "doctor" &&
       arg !== "menu" &&
       arg !== "activity" &&
-      arg !== "ledger" &&
       arg !== "watch" &&
       arg !== "post" &&
       arg !== "triage" &&
@@ -990,7 +968,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     ) {
       throw new CliUsageError(
         `unknown command: ${arg} (the commands are "menu", "review", "init", "setup", "doctor", ` +
-          '"activity", "ledger", "watch", "post", "triage", "status", "gc", "usage", ' +
+          '"activity", "watch", "post", "triage", "status", "gc", "usage", ' +
           '"reverts", "corpus", "config", "mcp", "upgrade", "uninstall", "ci" and "skills")',
       );
     }
@@ -1181,6 +1159,12 @@ export function parseArgs(argv: string[]): ParsedCli {
   // named by --pr. Both flags required for either — a command with neither
   // has nothing to read and nowhere to bind it, and guessing either would
   // silently act on the wrong run or the wrong PR.
+  if (command === "triage" && options.triage !== "reply") {
+    throw new CliUsageError(
+      "triage needs a subcommand: use `pr-hero triage reply` (the bare " +
+        "`triage --pr --from` verb was removed with comparison.json)",
+    );
+  }
   if (command === "post" || command === "triage") {
     if (options.pr === undefined) {
       throw new CliUsageError(`${command} requires --pr <n>`);
@@ -1414,9 +1398,6 @@ function applyValueFlag(
       return;
     case "--scout-model":
       options.scoutModel = value;
-      return;
-    case "--runs":
-      options.runs = value;
       return;
     case "--from":
       options.from = value;

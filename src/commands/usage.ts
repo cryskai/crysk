@@ -80,7 +80,7 @@ export async function usageCommand(options: CliOptions): Promise<number> {
 
   // An empty store is a valid state of the world (no review has ingested
   // yet, or none matches this scope), not an error — same split as
-  // ledgerCommand: a human note on stderr, stdout left clean, exit 0.
+  // every read-only report command: a human note on stderr, stdout left clean, exit 0.
   if (runRows.length === 0) {
     log(
       `no usage rows found in ${layout.prheroDbPath} — run \`pr-hero review\` or ` +
@@ -89,7 +89,7 @@ export async function usageCommand(options: CliOptions): Promise<number> {
     return 0;
   }
   // The report IS this command's product, same stdout/stderr split as
-  // ledgerCommand: everything human-facing above went to stderr via log(),
+  // every read-only report command: everything human-facing above went to stderr via log(),
   // so stdout stays pipeable.
   process.stdout.write(
     `${renderUsage(runRows, { styles: styleEnabled() }).join("\n")}\n`,

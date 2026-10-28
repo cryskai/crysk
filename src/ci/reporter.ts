@@ -453,7 +453,7 @@ function reviewedLines(data: CiReviewSummary): string[] {
 
 // Formatted Markdown for `$GITHUB_STEP_SUMMARY` (spec 2.1). Pure — the
 // caller supplies every byte, so the summary is re-renderable from a stored
-// findings.json/comparison.json months later, same contract as
+// findings.json months later, same contract as
 // renderReport/renderPrComment (report.ts).
 // `ciMode` picks the footer only. Omitted means advisory: the footer every
 // caller has today, until a caller passes the mode its status was set under.

@@ -185,8 +185,7 @@ export interface ParsedTriageMarker {
 // parseFindingMarker's exact-prefix contract: a marker quoted mid-reply
 // (someone pasting a prior triage into a new comment) must never parse as a
 // fresh one. Returns null for anything malformed rather than guessing — a
-// mis-parsed triage becomes a silently wrong ledger tally (6c), exactly the
-// failure compare/ledger.ts's loud per-field validation exists to prevent.
+// mis-parsed triage becomes a silently wrong verdict in the store.
 export function parseTriageMarker(body: string): ParsedTriageMarker | null {
   if (!body.startsWith(TRIAGE_MARKER_PREFIX)) return null;
   const firstLine = body.split("\n", 1)[0] ?? "";

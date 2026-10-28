@@ -267,9 +267,31 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["watch", "--once", "--full"])).toThrow(
       "only applies to the review command",
     );
-    expect(() => parseArgs(["ledger", "--full"])).toThrow(
+    expect(() => parseArgs(["status", "--full"])).toThrow(
       "only applies to the review command",
     );
+  });
+
+  test("the bare triage verb is retired: only `triage reply` parses", () => {
+    expect(() =>
+      parseArgs(["triage", "--pr", "42", "--from", "/tmp/run"]),
+    ).toThrow("triage reply");
+    expect(
+      parseArgs([
+        "triage",
+        "reply",
+        "--pr",
+        "42",
+        "--from",
+        "/tmp/run",
+        "--finding",
+        "F001",
+        "--tag",
+        "applied",
+        "--body-file",
+        "/tmp/body.md",
+      ]).options.triage,
+    ).toBe("reply");
   });
 
   test("--adjudicate is OFF unless asked for, and needs --pr", () => {
@@ -311,7 +333,7 @@ describe("parseArgs", () => {
       "only apply to the review command",
     );
     expect(() =>
-      parseArgs(["ledger", "--scout", "--scout-model", "haiku"]),
+      parseArgs(["status", "--scout", "--scout-model", "haiku"]),
     ).toThrow("only apply to the review command");
   });
 

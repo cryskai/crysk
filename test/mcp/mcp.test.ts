@@ -115,7 +115,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
     expect(notifRes).toBeNull();
   });
 
-  test("tools/list returns all 8 read-only tool definitions", async () => {
+  test("tools/list returns all 7 read-only tool definitions", async () => {
     const mockClient = {} as ProductStoreClient;
     const response = await processMcpMessage(mockClient, {
       jsonrpc: "2.0",
@@ -125,7 +125,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
 
     expect(response?.id).toBe(3);
     const result = (response as { result: { tools: unknown[] } })?.result;
-    expect(result.tools.length).toBe(8);
+    expect(result.tools.length).toBe(7);
     expect(PRHERO_MCP_TOOLS.map((t) => t.name)).toEqual([
       "prhero_health",
       "prhero_list_runs",
@@ -133,7 +133,6 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
       "prhero_get_findings",
       "prhero_search_findings",
       "prhero_get_usage",
-      "prhero_get_comparison",
       "prhero_get_triage",
     ]);
   });

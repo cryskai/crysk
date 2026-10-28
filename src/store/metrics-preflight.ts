@@ -1,6 +1,6 @@
 // The observability store (W4 / GitHub #23), pure half: the v1 schema DDL
 // and the projection from a completed run's already-on-disk facts
-// (FindingsDocument, per-agent usage, an optional StoredComparison) into the
+// (FindingsDocument, per-agent usage) into the
 // flat rows store/metrics.ts's bun:sqlite shell writes. Artifacts on disk stay the
 // source of truth — this module only reshapes what already exists into rows,
 // it never reads a file or opens a connection.
@@ -8,7 +8,6 @@
 // No backfill (proposal, decided): the dataset starts empty and grows one
 // ingest at a time, from the very next completed review after ship.
 
-import type { StoredComparison } from "#compare/ledger";
 import type { FindingsDocument, RunStatus } from "#review/findings";
 import type { PerAgentUsage } from "#review/pipeline";
 
@@ -120,20 +119,9 @@ export interface RunAgentRow {
   status: string;
 }
 
-export interface ComparisonRowProjection {
-  row_index: number;
-  bucket: string;
-  greptile_json: string | null;
-  prhero_json: string | null;
-  verdict: string | null;
-  reasoning: string | null;
-  actor: string | null;
-}
-
 export interface ProjectedRun {
   run: RunRow;
   agents: RunAgentRow[];
-  comparisonRows: ComparisonRowProjection[];
 }
 
 // The ONLY place a completed run's on-disk facts become sqlite rows. Pure:
@@ -145,7 +133,6 @@ export interface ProjectedRun {
 export function projectRunRow(input: {
   doc: FindingsDocument;
   perAgent: Record<string, PerAgentUsage>;
-  comparison: StoredComparison | null;
   repoId: string;
   runDir: string;
   checkoutPath: string | null;
@@ -189,18 +176,7 @@ export function projectRunRow(input: {
       status: usage.status,
     }),
   );
-  const comparisonRows: ComparisonRowProjection[] = (
-    input.comparison?.rows ?? []
-  ).map((row, index) => ({
-    row_index: index,
-    bucket: row.bucket,
-    greptile_json: row.greptile ? JSON.stringify(row.greptile) : null,
-    prhero_json: row.prhero ? JSON.stringify(row.prhero) : null,
-    verdict: row.verdict,
-    reasoning: row.reasoning,
-    actor: row.actor,
-  }));
-  return { run, agents, comparisonRows };
+  return { run, agents };
 }
 
 export interface RenderUsageOptions {
@@ -217,8 +193,7 @@ export interface RenderUsageOptions {
 // table (one line per run, `pr` mapped back to "local" for the NULL rows
 // projectRunRow produced) plus a totals footer that is a real reduction
 // over the input, never a placeholder — cli.ts prints these lines straight
-// to stdout, the same split compare/ledger.ts's markdown uses (human notes on
-// stderr via log(), the report itself on stdout).
+// to stdout (human notes on stderr via log(), the report itself on stdout).
 export function renderUsage(
   rows: RunRow[],
   _options: RenderUsageOptions,

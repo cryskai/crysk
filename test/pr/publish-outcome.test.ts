@@ -7,11 +7,10 @@
 //
 // Boundary-doubling note — a DELIBERATE exception to "double at boundaries
 // you do not control" (robust-testing rule 4), disclosed rather than hidden
-// behind an internal mock: `postFindingsIfEnabled` (src/pr/posting.ts) and
-// `computeComparison` (src/pr/comparison.ts) call real `gh`-backed
-// helpers (`ghRepoWebUrl`, `postInlineFindings`, `fetchPrComments`) WITHOUT
-// exposing an injectable `spawnFn` at their own parameter surface —
-// confirmed by reading both files. That is the same "genuine I/O shell, no
+// behind an internal mock: `postFindingsIfEnabled` (src/pr/posting.ts) calls
+// real `gh`-backed helpers (`ghRepoWebUrl`, `postInlineFindings`,
+// `fetchPrComments`) WITHOUT exposing an injectable `spawnFn` at its own
+// parameter surface — confirmed by reading that file. That is the same "genuine I/O shell, no
 // offline seam" limitation test/cli.test.ts already documents for
 // reviewPr() itself and for src/pr/discovery.ts's own fetches. Consequently
 // this suite cannot make `postFindingsIfEnabled` PRODUCE a truthy posted
@@ -23,9 +22,7 @@
 //     (verified manually: `gh pr view <n>` against a non-git directory
 //     returns in ~20ms with "fatal: not a git repository", no network
 //     round-trip) — `ghRepoWebUrl` and `gitRemoteWebUrl` both degrade to
-//     `undefined` on that failure. `computeComparison` no longer touches gh
-//     (it only writes comparison.json into the run dir), so it always records
-//     its artifact here. None of this throws. This
+//     `undefined` on that failure. None of this throws. This
 //     only holds with `GH_REPO` unset (it overrides gh's repo detection
 //     regardless of cwd) — saved/deleted/restored below, same as
 //     `GITHUB_STEP_SUMMARY`/`GITHUB_OUTPUT`, so the suite controls its own
@@ -44,6 +41,7 @@
 // before that later throw, and reverts to "never called" the instant the
 // call is moved past it (mutation-checked below).
 
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -67,6 +65,7 @@ import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import { CliError } from "../../src/errors";
+import { prheroLayout } from "../../src/home-preflight";
 import { zeroUsage } from "../../src/usage";
 
 function baseOptions(over: Partial<CliOptions> = {}): CliOptions {
@@ -529,6 +528,28 @@ describe("publishRunOutcome", () => {
     expect(doc.head_sha).toBe(HEAD_SHA);
     expect(doc.base_sha).toBe(BASE_SHA);
     expect(doc.run_status).toBe("complete");
+  });
+
+  // PR mode no longer writes comparison.json: the run dir holds findings.json and
+  // report.md only, and the canonical store receives the PR's diffFromSha directly.
+  test("PR publish writes no comparison.json and passes diffFromSha to the canonical store", async () => {
+    const exitCode = await publishRunOutcome(
+      baseInput({ repoId: "github.com/acme/repo" }),
+    );
+    expect(exitCode).toBe(0);
+    expect(existsSync(path.join(runDir, "comparison.json"))).toBe(false);
+
+    const db = new Database(prheroLayout(home).prheroDbPath, {
+      readonly: true,
+    });
+    try {
+      const row = db
+        .query("SELECT diff_from_sha FROM runs WHERE pr = ?")
+        .get(42) as { diff_from_sha: string | null } | null;
+      expect(row?.diff_from_sha).toBe(BASE_SHA);
+    } finally {
+      db.close();
+    }
   });
 
   // Task item 1: posting "succeeds" (postFindingsIfEnabled's real, offline

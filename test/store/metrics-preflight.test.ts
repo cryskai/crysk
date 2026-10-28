@@ -1,12 +1,11 @@
 // Pure-decision tests for the observability store (W4 / GitHub #23): the v1
 // DDL migration and the row projection from a completed run's already-on-
-// disk facts (FindingsDocument, per-agent usage, an optional comparison)
+// disk facts (FindingsDocument, per-agent usage)
 // into the flat rows store/metrics.ts's I/O shell writes. No fs, no sqlite, no
 // clock — the shell (store/metrics.ts) supplies generatedAt and owns the file
 // handle.
 
 import { describe, expect, test } from "bun:test";
-import type { StoredComparison } from "#compare/ledger";
 import type { Finding, FindingsDocument } from "#review/findings";
 import type { PerAgentUsage } from "#review/pipeline";
 import {
@@ -76,36 +75,6 @@ const PER_AGENT: Record<string, PerAgentUsage> = {
   },
 };
 
-function baseComparison(
-  overrides: Partial<StoredComparison> = {},
-): StoredComparison {
-  return {
-    pr: 42,
-    head_sha: "b".repeat(40),
-    diff_from_sha: "a".repeat(40),
-    run_dir: "/runs/pr-42-1",
-    run_status: "complete",
-    greptile: { found: true },
-    rows: [
-      {
-        bucket: "prhero_only",
-        greptile: null,
-        prhero: {
-          id: "F001",
-          path: "src/thing.ts",
-          line: 10,
-          claim: "a real defect",
-          tier: "blocking",
-        },
-        verdict: null,
-        reasoning: null,
-        actor: null,
-      },
-    ],
-    ...overrides,
-  };
-}
-
 describe("migrationsFor", () => {
   test("version 0 returns the v1 DDL for runs and its child tables", () => {
     const migration = migrationsFor(0);
@@ -118,7 +87,7 @@ describe("migrationsFor", () => {
     expect(sql).toMatch(/run_dir\s+TEXT\s+NOT\s+NULL\s+UNIQUE/);
     expect(sql).toMatch(/pr\s+INTEGER/);
     expect(sql).toMatch(/checkout_path\s+TEXT/);
-    // Child tables: per-agent usage and comparison rows, both scoped to a run.
+    // Child tables: per-agent usage, and comparison rows (historical, never written now).
     expect(sql).toContain("run_agents");
     expect(sql).toContain("comparison_rows");
   });
@@ -135,7 +104,6 @@ describe("projectRunRow", () => {
     const projected = projectRunRow({
       doc: baseDoc({ pr: 0 }),
       perAgent: PER_AGENT,
-      comparison: null,
       repoId: "github.com/juanmaagd/musive",
       runDir: "/runs/local-1",
       checkoutPath: "/Users/x/Desktop/musive",
@@ -157,7 +125,6 @@ describe("projectRunRow", () => {
     // One blocking (F001) + one advisory (F002) finding, per baseDoc.
     expect(projected.run.blocking).toBe(1);
     expect(projected.run.advisory).toBe(1);
-    expect(projected.comparisonRows).toEqual([]);
     expect(projected.agents).toEqual([
       {
         agent_key: "reliability",
@@ -172,38 +139,23 @@ describe("projectRunRow", () => {
     ]);
   });
 
-  test("a PR run keeps the numeric pr and carries comparison rows", () => {
-    const comparison = baseComparison();
+  test("a PR run keeps the numeric pr and projects no comparison rows", () => {
     const projected = projectRunRow({
       doc: baseDoc({ pr: 42 }),
       perAgent: PER_AGENT,
-      comparison,
       repoId: "github.com/juanmaagd/musive",
       runDir: "/runs/pr-42-1",
       checkoutPath: "/Users/x/Desktop/musive",
       generatedAt: "2026-08-15T12:00:00.000Z",
     });
     expect(projected.run.pr).toBe(42);
-    expect(projected.comparisonRows).toHaveLength(1);
-    expect(projected.comparisonRows[0]).toMatchObject({
-      row_index: 0,
-      bucket: "prhero_only",
-      greptile_json: null,
-      verdict: null,
-      reasoning: null,
-      actor: null,
-    });
-    expect(
-      projected.comparisonRows[0]?.prhero_json &&
-        JSON.parse(projected.comparisonRows[0].prhero_json),
-    ).toEqual(comparison.rows[0]?.prhero);
+    expect("comparisonRows" in projected).toBe(false);
   });
 
   test("a session-failed run stores session_failed = 1", () => {
     const projected = projectRunRow({
       doc: baseDoc({ pr: 0, sessionFailed: true }),
       perAgent: {},
-      comparison: null,
       repoId: "github.com/a/b",
       runDir: "/runs/local-2",
       checkoutPath: null,
@@ -217,7 +169,6 @@ describe("projectRunRow", () => {
     const first = projectRunRow({
       doc: baseDoc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       repoId: "github.com/juanmaagd/musive",
       runDir: "/runs/s1-1",
       checkoutPath: "/Users/x/Desktop/musive/musive-s1",
@@ -226,7 +177,6 @@ describe("projectRunRow", () => {
     const second = projectRunRow({
       doc: baseDoc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       repoId: "github.com/juanmaagd/musive",
       runDir: "/runs/s3-1",
       checkoutPath: "/Users/x/Desktop/musive/musive-s3",

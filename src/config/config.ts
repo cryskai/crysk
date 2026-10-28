@@ -10,7 +10,6 @@
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { StoredComparison } from "#compare/ledger";
 import { resolveRepoRoot } from "#git/git";
 import type { FindingsDocument } from "#review/findings";
 import type { PerAgentUsage, PipelineResult } from "#review/pipeline";
@@ -96,7 +95,8 @@ export interface PersistCanonicalReviewInput {
   checkoutPath: string | null;
   doc: FindingsDocument;
   perAgent?: Record<string, PerAgentUsage>;
-  comparison: StoredComparison | null;
+  // The PR's diff base. Local runs pass none; the store keeps the value it has.
+  diffFromSha?: string | null;
   generatedAt?: string;
   log?: (line: string) => void;
   // Test seam
@@ -125,7 +125,7 @@ export function persistCanonicalReview(
       const projected = projectCompleteRun({
         doc: input.doc,
         perAgent: input.perAgent,
-        comparison: input.comparison,
+        diffFromSha: input.diffFromSha,
         repoId: input.repoId,
         runDir: input.runDir,
         checkoutPath: input.checkoutPath,

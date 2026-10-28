@@ -4,7 +4,6 @@
 // Invariant: Callers do not open SQLite directly. All store interactions
 // go through this client.
 
-import type { StoredComparison } from "#compare/ledger";
 import type { FindingsDocument } from "#review/findings";
 import type {
   CanonicalRunRow,
@@ -137,21 +136,6 @@ export class ProductStoreClient {
         "GET",
         `/v1/runs/${id}/findings-document`,
       );
-    } catch (err) {
-      if (err instanceof StoreClientError && err.statusCode === 404) {
-        return null;
-      }
-      throw err;
-    }
-  }
-
-  async getComparison(id: number): Promise<StoredComparison | null> {
-    try {
-      const res = await this.request<{ comparison: StoredComparison | null }>(
-        "GET",
-        `/v1/runs/${id}/comparison`,
-      );
-      return res.comparison;
     } catch (err) {
       if (err instanceof StoreClientError && err.statusCode === 404) {
         return null;

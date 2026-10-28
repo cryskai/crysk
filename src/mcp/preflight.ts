@@ -134,21 +134,6 @@ export const PRHERO_MCP_TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: "prhero_get_comparison",
-    description:
-      "Retrieve head-to-head comparison rows and verdicts against Greptile for a review run.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        run_id: {
-          type: "number",
-          description: "Canonical run ID",
-        },
-      },
-      required: ["run_id"],
-    },
-  },
-  {
     name: "prhero_get_triage",
     description:
       "Retrieve recorded triage decisions (applied, dismissed, deferred, misclassified) for a review run.",
@@ -322,15 +307,6 @@ export async function handleMcpToolCall(
           typeof args.all === "boolean" ? args.all : repo_id === undefined;
         const usage = await client.getUsage({ repo_id, all });
         return formatToolSuccess(usage);
-      }
-
-      case "prhero_get_comparison": {
-        const run_id = parseRequiredInteger(args.run_id, "run_id");
-        const comp = await client.getComparison(run_id);
-        if (!comp) {
-          return formatToolError(`Comparison for run #${run_id} not found`);
-        }
-        return formatToolSuccess(comp);
       }
 
       case "prhero_get_triage": {

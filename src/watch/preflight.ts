@@ -776,7 +776,8 @@ export interface TickRepoFacts {
   // push re-arms.
   onPush: boolean;
   prs: WatchPrCandidate[];
-  // Parsed comparison.json fields (pr + head_sha) — never dir names.
+  // Parsed findings.json fields (pr + head_sha) of PR reviews that did not
+  // fail their session — never dir names.
   localReviews: { pr: number; head: string }[];
   // Marker facts per PR: the declared heads AND whether any marker comment
   // exists at all (a legacy headless marker is seen but declares nothing).
@@ -946,7 +947,7 @@ export function pendingReviewsToSettle(
 // changes the head, every (pr, head) key is fresh by construction, and an
 // updated PR becomes eligible again — with auto-post the comment tracks the
 // live head. Under the DEFAULT (on_push: false) each PR is reviewed ONCE:
-// any prior review of the PR number — a local comparison.json at any head,
+// any prior review of the PR number — a local findings.json at any head,
 // or any pr-hero marker comment whatever it declares (a legacy headless
 // marker proves a review happened even though it covers no specific head) —
 // skips it as `reviewed-prior-head`, so a push never re-bills a review.
@@ -983,7 +984,7 @@ function candidateSkipReason(
   //       the very next tick — so the verdict is RECOMPUTED every tick from
   //       live gh counters and never persisted anywhere.
   //   (c) It does NOT arm the on_push "one review per PR" state. That state
-  //       is armed by a comparison.json or a marker comment, both of which
+  //       is armed by a findings.json or a marker comment, both of which
   //       only a review that actually ran produces. A skip is not a review;
   //       treating it as one would permanently retire the PR.
   if (repo.tooLarge.includes(candidate.pr)) return "too-large";
