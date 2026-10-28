@@ -1,6 +1,6 @@
 ---
 name: pr-hero-triage
-description: "Run the autonomous pr-hero PR review loop end-to-end (review -> judge -> fix/reply -> wait -> recheck until done): triage pr-hero findings posted as PR comments in their own thread with applied, dismissed, deferred, or misclassified plus reasoning, push verified fixes, and subscribe to re-reviews with `pr-hero status --pr <n> --wait --json` without stopping to ask the user. Trigger: pr-hero finding comments on a PR you authored, pr-hero-loop, closing the PR review loop, responding to automated code review, `<!-- pr-hero-finding` markers in a PR."
+description: "Run the autonomous pr-hero PR review loop end-to-end (review -> judge -> fix/reply -> wait -> recheck until done): triage pr-hero findings posted as PR comments in their own thread with applied, dismissed, deferred, or misclassified plus reasoning, push verified fixes, and subscribe to re-reviews with `pr-hero status --pr <n> --wait --json` without stopping to ask the user. Trigger: pr-hero finding comments on a PR you authored, pr-hero-loop, closing the PR review loop, responding to automated code review, `<!-- crysk-finding` or legacy `<!-- pr-hero-finding` markers in a PR."
 license: Apache-2.0
 metadata:
   author: juanmaagd
@@ -15,15 +15,19 @@ you need to answer each one so the review loop closes without a human in it by d
 Use it when you see comments whose FIRST line matches:
 
 ```
-<!-- pr-hero-finding path=<url-encoded-path> line=<n> head=<40-hex-sha> c=<12-hex> -->
+<!-- crysk-finding path=<url-encoded-path> line=<n> head=<40-hex-sha> c=<12-hex> -->
 ```
 
+Comments posted before the rename to Crysk start with `<!-- pr-hero-` instead of
+`<!-- crysk-` (`<!-- pr-hero-finding`, `<!-- pr-hero-report`, `<!-- pr-hero-triage`, ...).
+Treat them exactly the same; the CLI reads both.
+
 Do not use it for ordinary human review comments, or for pr-hero's own summary comment
-(`<!-- pr-hero-report head=<sha> -->`). That comment is a status roll-up plus, since W2
+(`<!-- crysk-report head=<sha> -->`). That comment is a status roll-up plus, since W2
 (issues #16/#17), a `### Comments Outside Diff` bucket for findings GitHub would not
-anchor. Those bucket findings have **no** `<!-- pr-hero-finding` marker and **no**
+anchor. Those bucket findings have **no** `<!-- crysk-finding` marker and **no**
 review thread. Do not reply on the summary. Do not invent a `gh` comment for them.
-This skill only answers findings that already have their own `<!-- pr-hero-finding`
+This skill only answers findings that already have their own `<!-- crysk-finding`
 comment — almost always an inline review comment on Files changed.
 
 ## Running the CLI (no install needed)
@@ -185,7 +189,7 @@ Suspect a flawed integration or architecture when **either** of these signals ap
    answered at its own head and then re-answered at a later head. The thread (step 2 below) settles
    the per-head question, and the escalation count still reads the thread's prior markers.
 
-For EVERY `<!-- pr-hero-finding ` comment on this PR that has not already been triaged for the
+For EVERY `<!-- crysk-finding ` comment on this PR that has not already been triaged for the
 current head:
 
 1. **Read the finding.** Fetch the comment body (the marker plus pr-hero's claim/severity/tier
@@ -210,7 +214,7 @@ current head:
      --tag <tag> --body-file <reasoning.md> [--verdict <v>] [--issue <n>]
    ```
 
-   The driver resolves the parent from the posted `<!-- pr-hero-finding`
+   The driver resolves the parent from the posted `<!-- crysk-finding`
    marker (never a comment id, never the nearest line), prepends the triage
    marker and the visible badge, posts the reply, records the triage event
    transactionally in the canonical product store (`finding_triage` table in
@@ -246,7 +250,7 @@ adjudicator. When step 0 says `recheck`:
    the argument, the CI adjudicator rules. (`/pr-hero override` is the opposite: never yours to post.)
 2. Wait with `npx -y pr-hero status --pr <n> --wait --json` until the run settles. Each ruling is a reply on the finding's thread,
    from `github-actions[bot]`, whose first line is
-   `<!-- pr-hero-adjudication verdict=<v> reply=<your reply's id> head=<sha> -->`. Step 0's
+   `<!-- crysk-adjudication verdict=<v> reply=<your reply's id> head=<sha> -->`. Step 0's
    `ci_verdict` reads it for you.
 3. Act on the verdict:
    - `upheld`: the dismissal stands. The recheck run itself does not change its own count; step 0
@@ -346,7 +350,7 @@ different answer — if two different heads with real code changes between them 
 a third will not, and by then the thread carries enough material for a person to rule in a minute.
 
 **The count is read off the finding's PRIOR triage markers, not remembered or estimated.** Fetch
-this finding's own reply thread, parse every `<!-- pr-hero-triage ` marker already posted in it in
+this finding's own reply thread, parse every `<!-- crysk-triage ` marker already posted in it in
 order, and read their `verdict=` fields — the same field this round's reply will also carry. If
 the most recent one is `verdict=inconclusive` AND the one before it is also `verdict=inconclusive`
 (two markers, both `inconclusive`, both belonging to a head change that legitimately re-triaged —
@@ -356,13 +360,13 @@ nothing else to consult.
 
 ## What you write vs what the driver posts
 
-`--body-file` is **reasoning prose only**. Do not put a `<!-- pr-hero-triage` marker or a
+`--body-file` is **reasoning prose only**. Do not put a `<!-- crysk-triage` marker or a
 badge line in that file — the driver prepends both, picks the parent comment from the posted
-`<!-- pr-hero-finding` marker, records the decision to the canonical store (`finding_triage`
+`<!-- crysk-finding` marker, records the decision to the canonical store (`finding_triage`
 table), and resolves the inline review thread when there is one.
 Passing a GitHub comment id, or posting with `gh api … in_reply_to`, is how replies landed
 under Greptile on Musive #1724. Do not do that. Do not reply on
-`<!-- pr-hero-report -->` either: that is the summary, including Outside Diff.
+`<!-- crysk-report -->` either: that is the summary, including Outside Diff.
 
 `--from` is the pr-hero run directory that produced these findings (`findings.json`). `--finding`
 is the finding id (`F001`, …) from that file — never a comment id.
@@ -399,7 +403,7 @@ The posted body looks like this (driver-owned; shown so you know what a human wi
 ### `applied`
 
 ```
-<!-- pr-hero-triage tag=applied head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent -->
+<!-- crysk-triage tag=applied head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent -->
 
 ✅ **APPLIED** · agent
 
@@ -411,7 +415,7 @@ Fixed in this PR — see 3f9a2c1: `parseConfig` now validates `retries` before u
 ### `dismissed` (needs `--verdict`)
 
 ```
-<!-- pr-hero-triage tag=dismissed head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent verdict=upheld -->
+<!-- crysk-triage tag=dismissed head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent verdict=upheld -->
 
 ❌ **DISMISSED** · agent · adjudicator: upheld
 
@@ -423,7 +427,7 @@ this PR. The isolated adjudicator confirmed the citation independently and retur
 ### `deferred` (needs `--verdict`; `--issue` optional)
 
 ```
-<!-- pr-hero-triage tag=deferred head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent verdict=upheld -->
+<!-- crysk-triage tag=deferred head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent verdict=upheld -->
 
 📋 **DEFERRED** · agent · adjudicator: upheld
 
@@ -434,7 +438,7 @@ retry policy, which is out of scope for this PR.
 ### `misclassified` (needs `--verdict`)
 
 ```
-<!-- pr-hero-triage tag=misclassified head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent verdict=upheld -->
+<!-- crysk-triage tag=misclassified head=e3ab386a63020c6f5c21d814d176ff33849eef8d actor=agent verdict=upheld -->
 
 🏷️ **MISCLASSIFIED** · agent · adjudicator: upheld
 

@@ -14,7 +14,9 @@
 // A run under a token whose login is not CI_ADJUDICATOR_LOGIN posts replies the
 // gate never trusts, so it fails closed: the finding stays counted.
 
-export const ADJUDICATION_MARKER_PREFIX = "<!-- pr-hero-adjudication ";
+import { MARKER_OPEN, matchMarkerPrefix } from "../brand";
+
+export const ADJUDICATION_MARKER_PREFIX = `${MARKER_OPEN}adjudication `;
 
 // The login GitHub stamps on comments posted with the workflow's GITHUB_TOKEN.
 export const CI_ADJUDICATOR_LOGIN = "github-actions[bot]";
@@ -50,11 +52,12 @@ export function adjudicationMarker(marker: AdjudicationMarker): string {
 export function parseAdjudicationMarker(
   body: string,
 ): AdjudicationMarker | null {
-  if (!body.startsWith(ADJUDICATION_MARKER_PREFIX)) return null;
+  const prefix = matchMarkerPrefix(body, ADJUDICATION_MARKER_PREFIX);
+  if (prefix === undefined) return null;
   const firstLine = body.split("\n", 1)[0] ?? "";
   if (!firstLine.endsWith(" -->")) return null;
   const fields = firstLine.slice(
-    ADJUDICATION_MARKER_PREFIX.length,
+    prefix.length,
     firstLine.length - " -->".length,
   );
   const parts = new Map<string, string>();

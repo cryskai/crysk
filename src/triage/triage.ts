@@ -9,6 +9,8 @@
 // this process entirely — this module only defines the wire format both
 // sides agree on.
 //
+import { MARKER_OPEN, matchMarkerPrefix } from "../brand";
+
 // Disjoint from PR_COMMENT_MARKER_PREFIX and PR_FINDING_MARKER_PREFIX on
 // purpose, same reasoning as their own disjointness (pr/preflight.ts): a
 // triage reply lands in the SAME comment stream as the summary and the
@@ -16,7 +18,7 @@
 // a matcher that could confuse any of the three families would misfile a
 // reply as a finding, or a finding as a reply. See the three-way
 // disjointness test in test/triage/triage.test.ts.
-export const TRIAGE_MARKER_PREFIX = "<!-- pr-hero-triage ";
+export const TRIAGE_MARKER_PREFIX = `${MARKER_OPEN}triage `;
 
 // The FOUR tags an author may write (ROADMAP B6b table) — deliberately NOT
 // the `refuter_verdict` schema enum (review/findings.ts), which is sacred under
@@ -187,11 +189,12 @@ export interface ParsedTriageMarker {
 // fresh one. Returns null for anything malformed rather than guessing — a
 // mis-parsed triage becomes a silently wrong verdict in the store.
 export function parseTriageMarker(body: string): ParsedTriageMarker | null {
-  if (!body.startsWith(TRIAGE_MARKER_PREFIX)) return null;
+  const prefix = matchMarkerPrefix(body, TRIAGE_MARKER_PREFIX);
+  if (prefix === undefined) return null;
   const firstLine = body.split("\n", 1)[0] ?? "";
   if (!firstLine.endsWith(" -->")) return null;
   const fields = firstLine.slice(
-    TRIAGE_MARKER_PREFIX.length,
+    prefix.length,
     firstLine.length - " -->".length,
   );
   const parts = new Map<string, string>();

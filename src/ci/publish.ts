@@ -51,6 +51,7 @@
 
 import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { MARKER_OPEN, matchMarkerPrefix } from "../brand";
 import type {
   CliRecord,
   ErrorParams,
@@ -787,10 +788,11 @@ function listComments(
 }
 
 // WHY only the outcome marker counts: an override comment is the audit trail of a
-// human's unlock (S8). Its marker starts `<!-- pr-hero-override`, which does not
+// human's unlock (S8). Its marker starts `<!-- crysk-override` (or the legacy
+// `<!-- pr-hero-override`), which does not
 // start with MARKER_PREFIX, so no cleanup or older-run pass can remove it.
 function isOutcomeComment(row: ListedComment): boolean {
-  return row.firstLine.startsWith(MARKER_PREFIX);
+  return matchMarkerPrefix(row.firstLine, MARKER_PREFIX) !== undefined;
 }
 
 // Deletes each comment. A failed delete is a warning, and the rest still run.
@@ -1141,7 +1143,7 @@ function overrideCommentBody(
   at: Date,
 ): string {
   const when = `${at.toISOString().slice(0, 16).replace("T", " ")} UTC`;
-  const marker = `<!-- pr-hero-override head=${plan.headSha ?? "unknown"} run=${plan.runId} attempt=${plan.runAttempt} -->`;
+  const marker = `${MARKER_OPEN}override head=${plan.headSha ?? "unknown"} run=${plan.runId} attempt=${plan.runAttempt} -->`;
   if (statusSet && plan.headSha !== undefined) {
     return [
       marker,

@@ -65,6 +65,7 @@ import type { CiMode } from "#pr/preflight";
 import type { Finding, FindingsDocument } from "#review/findings";
 import type { PrCommentDelta } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
+import { MARKER_OPEN } from "../brand";
 import { CliUsageError } from "../errors";
 import { envBillsMetered } from "../execution/usage-normalized";
 import { ciForceReviewHintLine } from "./force-comment";
@@ -158,11 +159,10 @@ export interface CiGateSkip {
 // self-closing, field-less tags (unlike the four `<!-- pr-hero-<noun> ` +
 // trailing-space prefixes above): a skip decision has no code to anchor a
 // `head=` declaration to, and no fields to encode — see the module header.
-export const SKIP_SIZE_COMMENT_MARKER = "<!-- pr-hero-skip-size -->";
-export const SKIP_BUDGET_COMMENT_MARKER = "<!-- pr-hero-skip-budget -->";
-export const SKIP_COVERAGE_COMMENT_MARKER = "<!-- pr-hero-skip-coverage -->";
-export const MANUAL_REQUIRED_COMMENT_MARKER =
-  "<!-- pr-hero-manual-required -->";
+export const SKIP_SIZE_COMMENT_MARKER = `${MARKER_OPEN}skip-size -->`;
+export const SKIP_BUDGET_COMMENT_MARKER = `${MARKER_OPEN}skip-budget -->`;
+export const SKIP_COVERAGE_COMMENT_MARKER = `${MARKER_OPEN}skip-coverage -->`;
+export const MANUAL_REQUIRED_COMMENT_MARKER = `${MARKER_OPEN}manual-required -->`;
 
 // Same register as ci/reporter.ts's `skipSizeLines`/`skipBudgetLines` and
 // project rule 4 (assistant posture): a gate skip is a courteous notice

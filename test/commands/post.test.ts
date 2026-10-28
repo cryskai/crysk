@@ -338,7 +338,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
         calls.some(
           (c) =>
             c.argv.join(" ").includes("issues/42/comments") &&
-            c.stdin?.startsWith("<!-- pr-hero-report "),
+            c.stdin?.startsWith("<!-- crysk-report "),
         ),
       ).toBe(true);
       // WARN-2 (verify-report-pr3): post.json is written but was never
@@ -690,7 +690,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
 
   function summaryPatch(calls: RecordedCall[]): string {
     const patches = calls.filter((c) =>
-      c.stdin?.startsWith("<!-- pr-hero-report "),
+      c.stdin?.startsWith("<!-- crysk-report "),
     );
     return patches[patches.length - 1]?.stdin ?? "";
   }
@@ -721,8 +721,8 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       expect(body).not.toContain("resolved (verified)");
       // §3.6: the state block, AFTER the report marker, so the next run has
       // priors with real claims instead of `priorsFromPostedMarkers`' "".
-      expect(body).toContain(`<!-- pr-hero-state v=1 head=${RUN_HEAD} -->`);
-      expect(body.indexOf("<!-- pr-hero-state ")).toBeGreaterThan(0);
+      expect(body).toContain(`<!-- crysk-state v=1 head=${RUN_HEAD} -->`);
+      expect(body.indexOf("<!-- crysk-state ")).toBeGreaterThan(0);
       expect(body).toContain("the prior nobody touched");
       // C7: zero new findings is not a clean bill while priors are live.
       expect(body).not.toContain("found nothing to report");
@@ -1008,7 +1008,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       expect(exitCode).toBe(0);
       const body = summaryPatch(calls);
       expect(body).toContain("1 new · 0 persist");
-      expect(body).not.toContain("<!-- pr-hero-state ");
+      expect(body).not.toContain("<!-- crysk-state ");
     } finally {
       await cleanup();
     }

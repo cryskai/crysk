@@ -65,6 +65,7 @@ import {
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { log } from "#ui/primitives";
 import { parseMarkerHead } from "#watch/preflight";
+import { matchMarkerPrefix } from "../brand";
 import { CliError } from "../errors";
 import {
   buildPostPlan,
@@ -985,7 +986,7 @@ export async function repostMarkedPrComment(input: {
           c.id !== commentId &&
           c.user === author &&
           typeof c.body === "string" &&
-          c.body.startsWith(input.markerPrefix),
+          matchMarkerPrefix(c.body, input.markerPrefix) !== undefined,
       )
       .map((c) => c.id);
   } catch (error) {

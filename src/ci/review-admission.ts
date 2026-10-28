@@ -15,6 +15,12 @@ import type { ParsedStateBlock } from "#rereview/state";
 import type { Tier } from "#review/findings";
 import type { LocalConfig } from "#review/preflight";
 import {
+  findMarker,
+  MARKER_BRAND_PATTERN,
+  MARKER_OPEN,
+  matchMarkerPrefix,
+} from "../brand";
+import {
   type AdmissionRecord,
   countTerminalAttempts,
   PROVABLY_UNSPENT_STATUSES,
@@ -318,9 +324,10 @@ export function priorTierScore(
 // First reviews carry no item-7 `pr-hero-state` block (W-prov), but CI admission
 // still needs true tier counts. A separate marker keeps item-7 semantics intact
 // while giving the gate tier-accurate data on every post.
-export const PR_CI_ADMISSION_PREFIX = "<!-- pr-hero-ci-admission ";
-const CI_ADMISSION_HEADER =
-  /^<!-- pr-hero-ci-admission v=1 head=([0-9a-f]{40}) -->/;
+export const PR_CI_ADMISSION_PREFIX = `${MARKER_OPEN}ci-admission `;
+const CI_ADMISSION_HEADER = new RegExp(
+  `^<!-- ${MARKER_BRAND_PATTERN}-ci-admission v=1 head=([0-9a-f]{40}) -->`,
+);
 const HTML_COMMENT = /<!--([\s\S]*?)-->/;
 
 export interface ParsedCiAdmissionBlock {
@@ -377,8 +384,8 @@ export function renderCiAdmissionBlock(
 export function parseCiAdmissionBlock(
   body: string,
 ): ParsedCiAdmissionBlock | null {
-  const start = body.indexOf(PR_CI_ADMISSION_PREFIX);
-  if (start === -1) return null;
+  const start = findMarker(body, PR_CI_ADMISSION_PREFIX)?.index;
+  if (start === undefined) return null;
   const fromMarker = body.slice(start);
   const headerLine = fromMarker.split("\n", 1)[0] ?? "";
   const header = CI_ADMISSION_HEADER.exec(headerLine);
@@ -431,10 +438,10 @@ function encodeCiAdmissionJson(value: string): string {
 const FINDING_HEADER_TIER = /^\S+\s+(blocking|advisory)\s+·\s+/;
 
 export function parseFindingCommentTier(body: string): Tier | null {
-  if (!body.includes(PR_FINDING_MARKER_PREFIX)) return null;
+  if (findMarker(body, PR_FINDING_MARKER_PREFIX) === undefined) return null;
   let afterMarker = false;
   for (const line of body.split("\n")) {
-    if (line.startsWith(PR_FINDING_MARKER_PREFIX)) {
+    if (matchMarkerPrefix(line, PR_FINDING_MARKER_PREFIX) !== undefined) {
       afterMarker = true;
       continue;
     }

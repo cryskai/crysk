@@ -369,7 +369,10 @@ function isBuiltin(specifier: string): boolean {
   );
 }
 
-function runtimeImportViolations(source: string): string[] {
+function runtimeImportViolations(
+  source: string,
+  allowed: readonly string[] = [],
+): string[] {
   const code = source
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
@@ -380,7 +383,7 @@ function runtimeImportViolations(source: string): string[] {
     const clause = match[2] ?? "";
     const specifier = match[3] ?? "";
     if (/^\s*type\b/.test(clause)) continue;
-    if (!isBuiltin(specifier))
+    if (!isBuiltin(specifier) && !allowed.includes(specifier))
       violations.push(`${match[1]} from "${specifier}"`);
   }
   for (const match of code.matchAll(/\bimport\s*["']([^"']+)["']/g)) {
@@ -1447,10 +1450,20 @@ describe("ownerLead", () => {
 });
 
 describe("builtins-only guard: src/ci/outcome.ts", () => {
-  test("outcome.ts has no runtime import of a repo module", () => {
-    expect(runtimeImportViolations(readFileSync(OUTCOME_SRC, "utf8"))).toEqual(
-      [],
-    );
+  // ../brand is the one exception: it holds the marker names and has no
+  // imports of its own, which the next test pins.
+  test("outcome.ts has no runtime import of a repo module but ../brand", () => {
+    expect(
+      runtimeImportViolations(readFileSync(OUTCOME_SRC, "utf8"), ["../brand"]),
+    ).toEqual([]);
+  });
+
+  test("src/brand.ts has no runtime import at all", () => {
+    expect(
+      runtimeImportViolations(
+        readFileSync(path.join(REPO_ROOT, "src/brand.ts"), "utf8"),
+      ),
+    ).toEqual([]);
   });
 
   test("the guard itself fails on the violations it exists to catch", () => {
@@ -2071,7 +2084,7 @@ describe("parseOutcomeCode", () => {
       "utf8",
     );
     expect(publisherSource).toContain("OUTCOME_MARKER_PREFIX");
-    expect(OUTCOME_MARKER_PREFIX).toBe("<!-- pr-hero-outcome ");
+    expect(OUTCOME_MARKER_PREFIX).toBe("<!-- crysk-outcome ");
   });
 
   test("reads the code from a rendered outcome comment, as the publisher writes it", () => {

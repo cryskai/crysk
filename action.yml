@@ -290,8 +290,8 @@ runs:
     # this step reports.
     #
     # WHY builtins only: it runs before any install, like the trigger. The one
-    # relative import is a builtins-only sibling (src/ci/outcome.ts), which needs
-    # no node_modules.
+    # relative imports are builtins-only modules (src/ci/outcome.ts and
+    # src/brand.ts), which need no node_modules.
     #
     # Once the cli-started marker exists, the CLI's cli.json decides. A reviewed
     # run deletes pr-hero's own older outcome comments, since a completed review

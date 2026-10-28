@@ -294,7 +294,7 @@ describe("postAdjudicationReplies", () => {
     const body = calls[0]?.stdin ?? "";
     expect(
       body.startsWith(
-        `<!-- pr-hero-adjudication verdict=upheld reply=200 head=${HEAD} -->`,
+        `<!-- crysk-adjudication verdict=upheld reply=200 head=${HEAD} -->`,
       ),
     ).toBe(true);
     expect(body).toContain("✅ **CI adjudication: upheld**");

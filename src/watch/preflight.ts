@@ -18,6 +18,7 @@ import {
   type SizeGateConfig,
 } from "#review/size-gate";
 import type { SelfInvocation } from "../assets";
+import { MARKER_BRAND_PATTERN, matchMarkerPrefix } from "../brand";
 import { CliUsageError } from "../errors";
 import { type PrheroLayout, prheroLayout } from "../home-preflight";
 
@@ -529,8 +530,9 @@ export function parsePrFiles(raw: string): NumstatFile[] {
 // covers none, PR stays eligible. That is the fail-safe direction (more
 // review, never a truncated one), and it is what motivates fail-closed
 // (not fail-complete) as THIS reader's answer for a garbage token too.
-const MARKER_HEAD_RE =
-  /^<!-- pr-hero-report head=([0-9a-f]{40})( coverage=partial)? -->/;
+const MARKER_HEAD_RE = new RegExp(
+  `^<!-- ${MARKER_BRAND_PATTERN}-report head=([0-9a-f]{40})( coverage=partial)? -->`,
+);
 
 // NEVER throws: comment bodies are foreign text (bots, humans, pasted
 // reports), and a guard that crashes on someone else's comment takes the
@@ -562,7 +564,9 @@ export function parsePrCommentMarker(
   body: string,
 ): PrCommentMarkerFields | null {
   if (typeof body !== "string") return null;
-  if (!body.startsWith(PR_COMMENT_MARKER_PREFIX)) return null;
+  if (matchMarkerPrefix(body, PR_COMMENT_MARKER_PREFIX) === undefined) {
+    return null;
+  }
   const newlineAt = body.indexOf("\n");
   const firstLine = newlineAt === -1 ? body : body.slice(0, newlineAt);
   const match = MARKER_HEAD_RE.exec(firstLine);
@@ -627,7 +631,7 @@ export function markerCommentSeen(comments: { body: string }[]): boolean {
   return comments.some(
     (comment) =>
       typeof comment?.body === "string" &&
-      comment.body.startsWith(PR_COMMENT_MARKER_PREFIX),
+      matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined,
   );
 }
 

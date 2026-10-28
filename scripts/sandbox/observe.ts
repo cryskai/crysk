@@ -8,6 +8,7 @@
 // decide the path. Second, a path with no positive evidence is no-outcome, not
 // a guess.
 
+import { MARKER_OPEN, matchMarkerPrefix } from "../../src/brand";
 import {
   FINDING_MARKER_PREFIX,
   OUTCOME_MARKER_PREFIX,
@@ -262,9 +263,9 @@ export function outsideDiffBlockingPaths(body: string): string[] {
 }
 
 // D3: the state block a report carries (report.ts writes it after the body): the line
-// after `<!-- pr-hero-state v=1 `, a `<!-- {json} -->` comment. Its findings' first locs
+// after `<!-- crysk-state v=1 ` (or the legacy `<!-- pr-hero-state v=1 `), a `<!-- {json} -->` comment. Its findings' first locs
 // name the paths the PR's state remembers; the line number after the last colon is dropped.
-const STATE_LINE_PREFIX = "<!-- pr-hero-state v=1 ";
+const STATE_LINE_PREFIX = `${MARKER_OPEN}state v=1 `;
 
 // S1: one state row's path and tier. The tier is the row's own `tier` field (blocking,
 // advisory or unrecoverable); a row without one reads with no tier, so a tiered check
@@ -276,7 +277,9 @@ export interface StateRow {
 
 export function stateRowsOf(body: string): StateRow[] | undefined {
   const lines = body.split("\n");
-  const at = lines.findIndex((line) => line.startsWith(STATE_LINE_PREFIX));
+  const at = lines.findIndex(
+    (line) => matchMarkerPrefix(line, STATE_LINE_PREFIX) !== undefined,
+  );
   const json = lines[at + 1];
   if (at === -1 || json === undefined) return undefined;
   if (!json.startsWith("<!-- ") || !json.endsWith(" -->")) return undefined;
@@ -314,14 +317,14 @@ function pathsOf(rows: readonly StateRow[]): string[] {
 
 // T5b: the marker the CI adjudicator writes on its reply to a dismissal. Its verdict is
 // the `verdict=` token on that line; a line without one reads as no verdict.
-const ADJUDICATION_MARKER_PREFIX = "<!-- pr-hero-adjudication ";
+const ADJUDICATION_MARKER_PREFIX = `${MARKER_OPEN}adjudication `;
 
 export function classifyComment(
   body: string,
   source: "issue" | "inline",
 ): CommentFact {
   const first = (body.split("\n", 1)[0] ?? "").trim();
-  if (first.startsWith(REPORT_MARKER_PREFIX)) {
+  if (matchMarkerPrefix(first, REPORT_MARKER_PREFIX) !== undefined) {
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     const outside = outsideDiffBlockingCount(body);
     const outsidePaths = outsideDiffBlockingPaths(body);
@@ -341,7 +344,7 @@ export function classifyComment(
         : { statePaths: pathsOf(stateRows), stateRows }),
     };
   }
-  if (first.startsWith(FINDING_MARKER_PREFIX)) {
+  if (matchMarkerPrefix(first, FINDING_MARKER_PREFIX) !== undefined) {
     // The tier is in the finding's header line (report.ts findingHeaderLine),
     // and it is the only tier evidence a reader of the PR sees. Its marker names
     // the head, so the check can tell this head's finding from an older one.
@@ -359,7 +362,7 @@ export function classifyComment(
         : { path: decodeMarkerPath(anchor[1]), line: Number(anchor[2]) }),
     };
   }
-  if (first.startsWith(OUTCOME_MARKER_PREFIX)) {
+  if (matchMarkerPrefix(first, OUTCOME_MARKER_PREFIX) !== undefined) {
     // The head is "unknown" when the publisher had no sha; such an outcome has no head.
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     const code = outcomeCodeOf(body);
@@ -375,7 +378,7 @@ export function classifyComment(
         : {}),
     };
   }
-  if (first.startsWith(ADJUDICATION_MARKER_PREFIX)) {
+  if (matchMarkerPrefix(first, ADJUDICATION_MARKER_PREFIX) !== undefined) {
     const verdict = /\bverdict=([a-z]+)\b/.exec(first)?.[1];
     return {
       source,
@@ -384,10 +387,10 @@ export function classifyComment(
     };
   }
   for (const [reason, marker] of Object.entries(SKIP_MARKERS)) {
-    if (first === marker)
+    if (matchMarkerPrefix(first, marker) === first)
       return { source, kind: "skip", skip: reason as SkipReason };
   }
-  if (first.startsWith(OVERRIDE_MARKER_PREFIX)) {
+  if (matchMarkerPrefix(first, OVERRIDE_MARKER_PREFIX) !== undefined) {
     // The head names the commit the override unlocked; an override is valid for that head only.
     const head = /\bhead=([0-9a-f]{40})\b/.exec(first)?.[1];
     return head === undefined
