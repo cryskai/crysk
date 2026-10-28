@@ -44,6 +44,7 @@ import {
   type CliErrorClass,
   type CliRecord,
   type HunterFailureRecord,
+  knownFailureCredential,
   knownTransportCause,
   PENDING_AT_FILE,
   parseCliRecord,
@@ -124,6 +125,7 @@ export function hunterFailureRecords(
     readonly provider?: string;
     readonly model?: string;
     readonly detail?: string;
+    readonly credential?: string;
   }[],
 ): HunterFailureRecord[] {
   return failures.map((failure) => {
@@ -136,6 +138,8 @@ export function hunterFailureRecords(
     if (model !== undefined) entry.model = model;
     const detail = safeFailureDetail(failure.detail);
     if (detail !== undefined) entry.detail = detail;
+    const credential = knownFailureCredential(failure.credential);
+    if (credential !== undefined) entry.credential = credential;
     return entry;
   });
 }

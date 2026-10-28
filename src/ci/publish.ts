@@ -405,7 +405,10 @@ function huntersFailedRendering(
         model: sharedValue(failures.map((failure) => failure.model)),
       },
       "action",
-      sharedDetail,
+      {
+        detail: sharedDetail,
+        credential: sharedValue(failures.map((failure) => failure.credential)),
+      },
     );
     if (rendered !== undefined) return rendered;
   }
@@ -413,6 +416,8 @@ function huntersFailedRendering(
     "PRH-HUNTERS-FAILED",
     { ...runParams, step: REVIEW_STEP, detail: sharedDetail ?? HUNTERS_DETAIL },
     "action",
+    // Every hunter was refused for the size of the request: the fix is a smaller review.
+    cause === "context_window_exceeded" ? "context_window_exceeded" : undefined,
   );
 }
 

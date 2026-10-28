@@ -248,6 +248,40 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
     });
   });
 
+  test("the record names the credential a hunter ran on, and drops any other name", () => {
+    const dir = outcomeDir();
+    recordPipelineOutcome(
+      {
+        sessionFailed: true,
+        hunterFailures: [
+          {
+            name: "hunter-a",
+            cause: "auth_invalid",
+            credential: "ANTHROPIC_API_KEY",
+          },
+          {
+            name: "hunter-b",
+            cause: "auth_invalid",
+            credential: "GITHUB_TOKEN" as never,
+          },
+        ],
+      },
+      SHA,
+      { CRYSK_OUTCOME_DIR: dir },
+    );
+    expect(
+      parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
+    ).toEqual({
+      v: 1,
+      outcome: "hunters-failed",
+      head_sha: SHA,
+      hunter_failures: [
+        { cause: "auth_invalid", credential: "ANTHROPIC_API_KEY" },
+        { cause: "auth_invalid" },
+      ],
+    });
+  });
+
   test("a failure with no transport cause is recorded as an entry without one", () => {
     const dir = outcomeDir();
     recordPipelineOutcome(

@@ -450,6 +450,170 @@ describe("decidePublication — the pure table", () => {
       );
     });
 
+    // S4/S6 of odd/tasks/claude-error-map.md: the credential the hunters ran on is named,
+    // and the fix text matches the case instead of "wait or raise the quota".
+    describe("a shared credential or quota cause names the credential and the matching fix", () => {
+      function plan(failures: readonly Record<string, string>[]) {
+        const result = decidePublication({
+          record: record(),
+          cliStarted: true,
+          cliRecord: {
+            v: 1,
+            outcome: "hunters-failed",
+            head_sha: REVIEWED_HEAD,
+            hunter_failures: failures as never,
+          },
+        });
+        if (result.kind !== "remote") throw new Error("expected a remote plan");
+        return result;
+      }
+      const texts = (p: ReturnType<typeof plan>) =>
+        [
+          p.rendered.annotation,
+          p.rendered.summary.join("\n"),
+          p.rendered.what,
+          p.status?.description ?? "",
+          p.commentBody,
+        ].join("\n");
+
+      test.each(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"])(
+        "auth_invalid on %s renders PRH-CRED-REJECTED naming that secret",
+        (credential) => {
+          const entry = {
+            cause: "auth_invalid",
+            provider: "anthropic",
+            credential,
+            detail:
+              "Anthropic API: Invalid API key · Fix external API key (HTTP 401)",
+          };
+          const p = plan([entry, entry]);
+          expect(p.rendered.code).toBe("PRH-CRED-REJECTED");
+          expect(p.rendered.annotation).toContain(credential);
+          expect(p.rendered.annotation).toContain("Provider anthropic");
+          expect(p.status?.description).toStartWith("PRH-CRED-REJECTED: ");
+          expect(texts(p)).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+        },
+      );
+
+      test("auth_invalid with a credential but no known provider keeps the generic code and the detail", () => {
+        const entry = {
+          cause: "auth_invalid",
+          credential: "ANTHROPIC_API_KEY",
+          detail: "Anthropic API: Invalid API key (HTTP 401)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+        expect(p.rendered.annotation).toContain("Invalid API key");
+      });
+
+      test("an empty credit balance on an API key says to add credit or delete the secret", () => {
+        const entry = {
+          cause: "quota_exhausted",
+          provider: "anthropic",
+          credential: "ANTHROPIC_API_KEY",
+          detail: "Anthropic API: Credit balance is too low (HTTP 400)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+        const all = texts(p);
+        expect(all).toContain("Credit balance is too low");
+        expect(all).toContain(
+          "Add credit to the Anthropic account behind ANTHROPIC_API_KEY",
+        );
+        expect(all).toContain("delete the ANTHROPIC_API_KEY secret");
+        expect(all).not.toContain("Wait, or raise the quota");
+        expect(all).not.toContain(
+          "wait for the limit to reset or raise the quota",
+        );
+        expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+      });
+
+      test("a subscription usage limit on OAuth quotes the reset time and offers an API key", () => {
+        const entry = {
+          cause: "quota_exhausted",
+          provider: "anthropic",
+          credential: "CLAUDE_CODE_OAUTH_TOKEN",
+          detail:
+            "Anthropic API: You've hit your 5-hour limit · resets 12:40pm (Asia/Tokyo) (HTTP 429)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+        const all = texts(p);
+        expect(all).toContain(
+          "CLAUDE_CODE_OAUTH_TOKEN reached its usage limit",
+        );
+        expect(all).toContain("resets 12:40pm (Asia/Tokyo)");
+        expect(all).toContain("Re-run after");
+        expect(all).toContain("set ANTHROPIC_API_KEY");
+        expect(all).not.toContain("raise the quota");
+        expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+      });
+
+      test("a quota cause whose credential is unknown keeps the quoted-detail wording", () => {
+        const entry = {
+          cause: "quota_exhausted",
+          provider: "anthropic",
+          detail: "Anthropic API: Credit balance is too low (HTTP 400)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+        expect(texts(p)).toContain("Credit balance is too low");
+      });
+
+      test("hunters that ran on different credentials do not name one", () => {
+        const base = {
+          cause: "auth_invalid",
+          provider: "anthropic",
+          detail: "Anthropic API: Invalid API key (HTTP 401)",
+        };
+        const p = plan([
+          { ...base, credential: "ANTHROPIC_API_KEY" },
+          { ...base, credential: "CLAUDE_CODE_OAUTH_TOKEN" },
+        ]);
+        expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      });
+
+      test("a request too large for the model says to lower the size gate or exclude paths", () => {
+        const entry = {
+          cause: "context_window_exceeded",
+          provider: "anthropic",
+          detail: "Anthropic API: Prompt is too long",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+        const all = texts(p);
+        expect(all).toContain("Prompt is too long");
+        expect(all).toContain("max-changed-lines");
+        expect(all).toContain(".prheroignore");
+        expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+      });
+
+      test("a model the credential cannot reach (404) renders PRH-MODEL-UNAVAILABLE", () => {
+        const entry = {
+          cause: "model_unavailable",
+          provider: "anthropic",
+          model: "claude-nope",
+          detail:
+            "Anthropic API: There's an issue with the selected model (HTTP 404)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+      });
+
+      test("transient causes keep PRH-HUNTERS-FAILED with the provider's words and the re-run fix", () => {
+        for (const cause of ["rate_limit", "network_transient"]) {
+          const entry = {
+            cause,
+            detail: "Anthropic API: Overloaded (HTTP 529)",
+          };
+          const p = plan([entry, entry]);
+          expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+          expect(texts(p)).toContain("Overloaded");
+          expect(p.rendered.annotation).toContain("gh run rerun");
+        }
+      });
+    });
+
     test("every failed hunter with a missing provider record renders PRH-CRED-UNUSABLE, owned by the configuration", () => {
       const plan = decidePublication({
         record: record(),

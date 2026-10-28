@@ -121,7 +121,10 @@ import {
   recordDiversityHunterResult,
 } from "../diversity/pipeline-integration";
 import { writeJsonAtomically } from "../execution/atomic-write";
-import type { TransportFailureCause } from "../execution/contracts";
+import type {
+  FailureCredential,
+  TransportFailureCause,
+} from "../execution/contracts";
 // One predicate, owned beside the appends it recognizes. Already in this
 // module's graph through step-runner's value import of the harness, so it
 // adds no weight (the atomic-write WHY above is about a NEW dependency).
@@ -3527,6 +3530,8 @@ export interface HunterFailure {
   readonly model?: string;
   // The transport's one-line explanation, redacted and capped (see failureDetailOf).
   readonly detail?: string;
+  // The secret the hunter ran on, when its transport named one.
+  readonly credential?: FailureCredential;
 }
 
 // The step's failureDetail as the CLI record may carry it. It is provider text, so it
@@ -3550,6 +3555,9 @@ function hunterFailureOf(
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
     ...(detail === undefined ? {} : { detail }),
+    ...(result?.failureCredential === undefined
+      ? {}
+      : { credential: result.failureCredential }),
   };
 }
 

@@ -2244,6 +2244,23 @@ describe("parseCliRecord — the hunter_failures field", () => {
     }
   });
 
+  test("round-trips the credential a hunter ran on, and refuses any other name", () => {
+    for (const credential of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]) {
+      const value = {
+        ...base,
+        hunter_failures: [{ cause: "auth_invalid", credential }],
+      };
+      expect(parseCliRecord(text(value))).toEqual(value as CliRecord);
+    }
+    for (const bad of ["GITHUB_TOKEN", "", "anthropic_api_key", 3]) {
+      expect(
+        parseCliRecord(
+          text({ ...base, hunter_failures: [{ credential: bad }] }),
+        ),
+      ).toBeUndefined();
+    }
+  });
+
   test("a record with detail AND another unknown key is still refused", () => {
     expect(
       parseCliRecord(

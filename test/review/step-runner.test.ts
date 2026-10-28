@@ -15,6 +15,7 @@ import {
   isTransientSessionFailure,
 } from "../../src/execution/failure-classification";
 import { FORMAT_RETRY_REMINDER } from "../../src/execution/step-artifacts";
+import { CLAUDE_ERROR_ROWS, claudeErrorEnvelope } from "./claude-error-rows";
 
 // ---------------------------------------------------------------------------
 // FakeSpawn: scripted {stdout, stderr, exitCode} per call, records argv/cwd
@@ -663,88 +664,35 @@ describe("ClaudeCodeRunner attempt admission", () => {
   });
 });
 
-// The Anthropic API rejects every request (no credit, bad key) but the CLI still
-// exits 0 with an `is_error` envelope. The step must fail ONCE with the typed
-// cause and the provider's words, not spend a format retry on the error text.
-describe("ClaudeCodeRunner provider API error", () => {
-  function apiErrorEnvelope(result: string, status: number): string {
-    return JSON.stringify({
-      type: "result",
-      subtype: "success",
-      is_error: true,
-      terminal_reason: "api_error",
-      result,
-      api_error_status: status,
-      usage: { input_tokens: 0, output_tokens: 0 },
-      total_cost_usd: 0,
-    });
-  }
-
-  test("an invalid key fails once as auth_invalid and names the provider's message and status", async () => {
-    const { spawnFn, calls } = makeFakeSpawn([
-      {
-        stdout: apiErrorEnvelope("Invalid API key · Fix external API key", 401),
-      },
-    ]);
-    const seen: RetryInfo[] = [];
-    const spec = await makeSpec({ onRetry: (info) => seen.push(info) });
-    const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(spec);
-
-    expect(stepResult.status).toBe("failed");
-    expect(stepResult.attempts).toBe(1);
-    expect(calls).toHaveLength(1);
-    expect(seen).toEqual([]);
-    expect(stepResult.failureCause).toBe("auth_invalid");
-    expect(stepResult.failureDetail).toContain("Invalid API key");
-    expect(stepResult.failureDetail).toContain("401");
-    expect(stepResult.stderrTail).toContain("Invalid API key");
-    expect(stepResult.stderrTail).toContain("401");
-    // The terminal's failed-step line reads this same tail, so it names the cause too.
-    expect(stepFailureReason(stepResult.stderrTail)).toBe(
-      stepResult.failureDetail,
-    );
-  });
-
-  test("an empty credit balance fails once as quota_exhausted", async () => {
-    const { spawnFn, calls } = makeFakeSpawn([
-      {
-        stdout: apiErrorEnvelope(
-          "Credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
-          400,
-        ),
-      },
-    ]);
-    const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(
-      await makeSpec(),
-    );
-
-    expect(stepResult.status).toBe("failed");
-    expect(stepResult.attempts).toBe(1);
-    expect(calls).toHaveLength(1);
-    expect(stepResult.failureCause).toBe("quota_exhausted");
-    expect(stepResult.failureDetail).toContain("Credit balance is too low");
-    expect(stepResult.failureDetail).toContain("400");
-  });
-
-  // The CLI wraps server-side failures in the same envelope. They are the failures the
-  // witness patterns already retried before the envelope was read, so they must still
-  // get their second attempt and not be made terminal.
-  test.each([
-    [500, "Internal server error", "network_transient"],
-    [529, 'API Error: 529 {"error":{"type":"overloaded_error"}}', "rate_limit"],
-  ] as const)(
-    "HTTP %s keeps its retry and ends as %s",
-    async (status, message, cause) => {
+// The Claude CLI reports API and run-level errors in an `is_error` envelope (exit 0 or 1).
+// The step must fail with the typed cause and the CLI's words, and the cause alone decides
+// whether another attempt is spent: a transient cause retries, a terminal one does not,
+// and none of them spends a format retry on the error text.
+describe("ClaudeCodeRunner error map", () => {
+  test.each(CLAUDE_ERROR_ROWS)(
+    "$name -> $cause, $retried retried",
+    async (row) => {
       const { spawnFn, calls } = makeFakeSpawn([
-        { stdout: apiErrorEnvelope(message, status) },
+        { stdout: claudeErrorEnvelope(row), exitCode: row.exitCode },
       ]);
-      const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(
-        await makeSpec(),
-      );
+      const seen: RetryInfo[] = [];
+      const spec = await makeSpec({ onRetry: (info) => seen.push(info) });
+      const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(spec);
+
       expect(stepResult.status).toBe("failed");
-      expect(stepResult.attempts).toBe(2);
-      expect(calls).toHaveLength(2);
-      expect(stepResult.failureCause).toBe(cause);
+      expect(stepResult.failureCause).toBe(row.cause);
+      expect(stepResult.attempts).toBe(row.retried ? 2 : 1);
+      expect(calls).toHaveLength(row.retried ? 2 : 1);
+      expect(seen).toHaveLength(row.retried ? 1 : 0);
+      const detail = stepResult.failureDetail ?? "";
+      expect(detail).toContain(
+        row.message ?? row.subtype ?? row.terminalReason ?? "",
+      );
+      expect(stepResult.stderrTail).toContain(detail);
+      // The terminal's failed-step line reads this same tail, so it names the cause too.
+      expect(stepFailureReason(stepResult.stderrTail)).toMatch(
+        /^(Anthropic API|Claude CLI): /,
+      );
     },
   );
 
@@ -757,5 +705,27 @@ describe("ClaudeCodeRunner provider API error", () => {
     );
     expect(stepResult.status).toBe("ok");
     expect(stepResult.failureDetail).toBeUndefined();
+    expect(stepResult.failureCredential).toBeUndefined();
+  });
+
+  test("the credential of the child env rides the failed step", async () => {
+    const { spawnFn } = makeFakeSpawn([
+      {
+        stdout: claudeErrorEnvelope({
+          name: "401",
+          status: 401,
+          terminalReason: "api_error",
+          message: "Invalid API key",
+          exitCode: 0,
+          cause: "auth_invalid",
+          retried: false,
+        }),
+      },
+    ]);
+    const stepResult = await new ClaudeCodeRunner({
+      spawnFn,
+      childEnv: { ANTHROPIC_API_KEY: "k" },
+    }).run(await makeSpec());
+    expect(stepResult.failureCredential).toBe("ANTHROPIC_API_KEY");
   });
 });

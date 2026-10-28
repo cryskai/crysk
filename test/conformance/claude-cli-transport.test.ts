@@ -12,6 +12,10 @@ import {
 } from "../../src/execution/usage-normalized";
 import type { ClaudeCodeCliTransportOptions } from "../../src/transports/claude-code-cli";
 import { ClaudeCodeCliTransport } from "../../src/transports/claude-code-cli";
+import {
+  CLAUDE_ERROR_ROWS,
+  claudeErrorEnvelope,
+} from "../review/claude-error-rows";
 
 const PID = 424242;
 
@@ -1624,83 +1628,64 @@ describe("ClaudeCodeCliTransport spawn failure (#314)", () => {
   });
 });
 
-// The CLI exits 0 and prints a normal-looking envelope when the Anthropic API
-// rejects the request (invalid key, no credit): `is_error` with
-// `terminal_reason: "api_error"`, and the provider's message in `result`. The
-// message is the CLI's, not the agent's answer, so it must never reach the draft
-// parser, and the typed facts must reach the failure policy.
-describe("ClaudeCodeCliTransport provider API errors", () => {
-  function apiErrorBody(result: string, status: number | undefined): string {
-    return JSON.stringify({
-      type: "result",
-      subtype: "success",
-      is_error: true,
-      terminal_reason: "api_error",
-      result,
-      ...(status === undefined ? {} : { api_error_status: status }),
-      usage: { input_tokens: 0, output_tokens: 0 },
-      total_cost_usd: 0,
-    });
-  }
-
-  async function run(stdoutBody: string) {
-    const fake = makeFakeProc({ stdoutBody, exitCode: 0 });
+// Every error the Claude CLI reports in json mode (odd/tasks/claude-error-map.md, S3):
+// the CLI prints an `is_error` envelope and exits 0 or 1, and the message in `result` is
+// the CLI's, not the agent's answer. It must never reach the draft parser, and the typed
+// cause must come from the table, whatever the exit code.
+describe("ClaudeCodeCliTransport error map", () => {
+  async function run(
+    stdoutBody: string,
+    exitCode: number,
+    env: Record<string, string> = {},
+  ) {
+    const fake = makeFakeProc({ stdoutBody, exitCode });
     const transport = new ClaudeCodeCliTransport({
       ...okPromptFns,
       spawnFn: (() => fake.proc) as unknown as typeof Bun.spawn,
       getPgid: (pid) => pid,
       killFn: () => {},
     });
-    return transport.execute(makeRequest(), {
-      signal: new AbortController().signal,
-    });
+    const base = makeRequest();
+    return transport.execute(
+      { ...base, isolation: { ...base.isolation, env } },
+      { signal: new AbortController().signal },
+    );
   }
 
-  test.each([
-    ["Invalid API key · Fix external API key", 401, "auth_invalid"],
-    ["Forbidden", 403, "auth_invalid"],
-    [
-      "Credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
-      400,
-      "quota_exhausted",
-    ],
-    ["credit BALANCE is too low", undefined, "quota_exhausted"],
-    ["Rate limited", 429, "rate_limit"],
-    [
-      'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}',
-      529,
-      "rate_limit",
-    ],
-    ["Service unavailable", 503, "rate_limit"],
-    ["Internal server error", 500, "network_transient"],
-    [
-      "API Error: Connection closed mid-response",
-      undefined,
-      "network_transient",
-    ],
-    ["overloaded_error: try later", undefined, "rate_limit"],
-    [
-      "messages: text content blocks must be non-empty",
-      400,
-      "provider_configuration_invalid",
-    ],
-  ] as const)(
-    "%s (HTTP %s) fails the attempt with the typed cause %s",
-    async (message, status, cause) => {
-      const outcome = await run(apiErrorBody(message, status));
+  test.each(CLAUDE_ERROR_ROWS)(
+    "$name -> $cause (exit $exitCode)",
+    async (row) => {
+      const outcome = await run(claudeErrorEnvelope(row), row.exitCode);
       expect(outcome.completion).toBe("failed");
-      expect(outcome.failureCause).toBe(cause);
-      // The provider's words are a diagnostic, never the agent's answer.
+      expect(outcome.failureCause).toBe(row.cause);
+      expect(outcome.terminalProof?.exitCode).toBe(row.exitCode);
+      // The CLI's words are a diagnostic, never the agent's answer.
       expect(outcome.finalText).toBe("");
-      const detail = `Anthropic API: ${message}${status === undefined ? "" : ` (HTTP ${status})`}`;
-      expect(outcome.failureDetail).toBe(detail);
+      const detail = outcome.failureDetail ?? "";
+      expect(detail.length).toBeGreaterThan(0);
+      expect(detail.length).toBeLessThanOrEqual(160);
+      expect(detail).toContain(
+        row.message ?? row.subtype ?? row.terminalReason ?? "",
+      );
+      if (row.status !== undefined) {
+        expect(detail).toEndWith(` (HTTP ${row.status})`);
+      }
       expect(outcome.stderrTail).toContain(detail);
     },
   );
 
   test("the detail is one short line with no control characters", async () => {
     const outcome = await run(
-      apiErrorBody(`bad\n\u0007key ${"x".repeat(400)}`, 401),
+      claudeErrorEnvelope({
+        name: "long",
+        status: 401,
+        terminalReason: "api_error",
+        message: `bad\n\u0007key ${"x".repeat(400)}`,
+        exitCode: 0,
+        cause: "auth_invalid",
+        retried: false,
+      }),
+      0,
     );
     const detail = outcome.failureDetail ?? "";
     expect(detail).toStartWith("Anthropic API: bad key ");
@@ -1713,28 +1698,89 @@ describe("ClaudeCodeCliTransport provider API errors", () => {
     ).toBe(false);
   });
 
-  test("is_error without the api_error reason, or a plain success envelope, is unchanged", async () => {
-    const other = await run(
-      JSON.stringify({
-        is_error: true,
-        terminal_reason: "max_turns",
-        result: "partial answer",
+  test("a status wins over the message: a 500 that says overloaded is still a server error", async () => {
+    const outcome = await run(
+      claudeErrorEnvelope({
+        name: "500 overloaded text",
+        status: 500,
+        terminalReason: "api_error",
+        message: "overloaded_error",
+        exitCode: 0,
+        cause: "network_transient",
+        retried: true,
       }),
+      0,
     );
-    expect(other.completion).toBe("success");
-    expect(other.failureCause).toBeUndefined();
-    expect(other.failureDetail).toBeUndefined();
-    expect(other.finalText).toBe("partial answer");
+    expect(outcome.failureCause).toBe("network_transient");
+  });
 
+  test("a plain success, and an is_error the table does not name, are unchanged", async () => {
     const ok = await run(
       JSON.stringify({
         is_error: false,
         terminal_reason: "completed",
         result: "all good",
       }),
+      0,
     );
     expect(ok.completion).toBe("success");
     expect(ok.failureCause).toBeUndefined();
+    expect(ok.failureDetail).toBeUndefined();
     expect(ok.finalText).toBe("all good");
+
+    const unnamed = await run(
+      JSON.stringify({
+        is_error: true,
+        terminal_reason: "stop_hook_prevented",
+        result: "partial answer",
+      }),
+      0,
+    );
+    expect(unnamed.failureCause).toBeUndefined();
+    expect(unnamed.failureDetail).toBeUndefined();
+    expect(unnamed.finalText).toBe("partial answer");
   });
+
+  test("a non-JSON failure keeps no typed cause, so the witness patterns still decide", async () => {
+    const outcome = await run("Not logged in · Please run /login", 1);
+    expect(outcome.completion).toBe("failed");
+    expect(outcome.failureCause).toBeUndefined();
+    expect(
+      new ClaudeCodeCliTransport({ ...okPromptFns }).classifyFailure(outcome),
+    ).toBe("auth_invalid");
+  });
+
+  // S4: the credential the child ran on is the one CI must name. ANTHROPIC_API_KEY wins
+  // over CLAUDE_CODE_OAUTH_TOKEN in the CLI.
+  test.each([
+    [{ ANTHROPIC_API_KEY: "k" }, "ANTHROPIC_API_KEY"],
+    [{ CLAUDE_CODE_OAUTH_TOKEN: "t" }, "CLAUDE_CODE_OAUTH_TOKEN"],
+    [
+      { ANTHROPIC_API_KEY: "k", CLAUDE_CODE_OAUTH_TOKEN: "t" },
+      "ANTHROPIC_API_KEY",
+    ],
+    [
+      { ANTHROPIC_API_KEY: "  ", CLAUDE_CODE_OAUTH_TOKEN: "t" },
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    ],
+    [{}, undefined],
+  ] as const)(
+    "the child env %j names the credential %s",
+    async (env, expected) => {
+      const outcome = await run(
+        claudeErrorEnvelope({
+          name: "401",
+          status: 401,
+          terminalReason: "api_error",
+          message: "Invalid API key",
+          exitCode: 0,
+          cause: "auth_invalid",
+          retried: false,
+        }),
+        0,
+        env,
+      );
+      expect(outcome.failureCredential).toBe(expected);
+    },
+  );
 });

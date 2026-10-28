@@ -690,6 +690,76 @@ describe("format violation records why the draft was rejected", () => {
   });
 });
 
+describe("an attempt the transport failed with a typed cause is not parsed", () => {
+  const typedFailure = (): TransportOutcome => ({
+    completion: "failed",
+    protocolIntegrity: "verified",
+    failureCause: "auth_invalid",
+    failureDetail: "Anthropic API: Invalid API key (HTTP 401)",
+    failureCredential: "ANTHROPIC_API_KEY",
+    finalText: "Invalid API key",
+    usage: USAGE,
+    stderrTail: "",
+  });
+
+  test("the draft parser is not run, and the log names the cause with no parse_error", async () => {
+    const dir = await tempDir();
+    const { transport, requests } = makeScriptedTransport([typedFailure()]);
+    let parsed = 0;
+    const step = await makeStep(dir, {
+      parse: () => {
+        parsed += 1;
+        throw new Error("Unexpected token I in JSON");
+      },
+    });
+    const harness = new StepExecutionHarness({
+      transport,
+      spawnFn: (() => ({}) as unknown) as typeof Bun.spawn,
+      sleep: async () => {},
+    });
+
+    const result = await harness.run(step);
+
+    expect(parsed).toBe(0);
+    expect(result.status).toBe("failed");
+    expect(result.failureCause).toBe("auth_invalid");
+    expect(result.failureDetail).toBe(
+      "Anthropic API: Invalid API key (HTTP 401)",
+    );
+    expect(result.failureCredential).toBe("ANTHROPIC_API_KEY");
+    // auth_invalid is terminal: no second attempt, no format reminder.
+    expect(requests).toHaveLength(1);
+    const log = await Bun.file(
+      path.join(dir, "logs", `${step.name}.1.log`),
+    ).text();
+    expect(log).toContain("cause: auth_invalid");
+    expect(log).not.toContain("parse_error:");
+  });
+
+  test("a failed attempt with no typed cause is still parsed, as before", async () => {
+    const dir = await tempDir();
+    const { transport } = makeScriptedTransport([
+      { ...typedFailure(), failureCause: undefined },
+    ]);
+    let parsed = 0;
+    const step = await makeStep(dir, {
+      maxAttempts: 1,
+      parse: () => {
+        parsed += 1;
+        throw new Error("Unexpected token I in JSON");
+      },
+    });
+    const harness = new StepExecutionHarness({
+      transport,
+      spawnFn: (() => ({}) as unknown) as typeof Bun.spawn,
+      sleep: async () => {},
+    });
+
+    await harness.run(step);
+    expect(parsed).toBeGreaterThan(0);
+  });
+});
+
 describe("a refused draft is retried with the reason, a failed write is not retried", () => {
   test("the format-retry prompt names the rule the previous draft broke", async () => {
     // Martian keycloak 36880: the validator refused unresolved proof refs, and

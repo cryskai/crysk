@@ -1065,6 +1065,7 @@ describe("a pipeline whose hunters all fail with a provider API error", () => {
           resultText: "",
           failureCause: "auth_invalid",
           failureDetail: "Anthropic API: Invalid API key (HTTP 401)",
+          failureCredential: "ANTHROPIC_API_KEY",
         };
       };
       const runner: StepRunner = { run: failingHunter };
@@ -1089,6 +1090,7 @@ describe("a pipeline whose hunters all fail with a provider API error", () => {
         expect(failure.detail).toBe(
           "Anthropic API: Invalid API key (HTTP 401)",
         );
+        expect(failure.credential).toBe("ANTHROPIC_API_KEY");
       }
     } finally {
       await env.cleanup();

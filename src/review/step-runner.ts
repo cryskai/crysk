@@ -12,6 +12,7 @@ import type {
   AuthEvent,
   DenialCode,
   ExecutableAllowlistEntry,
+  FailureCredential,
   ResolvedModelRoute,
   StepAdmissionGate,
   TransportFailureCause,
@@ -110,6 +111,8 @@ export interface StepResult {
   // The final failed attempt's one-line explanation (TransportOutcome.failureDetail),
   // when the transport gave one. Absent on success.
   failureDetail?: string;
+  // The secret the final failed attempt ran on (TransportOutcome.failureCredential).
+  failureCredential?: FailureCredential;
   stderrTail: string;
   resultText: string;
 }
