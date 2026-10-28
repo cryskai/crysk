@@ -1136,8 +1136,9 @@ const NOT_LOGGED_IN = /Not logged in\s*[·.]\s*Please run \/login/i;
 // window) are terminal, and a server-side failure is never made terminal, since the CLI
 // wraps 5xx and 529 in this same envelope.
 //
-// An `is_error` the map does not name (a stop hook, a budget cap) returns undefined and
-// keeps its old reading.
+// An `is_error` the map does not name (a stop hook, a budget cap, a reason a later CLI adds)
+// returns undefined here, and providerApiErrorOf fails it terminally rather than let the
+// error text be parsed as a draft and earn a format retry that hides the cause.
 function claudeCliErrorCause(
   envelope: CliResultEnvelope,
 ): TransportFailureCause | undefined {
@@ -1208,7 +1209,6 @@ function providerApiErrorOf(
 ): ProviderApiError | undefined {
   if (envelope.is_error !== true) return undefined;
   const cause = claudeCliErrorCause(envelope);
-  if (cause === undefined) return undefined;
 
   const status =
     typeof envelope.api_error_status === "number"
@@ -1221,6 +1221,26 @@ function providerApiErrorOf(
   const subtype =
     typeof envelope.subtype === "string" ? envelope.subtype : undefined;
   const message = typeof envelope.result === "string" ? envelope.result : "";
+
+  // An error the map does not name. The CLI said it failed, so the text is not an answer;
+  // the request is not one a retry can fix, so it is terminal, and the reason is quoted
+  // beside the CLI's words so CI shows what happened instead of a generic failure.
+  if (cause === undefined) {
+    const tag =
+      reason ??
+      (subtype !== undefined && subtype !== "success" ? subtype : "unknown");
+    const suffix = ` (${tag}${status === undefined ? "" : `, HTTP ${status}`})`;
+    const prefix = "Claude CLI: ";
+    const words = oneLine(
+      message.trim() === "" ? "no message" : message,
+      API_ERROR_DETAIL_MAX - prefix.length - suffix.length,
+    );
+    return {
+      cause: "provider_configuration_invalid",
+      detail: `${prefix}${words}${suffix}`,
+    };
+  }
+
   // A run-level error has no message of its own; its reason names it.
   const named =
     subtype !== undefined && subtype !== "success" ? subtype : reason;
@@ -1233,6 +1253,12 @@ function providerApiErrorOf(
   // One line, no control characters, and short enough for a commit status.
   const suffix = status === undefined ? "" : ` (HTTP ${status})`;
   const room = API_ERROR_DETAIL_MAX - prefix.length - suffix.length;
+  return { cause, detail: `${prefix}${oneLine(words, room)}${suffix}` };
+}
+
+// The CLI's words as one line: control characters become spaces, whitespace collapses, and
+// the text is cut with an ellipsis to fit `room` characters.
+function oneLine(words: string, room: number): string {
   const flat = Array.from(words, (char) => {
     const code = char.charCodeAt(0);
     return code < 0x20 || code === 0x7f ? " " : char;
@@ -1240,8 +1266,7 @@ function providerApiErrorOf(
     .join("")
     .replace(/\s+/g, " ")
     .trim();
-  const shown = flat.length <= room ? flat : `${flat.slice(0, room - 1)}…`;
-  return { cause, detail: `${prefix}${shown}${suffix}` };
+  return flat.length <= room ? flat : `${flat.slice(0, room - 1)}…`;
 }
 
 // The secret the child ran on. ANTHROPIC_API_KEY wins over CLAUDE_CODE_OAUTH_TOKEN in the

@@ -1714,7 +1714,7 @@ describe("ClaudeCodeCliTransport error map", () => {
     expect(outcome.failureCause).toBe("network_transient");
   });
 
-  test("a plain success, and an is_error the table does not name, are unchanged", async () => {
+  test("a plain success is unchanged", async () => {
     const ok = await run(
       JSON.stringify({
         is_error: false,
@@ -1727,18 +1727,83 @@ describe("ClaudeCodeCliTransport error map", () => {
     expect(ok.failureCause).toBeUndefined();
     expect(ok.failureDetail).toBeUndefined();
     expect(ok.finalText).toBe("all good");
+  });
 
-    const unnamed = await run(
+  // An is_error the table does not name must not fall back to a draft parse and a format
+  // retry, which would hide the cause. It fails terminally and quotes the CLI's words.
+  test.each([
+    ["terminal_reason", "blocking_limit"],
+    ["terminal_reason", "stop_hook_prevented"],
+    ["terminal_reason", "hook_stopped"],
+    ["subtype", "error_max_budget_usd"],
+    ["subtype", "error_max_structured_output_retries"],
+    ["terminal_reason", "image_error"],
+    ["terminal_reason", "rapid_refill_breaker"],
+    ["terminal_reason", "tool_deferred"],
+    ["terminal_reason", "some_reason_a_later_cli_adds"],
+  ] as const)(
+    "an unnamed %s %s fails terminally with the CLI's words",
+    async (field, tag) => {
+      const outcome = await run(
+        JSON.stringify({
+          type: "result",
+          is_error: true,
+          ...(field === "subtype"
+            ? { subtype: tag }
+            : { subtype: "success", terminal_reason: tag }),
+          result: "partial answer\nwith a second line",
+          usage: { input_tokens: 0, output_tokens: 0 },
+        }),
+        1,
+      );
+      expect(outcome.completion).toBe("failed");
+      expect(outcome.failureCause).toBe("provider_configuration_invalid");
+      expect(outcome.failureDetail).toBe(
+        `Claude CLI: partial answer with a second line (${tag})`,
+      );
+      expect(outcome.finalText).toBe("");
+      expect(outcome.stderrTail).toContain(outcome.failureDetail ?? "");
+    },
+  );
+
+  test("an unnamed error with a status and no message quotes both", async () => {
+    const outcome = await run(
       JSON.stringify({
         is_error: true,
-        terminal_reason: "stop_hook_prevented",
-        result: "partial answer",
+        terminal_reason: "blocking_limit",
+        api_error_status: 302,
       }),
       0,
     );
-    expect(unnamed.failureCause).toBeUndefined();
-    expect(unnamed.failureDetail).toBeUndefined();
-    expect(unnamed.finalText).toBe("partial answer");
+    expect(outcome.failureCause).toBe("provider_configuration_invalid");
+    expect(outcome.failureDetail).toBe(
+      "Claude CLI: no message (blocking_limit, HTTP 302)",
+    );
+  });
+
+  test("an unnamed error with neither reason nor subtype is still failed, and the detail stays short", async () => {
+    const outcome = await run(
+      JSON.stringify({ is_error: true, result: "x".repeat(400) }),
+      0,
+    );
+    expect(outcome.completion).toBe("failed");
+    expect(outcome.failureCause).toBe("provider_configuration_invalid");
+    const detail = outcome.failureDetail ?? "";
+    expect(detail).toStartWith("Claude CLI: xxx");
+    expect(detail).toEndWith("… (unknown)");
+    expect(detail.length).toBeLessThanOrEqual(160);
+  });
+
+  test("the max_turns row is kept: is_error with max_turns stays output_limit_exceeded", async () => {
+    const outcome = await run(
+      JSON.stringify({
+        is_error: true,
+        subtype: "error_max_turns",
+        terminal_reason: "max_turns",
+      }),
+      1,
+    );
+    expect(outcome.failureCause).toBe("output_limit_exceeded");
   });
 
   test("a non-JSON failure keeps no typed cause, so the witness patterns still decide", async () => {
