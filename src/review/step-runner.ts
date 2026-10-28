@@ -107,6 +107,9 @@ export interface StepResult {
   // resolved one (a transport cause, never a harness cause). Absent on success,
   // and on a failure with no transport cause. The CLI record names it per hunter.
   failureCause?: TransportFailureCause;
+  // The final failed attempt's one-line explanation (TransportOutcome.failureDetail),
+  // when the transport gave one. Absent on success.
+  failureDetail?: string;
   stderrTail: string;
   resultText: string;
 }

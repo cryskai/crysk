@@ -931,9 +931,11 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
       const wallMs = Math.round(performance.now() - start);
 
       let fullResult = "";
+      let apiError: ProviderApiError | undefined;
       try {
-        const parsed = JSON.parse(stdout) as { result?: string };
+        const parsed = JSON.parse(stdout) as CliResultEnvelope;
         fullResult = parsed.result ?? "";
+        apiError = providerApiErrorOf(parsed);
       } catch {
         // non-json stdout
       }
@@ -965,10 +967,22 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
               ...(escalatedToKill ? { signal: "SIGKILL" } : {}),
             };
 
+      // The CLI exits 0 when the API rejected the request, with the provider's message in
+      // `result`. That message is not the agent's answer: it fails the attempt with its
+      // typed cause, is never handed to the draft parser (which would spend a format retry
+      // on it), and its words go to the attempt's diagnostics.
+      if (apiError !== undefined) {
+        fullResult = "";
+        stderrTail = `${stderrTail}\n[pr-hero] ${apiError.detail}`.slice(-4096);
+      }
+
       const isCancelled = context.signal.aborted;
       const completion: TransportOutcome["completion"] = isCancelled
         ? "cancelled"
-        : exitCode === 0 && fullResult && terminalProof !== undefined
+        : apiError === undefined &&
+            exitCode === 0 &&
+            fullResult &&
+            terminalProof !== undefined
           ? "success"
           : "failed";
 
@@ -988,6 +1002,9 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
               ? "verified"
               : "unverified",
         ...(terminalProof !== undefined ? { terminalProof } : {}),
+        ...(apiError === undefined
+          ? {}
+          : { failureCause: apiError.cause, failureDetail: apiError.detail }),
         finalText: fullResult,
         usage,
         stderrTail,
@@ -1070,6 +1087,83 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
     }
     return undefined;
   }
+}
+
+// The envelope fields the API-error path reads. `result` is the model's answer on a
+// normal run and the CLI's own message on an API error.
+interface CliResultEnvelope {
+  readonly result?: string;
+  readonly is_error?: unknown;
+  readonly terminal_reason?: unknown;
+  readonly api_error_status?: unknown;
+}
+
+interface ProviderApiError {
+  readonly cause: TransportFailureCause;
+  readonly detail: string;
+}
+
+const API_ERROR_DETAIL_PREFIX = "Anthropic API: ";
+const API_ERROR_DETAIL_MAX = 160;
+
+// The CLI's envelope for a request the API refused (invalid key, no credit, rate limit):
+// `is_error` with terminal_reason "api_error". Both must hold, so an `is_error` the CLI
+// raises for another reason (a turn cap) keeps its old reading.
+//
+// The cause comes from the HTTP status, with the credit-balance sentence as a text witness:
+// Anthropic reports an empty balance as a 400, a status it also uses for plain malformed
+// requests. 401 and 403 are the credential. The retryable families keep the cause the
+// witness patterns gave them before this envelope was read (classifyFailure below): 429,
+// 529, 503 and the overloaded/rate-limit error types are rate_limit, and any other 5xx or
+// a dropped connection is network_transient, so an overload is never made terminal. The
+// message is a witness only when the CLI gave no status. Everything else is a request the
+// provider will refuse the same way again, which is what provider_configuration_invalid
+// means (terminal, no format retry).
+function providerApiErrorOf(
+  envelope: CliResultEnvelope,
+): ProviderApiError | undefined {
+  if (envelope.is_error !== true || envelope.terminal_reason !== "api_error") {
+    return undefined;
+  }
+  const status =
+    typeof envelope.api_error_status === "number" &&
+    Number.isInteger(envelope.api_error_status)
+      ? envelope.api_error_status
+      : undefined;
+  const message = typeof envelope.result === "string" ? envelope.result : "";
+  let cause: TransportFailureCause;
+  if (/credit balance/i.test(message)) cause = "quota_exhausted";
+  else if (status === 401 || status === 403) cause = "auth_invalid";
+  else if (
+    status === 429 ||
+    status === 529 ||
+    status === 503 ||
+    /rate_limit_error|overloaded_error/i.test(message)
+  ) {
+    cause = "rate_limit";
+  } else if (
+    (status !== undefined && status >= 500) ||
+    /Connection closed|ECONNRESET|socket hang up|timed out/i.test(message)
+  ) {
+    cause = "network_transient";
+  } else cause = "provider_configuration_invalid";
+
+  // One line, no control characters, and short enough for a commit status.
+  const suffix = status === undefined ? "" : ` (HTTP ${status})`;
+  const room =
+    API_ERROR_DETAIL_MAX - API_ERROR_DETAIL_PREFIX.length - suffix.length;
+  const flat = Array.from(message, (char) => {
+    const code = char.charCodeAt(0);
+    return code < 0x20 || code === 0x7f ? " " : char;
+  })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  const shown = flat.length <= room ? flat : `${flat.slice(0, room - 1)}…`;
+  return {
+    cause,
+    detail: `${API_ERROR_DETAIL_PREFIX}${shown}${suffix}`,
+  };
 }
 
 // The failed outcome execute() returns when spawn throws, and its exact

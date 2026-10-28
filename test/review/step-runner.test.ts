@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { stepFailureReason } from "#review/pipeline";
 import {
   buildStepArgv,
   ClaudeCodeRunner,
@@ -659,5 +660,102 @@ describe("ClaudeCodeRunner attempt admission", () => {
     expect(result.status).toBe("ok");
     expect(acquired).toEqual([1]);
     expect(released).toBe(1);
+  });
+});
+
+// The Anthropic API rejects every request (no credit, bad key) but the CLI still
+// exits 0 with an `is_error` envelope. The step must fail ONCE with the typed
+// cause and the provider's words, not spend a format retry on the error text.
+describe("ClaudeCodeRunner provider API error", () => {
+  function apiErrorEnvelope(result: string, status: number): string {
+    return JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      terminal_reason: "api_error",
+      result,
+      api_error_status: status,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+  }
+
+  test("an invalid key fails once as auth_invalid and names the provider's message and status", async () => {
+    const { spawnFn, calls } = makeFakeSpawn([
+      {
+        stdout: apiErrorEnvelope("Invalid API key · Fix external API key", 401),
+      },
+    ]);
+    const seen: RetryInfo[] = [];
+    const spec = await makeSpec({ onRetry: (info) => seen.push(info) });
+    const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(spec);
+
+    expect(stepResult.status).toBe("failed");
+    expect(stepResult.attempts).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(seen).toEqual([]);
+    expect(stepResult.failureCause).toBe("auth_invalid");
+    expect(stepResult.failureDetail).toContain("Invalid API key");
+    expect(stepResult.failureDetail).toContain("401");
+    expect(stepResult.stderrTail).toContain("Invalid API key");
+    expect(stepResult.stderrTail).toContain("401");
+    // The terminal's failed-step line reads this same tail, so it names the cause too.
+    expect(stepFailureReason(stepResult.stderrTail)).toBe(
+      stepResult.failureDetail,
+    );
+  });
+
+  test("an empty credit balance fails once as quota_exhausted", async () => {
+    const { spawnFn, calls } = makeFakeSpawn([
+      {
+        stdout: apiErrorEnvelope(
+          "Credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+          400,
+        ),
+      },
+    ]);
+    const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(
+      await makeSpec(),
+    );
+
+    expect(stepResult.status).toBe("failed");
+    expect(stepResult.attempts).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(stepResult.failureCause).toBe("quota_exhausted");
+    expect(stepResult.failureDetail).toContain("Credit balance is too low");
+    expect(stepResult.failureDetail).toContain("400");
+  });
+
+  // The CLI wraps server-side failures in the same envelope. They are the failures the
+  // witness patterns already retried before the envelope was read, so they must still
+  // get their second attempt and not be made terminal.
+  test.each([
+    [500, "Internal server error", "network_transient"],
+    [529, 'API Error: 529 {"error":{"type":"overloaded_error"}}', "rate_limit"],
+  ] as const)(
+    "HTTP %s keeps its retry and ends as %s",
+    async (status, message, cause) => {
+      const { spawnFn, calls } = makeFakeSpawn([
+        { stdout: apiErrorEnvelope(message, status) },
+      ]);
+      const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(
+        await makeSpec(),
+      );
+      expect(stepResult.status).toBe("failed");
+      expect(stepResult.attempts).toBe(2);
+      expect(calls).toHaveLength(2);
+      expect(stepResult.failureCause).toBe(cause);
+    },
+  );
+
+  test("a normal success carries no failure detail", async () => {
+    const { spawnFn } = makeFakeSpawn([
+      { stdout: envelope(JSON.stringify(GOOD_DRAFT)) },
+    ]);
+    const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(
+      await makeSpec(),
+    );
+    expect(stepResult.status).toBe("ok");
+    expect(stepResult.failureDetail).toBeUndefined();
   });
 });

@@ -3525,6 +3525,15 @@ export interface HunterFailure {
   readonly cause?: TransportFailureCause;
   readonly provider?: string;
   readonly model?: string;
+  // The transport's one-line explanation, redacted and capped (see failureDetailOf).
+  readonly detail?: string;
+}
+
+// The step's failureDetail as the CLI record may carry it. It is provider text, so it
+// goes through the same redaction as every other copy of a step's stderr, and the cap
+// is the stepFailureReason one, so a detail never outgrows what the record accepts.
+function failureDetailOf(raw: string | undefined): string | undefined {
+  return raw === undefined ? undefined : stepFailureReason(raw);
 }
 
 function hunterFailureOf(
@@ -3534,11 +3543,13 @@ function hunterFailureOf(
   const cause = result?.failureCause;
   const provider = spec.route?.provider.trim();
   const model = spec.route?.modelSnapshot.trim();
+  const detail = failureDetailOf(result?.failureDetail);
   return {
     name: spec.name,
     ...(cause === undefined ? {} : { cause }),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
+    ...(detail === undefined ? {} : { detail }),
   };
 }
 

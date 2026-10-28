@@ -154,6 +154,11 @@ export interface TransportOutcome {
   // consults it before the witness classifier, so a fact the stderr witness could only
   // spell keeps its own cause instead of the runtime's generic one.
   readonly failureCause?: TransportFailureCause;
+  // One short line saying WHY the attempt failed, in the provider's own words, when the
+  // transport holds them as a fact (the Claude CLI's API-error envelope). It travels to
+  // the CLI record so the PR can name the real cause; the harness copies it from the final
+  // attempt's outcome. Absent on a success and when the transport has nothing to say.
+  readonly failureDetail?: string;
   readonly completion: "success" | "failed" | "cancelled";
   readonly protocolIntegrity:
     | "verified"

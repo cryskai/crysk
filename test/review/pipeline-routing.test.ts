@@ -1039,3 +1039,59 @@ describe("a pipeline whose hunters all fail with a missing provider record", () 
     }
   });
 });
+
+describe("a pipeline whose hunters all fail with a provider API error", () => {
+  // The transport's one-line explanation rides the step result to the hunter failure,
+  // so the CLI record can carry the provider's own words to the publisher.
+  test("reports each failed hunter's detail beside its cause", async () => {
+    const env = await setupTestEnvironment();
+    try {
+      const failingHunter = async (spec: StepSpec): Promise<StepResult> => {
+        if (!spec.name.startsWith("hunter-")) {
+          throw new Error(`unscripted step ${spec.name}`);
+        }
+        return {
+          name: spec.name,
+          status: "failed",
+          usage: {
+            tokens_in: 0,
+            tokens_out: 0,
+            tokens_total: 0,
+            wall_ms: 1,
+            cost_usd_est: 0,
+          },
+          attempts: 1,
+          stderrTail: "",
+          resultText: "",
+          failureCause: "auth_invalid",
+          failureDetail: "Anthropic API: Invalid API key (HTTP 401)",
+        };
+      };
+      const runner: StepRunner = { run: failingHunter };
+      const registry = new DefaultTransportRegistry();
+      registry.register("opencode", createCapableOpenCodeTransport());
+
+      const result = await runPipeline(
+        { ...env.input, routePlan: openCodeRoutePlan() },
+        {
+          runner,
+          transportRegistry: registry,
+          admissionEvidence: new Map<RunnerBackend, D1_11ReadinessEvidence>([
+            ["opencode", READY_OPENCODE_EVIDENCE],
+          ]),
+        },
+      );
+
+      expect(result.sessionFailed).toBe(true);
+      expect(result.hunterFailures?.length).toBeGreaterThan(0);
+      for (const failure of result.hunterFailures ?? []) {
+        expect(failure.cause).toBe("auth_invalid");
+        expect(failure.detail).toBe(
+          "Anthropic API: Invalid API key (HTTP 401)",
+        );
+      }
+    } finally {
+      await env.cleanup();
+    }
+  });
+});

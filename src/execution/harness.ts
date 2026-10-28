@@ -1875,6 +1875,9 @@ export class StepExecutionHarness implements StepRunner {
       ...(lastFailureCause === undefined
         ? {}
         : { failureCause: lastFailureCause }),
+      ...(lastOutcome?.failureDetail === undefined
+        ? {}
+        : { failureDetail: lastOutcome.failureDetail }),
       stderrTail: lastOutcome?.stderrTail ?? "",
       resultText: lastOutcome?.finalText.slice(-8192) ?? "",
     };

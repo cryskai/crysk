@@ -1623,3 +1623,118 @@ describe("ClaudeCodeCliTransport spawn failure (#314)", () => {
     expect(transport.classifyFailure(outcome)).toBeUndefined();
   });
 });
+
+// The CLI exits 0 and prints a normal-looking envelope when the Anthropic API
+// rejects the request (invalid key, no credit): `is_error` with
+// `terminal_reason: "api_error"`, and the provider's message in `result`. The
+// message is the CLI's, not the agent's answer, so it must never reach the draft
+// parser, and the typed facts must reach the failure policy.
+describe("ClaudeCodeCliTransport provider API errors", () => {
+  function apiErrorBody(result: string, status: number | undefined): string {
+    return JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      terminal_reason: "api_error",
+      result,
+      ...(status === undefined ? {} : { api_error_status: status }),
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+  }
+
+  async function run(stdoutBody: string) {
+    const fake = makeFakeProc({ stdoutBody, exitCode: 0 });
+    const transport = new ClaudeCodeCliTransport({
+      ...okPromptFns,
+      spawnFn: (() => fake.proc) as unknown as typeof Bun.spawn,
+      getPgid: (pid) => pid,
+      killFn: () => {},
+    });
+    return transport.execute(makeRequest(), {
+      signal: new AbortController().signal,
+    });
+  }
+
+  test.each([
+    ["Invalid API key · Fix external API key", 401, "auth_invalid"],
+    ["Forbidden", 403, "auth_invalid"],
+    [
+      "Credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+      400,
+      "quota_exhausted",
+    ],
+    ["credit BALANCE is too low", undefined, "quota_exhausted"],
+    ["Rate limited", 429, "rate_limit"],
+    [
+      'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}',
+      529,
+      "rate_limit",
+    ],
+    ["Service unavailable", 503, "rate_limit"],
+    ["Internal server error", 500, "network_transient"],
+    [
+      "API Error: Connection closed mid-response",
+      undefined,
+      "network_transient",
+    ],
+    ["overloaded_error: try later", undefined, "rate_limit"],
+    [
+      "messages: text content blocks must be non-empty",
+      400,
+      "provider_configuration_invalid",
+    ],
+  ] as const)(
+    "%s (HTTP %s) fails the attempt with the typed cause %s",
+    async (message, status, cause) => {
+      const outcome = await run(apiErrorBody(message, status));
+      expect(outcome.completion).toBe("failed");
+      expect(outcome.failureCause).toBe(cause);
+      // The provider's words are a diagnostic, never the agent's answer.
+      expect(outcome.finalText).toBe("");
+      const detail = `Anthropic API: ${message}${status === undefined ? "" : ` (HTTP ${status})`}`;
+      expect(outcome.failureDetail).toBe(detail);
+      expect(outcome.stderrTail).toContain(detail);
+    },
+  );
+
+  test("the detail is one short line with no control characters", async () => {
+    const outcome = await run(
+      apiErrorBody(`bad\n\u0007key ${"x".repeat(400)}`, 401),
+    );
+    const detail = outcome.failureDetail ?? "";
+    expect(detail).toStartWith("Anthropic API: bad key ");
+    expect(detail.length).toBeLessThanOrEqual(160);
+    expect(
+      Array.from(detail).some((char) => {
+        const code = char.charCodeAt(0);
+        return code < 0x20 || code === 0x7f;
+      }),
+    ).toBe(false);
+  });
+
+  test("is_error without the api_error reason, or a plain success envelope, is unchanged", async () => {
+    const other = await run(
+      JSON.stringify({
+        is_error: true,
+        terminal_reason: "max_turns",
+        result: "partial answer",
+      }),
+    );
+    expect(other.completion).toBe("success");
+    expect(other.failureCause).toBeUndefined();
+    expect(other.failureDetail).toBeUndefined();
+    expect(other.finalText).toBe("partial answer");
+
+    const ok = await run(
+      JSON.stringify({
+        is_error: false,
+        terminal_reason: "completed",
+        result: "all good",
+      }),
+    );
+    expect(ok.completion).toBe("success");
+    expect(ok.failureCause).toBeUndefined();
+    expect(ok.finalText).toBe("all good");
+  });
+});
