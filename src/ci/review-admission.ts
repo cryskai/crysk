@@ -17,6 +17,7 @@ import type { LocalConfig } from "#review/preflight";
 import {
   findMarker,
   isCommand,
+  legacyCommand,
   MARKER_BRAND_PATTERN,
   MARKER_OPEN,
   matchMarkerPrefix,
@@ -31,7 +32,7 @@ import {
   type DeltaRiskAssessment,
   deltaRiskTriggersReview,
 } from "./review-risk";
-import { parseReviewCommand, STOP_COMMAND } from "./trigger";
+import { parseReviewCommand, REVIEW_COMMAND, STOP_COMMAND } from "./trigger";
 
 export const CI_REVIEW_POLICY_SCHEMA_VERSION = 1;
 export const DEFAULT_CI_REVIEW_POLICY_MODE = "risk_aware" as const;
@@ -794,7 +795,9 @@ export function ciReviewSkipDetail(
     case "low-risk-delta":
       return `${counts}; delta touches only low-risk paths (docs, tests, fixtures)`;
     case "stopped":
-      return `a maintainer posted ${STOP_COMMAND}; /crysk review reviews this head`;
+      // A status description has little room, so it names the one spelling
+      // every workflow accepts during the rename.
+      return `a maintainer stopped automatic reviews; ${legacyCommand(REVIEW_COMMAND)} reviews this head`;
   }
 }
 

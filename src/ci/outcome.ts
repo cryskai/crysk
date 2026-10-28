@@ -21,7 +21,7 @@
 // src/ci/trigger.ts. That copy is private there, so it cannot be imported
 // without widening trigger.ts; the drift test compares the two source texts.
 
-import { MARKER_OPEN, matchMarkerPrefix } from "../brand";
+import { commandHint, MARKER_OPEN, matchMarkerPrefix } from "../brand";
 import type { TransportFailureCause } from "../execution/contracts";
 import type { CredentialProjectionFailureClass } from "../security/credential-broker";
 
@@ -1091,6 +1091,10 @@ const ENGINE_DEFECT_ISSUE =
   'gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"';
 const RERUN_FAILED = "$ gh run rerun {runId} --failed";
 const REVIEW_AGAIN = '$ gh pr comment {pr} --body "/crysk review"';
+// A workflow set up before the rename filters only `/pr-hero`, and the
+// floating action tag still delivers this text to it.
+const LEGACY_REVIEW_NOTE =
+  "On a workflow set up before the rename, comment `/pr-hero review` instead.";
 const OPENCODE_STORE =
   "$ gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json";
 const CRED_STORE_WHY =
@@ -1302,6 +1306,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         OPENCODE_STORE,
         "Then ask for a new review:",
         REVIEW_AGAIN,
+        LEGACY_REVIEW_NOTE,
       ],
       "replace the credential in {secret} with a new one, then run `gh secret set {secret}`",
     ),
@@ -1565,8 +1570,12 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "rate limit or quota reached",
     variants: single(
       "the provider has throttled this account or key, so an immediate retry would fail the same way",
-      ["Wait, or raise the quota, then ask for a new review:", REVIEW_AGAIN],
-      "wait for the limit to reset or raise the quota, then comment /crysk review on the PR",
+      [
+        "Wait, or raise the quota, then ask for a new review:",
+        REVIEW_AGAIN,
+        LEGACY_REVIEW_NOTE,
+      ],
+      `wait for the limit to reset or raise the quota, then comment ${commandHint("/crysk review", "")} on the PR`,
     ),
   },
   "PRH-PROVIDER-UNAVAILABLE": {
@@ -1585,7 +1594,12 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "the request was refused",
     variants: single(
       PROVIDER_REFUSED_WHY,
-      ["Ask for a new review once:", REVIEW_AGAIN, "If it repeats, report it."],
+      [
+        "Ask for a new review once:",
+        REVIEW_AGAIN,
+        LEGACY_REVIEW_NOTE,
+        "If it repeats, report it.",
+      ],
       "ask for a new review once, and report it if the provider refuses again",
     ),
   },
@@ -1639,8 +1653,12 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "The review was cancelled or superseded by a newer push",
     variants: single(
       "a newer run replaces this one, so this result would describe an outdated head",
-      ["Ask for a review of the current head:", REVIEW_AGAIN],
-      'ask for a review of the current head with `gh pr comment {pr} --body "/crysk review"`',
+      [
+        "Ask for a review of the current head:",
+        REVIEW_AGAIN,
+        LEGACY_REVIEW_NOTE,
+      ],
+      'ask for a review of the current head with `gh pr comment {pr} --body "/crysk review"` (or "/pr-hero review" on a workflow set up before the rename)',
     ),
   },
 };

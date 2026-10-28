@@ -1649,7 +1649,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
   }
 
   const STOP_REASON =
-    "a maintainer posted /crysk stop; /crysk review reviews this head";
+    "a maintainer stopped automatic reviews; /pr-hero review reviews this head";
 
   test("without a stop, this head runs (the baseline every case below changes)", async () => {
     const result = await runGate([priorSummary], []);

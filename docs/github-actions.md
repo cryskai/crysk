@@ -1091,6 +1091,8 @@ Then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
 ### PRH-ROUTING-MISSING
 
 **Owner:** your configuration
@@ -1437,6 +1439,8 @@ Wait, or raise the quota, then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
 ### PRH-PROVIDER-UNAVAILABLE
 
 **Owner:** provider
@@ -1468,6 +1472,8 @@ Ask for a new review once:
 ```bash
 gh pr comment {pr} --body "/crysk review"
 ```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 If it repeats, report it.
 
@@ -1566,6 +1572,8 @@ Ask for a review of the current head:
 ```bash
 gh pr comment {pr} --body "/crysk review"
 ```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 ## Troubleshooting
 

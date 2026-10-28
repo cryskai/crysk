@@ -2319,7 +2319,7 @@ describe("runPublish — the override (S8)", () => {
     expect(body).toContain("@maintainer");
     expect(body).toContain("2026-10-17 12:34 UTC");
     expect(body).toContain(
-      "A new push or a later `/crysk review` on this head replaces it",
+      "A new push or a later `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) on this head replaces it",
     );
     expect(run.stdout).toContain("::notice title=pr-hero::");
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
@@ -2528,10 +2528,15 @@ describe("publish.ts runs before `bun install`", () => {
     }
   });
 
-  test("it imports only builtins, plus the builtins-only ./outcome, ./override and ../brand", () => {
+  test("it imports only builtins, plus the builtins-only ./outcome, ./override, ./trigger and ../brand", () => {
     const source = readFileSync(MODULE_PATH, "utf8");
     expect(
-      runtimeImportViolations(source, ["./outcome", "./override", "../brand"]),
+      runtimeImportViolations(source, [
+        "./outcome",
+        "./override",
+        "./trigger",
+        "../brand",
+      ]),
     ).toEqual([]);
   });
 

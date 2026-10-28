@@ -1166,7 +1166,7 @@ describe("renderCode and renderError: the annotation", () => {
     const expected: Array<[string, string]> = [
       [
         renderCode("PRH-PROVIDER-LIMITED", FULL, "action").annotation,
-        "wait for the limit to reset or raise the quota, then comment /crysk review on the PR",
+        "wait for the limit to reset or raise the quota, then comment /crysk review (or /pr-hero review on a workflow set up before the rename) on the PR",
       ],
       [
         renderCode("PRH-TOKEN-PERMISSION", FULL, "action").annotation,

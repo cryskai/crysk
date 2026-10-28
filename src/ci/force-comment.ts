@@ -11,6 +11,7 @@
 // fallback rather than leaving those repos with an instruction that silently
 // fails.
 
+import { commandHint } from "../brand";
 import { REVIEW_COMMAND, REVIEW_FULL_COMMAND } from "./trigger";
 
 // The trigger's own commands, so a hint can never name a spelling the action
@@ -29,8 +30,8 @@ export function ciForceReviewDispatch(prNumber: number): string {
 
 export function ciForceReviewHintLine(prNumber: number): string {
   return (
-    `Comment \`${CI_REVIEW_COMMENT}\` on this pull request to run it on ` +
-    `GitHub Actions anyway (\`${CI_REVIEW_FULL_COMMENT}\` re-discovers the ` +
+    `Comment ${commandHint(CI_REVIEW_COMMENT)} on this pull request to run it ` +
+    `on GitHub Actions anyway (\`${CI_REVIEW_FULL_COMMENT}\` re-discovers the ` +
     "whole range). On a workflow scaffolded before comment triggers, run " +
     `\`${ciForceReviewDispatch(prNumber)}\` instead, or re-scaffold with ` +
     "`pr-hero ci init --force`."

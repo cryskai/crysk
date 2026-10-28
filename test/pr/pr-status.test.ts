@@ -1057,7 +1057,7 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
     );
     expect(status.next_action).toBe("review");
     expect(status.reason).toBe(
-      "The last review of this head was partial (some reviewers failed); run /crysk review, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
+      "The last review of this head was partial (some reviewers failed); run /crysk review (or /pr-hero review on a workflow set up before the rename), which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
     );
   });
 
@@ -1077,7 +1077,7 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
     );
     expect(status.next_action).toBe("override-or-fix");
     expect(status.reason).toBe(
-      "The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /crysk override.",
+      "The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /crysk override (or /pr-hero override on a workflow set up before the rename).",
     );
   });
 
@@ -1119,7 +1119,7 @@ describe("buildPrStatus: a partial review of this head is run again", () => {
     );
     expect(status.next_action).toBe("review");
     expect(status.reason).toBe(
-      "The last review of this head was partial (some reviewers failed); run /crysk review.",
+      "The last review of this head was partial (some reviewers failed); run /crysk review (or /pr-hero review on a workflow set up before the rename).",
     );
   });
 
@@ -1697,7 +1697,7 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
     expect(status.unresolved_blocking).toBe(1);
     expect(status.next_action).toBe("fix");
     expect(status.reason).toBe(
-      "1 live blocking finding(s) (R001) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /crysk override.",
+      "1 live blocking finding(s) (R001) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /crysk override (or /pr-hero override on a workflow set up before the rename).",
     );
   });
 

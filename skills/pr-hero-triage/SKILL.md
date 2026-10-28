@@ -124,6 +124,21 @@ Suspect a flawed integration or architecture when **either** of these signals ap
 - If `/crysk stop` was posted to pause automatic reviews while refactoring, remember that `/crysk stop` is persistent. Once the clean redesign is implemented and pushed, comment `/crysk review` on the PR to lift the stop and ensure CI reviews the new architecture.
 - Step back, identify the single root architectural or integration decision that caused the cluster of findings, and stop to report the diagnosis to the user (with the concrete alternative design or clean refactor plan) before continuing.
 
+## Which command spelling to post
+
+This skill names the commands as `/crysk review`, `/crysk recheck` and `/crysk override`. A
+workflow set up before the rename to Crysk listens only for `/pr-hero review`, `/pr-hero recheck`
+and `/pr-hero override`, and ignores `/crysk` comments. Comment triggers run the workflow on the
+default branch, so check that file once per PR before posting any command:
+
+```bash
+gh api "repos/{owner}/{repo}/contents/.github/workflows/pr-hero.yml" --jq .content | base64 -d | grep -q "'/crysk review'"
+```
+
+Exit 0 means the workflow accepts `/crysk`: post the `/crysk` form. Otherwise post the same
+command with `/pr-hero` in place of `/crysk`. If the workflow lives under another file name,
+read that file instead.
+
 ## The loop, end to end
 
 **Run this as a continuous autonomous loop (`while next_action !== "done"`).** Never end your turn or stop to ask the human for permission between `triage`, fixing code, `git push`, `recheck`, `review`, and waiting for CI to finish. Stop only when `next_action === "done"` or one of the hard escalation stops below triggers (repeated gate/runner failure, 6 forced runs on one head, 2 consecutive `inconclusive` heads, a suspected flawed design (### C), or `override-or-fix` with nothing left you can fix).

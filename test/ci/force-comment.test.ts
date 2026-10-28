@@ -83,7 +83,9 @@ describe("skip comments name the review comment, then the legacy dispatch", () =
       },
     });
     const comment = plan.comment;
-    expect(comment).toContain("Comment `/crysk review` on this pull request");
+    expect(comment).toContain(
+      "Comment `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) on this pull request",
+    );
     expect(comment).toContain("`/crysk review --full`");
     expect(comment).toContain("`pr-hero ci init --force`");
     expect(comment.indexOf("`/crysk review`")).toBeLessThan(

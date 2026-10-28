@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  commandHint,
   findMarker,
   isCommand,
+  legacyCommand,
   MARKER_BRAND_PATTERN,
   matchMarkerPrefix,
   readBrandEnv,
@@ -158,6 +160,23 @@ describe("PR commands accept both names", () => {
   test("a command that is not written in the new form is a bug", () => {
     expect(() => isCommand("/pr-hero review", "/pr-hero review")).toThrow(
       "not a crysk command",
+    );
+  });
+});
+
+describe("command hints name a spelling every workflow accepts", () => {
+  test("legacyCommand is the /pr-hero form", () => {
+    expect(legacyCommand("/crysk review --full")).toBe(
+      "/pr-hero review --full",
+    );
+  });
+
+  test("commandHint names both forms, quoted or plain", () => {
+    expect(commandHint("/crysk recheck")).toBe(
+      "`/crysk recheck` (or `/pr-hero recheck` on a workflow set up before the rename)",
+    );
+    expect(commandHint("/crysk recheck", "")).toBe(
+      "/crysk recheck (or /pr-hero recheck on a workflow set up before the rename)",
     );
   });
 });

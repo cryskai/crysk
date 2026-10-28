@@ -105,3 +105,21 @@ export function startsWithCommand(text: string, command: string): boolean {
   const trimmed = text.trim();
   return commandForms(command).some((form) => trimmed.startsWith(form));
 }
+
+// The legacy spelling of a command. Every workflow accepts it during the
+// rename, including one set up before it, which filters only `/pr-hero`, so it
+// is the one to name where there is room for a single spelling.
+export function legacyCommand(command: string): string {
+  return commandForms(command)[1] as string;
+}
+
+// Both spellings for a hint a person or an agent will act on. A workflow set
+// up before the rename ignores `/crysk`, and floating action tags deliver the
+// new hints to it, so a hint naming only `/crysk` would send the reader to a
+// command that starts nothing.
+export function commandHint(command: string, quote = "`"): string {
+  return (
+    `${quote}${command}${quote} (or ${quote}${legacyCommand(command)}${quote} ` +
+    "on a workflow set up before the rename)"
+  );
+}

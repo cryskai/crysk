@@ -629,7 +629,7 @@ async function stoppedByMaintainer(
       log(
         formatWorkflowCommand(
           "warning",
-          `Could not read the permission of ${command.user}, who posted /crysk stop, so the stop does not count and the review runs.`,
+          `Could not read the permission of ${command.user}, who posted a stop command, so the stop does not count and the review runs.`,
         ),
       );
       continue;
