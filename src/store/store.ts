@@ -58,6 +58,19 @@ export function openProductStore(dbPath: string): Database {
   return db;
 }
 
+// `generated_at` on conflict: a live re-run into the same run dir (an explicit
+// --out) is a new run, so its timestamp moves with its cost and head. Only the
+// historical backfill keeps the stored one, because it re-derives the time
+// from artifacts and must not rewrite when a run happened.
+function runUpsertSql(keepGeneratedAt: boolean): string {
+  return RUN_UPSERT_SQL.replace(
+    "generated_at = runs.generated_at",
+    keepGeneratedAt
+      ? "generated_at = runs.generated_at"
+      : "generated_at = excluded.generated_at",
+  );
+}
+
 const RUN_UPSERT_SQL = `
   INSERT INTO runs (
     repo_id, run_dir, pr, checkout_path, head_sha, base_sha, diff_from_sha,
@@ -155,10 +168,13 @@ function runParams(row: CanonicalRunRow): SQLQueryBindings[] {
 export function saveRunTransaction(
   db: Database,
   projected: ProjectedCompleteRun,
+  options: { keepGeneratedAt?: boolean } = {},
 ): number {
   let runId = 0;
   db.transaction(() => {
-    db.query(RUN_UPSERT_SQL).run(...runParams(projected.run));
+    db.query(runUpsertSql(options.keepGeneratedAt === true)).run(
+      ...runParams(projected.run),
+    );
     const runRow = db
       .query("SELECT id FROM runs WHERE repo_id = ? AND run_dir = ?")
       .get(projected.run.repo_id, projected.run.run_dir) as { id: number };

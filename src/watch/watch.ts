@@ -290,7 +290,18 @@ export async function gatherRepoFacts(
       persist: false,
     });
     const runsRoot = repoHome.paths.runs;
-    const runDirs = await scanRunDirs(runsRoot);
+    // One unreadable run dir must not stop the other repos. The repo whose
+    // reviewed-local set cannot be read is left out of this tick entirely, so
+    // nothing is launched for it (a misread would re-review and re-bill); the
+    // error is logged every tick until the operator fixes that run dir.
+    let runDirs: Awaited<ReturnType<typeof scanRunDirs>>;
+    try {
+      runDirs = await scanRunDirs(runsRoot);
+    } catch (error) {
+      if (!(error instanceof CliError)) throw error;
+      log(`watch: skipping ${entry.path} this tick: ${error.message}`);
+      continue;
+    }
     const prs = parsePrList(await io.ghPrList(repoRoot));
 
     // The remote guard costs one gh call per PR, so it only runs for
@@ -474,7 +485,9 @@ export async function scanRunDirs(runsRoot: string): Promise<{
         const doc = validateFindingsDocument(
           JSON.parse(await Bun.file(findingsPath).text()),
         );
-        if (doc.pr > 0 && doc.sessionFailed !== true) {
+        // An absent sessionFailed means "unknown" (findings.ts), so only a run
+        // KNOWN to have completed arms the latch: an unknown one is retried.
+        if (doc.pr > 0 && doc.sessionFailed === false) {
           localReviews.push({ pr: doc.pr, head: doc.head_sha });
         }
       } catch (error) {

@@ -365,7 +365,33 @@ describe("saveRunTransaction and round-trip fidelity", () => {
     }
   });
 
-  test("re-saving with no diffFromSha keeps diff_from_sha, greptile_found and generated_at", async () => {
+  // A live re-run into the same run dir (an explicit --out) is a new run: its
+  // timestamp must move with its cost and head, or `usage` pairs them wrong.
+  test("a live re-save refreshes generated_at", async () => {
+    const dbPath = await tmpDbPath();
+    const db = openProductStore(dbPath);
+    try {
+      const save = (generatedAt: string) =>
+        saveRunTransaction(
+          db,
+          projectCompleteRun({
+            doc: sampleDoc(),
+            perAgent: SAMPLE_PER_AGENT,
+            repoId: REPO_ID,
+            runDir: RUN_DIR,
+            checkoutPath: "/Users/juanma/Desktop/pr-hero",
+            generatedAt,
+          }),
+        );
+      const id = save("2026-08-23T18:00:00.000Z");
+      save("2026-08-23T18:05:00.000Z");
+      expect(getRunById(db, id)?.generated_at).toBe("2026-08-23T18:05:00.000Z");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("a backfill re-save (keepGeneratedAt) keeps diff_from_sha, greptile_found and generated_at", async () => {
     const dbPath = await tmpDbPath();
     const db = openProductStore(dbPath);
     try {
@@ -394,6 +420,7 @@ describe("saveRunTransaction and round-trip fidelity", () => {
           checkoutPath: "/Users/juanma/Desktop/pr-hero",
           generatedAt: "2026-08-23T18:05:00.000Z",
         }),
+        { keepGeneratedAt: true },
       );
 
       const row = getRunById(db, id);

@@ -63,13 +63,21 @@ async function runDir(name: string, findings?: unknown): Promise<string> {
 
 describe("scanRunDirs — reviewed-local set comes from findings.json", () => {
   test("a run dir with only findings.json (pr > 0) counts as reviewed", async () => {
-    await runDir("pr-1971-run", findingsDoc());
+    await runDir("pr-1971-run", findingsDoc({ sessionFailed: false }));
     const { localReviews } = await scanRunDirs(root);
     expect(localReviews).toEqual([{ pr: 1971, head: HEAD }]);
   });
 
   test("a session-failed run (sessionFailed: true) does not count as reviewed", async () => {
     await runDir("pr-1971-failed", findingsDoc({ sessionFailed: true }));
+    const { localReviews } = await scanRunDirs(root);
+    expect(localReviews).toEqual([]);
+  });
+
+  // findings.ts: an absent sessionFailed MUST mean "unknown", never "false".
+  // Only a run known to have completed arms the reviewed-local latch.
+  test("a run with sessionFailed absent (unknown) does not count as reviewed", async () => {
+    await runDir("pr-1971-unknown", findingsDoc());
     const { localReviews } = await scanRunDirs(root);
     expect(localReviews).toEqual([]);
   });

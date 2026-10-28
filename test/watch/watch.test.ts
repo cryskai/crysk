@@ -37,7 +37,7 @@
 // pipeline, never hand-rolled.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DEFAULT_SIZE_GATE, sizeGateConfig } from "#review/size-gate";
@@ -55,6 +55,7 @@ import {
   type WatchedRepoFacts,
   type WatchIo,
 } from "#watch/watch";
+import { resolveRepoHome } from "../../src/home";
 import { parseIgnoreFile } from "../../src/ignore-file";
 import { readLocalIgnoreRules } from "../../src/ignore-read";
 
@@ -820,5 +821,55 @@ describe("runTick source-text pin — the selector is fed the WHOLE eligible que
     expect(source.slice(selectorIndex, capLogIndex)).toContain(
       "selection.capReached",
     );
+  });
+});
+
+// A bad findings.json in one repo used to abort the whole tick, so every other
+// watched repo went unscanned until someone deleted that run dir by hand. The
+// bad repo is now left out of the tick (nothing launched for it, so no
+// re-bill) and the rest are scanned.
+describe("gatherRepoFacts — one unreadable run dir does not stop the other repos", () => {
+  test("the repo with a malformed findings.json is skipped, the next repo is still scanned", async () => {
+    const bad = await tmpGitRepo();
+    const good = await tmpGitRepo();
+    const home = await mkdtemp(path.join(tmpdir(), "pr-hero-watch-home-"));
+    try {
+      // Distinct origins, so each repo gets its own runs root.
+      Bun.spawnSync([
+        "git",
+        "-C",
+        good.dir,
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/acme/gadgets.git",
+      ]);
+      const badHome = await resolveRepoHome({
+        home,
+        operatorRoot: bad.dir,
+        persist: false,
+      });
+      const runDir = path.join(badHome.paths.runs, "pr-7-broken");
+      await mkdir(runDir, { recursive: true });
+      await writeFile(path.join(runDir, "findings.json"), "{ not json");
+      const io: WatchIo = {
+        git: shellGit,
+        ghPrList: async () => ghPrListJson([]),
+        ghPrFiles: async () => ghPrFilesJson([]),
+        readIgnoreFile: readLocalIgnoreRules,
+      };
+      const config = watchConfig(bad.dir);
+      config.repos.push(...watchConfig(good.dir).repos);
+
+      const facts = await gatherRepoFacts(config, home, io);
+
+      expect(facts.map((repo) => repo.path)).toEqual([
+        await realpath(good.dir),
+      ]);
+    } finally {
+      await bad.cleanup();
+      await good.cleanup();
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });
