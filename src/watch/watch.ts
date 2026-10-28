@@ -68,6 +68,10 @@ import {
   readLocalIgnoreRules,
 } from "../ignore-read";
 import {
+  LEGACY_WATCH_LAUNCHD_LABEL,
+  retireLegacyAgent,
+} from "../legacy-launchd";
+import {
   countAttempts,
   countLaunchedToday,
   decideTick,
@@ -1053,6 +1057,12 @@ async function watchInstall(intervalMin: number): Promise<number> {
         : "previous plist present but not loaded (fine, replacing it)",
     );
   }
+  await retireLegacyAgent({
+    home: os.homedir(),
+    legacyLabel: LEGACY_WATCH_LAUNCHD_LABEL,
+    run,
+    log,
+  });
   await Bun.write(paths.plistPath, plist);
   const loaded = await run(["launchctl", "load", "-w", paths.plistPath]);
   if (!loaded.ok) {
@@ -1082,6 +1092,12 @@ async function watchUninstall(): Promise<number> {
     );
   }
   const paths = prheroHomePaths(os.homedir());
+  await retireLegacyAgent({
+    home: os.homedir(),
+    legacyLabel: LEGACY_WATCH_LAUNCHD_LABEL,
+    run,
+    log,
+  });
   if (!existsSync(paths.plistPath)) {
     log(`nothing installed (no ${paths.plistPath})`);
     return 0;

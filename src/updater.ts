@@ -16,6 +16,7 @@ import {
   syncSkills,
 } from "./agent-env";
 import { type AssetMode, resolveEngineAssets, selfInvocation } from "./assets";
+import { LEGACY_HOME_DIR_NAME, resolveHomeDir } from "./brand-paths";
 import { loadGlobalConfigLayer } from "./config/config";
 import { runDoctor } from "./doctor";
 import { prheroLayout } from "./home-preflight";
@@ -54,16 +55,26 @@ export function detectInstallMethod(
     options.isDev !== undefined
       ? options.isDev
       : version === "dev" ||
-        (exists("./src/cli.ts") && !execPath.includes(".prhero/bin"));
+        (exists("./src/cli.ts") &&
+          !execPath.includes(".crysk/bin") &&
+          !execPath.includes(".prhero/bin"));
 
   if (isSource) {
     return { kind: "source" };
   }
 
-  const standaloneBinDir = path.join(home, ".prhero", "bin");
+  // Either home name: a binary installed before the rename lives under
+  // ~/.prhero/bin even when a ~/.crysk now exists beside it.
+  const standaloneBinDirs = [
+    path.join(resolveHomeDir(home, exists), "bin"),
+    path.join(home, LEGACY_HOME_DIR_NAME, "bin"),
+  ];
   if (
-    execPath.startsWith(standaloneBinDir) ||
-    path.resolve(execPath).startsWith(path.resolve(standaloneBinDir))
+    standaloneBinDirs.some(
+      (dir) =>
+        execPath.startsWith(dir) ||
+        path.resolve(execPath).startsWith(path.resolve(dir)),
+    )
   ) {
     return { kind: "standalone", binaryPath: execPath };
   }

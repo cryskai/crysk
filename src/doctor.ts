@@ -26,6 +26,16 @@ import {
   resolveEngineAssets,
   selfInvocation,
 } from "./assets";
+import {
+  HOME_DIR_NAME,
+  IGNORE_FILE_NAME,
+  LEGACY_HOME_DIR_NAME,
+  LEGACY_IGNORE_FILE_NAME,
+  LEGACY_REPO_DIR_NAME,
+  REPO_DIR_NAME,
+  resolveHomeDir,
+  resolveRepoDir,
+} from "./brand-paths";
 import type { ExactBindingCapabilityReport } from "./execution/contracts";
 import {
   type CheckSystemToolsOptions,
@@ -171,6 +181,72 @@ export function openCodeRoutingSdkCheck(input: {
   };
 }
 
+// The pr-hero → Crysk rename never moves a user's files. While an old path is
+// still the one being read, say so and print the exact command; when both
+// exist, the new one wins and the old one is silently dead weight, so say that.
+function migrationChecks(input: {
+  home: string;
+  repoDir: string | undefined;
+  exists: (p: string) => boolean;
+}): DoctorCheckItem[] {
+  const { home, repoDir, exists } = input;
+  const out: DoctorCheckItem[] = [];
+  const pair = (
+    name: string,
+    parent: string,
+    fresh: string,
+    legacy: string,
+    label: (n: string) => string,
+    move: string,
+  ) => {
+    const hasNew = exists(path.join(parent, fresh));
+    const hasOld = exists(path.join(parent, legacy));
+    if (!hasOld) return;
+    out.push(
+      hasNew
+        ? {
+            name,
+            severity: "degraded",
+            message: `${label(legacy)} is ignored because ${label(fresh)} exists`,
+            hint: `Merge anything you still need into ${label(fresh)}, then delete ${label(legacy)}.`,
+          }
+        : {
+            name,
+            severity: "degraded",
+            message: `${label(legacy)} is the legacy name; still read for now, but ${label(fresh)} is the current one`,
+            hint: move,
+          },
+    );
+  };
+  pair(
+    "migrate:home",
+    home,
+    HOME_DIR_NAME,
+    LEGACY_HOME_DIR_NAME,
+    (n) => `~/${n}`,
+    `Run: mv ~/${LEGACY_HOME_DIR_NAME} ~/${HOME_DIR_NAME}`,
+  );
+  if (repoDir !== undefined) {
+    pair(
+      "migrate:repo",
+      repoDir,
+      REPO_DIR_NAME,
+      LEGACY_REPO_DIR_NAME,
+      (n) => `${n}/`,
+      `Run: git mv ${LEGACY_REPO_DIR_NAME} ${REPO_DIR_NAME}`,
+    );
+    pair(
+      "migrate:ignore",
+      repoDir,
+      IGNORE_FILE_NAME,
+      LEGACY_IGNORE_FILE_NAME,
+      (n) => n,
+      `Run: git mv ${LEGACY_IGNORE_FILE_NAME} ${IGNORE_FILE_NAME}`,
+    );
+  }
+  return out;
+}
+
 export function evaluateDoctorReport(checks: DoctorCheckItem[]): DoctorReport {
   let overall: DoctorSeverity = "healthy";
   if (checks.some((c) => c.severity === "blocking")) {
@@ -203,6 +279,11 @@ export async function runDoctor(
     });
 
   const repoDir = options.repoRoot ?? options.cwd;
+  // The directory the engine actually reads (.crysk/, or a legacy .prhero/), so
+  // every message names a file that exists.
+  const repoDirName = repoDir
+    ? path.basename(resolveRepoDir(repoDir, exists))
+    : REPO_DIR_NAME;
 
   const checks: DoctorCheckItem[] = [];
 
@@ -306,9 +387,12 @@ export async function runDoctor(
 
   // 2. Config layer / agents_dir check
   const repoConfigPath = repoDir
-    ? path.join(repoDir, ".prhero", "config.json")
+    ? path.join(resolveRepoDir(repoDir, exists), "config.json")
     : undefined;
-  const globalConfigPath = path.join(home, ".prhero", "config.json");
+  const globalConfigPath = path.join(
+    resolveHomeDir(home, exists),
+    "config.json",
+  );
 
   let parsedAgentsDir: string | undefined;
   if (repoConfigPath && exists(repoConfigPath)) {
@@ -349,7 +433,7 @@ export async function runDoctor(
         name: "agents_dir",
         severity: "blocking",
         message: `Configured agents_dir not found: ${parsedAgentsDir}`,
-        hint: `Delete "agents_dir" from .prhero/config.json to fall through to the bundled default prompt set.`,
+        hint: `Delete "agents_dir" from ${repoDirName}/config.json to fall through to the bundled default prompt set.`,
       });
     } else {
       checks.push({
@@ -405,7 +489,7 @@ export async function runDoctor(
         message: `Bundled prompt set is incomplete: cannot read ${unreadable.join(", ")}`,
         hint:
           "This build cannot review anything. Reinstall the engine with " +
-          "'pr-hero upgrade', or set \"agents_dir\" in .prhero/config.json to " +
+          "'pr-hero upgrade', or set \"agents_dir\" in .crysk/config.json to " +
           "a checked-out prompt set.",
       });
     } else {
@@ -421,7 +505,7 @@ export async function runDoctor(
 
   // 3. Gotchas check (only when repo root is supplied or discovered)
   if (repoDir) {
-    const gotchasPath = resolveGotchasPath(undefined, repoDir);
+    const gotchasPath = resolveGotchasPath(undefined, repoDir, exists);
     const gotchasContent = exists(gotchasPath)
       ? readFile(gotchasPath)
       : undefined;
@@ -434,8 +518,7 @@ export async function runDoctor(
       checks.push({
         name: "gotchas",
         severity: "blocking",
-        message:
-          "Repository gotchas file (.prhero/gotchas.md) is still the untouched scaffold",
+        message: `Repository gotchas file (${repoDirName}/gotchas.md) is still the untouched scaffold`,
         hint:
           `Replace the placeholder lines with real repository invariants, and delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` ` +
           "marker line at the top if it is still there — pr-hero refuses to review the scaffold.",
@@ -444,36 +527,37 @@ export async function runDoctor(
       checks.push({
         name: "gotchas",
         severity: "blocking",
-        message:
-          "Repository gotchas file (.prhero/gotchas.md) is empty or missing",
-        hint: "Create and populate .prhero/gotchas.md with repository-specific invariants and failure traps.",
+        message: `Repository gotchas file (${repoDirName}/gotchas.md) is empty or missing`,
+        hint: `Create and populate ${repoDirName}/gotchas.md with repository-specific invariants and failure traps.`,
       });
     } else {
       checks.push({
         name: "gotchas",
         severity: "healthy",
-        message: "Repository gotchas present (.prhero/gotchas.md)",
+        message: `Repository gotchas present (${repoDirName}/gotchas.md)`,
       });
     }
   }
 
-  // 4. Setup state check (~/.prhero/setup.json)
-  const setupJsonPath = path.join(home, ".prhero", "setup.json");
+  // 4. Setup state check (<home dir>/setup.json)
+  const setupJsonPath = path.join(resolveHomeDir(home, exists), "setup.json");
+  const homeDirName = path.basename(path.dirname(setupJsonPath));
   if (!exists(setupJsonPath)) {
     checks.push({
       name: "setup",
       severity: "degraded",
-      message:
-        "Global setup state not initialized (~/.prhero/setup.json absent)",
+      message: `Global setup state not initialized (~/${homeDirName}/setup.json absent)`,
       hint: "Run 'pr-hero init' or complete onboarding to initialize.",
     });
   } else {
     checks.push({
       name: "setup",
       severity: "healthy",
-      message: "Global setup state verified (~/.prhero/setup.json)",
+      message: `Global setup state verified (~/${homeDirName}/setup.json)`,
     });
   }
+
+  checks.push(...migrationChecks({ home, repoDir, exists }));
 
   // 5. Agent Environments (S3)
   const envs = await detectAgentEnvironments({

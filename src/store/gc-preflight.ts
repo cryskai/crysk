@@ -105,7 +105,7 @@ export function worktreeRemoveArgs(worktreePath: string): string[] {
 // the exact plist; loading it is store/gc.ts's job. Separate label and log from
 // the watcher: this agent runs `pr-hero gc` (no reviews, no watch.json).
 
-export const GC_LAUNCHD_LABEL = "io.prhero.gc";
+export const GC_LAUNCHD_LABEL = "io.crysk.gc";
 
 export function gcPlistPath(home: string): string {
   return path.join(

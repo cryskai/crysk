@@ -41,6 +41,16 @@ describe("updater (lifecycle foundations)", () => {
       }
     });
 
+    test("detects a standalone binary in ~/.crysk/bin", () => {
+      const bin = path.join(home, ".crysk", "bin", "pr-hero");
+      const method = detectInstallMethod({
+        execPath: bin,
+        home,
+        version: "1.0.0",
+      });
+      expect(method).toEqual({ kind: "standalone", binaryPath: bin });
+    });
+
     test("detects source checkout when version is dev or running from source repo", () => {
       const method = detectInstallMethod({
         execPath: "/usr/local/bin/bun",

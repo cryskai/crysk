@@ -1169,7 +1169,7 @@ export function parseLockPid(raw: string): number | null {
 // The launchd agent (macOS). Rendering is pure string-out so a test can pin
 // the exact plist; loading it is the shell's job.
 
-export const WATCH_LAUNCHD_LABEL = "io.prhero.watch";
+export const WATCH_LAUNCHD_LABEL = "io.crysk.watch";
 
 export interface WatchPlistInput {
   // The engine's OWN invocation (assets.ts's selfInvocation()), never a fixed
