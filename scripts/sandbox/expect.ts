@@ -3,6 +3,7 @@
 // is pinned by a fixture and the report can print each one. The S7 invariants
 // are not checks here: the runner applies them to every observation itself.
 
+import { canonicalStatusText } from "../../src/brand";
 import { RUN_STEP_NAME } from "./markers";
 import {
   COMMENT_RUN_CLOCK_SKEW_MS,
@@ -133,10 +134,13 @@ export function describeCheck(check: Check): string {
   }
 }
 
-// The N the gate writes into its own description: `pr-hero: N blocking finding(s) …`
-// (blockingCommitStatusRequest). Undefined when the description carries no count.
+// The N the gate writes into its own description: `crysk: N blocking finding(s) …`
+// (blockingCommitStatusRequest). A run of an older ref writes `pr-hero: …`, so the lead is
+// read in its new spelling first. Undefined when the description carries no count.
 function gateBlockingCount(description: string): number | undefined {
-  const match = /^pr-hero: (\d+) blocking finding\(s\)/.exec(description);
+  const match = /^crysk: (\d+) blocking finding\(s\)/.exec(
+    canonicalStatusText(description),
+  );
   return match === null ? undefined : Number(match[1]);
 }
 
@@ -149,7 +153,7 @@ function headReports(obs: Observation): number {
 // The partial-review verdict's text, finished or carried. Spelled out here because the sandbox
 // harness does not import the engine.
 const PARTIAL_REVIEW =
-  /^pr-hero: review partial \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$|^pr-hero: review partial again \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\) — fix the failing route or \/pr-hero override$/;
+  /^crysk: review partial \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$|^crysk: review partial again \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\) — fix the failing route or \/pr-hero override$/;
 
 // S3: this observation's head carries a blocking finding comment anchored at `path`. The
 // same blocking test the status-matches-findings check reads (the finding header's tier),
@@ -278,7 +282,9 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       if (status === undefined) return pass(false, "no status on the head");
       const prefixOk =
         check.descriptionStartsWith === undefined ||
-        status.description.startsWith(check.descriptionStartsWith);
+        canonicalStatusText(status.description).startsWith(
+          check.descriptionStartsWith,
+        );
       return pass(
         status.state === check.state && prefixOk,
         `got ${status.state}: ${status.description}`,
@@ -329,7 +335,7 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       // It counts nothing because nothing blocks, so it agrees with no visible blocking finding.
       if (
         status.state === "failure" &&
-        PARTIAL_REVIEW.test(status.description ?? "")
+        PARTIAL_REVIEW.test(canonicalStatusText(status.description ?? ""))
       ) {
         return verdict(
           true,

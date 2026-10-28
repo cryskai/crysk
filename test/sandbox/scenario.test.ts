@@ -938,7 +938,7 @@ describe("run: the S4 gate verdicts against the fake repository", () => {
     ).toBe(true);
     expect(
       h.logs.some((l) =>
-        /PASS {2}size-skip: \[1\] status is failure, description starts with pr-hero skipped the review/.test(
+        /PASS {2}size-skip: \[1\] status is failure, description starts with crysk skipped the review/.test(
           l,
         ),
       ),
@@ -959,7 +959,7 @@ describe("run: the S4 gate verdicts against the fake repository", () => {
     ).toBe(true);
     expect(
       h.logs.some((l) =>
-        /PASS {2}override: \[2\] status is success, description starts with pr-hero: overridden by @/.test(
+        /PASS {2}override: \[2\] status is success, description starts with crysk: overridden by @/.test(
           l,
         ),
       ),

@@ -145,15 +145,26 @@ async function tmpLockPath(): Promise<string> {
 // twice by default before giving up and throwing), which is exactly the
 // gh-failure shape tryPublishCommitStatus's own try/catch is supposed to
 // swallow.
+//
+// Every status is written on two names, crysk and the legacy pr-hero (postCommitStatus).
+// `calls` holds the logical writes (the crysk side, with every call that is not a status
+// POST), so a test counts and reads one write per status; the legacy twin of each lands in
+// `legacyCalls`, where legacyTwinsMatch checks it carries the same fields.
 function makeStatusSpawn(options?: { fail?: boolean; onCall?: () => void }): {
   spawnFn: typeof Bun.spawn;
   calls: string[][];
+  legacyCalls: string[][];
 } {
   const calls: string[][] = [];
+  const legacyCalls: string[][] = [];
   const encoder = new TextEncoder();
   const spawnFn = ((argv: string[]) => {
-    calls.push(argv);
-    options?.onCall?.();
+    if (isLegacyPost(argv)) {
+      legacyCalls.push(argv);
+    } else {
+      calls.push(argv);
+      options?.onCall?.();
+    }
     const ok = options?.fail !== true;
     const stream = (text: string) =>
       new ReadableStream<Uint8Array>({
@@ -169,7 +180,31 @@ function makeStatusSpawn(options?: { fail?: boolean; onCall?: () => void }): {
       kill() {},
     };
   }) as unknown as typeof Bun.spawn;
-  return { spawnFn, calls };
+  return { spawnFn, calls, legacyCalls };
+}
+
+// A status POST on the legacy `pr-hero` name (or `pr-hero/local`): the twin of a crysk write.
+function isLegacyPost(argv: string[]): boolean {
+  return argv.some((arg) => /^context=pr-hero(\/local)?$/.test(arg));
+}
+
+// Whether the legacy writes are exactly the crysk writes, field for field but the context
+// (`crysk` against `pr-hero`, `crysk/local` against `pr-hero/local`), in the same order.
+function legacyTwinsMatch(calls: string[][], legacyCalls: string[][]): boolean {
+  const posts = calls.filter(
+    (argv) => parseStatusFlags(argv).state !== undefined,
+  );
+  if (posts.length !== legacyCalls.length) return false;
+  return posts.every((argv, i) => {
+    const crysk = parseStatusFlags(argv);
+    const legacy = parseStatusFlags(legacyCalls[i] as string[]);
+    return (
+      legacy.context === crysk.context?.replace(/^crysk/, "pr-hero") &&
+      legacy.state === crysk.state &&
+      legacy.description === crysk.description &&
+      legacy.target_url === crysk.target_url
+    );
+  });
 }
 
 // The commit-status request is sent as repeated `-f key=value` gh args;
@@ -319,7 +354,7 @@ describe("settleCommitStatusAndLedger — a partial review is red in gate mode (
     }) as unknown as PipelineResult;
 
   const PARTIAL_DESCRIPTION =
-    "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
+    "crysk: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
 
   test.each([
     [
@@ -339,7 +374,7 @@ describe("settleCommitStatusAndLedger — a partial review is red in gate mode (
       {
         state: "failure",
         description:
-          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
       },
     ],
     [
@@ -393,7 +428,7 @@ describe("settleCommitStatusAndLedger — a partial review is red in gate mode (
 
 describe("settleCommitStatusAndLedger — gate mode (S4)", () => {
   const BLOCKING_DESCRIPTION =
-    "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override";
+    "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override";
 
   test.each([
     [
@@ -807,7 +842,7 @@ describe("S7: only an explicit --ci run writes the pr-hero context", () => {
     const flags = parseStatusFlags(calls[0] as string[]);
     expect(flags.state).toBe("failure");
     expect(flags.description).toBe(
-      "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override",
+      "crysk: 1 blocking finding(s) — fix and push, or /pr-hero override",
     );
   });
 
@@ -958,7 +993,7 @@ describe("settleCommitStatusAndLedger — the unsettled final status", () => {
       {
         state: "failure",
         description:
-          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
       },
     ],
   ] as const)(
@@ -1021,7 +1056,7 @@ describe("settleCommitStatusAndLedger — the unsettled final status", () => {
       {
         state: "failure",
         description:
-          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+          "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
       },
     ],
   ] as const)(
@@ -1323,7 +1358,10 @@ describe("settleCommitStatusAndLedger — an override posted during this run", (
   });
   // The statuses of a gate run: the POSTs are the only calls that carry a `state=` flag.
   const postCount = (calls: string[][]) =>
-    calls.filter((argv) => parseStatusFlags(argv).state !== undefined).length;
+    calls.filter(
+      (argv) =>
+        parseStatusFlags(argv).state !== undefined && !isLegacyPost(argv),
+    ).length;
 
   afterEach(() => {
     releaseCommitStatusLock();
@@ -1628,7 +1666,10 @@ describe("settleCommitStatusAndLedger — the override read is strict and logged
     context: COMMIT_STATUS_CONTEXT,
   };
   const postCount = (calls: string[][]) =>
-    calls.filter((argv) => parseStatusFlags(argv).state !== undefined).length;
+    calls.filter(
+      (argv) =>
+        parseStatusFlags(argv).state !== undefined && !isLegacyPost(argv),
+    ).length;
   const overrideRow = (createdMs: number) =>
     `${JSON.stringify({
       state: "success",
@@ -1733,7 +1774,10 @@ describe("settleCommitStatusAndLedger — one retry of the override read", () =>
     description: OVERRIDE,
   });
   const postCount = (calls: string[][]) =>
-    calls.filter((argv) => parseStatusFlags(argv).state !== undefined).length;
+    calls.filter(
+      (argv) =>
+        parseStatusFlags(argv).state !== undefined && !isLegacyPost(argv),
+    ).length;
 
   afterEach(() => {
     releaseCommitStatusLock();
@@ -1847,11 +1891,11 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
     context: COMMIT_STATUS_CONTEXT,
   };
   const PARTIAL_1_OF_4 =
-    "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
+    "crysk: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
   const PARTIAL_1_OF_4_CARRIED =
     "pr-hero: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /pr-hero review retries it";
   const REPEAT_1_OF_4 =
-    "pr-hero: review partial again (1 of 4 hunters failed, set 938084) — fix the failing route or /pr-hero override";
+    "crysk: review partial again (1 of 4 hunters failed, set 938084) — fix the failing route or /pr-hero override";
   const partialResult = (failures: number, total = 4) =>
     ({
       sessionFailed: false,
@@ -2022,7 +2066,7 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
 
   test("the repeat text of three-digit counts stays within 140 characters", async () => {
     const key = hunterFailureSetKey(failedHunterNames(999));
-    const REPEAT_999 = `pr-hero: review partial again (999 of 999 hunters failed, set ${key}) — fix the failing route or /pr-hero override`;
+    const REPEAT_999 = `crysk: review partial again (999 of 999 hunters failed, set ${key}) — fix the failing route or /pr-hero override`;
     const description = await partialDescriptionWith(
       async () => [
         PENDING_ROW,
@@ -2036,5 +2080,115 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
     );
     expect(description).toBe(REPEAT_999);
     expect(description?.length).toBeLessThanOrEqual(140);
+  });
+});
+
+// The rename writes every verdict on crysk and, for one version, on the legacy pr-hero, and reads
+// the two as one gate.
+describe("settleCommitStatusAndLedger: the crysk and legacy pr-hero pair", () => {
+  const STAMP = Date.parse("2026-10-17T12:00:00Z");
+  const LOCK: Parameters<typeof holdCommitStatusLock>[0] = {
+    operatorRoot: "/repo",
+    sha: HEAD,
+    targetUrl: undefined,
+    context: COMMIT_STATUS_CONTEXT,
+  };
+  const partialResult = {
+    sessionFailed: false,
+    hunterCount: 4,
+    hunterFailedCount: 1,
+    hunterFailures: failedHunters(1),
+  } as unknown as PipelineResult;
+
+  afterEach(() => {
+    releaseCommitStatusLock();
+  });
+
+  async function settle(options: {
+    statusContext:
+      | typeof COMMIT_STATUS_CONTEXT
+      | typeof LOCAL_COMMIT_STATUS_CONTEXT;
+    ciMode: "gate" | "advisory";
+    readHistory?: NonNullable<
+      Parameters<typeof settleCommitStatusAndLedger>[0]["readHistory"]
+    >;
+  }) {
+    holdCommitStatusLock(LOCK, STAMP);
+    const { spawnFn, calls, legacyCalls } = makeStatusSpawn();
+    await settleCommitStatusAndLedger({
+      result: partialResult,
+      posted: null,
+      operatorRoot: "/repo",
+      headSha: HEAD,
+      statusTargetUrl: "https://runs.example/1",
+      ciAdmissionLedger: null,
+      spawnFn,
+      ciMode: options.ciMode,
+      statusContext: options.statusContext,
+      blockingCount: 0,
+      readStatuses: async () => [],
+      readHistory: options.readHistory ?? (async () => []),
+    });
+    return { calls, legacyCalls };
+  }
+
+  test("a gate verdict is written on crysk, then on pr-hero, with one state, description and target", async () => {
+    const { calls, legacyCalls } = await settle({
+      statusContext: COMMIT_STATUS_CONTEXT,
+      ciMode: "gate",
+    });
+    const written = calls.filter(
+      (argv) => parseStatusFlags(argv).state !== undefined,
+    );
+    expect(written).toHaveLength(1);
+    expect(parseStatusFlags(written[0] as string[]).context).toBe("crysk");
+    expect(legacyCalls).toHaveLength(1);
+    expect(parseStatusFlags(legacyCalls[0] as string[]).context).toBe(
+      "pr-hero",
+    );
+    expect(legacyTwinsMatch(calls, legacyCalls)).toBe(true);
+    expect(parseStatusFlags(written[0] as string[]).description).toStartWith(
+      "crysk: review partial",
+    );
+  });
+
+  test("a local verdict is written on crysk/local and pr-hero/local only", async () => {
+    const { calls, legacyCalls } = await settle({
+      statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
+      ciMode: "advisory",
+    });
+    const written = calls.filter(
+      (argv) => parseStatusFlags(argv).state !== undefined,
+    );
+    expect(written.map((argv) => parseStatusFlags(argv).context)).toEqual([
+      "crysk/local",
+    ]);
+    expect(legacyCalls.map((argv) => parseStatusFlags(argv).context)).toEqual([
+      "pr-hero/local",
+    ]);
+    expect(legacyTwinsMatch(calls, legacyCalls)).toBe(true);
+  });
+
+  test("the repeat check reads the previous verdict from the legacy pr-hero context too", async () => {
+    // An older action wrote the previous partial on pr-hero only, in the old spelling.
+    const { calls } = await settle({
+      statusContext: COMMIT_STATUS_CONTEXT,
+      ciMode: "gate",
+      readHistory: async () => [
+        {
+          state: "failure",
+          context: "pr-hero",
+          created_at: "2026-10-17T11:00:00Z",
+          description:
+            "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it",
+        },
+      ],
+    });
+    const written = calls.filter(
+      (argv) => parseStatusFlags(argv).state !== undefined,
+    );
+    expect(parseStatusFlags(written[0] as string[]).description).toStartWith(
+      "crysk: review partial again",
+    );
   });
 });

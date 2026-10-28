@@ -9,7 +9,7 @@ almost always real (13% false positives measured); it specializes in lifecycle a
 defects — stuck loading latches, missing cleanups, re-entrancy, stalls — and says nothing about
 style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
 disclaimer, and nothing it prints blocks a merge. In CI its commit status is a gate by default: require the
-`pr-hero` check in branch protection, and blocking findings block the merge. `mode: advisory` keeps that check
+`crysk` check in branch protection, and blocking findings block the merge. `mode: advisory` keeps that check
 green.
 
 ## Two ways to use it
@@ -53,7 +53,7 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
 3. **Merge the workflow and `.prhero/` into the default branch.** A comment-triggered run
    (`/crysk review`) reads both from the base branch, so it starts nothing until the workflow is
    there, and fails `PRH-GOTCHAS-MISSING` until `.prhero/` is.
-   Then require the `pr-hero` status check in branch protection if you want it to block merges.
+   Then require the `crysk` status check in branch protection (`pr-hero` is still posted for one version) if you want it to block merges.
 
 4. **Open pull requests as usual.** Every new PR gets a review posted as PR comments; later pushes
    follow the level you chose (balanced re-reviews a push only when it is risky or the last pass
@@ -368,7 +368,7 @@ Reviews launch two ways: **by hand**, or through the opt-in local watcher (`pr-h
 | Manual CLI (`review`, `--pr`, `--post`) | **Available now** — this README. |
 | Auto-trigger on new PRs / new pushes (local watcher) | **Available now** — `pr-hero watch`, below. Deliberately opt-in: every review spends real money, so nothing fires until you `watch add` a repo AND `watch install` the agent. |
 | CI mode (GitHub Actions) | **Available now** — official `action.yml` at the repo root, canonical `.github/workflows/pr-hero.yml`, full setup in [`docs/github-actions.md`](docs/github-actions.md). The commit-status gate (`mode: gate`, the default; `mode: advisory` opts out), exit 0 on findings, the size/budget gates, and `pr-hero setup --ci` scaffolding all apply. |
-| Required status check that blocks merges | **Available in CI** — the `pr-hero` commit status is the check (`mode: gate`, the default). Require it in branch protection. Fail-closed for a head with no run stays deferred. |
+| Required status check that blocks merges | **Available in CI** — the `crysk` commit status is the check (`mode: gate`, the default; `pr-hero` is still posted for one version). Require it in branch protection. Fail-closed for a head with no run stays deferred. |
 
 ## Watching PRs automatically — `pr-hero watch`
 
@@ -569,7 +569,7 @@ PR makes it eligible again on the next tick, because the gate is recomputed ever
   runs as evidence, not verdicts, and triage before acting.
 - Verify what it reports. Findings are claims with cited code, tiered by deterministic rules — the
   report says so itself. An advisory report reads *assistant report, not a merge gate; every line is a claim to
-  verify.* A CI report in gate mode backs the `pr-hero` commit status, the required check: a blocking finding
+  verify.* A CI report in gate mode backs the `crysk` commit status, the required check: a blocking finding
   sets that status to failure.
 
 ## Isolation model

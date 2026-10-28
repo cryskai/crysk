@@ -44,7 +44,7 @@ inputs:
     required: false
     default: ''
   mode:
-    description: 'gate (default): the pr-hero commit status, the required check, turns failure on blocking findings or a size/budget skip and error on a crash, and success on a clean or advisory-only review. Comment /crysk review to review a skipped head anyway. advisory: the status is always success for a finished review, as before.'
+    description: 'gate (default): the crysk commit status (and the legacy pr-hero one, posted for one version), the required check, turns failure on blocking findings or a size/budget skip and error on a crash, and success on a clean or advisory-only review. Comment /crysk review to review a skipped head anyway. advisory: the status is always success for a finished review, as before.'
     required: false
     default: 'gate'
   post:

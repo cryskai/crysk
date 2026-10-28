@@ -27,7 +27,7 @@
 // failing (its description is "review posted" or "review complete", or in gate mode a blocking count or a partial review). So the status and
 // the record can differ. A posting that throws after a finished pipeline leaves the
 // status success and the record error, and the publisher reports that error. The
-// publisher posts its own status later under the same context ("pr-hero") when it
+// publisher posts its own status later under the same context ("crysk", and the legacy "pr-hero") when it
 // knows the head, and that later status is the one GitHub shows.
 // A failure after the pipeline returns and before delivery leaves no reviewed record,
 // including a throw in the pipeline closure's finally or in the workflow group close.

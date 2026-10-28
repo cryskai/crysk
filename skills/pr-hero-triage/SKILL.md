@@ -168,8 +168,8 @@ read that file instead.
      them on this head (or ruled `inconclusive`). Comment `gh pr comment <n> --body "/crysk recheck"`, then immediately run step 0 with `--wait` and follow "Closing a dismissal" below.
    - `override-or-fix`: the gate is red and nothing is left for `triage` or `recheck`. Read the
      `reason` and act on the case it names; never override it yourself:
-     - the head was size- or budget-skipped (the gate description starts "pr-hero skipped the
-       review"): comment `/crysk review`, then run step 0 with `--wait`;
+     - the head was size- or budget-skipped (the gate description starts "crysk skipped the
+       review", or "pr-hero skipped the review" on a status an older action wrote): comment `/crysk review`, then run step 0 with `--wait`;
      - the review is "partial again" with the same hunters failing: fix the failing hunter's route
        (model or credential), or ask a maintainer to override;
      - every blocking finding is already answered but none can clear without a fix (a dismissal the
@@ -186,8 +186,8 @@ read that file instead.
    `error` (expired token, missing credential, crash) makes step 0 say `review` again forever.
    Before posting either, count the ones already on this head, never from memory: the comments in
    `gh pr view <n> --json comments` whose body is exactly `/crysk review`, `/crysk recheck`,
-   or their legacy spellings `/pr-hero review` and `/pr-hero recheck` (both still start a run), and whose `createdAt` is at or after the oldest `pr-hero` status on the head
-   (`gh api "repos/{owner}/{repo}/commits/<head>/statuses?per_page=100" --jq '[.[] | select(.context == "pr-hero")] | last.created_at'`;
+   or their legacy spellings `/pr-hero review` and `/pr-hero recheck` (both still start a run), and whose `createdAt` is at or after the oldest `crysk` or `pr-hero` status on the head
+   (`gh api "repos/{owner}/{repo}/commits/<head>/statuses?per_page=100" --jq '[.[] | select(.context == "crysk" or .context == "pr-hero")] | last.created_at'`;
    no status yet means none counted). Each reason step 0 gives gets its command once per head:
    one `/crysk review` each for a skipped head, a partial review, a used-up budget, a gate
    `error`, and an `upheld` dismissal; one `/crysk recheck` per pending dismissal, plus one retry

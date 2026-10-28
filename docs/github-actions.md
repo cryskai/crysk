@@ -2,8 +2,8 @@
 
 pr-hero reviews every pull request automatically: a multi-agent hunt with adversarial refutation runs
 inside a GitHub Actions job, posts findings as PR comments, and writes a step summary. Its commit status
-(`pr-hero`) is a gate by default: blocking findings turn it red, so require it in branch protection to
-block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mode-the-status-is-the-check).
+(`crysk`; `pr-hero` is still posted for one version) is a gate by default: blocking findings turn it red, so
+require `crysk` in branch protection to block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mode-the-status-is-the-check).
 
 ## Quick path
 
@@ -33,7 +33,7 @@ block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mo
    [`PRH-GOTCHAS-MISSING`](#prh-gotchas-missing).
 4. **Commit `.prhero/` to the default branch.** Comment-triggered runs read the base branch, so the file
    must be there, not only on your feature branch.
-5. **Require the check.** In branch protection, require the `pr-hero` status check (the gate), not the
+5. **Require the check.** In branch protection, require the `crysk` status check (the gate); `pr-hero` is still posted for one version, so a repository that already requires it keeps working while you switch. Do not require the
    `review` job, which stays green even when it finds blocking issues. A private repository on GitHub Free
    cannot require status checks (GitHub returns HTTP 403), so there the gate is advisory in practice.
 6. **Open a pull request** from a branch in this repository (not a fork). pr-hero comments inline, posts
@@ -592,7 +592,12 @@ short policy hash.
 
 ## Gate mode: the status is the check
 
-The `pr-hero` commit status is the check you require in branch protection. The job's exit code does not
+The `crysk` commit status is the check you require in branch protection. For one version every status is
+also written on the legacy `pr-hero` context, with the same state, description and link, so a repository that
+requires `pr-hero` is not blocked while it adds `crysk`; then `pr-hero` is dropped. Readers (the admission
+gate, `pr-hero status`, the override check) treat the two as one gate and take the newest row across both,
+so an override posted by an older action only on `pr-hero` still wins. Descriptions are written `crysk: …`
+and read in both spellings. The job's exit code does not
 carry the review's findings: a finished review exits `0` even when it finds blocking-tier issues. Findings
 are published as comments and a summary, and the commit status decides the gate.
 
@@ -609,15 +614,15 @@ The table shows the status and the job exit for each case:
 
 | Cause | `gate` status | `advisory` status | Exit |
 |---|---|---|---|
-| Finished review with unresolved blocking findings (see below) | `failure`: `pr-hero: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
-| Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/crysk override`) | `failure`: `pr-hero: review partial (N of M hunters failed, set abc123) — /pr-hero review retries it`, where `set abc123` is six hex of the failed hunters' names | `success` | `0` |
-| Finished review where the same hunters failed as on the head's previous finished partial review (the same N of M counts and the same set key), none blocking | `failure`: `pr-hero: review partial again (N of M hunters failed, set abc123) — fix the failing route or /pr-hero override` | `success` | `0` |
+| Finished review with unresolved blocking findings (see below) | `failure`: `crysk: N blocking finding(s) — fix and push, or /pr-hero override` | `success` | `0` |
+| Finished review where some hunters failed, none blocking (a blocking count still wins; when the same hunters fail every run, fix their route or `/crysk override`) | `failure`: `crysk: review partial (N of M hunters failed, set abc123) — /pr-hero review retries it`, where `set abc123` is six hex of the failed hunters' names | `success` | `0` |
+| Finished review where the same hunters failed as on the head's previous finished partial review (the same N of M counts and the same set key), none blocking | `failure`: `crysk: review partial again (N of M hunters failed, set abc123) — fix the failing route or /pr-hero override` | `success` | `0` |
 | Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `0` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
-| Size or budget skip (`/crysk review` reviews it anyway) | `failure`: `pr-hero skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
-| Admission skip for a low-risk or below-threshold delta, once per PR, or a `/crysk stop` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `pr-hero: no review needed (<reason>); carried from <sha>`, or `failure` `pr-hero: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `pr-hero: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; with no readable verdict, `failure` `pr-hero skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
+| Size or budget skip (`/crysk review` reviews it anyway) | `failure`: `crysk skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
+| Admission skip for a low-risk or below-threshold delta, once per PR, or a `/crysk stop` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `crysk: no review needed (<reason>); carried from <sha>`, or `failure` `crysk: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `crysk: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; with no readable verdict, `failure` `crysk skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
 | Same head, already reviewed | none (that head's own status already exists) | none | `0` |
-| Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `pr-hero: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
+| Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `crysk: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
 Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
@@ -722,12 +727,12 @@ commit-status lock is still released. On an already-reviewed head, the same-head
 posts no status, so the head stays `pending` until a `/crysk review` comment forces a review, which writes the
 status again. The pending status, written when a review starts, is best-effort in both modes.
 
-**Local runs and the watcher post on `pr-hero/local`.** Only an explicit `--ci` run writes the `pr-hero`
-status, which is the required check. A `pr-hero review --pr` you run locally, and each review that
-`pr-hero watch` starts, post advisory statuses on `pr-hero/local` instead, so they cannot overwrite a red gate
+**Local runs and the watcher post on `crysk/local`.** Only an explicit `--ci` run writes the `crysk`
+status (and its legacy `pr-hero` twin), which is the required check. A `pr-hero review --pr` you run locally, and each review that
+`pr-hero watch` starts, post advisory statuses on `crysk/local` (and `pr-hero/local`) instead, so they cannot overwrite a red gate
 on the same head. Only the `--ci` flag makes a run post to the gate; `CI=1` in your shell does not. The watcher yields
-to a review in flight on either context, and it settles only its own leftover pending, on `pr-hero/local`. A `--ci`
-run stands down only for a pending on `pr-hero`, because only it writes that context, so a local pending never
+to a review in flight on either context, and it settles only its own leftover pending, on `crysk/local`. A `--ci`
+run stands down only for a pending on `crysk` (or `pr-hero`), because only it writes those contexts, so a local pending never
 leaves the required check unsettled.
 
 Local statuses used to share the `pr-hero` name. A status a local run wrote there before this change stays in

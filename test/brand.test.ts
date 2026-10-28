@@ -2,14 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  canonicalStatusText,
   commandHint,
   findMarker,
   isCommand,
+  isLegacyStatusContext,
+  isStatusContext,
+  LOCAL_STATUS_CONTEXT,
   legacyCommand,
   MARKER_BRAND_PATTERN,
   matchMarkerPrefix,
   readBrandEnv,
+  STATUS_CONTEXT,
   startsWithCommand,
+  statusContextForms,
 } from "../src/brand";
 
 describe("readBrandEnv", () => {
@@ -178,5 +184,69 @@ describe("command hints name a spelling every workflow accepts", () => {
     expect(commandHint("/crysk recheck", "")).toBe(
       "/crysk recheck (or /pr-hero recheck on a workflow set up before the rename)",
     );
+  });
+});
+
+// The rename publishes every commit status on both names for one version: users keep
+// `pr-hero` as a required check in branch protection, and a head that stops getting that
+// context blocks forever.
+describe("commit status contexts", () => {
+  test("the contexts are written in the new name", () => {
+    expect(STATUS_CONTEXT).toBe("crysk");
+    expect(LOCAL_STATUS_CONTEXT).toBe("crysk/local");
+  });
+
+  test("a context is published on its own name first, then the legacy one", () => {
+    expect(statusContextForms(STATUS_CONTEXT)).toEqual(["crysk", "pr-hero"]);
+    expect(statusContextForms(LOCAL_STATUS_CONTEXT)).toEqual([
+      "crysk/local",
+      "pr-hero/local",
+    ]);
+  });
+
+  test("only a crysk context has forms", () => {
+    expect(() => statusContextForms("pr-hero")).toThrow();
+    expect(() => statusContextForms("crysk-other")).toThrow();
+  });
+
+  test("isStatusContext matches either name of the same context and nothing else", () => {
+    expect(isStatusContext("crysk", STATUS_CONTEXT)).toBe(true);
+    expect(isStatusContext("pr-hero", STATUS_CONTEXT)).toBe(true);
+    expect(isStatusContext("crysk/local", STATUS_CONTEXT)).toBe(false);
+    expect(isStatusContext("pr-hero/local", STATUS_CONTEXT)).toBe(false);
+    expect(isStatusContext("ci", STATUS_CONTEXT)).toBe(false);
+    expect(isStatusContext("pr-hero/local", LOCAL_STATUS_CONTEXT)).toBe(true);
+    expect(isStatusContext("pr-hero", LOCAL_STATUS_CONTEXT)).toBe(false);
+  });
+
+  test("isLegacyStatusContext names the old spelling, local included", () => {
+    expect(isLegacyStatusContext("pr-hero")).toBe(true);
+    expect(isLegacyStatusContext("pr-hero/local")).toBe(true);
+    expect(isLegacyStatusContext("crysk")).toBe(false);
+    expect(isLegacyStatusContext("crysk/local")).toBe(false);
+  });
+});
+
+describe("canonicalStatusText", () => {
+  test("a legacy lead word becomes the new one, colon form and plain form", () => {
+    expect(canonicalStatusText("pr-hero: 2 blocking finding(s)")).toBe(
+      "crysk: 2 blocking finding(s)",
+    );
+    expect(canonicalStatusText("pr-hero skipped the review: x")).toBe(
+      "crysk skipped the review: x",
+    );
+    expect(canonicalStatusText("pr-hero reviewing")).toBe("crysk reviewing");
+  });
+
+  test("a text that already leads with the new name, or with neither, is unchanged", () => {
+    expect(canonicalStatusText("crysk: review posted")).toBe(
+      "crysk: review posted",
+    );
+    expect(canonicalStatusText("review posted")).toBe("review posted");
+    expect(canonicalStatusText("PRH-CANCELLED: not reviewed")).toBe(
+      "PRH-CANCELLED: not reviewed",
+    );
+    // A word that merely starts with the old name is not the old lead.
+    expect(canonicalStatusText("pr-heroic: x")).toBe("pr-heroic: x");
   });
 });

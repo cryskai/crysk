@@ -1125,7 +1125,7 @@ describe("ci init gotchas steps (CLI)", () => {
     );
     expect(output).not.toContain("npx -y pr-hero init");
     expect(output).not.toContain("human-attention-required");
-    expect(output).toContain("require the `pr-hero` status check");
+    expect(output).toContain("require the `crysk` status check");
     expect(output).toContain("GitHub Free");
     // The steps stay numbered 1..n with no gap where the init steps were.
     const numbers = [...output.matchAll(/^ {2}(\d+)\. /gm)].map((m) =>
@@ -1134,10 +1134,10 @@ describe("ci init gotchas steps (CLI)", () => {
     expect(numbers).toEqual([1, 2, 3, 4, 5]);
   });
 
-  test("every repo is told to require the pr-hero status check, not the review job", async () => {
+  test("every repo is told to require the crysk status check, not the review job", async () => {
     const { output } = await runInit(undefined);
     expect(output).toContain(
-      "require the `pr-hero` status check (not the `review` job)",
+      "require the `crysk` status check (not the `review` job; `pr-hero` is still posted for one version, so an existing rule keeps working)",
     );
   });
 });

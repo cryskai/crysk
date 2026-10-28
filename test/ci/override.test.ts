@@ -11,17 +11,25 @@ import {
   isOverrideStatus,
   newestStatusInContext,
   OVERRIDE_DESCRIPTION_PREFIX,
+  OVERRIDE_STATUS_CONTEXT,
   overrideActorOf,
   overrideCutoffMs,
   overrideStandsOverRun,
 } from "#ci/override";
+import { COMMIT_STATUS_CONTEXT } from "#pr/preflight";
+import { STATUS_CONTEXT } from "../../src/brand";
 
 const MODULE_PATH = path.resolve(import.meta.dir, "../../src/ci/override.ts");
+const BRAND_PATH = path.resolve(import.meta.dir, "../../src/brand.ts");
 
 describe("override rule: builtins-only module", () => {
-  test("it imports nothing outside the language", () => {
-    const source = readFileSync(MODULE_PATH, "utf8");
-    expect(runtimeImportViolations(source)).toEqual([]);
+  test("it imports nothing outside the language but the brand module, which imports nothing itself", () => {
+    expect(runtimeImportViolations(readFileSync(MODULE_PATH, "utf8"))).toEqual(
+      [],
+    );
+    expect(
+      runtimeImportViolations(readFileSync(BRAND_PATH, "utf8"), false),
+    ).toEqual([]);
   });
 
   test("the guard itself fails on a repo import and on a package import, and passes a type-only one", () => {
@@ -36,21 +44,11 @@ describe("override rule: builtins-only module", () => {
 });
 
 describe("override rule: the context is the one the required check reads", () => {
-  test("OVERRIDE_STATUS_CONTEXT equals COMMIT_STATUS_CONTEXT in src/pr/preflight.ts", () => {
-    // WHY a drift test: override.ts is builtins-only, so it cannot import the constant.
-    const preflight = readFileSync(
-      path.resolve(import.meta.dir, "../../src/pr/preflight.ts"),
-      "utf8",
-    );
-    const override = readFileSync(MODULE_PATH, "utf8");
-    const expected = /export const COMMIT_STATUS_CONTEXT = "([^"]+)"/.exec(
-      preflight,
-    )?.[1];
-    const actual = /export const OVERRIDE_STATUS_CONTEXT = "([^"]+)"/.exec(
-      override,
-    )?.[1];
-    expect(expected).toBeDefined();
-    expect(actual).toBe(expected as string);
+  test("OVERRIDE_STATUS_CONTEXT is brand's STATUS_CONTEXT, which is the gate's COMMIT_STATUS_CONTEXT", () => {
+    // WHY brand's constant: override.ts is loaded before dependencies are installed, so it
+    // takes the one literal from the module that imports nothing (src/brand.ts).
+    expect(OVERRIDE_STATUS_CONTEXT).toBe(STATUS_CONTEXT);
+    expect(OVERRIDE_STATUS_CONTEXT).toBe(COMMIT_STATUS_CONTEXT);
   });
 });
 
@@ -133,7 +131,7 @@ describe("newestStatusInContext: a same-second tie goes to the newest row", () =
       row("success", "pr-hero: review posted"),
       row("failure", "pr-hero: 2 blocking finding(s)"),
     ];
-    expect(newestStatusInContext(rows, "pr-hero")?.state).toBe("success");
+    expect(newestStatusInContext(rows, "crysk")?.state).toBe("success");
   });
 
   test("a tie does not reorder the rows: the first array element wins, not the last", () => {
@@ -141,7 +139,7 @@ describe("newestStatusInContext: a same-second tie goes to the newest row", () =
       row("failure", "pr-hero: 2 blocking finding(s)"),
       row("success", "pr-hero: review posted"),
     ];
-    expect(newestStatusInContext(rows, "pr-hero")?.state).toBe("failure");
+    expect(newestStatusInContext(rows, "crysk")?.state).toBe("failure");
   });
 
   test("an older row never displaces a newer one, whatever the array order", () => {
@@ -153,17 +151,132 @@ describe("newestStatusInContext: a same-second tie goes to the newest row", () =
       },
       { state: "success", context: "pr-hero", created_at: SAME_SECOND },
     ];
-    expect(newestStatusInContext(rows, "pr-hero")?.state).toBe("success");
+    expect(newestStatusInContext(rows, "crysk")?.state).toBe("success");
+  });
+});
+
+// The rename publishes the gate on `crysk` and, for one version, on the legacy `pr-hero`.
+// Every reader treats the two as one gate: the newest row across both decides.
+describe("override rule: two contexts, one gate", () => {
+  const RUN_START = Date.parse("2026-10-29T12:00:00Z");
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const row = (
+    context: string,
+    state: string,
+    createdMs: number,
+    description?: string,
+  ) => ({
+    state,
+    context,
+    created_at: iso(createdMs),
+    ...(description === undefined ? {} : { description }),
+  });
+
+  test("the newest row across crysk and pr-hero wins, whichever name it sits on", () => {
+    const rows = [
+      row("crysk", "failure", RUN_START),
+      row("pr-hero", "success", RUN_START + 60_000),
+    ];
+    expect(newestStatusInContext(rows, "crysk")?.context).toBe("pr-hero");
+    expect(newestStatusInContext([...rows].reverse(), "crysk")?.context).toBe(
+      "pr-hero",
+    );
+  });
+
+  test("a tie across the two names goes to the crysk row, in either array order", () => {
+    const pair = [
+      row("pr-hero", "success", RUN_START),
+      row("crysk", "success", RUN_START),
+    ];
+    expect(newestStatusInContext(pair, "crysk")?.context).toBe("crysk");
+    expect(newestStatusInContext([...pair].reverse(), "crysk")?.context).toBe(
+      "crysk",
+    );
+  });
+
+  test("the local pair is a different gate: crysk/local and pr-hero/local never answer for the gate", () => {
+    const rows = [
+      row("crysk/local", "success", RUN_START),
+      row("pr-hero/local", "success", RUN_START),
+    ];
+    expect(newestStatusInContext(rows, "crysk")).toBeUndefined();
+    expect(newestStatusInContext(rows, "crysk/local")?.context).toBe(
+      "crysk/local",
+    );
+  });
+
+  test("an override an older action posted only on pr-hero stands over an older crysk verdict", () => {
+    const statuses = [
+      row("crysk", "failure", RUN_START, "crysk: 2 blocking finding(s)"),
+      row(
+        "pr-hero",
+        "success",
+        RUN_START + 30_000,
+        "pr-hero: overridden by @maintainer — no review on this head",
+      ),
+    ];
+    expect(overrideStandsOverRun(statuses, RUN_START)).toBe(true);
+  });
+
+  test("an override on crysk stands, and a newer crysk verdict ends it", () => {
+    const override = row(
+      "crysk",
+      "success",
+      RUN_START + 1_000,
+      "crysk: overridden by @maintainer — no review on this head",
+    );
+    expect(overrideStandsOverRun([override], RUN_START)).toBe(true);
+    expect(
+      overrideStandsOverRun(
+        [override, row("crysk", "failure", RUN_START + 9_000, "crysk: x")],
+        RUN_START,
+      ),
+    ).toBe(false);
+  });
+
+  test("a newer verdict that only the legacy name carries also ends the override", () => {
+    const statuses = [
+      row(
+        "crysk",
+        "success",
+        RUN_START + 1_000,
+        "crysk: overridden by @maintainer — no review on this head",
+      ),
+      row("pr-hero", "failure", RUN_START + 9_000, "pr-hero: x"),
+    ];
+    expect(overrideStandsOverRun(statuses, RUN_START)).toBe(false);
+  });
+
+  test("an override description is written crysk: and read in both spellings", () => {
+    expect(OVERRIDE_DESCRIPTION_PREFIX).toBe("crysk: overridden by @");
+    for (const description of [
+      "crysk: overridden by @maintainer — no review on this head",
+      "pr-hero: overridden by @maintainer — no review on this head",
+    ]) {
+      expect(
+        isOverrideStatus({
+          state: "success",
+          context: "crysk",
+          created_at: iso(RUN_START),
+          description,
+        }),
+        description,
+      ).toBe(true);
+      expect(overrideActorOf(description), description).toBe("maintainer");
+    }
   });
 });
 
 // The same rule as publish.test.ts's runtimeImportViolations (kept as a copy: that helper
 // is private to its file). Comments are stripped first; a type-only import is allowed.
-function runtimeImportViolations(source: string): string[] {
+// `allowBrand`: override.ts may load ../brand (which imports nothing, checked on its own with
+// false); brand.ts itself may load nothing at all.
+function runtimeImportViolations(source: string, allowBrand = true): string[] {
   const code = source
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
   const ok = (specifier: string): boolean =>
+    (allowBrand && specifier === "../brand") ||
     specifier.startsWith("node:") ||
     specifier === "bun" ||
     specifier.startsWith("bun:");
