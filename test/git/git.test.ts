@@ -33,14 +33,18 @@ function fakeGit(
 
 describe("readBaseRefIgnoreRules — the base-ref read (CI mode, design D2)", () => {
   const SHA = "a".repeat(40);
+  const LEGACY = ".prheroignore";
 
-  test("absent at base ref (ls-tree exit 0, empty stdout): defaults only, no error, no cat-file call", async () => {
+  test("absent at base ref (ls-tree exit 0, empty stdout for both names): defaults only, no error, no cat-file call", async () => {
     const { runner, calls } = fakeGit((args) =>
       args[0] === "ls-tree" ? { ok: true, stdout: "" } : null,
     );
     const result = await readBaseRefIgnoreRules(runner, "/repo", SHA);
     expect(result).toEqual({ rules: [], found: false });
-    expect(calls).toHaveLength(1);
+    expect(calls.map((c) => c.args.at(-1))).toEqual([
+      ".cryskignore",
+      ".prheroignore",
+    ]);
     expect(calls[0]?.repo).toBe("/repo");
     expect(calls[0]?.args).toContain("--full-tree");
     expect(calls[0]?.args).toContain(SHA);
@@ -63,7 +67,11 @@ describe("readBaseRefIgnoreRules — the base-ref read (CI mode, design D2)", ()
     const blobSha = "b".repeat(40);
     const { runner } = fakeGit((args) => {
       if (args[0] === "ls-tree") {
-        return { ok: true, stdout: `100644 blob ${blobSha}\t.prheroignore` };
+        return {
+          ok: true,
+          stdout:
+            args.at(-1) === LEGACY ? `100644 blob ${blobSha}\t${LEGACY}` : "",
+        };
       }
       if (args[0] === "cat-file") return { ok: true, stdout: "vendor/**\n" };
       return null;
@@ -78,7 +86,7 @@ describe("readBaseRefIgnoreRules — the base-ref read (CI mode, design D2)", ()
     const blobSha = "b".repeat(40);
     const { runner } = fakeGit((args) => {
       if (args[0] === "ls-tree") {
-        return { ok: true, stdout: `100755 blob ${blobSha}\t.prheroignore` };
+        return { ok: true, stdout: `100755 blob ${blobSha}\t${args.at(-1)}` };
       }
       if (args[0] === "cat-file") return { ok: true, stdout: "vendor/**\n" };
       return null;
@@ -110,7 +118,7 @@ describe("readBaseRefIgnoreRules — the base-ref read (CI mode, design D2)", ()
     const blobSha = "b".repeat(40);
     const { runner } = fakeGit((args) => {
       if (args[0] === "ls-tree") {
-        return { ok: true, stdout: `100644 blob ${blobSha}\t.prheroignore` };
+        return { ok: true, stdout: `100644 blob ${blobSha}\t${args.at(-1)}` };
       }
       if (args[0] === "cat-file") {
         return { ok: false, stderr: "fatal: bad object" };
@@ -122,11 +130,63 @@ describe("readBaseRefIgnoreRules — the base-ref read (CI mode, design D2)", ()
     );
   });
 
-  test("malformed blob content: loud abort naming the <sha>:.prheroignore locator, not the literal '.prheroignore'", async () => {
+  test("malformed blob content: loud abort naming the <sha>:<file read> locator", async () => {
     const blobSha = "b".repeat(40);
     const { runner } = fakeGit((args) => {
       if (args[0] === "ls-tree") {
-        return { ok: true, stdout: `100644 blob ${blobSha}\t.prheroignore` };
+        return { ok: true, stdout: `100644 blob ${blobSha}\t${args.at(-1)}` };
+      }
+      if (args[0] === "cat-file") return { ok: true, stdout: "ok/**\n!\n" };
+      return null;
+    });
+    await expect(readBaseRefIgnoreRules(runner, "/repo", SHA)).rejects.toThrow(
+      new RegExp(`^${SHA}:\\.cryskignore:2:`),
+    );
+  });
+
+  // The rename's read order: .cryskignore first, the legacy name only when the
+  // new one is absent at that ref.
+  test(".cryskignore present: it is read, the legacy name is never asked for", async () => {
+    const blobSha = "b".repeat(40);
+    const { runner, calls } = fakeGit((args) => {
+      if (args[0] === "ls-tree") {
+        return { ok: true, stdout: `100644 blob ${blobSha}\t.cryskignore` };
+      }
+      if (args[0] === "cat-file") return { ok: true, stdout: "new/**\n" };
+      return null;
+    });
+    const result = await readBaseRefIgnoreRules(runner, "/repo", SHA);
+    expect(result.rules[0]?.pattern).toBe("new/**");
+    expect(calls.filter((c) => c.args[0] === "ls-tree")).toHaveLength(1);
+  });
+
+  test("only .prheroignore present: it is read exactly as before", async () => {
+    const blobSha = "b".repeat(40);
+    const { runner } = fakeGit((args) => {
+      if (args[0] === "ls-tree") {
+        return {
+          ok: true,
+          stdout:
+            args.at(-1) === LEGACY ? `100644 blob ${blobSha}\t${LEGACY}` : "",
+        };
+      }
+      if (args[0] === "cat-file") return { ok: true, stdout: "old/**\n" };
+      return null;
+    });
+    const result = await readBaseRefIgnoreRules(runner, "/repo", SHA);
+    expect(result).toMatchObject({ found: true });
+    expect(result.rules[0]?.pattern).toBe("old/**");
+  });
+
+  test("a malformed legacy file names .prheroignore, the file actually read", async () => {
+    const blobSha = "b".repeat(40);
+    const { runner } = fakeGit((args) => {
+      if (args[0] === "ls-tree") {
+        return {
+          ok: true,
+          stdout:
+            args.at(-1) === LEGACY ? `100644 blob ${blobSha}\t${LEGACY}` : "",
+        };
       }
       if (args[0] === "cat-file") return { ok: true, stdout: "ok/**\n!\n" };
       return null;
@@ -134,6 +194,18 @@ describe("readBaseRefIgnoreRules — the base-ref read (CI mode, design D2)", ()
     await expect(readBaseRefIgnoreRules(runner, "/repo", SHA)).rejects.toThrow(
       new RegExp(`^${SHA}:\\.prheroignore:2:`),
     );
+  });
+
+  test("an unusable .cryskignore aborts; it never falls through to the legacy file", async () => {
+    const { runner, calls } = fakeGit((args) =>
+      args[0] === "ls-tree"
+        ? { ok: true, stdout: `120000 blob ${"c".repeat(40)}\t.cryskignore` }
+        : null,
+    );
+    await expect(readBaseRefIgnoreRules(runner, "/repo", SHA)).rejects.toThrow(
+      /\.cryskignore at .* has mode 120000/,
+    );
+    expect(calls).toHaveLength(1);
   });
 });
 
