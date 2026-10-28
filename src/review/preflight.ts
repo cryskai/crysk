@@ -263,6 +263,11 @@ export interface CliOptions {
   // on blocking findings, a size or budget skip, and a crash; `advisory` keeps
   // today's posture. Unset means the run resolves it (resolveCiMode, pr/preflight).
   ciMode?: "gate" | "advisory";
+  // `setup --ci` / `ci init` only: the re-review preset and how CI pays, for an
+  // agent that already asked the person. --ci-mode and --budget-usd also apply
+  // there; together they replace the questions setup asks in a terminal.
+  reviewLevel?: "minimal" | "balanced" | "thorough" | "manual";
+  billing?: "subscription" | "api";
 }
 
 // design.md 3.1's literal formula: Boolean(GITHUB_ACTIONS || CI || --ci).
@@ -315,13 +320,22 @@ Usage:
   pr-hero review [options]   Review a branch (zero flags inside a configured repo)
   pr-hero init [options]     Scaffold <repo>/.prhero/ (config.json + gotchas.md)
   pr-hero setup [options]    Run interactive onboarding wizard
-  pr-hero setup --ci [--force]
+  pr-hero setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
                              Scaffold .github/workflows/pr-hero.yml instead
                              of the wizard. Refuses to overwrite an existing
-                             workflow unless --force is passed
+                             workflow unless --force is passed. Asks how CI
+                             re-reviews (in a terminal) or takes the flags:
+                             --level minimal|balanced|thorough|manual,
+                             --ci-mode gate|advisory, --billing
+                             subscription|api, --budget-usd (api only),
+                             --max-changed-lines (default 4000).
+                             Writes the level to .prhero/config.json and
+                             prints a summary. Then checks gh and, in a
+                             terminal, offers to install it and run gh auth
+                             login
   pr-hero skills install [--force]
                              Install the pr-hero, pr-hero-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
-  pr-hero ci init [--force]  Same scaffolding as "setup --ci", as its own
+  pr-hero ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
                              command
   pr-hero doctor [options]   Check system tools and environment readiness
   pr-hero activity [options] View currently running reviews and recent store history
@@ -612,6 +626,8 @@ const VALUE_FLAGS = new Set([
   "--max-changed-files",
   "--budget-usd",
   "--ci-mode",
+  "--level",
+  "--billing",
   "--finding",
   "--tag",
   "--body-file",
@@ -1057,16 +1073,41 @@ export function parseArgs(argv: string[]): ParsedCli {
   // be a flag the operator believes changed a run it did not. Scoped to
   // `review`'s reading of --ci specifically now that `setup --ci` exists —
   // neither flag means anything to scaffolding.
+  // `setup --ci` and `ci init` read both too: they write the gate mode and
+  // the ceiling into the workflow they scaffold.
+  const scaffolding = (options.ci && command === "setup") || command === "ci";
   if (
     options.budgetUsd !== undefined &&
-    !(options.ci && command === "review")
+    !(options.ci && command === "review") &&
+    !scaffolding
   ) {
-    throw new CliUsageError("--budget-usd only applies with review --ci");
+    throw new CliUsageError(
+      "--budget-usd only applies with review --ci, setup --ci or ci init",
+    );
   }
   // S4: the gate mode is a review reading of --ci, like budgetUsd. Without
   // it the flag would name a mode that never runs.
-  if (options.ciMode !== undefined && !(options.ci && command === "review")) {
-    throw new CliUsageError("--ci-mode only applies with review --ci");
+  if (
+    options.ciMode !== undefined &&
+    !(options.ci && command === "review") &&
+    !scaffolding
+  ) {
+    throw new CliUsageError(
+      "--ci-mode only applies with review --ci, setup --ci or ci init",
+    );
+  }
+  if (
+    (options.reviewLevel !== undefined || options.billing !== undefined) &&
+    !scaffolding
+  ) {
+    throw new CliUsageError(
+      "--level and --billing only apply with setup --ci or ci init",
+    );
+  }
+  if (options.billing === "subscription" && options.budgetUsd !== undefined) {
+    throw new CliUsageError(
+      "--budget-usd does not apply with --billing subscription: a subscription review spends quota, not dollars",
+    );
   }
   if (
     options.stepSummary !== undefined &&
@@ -1417,6 +1458,29 @@ function applyValueFlag(
         );
       }
       options.ciMode = value;
+      return;
+    }
+    case "--level": {
+      if (
+        value !== "minimal" &&
+        value !== "balanced" &&
+        value !== "thorough" &&
+        value !== "manual"
+      ) {
+        throw new CliUsageError(
+          `--level must be minimal, balanced, thorough or manual, got: ${value}`,
+        );
+      }
+      options.reviewLevel = value;
+      return;
+    }
+    case "--billing": {
+      if (value !== "subscription" && value !== "api") {
+        throw new CliUsageError(
+          `--billing must be subscription or api, got: ${value}`,
+        );
+      }
+      options.billing = value;
       return;
     }
     case "--finding":

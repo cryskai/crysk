@@ -12,7 +12,64 @@ disclaimer, and nothing it prints blocks a merge. In CI its commit status is a g
 `pr-hero` check in branch protection, and blocking findings block the merge. `mode: advisory` keeps that check
 green.
 
+## Two ways to use it
+
+- **Local CLI**: install pr-hero on your machine and review branches or PRs from your terminal.
+  Start at [Requirements](#requirements).
+- **CI only, no local install**: install the skills into your coding agent, add one workflow file
+  to the repository, and every pull request is reviewed in GitHub Actions. Nothing below
+  Requirements applies to this path. It is described next.
+
+### CI only: skills plus one workflow
+
+You need Node (for `npx`), an authenticated `gh`, and a GitHub repository with Actions enabled. You do
+**not** need Bun, the Claude Code CLI, or a global pr-hero install: the review runs on the GitHub
+runner, which installs its own runtime. `npx -y pr-hero setup --ci` checks `gh` for you: when it is
+missing or logged out, it says why it is needed and prints the commands, and in a terminal it offers
+to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks the setup.
+
+1. **Install the skills** into your coding agent from [skills.sh](https://skills.sh/juanmaagd/pr-hero):
+
+   ```bash
+   npx skills add juanmaagd/pr-hero
+   ```
+
+   `pr-hero-ci-setup` sets up the workflow, `pr-hero-pr` opens a PR and waits for its review, and
+   `pr-hero-triage` answers the findings. `pr-hero` covers the local CLI, which this path does not use.
+
+2. **Ask your agent to set up pr-hero CI** in the repository. `pr-hero-ci-setup` first asks you how
+   re-reviews should work: a level (minimal, balanced, thorough or manual), gate or advisory, how CI
+   pays (a subscription gets no spend ceiling, an API key gets one you choose), the changed-lines
+   threshold above which a PR is skipped (default 4000, on any billing), and whether to tune the
+   advanced settings (score weights, observe-only, trusted actors, files limit, exclusions). Then it runs
+   `npx -y pr-hero setup --ci` with your answers (writes `.github/workflows/pr-hero.yml` and the
+   level's keys in `.prhero/config.json`, and prints a summary) and `npx -y pr-hero init`
+   (writes `.prhero/gotchas.md`), writes the repository gotchas, and stores
+   one secret with `gh secret set`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription; `claude setup-token`
+   prints it on any machine that has the Claude Code CLI, so this one does not need it) or
+   `ANTHROPIC_API_KEY` (pay as you go). Without an agent, run the same
+   commands yourself and follow the [Quick path](docs/github-actions.md#quick-path).
+
+3. **Merge the workflow and `.prhero/` into the default branch.** A comment-triggered run
+   (`/pr-hero review`) reads both from the base branch, so it starts nothing until the workflow is
+   there, and fails `PRH-GOTCHAS-MISSING` until `.prhero/` is.
+   Then require the `pr-hero` status check in branch protection if you want it to block merges.
+
+4. **Open pull requests as usual.** Every new PR gets a review posted as PR comments; later pushes
+   follow the level you chose (balanced re-reviews a push only when it is risky or the last pass
+   found enough, at most 2 automatic passes), and a PR above the size threshold is skipped. Comment
+   `/pr-hero review` to review a skipped push anyway. Ask your agent
+   to open the PR (`pr-hero-pr`), and it waits for the review with `npx -y pr-hero status --pr <n>
+   --wait --json`, then hands the findings to `pr-hero-triage`, which replies to each one in its
+   thread and pushes the fixes.
+
+Everything about the workflow (credentials, OpenCode routing, spend limits, the gate, error codes)
+is in [`docs/github-actions.md`](docs/github-actions.md).
+
 ## Requirements
+
+These apply to the local CLI. The [CI-only path](#ci-only-skills-plus-one-workflow) needs none of them
+on your machine.
 
 pr-hero does not call any model API of its own. It **spawns the Claude Code CLI as a subprocess** and
 inherits that CLI's authentication. `claude` is the engine; everything else here is plumbing.

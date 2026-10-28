@@ -13,7 +13,10 @@ block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mo
 2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
    to `.github/workflows/pr-hero.yml`, or run `npx -y pr-hero setup --ci` (or `pr-hero ci init`) in a clone of
    your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need pr-hero
-   installed locally: the file is the whole install. It reviews every push to a pull request, answers a
+   installed locally: the file is the whole install. The command also checks the GitHub CLI: if `gh` is
+   missing or logged out, it prints why the CI loop needs it (`gh secret set`, `pr-hero status`,
+   `pr-hero triage reply`) and how to fix it, and in a terminal it offers to install it (macOS with
+   Homebrew) and to run `gh auth login`; the workflow is written either way. It reviews every push to a pull request, answers a
    `/pr-hero review` comment (see [Re-review on demand](#re-review-on-demand)), and answers a
    `/pr-hero override` comment (see [Overriding a red gate](#overriding-a-red-gate)). Do **not** copy this
    repository's own `.github/workflows/pr-hero.yml`: that file is generated with
@@ -418,6 +421,23 @@ disable it.
 On every `synchronize` push, pr-hero decides whether another review is worth the spend **before**
 fetching the worktree or spawning agents. The decision is deterministic, logged in the job summary,
 and backed by a durable attempt ledger stored in GitHub Check Runs (`checks: write` permission).
+
+### Review levels (what setup --ci asks)
+
+`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode`, `--billing`, `--max-changed-lines` and `--budget-usd`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
+
+| Level | `ci_review_policy` | `ci_max_attempts` | `ci_rereview_min_score` | `max_verification_steps` |
+|---|---|---|---|---|
+| `minimal` | `once_per_pr` | 1 | (unset) | 8 |
+| `balanced` (default) | `risk_aware` | 2 | 4 | 8 |
+| `thorough` | `every_push` | 4 | (unset) | 8 |
+| `manual` | `manual_only` | 1 | (unset) | 8 |
+
+Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the repo has neither `ANTHROPIC_API_KEY` nor `OPENCODE_AUTH_JSON`, either of which makes the route metered; an explicit 0 would warn on every run and outlive a later API key); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+
+Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` and `budget-usd` unless a flag names them, and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
+
+Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). Unlike the budget it applies on any billing: left unset, a subscription route reviews a PR of any size.
 
 ### Policy configuration (`.prhero/config.json`)
 

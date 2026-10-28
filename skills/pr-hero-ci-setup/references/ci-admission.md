@@ -30,6 +30,23 @@ Read this when configuring `.prhero/config.json` during CI setup. Full operator 
 - **Whether it runs (admission):** in `risk_aware` and `thresholded` modes, the previous review's finding score (`blocking × 2 + advisory × 1` by default) is compared against `ci_rereview_min_score`, bounded by `ci_max_attempts` total automatic passes per PR.
 - **What it does when it runs:** discovery is incremental by default (hunters examine only commits since the last completed review's head SHA; `/pr-hero review --full` widens to the full PR), and up to `max_verification_steps` verifier steps check whether prior open findings were fixed by the new push.
 
+## Review levels (what setup --ci asks)
+
+`setup --ci` (and `ci init`) asks for a level and always writes its keys. An agent asks the human and passes `--level`, `--ci-mode`, `--billing`, `--max-changed-lines` and `--budget-usd`; a terminal user gets the same questions from the CLI; with neither, `balanced` and `gate` apply and the summary says nobody chose them.
+
+| Level | `ci_review_policy` | `ci_max_attempts` | `ci_rereview_min_score` | `max_verification_steps` |
+|---|---|---|---|---|
+| `minimal` | `once_per_pr` | 1 | (unset) | 8 |
+| `balanced` (default) | `risk_aware` | 2 | 4 | 8 |
+| `thorough` | `every_push` | 4 | (unset) | 8 |
+| `manual` | `manual_only` | 1 | (unset) | 8 |
+
+Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the repo has neither `ANTHROPIC_API_KEY` nor `OPENCODE_AUTH_JSON`, either of which makes the route metered; an explicit 0 would warn on every run and outlive a later API key); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+
+Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` and `budget-usd` unless a flag names them, and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
+
+Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). Unlike the budget it applies on any billing: left unset, a subscription route reviews a PR of any size.
+
 ## Policy modes
 
 | Mode | Use when |

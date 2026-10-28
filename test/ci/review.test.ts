@@ -238,8 +238,14 @@ describe("parseArgs — --ci-mode", () => {
     ).toThrow(/--ci/);
   });
 
-  test("--ci-mode on setup --ci is rejected: the mode is a review reading of --ci", () => {
-    expect(() => parseArgs(["setup", "--ci", "--ci-mode", "advisory"])).toThrow(
+  test("--ci-mode on setup --ci is accepted: the scaffold writes it into the workflow", () => {
+    expect(
+      parseArgs(["setup", "--ci", "--ci-mode", "advisory"]).options.ciMode,
+    ).toBe("advisory");
+  });
+
+  test("--ci-mode on setup without --ci is still rejected", () => {
+    expect(() => parseArgs(["setup", "--ci-mode", "advisory"])).toThrow(
       /--ci-mode/,
     );
   });
