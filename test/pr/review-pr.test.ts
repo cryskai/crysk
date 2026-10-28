@@ -402,7 +402,7 @@ describe("postAdjudicationReplies", () => {
     );
     expect(calls).toHaveLength(0);
     expect(out).toContain(
-      "::notice::pr-hero: the CI adjudicator could not rule on R001; it stays pending for the next /pr-hero recheck",
+      "::notice::pr-hero: the CI adjudicator could not rule on R001; it stays pending for the next /crysk recheck",
     );
   });
 

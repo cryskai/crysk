@@ -81,7 +81,7 @@ const COMMAND_PREFIX = "/crysk";
 const LEGACY_COMMAND_PREFIX = "/pr-hero";
 
 // Both written forms of a command, new name first. The workflow template
-// lists each one, because a Actions expression cannot match a pattern.
+// lists each one, because an Actions expression cannot match a pattern.
 export function commandForms(command: string): string[] {
   if (!command.startsWith(`${COMMAND_PREFIX} `)) {
     throw new Error(`not a crysk command: ${JSON.stringify(command)}`);
