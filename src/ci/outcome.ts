@@ -303,6 +303,9 @@ export interface HunterFailureRecord {
   // The route's provider and model, as short safe strings (see safeProviderName).
   provider?: string;
   model?: string;
+  // One short line saying why the hunter failed, in the provider's words (see
+  // safeFailureDetail). Present only when the transport knew it.
+  detail?: string;
 }
 
 // Every TransportFailureCause, as a runtime lookup the record reader can check a
@@ -351,6 +354,24 @@ export function safeProviderName(value: unknown): string | undefined {
 
 export function safeModelName(value: unknown): string | undefined {
   return typeof value === "string" && MODEL_NAME_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+// A failure detail, as the record may carry it. Unlike a provider or model name it is the
+// provider's own text, so the record accepts only one short line with no control
+// characters: it is later placed in a commit status, an annotation and a comment. The
+// writer (hunterFailureRecords) and the reader share this one check, and the cap matches
+// the engine's failure reason (stepFailureReason).
+const FAILURE_DETAIL_MAX = 160;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the point is to refuse control characters
+const FAILURE_DETAIL_PATTERN = /^[^\u0000-\u001f\u007f]+$/;
+
+export function safeFailureDetail(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.trim() === value &&
+    value.length <= FAILURE_DETAIL_MAX &&
+    FAILURE_DETAIL_PATTERN.test(value)
     ? value
     : undefined;
 }
@@ -620,10 +641,10 @@ function parseUnsettledStatus(value: unknown): UnsettledStatus | undefined {
   return { state, description };
 }
 
-// The per-hunter entries of a hunters-failed record. Each entry carries only the three
+// The per-hunter entries of a hunters-failed record. Each entry carries only the four
 // keys, and each value is checked: a cause against the transport vocabulary, a provider
-// and a model against their safe-string patterns. An empty list is refused, since the
-// writer never writes one.
+// and a model against their safe-string patterns, a detail as one short plain line. An
+// empty list is refused, since the writer never writes one.
 function parseHunterFailures(
   value: unknown,
 ): HunterFailureRecord[] | undefined {
@@ -645,6 +666,10 @@ function parseHunterFailures(
         const model = safeModelName(field);
         if (model === undefined) return undefined;
         failure.model = model;
+      } else if (key === "detail") {
+        const detail = safeFailureDetail(field);
+        if (detail === undefined) return undefined;
+        failure.detail = detail;
       } else {
         return undefined;
       }
@@ -1190,6 +1215,16 @@ function single(
   return { default: { why, fixes, annotationFix } };
 }
 
+const PROVIDER_LIMITED: CatalogVariant = {
+  why: "the provider has throttled this account or key, so an immediate retry would fail the same way",
+  fixes: [
+    "Wait, or raise the quota, then ask for a new review:",
+    REVIEW_AGAIN,
+    LEGACY_REVIEW_NOTE,
+  ],
+  annotationFix: `wait for the limit to reset or raise the quota, then comment ${commandHint("/crysk review", "")} on the PR`,
+};
+
 const CREDENTIAL_UNUSABLE_ENV: CatalogVariant = {
   why: CRED_STORE_WHY,
   fixes: ["Set the secret again:", "$ gh secret set {secret}"],
@@ -1574,15 +1609,15 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "provider",
     what: "rate limit or quota reached",
-    variants: single(
-      "the provider has throttled this account or key, so an immediate retry would fail the same way",
-      [
-        "Wait, or raise the quota, then ask for a new review:",
-        REVIEW_AGAIN,
-        LEGACY_REVIEW_NOTE,
-      ],
-      `wait for the limit to reset or raise the quota, then comment ${commandHint("/crysk review", "")} on the PR`,
-    ),
+    variants: {
+      default: PROVIDER_LIMITED,
+      // Every failed hunter hit the same limit and the provider said which one (an empty
+      // credit balance, say): the sentence quotes it, and the fix is the default's.
+      every_hunter: {
+        ...PROVIDER_LIMITED,
+        what: "rate limit or quota reached: {detail}",
+      },
+    },
   },
   "PRH-PROVIDER-UNAVAILABLE": {
     level: "error",
@@ -1693,7 +1728,22 @@ export function renderHunterCause(
   cause: TransportFailureCause,
   params: ErrorParams,
   ctx: OutcomeContext,
+  // The one detail every failed hunter reported, when they agree. Only the causes whose
+  // sentence has room for it use it.
+  sharedDetail?: string,
 ): RenderedError | undefined {
+  // An empty balance or a spent quota needs no param but the provider's own words, which
+  // say which of the two it was. Without them the default wording stands.
+  if (cause === "quota_exhausted") {
+    return sharedDetail === undefined
+      ? renderCode("PRH-PROVIDER-LIMITED", params, ctx)
+      : renderCode(
+          "PRH-PROVIDER-LIMITED",
+          { ...params, detail: sharedDetail },
+          ctx,
+          "every_hunter",
+        );
+  }
   // The provider's 404 names the model, so the every_hunter wording keeps it. Its fixes name
   // the provider, so the provider must be known; the model is optional (whatWithoutModel).
   if (cause === "model_unavailable") {

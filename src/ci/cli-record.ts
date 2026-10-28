@@ -47,6 +47,7 @@ import {
   knownTransportCause,
   PENDING_AT_FILE,
   parseCliRecord,
+  safeFailureDetail,
   safeModelName,
   safeProviderName,
   type UnsettledStatus,
@@ -115,13 +116,14 @@ export function cliHeadField(headSha: string): { head_sha?: string } {
 // The per-hunter entries of a hunters-failed record. WHY each field is checked here and
 // not left to the reader: a value the reader would refuse makes the whole record
 // unreadable, and the publisher then reports no outcome at all. So a cause outside the
-// vocabulary, or a provider or model that is not a safe short string, is left out of its
-// entry, and the entry still says that its hunter failed.
+// vocabulary, or a provider, model or detail that is not a safe short string, is left out
+// of its entry, and the entry still says that its hunter failed.
 export function hunterFailureRecords(
   failures: readonly {
     readonly cause?: string;
     readonly provider?: string;
     readonly model?: string;
+    readonly detail?: string;
   }[],
 ): HunterFailureRecord[] {
   return failures.map((failure) => {
@@ -132,6 +134,8 @@ export function hunterFailureRecords(
     if (provider !== undefined) entry.provider = provider;
     const model = safeModelName(failure.model);
     if (model !== undefined) entry.model = model;
+    const detail = safeFailureDetail(failure.detail);
+    if (detail !== undefined) entry.detail = detail;
     return entry;
   });
 }

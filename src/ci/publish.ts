@@ -100,9 +100,9 @@ const REVIEW_STEP = "the review";
 // crash or kill, or when its record write failed, and the publisher cannot tell
 // which, so the text claims only that it stopped before it reported an outcome.
 const STOPPED_STEP = "the review before it reported an outcome";
-// What a hunters-failed record says about the failure: the CLI writes no detail,
-// and the publisher's wording names what its own record means (sessionFailed:
-// every hunter failed, src/review/findings.ts).
+// What a hunters-failed record says when its hunters gave no shared detail: the
+// publisher's wording names what its own record means (sessionFailed: every hunter
+// failed, src/review/findings.ts).
 const HUNTERS_DETAIL = "each hunter's session ended without a result";
 // The step an unverifiable lookup stopped at. The trigger writes the same text
 // into its record; the publisher names it itself, so the message never depends
@@ -389,6 +389,10 @@ function huntersFailedRendering(
   runParams: ErrorParams,
 ): RenderedError {
   const failures = cliRecord.hunter_failures ?? [];
+  // The provider's own words, when every hunter reported the same ones. Hunters that
+  // disagree, or one that said nothing, leave the generic text: no single explanation
+  // covers the run.
+  const sharedDetail = sharedValue(failures.map((failure) => failure.detail));
   const cause = sharedValue(failures.map((failure) => failure.cause));
   if (cause !== undefined) {
     const rendered = renderHunterCause(
@@ -401,12 +405,13 @@ function huntersFailedRendering(
         model: sharedValue(failures.map((failure) => failure.model)),
       },
       "action",
+      sharedDetail,
     );
     if (rendered !== undefined) return rendered;
   }
   return renderCode(
     "PRH-HUNTERS-FAILED",
-    { ...runParams, step: REVIEW_STEP, detail: HUNTERS_DETAIL },
+    { ...runParams, step: REVIEW_STEP, detail: sharedDetail ?? HUNTERS_DETAIL },
     "action",
   );
 }

@@ -1446,6 +1446,14 @@ gh pr comment {pr} --body "/crysk review"
 
 On a workflow set up before the rename, comment `/pr-hero review` instead.
 
+When every failed hunter ran out of quota (the Claude CLI reports an empty Anthropic credit balance this way), the run renders this code with the provider's own words in the sentence, so the commit status says which limit it was. Top up the credit or raise the quota, then ask for a new review.
+
+#### `every_hunter`
+
+**What:** rate limit or quota reached: {detail}
+
+Every hunter of the run failed on the same limit, and all of them reported the same words from the provider, which fill `{detail}`. Hunters that reported different words, or none, render this code without the quote.
+
 ### PRH-PROVIDER-UNAVAILABLE
 
 **Owner:** provider
@@ -1505,6 +1513,8 @@ gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body
 **What:** Every review hunter failed in {step}: {detail}
 
 **Why:** no hunter returned a result, so there is no finding to report
+
+When every failed hunter reports the same one-line reason from the provider (an invalid API key, say: `Anthropic API: Invalid API key (HTTP 401)`), it replaces the generic reason after the colon, cut to fit the 140-character status description. A shared `quota_exhausted` cause renders `PRH-PROVIDER-LIMITED` instead, with the same words. An invalid key keeps this code, because the record does not name the secret.
 
 When every failed hunter shares a `model_unavailable` cause with its provider known, the run renders `PRH-MODEL-UNAVAILABLE` instead; when every failed hunter shares a `missing_provider_record` cause with its provider and model known, it renders `PRH-CRED-UNUSABLE`. Any other cause, a missing provider or model, a mix of causes, a hunter with no cause, or a `runtime_unavailable` cause keeps this code.
 

@@ -333,6 +333,123 @@ describe("decidePublication — the pure table", () => {
       expect(plan.status?.description).toStartWith("PRH-MODEL-UNAVAILABLE: ");
     });
 
+    test("every failed hunter sharing one detail puts it in the status, annotation and summary", () => {
+      const detail =
+        "Anthropic API: Invalid API key · Fix external API key (HTTP 401)";
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            { cause: "auth_invalid", detail },
+            { cause: "auth_invalid", detail },
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      // The credential's secret name is unknown here, so the generic code carries the detail.
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.annotation).toContain("Invalid API key");
+      expect(plan.rendered.annotation).not.toContain(
+        "each hunter's session ended without a result",
+      );
+      expect(plan.rendered.summary.join("\n")).toContain("Invalid API key");
+      const description = plan.status?.description ?? "";
+      expect(description).toStartWith("PRH-HUNTERS-FAILED: ");
+      expect(description).toContain("Anthropic API: Invalid API key");
+      expect(description.length).toBeLessThanOrEqual(140);
+    });
+
+    test("a long shared detail is cut inside the status limit", () => {
+      const detail = `Anthropic API: ${"word ".repeat(40).trim()} (HTTP 400)`;
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [{ detail }, { detail }],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      const description = plan.status?.description ?? "";
+      expect(description.length).toBeLessThanOrEqual(140);
+      expect(description).toContain("Anthropic API: word");
+    });
+
+    test("every failed hunter out of quota renders PRH-PROVIDER-LIMITED with the provider's words", () => {
+      const detail =
+        "Anthropic API: Credit balance is too low to access the Anthropic API. (HTTP 400)";
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            { cause: "quota_exhausted", detail },
+            { cause: "quota_exhausted", detail },
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+      expect(plan.rendered.annotation).toContain("Credit balance is too low");
+      expect(plan.status?.description).toStartWith("PRH-PROVIDER-LIMITED: ");
+    });
+
+    test("hunters that failed with different details keep the generic text", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            { detail: "Anthropic API: Invalid API key (HTTP 401)" },
+            { detail: "Anthropic API: Forbidden (HTTP 403)" },
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.annotation).toContain(
+        "each hunter's session ended without a result",
+      );
+      expect(plan.rendered.annotation).not.toContain("Invalid API key");
+    });
+
+    test("a hunter with no detail among the failures keeps the generic text", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            { detail: "Anthropic API: Invalid API key (HTTP 401)" },
+            {},
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.annotation).toContain(
+        "each hunter's session ended without a result",
+      );
+    });
+
     test("every failed hunter with a missing provider record renders PRH-CRED-UNUSABLE, owned by the configuration", () => {
       const plan = decidePublication({
         record: record(),
@@ -2931,6 +3048,13 @@ describe("hunters-failed allowlist", () => {
     if (plan.kind !== "remote") throw new Error("expected a remote plan");
     expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
     expect(plan.rendered.annotation).not.toContain("rejected the credential");
+  });
+
+  test("quota_exhausted with no shared detail renders PRH-PROVIDER-LIMITED in its default wording", () => {
+    const plan = hunterFailedPlan("quota_exhausted", {});
+    if (plan.kind !== "remote") throw new Error("expected a remote plan");
+    expect(plan.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+    expect(plan.rendered.what).toBe("Rate limit or quota reached");
   });
 
   test("model_unavailable with a provider renders PRH-MODEL-UNAVAILABLE without a model", () => {
