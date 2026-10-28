@@ -495,7 +495,7 @@ describe("decidePublication — the pure table", () => {
     test("a gotchas error written by the CLI renders PRH-GOTCHAS-MISSING under 'Your configuration:'", () => {
       const dir = mkdtempSync(path.join(os.tmpdir(), "pr-hero-gotchas-e2e-"));
       try {
-        const env = { PRHERO_OUTCOME_DIR: dir };
+        const env = { CRYSK_OUTCOME_DIR: dir };
         writeFatalCliRecord(
           classifyCliError(
             new CliError("gotchas file is still the scaffold", {
@@ -1088,7 +1088,7 @@ function runPublishIn(options: {
     let summary = "";
     const exitCode = runPublish({
       env: {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
         GITHUB_REPOSITORY: REPO,
         GITHUB_RUN_ID: "4242",
         GITHUB_SERVER_URL: "https://github.com",
@@ -1792,7 +1792,7 @@ describe("runPublish — the shell", () => {
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(
-      "description=PRH-ROUTING-INVALID: PRHERO_ROUTING is invalid: the routing input is not valid JSON",
+      "description=PRH-ROUTING-INVALID: CRYSK_ROUTING is invalid: the routing input is not valid JSON",
     );
     expect(commentPost(run.calls)).toBeDefined();
   });
@@ -2319,7 +2319,7 @@ describe("runPublish — the override (S8)", () => {
     expect(body).toContain("@maintainer");
     expect(body).toContain("2026-10-17 12:34 UTC");
     expect(body).toContain(
-      "A new push or a later `/pr-hero review` on this head replaces it",
+      "A new push or a later `/crysk review` on this head replaces it",
     );
     expect(run.stdout).toContain("::notice title=pr-hero::");
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
@@ -2481,7 +2481,7 @@ describe("publish.ts runs before `bun install`", () => {
       const result = Bun.spawnSync([process.execPath, MODULE_PATH], {
         cwd: dir,
         env: {
-          PRHERO_OUTCOME_DIR: dir,
+          CRYSK_OUTCOME_DIR: dir,
           GITHUB_REPOSITORY: REPO,
           GITHUB_RUN_ID: "4242",
           GITHUB_SERVER_URL: "https://github.com",
@@ -2510,7 +2510,7 @@ describe("publish.ts runs before `bun install`", () => {
       const result = Bun.spawnSync([process.execPath, MODULE_PATH], {
         cwd: dir,
         env: {
-          PRHERO_OUTCOME_DIR: dir,
+          CRYSK_OUTCOME_DIR: dir,
           GITHUB_REPOSITORY: REPO,
           GITHUB_RUN_ID: "4242",
           GITHUB_SERVER_URL: "https://github.com",
@@ -2998,7 +2998,7 @@ function runCancelSettleIn(options: {
     let stdout = "";
     const exitCode = runCancelSettle({
       env: {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
         GITHUB_REPOSITORY: REPO,
         GITHUB_RUN_ID: "4242",
         GITHUB_SERVER_URL: "https://github.com",
@@ -3065,7 +3065,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
       mkdirSync(path.join(dir, PENDING_AT_FILE));
       const calls: Call[] = [];
       const exitCode = runCancelSettle({
-        env: { PRHERO_OUTCOME_DIR: dir, GITHUB_REPOSITORY: REPO },
+        env: { CRYSK_OUTCOME_DIR: dir, GITHUB_REPOSITORY: REPO },
         gh: (args) => {
           calls.push({ args: [...args], stdin: undefined });
           return statusRows(["pr-hero", "pending", PENDING_ISO]);

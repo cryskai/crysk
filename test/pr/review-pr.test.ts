@@ -35,7 +35,7 @@ describe("recordPipelineOutcome", () => {
     setup();
     try {
       recordPipelineOutcome({ sessionFailed: false }, SHA, {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
       });
       expect(written()).toBeUndefined();
     } finally {
@@ -47,7 +47,7 @@ describe("recordPipelineOutcome", () => {
     setup();
     try {
       recordPipelineOutcome({ sessionFailed: true }, SHA, {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
       });
       expect(parseCliRecord(written() ?? "")).toEqual({
         v: 1,
@@ -62,7 +62,7 @@ describe("recordPipelineOutcome", () => {
   test("a pipeline that never returned writes nothing: its throw reaches the fatal record", () => {
     setup();
     try {
-      recordPipelineOutcome(undefined, SHA, { PRHERO_OUTCOME_DIR: dir });
+      recordPipelineOutcome(undefined, SHA, { CRYSK_OUTCOME_DIR: dir });
       expect(written()).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -73,7 +73,7 @@ describe("recordPipelineOutcome", () => {
     setup();
     try {
       recordPipelineOutcome({ sessionFailed: true }, "not-a-sha", {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
       });
       expect(parseCliRecord(written() ?? "")).toEqual({
         v: 1,
@@ -164,7 +164,7 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
         ],
       },
       SHA,
-      { PRHERO_OUTCOME_DIR: dir },
+      { CRYSK_OUTCOME_DIR: dir },
     );
     expect(
       parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
@@ -201,7 +201,7 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
         ],
       },
       SHA,
-      { PRHERO_OUTCOME_DIR: dir },
+      { CRYSK_OUTCOME_DIR: dir },
     );
     expect(
       parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
@@ -219,7 +219,7 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
       { sessionFailed: true, hunterFailures: [{ name: "hunter-reliability" }] },
       SHA,
       {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
       },
     );
     expect(

@@ -1,5 +1,5 @@
 // How a person or a local agent asks GitHub to run a skipped review anyway.
-// The answer is a pull request comment, `/pr-hero review`: the scaffolded
+// The answer is a pull request comment, `/crysk review`: the scaffolded
 // workflow listens for it, the action checks the commenter's write access,
 // and the review runs on the Actions runner with --force. Running
 // `pr-hero review --force` locally is a different path and is not this one.
@@ -11,8 +11,12 @@
 // fallback rather than leaving those repos with an instruction that silently
 // fails.
 
-export const CI_REVIEW_COMMENT = "/pr-hero review";
-export const CI_REVIEW_FULL_COMMENT = "/pr-hero review --full";
+import { REVIEW_COMMAND, REVIEW_FULL_COMMAND } from "./trigger";
+
+// The trigger's own commands, so a hint can never name a spelling the action
+// would not accept.
+export const CI_REVIEW_COMMENT = REVIEW_COMMAND;
+export const CI_REVIEW_FULL_COMMENT = REVIEW_FULL_COMMAND;
 
 export const CI_FORCE_WORKFLOW_FILE = "pr-hero-force.yml";
 

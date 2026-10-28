@@ -72,7 +72,7 @@ export interface AdmissionRecord {
 // which is in this set (admission skips keep it on purpose), so every gate
 // skip spent an attempt. The workflow-heads leg then counted that head a second
 // time, and a PR with one review run reported "2/2 attempts" (#326).
-// A forced row (`forced: true`, a `/pr-hero review` or `/pr-hero recheck`
+// A forced row (`forced: true`, a `/crysk review` or `/crysk recheck`
 // comment) is excluded whatever its status: the budget bounds AUTOMATIC reviews,
 // and a writer's explicit comment is a deliberate spend outside it. The filter
 // is in countTerminalAttempts, not in this set, because a forced `completed`

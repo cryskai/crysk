@@ -88,7 +88,16 @@ const own = () => generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
 const WRITER_ASSOCIATION = `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)`;
 // T6 (S8): the group also admits `/pr-hero override` from the same associations, so
 // an override queues behind an in-flight review and lands last.
-const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero recheck') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
+const GROUP_COMMANDS = [
+  "/crysk review",
+  "/crysk recheck",
+  "/crysk override",
+  "/pr-hero review",
+  "/pr-hero recheck",
+  "/pr-hero override",
+];
+// The new names come first; the legacy /pr-hero forms are still admitted for one version.
+const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || ${GROUP_COMMANDS.map((c) => `(startsWith(github.event.comment.body, '${c}') && ${WRITER_ASSOCIATION})`).join(" || ")}) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
 const PUSH_ONLY_CANCEL = `\${{ github.event_name == 'pull_request' }}`;
 
 describe("generateCiWorkflowTemplate (pure)", () => {
@@ -125,15 +134,16 @@ describe("generateCiWorkflowTemplate (pure)", () => {
   // so credential presence is the action's to detect, loudly, inside the
   // run. The `if` only routes events. Fork pull_request runs never receive
   // secrets, so they are skipped here; a maintainer's comment reviews them.
-  test("the review job skips fork pushes, starts only on a `/pr-hero review`, `/pr-hero recheck` or `/pr-hero override` comment, and never reads secrets", () => {
+  test("the review job skips fork pushes, starts only on a `/crysk` (or legacy `/pr-hero`) review, recheck or override comment, and never reads secrets", () => {
     const reviewIf = String(
       parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
     );
     expect(reviewIf).toBe(
       "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || " +
-        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) || " +
-        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero recheck')) || " +
-        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))",
+        GROUP_COMMANDS.map(
+          (c) =>
+            `(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '${c}'))`,
+        ).join(" || "),
     );
     expect(reviewIf).not.toContain("secrets.");
   });
@@ -169,6 +179,9 @@ describe("generateCiWorkflowTemplate (pure)", () => {
         ?.group ?? "",
     );
     expect(group).toContain(
+      `(startsWith(github.event.comment.body, '/crysk review') && ${WRITER_ASSOCIATION})`,
+    );
+    expect(group).toContain(
       `(startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION})`,
     );
     expect(String(parsed.jobs.review?.if ?? "")).not.toContain(
@@ -187,9 +200,11 @@ describe("generateCiWorkflowTemplate (pure)", () => {
           | undefined
       )?.group ?? "",
     );
-    expect(group).toContain(
-      `(startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})`,
-    );
+    for (const command of ["/crysk override", "/pr-hero override"]) {
+      expect(group).toContain(
+        `(startsWith(github.event.comment.body, '${command}') && ${WRITER_ASSOCIATION})`,
+      );
+    }
   });
 
   test("the docs' workflow snippet carries the generator's exact concurrency group", () => {
@@ -216,9 +231,11 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     const generatedIf = String(
       parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
     );
-    expect(generatedIf).toContain(
-      "startsWith(github.event.comment.body, '/pr-hero override')",
-    );
+    for (const command of ["/crysk override", "/pr-hero override"]) {
+      expect(generatedIf).toContain(
+        `startsWith(github.event.comment.body, '${command}')`,
+      );
+    }
     expect(String(parseWorkflow(snippet).jobs.review?.if ?? "")).toBe(
       generatedIf,
     );
@@ -419,19 +436,23 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     );
   });
 
-  // Threat matrix RED (5): vars must be quoted so an unset PRHERO_ROUTING
+  // Threat matrix RED (5): vars must be quoted so an unset CRYSK_ROUTING
   // becomes the empty string instead of breaking YAML. The auth secret is
   // referenced by name, never inlined.
-  test("quoted with.routing is vars.PRHERO_ROUTING and with.opencode-auth is secrets.OPENCODE_AUTH_JSON", () => {
+  test("quoted with.routing is vars.CRYSK_ROUTING with a vars.PRHERO_ROUTING fallback, and with.opencode-auth is secrets.OPENCODE_AUTH_JSON", () => {
     const template = generateCiWorkflowTemplate();
-    expect(template).toContain(`routing: "\${{ vars.PRHERO_ROUTING }}"`);
+    expect(template).toContain(
+      `routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
+    );
     const parsed = Bun.YAML.parse(template) as {
       jobs: { review: { steps: Array<Record<string, unknown>> } };
     };
     const step = parsed.jobs.review.steps.find(
       (s) => s.name === "Run pr-hero",
     ) as { with?: Record<string, string> } | undefined;
-    expect(step?.with?.routing).toBe(`\${{ vars.PRHERO_ROUTING }}`);
+    expect(step?.with?.routing).toBe(
+      `\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}`,
+    );
     expect(step?.with?.["opencode-auth"]).toBe(
       `\${{ secrets.OPENCODE_AUTH_JSON }}`,
     );
@@ -656,7 +677,7 @@ describe("this repo's own comment runs pin the pull request head", () => {
       expect(gate.exitCode).toBe(1);
       expect(gate.outputs).toEqual({});
       expect(gate.stdout).toContain("::error title=pr-hero::");
-      expect(gate.stdout).toContain("/pr-hero review");
+      expect(gate.stdout).toContain("/crysk review");
       expect(gate.lookups).toBe(2);
       expect(gate.sleeps).toHaveLength(1);
       expect(gate.calls.some((call) => call.startsWith("pr view"))).toBe(false);
@@ -904,7 +925,7 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
           HOME: home,
           ROUTING_INPUT: "",
           OPENCODE_AUTH_INPUT: "",
-          PRHERO_OUTCOME_DIR: outDir,
+          CRYSK_OUTCOME_DIR: outDir,
           ...env,
         },
         stdout: "pipe",
@@ -1013,7 +1034,7 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
 });
 
 describe("ci init next steps (CLI)", () => {
-  test("say that /pr-hero review works once the workflow is on the default branch", () => {
+  test("say that /crysk review works once the workflow is on the default branch", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "prhero-ci-init-"));
     try {
       Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
@@ -1029,7 +1050,7 @@ describe("ci init next steps (CLI)", () => {
       const output = `${result.stdout}${result.stderr}`;
       expect(result.exitCode).toBe(0);
       expect(output).toContain("Next steps:");
-      expect(output).toContain("/pr-hero review");
+      expect(output).toContain("/crysk review");
       expect(output).toMatch(/default branch/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1499,29 +1520,34 @@ describe("scaffold writes the gate mode explicitly (S4)", () => {
   });
 });
 
-// `/pr-hero recheck` is accepted wherever `/pr-hero review` is: the job's `if:`
-// and the concurrency group, so the scaffolded workflow starts the same run.
-describe("the scaffolded workflow accepts /pr-hero recheck", () => {
-  test("the if and concurrency clauses mirror the review clauses", () => {
-    const template = generateCiWorkflowTemplate();
-    const recheck = "startsWith(github.event.comment.body, '/pr-hero recheck')";
-    const review = "startsWith(github.event.comment.body, '/pr-hero review')";
-    expect(template.split(review).length - 1).toBeGreaterThan(0);
-    expect(template.split(recheck).length - 1).toBe(
-      template.split(review).length - 1,
-    );
-  });
+// `/crysk recheck` is accepted wherever `/crysk review` is, in both names: the job's
+// `if:` and the concurrency group, so the scaffolded workflow starts the same run.
+describe("the scaffolded workflow accepts recheck beside review", () => {
+  test.each([
+    ["/crysk review", "/crysk recheck"],
+    ["/pr-hero review", "/pr-hero recheck"],
+  ])(
+    "the if and concurrency clauses for %s are mirrored for %s",
+    (review, recheck) => {
+      const template = generateCiWorkflowTemplate();
+      const count = (command: string) =>
+        template.split(`startsWith(github.event.comment.body, '${command}')`)
+          .length - 1;
+      expect(count(review)).toBeGreaterThan(0);
+      expect(count(recheck)).toBe(count(review));
+    },
+  );
 
-  test("the comments name /pr-hero recheck beside review and override", () => {
+  test("the comments name /crysk recheck beside review and override", () => {
     const template = generateCiWorkflowTemplate();
     expect(template).toContain(
-      "A comment that is exactly\n# `/pr-hero recheck` reviews the head",
+      "A comment that is exactly\n# `/crysk recheck` reviews the head",
     );
     expect(template).toContain(
-      "BEGINS with `/pr-hero review`,\n    # `/pr-hero recheck` or `/pr-hero override`",
+      "BEGINS with `/crysk review`,\n    # `/crysk recheck` or `/crysk override`",
     );
     expect(template).toContain(
-      "starts with\n    # /pr-hero review, /pr-hero recheck or /pr-hero override",
+      "starts with\n    # /crysk review, /crysk recheck or /crysk override",
     );
   });
 });

@@ -68,7 +68,9 @@ describe("workflow variants: the real scaffold", () => {
       "mode",
       "routing",
     ]);
-    expect(inputs.routing).toBe(`\${{ vars.PRHERO_ROUTING }}`);
+    expect(inputs.routing).toBe(
+      `\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}`,
+    );
   });
 
   test("no-credential removes exactly the three credential lines and nothing else", () => {
@@ -95,7 +97,7 @@ describe("workflow variants: the real scaffold", () => {
     expect(after.length).toBe(before.length);
     const changed = before.filter((line, i) => line !== after[i]);
     expect(changed).toEqual([
-      `          routing: "\${{ vars.PRHERO_ROUTING }}"`,
+      `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
     ]);
   });
 
@@ -123,14 +125,14 @@ describe("workflow variants: a scaffold that changed", () => {
   });
 
   test("a duplicated anchor line throws rather than editing an arbitrary one", () => {
-    const routing = `          routing: "\${{ vars.PRHERO_ROUTING }}"`;
+    const routing = `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`;
     const changed = NORMAL.replace(routing, `${routing}\n${routing}`);
     expect(() => applyVariant("bad-routing", changed)).toThrow(/found 2/);
   });
 
   test("bad-routing refuses a scaffold whose routing input moved to another form", () => {
     const changed = NORMAL.replace(
-      `          routing: "\${{ vars.PRHERO_ROUTING }}"`,
+      `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
       `          routing: \${{ vars.PRHERO_ROUTING_V2 }}`,
     );
     expect(() => applyVariant("bad-routing", changed)).toThrow(

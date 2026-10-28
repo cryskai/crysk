@@ -922,7 +922,7 @@ describe("settleCommitStatusAndLedger — the unsettled final status", () => {
     const root = await mkdtemp(path.join(tmpdir(), "pr-hero-teardown-cli-"));
     const dir = path.join(root, "outcome");
     return {
-      env: { PRHERO_OUTCOME_DIR: dir },
+      env: { CRYSK_OUTCOME_DIR: dir },
       recordPath: path.join(dir, CLI_RECORD_FILE),
     };
   }

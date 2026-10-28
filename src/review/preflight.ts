@@ -102,7 +102,7 @@ export interface CliOptions {
   // triage, and classification still run (R2-C5). Review-only, like --scout.
   full: boolean;
   // T5b: with --pr --ci, also have the CI adjudicator rule on each pending
-  // dismissal of a blocking finding. Set by a /pr-hero recheck comment. Absent
+  // dismissal of a blocking finding. Set by a /crysk recheck comment. Absent
   // means off.
   adjudicate?: boolean;
   hopBudget: number;
@@ -156,7 +156,7 @@ export interface CliOptions {
   onPush: boolean;
   // Bypass the CI skips for THIS run: the size gate, review-policy
   // admission, and (in CI) the budget ceiling. The GitHub comment
-  // `/pr-hero review` is what sets this flag from Actions. Deliberately
+  // `/crysk review` is what sets this flag from Actions. Deliberately
   // does NOT imply --yes: the interactive cost-band prompt is a separate
   // question from those skips.
   force: boolean;
@@ -525,11 +525,11 @@ Options:
   --full              review only: on a re-review, widen discovery to the
                       full PR range (B..H). Verification and triage still
                       run; the recorded case does not change. On GitHub,
-                      comment /pr-hero review --full on the PR
+                      comment /crysk review --full on the PR
   --adjudicate        with --pr --ci: also have the CI adjudicator rule on
                       each pending dismissal of a blocking finding (at most
                       5 per run) and post its verdict on the finding's
-                      thread. Set by a /pr-hero recheck comment.
+                      thread. Set by a /crysk recheck comment.
   --hop-budget <n>    Hops per hunter (default: ${DEFAULT_HOP_BUDGET}); the biggest
                       per-hunter cost lever there is
   --two-dot           Diff the literal <base>..<head> two-point range instead
@@ -566,7 +566,7 @@ Options:
                       findings, as before
   --force             Review even when CI would skip: the size gate, the
                       review-policy admission rules, and the budget ceiling.
-                      On GitHub, comment /pr-hero review on the PR to pass
+                      On GitHub, comment /crysk review on the PR to pass
                       this flag from Actions. An interactive TTY already
                       offers the size-gate choice as a menu; this flag is
                       the unattended hatch. Does NOT imply --yes — the
@@ -2324,7 +2324,7 @@ export function parseLocalConfig(raw: string): ConfigLayer {
 // right: two are lists of paths inside one repository and the third selects a
 // commit range ahead of an autodetection that already works.
 // Its routing object is parsed without the routing class. That class renders
-// PRH-ROUTING-INVALID, whose text names PRHERO_ROUTING and `gh variable set`: the
+// PRH-ROUTING-INVALID, whose text names CRYSK_ROUTING and `gh variable set`: the
 // fix for the CI routing input, not for this personal file. The message is the same.
 export function parseGlobalConfig(raw: string): ConfigLayer {
   return parseConfigLayer(

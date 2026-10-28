@@ -1,5 +1,5 @@
 // The CLI's writer for cli.json (odd/tasks/agent-first-ci.md, T2c). In action mode
-// (PRHERO_OUTCOME_DIR set) it leaves the record the publisher reads. Without it,
+// (CRYSK_OUTCOME_DIR set) it leaves the record the publisher reads. Without it,
 // it does nothing and prints nothing, so local and watcher runs stay byte-identical.
 //
 // It never throws: the review's own result is not the record's to block. A write
@@ -57,7 +57,7 @@ export function writeCliRecord(
   record: CliRecord,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
-  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return;
   const written = inheritProgressHead(record, dir);
   try {
@@ -143,7 +143,7 @@ export function recordPendingCreatedAt(
   createdAt: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
-  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return;
   try {
     writeRecordAtomically(dir, PENDING_AT_FILE, `${createdAt}\n`, NODE_FS);
@@ -184,7 +184,7 @@ export function recordUnsettledStatus(
   env: Readonly<Record<string, string | undefined>> = process.env,
   overrideCutoffMs?: number | null,
 ): void {
-  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return;
   const head = cliHeadField(headSha);
   if (head.head_sha === undefined) return;
@@ -228,7 +228,7 @@ export function writeFatalCliRecord(
   cls: CliErrorClass,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
-  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return;
   const earlier = readEarlierRecord(dir);
   if (earlier !== undefined && earlier.outcome !== "reviewing") {

@@ -66,8 +66,10 @@ describe("workflow", () => {
     };
     const step = parsed.jobs.review.steps.find((s) => s.id === "pr-hero");
     // GitHub Actions expressions, not JS templates: the braces are literal.
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression syntax
-    expect(step?.with?.routing).toBe("${{ vars.PRHERO_ROUTING }}");
+    expect(step?.with?.routing).toBe(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression syntax
+      "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}",
+    );
     expect(step?.with?.["opencode-auth"]).toBe(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression syntax
       "${{ secrets.OPENCODE_AUTH_JSON }}",
@@ -189,7 +191,7 @@ describe("the override marker pinned against the product's publisher", () => {
       const posted: string[] = [];
       runPublish({
         env: {
-          PRHERO_OUTCOME_DIR: dir,
+          CRYSK_OUTCOME_DIR: dir,
           GITHUB_REPOSITORY: SANDBOX_REPO,
           GITHUB_RUN_ID: "1",
         },

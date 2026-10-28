@@ -1090,7 +1090,7 @@ const DOCS_BASE =
 const ENGINE_DEFECT_ISSUE =
   'gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"';
 const RERUN_FAILED = "$ gh run rerun {runId} --failed";
-const REVIEW_AGAIN = '$ gh pr comment {pr} --body "/pr-hero review"';
+const REVIEW_AGAIN = '$ gh pr comment {pr} --body "/crysk review"';
 const OPENCODE_STORE =
   "$ gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json";
 const CRED_STORE_WHY =
@@ -1105,7 +1105,7 @@ const OPENCODE_SUBSCRIPTION_FIXES = [
   "Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then re-set the secret:",
   "$ opencode auth login",
   OPENCODE_STORE,
-  "Or rename the provider in PRHERO_ROUTING.",
+  "Or rename the provider in CRYSK_ROUTING.",
 ];
 // Only the OpenCode route stores a ChatGPT login; any other backend, or none, is
 // the Claude route.
@@ -1115,12 +1115,12 @@ function isOpencodeRoute(params: ErrorParams): boolean {
 const MODEL_NOT_SERVED: CatalogVariant = {
   why: "the routing names a model this provider does not offer",
   fixes: [
-    "Fix the `modelSnapshot` for this step in PRHERO_ROUTING.",
+    "Fix the `modelSnapshot` for this step in CRYSK_ROUTING.",
     "List the models this provider serves:",
     "$ opencode models {provider}",
   ],
   annotationFix:
-    "fix the `modelSnapshot` for {step} in PRHERO_ROUTING to a model that {provider} serves",
+    "fix the `modelSnapshot` for {step} in CRYSK_ROUTING to a model that {provider} serves",
 };
 
 const ROUTE_WHY = "every agent needs exactly one backend, provider and model";
@@ -1164,7 +1164,7 @@ const OPENCODE_CREDENTIAL_FIXES = [
   "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
   `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${OPENCODE_AUTH_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
   "An OpenCode route also needs the routing variable:",
-  "$ gh variable set PRHERO_ROUTING --body '<routing-object-json>'",
+  "$ gh variable set CRYSK_ROUTING --body '<routing-object-json>'",
   "Dependabot PRs read Dependabot secrets, so set this one too:",
   "$ gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
   "A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.",
@@ -1192,10 +1192,10 @@ const CREDENTIAL_UNUSABLE_ENV: CatalogVariant = {
 const ROUTE_UNMAPPED: CatalogVariant = {
   why: ROUTE_WHY,
   fixes: [
-    "Add or complete this model's route in PRHERO_ROUTING, with an explicit `modelSnapshot`.",
+    "Add or complete this model's route in CRYSK_ROUTING, with an explicit `modelSnapshot`.",
   ],
   annotationFix:
-    "add or complete this model's route in PRHERO_ROUTING, with an explicit `modelSnapshot`",
+    "add or complete this model's route in CRYSK_ROUTING, with an explicit `modelSnapshot`",
 };
 
 const RUNTIME_LOCAL: CatalogVariant = {
@@ -1262,7 +1262,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
             : CLAUDE_SUBSCRIPTION_FIXES,
         annotationFix: (params) =>
           isOpencodeRoute(params)
-            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then re-set OPENCODE_AUTH_JSON, or rename the provider in PRHERO_ROUTING"
+            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then re-set OPENCODE_AUTH_JSON, or rename the provider in CRYSK_ROUTING"
             : "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
       },
       malformed_payload: {
@@ -1303,26 +1303,26 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-ROUTING-MISSING": {
     level: "error",
     owner: "config",
-    what: "OpenCode auth is set but PRHERO_ROUTING is empty, so the default Claude route is used",
+    what: "OpenCode auth is set but CRYSK_ROUTING is empty, so the default Claude route is used",
     variants: single(
       "the run would fail later at the Claude credential check",
       [
-        '$ gh variable set PRHERO_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"',
+        '$ gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"',
       ],
-      `set PRHERO_ROUTING from your routing config: \`gh variable set PRHERO_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"\``,
+      `set CRYSK_ROUTING from your routing config: \`gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"\``,
     ),
   },
   "PRH-ROUTING-INVALID": {
     level: "error",
     owner: "config",
-    what: "PRHERO_ROUTING is invalid: {detail}",
+    what: "CRYSK_ROUTING is invalid: {detail}",
     variants: single(
       "pr-hero cannot tell which backend and model each agent should use",
       [
         "Edit the JSON, then set it again:",
-        '$ gh variable set PRHERO_ROUTING --body "$(jq -c . routing.json)"',
+        '$ gh variable set CRYSK_ROUTING --body "$(jq -c . routing.json)"',
       ],
-      "fix the JSON in PRHERO_ROUTING ({detail}), then set it again with `gh variable set PRHERO_ROUTING`",
+      "fix the JSON in CRYSK_ROUTING ({detail}), then set it again with `gh variable set CRYSK_ROUTING`",
     ),
   },
   "PRH-ROUTE-UNRESOLVABLE": {
@@ -1334,21 +1334,20 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       ambiguous: {
         why: ROUTE_WHY,
         fixes: [
-          "Remove the duplicate mapping for this route from PRHERO_ROUTING.",
+          "Remove the duplicate mapping for this route from CRYSK_ROUTING.",
         ],
         annotationFix:
-          "remove the duplicate mapping for this route from PRHERO_ROUTING",
+          "remove the duplicate mapping for this route from CRYSK_ROUTING",
       },
       "spend-disabled": {
         why: ROUTE_WHY,
-        fixes: ["Enable spend for this route in PRHERO_ROUTING."],
-        annotationFix: "enable spend for this route in PRHERO_ROUTING",
+        fixes: ["Enable spend for this route in CRYSK_ROUTING."],
+        annotationFix: "enable spend for this route in CRYSK_ROUTING",
       },
       "multiple-opencode-providers": {
         why: ROUTE_WHY,
-        fixes: ["Keep one OpenCode provider per review in PRHERO_ROUTING."],
-        annotationFix:
-          "keep one OpenCode provider per review in PRHERO_ROUTING",
+        fixes: ["Keep one OpenCode provider per review in CRYSK_ROUTING."],
+        annotationFix: "keep one OpenCode provider per review in CRYSK_ROUTING",
       },
       default: ROUTE_UNMAPPED,
     },
@@ -1559,7 +1558,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "the provider has throttled this account or key, so an immediate retry would fail the same way",
       ["Wait, or raise the quota, then ask for a new review:", REVIEW_AGAIN],
-      "wait for the limit to reset or raise the quota, then comment /pr-hero review on the PR",
+      "wait for the limit to reset or raise the quota, then comment /crysk review on the PR",
     ),
   },
   "PRH-PROVIDER-UNAVAILABLE": {
@@ -1633,7 +1632,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "a newer run replaces this one, so this result would describe an outdated head",
       ["Ask for a review of the current head:", REVIEW_AGAIN],
-      'ask for a review of the current head with `gh pr comment {pr} --body "/pr-hero review"`',
+      'ask for a review of the current head with `gh pr comment {pr} --body "/crysk review"`',
     ),
   },
 };

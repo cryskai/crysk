@@ -238,7 +238,7 @@ export async function settleCommitStatusAndLedger(input: {
   readHistory?: typeof fetchCommitStatusList;
   // The wait before the override read's one retry. Production omits it (Bun.sleep); a test injects one.
   sleep?: (ms: number) => Promise<void>;
-  // Where the CLI's outcome record is written (PRHERO_OUTCOME_DIR). Production omits
+  // Where the CLI's outcome record is written (CRYSK_OUTCOME_DIR). Production omits
   // it, and the record writer then reads process.env, as every other writer does.
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<void> {

@@ -7,7 +7,7 @@
 // (src/ci/outcome.ts ERROR_CATALOG):
 // - UnmappedRouteError (src/model/routing.ts) -> route/unmapped: "No route mapping
 //   found" and "supplies no modelSnapshot"; PRH-ROUTE-UNRESOLVABLE's unmapped text
-//   asks for a modelSnapshot in PRHERO_ROUTING.
+//   asks for a modelSnapshot in CRYSK_ROUTING.
 // - AmbiguousMappingError (src/model/routing.ts) -> route/ambiguous: "found N
 //   duplicate mappings"; its text asks to remove the duplicate.
 // - UnauthorizedRouteError (src/model/routing.ts) -> route/spend-disabled: every

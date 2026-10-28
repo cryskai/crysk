@@ -11,7 +11,7 @@ import { generateCiWorkflowTemplate } from "#ci/setup";
 
 describe("the review comment", () => {
   test("is the exact command the scaffolded workflow starts on", () => {
-    expect(CI_REVIEW_COMMENT).toBe("/pr-hero review");
+    expect(CI_REVIEW_COMMENT).toBe("/crysk review");
     expect(CI_REVIEW_FULL_COMMENT).toBe(`${CI_REVIEW_COMMENT} --full`);
     // The hint and the trigger must name the same command, or the hint
     // sends people to a comment the workflow never starts on.
@@ -83,10 +83,10 @@ describe("skip comments name the review comment, then the legacy dispatch", () =
       },
     });
     const comment = plan.comment;
-    expect(comment).toContain("Comment `/pr-hero review` on this pull request");
-    expect(comment).toContain("`/pr-hero review --full`");
+    expect(comment).toContain("Comment `/crysk review` on this pull request");
+    expect(comment).toContain("`/crysk review --full`");
     expect(comment).toContain("`pr-hero ci init --force`");
-    expect(comment.indexOf("`/pr-hero review`")).toBeLessThan(
+    expect(comment.indexOf("`/crysk review`")).toBeLessThan(
       comment.indexOf(ciForceReviewDispatch(7)),
     );
   });

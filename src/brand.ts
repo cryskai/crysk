@@ -73,3 +73,35 @@ export function findMarker(
   }
   return best;
 }
+
+// PR comment commands. Every command constant is written in the new form
+// (`/crysk review`); the legacy `/pr-hero` form is derived from it here, so
+// a maintainer's muscle memory and old docs keep working for one version.
+const COMMAND_PREFIX = "/crysk";
+const LEGACY_COMMAND_PREFIX = "/pr-hero";
+
+// Both written forms of a command, new name first. The workflow template
+// lists each one, because a Actions expression cannot match a pattern.
+export function commandForms(command: string): string[] {
+  if (!command.startsWith(`${COMMAND_PREFIX} `)) {
+    throw new Error(`not a crysk command: ${JSON.stringify(command)}`);
+  }
+  return [
+    command,
+    LEGACY_COMMAND_PREFIX + command.slice(COMMAND_PREFIX.length),
+  ];
+}
+
+// Exact match after trimming, and nothing else: no case folding, no inner
+// whitespace tolerance, no trailing words. A loose match is how a quoted reply
+// would start a paid review.
+export function isCommand(text: string, command: string): boolean {
+  const trimmed = text.trim();
+  return commandForms(command).includes(trimmed);
+}
+
+// For near-miss detection: the text begins like the command, in either name.
+export function startsWithCommand(text: string, command: string): boolean {
+  const trimmed = text.trim();
+  return commandForms(command).some((form) => trimmed.startsWith(form));
+}

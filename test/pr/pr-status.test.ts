@@ -1057,7 +1057,7 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
     );
     expect(status.next_action).toBe("review");
     expect(status.reason).toBe(
-      "The last review of this head was partial (some reviewers failed); run /pr-hero review, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
+      "The last review of this head was partial (some reviewers failed); run /crysk review, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.",
     );
   });
 
@@ -1077,7 +1077,7 @@ describe("buildPrStatus: a red partial review is run again (S6)", () => {
     );
     expect(status.next_action).toBe("override-or-fix");
     expect(status.reason).toBe(
-      "The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /pr-hero override.",
+      "The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run /crysk override.",
     );
   });
 
@@ -1119,7 +1119,7 @@ describe("buildPrStatus: a partial review of this head is run again", () => {
     );
     expect(status.next_action).toBe("review");
     expect(status.reason).toBe(
-      "The last review of this head was partial (some reviewers failed); run /pr-hero review.",
+      "The last review of this head was partial (some reviewers failed); run /crysk review.",
     );
   });
 
@@ -1417,7 +1417,7 @@ describe("buildPrStatus: the CI adjudicator's ruling on a dismissal", () => {
     const status = buildPrStatus(dismissed());
     expect(status.findings[0]?.ci_verdict).toBeNull();
     expect(status.next_action).toBe("recheck");
-    expect(status.reason).toMatch(/comment \/pr-hero recheck/);
+    expect(status.reason).toMatch(/comment \/crysk recheck/);
   });
 
   test("(b) a bot ruling upheld on the newest reply and this head counts, and the review no longer waits on it", () => {
@@ -1697,7 +1697,7 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
     expect(status.unresolved_blocking).toBe(1);
     expect(status.next_action).toBe("fix");
     expect(status.reason).toBe(
-      "1 live blocking finding(s) (R001) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /pr-hero override.",
+      "1 live blocking finding(s) (R001) have no comment thread to answer (summary-only or never posted inline); fix them and push, or /crysk override.",
     );
   });
 
@@ -1753,7 +1753,7 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
     );
     expect(status.next_action).toBe("review");
     expect(status.reason).toMatch(/automatic review budget/);
-    expect(status.reason).toMatch(/\/pr-hero review/);
+    expect(status.reason).toMatch(/\/crysk review/);
   });
 
   test("(c) a manual_only policy with no live blocking finding is review", () => {
@@ -1762,7 +1762,7 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
     );
     expect(status.next_action).toBe("review");
     expect(status.reason).toMatch(/manual-only|manual_only/);
-    expect(status.reason).toMatch(/\/pr-hero review/);
+    expect(status.reason).toMatch(/\/crysk review/);
   });
 
   test("(c) a used-up budget answers review even with a live blocking finding (no push gets reviewed there; review #348 R006)", () => {
@@ -1946,6 +1946,31 @@ describe("shouldWaitPrStatus", () => {
       }),
     ).toBe(true);
   });
+
+  test.each(["/crysk review", "/crysk review --full", "/crysk recheck"])(
+    "waits on a fresh %s comment, the same as the legacy spelling",
+    (body) => {
+      const status = buildPrStatus(
+        input({
+          statuses: [gate("failure", "pr-hero: 1 blocking finding(s)", 5)],
+        }),
+      );
+      expect(
+        shouldWaitPrStatus({
+          status,
+          issueComments: [
+            {
+              id: 20,
+              body: `  ${body}\n`,
+              created_at: new Date(NOW - 10_000).toISOString(),
+            },
+          ],
+          nowMs: NOW,
+          elapsedMs: 0,
+        }),
+      ).toBe(true);
+    },
+  );
 
   test("does not wait when the trigger comment is older than gate.created_at or older than startup grace", () => {
     const olderCommentIso = new Date(NOW - 60_000).toISOString();

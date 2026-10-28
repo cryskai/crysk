@@ -872,7 +872,7 @@ describe("Packaging & distribution configuration", () => {
     test("the outcome directory is bound the same way in the trigger, run and publish steps", () => {
       for (const id of ["trigger", "run-pr-hero", "publish"]) {
         const step = steps().find((candidate) => candidate.id === id);
-        expect(step?.env?.PRHERO_OUTCOME_DIR, id).toBe(
+        expect(step?.env?.CRYSK_OUTCOME_DIR, id).toBe(
           `\${{ runner.temp }}/pr-hero-outcome`,
         );
       }
@@ -880,7 +880,7 @@ describe("Packaging & distribution configuration", () => {
 
     test("the materialize step binds the outcome directory, so a malformed input can leave setup.json there", () => {
       const step = steps().find((candidate) => candidate.id === "materialize");
-      expect(step?.env?.PRHERO_OUTCOME_DIR).toBe(
+      expect(step?.env?.CRYSK_OUTCOME_DIR).toBe(
         `\${{ runner.temp }}/pr-hero-outcome`,
       );
     });
@@ -920,7 +920,7 @@ describe("Packaging & distribution configuration", () => {
       );
       expect(step?.run).toContain("src/ci/publish.ts");
       const env = step?.env as Record<string, string> | undefined;
-      expect(env?.PRHERO_PUBLISH_MODE).toBe("cancelled");
+      expect(env?.CRYSK_PUBLISH_MODE).toBe("cancelled");
       const publishEnv = (all[publish]?.env ?? {}) as Record<string, string>;
       // Every value it reads is bound as the publish step binds it. It reads no
       // run attempt: its lock is the outcome directory the trigger cleared.
@@ -965,7 +965,7 @@ describe("Packaging & distribution configuration", () => {
         .split("\n")
         .map((line) => line.trim())
         .find((line) => line !== "" && !line.startsWith("#"));
-      expect(firstCommand).toBe(': > "$PRHERO_OUTCOME_DIR/cli-started"');
+      expect(firstCommand).toBe(': > "$CRYSK_OUTCOME_DIR/cli-started"');
     });
 
     test("the trigger learns only whether the routing names OpenCode, never the routing text", () => {
@@ -1337,7 +1337,7 @@ describe("Packaging & distribution configuration", () => {
     const skill = readFileSync(skillPath, "utf-8");
     expect(skill).toContain("references/opencode-ci.md");
     expect(skill).toContain("OPENCODE_AUTH_JSON");
-    expect(skill).toContain("PRHERO_ROUTING");
+    expect(skill).toContain("CRYSK_ROUTING");
     const ref = readFileSync(refPath, "utf-8");
     expect(ref).toContain("modelSnapshot");
     expect(ref).toContain("Do **not** create `OPENAI_API_KEY`");
@@ -1435,12 +1435,13 @@ describe("Packaging & distribution configuration", () => {
   });
 });
 
-// `/pr-hero recheck` reaches the CI adjudicator through action.yml's review args
-// and the three workflow copies, which must all accept the command.
-describe("/pr-hero recheck wiring", () => {
+// `/crysk recheck` reaches the CI adjudicator through action.yml's review args
+// and the workflow copies, which must all accept the command (and its legacy
+// `/pr-hero` spelling).
+describe("/crysk recheck wiring", () => {
   const rootDir = path.resolve(__dirname, "..");
-  const recheckClause =
-    "startsWith(github.event.comment.body, '/pr-hero recheck')";
+  const clause = (command: string) =>
+    `startsWith(github.event.comment.body, '${command}')`;
   const copies = [
     ".github/workflows/pr-hero.yml",
     "skills/pr-hero-ci-setup/assets/workflow.yml",
@@ -1457,18 +1458,20 @@ describe("/pr-hero recheck wiring", () => {
   });
 
   test.each(copies)(
-    "%s accepts the recheck command in if and concurrency",
+    "%s accepts the recheck command in if and concurrency, in both names",
     (file) => {
       const content = readFileSync(path.join(rootDir, file), "utf-8");
-      const review =
-        content.split(
-          "startsWith(github.event.comment.body, '/pr-hero review')",
-        ).length - 1;
-      expect(review).toBeGreaterThan(0);
-      expect(content.split(recheckClause).length - 1).toBe(review);
+      for (const [review, recheck] of [
+        ["/crysk review", "/crysk recheck"],
+        ["/pr-hero review", "/pr-hero recheck"],
+      ] as const) {
+        const reviewCount = content.split(clause(review)).length - 1;
+        expect(reviewCount).toBeGreaterThan(0);
+        expect(content.split(clause(recheck)).length - 1).toBe(reviewCount);
+      }
       if (file.startsWith(".github")) {
         expect(content).toContain(
-          "/pr-hero review, /pr-hero recheck or /pr-hero override",
+          "/crysk review, /crysk recheck or /crysk override",
         );
       }
     },

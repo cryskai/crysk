@@ -1469,9 +1469,27 @@ describe("stopCommandsNewestFirst", () => {
     ]);
   });
 
+  test("lists the /crysk spellings too, mixed with the legacy ones", () => {
+    expect(
+      stopCommandsNewestFirst([
+        c("old", "/pr-hero stop"),
+        c("maint", "/crysk review --full"),
+        c("a", "  /crysk stop\n"),
+        c("b", "/crysk recheck"),
+        c("y", "/crysk override"),
+      ]),
+    ).toEqual([
+      { user: "b", kind: "lift" },
+      { user: "a", kind: "stop" },
+      { user: "maint", kind: "lift" },
+      { user: "old", kind: "stop" },
+    ]);
+  });
+
   test("ignores near misses and comments with no author", () => {
     expect(
       stopCommandsNewestFirst([
+        c("z", "/crysk stop please"),
         c("a", "/pr-hero stop please"),
         c("b", "/pr-hero  stop"),
         c("", "/pr-hero stop"),

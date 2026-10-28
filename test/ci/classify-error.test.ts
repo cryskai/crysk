@@ -172,7 +172,7 @@ describe("classifyCliError: the class an error carries", () => {
   });
 });
 
-// The routing class renders PRH-ROUTING-INVALID, whose text names PRHERO_ROUTING. The
+// The routing class renders PRH-ROUTING-INVALID, whose text names CRYSK_ROUTING. The
 // person file's routing error must not take it; the routing parser itself keeps it.
 describe("classifyCliError: the routing class depends on the layer that parsed", () => {
   function thrownBy(thrower: () => unknown): unknown {

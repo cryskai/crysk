@@ -51,14 +51,14 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    commands yourself and follow the [Quick path](docs/github-actions.md#quick-path).
 
 3. **Merge the workflow and `.prhero/` into the default branch.** A comment-triggered run
-   (`/pr-hero review`) reads both from the base branch, so it starts nothing until the workflow is
+   (`/crysk review`) reads both from the base branch, so it starts nothing until the workflow is
    there, and fails `PRH-GOTCHAS-MISSING` until `.prhero/` is.
    Then require the `pr-hero` status check in branch protection if you want it to block merges.
 
 4. **Open pull requests as usual.** Every new PR gets a review posted as PR comments; later pushes
    follow the level you chose (balanced re-reviews a push only when it is risky or the last pass
    found enough, at most 2 automatic passes), and a PR above the size threshold is skipped. Comment
-   `/pr-hero review` to review a skipped push anyway. Ask your agent
+   `/crysk review` to review a skipped push anyway. Ask your agent
    to open the PR (`pr-hero-pr`), and it waits for the review with `npx -y pr-hero status --pr <n>
    --wait --json`, then hands the findings to `pr-hero-triage`, which replies to each one in its
    thread and pushes the fixes.
@@ -323,8 +323,8 @@ holding the patch, their roles move to the user message and a one-turn warm-up w
 since other providers already cache each hunter's own loop),
 `--post` / `--no-post` (toggle PR comment publishing),
 `--force` (local only: review this diff even when the size gate would skip it;
-in GitHub Actions the same forced re-review is a `/pr-hero review` comment on the pull request,
-which runs on the Actions runner; `/pr-hero override` instead unlocks a red gate with no review),
+in GitHub Actions the same forced re-review is a `/crysk review` comment on the pull request,
+which runs on the Actions runner; `/crysk override` instead unlocks a red gate with no review),
 `--full` (run un-capped refuter verification steps),
 `--no-summary` (skip the summarizer; see `summary` in config above),
 `--out <dir>` (run dir for `review`),
@@ -483,7 +483,7 @@ because an unattended watcher must not be the thing that discovers it.
 **It is not a claim about quality.** We have no evidence that a bigger diff reviews worse: attention
 dilution was tested and falsified (`fixtures/scale-probe.ts`), and the one measured Greptile-only
 miss came from a 7-file PR. If a large diff is worth its price, review it anyway.
-Locally that is `--force`. In GitHub Actions it is a pull request comment, `/pr-hero review`,
+Locally that is `--force`. In GitHub Actions it is a pull request comment, `/crysk review`,
 from a user with write access (a workflow scaffolded before the comment trigger uses
 `gh workflow run pr-hero-force.yml -f pr=<n>` instead). The comment does not review on your
 machine; the Actions runner does. It also clears the CI admission rules and the budget ceiling for
@@ -552,9 +552,9 @@ only ever over-count, never under-count.
 ```bash
 pr-hero review --pr 42 --dry-run          # prints the gate verdict, spends nothing
 pr-hero review --pr 42 --force            # local: review it anyway (does NOT skip the cost prompt)
-gh pr comment 42 --body "/pr-hero review"  # CI: same forced re-review, on the Actions runner
-gh pr comment 42 --body "/pr-hero override"  # CI: unlock a red gate on this head, no review, $0
-gh pr comment 42 --body "/pr-hero stop"      # CI: skip automatic reviews on later pushes, until /pr-hero review
+gh pr comment 42 --body "/crysk review"  # CI: same forced re-review, on the Actions runner
+gh pr comment 42 --body "/crysk override"  # CI: unlock a red gate on this head, no review, $0
+gh pr comment 42 --body "/crysk stop"      # CI: skip automatic reviews on later pushes, until /crysk review
 pr-hero review --pr 42 --max-changed-lines 0   # 0 disables that limit entirely
 pr-hero watch add --max-changed-lines 800       # per-repo threshold for the watcher
 ```

@@ -34,6 +34,10 @@ export const OPENCODE_AUTH_SECRET = "OPENCODE_AUTH_JSON";
 // An empty OpenCode auth store. The free broker projects an empty tree, so `{}`
 // is the minimum that passes the trigger's credential check (src/ci/trigger.ts).
 export const OPENCODE_AUTH_VALUE = "{}";
+// The legacy name on purpose: the scaffold reads CRYSK_ROUTING first and this one
+// as its fallback, and nothing here ever sets CRYSK_ROUTING, so the fallback is
+// what decides. The sandbox repo's variable and the rails' delete allow-list
+// keep one name; moving both is a later slice with the rest of the rename.
 export const ROUTING_VARIABLE = "PRHERO_ROUTING";
 // The subscription token the claude route runs on. The scaffold wires it to the
 // action's `claude-token` input (src/ci/setup.ts). init checks its presence only.

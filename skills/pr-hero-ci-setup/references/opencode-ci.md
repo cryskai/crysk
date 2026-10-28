@@ -1,6 +1,6 @@
 # OpenCode in CI — operator procedure
 
-Read this when the operator wants OpenCode, DeepSeek, mixed Claude+OpenCode, or GitHub `OPENCODE_AUTH_JSON` / `PRHERO_ROUTING`. Full narrative: `docs/github-actions.md` (section **OpenCode in CI**).
+Read this when the operator wants OpenCode, DeepSeek, mixed Claude+OpenCode, or GitHub `OPENCODE_AUTH_JSON` / `CRYSK_ROUTING`. Full narrative: `docs/github-actions.md` (section **OpenCode in CI**).
 
 Do **not** print, `cat`, or log credential values. Inspect **keys and `type` only**.
 
@@ -10,7 +10,7 @@ Do **not** print, `cat`, or log credential values. Inspect **keys and `type` onl
 |---|---|---|
 | **Secrets** (hidden) | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | Claude. Unchanged. |
 | **Secrets** | `OPENCODE_AUTH_JSON` | One JSON object: the OpenCode `auth.json` store (or a **CI-only** subset). Cap 48 KB. |
-| **Variables** (public) | `PRHERO_ROUTING` | Routing object only (`default` / `mappings` / `disabled`). No credentials. Cap 48 KB. Quoted in workflow `with.routing`. |
+| **Variables** (public) | `CRYSK_ROUTING` | Routing object only (`default` / `mappings` / `disabled`). No credentials. Cap 48 KB. Quoted in workflow `with.routing`. |
 
 Do **not** create `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or any other per-provider GitHub secret. The Action has no per-provider inputs. Provider tokens live **inside** `OPENCODE_AUTH_JSON`.
 
@@ -59,7 +59,7 @@ gh secret set OPENCODE_AUTH_JSON < /path/to/ci-only-auth.json
 
 ## Routing is logical model, not role
 
-`PRHERO_ROUTING` maps **logical model identity** (`sonnet`, `haiku`), not hunter vs refuter.
+`CRYSK_ROUTING` maps **logical model identity** (`sonnet`, `haiku`), not hunter vs refuter.
 
 Default prompt set:
 
@@ -86,7 +86,7 @@ Do not wrap the variable in `{"routing": ...}`. Do not put keys in the variable 
 ### OpenCode-only (all logicals)
 
 ```bash
-gh variable set PRHERO_ROUTING --body '{"default":{"backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"}}'
+gh variable set CRYSK_ROUTING --body '{"default":{"backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"}}'
 ```
 
 Replace `deepseek-v4-flash` with an id `opencode models` actually lists. The `default` route covers hunters (`sonnet`) and the refuter (`opus`) alike, so the refuter runs on this same model.
@@ -96,7 +96,7 @@ Replace `deepseek-v4-flash` with an id `opencode models` actually lists. The `de
 Hunters (`sonnet`) and refuter (`opus`) → the OpenCode default route, one API provider. Summarizer (`haiku`) → Claude.
 
 ```bash
-gh variable set PRHERO_ROUTING --body '{"default":{"backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"},"mappings":[{"logical":"haiku","backend":"claude-code","provider":"anthropic","gateway":"direct"}]}'
+gh variable set CRYSK_ROUTING --body '{"default":{"backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"},"mappings":[{"logical":"haiku","backend":"claude-code","provider":"anthropic","gateway":"direct"}]}'
 ```
 
 Keep `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) for the Claude mapping. Presence of `OPENCODE_AUTH_JSON` still applies the metered ceiling.
@@ -106,13 +106,13 @@ Keep `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) for the Claude mapping. 
 Map **only** `sonnet`. Hunters go to OpenCode; the unmapped `opus` refuter and the `haiku` summarizer (on unless `summary.enabled` is false) fall through to the Claude CLI (current behavior), so keep a Claude secret next to `OPENCODE_AUTH_JSON`.
 
 ```bash
-gh variable set PRHERO_ROUTING --body '{"mappings":[{"logical":"sonnet","backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"}]}'
+gh variable set CRYSK_ROUTING --body '{"mappings":[{"logical":"sonnet","backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"}]}'
 ```
 
 Do **not** use this shape in an OpenCode-only run (no Claude secret): the refuter and the summarizer are still routed to the Claude CLI and have no credentials to run them. For OpenCode-only, use the `default` route above, or map all three aliases (`sonnet`, `opus`, `haiku`), each with its own `modelSnapshot` (`opencode models` ids, same single OpenCode provider):
 
 ```bash
-gh variable set PRHERO_ROUTING --body '{"mappings":[{"logical":"sonnet","backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"},{"logical":"opus","backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-pro"},{"logical":"haiku","backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"}]}'
+gh variable set CRYSK_ROUTING --body '{"mappings":[{"logical":"sonnet","backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"},{"logical":"opus","backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-pro"},{"logical":"haiku","backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"}]}'
 ```
 
 ## Workflow
@@ -120,7 +120,7 @@ gh variable set PRHERO_ROUTING --body '{"mappings":[{"logical":"sonnet","backend
 Generated `with:` must keep:
 
 ```yaml
-routing: "${{ vars.PRHERO_ROUTING }}"
+routing: "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"
 opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
 ```
 
@@ -130,7 +130,7 @@ The Action installs OpenCode CLI **1.18.30** in its **own** step when `opencode-
 
 ## Fail-closed edges
 
-- Fork pushes still skip (no secrets); a maintainer's `/pr-hero review` comment reviews a fork.
+- Fork pushes still skip (no secrets); a maintainer's `/crysk review` comment reviews a fork.
 - OpenCode-only (only `OPENCODE_AUTH_JSON`) counts as a credential and reviews.
 - No credential at all fails the run red, with the `gh secret set` commands in the step summary.
 - Claude credentials + OpenCode routing **without** `OPENCODE_AUTH_JSON` starts then **fails**.

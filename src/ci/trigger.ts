@@ -3,7 +3,7 @@
 //
 // The consumer workflow calls the action on `pull_request` and
 // `issue_comment`, and its job `if:` already drops fork pull requests and
-// comments that do not start with `/pr-hero review`. This module decides it
+// comments that do not start with `/crysk review` (or `/pr-hero review`). This module decides it
 // all again anyway. A workflow is a file the consumer owns and edits, so a
 // prefix filter there is a cost saving, never the security boundary: the
 // command match, the commenter's permission and the credential check all
@@ -31,20 +31,23 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { isCommand, startsWithCommand } from "../brand";
 
-export const REVIEW_COMMAND = "/pr-hero review";
-export const REVIEW_FULL_COMMAND = "/pr-hero review --full";
+// Commands are written in the new `/crysk` form. The matchers in ../brand
+// also accept the legacy `/pr-hero` spelling for one version.
+export const REVIEW_COMMAND = "/crysk review";
+export const REVIEW_FULL_COMMAND = "/crysk review --full";
 // The review, plus the CI adjudicator's rulings on pending dismissals (docs/github-actions.md,
 // "Rechecking a dismissal"). Exact, like the review command.
-export const RECHECK_COMMAND = "/pr-hero recheck";
+export const RECHECK_COMMAND = "/crysk recheck";
 // The human escape hatch (odd/tasks/agent-first-ci.md, S8). Exact, like the review
 // command: a loose match would let a quoted reply unlock a gate.
-export const OVERRIDE_COMMAND = "/pr-hero override";
+export const OVERRIDE_COMMAND = "/crysk override";
 // Stops automatic reviews on the PR until the next review or recheck command.
 // It starts no workflow run: CI admission reads it on the next push and checks
 // the author's permission there (activeStopAuthors, ci-admission-gate.ts).
 // Exact, like the other commands.
-export const STOP_COMMAND = "/pr-hero stop";
+export const STOP_COMMAND = "/crysk stop";
 
 // A GitHub login: letters, digits, hyphens and underscores (an Enterprise Managed
 // User login is `handle_shortcode`), plus the `[bot]` suffix an app posts under. The
@@ -174,47 +177,44 @@ export type CiTriggerDecision =
   | { kind: "no-credentials"; inputs: readonly string[] };
 
 // Exact match after trimming, and nothing else: no case folding, no inner
-// whitespace tolerance, no trailing words. A loose match is how "/pr-hero
+// whitespace tolerance, no trailing words. A loose match is how "/crysk
 // review please" or a quoted reply would start a paid review.
 export function parseReviewCommand(
   body: string,
 ): { full: boolean; adjudicate: boolean } | undefined {
-  const command = body.trim();
-  if (command === REVIEW_COMMAND) return { full: false, adjudicate: false };
-  if (command === REVIEW_FULL_COMMAND) return { full: true, adjudicate: false };
-  if (command === RECHECK_COMMAND) return { full: false, adjudicate: true };
+  if (isCommand(body, REVIEW_COMMAND))
+    return { full: false, adjudicate: false };
+  if (isCommand(body, REVIEW_FULL_COMMAND)) {
+    return { full: true, adjudicate: false };
+  }
+  if (isCommand(body, RECHECK_COMMAND))
+    return { full: false, adjudicate: true };
   return undefined;
 }
 
 // A comment that asks for something. Both kinds are permission-gated, so the
 // comment kind (and not the command) decides whether the lookup runs.
+// `text` is what the commenter typed (trimmed), so a message that names the
+// command echoes the spelling they used, `/crysk` or the legacy `/pr-hero`.
 type CommentCommand =
-  | { kind: "review"; full: boolean; adjudicate: boolean }
-  | { kind: "override" };
+  | { kind: "review"; full: boolean; adjudicate: boolean; text: string }
+  | { kind: "override"; text: string };
 
 type EventVerdict =
   | { kind: "ignore"; reason: string; nearMiss?: true }
   | { kind: "comment"; command: CommentCommand }
   | { kind: "event" };
 
-// A comment that starts like a command but is not an exact one: "/pr-hero review
-// please", "/pr-hero override --force". It is judged on the trimmed text, the same way
+// A comment that starts like a command but is not an exact one: "/crysk review
+// please", "/crysk override --force". It is judged on the trimmed text, the same way
 // as the command. The job's own `startsWith` filter lets such a comment start a run,
 // and that run reviews nothing; its reaction (confused) is the only word it says.
 function isNearMiss(body: string): boolean {
-  const text = body.trim();
   return (
-    text.startsWith(REVIEW_COMMAND) ||
-    text.startsWith(RECHECK_COMMAND) ||
-    text.startsWith(OVERRIDE_COMMAND)
+    startsWithCommand(body, REVIEW_COMMAND) ||
+    startsWithCommand(body, RECHECK_COMMAND) ||
+    startsWithCommand(body, OVERRIDE_COMMAND)
   );
-}
-
-// The exact text a commenter typed, for the messages that name it.
-function commandText(command: CommentCommand): string {
-  if (command.kind === "override") return OVERRIDE_COMMAND;
-  if (command.adjudicate) return RECHECK_COMMAND;
-  return command.full ? REVIEW_FULL_COMMAND : REVIEW_COMMAND;
 }
 
 // Stage 1 of the precedence. Shared by decideCiTrigger and
@@ -260,16 +260,20 @@ function classifyEvent(input: CiTriggerInput): EventVerdict {
           kind: "review",
           full: review.full,
           adjudicate: review.adjudicate,
+          text: input.commentBody.trim(),
         },
       };
     }
-    if (input.commentBody.trim() === OVERRIDE_COMMAND) {
-      return { kind: "comment", command: { kind: "override" } };
+    if (isCommand(input.commentBody, OVERRIDE_COMMAND)) {
+      return {
+        kind: "comment",
+        command: { kind: "override", text: input.commentBody.trim() },
+      };
     }
     return {
       kind: "ignore",
       reason:
-        `This comment is not a pr-hero command. Comment exactly ` +
+        `This comment is not a crysk command. Comment exactly ` +
         `\`${REVIEW_COMMAND}\`, \`${REVIEW_FULL_COMMAND}\` or \`${RECHECK_COMMAND}\` to request ` +
         `a review, or \`${OVERRIDE_COMMAND}\` to unlock a gate.`,
       ...(isNearMiss(input.commentBody) ? { nearMiss: true as const } : {}),
@@ -314,7 +318,7 @@ function commenterVerdict(
         `pr-hero could not verify whether ${who} has write access to ` +
         `${input.repository}, because the GitHub API call failed ` +
         `(${permission.detail}), so ${outcome}. Comment ` +
-        `\`${commandText(command)}\` again to retry.`,
+        `\`${command.text}\` again to retry.`,
       status: permission.status,
       rateLimited: permission.rateLimited,
     };
@@ -361,7 +365,7 @@ function overrideDecision(input: CiTriggerInput): CiTriggerDecision {
       kind: "denied",
       reason:
         "pr-hero did not override the gate: an override applies to the head at " +
-        "the time of the comment; comment `/pr-hero override` again.",
+        "the time of the comment; comment `/crysk override` again.",
     };
   }
   if (!GITHUB_LOGIN.test(input.commenterLogin)) {
@@ -706,7 +710,7 @@ function writeRecord(
   run: RunIdentity,
   fields: RecordFields,
 ): RecordWrite {
-  const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = deps.env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return "unset";
   const record = {
     v: 1,
@@ -1024,20 +1028,20 @@ const HEAD_RETRY_DELAY_MS = 2_000;
 // The notice a refused override prints. docs/github-actions.md ("Overriding a red
 // gate") describes the same refusal in prose, so keep the two in step.
 const OVERRIDE_FORK_REFUSAL =
-  "`/pr-hero override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/pr-hero review` and merge it with your repository's own rules.";
+  "`/crysk override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/crysk review` and merge it with your repository's own rules.";
 
 // The notice for an answer that does not say whether the pull request is a fork (a
 // failed or invalid lookup). It is not a claim that the pull request is one, so it gets
 // its own text: the same refusal, with the way to retry.
 const OVERRIDE_UNKNOWN_FORK_REFUSAL =
-  "`/pr-hero override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/pr-hero override` again.";
+  "`/crysk override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/crysk override` again.";
 
 // The notices a refused recheck prints: the same refusal as an override on a fork,
 // with the adjudicator's reason. The unknown answer gets its own text, as the override does.
 const RECHECK_FORK_REFUSAL =
-  "/pr-hero recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
+  "/crysk recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
 const RECHECK_UNKNOWN_FORK_REFUSAL =
-  "/pr-hero recheck could not confirm whether this pull request comes from a fork, so it was refused; comment `/pr-hero recheck` again.";
+  "/crysk recheck could not confirm whether this pull request comes from a fork, so it was refused; comment `/crysk recheck` again.";
 
 // What the override's one lookup says. `crossRepository` is undefined when the
 // answer does not say (a failed call, output that is not JSON, or a field that is

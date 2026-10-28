@@ -201,7 +201,7 @@ const ISOLATED_ENV_VARS = [
   "GITHUB_STEP_SUMMARY",
   "GITHUB_OUTPUT",
   "GH_REPO",
-  "PRHERO_OUTCOME_DIR",
+  "CRYSK_OUTCOME_DIR",
 ];
 
 describe("publishRunOutcome", () => {
@@ -603,7 +603,7 @@ describe("publishRunOutcome", () => {
 
     beforeEach(() => {
       outcome = path.join(home, "outcome");
-      process.env.PRHERO_OUTCOME_DIR = outcome;
+      process.env.CRYSK_OUTCOME_DIR = outcome;
     });
 
     function readCli(): unknown {
@@ -642,7 +642,7 @@ describe("publishRunOutcome", () => {
     });
 
     test("a posting that throws with no outcome directory writes nothing and still rethrows", async () => {
-      delete process.env.PRHERO_OUTCOME_DIR;
+      delete process.env.CRYSK_OUTCOME_DIR;
       const postError = new Error("gh went away");
       const input = baseInput({
         postEnabled: true,

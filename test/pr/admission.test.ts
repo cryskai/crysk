@@ -267,8 +267,8 @@ describe("publishCiSkip: the outcome record", () => {
     "%s is recorded as skipped for %s, with no head (the plan carries none)",
     async (status, skip) => {
       const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-record-"));
-      const saved = process.env.PRHERO_OUTCOME_DIR;
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      const saved = process.env.CRYSK_OUTCOME_DIR;
+      process.env.CRYSK_OUTCOME_DIR = dir;
       try {
         expect((await publish(status)).code).toBe(0);
         const written = readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
@@ -295,8 +295,8 @@ describe("publishCiSkip: the outcome record", () => {
 
     beforeEach(() => {
       dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-status-"));
-      saved = process.env.PRHERO_OUTCOME_DIR;
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      saved = process.env.CRYSK_OUTCOME_DIR;
+      process.env.CRYSK_OUTCOME_DIR = dir;
     });
 
     afterEach(() => {
@@ -1258,8 +1258,8 @@ describe("publishCiSkip: the outcome record", () => {
 
     beforeEach(() => {
       dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-post-"));
-      saved = process.env.PRHERO_OUTCOME_DIR;
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      saved = process.env.CRYSK_OUTCOME_DIR;
+      process.env.CRYSK_OUTCOME_DIR = dir;
     });
 
     afterEach(() => {
@@ -1312,7 +1312,7 @@ describe("publishCiSkip: the outcome record", () => {
     });
 
     test("with no outcome directory, a reposted notice writes nothing", async () => {
-      delete process.env.PRHERO_OUTCOME_DIR;
+      delete process.env.CRYSK_OUTCOME_DIR;
       const repost = (async () => ({
         commentId: 1,
         deletedIds: [],
@@ -1324,13 +1324,13 @@ describe("publishCiSkip: the outcome record", () => {
 
   test("the notice and the exit code are identical with and without the outcome directory", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-same-"));
-    const saved = process.env.PRHERO_OUTCOME_DIR;
+    const saved = process.env.CRYSK_OUTCOME_DIR;
     try {
-      delete process.env.PRHERO_OUTCOME_DIR;
+      delete process.env.CRYSK_OUTCOME_DIR;
       const without = await publish("skipped-size");
       expect(existsSync(path.join(dir, CLI_RECORD_FILE))).toBe(false);
 
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      process.env.CRYSK_OUTCOME_DIR = dir;
       const withDir = await publish("skipped-size");
       expect(withDir).toEqual(without);
       expect(without.stderr).toContain("pr-hero review skipped — fixture");
@@ -1469,9 +1469,9 @@ describe("fetchCommitStatuses with failClosed", () => {
 
 function restoreOutcomeDir(saved: string | undefined): void {
   if (saved === undefined) {
-    delete process.env.PRHERO_OUTCOME_DIR;
+    delete process.env.CRYSK_OUTCOME_DIR;
   } else {
-    process.env.PRHERO_OUTCOME_DIR = saved;
+    process.env.CRYSK_OUTCOME_DIR = saved;
   }
 }
 
