@@ -1,6 +1,6 @@
 // Pure-decision tests for PR mode (ROADMAP B1): the --pr flag surface, the
 // PR-record parser, the two-root naming rules, the worktree reuse gate, and
-// the comparison.json projection. All offline, literal in → literal out.
+// the commit-status contract. All offline, literal in → literal out.
 //
 // The two real fixtures below are REAL `gh pr view` bodies captured
 // 2026-08-10 with
@@ -16,11 +16,8 @@ import {
   SKIP_SIZE_COMMENT_MARKER,
 } from "#ci/gates";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
-import type { PrHeroFindingRef } from "#compare/compare";
-import { parseComparisonJson } from "#compare/ledger";
 import {
   blockingCommitStatusRequest,
-  buildComparisonJson,
   CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
   COMMIT_STATUS_CONTEXT,
   COMMIT_STATUS_DESCRIPTION_MAX,
@@ -316,7 +313,7 @@ describe("parseArgs post command", () => {
     expect(options.from).toBe("/runs/x");
     for (const argv of [
       ["review", "--from", "/runs/x"],
-      ["ledger", "--from", "/runs/x"],
+      ["status", "--pr", "5", "--from", "/runs/x"],
     ]) {
       try {
         parseArgs(argv);
@@ -350,14 +347,26 @@ describe("parseArgs post command", () => {
   });
 });
 
-// ROADMAP B6c: the `triage` verb — `pr-hero triage --pr <n> --from
-// <run-dir> [--dry-run]` — shares `post`'s exact shape (both --pr and
-// --from required, --from otherwise rejected everywhere else).
+const replyFlags = [
+  "--pr",
+  "5",
+  "--from",
+  "/runs/x",
+  "--finding",
+  "F001",
+  "--tag",
+  "applied",
+  "--body-file",
+  "/tmp/reason.md",
+];
+
+// The bare `triage --pr --from` verb (it bound verdicts into comparison.json)
+// was retired with that file; only `triage reply` remains.
 describe("parseArgs triage command", () => {
   test("is a recognized command, and the unknown-command list names it", () => {
-    expect(
-      parseArgs(["triage", "--pr", "5", "--from", "/runs/x"]).command,
-    ).toBe("triage");
+    expect(parseArgs(["triage", "reply", ...replyFlags]).command).toBe(
+      "triage",
+    );
     try {
       parseArgs(["audit"]);
       throw new Error("should have thrown");
@@ -367,28 +376,10 @@ describe("parseArgs triage command", () => {
     }
   });
 
-  test("requires --pr and --from", () => {
-    expect(() => parseArgs(["triage", "--from", "/runs/x"])).toThrow(/--pr/);
-    expect(() => parseArgs(["triage", "--pr", "5"])).toThrow(/--from/);
-  });
-
-  test("--from is read, and rejected on every other command", () => {
-    const { options } = parseArgs(["triage", "--pr", "5", "--from", "/runs/x"]);
-    expect(options.from).toBe("/runs/x");
-    expect(() => parseArgs(["review", "--from", "/runs/x"])).toThrow(/--from/);
-  });
-
-  test("accepts bare --pr (current branch's PR), and --dry-run parses beside it", () => {
-    const { options } = parseArgs([
-      "triage",
-      "--pr",
-      "--from",
-      "/runs/x",
-      "--dry-run",
-    ]);
-    expect(options.pr).toBe("current");
-    expect(options.from).toBe("/runs/x");
-    expect(options.dryRun).toBe(true);
+  test("bare triage fails loud and names triage reply", () => {
+    expect(() =>
+      parseArgs(["triage", "--pr", "5", "--from", "/runs/x"]),
+    ).toThrow(/triage reply/);
   });
 });
 
@@ -499,7 +490,7 @@ describe("parseArgs triage reply", () => {
     );
   });
 
-  test("reply flags are rejected on the bind-only triage verb", () => {
+  test("reply flags without the reply sub-word fail loud", () => {
     expect(() =>
       parseArgs([
         "triage",
@@ -510,7 +501,7 @@ describe("parseArgs triage reply", () => {
         "--finding",
         "F001",
       ]),
-    ).toThrow(/--finding only applies to triage reply/);
+    ).toThrow(/triage reply/);
   });
 
   test("an unknown tag fails loud", () => {
@@ -952,129 +943,6 @@ describe("decideWorktree", () => {
     expect(headMoved.reason.length).toBeGreaterThan(0);
     expect(dirtied.reason.length).toBeGreaterThan(0);
     expect(headMoved.reason).not.toBe(dirtied.reason);
-  });
-});
-
-describe("buildComparisonJson", () => {
-  const first: PrHeroFindingRef = {
-    id: "F001",
-    path: "src/a.ts",
-    line: 102,
-    claim: "Cached list survives the mutation.",
-    tier: "blocking",
-  };
-  const second: PrHeroFindingRef = {
-    id: "F002",
-    path: "src/c.ts",
-    line: 40,
-    claim: "Only pr-hero saw this.",
-    tier: "advisory",
-  };
-  const base = {
-    pr: 1682,
-    headSha: "e3ab386a63020c6f5c21d814d176ff33849eef8d",
-    diffFromSha: "b22c3b367f6ac8531ad40e172f7aa82384dbbeb1",
-    runDir: "/x/musive-prhero-runs/pr-1682-e3ab386a-1",
-    generatedAt: "2026-08-10T18:00:00.000Z",
-    runStatus: "complete" as const,
-  };
-
-  test("one prhero_only row per finding, in order, with greptile null", () => {
-    const json = buildComparisonJson({ ...base, findings: [first, second] });
-    expect(json.pr).toBe(1682);
-    expect(json.head_sha).toBe(base.headSha);
-    expect(json.diff_from_sha).toBe(base.diffFromSha);
-    expect(json.run_dir).toBe(base.runDir);
-    expect(json.generated_at).toBe(base.generatedAt);
-    expect(json.run_status).toBe("complete");
-    expect(json.greptile).toEqual({ found: false });
-    expect(json.rows).toEqual([
-      {
-        bucket: "prhero_only",
-        greptile: null,
-        prhero: {
-          id: "F001",
-          path: "src/a.ts",
-          line: 102,
-          claim: "Cached list survives the mutation.",
-          tier: "blocking",
-        },
-        verdict: null,
-        reasoning: null,
-        actor: null,
-      },
-      {
-        bucket: "prhero_only",
-        greptile: null,
-        prhero: {
-          id: "F002",
-          path: "src/c.ts",
-          line: 40,
-          claim: "Only pr-hero saw this.",
-          tier: "advisory",
-        },
-        verdict: null,
-        reasoning: null,
-        actor: null,
-      },
-    ]);
-  });
-
-  // The byte-level contract: the ledger, store and watcher read these keys
-  // in this order, and a reordered row is a silent schema change.
-  test("a row keeps the exact key order the readers were written against", () => {
-    const json = buildComparisonJson({ ...base, findings: [first] });
-    expect(Object.keys(json.rows[0])).toEqual([
-      "bucket",
-      "greptile",
-      "prhero",
-      "verdict",
-      "reasoning",
-      "actor",
-    ]);
-  });
-
-  test("the output reads back through the ledger's own parser", () => {
-    const json = buildComparisonJson({ ...base, findings: [first, second] });
-    const stored = parseComparisonJson(`${JSON.stringify(json, null, 2)}\n`);
-    expect(stored.greptile).toEqual({ found: false });
-    expect(stored.rows.map((row) => row.bucket)).toEqual([
-      "prhero_only",
-      "prhero_only",
-    ]);
-    expect(stored.rows.every((row) => row.greptile === null)).toBe(true);
-  });
-
-  test("no findings is an empty but valid record", () => {
-    const json = buildComparisonJson({ ...base, findings: [] });
-    expect(json.rows).toEqual([]);
-    expect(parseComparisonJson(JSON.stringify(json)).rows).toEqual([]);
-  });
-
-  // A partial run's comparison stays readable, weighted by its status — only
-  // the all-hunters-dead case is never written at all (comparison.ts skips it).
-  test("a partial run is recorded as partial", () => {
-    const json = buildComparisonJson({
-      ...base,
-      runStatus: "partial",
-      findings: [second],
-    });
-    expect(json.run_status).toBe("partial");
-    expect(json.rows).toHaveLength(1);
-    expect(json.rows[0].bucket).toBe("prhero_only");
-  });
-
-  // The A3 lesson made structural: the triage columns exist, and they ship
-  // empty — never pre-filled, never omitted. `actor` (ROADMAP B6c) joins
-  // them for the same reason: nobody has triaged this row yet.
-  test("every row ships verdict, reasoning and actor as literal nulls", () => {
-    const json = buildComparisonJson({ ...base, findings: [first, second] });
-    expect(json.rows.length).toBeGreaterThan(0);
-    for (const row of json.rows) {
-      expect(row.verdict).toBeNull();
-      expect(row.reasoning).toBeNull();
-      expect(row.actor).toBeNull();
-    }
   });
 });
 

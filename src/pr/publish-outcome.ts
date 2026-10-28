@@ -1,5 +1,5 @@
 // PR mode's post-pipeline tail (ROADMAP B1): the artifact writes, the
-// comparison.json, the canonical store, posting, the terminal summary,
+// the canonical store, posting, the terminal summary,
 // CI publishing, and the CI admission ledger's terminal settlement — all of
 // it runs once `runPipeline` has returned. Extracted out of reviewPr()
 // (src/pr/review-pr.ts, cli-decomp/review-pr-publish-outcome): identifiers
@@ -41,7 +41,6 @@ import {
   settleCiAdmissionLedger,
 } from "#pr/admission";
 import { publishCiReviewIfEligible } from "#pr/ci-publish";
-import { computeComparison } from "#pr/comparison";
 import type { PrDiscoveryResult } from "#pr/discovery";
 import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
 import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
@@ -171,25 +170,7 @@ export async function publishRunOutcome(
     recordReviewDelivered(input.headSha);
   }
 
-  // 13 — the comparison.json write, then (13b) its read-back for the
-  // observability store. See computeComparison (src/pr/comparison.ts) for the
-  // full rationale.
-  const { storedComparison } = await computeComparison({
-    sessionFailed: result.sessionFailed,
-    pr: input.prNumber,
-    headSha: input.headSha,
-    diffFromSha: input.diffFromSha,
-    runDir: input.runDir,
-    runStatus: doc.run_status,
-    findings: doc.findings.map((f) => ({
-      id: f.id,
-      path: f.path,
-      line: f.line,
-      claim: f.claim,
-      tier: f.tier,
-    })),
-  });
-  // 13b — canonical product store & observability metrics.
+  // 13 — canonical product store & observability metrics.
   persistCanonicalReview({
     home: input.home,
     repoId: input.repoId,
@@ -197,7 +178,7 @@ export async function publishRunOutcome(
     checkoutPath: input.operatorRoot,
     doc,
     perAgent: result.perAgent,
-    comparison: storedComparison,
+    diffFromSha: input.diffFromSha,
     log,
   });
   ingestReviewMetrics({
@@ -207,7 +188,6 @@ export async function publishRunOutcome(
     checkoutPath: input.operatorRoot,
     doc,
     perAgent: result.perAgent,
-    comparison: storedComparison,
     log,
   });
 

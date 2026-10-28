@@ -17,9 +17,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
-import type { Bucket, PrHeroFindingRef } from "#compare/compare";
 import { isFullCommitId } from "#git/refs";
-import type { RunStatus } from "#review/findings";
 import {
   assertOutsideRepo,
   type CliOptions,
@@ -589,122 +587,6 @@ export function parseFindingMarker(body: string): ParsedFindingMarker | null {
     return null;
   }
   return { path, line, headSha, c };
-}
-
-// ---------------------------------------------------------------------------
-// comparison.json — the machine-readable record of one run's findings. Its
-// schema is frozen on purpose: the ledger, the store and the watcher still
-// parse it, so `greptile` stays a literal `{ found: false }` and every row is
-// `prhero_only` with `greptile: null`.
-
-// Shape of a Greptile claim as written by older runs. Nothing writes it any
-// more; the ledger's reader (compare/ledger.ts) still types historical files
-// with it, so it stays exported.
-export interface ComparisonGreptileClaim {
-  index: number;
-  path: string;
-  start_line: number;
-  end_line: number;
-  title: string;
-  description: string;
-}
-
-export interface ComparisonPrHeroClaim {
-  id: string;
-  path: string;
-  line: number;
-  claim: string;
-  tier: string;
-}
-
-export interface ComparisonRow {
-  bucket: Bucket;
-  greptile: null;
-  prhero: ComparisonPrHeroClaim | null;
-  // Always null here, and present ON PURPOSE — the A3 lesson: a verdict
-  // recorded without its reasoning cannot be re-examined when new evidence
-  // arrives. These two columns exist to be filled by the triage (6b/6c),
-  // and the ledger (B4) will accumulate them across PRs.
-  verdict: null;
-  reasoning: null;
-  // Who will eventually write verdict/reasoning — always null at build time
-  // for the same reason verdict/reasoning are: this row is fresh off a
-  // review, nobody has triaged it yet. `comparison.json` carries no
-  // `schema_version` (it is pr-hero's own artifact, not the findings schema
-  // shared with the lab — rule 5 does not apply), so this field costs no
-  // coordination (ROADMAP B6c, decided 2026-08-12).
-  actor: null;
-}
-
-export interface ComparisonJson {
-  pr: number;
-  head_sha: string;
-  diff_from_sha: string;
-  run_dir: string;
-  // ISO 8601, stamped by the I/O caller (this module owns no clock): the
-  // ledger (B4) orders a PR's runs by it so the LATEST run is the one that
-  // votes. Files written before this field existed are ordered by mtime.
-  generated_at: string;
-  // "complete" or "partial" — stamped so B4's ledger can weigh a comparison
-  // by how much of the engine actually ran. (A run where EVERY hunter died
-  // never reaches this file: the caller skips the comparison outright,
-  // because "pr-hero 0" from a review that never happened would be recorded
-  // as a measured miss.)
-  run_status: RunStatus;
-  // Always `{ found: false }`: no external review is compared any more. The
-  // field stays so the schema the ledger reads does not change.
-  greptile: { found: false };
-  rows: ComparisonRow[];
-}
-
-// One `prhero_only` row per finding, in the findings' own order. Each row is
-// built by the same row() the rows always came from, so the bytes are unchanged.
-export function buildComparisonJson(input: {
-  pr: number;
-  headSha: string;
-  diffFromSha: string;
-  runDir: string;
-  generatedAt: string;
-  runStatus: RunStatus;
-  findings: PrHeroFindingRef[];
-}): ComparisonJson {
-  return {
-    pr: input.pr,
-    head_sha: input.headSha,
-    diff_from_sha: input.diffFromSha,
-    run_dir: input.runDir,
-    generated_at: input.generatedAt,
-    run_status: input.runStatus,
-    greptile: { found: false },
-    rows: input.findings.map((finding) =>
-      row("prhero_only", null, prheroClaim(finding)),
-    ),
-  };
-}
-
-function row(
-  bucket: Bucket,
-  greptile: null,
-  prhero: ComparisonPrHeroClaim | null,
-): ComparisonRow {
-  return {
-    bucket,
-    greptile,
-    prhero,
-    verdict: null,
-    reasoning: null,
-    actor: null,
-  };
-}
-
-function prheroClaim(finding: PrHeroFindingRef): ComparisonPrHeroClaim {
-  return {
-    id: finding.id,
-    path: finding.path,
-    line: finding.line,
-    claim: finding.claim,
-    tier: finding.tier,
-  };
 }
 
 // ---------------------------------------------------------------------------

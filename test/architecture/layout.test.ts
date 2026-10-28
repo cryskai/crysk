@@ -100,7 +100,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   },
   {
     domain: "triage",
-    files: ["adjudication", "reply", "triage", "write"],
+    files: ["adjudication", "reply", "triage"],
   },
   {
     domain: "watch",
@@ -120,7 +120,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   },
   {
     domain: "compare",
-    files: ["compare", "floor-test", "ledger", "martian-adapter"],
+    files: ["compare", "floor-test", "martian-adapter"],
   },
   {
     domain: "review",
@@ -152,7 +152,6 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "admission",
       "ci-admission-gate",
       "ci-publish",
-      "comparison",
       "discovery",
       "inline",
       "plan",

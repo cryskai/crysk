@@ -11,7 +11,7 @@
 // computeDroppedFindingIds) moved to test/pr/inline-post.test.ts alongside
 // src/pr/pr.ts and src/pr/inline.ts (cli-decomp S2, Cluster C). The
 // `post`/`triage`/`usage`/`doctor` verbs' own wiring tests (runPostCommand,
-// runTriageCommand/runTriageReplyCommand, originUsageScope,
+// runTriageReplyCommand, originUsageScope,
 // runDoctorCommand) moved to test/commands/*.test.ts alongside
 // src/commands/*.ts (cli-decomp S3), duplicating the doc()/finding() half of
 // the fixture block below; the makeFakeGh/ndjson/OPERATOR_ROOT half stays

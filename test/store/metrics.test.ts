@@ -10,7 +10,6 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { StoredComparison } from "#compare/ledger";
 import type { Finding, FindingsDocument } from "#review/findings";
 import type { PerAgentUsage } from "#review/pipeline";
 import { runGc } from "#store/gc";
@@ -142,7 +141,6 @@ describe("ingestRun + queryUsage", () => {
       checkoutPath: "/Users/x/Desktop/musive",
       doc: baseDoc({ pr: 0 }),
       perAgent: PER_AGENT,
-      comparison: null,
       generatedAt: "2026-08-15T12:00:00.000Z",
     });
     const rows = queryUsage(dbPath, { repoId: REPO_A });
@@ -157,52 +155,41 @@ describe("ingestRun + queryUsage", () => {
     });
   });
 
-  test("a PR run keeps the numeric pr and stores comparison rows", async () => {
+  test("a PR run keeps the numeric pr, and re-ingest keeps comparison rows stored before", async () => {
     const dbPath = await tmpDbPath();
-    const comparison: StoredComparison = {
-      pr: 42,
-      head_sha: "b".repeat(40),
-      diff_from_sha: "a".repeat(40),
-      run_dir: "/runs/pr-42-1",
-      run_status: "complete",
-      greptile: { found: true },
-      rows: [
-        {
-          bucket: "greptile_only",
-          greptile: {
-            index: 1,
-            path: "src/thing.ts",
-            start_line: 1,
-            end_line: 2,
-            title: "t",
-            description: "d",
-          },
-          prhero: null,
-          verdict: null,
-          reasoning: null,
-          actor: null,
-        },
-      ],
-    };
-    ingestRun({
-      dbPath,
-      repoId: REPO_A,
-      runDir: "/runs/pr-42-1",
-      checkoutPath: "/Users/x/Desktop/musive",
-      doc: baseDoc({ pr: 42 }),
-      perAgent: PER_AGENT,
-      comparison,
-      generatedAt: "2026-08-15T12:00:00.000Z",
-    });
+    const ingestPr = () =>
+      ingestRun({
+        dbPath,
+        repoId: REPO_A,
+        runDir: "/runs/pr-42-1",
+        checkoutPath: "/Users/x/Desktop/musive",
+        doc: baseDoc({ pr: 42 }),
+        perAgent: PER_AGENT,
+        generatedAt: "2026-08-15T12:00:00.000Z",
+      });
+    ingestPr();
+    // A verdict written before the retirement. No writer creates these any more.
+    const seed = new Database(dbPath);
+    try {
+      seed
+        .query(
+          `INSERT INTO comparison_rows (run_id, row_index, bucket, greptile_json, prhero_json, verdict, reasoning, actor)
+           VALUES ((SELECT id FROM runs WHERE run_dir = ?), 0, 'prhero_only', NULL, NULL, 'prhero-false-positive', 'kept', 'human')`,
+        )
+        .run("/runs/pr-42-1");
+    } finally {
+      seed.close();
+    }
+    ingestPr();
     const rows = queryUsage(dbPath, { repoId: REPO_A });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.pr).toBe(42);
     const db = new Database(dbPath, { readonly: true });
     try {
       const compRows = db
-        .query("SELECT * FROM comparison_rows;")
-        .all() as unknown[];
-      expect(compRows).toHaveLength(1);
+        .query("SELECT verdict FROM comparison_rows;")
+        .all() as { verdict: string }[];
+      expect(compRows).toEqual([{ verdict: "prhero-false-positive" }]);
     } finally {
       db.close();
     }
@@ -221,7 +208,6 @@ describe("ingestRun + queryUsage", () => {
           telemetry: { ...baseDoc().telemetry, wall_ms: wallMs },
         }),
         perAgent: PER_AGENT,
-        comparison: null,
         generatedAt: "2026-08-15T12:00:00.000Z",
       });
     ingestOnce(5000);
@@ -251,7 +237,6 @@ describe("ingestRun + queryUsage", () => {
       checkoutPath: "/Users/x/Desktop/musive/musive-s1",
       doc: baseDoc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       generatedAt: "2026-08-15T12:00:00.000Z",
     });
     ingestRun({
@@ -261,7 +246,6 @@ describe("ingestRun + queryUsage", () => {
       checkoutPath: "/Users/x/Desktop/musive/musive-s3",
       doc: baseDoc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       generatedAt: "2026-08-15T12:00:01.000Z",
     });
     ingestRun({
@@ -271,7 +255,6 @@ describe("ingestRun + queryUsage", () => {
       checkoutPath: "/Users/x/Desktop/other",
       doc: baseDoc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       generatedAt: "2026-08-15T12:00:02.000Z",
     });
     const scoped = queryUsage(dbPath, { repoId: REPO_A });
@@ -290,7 +273,6 @@ describe("ingestRun + queryUsage", () => {
       checkoutPath: null,
       doc: baseDoc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       generatedAt: "2026-08-15T12:00:00.000Z",
     });
     ingestRun({
@@ -300,7 +282,6 @@ describe("ingestRun + queryUsage", () => {
       checkoutPath: null,
       doc: baseDoc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       generatedAt: "2026-08-15T12:00:01.000Z",
     });
     const all = queryUsage(dbPath, { all: true });
@@ -324,7 +305,6 @@ describe("failSoftIngest", () => {
         checkoutPath: "/Users/x/Desktop/musive",
         doc: baseDoc(),
         perAgent: {},
-        comparison: null,
         log: (line) => warnings.push(line),
         ingest: boom,
       }),
@@ -346,7 +326,6 @@ describe("failSoftIngest", () => {
       checkoutPath: "/Users/x/Desktop/musive",
       doc: baseDoc(),
       perAgent: {},
-      comparison: null,
       log: (line) => warnings.push(line),
       ingest: ingestSpy,
     });
@@ -366,7 +345,6 @@ describe("failSoftIngest", () => {
       checkoutPath: "/Users/x/Desktop/musive",
       doc: baseDoc(),
       perAgent: {},
-      comparison: null,
       log: (line) => warnings.push(line),
     });
     expect(warnings).toEqual([]);
@@ -395,7 +373,6 @@ describe("GC immunity end-to-end (spec: GC after ingest)", () => {
       checkoutPath: "/Users/x/Desktop/musive",
       doc: baseDoc({ pr: 0 }),
       perAgent: PER_AGENT,
-      comparison: null,
       generatedAt: "2026-08-15T12:00:00.000Z",
     });
     // A registry.json + a worktree dir is exactly what discoverWorktrees
@@ -458,7 +435,6 @@ describe("No backfill (spec: Pre-ship run dirs ignored)", () => {
       checkoutPath: null,
       doc: baseDoc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       generatedAt: "2026-08-15T12:00:00.000Z",
     });
     expect(queryUsage(dbPath, { all: true })).toHaveLength(1);

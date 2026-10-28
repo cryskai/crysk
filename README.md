@@ -289,13 +289,12 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 | --- | --- |
 | `pr-hero` / `pr-hero menu` | Open the interactive terminal user interface (TUI) with context-aware navigation, review launcher, and submenus. |
 | `pr-hero review` | Review the checked-out branch against the merge base with `--base`. Requires a clean tree sitting on `--head` (default `HEAD`). |
-| `pr-hero review --pr [n]` | Review a GitHub PR: by number, or — bare, no number — the PR that belongs to the current branch (errors loudly if it has none). Resolves the range through `gh`, runs in a detached worktree with its own codegraph index, then records the result in `comparison.json` as pr-hero's own findings. |
+| `pr-hero review --pr [n]` | Review a GitHub PR: by number, or — bare, no number — the PR that belongs to the current branch (errors loudly if it has none). Resolves the range through `gh`, runs in a detached worktree with its own codegraph index, then records the result in the run's `findings.json`. |
 | `pr-hero review --pr <n> --post` | Same, then publish the report as **one** marked PR comment — re-runs update it in place, never stack. |
 | `pr-hero doctor` | Run diagnostic environment and dependency checks (git, claude auth, gh, codegraph, config). Works inside or outside a repository. |
 | `pr-hero setup` | Machine-level onboarding: skill synchronization and MCP registration — and, when run inside a git repo, it also scaffolds that repo's `.prhero/config.json` and `.prhero/gotchas.md`, so no separate `init` is needed there. Fully non-interactive. It does **not** commit or `.gitignore` what it scaffolds; do that yourself before reviewing. |
 | `pr-hero activity [--kill <pid>]` | Inspect running reviews (with elapsed time, PID, repo/PR), watcher spend against daily cap, and completed run history. `--kill <pid>` safely terminates a running review. |
 | `pr-hero post --pr <n> --from <run-dir>` | Replay-publish a previous run's findings onto the PR (same plan as `--pr --post`). `--dry-run` previews at $0. |
-| `pr-hero triage --pr <n> --from <run-dir>` | Read reply threads and bind triage markers onto that run's `comparison.json` ledger rows. |
 | `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N --tag <tag> --body-file <path>` | Post one triage reply. The driver picks the parent from the posted `<!-- pr-hero-finding` marker (never path/line), renders the marker + badge, posts, and resolves the inline review thread. Reads `anchor.patch` (else `diff.patch`) from the run dir to remap post lines the same way `--post` does. `--body-file` is reasoning only. |
 | `pr-hero status --pr <n> [--wait] [--json]` | Read-only, through `gh` only: the PR's pr-hero gate, its posted findings, and a `next_action` (`wait`, `review`, `triage`, `fix`, `recheck`, `override-or-fix`, `done`). `--wait` polls until an in-flight or newly-triggered review settles before emitting (a review that has not posted its first status within 3 minutes is not waited for: counted from the `/pr-hero` comment, or, after a push, from when `--wait` starts; a run still queued after that returns the current status); `--json` prints one `pr-hero.status/v1` object on stdout. See [`docs/github-actions.md`](docs/github-actions.md#reading-a-pr-with-pr-hero-status). |
 | `pr-hero config` | Read-only, $0: every config key with its value and **which layer decided it** (`repo` / `global` / `capped` / `default`), plus both file paths whether or not they exist. |
@@ -328,7 +327,7 @@ in GitHub Actions the same forced re-review is a `/pr-hero review` comment on th
 which runs on the Actions runner; `/pr-hero override` instead unlocks a red gate with no review),
 `--full` (run un-capped refuter verification steps),
 `--no-summary` (skip the summarizer; see `summary` in config above),
-`--out <dir>` (run dir for `review`), `--runs <dir>` (ledger's runs root),
+`--out <dir>` (run dir for `review`),
 `--all` (`usage` only: every origin instead of just this checkout's).
 `pr-hero --help` lists everything.
 
@@ -366,7 +365,7 @@ Reviews launch two ways: **by hand**, or through the opt-in local watcher (`pr-h
 
 | Stage | Status |
 | --- | --- |
-| Manual CLI (`review`, `--pr`, `--post`, `ledger`) | **Available now** — this README. |
+| Manual CLI (`review`, `--pr`, `--post`) | **Available now** — this README. |
 | Auto-trigger on new PRs / new pushes (local watcher) | **Available now** — `pr-hero watch`, below. Deliberately opt-in: every review spends real money, so nothing fires until you `watch add` a repo AND `watch install` the agent. |
 | CI mode (GitHub Actions) | **Available now** — official `action.yml` at the repo root, canonical `.github/workflows/pr-hero.yml`, full setup in [`docs/github-actions.md`](docs/github-actions.md). The commit-status gate (`mode: gate`, the default; `mode: advisory` opts out), exit 0 on findings, the size/budget gates, and `pr-hero setup --ci` scaffolding all apply. |
 | Required status check that blocks merges | **Available in CI** — the `pr-hero` commit status is the check (`mode: gate`, the default). Require it in branch protection. Fail-closed for a head with no run stays deferred. |
@@ -464,7 +463,6 @@ Run artifacts land **outside** the repo, in `~/.prhero/repos/<origin>/runs/<run>
 | --- | --- |
 | `report.md` | The human-readable review. |
 | `findings.json` | The machine artifact (schema v1.0.0): findings, tiers, refuter verdicts, usage, provenance. |
-| `comparison.json` | PR mode only — pr-hero's own findings for the PR, one row each; no external reviewer is compared. The JSON rows carry `verdict`/`reasoning` columns for triage; `pr-hero ledger` accumulates them. |
 | `diff.patch`, `pipeline.json`, `steps/` | The exact diff reviewed — after exclusions, so it is byte-for-byte what the hunters read — plus pipeline provenance (including the excluded paths), per-agent drafts and logs. |
 | `diff.raw.patch` | The unfiltered diff of the same range. Written **only** when exclusions actually dropped a file, since otherwise it would duplicate `diff.patch`. |
 | `anchor.patch` | The full PR diff (merge-base..head, after exclusions) that inline comments anchor against. On a first review it equals `diff.patch`; on an incremental re-review `diff.patch` is only the push delta, and this file still covers the whole PR, so a finding on an untouched line of the PR gets a review thread. |

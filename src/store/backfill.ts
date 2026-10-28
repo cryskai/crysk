@@ -1,13 +1,14 @@
 // Canonical product store (Fundamentals #6 / observability-canonical-store.md),
 // historical backfill & metrics.db migration module.
 //
-// Ingests historical findings.json and comparison.json runs across ~/.prhero/repos
-// into ~/.prhero/prhero.db idempotently.
+// Ingests historical findings.json runs across ~/.prhero/repos into
+// ~/.prhero/prhero.db idempotently. comparison.json is no longer read: PR mode
+// stopped writing it, and the store keeps whatever diff_from_sha and
+// greptile_found it already holds (a re-save never overwrites them with NULL).
 
 import { copyFileSync, existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { parseComparisonJson, type StoredComparison } from "#compare/ledger";
 import {
   type FindingsDocument,
   validateFindingsDocument,
@@ -63,24 +64,18 @@ export async function backfillHistoricalRuns(
           continue;
         }
 
-        // Try reading comparison.json
-        let comparison: StoredComparison | null = null;
-        const comparisonPath = path.join(runDir, "comparison.json");
-        if (existsSync(comparisonPath)) {
-          try {
-            const compText = await Bun.file(comparisonPath).text();
-            comparison = parseComparisonJson(compText);
-          } catch {}
-        }
-
-        // Try reading pipeline.json for provenance / repo_id
+        // Try reading pipeline.json for provenance / repo_id / when the run happened
         let repoId = parseRepoIdFromRelPath(rel);
+        let pipelineGeneratedAt: string | null = null;
         const pipelinePath = path.join(runDir, "pipeline.json");
         if (existsSync(pipelinePath)) {
           try {
             const pipeJson = JSON.parse(await Bun.file(pipelinePath).text());
             if (pipeJson.repo_id && typeof pipeJson.repo_id === "string") {
               repoId = pipeJson.repo_id;
+            }
+            if (typeof pipeJson.generated_at === "string") {
+              pipelineGeneratedAt = pipeJson.generated_at;
             }
           } catch {}
         }
@@ -94,12 +89,11 @@ export async function backfillHistoricalRuns(
         }
 
         const { mtime } = await stat(findingsPath);
-        const generatedAt = comparison?.generated_at ?? mtime.toISOString();
+        const generatedAt = pipelineGeneratedAt ?? mtime.toISOString();
 
         const projected = projectCompleteRun({
           doc,
           perAgent: {},
-          comparison,
           repoId,
           runDir: runDirName,
           checkoutPath: null,

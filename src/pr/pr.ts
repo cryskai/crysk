@@ -1,6 +1,6 @@
 // PR mode's I/O (ROADMAP B1): gh, the fetch, the detached worktree, the
-// worktree's codegraph index, and the comparison.json write — every side
-// effect `pr-hero review --pr <n>` needs beyond what cli.ts already owns.
+// worktree's codegraph index — every side effect `pr-hero review --pr <n>`
+// needs beyond what cli.ts already owns.
 // Same contract as cli.ts: this is an I/O shell, and every decision it acts
 // on is a pure function in pr/preflight.ts / pr/inline.ts (or review/preflight.ts),
 // where most of the tests live.
@@ -52,7 +52,7 @@ import {
   renderStateBlock,
   stateBlockBudget,
 } from "#rereview/state";
-import type { Finding, FindingsDocument, RunStatus } from "#review/findings";
+import type { Finding, FindingsDocument } from "#review/findings";
 import {
   type PrCommentDelta,
   parseFindingCommentBadge,
@@ -77,7 +77,6 @@ import {
   resolvePostLine,
 } from "./inline";
 import {
-  buildComparisonJson,
   type CiMode,
   COMMIT_STATUS_TIMEOUT_MS,
   type CommitStatusFact,
@@ -801,43 +800,6 @@ export async function initCodegraphIndex(
     );
   }
   return Math.round(performance.now() - started);
-}
-
-export interface ComparisonOutcome {
-  prheroOnly: number;
-  jsonPath: string;
-}
-
-// Writes comparison.json and nothing else: no gh call, no markdown. The
-// caller decides that a failure here must not fail the run, because the review
-// artifacts are already on disk and are the product.
-export async function writeComparison(input: {
-  pr: number;
-  headSha: string;
-  diffFromSha: string;
-  runDir: string;
-  generatedAt: string;
-  runStatus: RunStatus;
-  findings: PrHeroFindingRef[];
-}): Promise<ComparisonOutcome> {
-  const jsonPath = path.join(input.runDir, "comparison.json");
-  await Bun.write(
-    jsonPath,
-    `${JSON.stringify(
-      buildComparisonJson({
-        pr: input.pr,
-        headSha: input.headSha,
-        diffFromSha: input.diffFromSha,
-        runDir: input.runDir,
-        generatedAt: input.generatedAt,
-        runStatus: input.runStatus,
-        findings: input.findings,
-      }),
-      null,
-      2,
-    )}\n`,
-  );
-  return { prheroOnly: input.findings.length, jsonPath };
 }
 
 // Publishes the review as ONE marked PR comment: update the existing marked

@@ -1,6 +1,6 @@
 // Integration tests for the Canonical Product Store Local Server & Typed Client (Slice 2).
 // Tests HTTP RPC over Unix Domain Socket: health check, run ingestion, document export,
-// comparison retrieval, usage aggregation, finding searches, and 404 / error boundaries.
+// usage aggregation, finding searches, and 404 / error boundaries.
 //
 // 100% offline, temporary DB and Unix domain socket per test.
 
@@ -8,7 +8,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { StoredComparison } from "#compare/ledger";
 import type { Finding, FindingsDocument } from "#review/findings";
 import type { PerAgentUsage } from "#review/pipeline";
 import { ProductStoreClient } from "#server/client";
@@ -130,39 +129,6 @@ const SAMPLE_PER_AGENT: Record<string, PerAgentUsage> = {
   },
 };
 
-const SAMPLE_COMPARISON: StoredComparison = {
-  pr: 42,
-  head_sha: "b".repeat(40),
-  diff_from_sha: "c".repeat(40),
-  run_dir: "run-42",
-  run_status: "complete",
-  generated_at: "2026-08-23T18:00:00.000Z",
-  greptile: { found: true },
-  rows: [
-    {
-      bucket: "both",
-      greptile: {
-        index: 0,
-        path: "src/engine.ts",
-        start_line: 42,
-        end_line: 45,
-        title: "Missing timer cleanup",
-        description: "Missing timer cleanup",
-      },
-      prhero: {
-        id: "F001",
-        path: "src/engine.ts",
-        line: 42,
-        claim: "Resource leak in timeout handler without cleanup",
-        tier: "blocking",
-      },
-      verdict: "both-found-real-bug",
-      reasoning: "Confirmed",
-      actor: "human",
-    },
-  ],
-};
-
 describe("Local Store Server & Typed Client", () => {
   test("health check returns schema version and runs count over Unix socket", async () => {
     const env = await tmpServerEnv();
@@ -182,7 +148,7 @@ describe("Local Store Server & Typed Client", () => {
     }
   });
 
-  test("saveRun persists run and exports matching FindingsDocument and StoredComparison", async () => {
+  test("saveRun persists run and exports matching FindingsDocument", async () => {
     const env = await tmpServerEnv();
     const serverHandle = startProductStoreServer({
       dbPath: env.dbPath,
@@ -195,7 +161,7 @@ describe("Local Store Server & Typed Client", () => {
       const projected = projectCompleteRun({
         doc: originalDoc,
         perAgent: SAMPLE_PER_AGENT,
-        comparison: SAMPLE_COMPARISON,
+        diffFromSha: "c".repeat(40),
         repoId: "github.com/juanmaagd/pr-hero",
         runDir: "run-42",
         checkoutPath: "/Users/juanma/Desktop/pr-hero",
@@ -221,10 +187,6 @@ describe("Local Store Server & Typed Client", () => {
       // Get findings document
       const doc = await client.getFindingsDocument(saveRes.run_id);
       expect(doc).toEqual(originalDoc);
-
-      // Get comparison
-      const comparison = await client.getComparison(saveRes.run_id);
-      expect(comparison).toEqual(SAMPLE_COMPARISON);
     } finally {
       serverHandle.stop();
     }
@@ -351,8 +313,12 @@ describe("Local Store Server & Typed Client", () => {
       const doc = await client.getFindingsDocument(9999);
       expect(doc).toBeNull();
 
-      const comp = await client.getComparison(9999);
-      expect(comp).toBeNull();
+      // comparison.json is retired: the route is gone, so it is an unknown
+      // route (404 "Not found"), not an empty comparison.
+      const retired = await fetch("http://localhost/v1/runs/9999/comparison", {
+        unix: env.socketPath,
+      });
+      expect(retired.status).toBe(404);
     } finally {
       serverHandle.stop();
     }

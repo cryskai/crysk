@@ -4,13 +4,7 @@
 // floor-test case gate all compare paths through `normalizePath`; the floor-test
 // case gate and the scout probe use `DEFAULT_LINE_WINDOW`.
 //
-// Pure: no I/O, no clock. The Greptile head-to-head that once lived here is
-// retired; `Bucket` survives only because historical comparison rows and the
-// ledger still carry those labels, and a later task removes it.
-
-// Legacy labels of the retired head-to-head. Read-only: historical
-// `comparison_rows` and ledger rows still store them.
-export type Bucket = "both" | "greptile_only" | "prhero_only";
+// Pure: no I/O, no clock.
 
 // The subset of a pr-hero `Finding` that location matching needs. Deliberately
 // structural rather than an import of `Finding`: artifacts written by an older

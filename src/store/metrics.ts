@@ -13,11 +13,9 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import type { StoredComparison } from "#compare/ledger";
 import type { FindingsDocument } from "#review/findings";
 import type { PerAgentUsage } from "#review/pipeline";
 import {
-  type ComparisonRowProjection,
   migrationsFor,
   projectRunRow,
   type RunAgentRow,
@@ -59,7 +57,6 @@ export interface IngestRunInput {
   checkoutPath: string | null;
   doc: FindingsDocument;
   perAgent: Record<string, PerAgentUsage>;
-  comparison: StoredComparison | null;
   generatedAt?: string;
 }
 
@@ -78,7 +75,7 @@ const RUN_UPSERT_SQL = `
     run_status = excluded.run_status,
     session_failed = excluded.session_failed,
     model = excluded.model,
-    generated_at = excluded.generated_at,
+    generated_at = runs.generated_at,
     wall_ms = excluded.wall_ms,
     index_ms = excluded.index_ms,
     tokens_in = excluded.tokens_in,
@@ -115,7 +112,7 @@ function runParams(row: RunRow): SQLQueryBindings[] {
 // ONE transaction: upsert the parent by run_dir (the unique run key), then
 // DELETE + re-INSERT every child table scoped to that run's id. Delete-then-
 // insert, never a diff, because the child sets are always small (one row
-// per agent, one per comparison bucket entry) and a diff buys nothing a
+// per agent) and a diff buys nothing a
 // full replace does not already give for free — spec "Idempotent Run
 // Identity": a double ingest of the same run_dir must not duplicate rows.
 export function ingestRun(input: IngestRunInput): void {
@@ -124,7 +121,6 @@ export function ingestRun(input: IngestRunInput): void {
     const projected = projectRunRow({
       doc: input.doc,
       perAgent: input.perAgent,
-      comparison: input.comparison,
       repoId: input.repoId,
       runDir: input.runDir,
       checkoutPath: input.checkoutPath,
@@ -137,9 +133,7 @@ export function ingestRun(input: IngestRunInput): void {
         .get(projected.run.run_dir) as { id: number };
       const runId = runRow.id;
       db.query("DELETE FROM run_agents WHERE run_id = ?").run(runId);
-      db.query("DELETE FROM comparison_rows WHERE run_id = ?").run(runId);
       insertAgents(db, runId, projected.agents);
-      insertComparisonRows(db, runId, projected.comparisonRows);
     })();
   } finally {
     db.close();
@@ -169,32 +163,6 @@ function insertAgents(
       agent.cost_usd_est,
       agent.attempts,
       agent.status,
-    );
-  }
-}
-
-function insertComparisonRows(
-  db: Database,
-  runId: number,
-  rows: ComparisonRowProjection[],
-): void {
-  if (rows.length === 0) return;
-  const insert = db.query(`
-    INSERT INTO comparison_rows (
-      run_id, row_index, bucket, greptile_json, prhero_json, verdict,
-      reasoning, actor
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    insert.run(
-      runId,
-      row.row_index,
-      row.bucket,
-      row.greptile_json,
-      row.prhero_json,
-      row.verdict,
-      row.reasoning,
-      row.actor,
     );
   }
 }
@@ -235,7 +203,6 @@ export interface FailSoftIngestInput {
   checkoutPath: string | null;
   doc: FindingsDocument;
   perAgent: Record<string, PerAgentUsage>;
-  comparison: StoredComparison | null;
   log: (line: string) => void;
   // Test seam only — production always uses ingestRun.
   ingest?: (input: IngestRunInput) => void;
@@ -244,7 +211,7 @@ export interface FailSoftIngestInput {
 const WARNING_PREFIX =
   "warning: metrics ingest failed — the review itself is intact: ";
 
-// The ONLY function cli.ts calls after writeFindings/writeComparison. Never
+// The ONLY function cli.ts calls after writeFindings. Never
 // throws — a sqlite failure (or a missing repo_id) degrades to a printed
 // warning, and the review's own exit code is untouched (spec "Fail-Soft
 // Ingest").
@@ -262,7 +229,6 @@ export function failSoftIngest(input: FailSoftIngestInput): void {
       checkoutPath: input.checkoutPath,
       doc: input.doc,
       perAgent: input.perAgent,
-      comparison: input.comparison,
     });
   } catch (error) {
     input.log(`${WARNING_PREFIX}${(error as Error).message}`);

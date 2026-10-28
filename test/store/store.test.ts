@@ -1,6 +1,6 @@
 // Integration & round-trip tests for the Canonical Product Store (prhero.db, Fundamentals #6).
 // Asserts schema creation, migrations, transactional save, idempotency, cascade deletes,
-// and exact deterministic round-trip reconstruction of FindingsDocument and StoredComparison.
+// and exact deterministic round-trip reconstruction of FindingsDocument.
 //
 // 100% offline, fresh tmp database per test run.
 
@@ -9,7 +9,6 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { StoredComparison } from "#compare/ledger";
 import type { Finding, FindingsDocument } from "#review/findings";
 import type { PerAgentUsage } from "#review/pipeline";
 import {
@@ -17,7 +16,6 @@ import {
   projectCompleteRun,
 } from "#store/preflight";
 import {
-  exportComparison,
   exportFindingsDocument,
   getFindingTriageByRunId,
   getRunById,
@@ -209,55 +207,24 @@ const SAMPLE_PER_AGENT: Record<string, PerAgentUsage> = {
   },
 };
 
-const SAMPLE_COMPARISON: StoredComparison = {
-  pr: 42,
-  head_sha: "b".repeat(40),
-  diff_from_sha: "c".repeat(40),
-  run_dir: "2026-08-23T18-00-00-000Z-pr-42",
-  run_status: "complete",
-  generated_at: "2026-08-23T18:00:00.000Z",
-  greptile: { found: true },
-  rows: [
-    {
-      bucket: "both",
-      greptile: {
-        index: 0,
-        path: "src/engine.ts",
-        start_line: 42,
-        end_line: 45,
-        title: "Missing timer cleanup",
-        description: "Missing timer cleanup",
-      },
-      prhero: {
-        id: "F001",
-        path: "src/engine.ts",
-        line: 42,
-        claim: "Resource leak in timeout handler without cleanup",
-        tier: "blocking",
-      },
-      verdict: "both-found-real-bug",
-      reasoning: "Both reviewers flagged the timer leak",
-      actor: "human",
-    },
-    {
-      bucket: "prhero_only",
-      greptile: null,
-      prhero: {
-        id: "F002",
-        path: "src/client.ts",
-        line: 15,
-        claim: "Unchecked error return value",
-        tier: "advisory",
-      },
-      verdict: null,
-      reasoning: null,
-      actor: null,
-    },
-  ],
-};
-
 const REPO_ID = "github.com/juanmaagd/pr-hero";
 const RUN_DIR = "2026-08-23T18-00-00-000Z-pr-42";
+
+// Historical triage verdicts live in comparison_rows. No writer creates them any
+// more; a fixture inserts them directly, the way a run stored before the retirement
+// left them.
+function insertComparisonRow(
+  db: Database,
+  runId: number,
+  rowIndex: number,
+  verdict: string,
+): void {
+  db.query(
+    `INSERT INTO comparison_rows
+       (run_id, row_index, bucket, greptile_json, prhero_json, verdict, reasoning, actor)
+     VALUES (?, ?, 'prhero_only', NULL, NULL, ?, 'fixture reasoning', 'human')`,
+  ).run(runId, rowIndex, verdict);
+}
 
 describe("openProductStore", () => {
   test("creates the file, migrates to CURRENT_PRODUCT_SCHEMA_VERSION, and enables WAL + foreign keys", async () => {
@@ -310,7 +277,6 @@ describe("saveRunTransaction and round-trip fidelity", () => {
       const projected = projectCompleteRun({
         doc: originalDoc,
         perAgent: SAMPLE_PER_AGENT,
-        comparison: SAMPLE_COMPARISON,
         repoId: REPO_ID,
         runDir: RUN_DIR,
         checkoutPath: "/Users/juanma/Desktop/pr-hero",
@@ -327,17 +293,113 @@ describe("saveRunTransaction and round-trip fidelity", () => {
       expect(runRow?.pr).toBe(42);
       expect(runRow?.blocking).toBe(1);
       expect(runRow?.advisory).toBe(1);
-      expect(runRow?.greptile_found).toBe(1);
+      // No writer sets greptile_found any more; a new run leaves it NULL.
+      expect(runRow?.greptile_found).toBeNull();
 
       // Round-trip export
       const exportedDoc = exportFindingsDocument(db, runId);
       expect(exportedDoc).not.toBeNull();
       expect(exportedDoc).toEqual(originalDoc);
+    } finally {
+      db.close();
+    }
+  });
 
-      // Comparison export
-      const exportedComparison = exportComparison(db, runId);
-      expect(exportedComparison).not.toBeNull();
-      expect(exportedComparison).toEqual(SAMPLE_COMPARISON);
+  test("projectCompleteRun sets run.diff_from_sha from the diffFromSha input", async () => {
+    const projected = projectCompleteRun({
+      doc: sampleDoc(),
+      perAgent: SAMPLE_PER_AGENT,
+      repoId: REPO_ID,
+      runDir: RUN_DIR,
+      checkoutPath: "/Users/juanma/Desktop/pr-hero",
+      diffFromSha: "c".repeat(40),
+      generatedAt: "2026-08-23T18:00:00.000Z",
+    });
+    expect(projected.run.diff_from_sha).toBe("c".repeat(40));
+    expect(projected.run.greptile_found).toBeNull();
+    expect("comparisonRows" in projected).toBe(false);
+  });
+
+  test("re-saving a run keeps comparison_rows that were already stored", async () => {
+    const dbPath = await tmpDbPath();
+    const db = openProductStore(dbPath);
+    try {
+      const first = saveRunTransaction(
+        db,
+        projectCompleteRun({
+          doc: sampleDoc(),
+          perAgent: SAMPLE_PER_AGENT,
+          repoId: REPO_ID,
+          runDir: RUN_DIR,
+          checkoutPath: "/Users/juanma/Desktop/pr-hero",
+          generatedAt: "2026-08-23T18:00:00.000Z",
+        }),
+      );
+      insertComparisonRow(db, first, 0, "both-found-real-bug");
+      insertComparisonRow(db, first, 1, "prhero-false-positive");
+
+      const again = saveRunTransaction(
+        db,
+        projectCompleteRun({
+          doc: sampleDoc(),
+          perAgent: SAMPLE_PER_AGENT,
+          repoId: REPO_ID,
+          runDir: RUN_DIR,
+          checkoutPath: "/Users/juanma/Desktop/pr-hero",
+          generatedAt: "2026-08-23T18:05:00.000Z",
+        }),
+      );
+      expect(again).toBe(first);
+
+      const rows = db
+        .query(
+          "SELECT row_index, verdict FROM comparison_rows WHERE run_id = ? ORDER BY row_index",
+        )
+        .all(first) as { row_index: number; verdict: string }[];
+      expect(rows).toEqual([
+        { row_index: 0, verdict: "both-found-real-bug" },
+        { row_index: 1, verdict: "prhero-false-positive" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("re-saving with no diffFromSha keeps diff_from_sha, greptile_found and generated_at", async () => {
+    const dbPath = await tmpDbPath();
+    const db = openProductStore(dbPath);
+    try {
+      const id = saveRunTransaction(
+        db,
+        projectCompleteRun({
+          doc: sampleDoc(),
+          perAgent: SAMPLE_PER_AGENT,
+          diffFromSha: "c".repeat(40),
+          repoId: REPO_ID,
+          runDir: RUN_DIR,
+          checkoutPath: "/Users/juanma/Desktop/pr-hero",
+          generatedAt: "2026-08-23T18:00:00.000Z",
+        }),
+      );
+      // A historical value written before the retirement.
+      db.query("UPDATE runs SET greptile_found = 1 WHERE id = ?").run(id);
+
+      saveRunTransaction(
+        db,
+        projectCompleteRun({
+          doc: sampleDoc(),
+          perAgent: SAMPLE_PER_AGENT,
+          repoId: REPO_ID,
+          runDir: RUN_DIR,
+          checkoutPath: "/Users/juanma/Desktop/pr-hero",
+          generatedAt: "2026-08-23T18:05:00.000Z",
+        }),
+      );
+
+      const row = getRunById(db, id);
+      expect(row?.diff_from_sha).toBe("c".repeat(40));
+      expect(row?.greptile_found).toBe(1);
+      expect(row?.generated_at).toBe("2026-08-23T18:00:00.000Z");
     } finally {
       db.close();
     }
@@ -364,9 +426,6 @@ describe("saveRunTransaction and round-trip fidelity", () => {
       const exportedDoc = exportFindingsDocument(db, runId);
       expect(exportedDoc?.pr).toBe(0);
       expect(exportedDoc).toEqual(localDoc);
-
-      const exportedComp = exportComparison(db, runId);
-      expect(exportedComp).toBeNull();
     } finally {
       db.close();
     }
@@ -448,7 +507,6 @@ describe("saveRunTransaction and round-trip fidelity", () => {
       const projectedV1 = projectCompleteRun({
         doc: docV1,
         perAgent: SAMPLE_PER_AGENT,
-        comparison: SAMPLE_COMPARISON,
         repoId: REPO_ID,
         runDir: RUN_DIR,
         checkoutPath: "/Users/juanma/Desktop/pr-hero",
@@ -474,7 +532,6 @@ describe("saveRunTransaction and round-trip fidelity", () => {
       const projectedV2 = projectCompleteRun({
         doc: docV2,
         perAgent: SAMPLE_PER_AGENT,
-        comparison: null,
         repoId: REPO_ID,
         runDir: RUN_DIR,
         checkoutPath: "/Users/juanma/Desktop/pr-hero",
@@ -513,7 +570,6 @@ describe("saveRunTransaction and round-trip fidelity", () => {
       const projected = projectCompleteRun({
         doc,
         perAgent: SAMPLE_PER_AGENT,
-        comparison: SAMPLE_COMPARISON,
         repoId: REPO_ID,
         runDir: RUN_DIR,
         checkoutPath: "/Users/juanma/Desktop/pr-hero",
@@ -522,6 +578,7 @@ describe("saveRunTransaction and round-trip fidelity", () => {
 
       const runId = saveRunTransaction(db, projected);
       expect(runId).toBeGreaterThan(0);
+      insertComparisonRow(db, runId, 0, "both-found-real-bug");
 
       // Delete the run
       db.query("DELETE FROM runs WHERE id = ?").run(runId);

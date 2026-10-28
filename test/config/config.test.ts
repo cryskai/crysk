@@ -140,7 +140,6 @@ describe("ingestReviewMetrics — the review()/reviewPr() caller seam (W4 Phase 
         checkoutPath: OPERATOR_ROOT,
         doc: doc({ pr: 0 }),
         perAgent: {},
-        comparison: null,
         log: (line) => warnings.push(line),
         ingest: () => {
           throw new Error("disk full");
@@ -162,7 +161,6 @@ describe("ingestReviewMetrics — the review()/reviewPr() caller seam (W4 Phase 
       checkoutPath: OPERATOR_ROOT,
       doc: doc({ pr: 42 }),
       perAgent: {},
-      comparison: null,
       log: (line) => warnings.push(line),
       ingest: (input) => {
         seenRunDirs.push(input.runDir);
@@ -183,7 +181,6 @@ describe("persistCanonicalReview — canonical product store persistence (Fundam
       checkoutPath: OPERATOR_ROOT,
       doc: doc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       log: (line) => warnings.push(line),
     });
     expect(runId).toBe(0);
@@ -201,7 +198,6 @@ describe("persistCanonicalReview — canonical product store persistence (Fundam
       checkoutPath: OPERATOR_ROOT,
       doc: doc({ pr: 42 }),
       perAgent: {},
-      comparison: null,
       log: (line) => warnings.push(line),
     });
     expect(runId).toBe(0);
@@ -220,7 +216,6 @@ describe("persistCanonicalReview — canonical product store persistence (Fundam
       checkoutPath: OPERATOR_ROOT,
       doc: doc({ pr: 42 }),
       perAgent: {},
-      comparison: null,
       persist: (input) => {
         seen.push(input.runDir);
         return 123;

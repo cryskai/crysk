@@ -1174,8 +1174,8 @@ describe("Packaging & distribution configuration", () => {
     //
     // `pr-hero triage reply --from <run-dir>` is the ONLY supported way to
     // answer a posted finding, and it hard-fails without a run directory on
-    // disk (runTriageCommand needs comparison.json; the reply path needs
-    // findings.json to map F00N onto the posted marker). In CI that directory
+    // disk (the reply path needs findings.json to map F00N onto the posted
+    // marker). In CI that directory
     // is `~/.prhero/.../runs/pr-<n>-<sha>-1` on an EPHEMERAL runner — it dies
     // with the job. Uploading it is what keeps the triage half of the loop
     // reachable once reviews move to Actions.

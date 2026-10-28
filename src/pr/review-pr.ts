@@ -1,5 +1,5 @@
 // PR mode (ROADMAP B1): one command from a PR number to a reviewed range, a
-// detached worktree, a pipeline run, and the comparison.json record. Moved out of
+// detached worktree, and a pipeline run. Moved out of
 // src/cli.ts (cli-decomp Phase 2, odd/tasks/cli-decomposition.md) as a
 // byte-for-byte relocation — no behaviour change.
 //

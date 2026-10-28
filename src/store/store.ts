@@ -8,8 +8,6 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import type { Bucket } from "#compare/compare";
-import type { StoredComparison, StoredComparisonRow } from "#compare/ledger";
 import {
   type DebugDedupedFinding,
   type DebugRefutedFinding,
@@ -79,7 +77,7 @@ const RUN_UPSERT_SQL = `
     checkout_path = excluded.checkout_path,
     head_sha = excluded.head_sha,
     base_sha = excluded.base_sha,
-    diff_from_sha = excluded.diff_from_sha,
+    diff_from_sha = COALESCE(excluded.diff_from_sha, runs.diff_from_sha),
     run_status = excluded.run_status,
     session_failed = excluded.session_failed,
     model = excluded.model,
@@ -95,7 +93,7 @@ const RUN_UPSERT_SQL = `
     summary_prose = excluded.summary_prose,
     summary_score = excluded.summary_score,
     summary_score_reason = excluded.summary_score_reason,
-    generated_at = excluded.generated_at,
+    generated_at = runs.generated_at,
     wall_ms = excluded.wall_ms,
     index_ms = excluded.index_ms,
     index_mode = excluded.index_mode,
@@ -108,7 +106,7 @@ const RUN_UPSERT_SQL = `
     blocking = excluded.blocking,
     advisory = excluded.advisory,
     root_causes_json = excluded.root_causes_json,
-    greptile_found = excluded.greptile_found,
+    greptile_found = COALESCE(excluded.greptile_found, runs.greptile_found),
     diversity_plan_json = excluded.diversity_plan_json
 `;
 
@@ -170,7 +168,6 @@ export function saveRunTransaction(
     db.query("DELETE FROM findings WHERE run_id = ?").run(runId);
     db.query("DELETE FROM debug_findings WHERE run_id = ?").run(runId);
     db.query("DELETE FROM run_agents WHERE run_id = ?").run(runId);
-    db.query("DELETE FROM comparison_rows WHERE run_id = ?").run(runId);
     db.query("DELETE FROM diversity_observations WHERE run_id = ?").run(runId);
     db.query("DELETE FROM diversity_attempts WHERE run_id = ?").run(runId);
 
@@ -305,28 +302,6 @@ export function saveRunTransaction(
           a.cost_usd_est,
           a.attempts,
           a.status,
-        );
-      }
-    }
-
-    // Insert comparison rows
-    if (projected.comparisonRows.length > 0) {
-      const insertComp = db.query(`
-        INSERT INTO comparison_rows (
-          run_id, row_index, bucket, greptile_json, prhero_json, verdict,
-          reasoning, actor
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      for (const c of projected.comparisonRows) {
-        insertComp.run(
-          runId,
-          c.row_index,
-          c.bucket,
-          c.greptile_json,
-          c.prhero_json,
-          c.verdict,
-          c.reasoning,
-          c.actor,
         );
       }
     }
@@ -611,52 +586,6 @@ export function exportFindingsDocument(
   };
 
   return validateFindingsDocument(doc);
-}
-
-export function exportComparison(
-  db: Database,
-  runId: number,
-): StoredComparison | null {
-  const run = getRunById(db, runId);
-  if (!run || run.pr === null) return null;
-
-  const rows = db
-    .query(
-      "SELECT * FROM comparison_rows WHERE run_id = ? ORDER BY row_index ASC",
-    )
-    .all(runId) as {
-    row_index: number;
-    bucket: string;
-    greptile_json: string | null;
-    prhero_json: string | null;
-    verdict: string | null;
-    reasoning: string | null;
-    actor: string | null;
-  }[];
-
-  if (rows.length === 0 && run.greptile_found === null) {
-    return null;
-  }
-
-  const comparisonRows: StoredComparisonRow[] = rows.map((r) => ({
-    bucket: r.bucket as Bucket,
-    greptile: r.greptile_json ? JSON.parse(r.greptile_json) : null,
-    prhero: r.prhero_json ? JSON.parse(r.prhero_json) : null,
-    verdict: r.verdict,
-    reasoning: r.reasoning,
-    actor: (r.actor as "agent" | "human" | null) ?? null,
-  }));
-
-  return {
-    pr: run.pr,
-    head_sha: run.head_sha,
-    diff_from_sha: run.diff_from_sha ?? run.base_sha,
-    run_dir: run.run_dir,
-    run_status: run.run_status,
-    generated_at: run.generated_at,
-    greptile: { found: run.greptile_found === 1 },
-    rows: comparisonRows,
-  };
 }
 
 export type StoreQueryScope = { repoId: string } | { all: true };

@@ -337,9 +337,8 @@ runs:
     # Without this step the triage half of the review loop has no input.
     # `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N` is the
     # ONLY supported way to answer a posted finding, and `--from` REQUIRES a
-    # completed run directory on disk (comparison.json to open the run,
-    # findings.json to map F00N onto the posted `<!-- pr-hero-finding`
-    # marker). In CI that directory lives at
+    # completed run directory on disk (findings.json maps F00N onto the
+    # posted `<!-- pr-hero-finding` marker). In CI that directory lives at
     # `~/.prhero/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` on an
     # EPHEMERAL runner and dies with the job — so a PR reviewed in Actions
     # used to carry findings that literally could not be answered. It lives

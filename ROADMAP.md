@@ -85,7 +85,8 @@ Anthropic's "Solving code review at Anthropic" (claude.dev/blog, 2026-10-15) and
   someone who knows the code; rescored on every prompt, model or tool change. Lives in the private lab.
   (Anthropic: "any incidents are now an eval".)
 - **Noise metric:** per hunter, the share of findings triaged as fixed, wrong, intentional or did not
-  matter, read from triage outcomes (`src/compare/ledger.ts` already reads verdicts).
+  matter, read from triage outcomes (the store's `finding_triage` table, plus the historical
+  verdicts kept read-only in `comparison_rows`).
 - **Clean-PR arm:** PRs with no known bug, to count pure false positives.
 - **Loop metrics:** rounds to a green gate, and time from PR open to green.
 

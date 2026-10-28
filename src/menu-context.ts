@@ -22,7 +22,6 @@ export type MenuAction =
   | "review"
   | "init"
   | "activity"
-  | "ledger"
   | "watcher"
   | "config"
   | "doctor"
