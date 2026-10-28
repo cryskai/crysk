@@ -24,9 +24,22 @@ describe("readBrandEnv", () => {
     expect(readBrandEnv({}, "AGENTS_DIR")).toBeUndefined();
   });
 
-  test("a set but empty CRYSK_ value still wins over the legacy name", () => {
+  test("an empty CRYSK_ value falls back to a non-empty legacy value", () => {
     expect(
-      readBrandEnv({ CRYSK_NO_TUI: "", PRHERO_NO_TUI: "1" }, "NO_TUI"),
+      readBrandEnv(
+        { CRYSK_AGENTS_DIR: "", PRHERO_AGENTS_DIR: "/x" },
+        "AGENTS_DIR",
+      ),
+    ).toEqual({ value: "/x", name: "PRHERO_AGENTS_DIR" });
+  });
+
+  test("a variable set but empty still counts as set when nothing has a value", () => {
+    expect(readBrandEnv({ CRYSK_NO_TUI: "" }, "NO_TUI")).toEqual({
+      value: "",
+      name: "CRYSK_NO_TUI",
+    });
+    expect(
+      readBrandEnv({ CRYSK_NO_TUI: "", PRHERO_NO_TUI: "" }, "NO_TUI"),
     ).toEqual({ value: "", name: "CRYSK_NO_TUI" });
   });
 });
@@ -41,7 +54,13 @@ describe("user-set env vars go through readBrandEnv", () => {
       recursive: true,
       encoding: "utf8",
     }).filter((file) => file.endsWith(".ts"));
-    const direct = /env\.PRHERO_(AGENTS_DIR|EXTRA_HUNTERS|NO_TUI)\b/;
+    // Dot access, bracket access, or a destructure of any PRHERO_ variable.
+    // OUTCOME_DIR and PUBLISH_MODE are the action's own wiring, set and read
+    // inside action.yml, and are renamed with it.
+    const internal = "(?!OUTCOME_DIR\\b|PUBLISH_MODE\\b)";
+    const direct = new RegExp(
+      `env(?:\\.|\\[\\s*["'\`])PRHERO_${internal}|\\{[^}]*\\bPRHERO_${internal}\\w+[^}]*\\}\\s*=\\s*[\\w.]*env\\b`,
+    );
     const offenders = files.filter((file) =>
       direct.test(readFileSync(path.join(srcDir, file), "utf8")),
     );
