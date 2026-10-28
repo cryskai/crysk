@@ -45,8 +45,9 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    `npx -y pr-hero setup --ci` with your answers (writes `.github/workflows/pr-hero.yml` and the
    level's keys in `.prhero/config.json`, and prints a summary) and `npx -y pr-hero init`
    (writes `.prhero/gotchas.md`), writes the repository gotchas, and stores
-   one secret with `gh secret set`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription, from
-   `claude setup-token`) or `ANTHROPIC_API_KEY` (pay as you go). Without an agent, run the same
+   one secret with `gh secret set`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription; `claude setup-token`
+   prints it on any machine that has the Claude Code CLI, so this one does not need it) or
+   `ANTHROPIC_API_KEY` (pay as you go). Without an agent, run the same
    commands yourself and follow the [Quick path](docs/github-actions.md#quick-path).
 
 3. **Merge the workflow and `.prhero/` into the default branch.** A comment-triggered run
@@ -54,7 +55,10 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    there, and fails `PRH-GOTCHAS-MISSING` until `.prhero/` is.
    Then require the `pr-hero` status check in branch protection if you want it to block merges.
 
-4. **Open pull requests as usual.** Each push gets a review posted as PR comments. Ask your agent
+4. **Open pull requests as usual.** Every new PR gets a review posted as PR comments; later pushes
+   follow the level you chose (balanced re-reviews a push only when it is risky or the last pass
+   found enough, at most 2 automatic passes), and a PR above the size threshold is skipped. Comment
+   `/pr-hero review` to review a skipped push anyway. Ask your agent
    to open the PR (`pr-hero-pr`), and it waits for the review with `npx -y pr-hero status --pr <n>
    --wait --json`, then hands the findings to `pr-hero-triage`, which replies to each one in its
    thread and pushes the fixes.

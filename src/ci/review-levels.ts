@@ -134,7 +134,12 @@ export interface CiSetupChoices {
 // re-run should start from, so pressing Enter changes nothing.
 export interface CurrentSettings {
   config: Record<string, unknown>;
-  workflow: { mode?: "gate" | "advisory"; budgetUsd?: string };
+  workflow: {
+    mode?: "gate" | "advisory";
+    budgetUsd?: string;
+    maxChangedLines?: string;
+    maxChangedFiles?: string;
+  };
 }
 
 export const NO_CURRENT_SETTINGS: CurrentSettings = {
@@ -166,16 +171,25 @@ export function presetMatching(
 export function parseWorkflowChoices(
   text: string,
 ): CurrentSettings["workflow"] {
-  const mode = /^\s+mode:\s*(gate|advisory)\s*$/m.exec(text)?.[1] as
+  // One input per line, quoted or not, with an optional trailing comment. A
+  // number must be a whole number (sizes) or a plain decimal (budget): a value
+  // like `1.2.3` reads as absent rather than becoming NaN in the new file.
+  const input = (name: string, value: string): string | undefined =>
+    new RegExp(`^\\s+${name}:\\s*["']?(${value})["']?\\s*(?:#.*)?$`, "m").exec(
+      text,
+    )?.[1];
+  const mode = input("mode", "gate|advisory") as
     | "gate"
     | "advisory"
     | undefined;
-  const budgetUsd = /^\s+budget-usd:\s*['"]?([0-9.]+)['"]?\s*$/m.exec(
-    text,
-  )?.[1];
+  const budgetUsd = input("budget-usd", "-?\\d+(?:\\.\\d+)?");
+  const maxChangedLines = input("max-changed-lines", "\\d+");
+  const maxChangedFiles = input("max-changed-files", "\\d+");
   return {
     ...(mode === undefined ? {} : { mode }),
     ...(budgetUsd === undefined ? {} : { budgetUsd }),
+    ...(maxChangedLines === undefined ? {} : { maxChangedLines }),
+    ...(maxChangedFiles === undefined ? {} : { maxChangedFiles }),
   };
 }
 
@@ -218,36 +232,49 @@ export function budgetInput(choices: CiSetupChoices): string | undefined {
 export interface ConfigPlan {
   set: Record<string, unknown>;
   fillIfAbsent: Record<string, unknown>[];
+  // Keys a chosen preset removes from the file.
+  remove: string[];
 }
 
 export function configPlan(choices: CiSetupChoices): ConfigPlan {
   const { ignorePatterns: _ignored, ...advanced } = choices.advanced;
   const set: Record<string, unknown> = {};
   const fillIfAbsent: Record<string, unknown>[] = [];
+  const remove: string[] = [];
   const levelKeys = { ...REVIEW_LEVELS[choices.level].config };
   const lineKeys = { max_changed_lines: choices.maxChangedLines };
-  if (choices.chosen.level) Object.assign(set, levelKeys);
-  else fillIfAbsent.push(levelKeys);
+  if (choices.chosen.level) {
+    Object.assign(set, levelKeys);
+    for (const key of [...LEVEL_KEYS, "ci_max_reviews"]) {
+      if (!(key in levelKeys)) remove.push(key);
+    }
+  } else fillIfAbsent.push(levelKeys);
   if (choices.chosen.maxChangedLines) Object.assign(set, lineKeys);
   else fillIfAbsent.push(lineKeys);
   // An advanced key is present only because someone gave it.
   for (const [key, value] of Object.entries(advanced)) {
     if (value !== undefined) set[key] = value;
   }
-  return { set, fillIfAbsent };
+  return { set, fillIfAbsent, remove };
 }
 
 // One line per choice, plus how to change it. Returned, never logged.
 // `kept` holds the file's values for keys nobody chose this run; where a group
 // was kept the summary shows those values, never the preset it did not write.
+// `effective` is the config file as written: the advanced lines report it, so
+// a tuned value nobody touched this run is shown as it stands.
 export function renderChoicesSummary(
   choices: CiSetupChoices,
   kept: Record<string, unknown> = {},
+  effective: Record<string, unknown> = {},
 ): string[] {
   const preset = REVIEW_LEVELS[choices.level];
   const levelKept = LEVEL_KEYS.filter((key) => key in kept);
   const c = preset.config;
-  const a = choices.advanced;
+  const a: AdvancedChoices = {
+    ...(effective as AdvancedChoices),
+    ...choices.advanced,
+  };
   const budget = budgetInput(choices);
   const lines = [
     choices.defaulted
@@ -266,10 +293,10 @@ export function renderChoicesSummary(
     `  budget           ${
       budget === undefined
         ? choices.billing === "subscription"
-          ? "not set: no ceiling while the repo has no ANTHROPIC_API_KEY secret (a subscription spends quota, not dollars); adding one brings back the $10 ceiling"
+          ? "not set: no ceiling while the repo has no ANTHROPIC_API_KEY or OPENCODE_AUTH_JSON secret (a subscription spends quota, not dollars); adding either brings back the $10 ceiling"
           : "not set: resolved from how the review is paid (no ceiling on a subscription, $10 on an API key)"
-        : budget === "0"
-          ? "none (budget-usd: 0)"
+        : Number(budget) <= 0
+          ? `none (budget-usd: ${budget}; 0 or less disables the ceiling)`
           : `$${budget} per review (budget-usd)`
     }`,
     `  score weights    blocking ${a.ci_blocking_weight ?? DEFAULT_CI_BLOCKING_WEIGHT}, advisory ${a.ci_advisory_weight ?? DEFAULT_CI_ADVISORY_WEIGHT}`,

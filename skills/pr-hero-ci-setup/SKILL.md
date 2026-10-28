@@ -80,7 +80,7 @@ Before step 4, ask the human these questions in their language. Use the native q
    - **Manual**: nothing automatic after the first review; every re-review starts with `/pr-hero review`.
 2. **Gate or advisory**: gate turns the `pr-hero` check red on blocking findings (require it in branch protection to block merges); advisory keeps it green.
 3. **How CI pays**:
-   - **Claude subscription** (`CLAUDE_CODE_OAUTH_TOKEN`): do not ask for a budget. Tell them no `budget-usd` is written: a subscription review spends quota, not dollars, and CI applies no ceiling while the repo has no `ANTHROPIC_API_KEY` secret (adding one brings back the $10 ceiling).
+   - **Claude subscription** (`CLAUDE_CODE_OAUTH_TOKEN`): do not ask for a budget. Tell them no `budget-usd` is written: a subscription review spends quota, not dollars, and CI applies no ceiling while the repo has neither an `ANTHROPIC_API_KEY` nor an `OPENCODE_AUTH_JSON` secret (either one makes CI metered and brings back the $10 ceiling, so a subscription mixed with OpenCode is the API-key answer).
    - **API key** (`ANTHROPIC_API_KEY` or an OpenCode provider): ask for the spend ceiling per review in USD (default 10, `0` = none).
 4. **Changed-lines threshold**: a PR with more changed lines is skipped, not reviewed. Ask on any billing (default 4000, `0` = no limit, only if they say so): unlike the budget it matters on a subscription too, where an unset threshold means no limit at all.
 5. **Advanced settings**: name them, then ask whether to review them now. Each keeps a working default if skipped:
@@ -90,13 +90,15 @@ Before step 4, ask the human these questions in their language. Use the native q
    - changed-files limit (`max_changed_files`): a PR touching more files is skipped; unset = none on a subscription, 50 on an API key;
    - exclusions: patterns in `.prheroignore` (gitignore syntax) the review never reads.
 
+**On a re-run** (`.prhero/config.json` already has re-review keys, or the workflow already exists), first show the human the current values (`npx -y pr-hero config`) and offer **Keep current settings** for the level and for the line threshold. When they keep them, omit `--level` / `--max-changed-lines`: passing a flag overwrites that group, including a tuned `max_verification_steps`.
+
 Then pass the answers to the scaffold as flags, never as hand-written YAML:
 
 ```bash
 npx -y pr-hero setup --ci --level <minimal|balanced|thorough|manual> --ci-mode <gate|advisory> --billing <subscription|api> --max-changed-lines <n> [--budget-usd <n>]
 ```
 
-It writes the workflow, merges the level's keys into `.prhero/config.json` (keeping other keys), and prints a summary of every setting. **Never run it without these flags**: with none it applies balanced and gate, and its summary says nobody chose them. Write any advanced answers into `.prhero/config.json` (and `.prheroignore`) afterwards, then run `npx -y pr-hero config` to verify. Show the human the printed summary, including any `Changed` and `Kept existing` lines: on a re-run (for example `--force` to refresh an old workflow) only the groups a flag names are overwritten, and keys nobody chose stay as the file had them; the workflow keeps its old `mode` and `budget-usd` unless `--ci-mode` or `--billing` / `--budget-usd` is passed. In a terminal, every question defaults to the repository's current value. Details: `references/ci-admission.md`.
+It writes the workflow, merges the level's keys into `.prhero/config.json` (keeping other keys), and prints a summary of every setting. **Never run it without these flags**: with none it applies balanced and gate, and its summary says nobody chose them. Write any advanced answers into `.prhero/config.json` (and `.prheroignore`) afterwards. The summary `setup --ci` printed predates those edits, so when there were any, show the human the effective settings from `npx -y pr-hero config` instead. Otherwise show the printed summary, including any `Changed` and `Kept existing` lines: on a re-run (for example `--force` to refresh an old workflow) only the groups a flag names are overwritten, and keys nobody chose stay as the file had them; the workflow keeps its old `mode` and `budget-usd` unless `--ci-mode` or `--billing` / `--budget-usd` is passed. In a terminal, every question defaults to the repository's current value. Details: `references/ci-admission.md`.
 
 ## Execution Steps
 

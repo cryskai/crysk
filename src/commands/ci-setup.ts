@@ -173,9 +173,14 @@ async function resolveChoices(
   if (!choices.chosen.mode && current.workflow.mode !== undefined) {
     choices.mode = current.workflow.mode;
   }
-  if (!choices.chosen.billing && current.workflow.budgetUsd !== undefined) {
+  const oldBudget = Number(current.workflow.budgetUsd);
+  if (
+    !choices.chosen.billing &&
+    current.workflow.budgetUsd !== undefined &&
+    Number.isFinite(oldBudget)
+  ) {
     choices.billing = "api";
-    choices.budgetUsd = Number(current.workflow.budgetUsd);
+    choices.budgetUsd = oldBudget;
   }
   return choices;
 }
@@ -247,6 +252,15 @@ export async function ciSetupCommand(
     template: {
       mode: choices.mode,
       ...(budget === undefined ? {} : { budgetUsd: budget }),
+      // Size inputs a person set by hand in the old workflow. setup never
+      // writes them (it writes the config keys), so a refresh carries them
+      // over; the action gives a workflow input precedence over the config.
+      ...(current.workflow.maxChangedLines === undefined
+        ? {}
+        : { maxChangedLines: current.workflow.maxChangedLines }),
+      ...(current.workflow.maxChangedFiles === undefined
+        ? {}
+        : { maxChangedFiles: current.workflow.maxChangedFiles }),
     },
   });
   if (result.status === "skipped-existing") {
@@ -266,12 +280,23 @@ export async function ciSetupCommand(
     log(`Updated ${await appendIgnorePatterns(repoRoot, patterns)}`);
   }
   log();
-  for (const line of renderChoicesSummary(choices, config.kept)) log(line);
+  for (const line of renderChoicesSummary(choices, config.kept, config.config))
+    log(line);
   // The summary describes the choices; these lines say where the file differs.
   for (const c of config.changed) {
     log(
       `Changed ${c.key}: ${JSON.stringify(c.from)} -> ${JSON.stringify(c.to)}`,
     );
+  }
+  for (const [input, value] of [
+    ["max-changed-lines", current.workflow.maxChangedLines],
+    ["max-changed-files", current.workflow.maxChangedFiles],
+  ] as const) {
+    if (value !== undefined) {
+      log(
+        `Kept the workflow's ${input}: ${value}; it takes precedence over .prhero/config.json`,
+      );
+    }
   }
   const keptKeys = Object.keys(config.kept);
   if (keptKeys.length > 0) {
@@ -305,7 +330,7 @@ export async function ciSetupCommand(
     : undefined;
   if (gotchas === undefined || gotchasUnusableReason(gotchas) !== undefined) {
     log(
-      `${next()} Run \`npx -y pr-hero init\` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md)`,
+      `${next()} Run \`npx -y pr-hero init\` in a clone of the repository (it creates .prhero/gotchas.md; the config.json written above is kept as it is)`,
     );
     log(
       `${next()} Replace the placeholder lines in .prhero/gotchas.md with real facts about this repository, and delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line if it is there: pr-hero refuses to review the scaffold`,

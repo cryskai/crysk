@@ -207,7 +207,7 @@ export async function askChoices(
   );
   if (choices.billing === "subscription") {
     say(
-      "  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the repo has no ANTHROPIC_API_KEY secret. Adding one brings back the $10 ceiling.",
+      "  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the repo has no ANTHROPIC_API_KEY or OPENCODE_AUTH_JSON secret. Adding either brings back the $10 ceiling.",
     );
   } else {
     choices.budgetUsd = await askValue(
@@ -216,10 +216,10 @@ export async function askChoices(
       current.workflow.budgetUsd ?? String(CI_DEFAULT_METERED_BUDGET_USD),
       (raw) => {
         const n = Number(raw);
-        return raw !== "" && Number.isFinite(n) ? n : undefined;
+        return raw !== "" && Number.isFinite(n) && n >= 0 ? n : undefined;
       },
       say,
-      "Enter a number, for example 10 or 7.5.",
+      "Enter a number, 0 or more, for example 10 or 7.5.",
     );
   }
 

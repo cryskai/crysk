@@ -65,7 +65,16 @@ describe("askChoices", () => {
   });
 
   test("api: asks the ceiling, re-asks on a non-number, empty takes $10", async () => {
-    const { prompter } = scripted(["", "", "api", "lots", "7.5", "2000", "n"]);
+    const { prompter } = scripted([
+      "",
+      "",
+      "api",
+      "lots",
+      "-5",
+      "7.5",
+      "2000",
+      "n",
+    ]);
     const c = await askChoices(prompter, () => {});
     expect(c.billing).toBe("api");
     expect(c.budgetUsd).toBe(7.5);

@@ -360,6 +360,22 @@ describe("setup --ci review choices (CLI)", () => {
     }
   });
 
+  test("--force carries a hand-set size input over and says it wins over the config", async () => {
+    const r = await runSetup(["--force"], async (dir) => {
+      await Bun.write(
+        path.join(dir, ".github", "workflows", "pr-hero.yml"),
+        "jobs:\n  review:\n    steps:\n      - with:\n          max-changed-lines: 8000 # big repo\n",
+      );
+    });
+    try {
+      expect(r.code).toBe(0);
+      expect(r.workflow).toContain("max-changed-lines: 8000\n");
+      expect(r.output).toContain("Kept the workflow's max-changed-lines: 8000");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
   test("--level alone changes the level keys, reports them, and keeps the line threshold", async () => {
     const r = await runSetup(["--level", "minimal"], async (dir) => {
       await Bun.write(

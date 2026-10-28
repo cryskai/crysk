@@ -112,6 +112,7 @@ describe("configPlan", () => {
         ci_trusted_actors: ["bot"],
       },
       fillIfAbsent: [],
+      remove: ["ci_rereview_min_score", "ci_max_reviews"],
     });
   });
 
@@ -127,6 +128,7 @@ describe("configPlan", () => {
         },
         { max_changed_lines: 4000 },
       ],
+      remove: [],
     });
   });
 });
@@ -158,7 +160,7 @@ describe("renderChoicesSummary", () => {
     expect(text).toContain("once_per_pr, at most 1 automatic pass per PR");
     expect(text).toContain("advisory");
     expect(text).toContain(
-      "not set: no ceiling while the repo has no ANTHROPIC_API_KEY",
+      "not set: no ceiling while the repo has no ANTHROPIC_API_KEY or OPENCODE_AUTH_JSON",
     );
     expect(text).toContain("observe only     yes");
     expect(text).toContain("gen/**");
@@ -169,7 +171,7 @@ describe("renderChoicesSummary", () => {
     const text = renderChoicesSummary(
       choices({ billing: "api", budgetUsd: 0 }),
     ).join("\n");
-    expect(text).toContain("none (budget-usd: 0)");
+    expect(text).toContain("none (budget-usd: 0;");
     expect(text).not.toContain("subscription");
   });
 
@@ -210,6 +212,7 @@ describe("writeRepoReviewConfig", () => {
       const r = await writeRepoReviewConfig(dir, {
         set: { ci_blocking_weight: 3 },
         fillIfAbsent: [{ ci_max_attempts: 1 }, { max_changed_lines: 4000 }],
+        remove: [],
       });
       expect(JSON.parse(await readFile(r.file, "utf-8"))).toEqual({
         ci_blocking_weight: 3,
@@ -230,6 +233,7 @@ describe("writeRepoReviewConfig", () => {
           { ci_review_policy: "risk_aware", ci_max_attempts: 2 },
           { max_changed_lines: 4000 },
         ],
+        remove: [],
       });
       expect(JSON.parse(await readFile(file(dir), "utf-8"))).toEqual({
         post: true,
@@ -246,6 +250,7 @@ describe("writeRepoReviewConfig", () => {
       const r = await writeRepoReviewConfig(dir, {
         set: { ci_max_attempts: 2, ci_review_policy: "risk_aware" },
         fillIfAbsent: [],
+        remove: [],
       });
       expect(JSON.parse(await readFile(file(dir), "utf-8"))).toEqual({
         post: true,
@@ -262,6 +267,7 @@ describe("writeRepoReviewConfig", () => {
       const attempt = writeRepoReviewConfig(dir, {
         set: { ci_max_attempts: 2 },
         fillIfAbsent: [],
+        remove: [],
       });
       await expect(attempt).rejects.toThrow(/not valid JSON/);
       await expect(attempt).rejects.toBeInstanceOf(CliError);
@@ -275,6 +281,7 @@ describe("writeRepoReviewConfig", () => {
         writeRepoReviewConfig(dir, {
           set: { ci_blocking_weight: 0 },
           fillIfAbsent: [],
+          remove: [],
         }),
       ).rejects.toThrow(/ci_blocking_weight/);
       expect(existsSync(file(dir))).toBe(false);
@@ -323,5 +330,90 @@ describe("parseWorkflowChoices", () => {
   });
   test("a workflow without them reads as empty", () => {
     expect(parseWorkflowChoices("name: x\n")).toEqual({});
+  });
+});
+
+describe("re-runs over a tuned file (PR #411 review)", () => {
+  async function withFile(
+    body: Record<string, unknown>,
+    fn: (dir: string, file: string) => Promise<void>,
+  ) {
+    const dir = await mkdtemp(path.join(tmpdir(), "prhero-411-"));
+    try {
+      await mkdir(path.join(dir, ".prhero"));
+      const file = path.join(dir, ".prhero", "config.json");
+      await writeFile(file, JSON.stringify(body));
+      await fn(dir, file);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("switching balanced to minimal drops the orphan score floor, so the file reads as minimal again", async () => {
+    await withFile({ ...REVIEW_LEVELS.balanced.config }, async (dir, file) => {
+      const r = await writeRepoReviewConfig(
+        dir,
+        configPlan(choices({ level: "minimal" })),
+      );
+      const written = JSON.parse(await readFile(file, "utf-8"));
+      expect(written.ci_rereview_min_score).toBeUndefined();
+      expect(presetMatching(written)).toBe("minimal");
+      expect(r.changed).toContainEqual({
+        key: "ci_rereview_min_score",
+        from: 4,
+        to: undefined,
+      });
+    });
+  });
+
+  test("a legacy ci_max_reviews counts as a pass count already decided", async () => {
+    await withFile({ ci_max_reviews: 5 }, async (dir, file) => {
+      const r = await writeRepoReviewConfig(dir, configPlan(defaultChoices()));
+      const written = JSON.parse(await readFile(file, "utf-8"));
+      expect(written.ci_max_attempts).toBeUndefined();
+      expect(written.ci_max_reviews).toBe(5);
+      expect(r.kept).toEqual({ ci_max_reviews: 5 });
+    });
+  });
+
+  test("the summary reports advanced values from the file as written", () => {
+    const text = renderChoicesSummary(
+      defaultChoices(),
+      {},
+      {
+        ci_blocking_weight: 5,
+        ci_admission_observe_only: true,
+        max_changed_files: 30,
+      },
+    ).join("\n");
+    expect(text).toContain("blocking 5");
+    expect(text).toContain("observe only     yes");
+    expect(text).toContain("30 files");
+  });
+
+  test("a negative ceiling reads as none, never as a negative price", () => {
+    const text = renderChoicesSummary(
+      choices({ billing: "api", budgetUsd: -5 }),
+    ).join("\n");
+    expect(text).toContain("none (budget-usd: -5;");
+    expect(text).not.toContain("$-5");
+  });
+});
+
+describe("parseWorkflowChoices on hand-edited workflows", () => {
+  test("quotes and trailing comments still read", () => {
+    expect(
+      parseWorkflowChoices(
+        "          mode: \"advisory\"  # report only\n          budget-usd: 7.5 # cap\n          max-changed-lines: 8000\n          max-changed-files: '30'\n",
+      ),
+    ).toEqual({
+      mode: "advisory",
+      budgetUsd: "7.5",
+      maxChangedLines: "8000",
+      maxChangedFiles: "30",
+    });
+  });
+  test("a malformed number reads as absent, never as NaN", () => {
+    expect(parseWorkflowChoices("          budget-usd: 1.2.3\n")).toEqual({});
   });
 });

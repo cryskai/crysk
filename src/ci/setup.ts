@@ -100,6 +100,8 @@ export interface CiWorkflowTemplateOptions {
   // gated `estimate.high`, a token-derived figure, against $0.00 of real
   // cash.
   maxChangedLines?: string;
+  // The files half of the size gate, emitted right after the lines input.
+  maxChangedFiles?: string;
   // THIS repo only: on a `/pr-hero review` comment, the workflow resolves
   // the pull request's head commit BEFORE checkout and checks out exactly
   // that commit, so `uses: ./` runs the engine under review. A comment run
@@ -163,6 +165,10 @@ export function generateCiWorkflowTemplate(
     options.maxChangedLines === undefined
       ? ""
       : `\n          max-changed-lines: ${options.maxChangedLines}`;
+  const filesGateLine =
+    options.maxChangedFiles === undefined
+      ? ""
+      : `\n          max-changed-files: ${options.maxChangedFiles}`;
   // S4: always written, never inherited. The gate is what makes a scaffolded
   // repo's pr-hero check red, so the file names it instead of relying on the
   // action's default, and a reader sees the consequence where they edit.
@@ -414,7 +420,7 @@ ${gateStep}      - name: Checkout${checkoutGate}
           anthropic-api-key: \${{ secrets.ANTHROPIC_API_KEY }}
           claude-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           routing: "\${{ vars.PRHERO_ROUTING }}"
-          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}${sizeGateLine}${budgetLine}${modeLine}
+          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}${sizeGateLine}${filesGateLine}${budgetLine}${modeLine}
 `;
 }
 
@@ -423,7 +429,10 @@ export interface RunCiSetupOptions {
   force?: boolean;
   exists?: (p: string) => boolean;
   // What the person chose in setup --ci; absent keeps the template's defaults.
-  template?: Pick<CiWorkflowTemplateOptions, "mode" | "budgetUsd">;
+  template?: Pick<
+    CiWorkflowTemplateOptions,
+    "mode" | "budgetUsd" | "maxChangedLines" | "maxChangedFiles"
+  >;
 }
 
 export type CiSetupResult =
@@ -466,6 +475,8 @@ export async function runCiSetup(
 // replaced, because replacing it would delete whatever the team wrote there.
 export interface RepoReviewConfigWrite {
   file: string;
+  // The file as written: what the summary reports as in force.
+  config: Record<string, unknown>;
   // Keys that already held a different value and now hold the chosen one.
   changed: { key: string; from: unknown; to: unknown }[];
   // Keys already in the file that nobody chose this run, left untouched, with
@@ -503,10 +514,32 @@ export async function writeRepoReviewConfig(
   const next: Record<string, unknown> = { ...current };
   const changed: RepoReviewConfigWrite["changed"] = [];
   const kept: Record<string, unknown> = {};
+  // ci_max_reviews is the legacy name of ci_max_attempts: a file that sets it
+  // has already decided the pass count, so filling ci_max_attempts would
+  // silently override it (resolveCiReviewPolicy reads ci_max_attempts first).
+  const has = (key: string): boolean =>
+    key in current ||
+    (key === "ci_max_attempts" && "ci_max_reviews" in current);
   for (const group of plan.fillIfAbsent) {
-    const present = Object.keys(group).filter((key) => key in current);
+    const present = Object.keys(group).filter(has);
     if (present.length === 0) Object.assign(next, group);
-    for (const key of present) kept[key] = current[key];
+    for (const key of present) {
+      const fileKey =
+        key in current
+          ? key
+          : key === "ci_max_attempts"
+            ? "ci_max_reviews"
+            : key;
+      kept[fileKey] = current[fileKey];
+    }
+  }
+  // A chosen preset drops the level keys it does not set (and the legacy
+  // alias), so switching presets never leaves an orphan behind.
+  for (const key of plan.remove) {
+    if (key in current) {
+      changed.push({ key, from: current[key], to: undefined });
+      delete next[key];
+    }
   }
   for (const [key, value] of Object.entries(plan.set)) {
     if (
@@ -521,7 +554,7 @@ export async function writeRepoReviewConfig(
   parseLocalConfig(body);
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, body);
-  return { file, changed, kept };
+  return { file, config: next, changed, kept };
 }
 
 // Why these .prheroignore patterns would be refused, or undefined when they
