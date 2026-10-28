@@ -75,9 +75,16 @@ describe("scanRunDirs — reviewed-local set comes from findings.json", () => {
   });
 
   // findings.ts: an absent sessionFailed MUST mean "unknown", never "false".
-  // Only a run known to have completed arms the reviewed-local latch.
-  test("a run with sessionFailed absent (unknown) does not count as reviewed", async () => {
-    await runDir("pr-1971-unknown", findingsDoc());
+  // The repo's back-compat rule for that case (commands/post.ts) falls back to
+  // run_status: a legacy "complete" document is a finished review.
+  test("sessionFailed absent with run_status complete counts as reviewed", async () => {
+    await runDir("pr-1971-legacy", findingsDoc({ run_status: "complete" }));
+    const { localReviews } = await scanRunDirs(root);
+    expect(localReviews).toEqual([{ pr: 1971, head: HEAD }]);
+  });
+
+  test("sessionFailed absent with run_status partial does not count as reviewed", async () => {
+    await runDir("pr-1971-unknown", findingsDoc({ run_status: "partial" }));
     const { localReviews } = await scanRunDirs(root);
     expect(localReviews).toEqual([]);
   });

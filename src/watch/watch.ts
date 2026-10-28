@@ -485,9 +485,11 @@ export async function scanRunDirs(runsRoot: string): Promise<{
         const doc = validateFindingsDocument(
           JSON.parse(await Bun.file(findingsPath).text()),
         );
-        // An absent sessionFailed means "unknown" (findings.ts), so only a run
-        // KNOWN to have completed arms the latch: an unknown one is retried.
-        if (doc.pr > 0 && doc.sessionFailed === false) {
+        // An absent sessionFailed means "unknown" (findings.ts). Same
+        // back-compat rule as commands/post.ts: fall back to run_status, so a
+        // legacy "complete" document still counts and any other is retried.
+        const failed = doc.sessionFailed ?? doc.run_status !== "complete";
+        if (doc.pr > 0 && !failed) {
           localReviews.push({ pr: doc.pr, head: doc.head_sha });
         }
       } catch (error) {
