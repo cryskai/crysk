@@ -2322,3 +2322,18 @@ describe("actionsRunUrl — the run a pending belongs to", () => {
     }
   });
 });
+
+// A workflow scaffolded before the rename passes only vars.PRHERO_ROUTING to
+// the action, so the routing fixes must name it, not only CRYSK_ROUTING.
+describe("routing fixes name the pre-rename variable too", () => {
+  test("PRH-ROUTING-MISSING points a pre-rename workflow at PRHERO_ROUTING", () => {
+    const rendered = renderError(
+      { kind: "trigger", check: "routing-missing" },
+      {},
+      "action",
+    );
+    expect(rendered.what).not.toContain("CRYSK_ROUTING is empty");
+    expect(rendered.summary.join("\n")).toContain("reads PRHERO_ROUTING");
+    expect(rendered.annotation).toContain("PRHERO_ROUTING");
+  });
+});

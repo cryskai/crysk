@@ -973,6 +973,8 @@ An OpenCode route also needs the routing variable:
 gh variable set CRYSK_ROUTING --body '<routing-object-json>'
 ```
 
+A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `pr-hero ci init --force` so the workflow also reads CRYSK_ROUTING.
+
 Dependabot PRs read Dependabot secrets, so set this one too:
 
 ```bash
@@ -1093,7 +1095,7 @@ gh pr comment {pr} --body "/crysk review"
 
 **Owner:** your configuration
 
-**What:** OpenCode auth is set but CRYSK_ROUTING is empty, so the default Claude route is used
+**What:** OpenCode auth is set but the routing variable is empty, so the default Claude route is used
 
 **Why:** the run would fail later at the Claude credential check
 
@@ -1103,11 +1105,13 @@ gh pr comment {pr} --body "/crysk review"
 gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"
 ```
 
+A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `pr-hero ci init --force` so the workflow also reads CRYSK_ROUTING.
+
 ### PRH-ROUTING-INVALID
 
 **Owner:** your configuration
 
-**What:** CRYSK_ROUTING is invalid: {detail}
+**What:** The routing variable is invalid: {detail}
 
 **Why:** pr-hero cannot tell which backend and model each agent should use
 
@@ -1118,6 +1122,8 @@ Edit the JSON, then set it again:
 ```bash
 gh variable set CRYSK_ROUTING --body "$(jq -c . routing.json)"
 ```
+
+A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `pr-hero ci init --force` so the workflow also reads CRYSK_ROUTING.
 
 ### PRH-ROUTE-UNRESOLVABLE
 

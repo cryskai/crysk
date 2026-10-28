@@ -170,8 +170,8 @@ Suspect a flawed integration or architecture when **either** of these signals ap
    that bypasses the size, budget and admission gates (`ci_max_attempts` included), and a gate
    `error` (expired token, missing credential, crash) makes step 0 say `review` again forever.
    Before posting either, count the ones already on this head, never from memory: the comments in
-   `gh pr view <n> --json comments` whose body is exactly `/crysk review` or `/crysk recheck`
-   and whose `createdAt` is at or after the oldest `pr-hero` status on the head
+   `gh pr view <n> --json comments` whose body is exactly `/crysk review`, `/crysk recheck`,
+   or their legacy spellings `/pr-hero review` and `/pr-hero recheck` (both still start a run), and whose `createdAt` is at or after the oldest `pr-hero` status on the head
    (`gh api "repos/{owner}/{repo}/commits/<head>/statuses?per_page=100" --jq '[.[] | select(.context == "pr-hero")] | last.created_at'`;
    no status yet means none counted). Each reason step 0 gives gets its command once per head:
    one `/crysk review` each for a skipped head, a partial review, a used-up budget, a gate

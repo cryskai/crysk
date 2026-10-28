@@ -1159,12 +1159,18 @@ const CLAUDE_CREDENTIAL_FIXES = [
   "Then re-run the workflow:",
   "$ gh run rerun {runId}",
 ] as const;
+// A workflow scaffolded before the rename to Crysk passes only
+// vars.PRHERO_ROUTING to the action, so a fix that names CRYSK_ROUTING alone
+// would send its owner to set a variable nothing reads.
+const LEGACY_ROUTING_NOTE =
+  "A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `pr-hero ci init --force` so the workflow also reads CRYSK_ROUTING.";
 const OPENCODE_CREDENTIAL_FIXES = [
   "Set the OpenCode credential for the route you use:",
   "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
   `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${OPENCODE_AUTH_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
   "An OpenCode route also needs the routing variable:",
   "$ gh variable set CRYSK_ROUTING --body '<routing-object-json>'",
+  LEGACY_ROUTING_NOTE,
   "Dependabot PRs read Dependabot secrets, so set this one too:",
   "$ gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
   "A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.",
@@ -1303,26 +1309,28 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-ROUTING-MISSING": {
     level: "error",
     owner: "config",
-    what: "OpenCode auth is set but CRYSK_ROUTING is empty, so the default Claude route is used",
+    what: "OpenCode auth is set but the routing variable is empty, so the default Claude route is used",
     variants: single(
       "the run would fail later at the Claude credential check",
       [
         '$ gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"',
+        LEGACY_ROUTING_NOTE,
       ],
-      `set CRYSK_ROUTING from your routing config: \`gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"\``,
+      `set CRYSK_ROUTING from your routing config: \`gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"\` (PRHERO_ROUTING on a workflow set up before the rename)`,
     ),
   },
   "PRH-ROUTING-INVALID": {
     level: "error",
     owner: "config",
-    what: "CRYSK_ROUTING is invalid: {detail}",
+    what: "The routing variable is invalid: {detail}",
     variants: single(
       "pr-hero cannot tell which backend and model each agent should use",
       [
         "Edit the JSON, then set it again:",
         '$ gh variable set CRYSK_ROUTING --body "$(jq -c . routing.json)"',
+        LEGACY_ROUTING_NOTE,
       ],
-      "fix the JSON in CRYSK_ROUTING ({detail}), then set it again with `gh variable set CRYSK_ROUTING`",
+      "fix the routing JSON ({detail}), then set it again with `gh variable set CRYSK_ROUTING` (PRHERO_ROUTING on a workflow set up before the rename)",
     ),
   },
   "PRH-ROUTE-UNRESOLVABLE": {

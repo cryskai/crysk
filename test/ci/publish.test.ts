@@ -1792,7 +1792,7 @@ describe("runPublish — the shell", () => {
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(
-      "description=PRH-ROUTING-INVALID: CRYSK_ROUTING is invalid: the routing input is not valid JSON",
+      "description=PRH-ROUTING-INVALID: The routing variable is invalid: the routing input is not valid JSON",
     );
     expect(commentPost(run.calls)).toBeDefined();
   });
