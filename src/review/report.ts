@@ -34,6 +34,7 @@ import {
   type RootCauseSummary,
   rootCauseIdByFinding,
 } from "#review/root-cause";
+import { findMarker, matchMarkerPrefix } from "../brand";
 
 export interface DiffStat {
   files: number;
@@ -1293,10 +1294,10 @@ export interface RecoveredFindingBadge {
 export function parseFindingCommentBadge(
   body: string,
 ): RecoveredFindingBadge | null {
-  if (!body.includes(PR_FINDING_MARKER_PREFIX)) return null;
+  if (findMarker(body, PR_FINDING_MARKER_PREFIX) === undefined) return null;
   const lines = body.split("\n");
-  const markerIndex = lines.findIndex((line) =>
-    line.startsWith(PR_FINDING_MARKER_PREFIX),
+  const markerIndex = lines.findIndex(
+    (line) => matchMarkerPrefix(line, PR_FINDING_MARKER_PREFIX) !== undefined,
   );
   if (markerIndex === -1) return null;
   let i = markerIndex + 1;

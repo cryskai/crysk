@@ -434,7 +434,7 @@ describe("postFindingsIfEnabled — the CI gate mode reaches the PR comment (S4)
       spawnFn,
       ciMode,
     });
-    return stdins.find((body) => body.startsWith("<!-- pr-hero-report ")) ?? "";
+    return stdins.find((body) => body.startsWith("<!-- crysk-report ")) ?? "";
   }
 
   test("a gate run's summary comment backs the required status, and never disclaims a merge gate", async () => {

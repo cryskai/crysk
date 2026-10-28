@@ -32,6 +32,7 @@ import {
   type TriageVerdict,
 } from "#triage/triage";
 import { log } from "#ui/primitives";
+import { matchMarkerPrefix } from "../brand";
 import { CliError, CliUsageError } from "../errors";
 import { tryOriginRepoId } from "../home";
 import { prheroLayout } from "../home-preflight";
@@ -146,11 +147,11 @@ export async function runTriageReplyCommand(input: {
     throw new CliUsageError(`--body-file not found: ${bodyPath}`);
   }
   const reasoning = await Bun.file(bodyPath).text();
-  if (reasoning.startsWith(TRIAGE_MARKER_PREFIX)) {
+  if (matchMarkerPrefix(reasoning, TRIAGE_MARKER_PREFIX) !== undefined) {
     throw new CliUsageError(
       "--body-file must be reasoning prose only — the driver prepends the " +
         "triage marker and badge (do not start the file with " +
-        "`<!-- pr-hero-triage`)",
+        "`<!-- crysk-triage`)",
     );
   }
   // anchor.patch first, as in post --from: the diff the finding's line is
@@ -196,7 +197,7 @@ export async function runTriageReplyCommand(input: {
         : `${finding.path}: post line ${identity.line} ` +
           `(findings.json:${findingsLine})`;
     throw new CliError(
-      `no posted <!-- pr-hero-finding marker matches ${input.findingId} ` +
+      `no posted <!-- crysk-finding (or <!-- pr-hero-finding) marker matches ${input.findingId} ` +
         `on PR #${prNumber} (${lineHint}, head ${doc.head_sha.slice(0, 8)}). ` +
         "Bind by marker, never by a GitHub comment id or the nearest line",
     );

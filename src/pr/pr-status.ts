@@ -43,6 +43,7 @@ import {
   type TriageVerdict,
 } from "#triage/triage";
 import { parsePrCommentMarker } from "#watch/preflight";
+import { matchMarkerPrefix } from "../brand";
 
 export const PR_STATUS_SCHEMA = "pr-hero.status/v1" as const;
 
@@ -269,7 +270,9 @@ function readSummary(comments: PrStatusComment[]): {
 function outcomeCodeOf(comments: PrStatusComment[]): string | null {
   let newest: PrStatusComment | null = null;
   for (const comment of comments) {
-    if (!comment.body.startsWith(OUTCOME_MARKER_PREFIX)) continue;
+    if (matchMarkerPrefix(comment.body, OUTCOME_MARKER_PREFIX) === undefined) {
+      continue;
+    }
     if (newest === null || comment.id > newest.id) newest = comment;
   }
   return newest === null ? null : parseOutcomeCode(newest.body);

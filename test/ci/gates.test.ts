@@ -179,7 +179,7 @@ describe("ciSizeGateSkip", () => {
       maxChangedLines: 1000,
       maxChangedFiles: 50,
     });
-    expect(skip?.comment.startsWith("<!-- pr-hero-skip-size -->")).toBe(true);
+    expect(skip?.comment.startsWith("<!-- crysk-skip-size -->")).toBe(true);
   });
 
   test("the comment reports the changed lines/files against their limits", () => {
@@ -315,7 +315,7 @@ describe("ciBudgetGateSkip", () => {
       budgetUsd: 10,
       prNumber: 56,
     });
-    expect(skip?.comment.startsWith("<!-- pr-hero-skip-budget -->")).toBe(true);
+    expect(skip?.comment.startsWith("<!-- crysk-skip-budget -->")).toBe(true);
   });
 
   test("the comment states both the estimated cost and the budget ceiling", () => {

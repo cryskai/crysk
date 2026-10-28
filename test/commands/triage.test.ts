@@ -396,7 +396,7 @@ describe("runTriageReplyCommand", () => {
       expect(post).toBeDefined();
       expect(post?.argv.join(" ")).toContain("in_reply_to=22");
       expect(post?.argv.join(" ")).not.toContain("in_reply_to=11");
-      expect(post?.stdin).toContain("<!-- pr-hero-triage tag=applied");
+      expect(post?.stdin).toContain("<!-- crysk-triage tag=applied");
       expect(post?.stdin).toContain("✅ **APPLIED**");
       expect(post?.stdin).toContain("Fixed by resetting the latch on unmount.");
       expect(

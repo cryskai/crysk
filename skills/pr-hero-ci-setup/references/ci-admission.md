@@ -119,4 +119,4 @@ A red gate with blocking findings that the team accepts is unlocked by commentin
 gh pr comment <n> --body "/pr-hero override"
 ```
 
-The override sets the `pr-hero` status on that head to `success` with no review, no spend, and no credential, and only a user with write or admin access may post it. Each override is recorded: the status names who acted, and a `<!-- pr-hero-override` comment names who, which head, and when. It is valid only for the head it names, so a new push or a later `/pr-hero review` on that head replaces it, and it works only on pull requests from this repository, never on forks.
+The override sets the `pr-hero` status on that head to `success` with no review, no spend, and no credential, and only a user with write or admin access may post it. Each override is recorded: the status names who acted, and a `<!-- crysk-override` comment names who, which head, and when. It is valid only for the head it names, so a new push or a later `/pr-hero review` on that head replaces it, and it works only on pull requests from this repository, never on forks.

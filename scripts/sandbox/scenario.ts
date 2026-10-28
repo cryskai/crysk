@@ -11,6 +11,8 @@
 //
 // smoke is the review-free scenario, run through this same code (smoke.ts).
 
+import { TRIAGE_MARKER_PREFIX } from "#triage/triage";
+import { matchMarkerPrefix } from "../../src/brand";
 import {
   type Check,
   type CheckResult,
@@ -826,7 +828,7 @@ async function dismissBlockingFinding(
   ]);
   const finding = comments.find(
     (c) =>
-      c.body.startsWith(FINDING_MARKER_PREFIX) &&
+      matchMarkerPrefix(c.body, FINDING_MARKER_PREFIX) !== undefined &&
       c.body.includes("🔴 blocking"),
   );
   if (finding === undefined) {
@@ -839,7 +841,7 @@ async function dismissBlockingFinding(
     "--method",
     "POST",
     "-f",
-    `body=<!-- pr-hero-triage tag=dismissed head=${headSha} actor=agent verdict=upheld -->\n\n${argument}`,
+    `body=${TRIAGE_MARKER_PREFIX}tag=dismissed head=${headSha} actor=agent verdict=upheld -->\n\n${argument}`,
     "-F",
     `in_reply_to=${finding.id}`,
   ]);

@@ -505,7 +505,7 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body.split("\n")[0]).toBe(`<!-- pr-hero-report head=${HEAD} -->`);
+    expect(body.split("\n")[0]).toBe(`<!-- crysk-report head=${HEAD} -->`);
   });
 
   // A PARTIAL run's marker carries the named coverage token so the NEXT
@@ -522,7 +522,7 @@ describe("renderPrComment", () => {
     );
     const firstLine = body.split("\n")[0] ?? "";
     expect(firstLine).toBe(
-      `<!-- pr-hero-report head=${HEAD} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`,
+      `<!-- crysk-report head=${HEAD} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`,
     );
     expect(firstLine.startsWith(PR_COMMENT_MARKER_PREFIX)).toBe(true);
   });
@@ -1720,7 +1720,7 @@ describe("renderPrComment", () => {
   test("an absent summary preserves the comment output byte-for-byte", () => {
     const body = renderPrComment(doc(), undefined, undefined, [], undefined);
     expect(body).toBe(
-      "<!-- pr-hero-report head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->\n" +
+      "<!-- crysk-report head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->\n" +
         "## pr-hero review\n\n" +
         "🔴 0 critical · 🟡 0 warning — `bbbbbbbb`, diff from `aaaaaaaa`\n\n" +
         "✅ pr-hero reviewed this PR and found nothing to report.\n\n" +

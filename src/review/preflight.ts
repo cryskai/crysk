@@ -352,7 +352,7 @@ Usage:
   pr-hero triage reply --pr <n> --from <run-dir> --finding <id> --tag <tag>
                    --body-file <path> [--verdict <v>] [--issue <n>] [--dry-run]
                              Post one triage reply. The driver resolves the
-                             parent from the posted <!-- pr-hero-finding
+                             parent from the posted <!-- crysk-finding
                              marker (never path/line), renders the marker +
                              badge, posts, and resolves the inline review
                              thread. --body-file is reasoning prose only.

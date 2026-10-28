@@ -639,7 +639,7 @@ been cleared (subject to the known gap at the end of this paragraph). A finding 
 decide, when a triage reply deferred it, or when a triage reply dismissed it. A dismissal the adjudicator
 upheld counts too, until the next review of the same head: an upheld verdict takes effect in two steps, the recheck posts the ruling and the following same-head `/pr-hero review` stops counting the finding. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, or when every file it
 names was deleted. A dismissed, deferred or misclassified finding is re-verified when a push touches its code, and leaves the count when verified gone. Triage replies (`applied`, `dismissed`,
-`deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator checks them only when someone comments `/pr-hero recheck` (see [Rechecking a dismissal](#rechecking-a-dismissal)). The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. **State block.** From the second review on, the summary carries a `pr-hero-state` block: the merged live set of the pull request's open findings. It holds every surviving earlier finding and this run's findings, so a blocking finding first raised by a re-review still counts on the next review, including a same-head `/pr-hero review` that runs no hunters. A finding that a re-review verified gone leaves the block. Each row keeps its `R###` id. The block's `hw` field is the highest id ever assigned on the pull request, so a retired id is never reused. When the summary would exceed GitHub's comment size limit, the cap drops prior advisory findings first (unconfirmed, then carried), never a blocking finding, and the summary states how many finding identities it dropped from the block. Known gap: the first review writes no state block, so an outside-diff finding of the first review is not persisted. Its inline findings are recovered from their markers on the second review.
+`deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator checks them only when someone comments `/pr-hero recheck` (see [Rechecking a dismissal](#rechecking-a-dismissal)). The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. **State block.** From the second review on, the summary carries a `crysk-state` block: the merged live set of the pull request's open findings. It holds every surviving earlier finding and this run's findings, so a blocking finding first raised by a re-review still counts on the next review, including a same-head `/pr-hero review` that runs no hunters. A finding that a re-review verified gone leaves the block. Each row keeps its `R###` id. The block's `hw` field is the highest id ever assigned on the pull request, so a retired id is never reused. When the summary would exceed GitHub's comment size limit, the cap drops prior advisory findings first (unconfirmed, then carried), never a blocking finding, and the summary states how many finding identities it dropped from the block. Known gap: the first review writes no state block, so an outside-diff finding of the first review is not persisted. Its inline findings are recovered from their markers on the second review.
 
 
 **Unlocking a gate.** A `failure` for blocking findings clears in one of two ways. A fix pushed to a new head
@@ -674,7 +674,7 @@ into `success`, with the description `pr-hero: overridden by @<login> — no rev
 review and spends nothing, and it needs no credential, so a repository without one can still unlock its gate.
 
 Every override is recorded. The status names who acted, and a pr-hero comment on the pull request names who,
-on which head, and when (UTC). It starts with `<!-- pr-hero-override`, and no later cleanup removes it, so the
+on which head, and when (UTC). It starts with `<!-- crysk-override`, and no later cleanup removes it, so the
 history of overrides stays on the pull request. The override also removes earlier outcome comments from the pull request, as a completed review does, and keeps every override record.
 
 An override is valid only for the head it names. The newest status on a head wins, so the override stands
@@ -779,7 +779,7 @@ pr-hero triage reply --pr <n> --from <run-dir> --finding F001 \
 
 `--from` needs the **run directory that produced those findings** — the driver opens
 `comparison.json` there and reads `findings.json` to map `F001` onto the posted
-`<!-- pr-hero-finding` marker. Locally that directory is still on your disk. In Actions it lives on the
+`<!-- crysk-finding` marker. Locally that directory is still on your disk. In Actions it lives on the
 runner at `~/.prhero/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` and **dies with the job**, so the
 action uploads it as an artifact in its last step.
 
@@ -864,7 +864,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 ```
 
 - `gate` is pr-hero's own commit status on the head. `state: "none"` means no `pr-hero` status is on it.
-- `findings` covers every posted `<!-- pr-hero-finding` comment, on every head. `channel` is `inline` for a review
+- `findings` covers every posted `<!-- crysk-finding` comment, on every head. `channel` is `inline` for a review
   thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread only.
 - A finding joins its state-block row the way the engine binds a prior to its comment: the comment's anchor must land
   within the row's locations, and the claim fingerprint breaks only a tie. The anchor is the marker's path and line,

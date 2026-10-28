@@ -51,7 +51,7 @@ const TRIGGER_HEAD = "e".repeat(40);
 const REVIEWED_HEAD = "d".repeat(40);
 const RUN_URL = `https://github.com/${REPO}/actions/runs/4242`;
 const MODULE_PATH = path.resolve(import.meta.dir, "../../src/ci/publish.ts");
-const MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=4242 attempt=1 -->`;
+const MARKER = `<!-- crysk-outcome v=1 head=${SHA} run=4242 attempt=1 -->`;
 // The run this file's record belongs to is 4242, so a marker from an older run
 // is 4000 and one from a newer run is 5000. Cleanup deletes only the older one.
 const OLDER_MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=4000 attempt=1 -->`;
@@ -620,7 +620,7 @@ describe("decidePublication — the pure table", () => {
         true,
       );
       expect(plan.commentBody.split("\n")[0]).toBe(
-        `<!-- pr-hero-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
+        `<!-- crysk-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
       );
     });
 
@@ -640,7 +640,7 @@ describe("decidePublication — the pure table", () => {
       expect(plan.headSha).toBe(REVIEWED_HEAD);
       expect(plan.status?.state).toBe("error");
       expect(plan.commentBody.split("\n")[0]).toBe(
-        `<!-- pr-hero-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
+        `<!-- crysk-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
       );
     });
 
@@ -661,7 +661,7 @@ describe("decidePublication — the pure table", () => {
       expect(plan.headSha).toBeUndefined();
       expect(plan.status).toBeUndefined();
       expect(plan.commentBody.split("\n")[0]).toBe(
-        `<!-- pr-hero-outcome v=1 head=unknown run=4242 attempt=1 -->`,
+        `<!-- crysk-outcome v=1 head=unknown run=4242 attempt=1 -->`,
       );
     });
 
@@ -781,7 +781,7 @@ describe("decidePublication — the pure table", () => {
     if (plan.kind !== "remote") return;
     expect(plan.status).toBeUndefined();
     expect(plan.commentBody.split("\n")[0]).toBe(
-      "<!-- pr-hero-outcome v=1 head=unknown run=4242 attempt=1 -->",
+      "<!-- crysk-outcome v=1 head=unknown run=4242 attempt=1 -->",
     );
   });
 
@@ -909,7 +909,7 @@ describe("decidePublication — the pure table", () => {
     if (plan.kind !== "remote") return;
     expect(plan.status).toBeUndefined();
     expect(plan.commentBody.split("\n")[0]).toBe(
-      "<!-- pr-hero-outcome v=1 head=unknown run=4242 attempt=1 -->",
+      "<!-- crysk-outcome v=1 head=unknown run=4242 attempt=1 -->",
     );
   });
 
@@ -1612,7 +1612,7 @@ describe("runPublish — the shell", () => {
     });
     expect(deletions(run.calls)).toEqual([`repos/${REPO}/issues/comments/10`]);
     expect(commentPost(run.calls)?.stdin?.split("\n")[0]).toBe(
-      `<!-- pr-hero-outcome v=1 head=${SHA} run=4242 attempt=2 -->`,
+      `<!-- crysk-outcome v=1 head=${SHA} run=4242 attempt=2 -->`,
     );
   });
 
@@ -2314,7 +2314,7 @@ describe("runPublish — the override (S8)", () => {
     );
     const body = comment?.stdin ?? "";
     expect(body.split("\n")[0]).toBe(
-      `<!-- pr-hero-override head=${SHA} run=4242 attempt=1 -->`,
+      `<!-- crysk-override head=${SHA} run=4242 attempt=1 -->`,
     );
     expect(body).toContain("@maintainer");
     expect(body).toContain("2026-10-17 12:34 UTC");
@@ -2352,7 +2352,7 @@ describe("runPublish — the override (S8)", () => {
     expect(statusCalls(run.calls)).toHaveLength(0);
     const body = commentPost(run.calls)?.stdin ?? "";
     expect(body.split("\n")[0]).toBe(
-      `<!-- pr-hero-override head=unknown run=4242 attempt=1 -->`,
+      `<!-- crysk-override head=unknown run=4242 attempt=1 -->`,
     );
     expect(body).toContain("no commit status could be set");
   });
@@ -2528,10 +2528,10 @@ describe("publish.ts runs before `bun install`", () => {
     }
   });
 
-  test("it imports only builtins, plus the builtins-only ./outcome and ./override siblings", () => {
+  test("it imports only builtins, plus the builtins-only ./outcome, ./override and ../brand", () => {
     const source = readFileSync(MODULE_PATH, "utf8");
     expect(
-      runtimeImportViolations(source, ["./outcome", "./override"]),
+      runtimeImportViolations(source, ["./outcome", "./override", "../brand"]),
     ).toEqual([]);
   });
 

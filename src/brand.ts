@@ -31,3 +31,45 @@ export function readBrandEnv(
   }
   return present;
 }
+
+// Comment markers on PRs. Every marker constant is written in the new form
+// (`<!-- crysk-<kind>`); the legacy form is derived from it here, so a reader
+// passes the one constant it already has and still finds comments posted
+// before the rename.
+export const MARKER_OPEN = "<!-- crysk-";
+const LEGACY_MARKER_OPEN = "<!-- pr-hero-";
+
+// For a RegExp that must match either name: `^<!-- ${MARKER_BRAND_PATTERN}-report`.
+export const MARKER_BRAND_PATTERN = "(?:crysk|pr-hero)";
+
+function markerForms(prefix: string): string[] {
+  if (!prefix.startsWith(MARKER_OPEN)) {
+    throw new Error(`not a crysk marker prefix: ${JSON.stringify(prefix)}`);
+  }
+  return [prefix, LEGACY_MARKER_OPEN + prefix.slice(MARKER_OPEN.length)];
+}
+
+// The form `text` starts with, or undefined. Callers slice by the returned
+// prefix's length: the two names differ in length.
+export function matchMarkerPrefix(
+  text: string,
+  prefix: string,
+): string | undefined {
+  return markerForms(prefix).find((form) => text.startsWith(form));
+}
+
+// The earliest occurrence of either form anywhere in `text`, for markers that
+// sit inside a larger comment (the summary's state and admission blocks).
+export function findMarker(
+  text: string,
+  prefix: string,
+): { index: number; prefix: string } | undefined {
+  let best: { index: number; prefix: string } | undefined;
+  for (const form of markerForms(prefix)) {
+    const index = text.indexOf(form);
+    if (index !== -1 && (best === undefined || index < best.index)) {
+      best = { index, prefix: form };
+    }
+  }
+  return best;
+}

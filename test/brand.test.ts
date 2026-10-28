@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { readBrandEnv } from "../src/brand";
+import {
+  findMarker,
+  MARKER_BRAND_PATTERN,
+  matchMarkerPrefix,
+  readBrandEnv,
+} from "../src/brand";
 
 describe("readBrandEnv", () => {
   test("reads the new CRYSK_ name first", () => {
@@ -65,5 +70,52 @@ describe("user-set env vars go through readBrandEnv", () => {
       direct.test(readFileSync(path.join(srcDir, file), "utf8")),
     );
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("comment markers read both names", () => {
+  const prefix = "<!-- crysk-finding ";
+
+  test("matchMarkerPrefix returns the new prefix when the body uses it", () => {
+    expect(matchMarkerPrefix("<!-- crysk-finding path=a -->", prefix)).toBe(
+      prefix,
+    );
+  });
+
+  test("matchMarkerPrefix returns the legacy prefix for an old comment", () => {
+    expect(matchMarkerPrefix("<!-- pr-hero-finding path=a -->", prefix)).toBe(
+      "<!-- pr-hero-finding ",
+    );
+  });
+
+  test("matchMarkerPrefix does not match a marker quoted mid-body", () => {
+    expect(
+      matchMarkerPrefix("see <!-- crysk-finding path=a -->", prefix),
+    ).toBeUndefined();
+  });
+
+  test("matchMarkerPrefix works on a full marker without a trailing space", () => {
+    expect(
+      matchMarkerPrefix(
+        "<!-- pr-hero-skip-size -->\nbody",
+        "<!-- crysk-skip-size -->",
+      ),
+    ).toBe("<!-- pr-hero-skip-size -->");
+  });
+
+  test("findMarker returns the earliest of the two forms", () => {
+    const body = "x\n<!-- pr-hero-state v=1 -->\n<!-- crysk-state v=1 -->";
+    expect(findMarker(body, "<!-- crysk-state ")).toEqual({
+      index: 2,
+      prefix: "<!-- pr-hero-state ",
+    });
+    expect(findMarker("nothing", "<!-- crysk-state ")).toBeUndefined();
+  });
+
+  test("MARKER_BRAND_PATTERN matches both names inside a RegExp", () => {
+    const re = new RegExp(`^<!-- ${MARKER_BRAND_PATTERN}-report -->$`);
+    expect(re.test("<!-- crysk-report -->")).toBe(true);
+    expect(re.test("<!-- pr-hero-report -->")).toBe(true);
+    expect(re.test("<!-- other-report -->")).toBe(false);
   });
 });

@@ -30,6 +30,7 @@ import {
   type SizeGateConfig,
   type SizeGateVerdict,
 } from "#review/size-gate";
+import { MARKER_OPEN, matchMarkerPrefix } from "../brand";
 import { CliError, CliUsageError } from "../errors";
 
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
@@ -405,7 +406,7 @@ export function decideWorktree(input: {
 // comment instead of updating. The trailing space in the prefix is
 // deliberate: both formats continue with a space (` -->` / ` head=`), while
 // a foreign lookalike marker such as `<!-- pr-hero-reporter -->` does not.
-export const PR_COMMENT_MARKER_PREFIX = "<!-- pr-hero-report ";
+export const PR_COMMENT_MARKER_PREFIX = `${MARKER_OPEN}report `;
 
 // The re-review closing comment (pr/pr.ts's postInlineFindings). A re-review
 // only PATCHes the summary, and GitHub neither notifies on an edit nor moves
@@ -413,7 +414,7 @@ export const PR_COMMENT_MARKER_PREFIX = "<!-- pr-hero-report ";
 // looking untouched. This marker tags the short comment that closes the run.
 // Its own `pr-hero-<noun>` namespace, so findMarkedCommentId's summary lookup
 // (prefix `pr-hero-report `) can never mistake it for the summary.
-export const PR_REREVIEW_CLOSED_MARKER_PREFIX = "<!-- pr-hero-rereview-closed ";
+export const PR_REREVIEW_CLOSED_MARKER_PREFIX = `${MARKER_OPEN}rereview-closed `;
 
 // Rereview-coverage fix (GitHub #42's re-review half, MusiveTech/musive
 // #1823): a PARTIAL run (some hunters or the refuter failed, but not all —
@@ -433,8 +434,8 @@ export const PR_COMMENT_COVERAGE_PARTIAL_TOKEN = "coverage=partial";
 // passes `false`.
 export function prCommentMarker(headSha: string, complete = true): string {
   return complete
-    ? `<!-- pr-hero-report head=${headSha} -->`
-    : `<!-- pr-hero-report head=${headSha} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`;
+    ? `${PR_COMMENT_MARKER_PREFIX}head=${headSha} -->`
+    : `${PR_COMMENT_MARKER_PREFIX}head=${headSha} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`;
 }
 
 // Finds the comment a --post run should update. A comment matches only when
@@ -459,7 +460,7 @@ export function findMarkedCommentId(
   let found: number | null = null;
   for (const comment of comments) {
     if (typeof comment?.body !== "string") continue;
-    if (!comment.body.startsWith(prefix)) continue;
+    if (matchMarkerPrefix(comment.body, prefix) === undefined) continue;
     found = comment.id;
   }
   return found;
@@ -500,7 +501,7 @@ export function findMarkedCommentId(
 // marker family for the other would either orphan the summary comment or
 // treat a per-finding comment as the summary. See the prefix-disjointness
 // test in test/pr/preflight.test.ts.
-export const PR_FINDING_MARKER_PREFIX = "<!-- pr-hero-finding ";
+export const PR_FINDING_MARKER_PREFIX = `${MARKER_OPEN}finding `;
 
 export interface FindingMarkerFields {
   path: string;
@@ -552,11 +553,12 @@ export interface ParsedFindingMarker {
 // not a fatal error, and the caller (the matcher) treats "unparseable" the
 // same as "no prior comment": it posts fresh rather than guess.
 export function parseFindingMarker(body: string): ParsedFindingMarker | null {
-  if (!body.startsWith(PR_FINDING_MARKER_PREFIX)) return null;
+  const prefix = matchMarkerPrefix(body, PR_FINDING_MARKER_PREFIX);
+  if (prefix === undefined) return null;
   const firstLine = body.split("\n", 1)[0] ?? "";
   if (!firstLine.endsWith(" -->")) return null;
   const fields = firstLine.slice(
-    PR_FINDING_MARKER_PREFIX.length,
+    prefix.length,
     firstLine.length - " -->".length,
   );
   const parts = new Map<string, string>();

@@ -529,16 +529,22 @@ describe("prCommentMarker", () => {
 
   test("declares the full head sha and starts with the matcher's prefix", () => {
     const marker = prCommentMarker(HEAD);
-    expect(marker).toBe(`<!-- pr-hero-report head=${HEAD} -->`);
+    expect(marker).toBe(`<!-- crysk-report head=${HEAD} -->`);
     expect(marker.startsWith(PR_COMMENT_MARKER_PREFIX)).toBe(true);
   });
 
-  // The old headless marker must ALSO start with the prefix — that identity
-  // is the whole backward-compatibility argument for prefix matching.
-  test("the legacy headless marker starts with the same prefix", () => {
-    expect("<!-- pr-hero-report -->".startsWith(PR_COMMENT_MARKER_PREFIX)).toBe(
-      true,
-    );
+  // Comments already posted carry the old headless `<!-- pr-hero-report -->`
+  // and the pre-rename `<!-- pr-hero-report head=… -->`. The summary lookup
+  // must still find both, or --post stacks a second summary.
+  test("the summary lookup still finds a legacy pr-hero marker", () => {
+    expect(
+      findMarkedCommentId([{ id: 1, body: "<!-- pr-hero-report -->" }]),
+    ).toBe(1);
+    expect(
+      findMarkedCommentId([
+        { id: 2, body: `<!-- pr-hero-report head=${HEAD} -->\nbody` },
+      ]),
+    ).toBe(2);
   });
 
   // Rereview-coverage fix (partial-review posting a marker that reads as
@@ -546,10 +552,10 @@ describe("prCommentMarker", () => {
   // it explicitly true — must stay BYTE-IDENTICAL to the pre-fix marker.
   // Every already-posted comment, and every one-argument caller in this
   // codebase, depends on that.
-  test("complete (default, and explicit true) is byte-identical to the old marker", () => {
-    expect(prCommentMarker(HEAD)).toBe(`<!-- pr-hero-report head=${HEAD} -->`);
+  test("complete (default, and explicit true) is the plain head marker", () => {
+    expect(prCommentMarker(HEAD)).toBe(`<!-- crysk-report head=${HEAD} -->`);
     expect(prCommentMarker(HEAD, true)).toBe(
-      `<!-- pr-hero-report head=${HEAD} -->`,
+      `<!-- crysk-report head=${HEAD} -->`,
     );
   });
 
@@ -560,7 +566,7 @@ describe("prCommentMarker", () => {
   test("incomplete carries the named coverage token and still matches the prefix", () => {
     const marker = prCommentMarker(HEAD, false);
     expect(marker).toBe(
-      `<!-- pr-hero-report head=${HEAD} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`,
+      `<!-- crysk-report head=${HEAD} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`,
     );
     expect(marker.startsWith(PR_COMMENT_MARKER_PREFIX)).toBe(true);
   });
