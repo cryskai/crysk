@@ -391,6 +391,35 @@ describe("saveRunTransaction and round-trip fidelity", () => {
     }
   });
 
+  // Same head, but the artifact was stamped AFTER the stored row: a later
+  // re-run of that head into the same run dir whose live persist was missed.
+  // The live persist always stamps after the pipeline (store/preflight.ts), so
+  // for the run the row describes the artifact time is never later.
+  test("a backfill re-save with the same head and a later artifact time takes it", async () => {
+    const dbPath = await tmpDbPath();
+    const db = openProductStore(dbPath);
+    try {
+      const save = (generatedAt: string) =>
+        saveRunTransaction(
+          db,
+          projectCompleteRun({
+            doc: sampleDoc(),
+            perAgent: SAMPLE_PER_AGENT,
+            repoId: REPO_ID,
+            runDir: RUN_DIR,
+            checkoutPath: "/Users/juanma/Desktop/pr-hero",
+            generatedAt,
+          }),
+          { keepGeneratedAt: true },
+        );
+      const id = save("2026-08-23T18:00:00.000Z");
+      save("2026-08-24T09:00:00.000Z");
+      expect(getRunById(db, id)?.generated_at).toBe("2026-08-24T09:00:00.000Z");
+    } finally {
+      db.close();
+    }
+  });
+
   // A backfill keeps the stored time only for the SAME run. A different head
   // in the same run dir is a later run whose live persist was missed, so its
   // own time comes with its own cost and head.
@@ -456,7 +485,8 @@ describe("saveRunTransaction and round-trip fidelity", () => {
           repoId: REPO_ID,
           runDir: RUN_DIR,
           checkoutPath: "/Users/juanma/Desktop/pr-hero",
-          generatedAt: "2026-08-23T18:05:00.000Z",
+          // The artifact of the run the row describes: stamped before the row.
+          generatedAt: "2026-08-23T17:55:00.000Z",
         }),
         { keepGeneratedAt: true },
       );

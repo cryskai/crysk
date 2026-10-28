@@ -60,15 +60,19 @@ export function openProductStore(dbPath: string): Database {
 
 // `generated_at` on conflict: a live re-run into the same run dir (an explicit
 // --out) is a new run, so its timestamp moves with its cost and head. The
-// historical backfill keeps the stored one only for the SAME run (same head):
-// it re-derives the time from artifacts and must not rewrite when that run
-// happened. A different head is a later run whose live persist was missed, so
-// it takes the artifact's own time along with its cost and head.
+// historical backfill keeps the stored one only for the SAME run: it
+// re-derives the time from artifacts and must not rewrite when that run
+// happened. The live persist always stamps after the pipeline wrote its
+// artifacts (store/preflight.ts), so for the run a row describes the artifact
+// time is never later than the stored one. A different head, or a later
+// artifact time, is a later run in the same run dir whose live persist was
+// missed: it takes the artifact's own time along with its cost and head.
 function runUpsertSql(keepGeneratedAt: boolean): string {
   return RUN_UPSERT_SQL.replace(
     "generated_at = runs.generated_at",
     keepGeneratedAt
       ? "generated_at = CASE WHEN excluded.head_sha = runs.head_sha " +
+          "AND excluded.generated_at <= runs.generated_at " +
           "THEN runs.generated_at ELSE excluded.generated_at END"
       : "generated_at = excluded.generated_at",
   );
