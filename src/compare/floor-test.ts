@@ -15,7 +15,7 @@ import type { Finding, FindingsDocument } from "#review/findings";
 import { DEFAULT_LINE_WINDOW, normalizePath } from "./compare";
 
 // §3.11's two case types, and M6 must not blur them: a `miss` case reviews the
-// PR where our engine missed something Greptile found; a `corpus` case reviews
+// PR where our engine missed a defect a production reviewer caught; a `corpus` case reviews
 // the INTRODUCER, and `fix_pr` is provenance only.
 export type FloorCaseType = "miss" | "corpus";
 
@@ -121,9 +121,9 @@ export function parseFloorCases(raw: string): FloorCase[] {
   return cases;
 }
 
-// `compare/compare.ts`'s window, reused rather than re-chosen: the head-to-head and
-// this scorer must agree on what "the same place" means, or a finding can be
-// `both` against Greptile and a miss against the floor test at the same line.
+// `compare/compare.ts`'s window, reused rather than re-chosen: the PR comparison and
+// this scorer must agree on what "the same place" means, or a finding can match in one
+// and count as a miss in the other at the same line.
 export { DEFAULT_LINE_WINDOW };
 
 export type FloorArm = "scout" | "control";

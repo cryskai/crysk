@@ -1,5 +1,5 @@
 // PR mode's post-pipeline tail (ROADMAP B1): the artifact writes, the
-// Greptile comparison, the canonical store, posting, the terminal summary,
+// comparison.json, the canonical store, posting, the terminal summary,
 // CI publishing, and the CI admission ledger's terminal settlement — all of
 // it runs once `runPipeline` has returned. Extracted out of reviewPr()
 // (src/pr/review-pr.ts, cli-decomp/review-pr-publish-outcome): identifiers
@@ -41,7 +41,7 @@ import {
   settleCiAdmissionLedger,
 } from "#pr/admission";
 import { publishCiReviewIfEligible } from "#pr/ci-publish";
-import { computeGreptileComparison } from "#pr/comparison";
+import { computeComparison } from "#pr/comparison";
 import type { PrDiscoveryResult } from "#pr/discovery";
 import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
 import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
@@ -171,12 +171,11 @@ export async function publishRunOutcome(
     recordReviewDelivered(input.headSha);
   }
 
-  // 13 — the Greptile head-to-head, then (13b) the comparison.json
-  // read-back for the observability store. See computeGreptileComparison
-  // (src/pr/comparison.ts) for the full rationale.
-  const { comparison, storedComparison } = await computeGreptileComparison({
+  // 13 — the comparison.json write, then (13b) its read-back for the
+  // observability store. See computeComparison (src/pr/comparison.ts) for the
+  // full rationale.
+  const { storedComparison } = await computeComparison({
     sessionFailed: result.sessionFailed,
-    operatorRoot: input.operatorRoot,
     pr: input.prNumber,
     headSha: input.headSha,
     diffFromSha: input.diffFromSha,
@@ -269,8 +268,8 @@ export async function publishRunOutcome(
   input.onPosted(posted);
   const postedWebUrl = postingResult.postedWebUrl;
 
-  // 15 — the summary. One shared renderer with local mode; the mode-specific parts (comparison,
-  // the worktree hint) ride in as optional inputs. The `posted:` line that
+  // 15 — the summary. One shared renderer with local mode; the mode-specific parts
+  // (the worktree hint) ride in as optional inputs. The `posted:` line that
   // used to sit here is GONE on purpose: step 14 already printed a richer one
   // at the moment it happened, and two differently-worded reports of the same
   // POST read as two postings. What this block keeps is the durable trace —
@@ -308,19 +307,8 @@ export async function publishRunOutcome(
     artifacts: [
       path.basename(reportPath),
       path.basename(findingsPath),
-      ...(comparison ? [path.basename(comparison.markdownPath)] : []),
       ...(posted ? ["post.json"] : []),
     ],
-    ...(comparison
-      ? {
-          comparison: {
-            greptileFound: comparison.greptileFound,
-            // The buckets themselves, not their counts: writeComparison's
-            // widened outcome is what lets the block name a recall miss.
-            result: comparison.result,
-          },
-        }
-      : {}),
     worktree: {
       gitDirOwner: input.gitDirOwner,
       worktreePath: input.worktreePath,

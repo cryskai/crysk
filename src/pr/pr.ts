@@ -1,5 +1,5 @@
 // PR mode's I/O (ROADMAP B1): gh, the fetch, the detached worktree, the
-// worktree's codegraph index, and the Greptile comparison files — every side
+// worktree's codegraph index, and the comparison.json write — every side
 // effect `pr-hero review --pr <n>` needs beyond what cli.ts already owns.
 // Same contract as cli.ts: this is an I/O shell, and every decision it acts
 // on is a pure function in pr/preflight.ts / pr/inline.ts (or review/preflight.ts),
@@ -36,13 +36,7 @@ import {
   renderCiAdmissionBlock,
   tierCountsFromFindings,
 } from "#ci/review-admission";
-import {
-  type ComparisonResult,
-  compareFindings,
-  type PrHeroFindingRef,
-} from "#compare/compare";
-import { parseGreptileComment, pickGreptileComment } from "#compare/greptile";
-import { renderComparison } from "#compare/report";
+import type { PrHeroFindingRef } from "#compare/compare";
 import { THREAD_PAGE_SIZE } from "#corpus/preflight";
 import { git } from "#git/git";
 import { isFullCommitId } from "#git/refs";
@@ -126,8 +120,7 @@ async function gh(
     );
   }
   // cwd = operator root: gh resolves owner/repo from the checkout's remote,
-  // so the PR consulted always belongs to the repo passed as --repo — same
-  // reasoning as scripts/compare-pr.ts.
+  // so the PR consulted always belongs to the repo passed as --repo.
   //
   // stdin carries a field value when the caller passes `-F key=@-` (gh reads
   // `@-` from stdin; verified against `gh api --help`, 2026-08-10): a report
@@ -811,27 +804,14 @@ export async function initCodegraphIndex(
 }
 
 export interface ComparisonOutcome {
-  greptileFound: boolean;
-  greptileOnly: number;
-  both: number;
   prheroOnly: number;
-  markdownPath: string;
   jsonPath: string;
-  // The whole bucketing, not just its cardinalities. writeComparison already
-  // computes this to write comparison.md; discarding it left the terminal
-  // structurally unable to say anything but numbers, and `greptileOnly` is
-  // THE measured number — "a recall miss with a name, a file and a line"
-  // (compare/compare.ts). IN-MEMORY ONLY: comparison.json's bytes are unchanged, and
-  // must stay so — the ledger reads them back through StoredComparison.
-  result: ComparisonResult;
 }
 
-// The in-process replacement for scripts/compare-pr.ts, run against the
-// findings this review just produced. Throws on any gh failure — the CALLER
-// decides that a comparison failure must not fail the run, because the
-// review artifacts are already on disk and are the product.
+// Writes comparison.json and nothing else: no gh call, no markdown. The
+// caller decides that a failure here must not fail the run, because the review
+// artifacts are already on disk and are the product.
 export async function writeComparison(input: {
-  operatorRoot: string;
   pr: number;
   headSha: string;
   diffFromSha: string;
@@ -840,13 +820,7 @@ export async function writeComparison(input: {
   runStatus: RunStatus;
   findings: PrHeroFindingRef[];
 }): Promise<ComparisonOutcome> {
-  const comments = await fetchPrComments(input.operatorRoot, input.pr);
-  const body = pickGreptileComment(comments);
-  const greptile = body === null ? [] : parseGreptileComment(body);
-  const result = compareFindings(input.findings, greptile);
-  const markdownPath = path.join(input.runDir, "comparison.md");
   const jsonPath = path.join(input.runDir, "comparison.json");
-  await Bun.write(markdownPath, renderComparison(input.pr, result));
   await Bun.write(
     jsonPath,
     `${JSON.stringify(
@@ -857,22 +831,13 @@ export async function writeComparison(input: {
         runDir: input.runDir,
         generatedAt: input.generatedAt,
         runStatus: input.runStatus,
-        greptileFound: body !== null,
-        result,
+        findings: input.findings,
       }),
       null,
       2,
     )}\n`,
   );
-  return {
-    greptileFound: body !== null,
-    greptileOnly: result.greptileOnly.length,
-    both: result.both.length,
-    prheroOnly: result.prheroOnly.length,
-    markdownPath,
-    jsonPath,
-    result,
-  };
+  return { prheroOnly: input.findings.length, jsonPath };
 }
 
 // Publishes the review as ONE marked PR comment: update the existing marked
@@ -1110,12 +1075,9 @@ function postedCommentAuthor(stdout: string): string | undefined {
   }
 }
 
-// Mirror of scripts/compare-pr.ts's fetch, kept shape-identical on purpose.
-// --paginate matters: a busy PR accumulates enough comments to push
-// Greptile's off page 1, and a missing comment looks identical to "Greptile
-// found nothing" — the exact failure mode that would silently flatter
-// pr-hero. API order is preserved verbatim (no sort, no reverse):
-// pickGreptileComment reads "newest" as LAST.
+// --paginate matters: a busy PR accumulates enough comments to push the
+// pr-hero marker comments off page 1, and a missing comment looks identical
+// to "nothing declared". API order is preserved verbatim (no sort, no reverse).
 //
 // Exported since B3: the watch guard reads the same comments to learn which
 // heads a pr-hero marker already declares (watch/watch.ts imports this one-way;

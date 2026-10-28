@@ -289,7 +289,7 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 | --- | --- |
 | `pr-hero` / `pr-hero menu` | Open the interactive terminal user interface (TUI) with context-aware navigation, review launcher, and submenus. |
 | `pr-hero review` | Review the checked-out branch against the merge base with `--base`. Requires a clean tree sitting on `--head` (default `HEAD`). |
-| `pr-hero review --pr [n]` | Review a GitHub PR: by number, or — bare, no number — the PR that belongs to the current branch (errors loudly if it has none). Resolves the range through `gh`, runs in a detached worktree with its own codegraph index, then compares the result against Greptile's comment on that PR. |
+| `pr-hero review --pr [n]` | Review a GitHub PR: by number, or — bare, no number — the PR that belongs to the current branch (errors loudly if it has none). Resolves the range through `gh`, runs in a detached worktree with its own codegraph index, then records the result in `comparison.json` as pr-hero's own findings. |
 | `pr-hero review --pr <n> --post` | Same, then publish the report as **one** marked PR comment — re-runs update it in place, never stack. |
 | `pr-hero doctor` | Run diagnostic environment and dependency checks (git, claude auth, gh, codegraph, config). Works inside or outside a repository. |
 | `pr-hero setup` | Machine-level onboarding: skill synchronization and MCP registration — and, when run inside a git repo, it also scaffolds that repo's `.prhero/config.json` and `.prhero/gotchas.md`, so no separate `init` is needed there. Fully non-interactive. It does **not** commit or `.gitignore` what it scaffolds; do that yourself before reviewing. |
@@ -360,10 +360,7 @@ Reviews launch two ways: **by hand**, or through the opt-in local watcher (`pr-h
 
    Bare `--pr` resolves the branch's own PR (loud error if there is none), the review runs in its
    worktree while you keep working, and `--post` publishes the one marked comment. A PR number works
-   anywhere (`--pr <n>`), no matter what you have checked out. Launch timing is forgiving: the
-   Greptile comparison happens at the END of the run, and if it still ran too early it can be redone
-   later for $0 without paying a new review:
-   `bun run scripts/compare-pr.ts --pr <n> --findings <run-dir>/findings.json`.
+   anywhere (`--pr <n>`), no matter what you have checked out.
 
 ### Automation and CI — status
 
@@ -467,7 +464,7 @@ Run artifacts land **outside** the repo, in `~/.prhero/repos/<origin>/runs/<run>
 | --- | --- |
 | `report.md` | The human-readable review. |
 | `findings.json` | The machine artifact (schema v1.0.0): findings, tiers, refuter verdicts, usage, provenance. |
-| `comparison.md` / `comparison.json` | PR mode only — the head-to-head against Greptile, three buckets. The JSON rows carry `verdict`/`reasoning` columns for triage; `pr-hero ledger` accumulates them. |
+| `comparison.json` | PR mode only — pr-hero's own findings for the PR, one row each; no external reviewer is compared. The JSON rows carry `verdict`/`reasoning` columns for triage; `pr-hero ledger` accumulates them. |
 | `diff.patch`, `pipeline.json`, `steps/` | The exact diff reviewed — after exclusions, so it is byte-for-byte what the hunters read — plus pipeline provenance (including the excluded paths), per-agent drafts and logs. |
 | `diff.raw.patch` | The unfiltered diff of the same range. Written **only** when exclusions actually dropped a file, since otherwise it would duplicate `diff.patch`. |
 | `anchor.patch` | The full PR diff (merge-base..head, after exclusions) that inline comments anchor against. On a first review it equals `diff.patch`; on an incremental re-review `diff.patch` is only the push delta, and this file still covers the whole PR, so a finding on an untouched line of the PR gets a review thread. |

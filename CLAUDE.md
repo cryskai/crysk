@@ -119,8 +119,7 @@ over** (found while wiring C5, 2026-08-23):
   decisions (all offline-tested), and the cost band + report renderer.
 - `src/pr.ts` + `src/pr-preflight.ts` — PR mode (B1, `--pr <n>`): gh/worktree/codegraph I/O shell and
   its pure decisions — PR record → range, the worktree reuse gate, comparison.json (B4's seed).
-- `src/greptile.ts` + `src/compare.ts` + `src/compare-report.ts` — the head-to-head: parse Greptile's
-  PR comment, bucket findings against ours, render the comparison.
+- `src/compare/compare.ts` — shared PR path normalization and the default line window, used by the comparison.json rows and the floor test.
 - `src/floor-test.ts` — M6's primary instrument, pure: the case list's validator, the per-case gate (a
   refuter-CORROBORATED finding within compare.ts's ±25 of the site), the per-arm tally, the table. Arm
   identity is read off `pipeline.json`'s `scout.enabled`, never a directory name. Cases live in

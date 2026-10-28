@@ -8,7 +8,7 @@
 // Boundary-doubling note — a DELIBERATE exception to "double at boundaries
 // you do not control" (robust-testing rule 4), disclosed rather than hidden
 // behind an internal mock: `postFindingsIfEnabled` (src/pr/posting.ts) and
-// `computeGreptileComparison` (src/pr/comparison.ts) call real `gh`-backed
+// `computeComparison` (src/pr/comparison.ts) call real `gh`-backed
 // helpers (`ghRepoWebUrl`, `postInlineFindings`, `fetchPrComments`) WITHOUT
 // exposing an injectable `spawnFn` at their own parameter surface —
 // confirmed by reading both files. That is the same "genuine I/O shell, no
@@ -23,8 +23,9 @@
 //     (verified manually: `gh pr view <n>` against a non-git directory
 //     returns in ~20ms with "fatal: not a git repository", no network
 //     round-trip) — `ghRepoWebUrl` and `gitRemoteWebUrl` both degrade to
-//     `undefined` on that failure, and `computeGreptileComparison`'s own
-//     try/catch degrades to `comparison: null`. None of this throws. This
+//     `undefined` on that failure. `computeComparison` no longer touches gh
+//     (it only writes comparison.json into the run dir), so it always records
+//     its artifact here. None of this throws. This
 //     only holds with `GH_REPO` unset (it overrides gh's repo detection
 //     regardless of cwd) — saved/deleted/restored below, same as
 //     `GITHUB_STEP_SUMMARY`/`GITHUB_OUTPUT`, so the suite controls its own

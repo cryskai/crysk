@@ -13,7 +13,7 @@ metadata:
 
 Load when scoring, running, or comparing a pr-hero methodology on Martian’s Code Review Bench — Cal.com evals, n-vs-n vs Greptile/CodeRabbit/Bugbot, Surface A/B, or “how did we do” on that corpus.
 
-Do not load for musive H2H alone (`src/compare.ts`), M6 scout A/B on musive, or a product review of our own PRs.
+Do not load for M6 scout A/B on musive alone, or a product review of our own PRs.
 
 ## Hard Rules
 

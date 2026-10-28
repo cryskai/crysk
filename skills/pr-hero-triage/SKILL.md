@@ -232,8 +232,7 @@ current head:
 
    **Greptile re-review:** Greptile updates its existing PR comment in place —
    it does not post a second one. Do not wait for a new Greptile comment to
-   appear; poll for a body change on the existing one, or re-run
-   `compare-pr.ts` when you need an updated head-to-head.
+   appear; poll for a body change on the existing one.
 
 ## Closing a dismissal: `/pr-hero recheck`
 

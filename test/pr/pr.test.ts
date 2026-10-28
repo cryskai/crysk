@@ -20,6 +20,9 @@
 // identity marker and its claim, verbatim, never via argv".
 
 import { describe, expect, test } from "bun:test";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   ADMISSION_CHECK_RUN_NAME,
   type AdmissionRecord,
@@ -52,6 +55,7 @@ import {
   repostMarkedPrComment,
   resolveReviewThreadForComment,
   upsertAdmissionCheckRun,
+  writeComparison,
 } from "#pr/pr";
 import {
   CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
@@ -3351,5 +3355,51 @@ describe("upsertAdmissionCheckRun — reserve POST lookup (W3)", () => {
     expect(id).toBe(501);
     expect(calls).toHaveLength(1);
     expect(calls.some(isLookup)).toBe(false);
+  });
+});
+
+describe("writeComparison — a pure file write", () => {
+  // The comparison no longer fetches PR comments, so it must never reach gh.
+  // A fake gh that records any call sits first on PATH; it must stay unused.
+  test("makes no gh call and writes comparison.json only", async () => {
+    const bin = await mkdtemp(path.join(tmpdir(), "pr-hero-no-gh-bin-"));
+    const marker = path.join(bin, "gh-was-called");
+    await writeFile(
+      path.join(bin, "gh"),
+      `#!/bin/sh\ntouch "${marker}"\nexit 1\n`,
+    );
+    await chmod(path.join(bin, "gh"), 0o755);
+    const runDir = await mkdtemp(path.join(tmpdir(), "pr-hero-no-gh-run-"));
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+    try {
+      const outcome = await writeComparison({
+        pr: 42,
+        headSha: "b".repeat(40),
+        diffFromSha: "a".repeat(40),
+        runDir,
+        generatedAt: "2026-10-28T10:00:00.000Z",
+        runStatus: "complete",
+        findings: [
+          {
+            id: "F001",
+            path: "src/a.ts",
+            line: 7,
+            claim: "c",
+            tier: "blocking",
+          },
+        ],
+      });
+      expect(outcome.prheroOnly).toBe(1);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+    expect(await Bun.file(marker).exists()).toBe(false);
+    expect(await Bun.file(path.join(runDir, "comparison.json")).exists()).toBe(
+      true,
+    );
+    expect(await Bun.file(path.join(runDir, "comparison.md")).exists()).toBe(
+      false,
+    );
   });
 });
