@@ -17,12 +17,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
-import type {
-  Bucket,
-  ComparisonResult,
-  PrHeroFindingRef,
-} from "#compare/compare";
-import type { GreptileFinding } from "#compare/greptile";
+import type { Bucket, PrHeroFindingRef } from "#compare/compare";
 import { isFullCommitId } from "#git/refs";
 import type { RunStatus } from "#review/findings";
 import {
@@ -597,8 +592,14 @@ export function parseFindingMarker(body: string): ParsedFindingMarker | null {
 }
 
 // ---------------------------------------------------------------------------
-// comparison.json — the machine-readable half of the head-to-head artifact.
+// comparison.json — the machine-readable record of one run's findings. Its
+// schema is frozen on purpose: the ledger, the store and the watcher still
+// parse it, so `greptile` stays a literal `{ found: false }` and every row is
+// `prhero_only` with `greptile: null`.
 
+// Shape of a Greptile claim as written by older runs. Nothing writes it any
+// more; the ledger's reader (compare/ledger.ts) still types historical files
+// with it, so it stays exported.
 export interface ComparisonGreptileClaim {
   index: number;
   path: string;
@@ -618,7 +619,7 @@ export interface ComparisonPrHeroClaim {
 
 export interface ComparisonRow {
   bucket: Bucket;
-  greptile: ComparisonGreptileClaim | null;
+  greptile: null;
   prhero: ComparisonPrHeroClaim | null;
   // Always null here, and present ON PURPOSE — the A3 lesson: a verdict
   // recorded without its reasoning cannot be re-examined when new evidence
@@ -650,18 +651,14 @@ export interface ComparisonJson {
   // because "pr-hero 0" from a review that never happened would be recorded
   // as a measured miss.)
   run_status: RunStatus;
-  // found: false is "Greptile left no comment", which must stay
-  // distinguishable from "Greptile commented and reported nothing" —
-  // renderComparison keeps them apart in prose, and the JSON must not
-  // collapse them either.
-  greptile: { found: boolean };
+  // Always `{ found: false }`: no external review is compared any more. The
+  // field stays so the schema the ledger reads does not change.
+  greptile: { found: false };
   rows: ComparisonRow[];
 }
 
-// A mechanical projection of the SAME ComparisonResult renderComparison
-// consumes — never a second comparison pass, or the .md and the .json could
-// disagree about what matched. Row order mirrors the rendering: the measured
-// miss (greptile_only) leads.
+// One `prhero_only` row per finding, in the findings' own order. Each row is
+// built by the same row() the rows always came from, so the bytes are unchanged.
 export function buildComparisonJson(input: {
   pr: number;
   headSha: string;
@@ -669,21 +666,8 @@ export function buildComparisonJson(input: {
   runDir: string;
   generatedAt: string;
   runStatus: RunStatus;
-  greptileFound: boolean;
-  result: ComparisonResult;
+  findings: PrHeroFindingRef[];
 }): ComparisonJson {
-  const rows: ComparisonRow[] = [];
-  for (const finding of input.result.greptileOnly) {
-    rows.push(row("greptile_only", greptileClaim(finding), null));
-  }
-  for (const pair of input.result.both) {
-    rows.push(
-      row("both", greptileClaim(pair.greptile), prheroClaim(pair.prhero)),
-    );
-  }
-  for (const finding of input.result.prheroOnly) {
-    rows.push(row("prhero_only", null, prheroClaim(finding)));
-  }
   return {
     pr: input.pr,
     head_sha: input.headSha,
@@ -691,14 +675,16 @@ export function buildComparisonJson(input: {
     run_dir: input.runDir,
     generated_at: input.generatedAt,
     run_status: input.runStatus,
-    greptile: { found: input.greptileFound },
-    rows,
+    greptile: { found: false },
+    rows: input.findings.map((finding) =>
+      row("prhero_only", null, prheroClaim(finding)),
+    ),
   };
 }
 
 function row(
   bucket: Bucket,
-  greptile: ComparisonGreptileClaim | null,
+  greptile: null,
   prhero: ComparisonPrHeroClaim | null,
 ): ComparisonRow {
   return {
@@ -708,17 +694,6 @@ function row(
     verdict: null,
     reasoning: null,
     actor: null,
-  };
-}
-
-function greptileClaim(finding: GreptileFinding): ComparisonGreptileClaim {
-  return {
-    index: finding.index,
-    path: finding.path,
-    start_line: finding.startLine,
-    end_line: finding.endLine,
-    title: finding.title,
-    description: finding.description,
   };
 }
 

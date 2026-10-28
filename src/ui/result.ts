@@ -9,15 +9,14 @@
 // a `posted:` line that duplicated one already printed during the run. Two
 // copies of the last thing an operator reads is two chances to drift, and
 // neither copy could be tested because both were a run of `log()` calls
-// inside a 400-line async shell. The mode-specific parts (comparison,
-// worktree hint, extra artifacts) are optional inputs, not a second renderer.
+// inside a 400-line async shell. The mode-specific parts (worktree hint, links,
+// extra artifacts) are optional inputs, not a second renderer.
 //
 // WHY it prints the FINDINGS: after five minutes and $4 the terminal used to
 // report counts and file paths and never once said what was found — the
 // payload was the one thing you had to leave the terminal to read. Everything
 // below the header exists to end that.
 
-import type { ComparisonResult } from "#compare/compare";
 import type { Finding, FindingsDocument } from "#review/findings";
 import {
   blobUrl,
@@ -41,14 +40,6 @@ import {
   yellow,
 } from "./primitives";
 import { FREE_STEPS_NOTE, type FreeBillingMode } from "./select";
-
-interface ResultComparison {
-  greptileFound: boolean;
-  // The whole bucketing, not the three cardinalities: a Greptile-only finding
-  // is a recall miss with a name, a file and a line, and printing only its
-  // count is how a measured miss reads as a rounding error.
-  result: ComparisonResult;
-}
 
 interface ResultWorktree {
   gitDirOwner: string;
@@ -118,7 +109,6 @@ export interface ResultInput {
   // place that motivated it).
   runDir: string;
   artifacts: string[];
-  comparison?: ResultComparison;
   // PR mode only: the worktree is kept and reused BY DECISION, so the block
   // hands over the exact removal command. `worktree remove`, never `rm -rf` —
   // a live codegraph daemon holds .codegraph/daemon.sock.
@@ -127,7 +117,7 @@ export interface ResultInput {
   // PR mode only, and only on a CONFIRMED mismatch (GitHub #39): the PR's
   // head as GitHub reported it immediately before posting, when it is not
   // the head this run reviewed. Optional, matching this interface's own
-  // style for mode-specific inputs (`comparison`, `links`, `worktree`) —
+  // style for mode-specific inputs (`links`, `worktree`) —
   // unlike renderPrComment's required parameter, there is exactly ONE
   // production call site for this block and its test pins it, so an
   // omission cannot hide in a second caller.
@@ -148,10 +138,6 @@ const MAX_WIDTH = 96;
 // Body indents: the marker column, then the prose column under it.
 const MARKER_INDENT = "  ";
 const PROSE_INDENT = "     ";
-// How many Greptile-only rows are worth a line each before the tail becomes a
-// count. Real PRs carry a handful; a 20-row dump would bury the findings this
-// block exists to show.
-const MAX_GREPTILE_ROWS = 5;
 // Wide enough for the longest footer label ("estimate", "worktree") plus a gap.
 const FOOTER_LABEL_WIDTH = 12;
 
@@ -400,57 +386,6 @@ function incompleteLines(
   ];
 }
 
-function greptileLines(
-  comparison: ResultComparison,
-  doc: FindingsDocument,
-  width: number,
-  styles: boolean,
-): string[] {
-  const { greptileOnly, both, prheroOnly } = comparison.result;
-  const lines = [
-    "",
-    `${MARKER_INDENT}${dim("vs Greptile ", styles)} pr-hero ` +
-      `${prheroOnly.length} · both ${both.length} · greptile ` +
-      `${greptileOnly.length}` +
-      (comparison.greptileFound
-        ? ""
-        : dim("  (no Greptile comment on this PR)", styles)),
-  ];
-  // The recall misses, by name. This is the number the whole head-to-head
-  // exists to measure, and until WU4 widened ComparisonOutcome the terminal
-  // could not name a single one of them.
-  const shown = greptileOnly.slice(0, MAX_GREPTILE_ROWS);
-  for (const miss of shown) {
-    lines.push(
-      PROSE_INDENT +
-        yellow(
-          truncate(
-            `↳ missed ${miss.path}:${miss.startLine} — ${miss.title}`,
-            Math.max(width - PROSE_INDENT.length, 20),
-          ),
-          styles,
-        ),
-    );
-  }
-  if (greptileOnly.length > shown.length) {
-    lines.push(
-      PROSE_INDENT +
-        dim(
-          `↳ and ${greptileOnly.length - shown.length} more — see ` +
-            "comparison.md",
-          styles,
-        ),
-    );
-  }
-  // A pr-hero-only finding is not automatically a win, and a `both` row is not
-  // automatically a match (compare/compare.ts's window over-matches by design), so the
-  // block points at the file that shows the pairings rather than scoring them.
-  if (doc.findings.length > 0 && comparison.greptileFound) {
-    lines.push(PROSE_INDENT + dim("↳ pairings: comparison.md", styles));
-  }
-  return lines;
-}
-
 export function renderResult(input: ResultInput): string[] {
   const width = Math.max(
     Math.min(input.width ?? terminalWidth(), MAX_WIDTH),
@@ -503,8 +438,8 @@ export function renderResult(input: ResultInput): string[] {
   ];
   // A green all-clear is only allowed when the review actually RAN. A dead
   // session also reaches here with `findings: []`, and "no findings" over a
-  // review that never happened is the same lie the comparison and posting
-  // guards exist to prevent (cli.ts steps 13/14) — the red line below is the
+  // review that never happened is the same lie the posting
+  // guard exists to prevent (cli.ts steps 13/14) — the red line below is the
   // whole message in that case.
   //
   // `partial` joined that exclusion for GitHub #42: a run where some agents
@@ -519,9 +454,6 @@ export function renderResult(input: ResultInput): string[] {
         green("no findings survived to this point", styles) +
         (refuted === 0 ? "" : dim(` — ${refuted} refuted and dropped`, styles)),
     );
-  }
-  if (input.comparison) {
-    lines.push(...greptileLines(input.comparison, doc, width, styles));
   }
   // The footer goes through row(), so a run dir plus four basenames wraps to
   // the value column instead of running off the terminal. Values are handed to

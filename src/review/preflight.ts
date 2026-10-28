@@ -450,8 +450,8 @@ Options:
   --pr [n]            Review GitHub PR #n — or, with no number, the PR that
                       belongs to the current branch. head and base come from
                       gh, the review runs in a detached worktree with its
-                      own codegraph index, and the result is compared
-                      against Greptile's comment on the PR. Excludes --base,
+                      own codegraph index, and the result is written to
+                      comparison.json with pr-hero's findings. Excludes --base,
                       --head and --two-dot
   --post              With --pr only: publish the review to the PR as one
                       marked comment — created the first time, updated in

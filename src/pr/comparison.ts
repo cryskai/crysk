@@ -1,11 +1,11 @@
-// PR mode's Greptile head-to-head, in-process. Relocated out of reviewPr()
+// PR mode's comparison.json stage, in-process. Relocated out of reviewPr()
 // (src/pr/review-pr.ts): the two sequential `if/else` blocks collapsed into
 // one early-return guard clause, identifiers renamed to explicit parameters,
 // control flow otherwise unchanged. The WHY comments below move with the
 // code they explain.
 //
 // A failure here must NOT fail the run: the review artifacts are already on
-// disk and are the product, so a gh hiccup degrades to a warning, never an
+// disk and are the product, so a write hiccup degrades to a warning, never an
 // exit code. A run where EVERY hunter died writes no comparison at all —
 // "pr-hero 0" from a review that never happened would land in B4's ledger as
 // a measured miss, and the ledger's honesty outranks the artifact's
@@ -22,20 +22,17 @@ export interface ComparisonStageResult {
   storedComparison: StoredComparison | null;
 }
 
-export async function computeGreptileComparison(input: {
+export async function computeComparison(input: {
   sessionFailed: boolean;
-  operatorRoot: string;
   pr: number;
   headSha: string;
   diffFromSha: string;
   runDir: string;
   runStatus: RunStatus;
   findings: PrHeroFindingRef[];
-  // Test-only seam (default: the real writeComparison). writeComparison
-  // itself calls fetchPrComments with no spawnFn of its own, and pr.ts is
-  // out of scope for this slice — so offline tests replace the whole
-  // collaborator instead, writing a real comparison.json to a temp runDir
-  // so the read-back below (parseComparisonJson) still runs for real.
+  // Test-only seam (default: the real writeComparison), so the offline tests
+  // can inject a writer that fails or leaves an unreadable file while the
+  // read-back below (parseComparisonJson) still runs for real.
   write?: typeof writeComparison;
 }): Promise<ComparisonStageResult> {
   const write = input.write ?? writeComparison;
@@ -49,7 +46,6 @@ export async function computeGreptileComparison(input: {
   let comparison: ComparisonOutcome | null = null;
   try {
     comparison = await write({
-      operatorRoot: input.operatorRoot,
       pr: input.pr,
       headSha: input.headSha,
       diffFromSha: input.diffFromSha,
@@ -61,7 +57,7 @@ export async function computeGreptileComparison(input: {
     });
   } catch (error) {
     log(
-      "warning: comparison against Greptile failed — the review itself is " +
+      "warning: writing comparison.json failed — the review itself is " +
         `intact: ${(error as Error).message}`,
     );
   }

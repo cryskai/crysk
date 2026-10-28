@@ -617,7 +617,7 @@ function findingIndexLines(
 // ROADMAP B6 reshape, W2 (issues #16/#17): the index stays one-liners;
 // anchorable findings live on the review; un-anchorable (and 422-demoted)
 // findings render their full body in this summary's Comments Outside Diff
-// section — Greptile-shaped, never as standalone issue comments. `delta`
+// section, never as standalone issue comments. `delta`
 // may be absent — a caller with no prior-state knowledge (or a same-run
 // first post) still gets a valid comment, just without the delta line —
 // but the PARAMETER itself is REQUIRED, not optional (PR2 verification
@@ -1087,7 +1087,7 @@ export function renderRereviewClosedComment(input: {
   return `${lines.join("\n")}\n`;
 }
 
-// Greptile-shaped bucket (issues #16/#17): un-anchorable and 422-demoted
+// Outside-diff bucket (issues #16/#17): un-anchorable and 422-demoted
 // findings live HERE, inside the one summary, never as `POST .../issues/<n>/comments`.
 // Rendered only when N>0. Full per-finding body (header, blob-linked location,
 // claim, tier explanation, evidence, prompt-to-fix) — the same shape as

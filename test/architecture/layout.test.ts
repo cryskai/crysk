@@ -120,14 +120,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   },
   {
     domain: "compare",
-    files: [
-      "compare",
-      "floor-test",
-      "greptile",
-      "ledger",
-      "martian-adapter",
-      "report",
-    ],
+    files: ["compare", "floor-test", "ledger", "martian-adapter"],
   },
   {
     domain: "review",

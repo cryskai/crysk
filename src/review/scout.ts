@@ -92,8 +92,8 @@ export function validateScoutLeads(candidate: unknown): ScoutLead[] {
     // Left unstripped, a correct suspicion at the right line scores as a
     // coverage MISS and the M4 gate silently measures prompt formatting
     // instead of scouting. `compare/compare.ts`'s normalizePath is deliberately NOT
-    // the place for this: it defines "the same path" for the Greptile
-    // head-to-head, and widening it there would invent matches across
+    // the place for this: it defines "the same path" for the PR
+    // comparison rows, and widening it there would invent matches across
     // `packages/`.
     const leadPath = (lead.path as string).replace(/^[ab]\//, "");
     must(leadPath.length > 0, `scout leads[${i}].path required`);

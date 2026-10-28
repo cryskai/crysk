@@ -16,8 +16,8 @@ import {
   SKIP_SIZE_COMMENT_MARKER,
 } from "#ci/gates";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
-import type { ComparisonResult, PrHeroFindingRef } from "#compare/compare";
-import type { GreptileFinding } from "#compare/greptile";
+import type { PrHeroFindingRef } from "#compare/compare";
+import { parseComparisonJson } from "#compare/ledger";
 import {
   blockingCommitStatusRequest,
   buildComparisonJson,
@@ -956,160 +956,125 @@ describe("decideWorktree", () => {
 });
 
 describe("buildComparisonJson", () => {
-  const matched: GreptileFinding = {
-    index: 1,
-    path: "src/a.ts",
-    startLine: 100,
-    endLine: 104,
-    title: "Stale cache",
-    description: "The derived value is never invalidated.",
-  };
-  const missed: GreptileFinding = {
-    index: 2,
-    path: "src/b.ts",
-    startLine: 7,
-    endLine: 7,
-    title: "Missed",
-    description: "Only Greptile saw this.",
-  };
-  const paired: PrHeroFindingRef = {
+  const first: PrHeroFindingRef = {
     id: "F001",
     path: "src/a.ts",
     line: 102,
     claim: "Cached list survives the mutation.",
     tier: "blocking",
   };
-  const extra: PrHeroFindingRef = {
+  const second: PrHeroFindingRef = {
     id: "F002",
     path: "src/c.ts",
     line: 40,
     claim: "Only pr-hero saw this.",
     tier: "advisory",
   };
-  const result: ComparisonResult = {
-    greptileOnly: [missed],
-    both: [{ greptile: matched, prhero: paired }],
-    prheroOnly: [extra],
+  const base = {
+    pr: 1682,
+    headSha: "e3ab386a63020c6f5c21d814d176ff33849eef8d",
+    diffFromSha: "b22c3b367f6ac8531ad40e172f7aa82384dbbeb1",
+    runDir: "/x/musive-prhero-runs/pr-1682-e3ab386a-1",
+    generatedAt: "2026-08-10T18:00:00.000Z",
+    runStatus: "complete" as const,
   };
 
-  test("projects the same result the renderer consumes, miss first", () => {
-    const json = buildComparisonJson({
-      pr: 1682,
-      headSha: "e3ab386a63020c6f5c21d814d176ff33849eef8d",
-      diffFromSha: "b22c3b367f6ac8531ad40e172f7aa82384dbbeb1",
-      runDir: "/x/musive-prhero-runs/pr-1682-e3ab386a-1",
-      generatedAt: "2026-08-10T18:00:00.000Z",
-      runStatus: "complete",
-      greptileFound: true,
-      result,
-    });
+  test("one prhero_only row per finding, in order, with greptile null", () => {
+    const json = buildComparisonJson({ ...base, findings: [first, second] });
     expect(json.pr).toBe(1682);
-    expect(json.generated_at).toBe("2026-08-10T18:00:00.000Z");
-    expect(json.head_sha).toBe("e3ab386a63020c6f5c21d814d176ff33849eef8d");
-    expect(json.diff_from_sha).toBe("b22c3b367f6ac8531ad40e172f7aa82384dbbeb1");
-    expect(json.run_dir).toBe("/x/musive-prhero-runs/pr-1682-e3ab386a-1");
+    expect(json.head_sha).toBe(base.headSha);
+    expect(json.diff_from_sha).toBe(base.diffFromSha);
+    expect(json.run_dir).toBe(base.runDir);
+    expect(json.generated_at).toBe(base.generatedAt);
     expect(json.run_status).toBe("complete");
-    expect(json.greptile).toEqual({ found: true });
-    expect(json.rows.map((r) => r.bucket)).toEqual([
-      "greptile_only",
-      "both",
+    expect(json.greptile).toEqual({ found: false });
+    expect(json.rows).toEqual([
+      {
+        bucket: "prhero_only",
+        greptile: null,
+        prhero: {
+          id: "F001",
+          path: "src/a.ts",
+          line: 102,
+          claim: "Cached list survives the mutation.",
+          tier: "blocking",
+        },
+        verdict: null,
+        reasoning: null,
+        actor: null,
+      },
+      {
+        bucket: "prhero_only",
+        greptile: null,
+        prhero: {
+          id: "F002",
+          path: "src/c.ts",
+          line: 40,
+          claim: "Only pr-hero saw this.",
+          tier: "advisory",
+        },
+        verdict: null,
+        reasoning: null,
+        actor: null,
+      },
+    ]);
+  });
+
+  // The byte-level contract: the ledger, store and watcher read these keys
+  // in this order, and a reordered row is a silent schema change.
+  test("a row keeps the exact key order the readers were written against", () => {
+    const json = buildComparisonJson({ ...base, findings: [first] });
+    expect(Object.keys(json.rows[0])).toEqual([
+      "bucket",
+      "greptile",
+      "prhero",
+      "verdict",
+      "reasoning",
+      "actor",
+    ]);
+  });
+
+  test("the output reads back through the ledger's own parser", () => {
+    const json = buildComparisonJson({ ...base, findings: [first, second] });
+    const stored = parseComparisonJson(`${JSON.stringify(json, null, 2)}\n`);
+    expect(stored.greptile).toEqual({ found: false });
+    expect(stored.rows.map((row) => row.bucket)).toEqual([
+      "prhero_only",
       "prhero_only",
     ]);
-    expect(json.rows[0]).toEqual({
-      bucket: "greptile_only",
-      greptile: {
-        index: 2,
-        path: "src/b.ts",
-        start_line: 7,
-        end_line: 7,
-        title: "Missed",
-        description: "Only Greptile saw this.",
-      },
-      prhero: null,
-      verdict: null,
-      reasoning: null,
-      actor: null,
+    expect(stored.rows.every((row) => row.greptile === null)).toBe(true);
+  });
+
+  test("no findings is an empty but valid record", () => {
+    const json = buildComparisonJson({ ...base, findings: [] });
+    expect(json.rows).toEqual([]);
+    expect(parseComparisonJson(JSON.stringify(json)).rows).toEqual([]);
+  });
+
+  // A partial run's comparison stays readable, weighted by its status — only
+  // the all-hunters-dead case is never written at all (comparison.ts skips it).
+  test("a partial run is recorded as partial", () => {
+    const json = buildComparisonJson({
+      ...base,
+      runStatus: "partial",
+      findings: [second],
     });
-    expect(json.rows[1]).toEqual({
-      bucket: "both",
-      greptile: {
-        index: 1,
-        path: "src/a.ts",
-        start_line: 100,
-        end_line: 104,
-        title: "Stale cache",
-        description: "The derived value is never invalidated.",
-      },
-      prhero: {
-        id: "F001",
-        path: "src/a.ts",
-        line: 102,
-        claim: "Cached list survives the mutation.",
-        tier: "blocking",
-      },
-      verdict: null,
-      reasoning: null,
-      actor: null,
-    });
-    expect(json.rows[2]).toEqual({
-      bucket: "prhero_only",
-      greptile: null,
-      prhero: {
-        id: "F002",
-        path: "src/c.ts",
-        line: 40,
-        claim: "Only pr-hero saw this.",
-        tier: "advisory",
-      },
-      verdict: null,
-      reasoning: null,
-      actor: null,
-    });
+    expect(json.run_status).toBe("partial");
+    expect(json.rows).toHaveLength(1);
+    expect(json.rows[0].bucket).toBe("prhero_only");
   });
 
   // The A3 lesson made structural: the triage columns exist, and they ship
   // empty — never pre-filled, never omitted. `actor` (ROADMAP B6c) joins
   // them for the same reason: nobody has triaged this row yet.
   test("every row ships verdict, reasoning and actor as literal nulls", () => {
-    const json = buildComparisonJson({
-      pr: 1682,
-      headSha: "e3ab386a63020c6f5c21d814d176ff33849eef8d",
-      diffFromSha: "b22c3b367f6ac8531ad40e172f7aa82384dbbeb1",
-      runDir: "/x/runs/pr-1682-e3ab386a-1",
-      generatedAt: "2026-08-10T18:00:00.000Z",
-      runStatus: "complete",
-      greptileFound: true,
-      result,
-    });
+    const json = buildComparisonJson({ ...base, findings: [first, second] });
     expect(json.rows.length).toBeGreaterThan(0);
     for (const row of json.rows) {
       expect(row.verdict).toBeNull();
       expect(row.reasoning).toBeNull();
       expect(row.actor).toBeNull();
     }
-  });
-
-  // found: false ("no Greptile comment") must stay distinguishable from
-  // "Greptile commented and reported nothing" (found: true, no rows).
-  test("a PR without a Greptile comment records found: false", () => {
-    const json = buildComparisonJson({
-      pr: 1660,
-      headSha: "30e038b0c71742432eea11a7d5964c97251c5e49",
-      diffFromSha: "7395db0d33d0f3fae8eb2f98795c8748335986ca",
-      runDir: "/x/runs/pr-1660-30e038b0-1",
-      generatedAt: "2026-08-10T18:05:00.000Z",
-      runStatus: "partial",
-      greptileFound: false,
-      result: { greptileOnly: [], both: [], prheroOnly: [extra] },
-    });
-    expect(json.greptile.found).toBe(false);
-    // A partial run's comparison stays readable, weighted by its status —
-    // only the all-hunters-dead case is never written at all (cli.ts skips
-    // it: "pr-hero 0" from a review that never ran is not a measured miss).
-    expect(json.run_status).toBe("partial");
-    expect(json.rows).toHaveLength(1);
-    expect(json.rows[0].bucket).toBe("prhero_only");
-    expect(json.rows[0].greptile).toBeNull();
   });
 });
 
