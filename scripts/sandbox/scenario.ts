@@ -23,7 +23,7 @@ import {
   ownBlockingUndecided,
 } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
-import { FINDING_MARKER_PREFIX, STATUS_CONTEXT } from "./markers";
+import { FINDING_MARKER_PREFIX, gateStatusOf } from "./markers";
 import {
   COMMENT_RUN_CLOCK_SKEW_MS,
   type CommentFact,
@@ -726,16 +726,21 @@ async function perform(
   await postComment(deps, live, action.body);
 }
 
-// The status of one head, as the combined status of its commit reads it (the pr-hero
-// context only). Undefined when the head has none yet.
+// The status of one head, as the combined status of its commit reads it (the gate's context
+// only, either of its names). Undefined when the head has none yet.
 async function statusOf(
   deps: SandboxDeps,
   sha: string,
 ): Promise<StatusFact | undefined> {
   const combined = await ghJson<{
-    statuses: { context: string; state: string; description: string }[];
+    statuses: {
+      context: string;
+      state: string;
+      description: string;
+      created_at: string;
+    }[];
   }>(deps, ["api", `repos/${SANDBOX_REPO}/commits/${sha}/status`]);
-  const latest = combined.statuses.find((s) => s.context === STATUS_CONTEXT);
+  const latest = gateStatusOf(combined.statuses);
   return latest === undefined
     ? undefined
     : { state: latest.state, description: latest.description };
@@ -1045,14 +1050,16 @@ async function waitForRun(
             let gateState: string | undefined;
             try {
               const combined = await ghJson<{
-                statuses: { context: string; state: string }[];
+                statuses: {
+                  context: string;
+                  state: string;
+                  created_at: string;
+                }[];
               }>(deps, [
                 "api",
                 `repos/${SANDBOX_REPO}/commits/${headSha}/status`,
               ]);
-              gateState = combined.statuses.find(
-                (s) => s.context === STATUS_CONTEXT,
-              )?.state;
+              gateState = gateStatusOf(combined.statuses)?.state;
             } catch {
               // A failed status read is retried on the next tick.
             }
@@ -1260,7 +1267,7 @@ async function collect(
       createdAt: c.created_at,
     })),
   ];
-  const latest = combined.statuses.find((s) => s.context === STATUS_CONTEXT);
+  const latest = gateStatusOf(combined.statuses);
   // The log is read only for a phase that asks for it, so every other phase makes the
   // same calls it always did.
   const hunterFailures =

@@ -65,7 +65,7 @@ import {
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { log } from "#ui/primitives";
 import { parseMarkerHead } from "#watch/preflight";
-import { matchMarkerPrefix } from "../brand";
+import { matchMarkerPrefix, statusContextForms } from "../brand";
 import { CliError } from "../errors";
 import {
   buildPostPlan,
@@ -413,9 +413,20 @@ export async function ghRepoNameWithOwner(
 // In-flight / completed signal on the head SHA. Fail-loud here: the CLI
 // catches and warns, because a missing `repo:status` scope must not abort a
 // review that already cost hunter money. The context is the request's own
-// (T3 S7): the gate's `pr-hero` only from a `--ci` run's request, and
-// `pr-hero/local` from every other run, so the POST can never pick a context
+// (T3 S7): the gate's `crysk` only from a `--ci` run's request, and
+// `crysk/local` from every other run, so the POST can never pick a context
 // the caller did not choose.
+//
+// WHY two POSTs: for one version every status is also written on the legacy
+// `pr-hero` name (`pr-hero/local` for a local run). Users have `pr-hero` as a
+// required check in branch protection, and a head that stops getting it blocks
+// every PR until they add `crysk`. Both POSTs carry one state, one description
+// and one target. They start together, crysk first, so the cancellation settle
+// (which runs inside a signal handler racing a SIGKILL) spends one short
+// window, not two. A failed POST never skips the other: the required check may
+// be either name, so the call still throws if either failed, and the caller's
+// own handling (fail-soft or fail-loud) applies exactly as it did to one POST.
+// Resolves with the created_at of the crysk row, the context the CLI reads back.
 export async function postCommitStatus(
   operatorRoot: string,
   sha: string,
@@ -431,6 +442,37 @@ export async function postCommitStatus(
       `commit status: head sha is not a full 40-char id: ${sha.slice(0, 16)}`,
     );
   }
+  const results = await Promise.allSettled(
+    statusContextForms(status.context).map((context) =>
+      postCommitStatusOn(
+        operatorRoot,
+        sha,
+        { ...status, context },
+        spawnFn,
+        options,
+      ),
+    ),
+  );
+  for (const result of results) {
+    if (result.status === "rejected") throw result.reason;
+  }
+  const [crysk] = results;
+  return crysk?.status === "fulfilled" ? crysk.value : undefined;
+}
+
+// One POST of a status on one context, with the retry.
+async function postCommitStatusOn(
+  operatorRoot: string,
+  sha: string,
+  status: {
+    state: string;
+    context: string;
+    description: string;
+    targetUrl?: string;
+  },
+  spawnFn: typeof Bun.spawn | undefined,
+  options: { attempts?: number; timeoutMs?: number } | undefined,
+): Promise<string | undefined> {
   const args = [
     "api",
     "--method",
@@ -457,7 +499,7 @@ export async function postCommitStatus(
     lastStderr = result.stderr.trim();
   }
   throw new CliError(
-    `gh api (commit status ${status.state}) failed: ${lastStderr}`,
+    `gh api (commit status ${status.state} on ${status.context}) failed: ${lastStderr}`,
   );
 }
 

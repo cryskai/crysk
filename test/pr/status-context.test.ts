@@ -42,13 +42,13 @@ describe("S7: reviewPr resolves its posture from the explicit --ci flag only", (
     expect(reviewPr).not.toMatch(/resolveCiMode\(\s*options\.ciMode,\s*isCi/);
   });
 
-  test("CI=1 in the environment without --ci: isCi is true, the posture is advisory on pr-hero/local", () => {
+  test("CI=1 in the environment without --ci: isCi is true, the posture is advisory on crysk/local", () => {
     // isCi folds the environment in (it drives --yes, the budget and admission),
     // but the posture takes only the flag, so the environment cannot grade.
     expect(isCiEnvironment({}, { CI: "1" })).toBe(true);
     expect(resolveCiPosture({ ci: undefined, ciMode: undefined })).toEqual({
       ciMode: "advisory",
-      statusContext: "pr-hero/local",
+      statusContext: "crysk/local",
     });
   });
 });

@@ -36,6 +36,7 @@ import {
 import type { PipelineResult } from "#review/pipeline";
 import { runGc } from "#store/gc";
 import { log } from "#ui/primitives";
+import { isStatusContext } from "../brand";
 import { releasePidLock } from "../home";
 
 // The ledger has no equivalent hand-off to the SIGTERM/SIGINT handlers (which
@@ -161,7 +162,9 @@ async function previousPartialIsSame(
   }
   if (history === null) return false;
   const previous = history.find(
-    (row) => row.context === COMMIT_STATUS_CONTEXT && row.state !== "pending",
+    (row) =>
+      isStatusContext(row.context, COMMIT_STATUS_CONTEXT) &&
+      row.state !== "pending",
   );
   const description = previous?.description;
   if (typeof description !== "string" || !finishedPartialMatches(description)) {

@@ -1251,9 +1251,21 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
   });
 
   // Every status write this run made: the POST to the statuses endpoint.
-  function statusWrites(calls: string[][]): string[][] {
+  // Every status goes out twice, crysk then the legacy pr-hero (postCommitStatus). This is the
+  // logical writes, the crysk side; legacyStatusWrites is the twin of each.
+  function allStatusPosts(calls: string[][]): string[][] {
     return calls.filter((argv) =>
       argv.some((token) => token.startsWith("repos/{owner}/{repo}/statuses/")),
+    );
+  }
+  function statusWrites(calls: string[][]): string[][] {
+    return allStatusPosts(calls).filter(
+      (argv) => !argv.includes("context=pr-hero"),
+    );
+  }
+  function legacyStatusWrites(calls: string[][]): string[][] {
+    return allStatusPosts(calls).filter((argv) =>
+      argv.includes("context=pr-hero"),
     );
   }
 
@@ -1308,9 +1320,15 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
     expect(writes[0]).toContain("state=failure");
-    expect(writes[0]).toContain("context=pr-hero");
+    expect(writes[0]).toContain("context=crysk");
+    // The legacy pr-hero twin carries the same state, description and target.
+    const twins = legacyStatusWrites(calls);
+    expect(twins).toHaveLength(1);
+    expect(twins[0]?.filter((token) => token !== "context=pr-hero")).toEqual(
+      writes[0]?.filter((token) => token !== "context=crysk"),
+    );
     expect(writes[0]).toContain(
-      "description=pr-hero: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+      "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
     );
   });
 
@@ -1329,7 +1347,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
     expect(writes[0]).toContain("state=failure");
     expect(writes[0]).toContain(
-      "description=pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+      "description=crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
     );
   });
 
@@ -1375,7 +1393,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain("state=failure");
     expect(writes[0]).toContain(
-      "description=pr-hero: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+      "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
     );
   });
 

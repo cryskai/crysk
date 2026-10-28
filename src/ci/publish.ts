@@ -51,7 +51,13 @@
 
 import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { commandHint, MARKER_OPEN, matchMarkerPrefix } from "../brand";
+import {
+  commandHint,
+  MARKER_OPEN,
+  matchMarkerPrefix,
+  STATUS_CONTEXT,
+  statusContextForms,
+} from "../brand";
 import type {
   CliRecord,
   ErrorParams,
@@ -80,9 +86,6 @@ import {
 } from "./override";
 import { OVERRIDE_COMMAND, REVIEW_COMMAND } from "./trigger";
 
-// The commit status context. The required check reads this name, so it must
-// equal COMMIT_STATUS_CONTEXT in src/pr/preflight.ts (a test pins the two).
-const STATUS_CONTEXT = "pr-hero";
 // The outcome marker's spelling is outcome.ts's, shared with the status reader.
 const MARKER_PREFIX = OUTCOME_MARKER_PREFIX.trimEnd();
 const CLI_STARTED_FILE = "cli-started";
@@ -120,7 +123,7 @@ interface StatusPost {
   // `success` comes from an override (odd/tasks/agent-first-ci.md, S8) or from the
   // final status a CLI could not write; `failure` only from the latter.
   state: "error" | "success" | "failure";
-  context: "pr-hero";
+  context: typeof STATUS_CONTEXT;
   description: string;
   targetUrl: string;
 }
@@ -602,9 +605,11 @@ function workflowCommand(
   return `::${command} title=pr-hero::${escaped}\n`;
 }
 
-// The status write, retried once unless `attempts` is 1. Returns the failure's HTTP
-// status when gh printed one, so the renderer can pick the permission or the server
-// wording.
+// The status write, on BOTH names of its context: the new one, then the legacy `pr-hero` one
+// (statusContextForms). Users have `pr-hero` as a required check in branch protection, and a
+// head that stops getting it blocks every PR, so the publisher keeps writing it for one version.
+// A failed write never skips the other: the required check may be either name. The first
+// failure is the one reported, so the renderer sees the same answer a single write gave.
 function postStatus(
   deps: PublishDeps,
   repository: string,
@@ -612,13 +617,39 @@ function postStatus(
   status: StatusPost,
   attempts = 2,
 ): { ok: true } | { ok: false; httpStatus: number | undefined } {
+  let failure: { ok: false; httpStatus: number | undefined } | undefined;
+  for (const context of statusContextForms(status.context)) {
+    const posted = postStatusOn(
+      deps,
+      repository,
+      headSha,
+      status,
+      context,
+      attempts,
+    );
+    if (!posted.ok) failure ??= posted;
+  }
+  return failure ?? { ok: true };
+}
+
+// One write on one context, retried once unless `attempts` is 1. Returns the failure's HTTP
+// status when gh printed one, so the renderer can pick the permission or the server
+// wording.
+function postStatusOn(
+  deps: PublishDeps,
+  repository: string,
+  headSha: string,
+  status: StatusPost,
+  context: string,
+  attempts: number,
+): { ok: true } | { ok: false; httpStatus: number | undefined } {
   const args = [
     "api",
     `repos/${repository}/statuses/${headSha}`,
     "-f",
     `state=${status.state}`,
     "-f",
-    `context=${status.context}`,
+    `context=${context}`,
     "-f",
     `description=${status.description}`,
     "-f",

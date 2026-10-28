@@ -14,7 +14,12 @@ import {
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
 } from "#pr/preflight";
-import { MARKER_OPEN } from "../../src/brand";
+import {
+  STATUS_CONTEXT as BRAND_STATUS_CONTEXT,
+  isLegacyStatusContext,
+  isStatusContext,
+  MARKER_OPEN,
+} from "../../src/brand";
 
 // The summary comment and the per-finding comments. The summary is an issue
 // comment; the findings are inline review comments, so the runner reads both.
@@ -28,8 +33,35 @@ export const OUTCOME_MARKER_PREFIX = `${MARKER_OPEN}outcome`;
 // not an outcome marker, so the classifier must read it as its own kind.
 export const OVERRIDE_MARKER_PREFIX = `${MARKER_OPEN}override`;
 
-// Private STATUS_CONTEXT in src/ci/publish.ts: the commit status context.
-export const STATUS_CONTEXT = "pr-hero";
+// The commit status context the publisher writes (src/ci/publish.ts), brand's one literal.
+export const STATUS_CONTEXT = BRAND_STATUS_CONTEXT;
+
+// The gate's row among a commit's statuses. The publisher writes the gate on `crysk` and, for
+// one version, on the legacy `pr-hero` too, and a sandbox run on an older ref writes only
+// `pr-hero`: the newest row across both names is the gate, as every product reader takes it.
+// A tie goes to the crysk row. A row without a time sorts as the oldest.
+export function gateStatusOf<
+  T extends { context: string; created_at?: string },
+>(rows: readonly T[]): T | undefined {
+  let latest: T | undefined;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const row of rows) {
+    if (!isStatusContext(row.context, STATUS_CONTEXT)) continue;
+    const parsed = Date.parse(row.created_at ?? "");
+    const ms = Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+    const wins =
+      latest === undefined ||
+      ms > latestMs ||
+      (ms === latestMs &&
+        isLegacyStatusContext(latest.context) &&
+        !isLegacyStatusContext(row.context));
+    if (wins) {
+      latest = row;
+      latestMs = ms;
+    }
+  }
+  return latest;
+}
 
 export const SKIP_MARKERS = {
   size: SKIP_SIZE_COMMENT_MARKER,

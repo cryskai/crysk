@@ -123,3 +123,55 @@ export function commandHint(command: string, quote = "`"): string {
     "on a workflow set up before the rename)"
   );
 }
+
+// Commit status contexts. The gate is a required check in users' branch
+// protection, which names `pr-hero`; a head that stops getting that context
+// blocks forever. So for one version every status is written on BOTH names, the
+// new one first, and every reader treats the two as one gate. The version that
+// drops the legacy name deletes LEGACY_STATUS_CONTEXT and the helpers below.
+export const STATUS_CONTEXT = "crysk";
+const LEGACY_STATUS_CONTEXT = "pr-hero";
+
+// The context of a run that cannot move the gate: a local `review --pr` and the
+// watcher. Its legacy form is `pr-hero/local`, derived the same way.
+export const LOCAL_STATUS_CONTEXT = `${STATUS_CONTEXT}/local` as const;
+
+// Both contexts a status written on `context` is published on, new name first.
+// `context` is always a crysk context: a request is built in the new form, and the
+// legacy form is derived from it here, as the marker and command helpers do.
+export function statusContextForms(context: string): string[] {
+  if (context !== STATUS_CONTEXT && !context.startsWith(`${STATUS_CONTEXT}/`)) {
+    throw new Error(`not a crysk status context: ${JSON.stringify(context)}`);
+  }
+  return [
+    context,
+    LEGACY_STATUS_CONTEXT + context.slice(STATUS_CONTEXT.length),
+  ];
+}
+
+// Whether a row's context is either name of `context` (the crysk form). `crysk` and
+// `pr-hero/local` stay different gates: the local pair never answers for the gate.
+export function isStatusContext(actual: string, context: string): boolean {
+  return statusContextForms(context).includes(actual);
+}
+
+// For picking between two rows with the same time: the legacy name loses to the new
+// one, because the pair a run writes carries identical content on both.
+export function isLegacyStatusContext(context: string): boolean {
+  return (
+    context === LEGACY_STATUS_CONTEXT ||
+    context.startsWith(`${LEGACY_STATUS_CONTEXT}/`)
+  );
+}
+
+// A status description starts with the context name (`crysk: 2 blocking finding(s)`,
+// `crysk skipped the review`). Statuses written before the rename start with
+// `pr-hero` instead. A reader rewrites a legacy lead into the new one and then
+// matches against the text this version writes, so one pattern serves both. Only a
+// lead followed by `:` or a space is the brand: `pr-heroic` is not.
+export function canonicalStatusText(text: string): string {
+  if (!text.startsWith(LEGACY_STATUS_CONTEXT)) return text;
+  const next = text.charAt(LEGACY_STATUS_CONTEXT.length);
+  if (next !== ":" && next !== " ") return text;
+  return STATUS_CONTEXT + text.slice(LEGACY_STATUS_CONTEXT.length);
+}

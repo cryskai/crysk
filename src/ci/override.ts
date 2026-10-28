@@ -3,18 +3,27 @@
 // (src/pr/teardown.ts) and the publisher's repost of a status the CLI could not write
 // (src/ci/publish.ts). They must give the same answer, so both import it from here.
 //
-// WHY ONLY BUILTINS: publish.ts runs before `bun install`, so it cannot import a
-// package, and it imports this module. The rule needs nothing outside the language,
-// so this module imports nothing at all.
+// WHY ONLY BUILTINS AND ../brand: publish.ts runs before dependencies are installed, so it
+// cannot import a package, and it imports this module. The rule needs nothing outside the
+// language, and ../brand itself imports nothing, so it is the one module this file may load.
+import {
+  canonicalStatusText,
+  isLegacyStatusContext,
+  isStatusContext,
+  STATUS_CONTEXT,
+} from "../brand";
 
 // The start of an override's status description. The publisher writes an override with
-// it, and this rule recognises an override by it.
-export const OVERRIDE_DESCRIPTION_PREFIX = "pr-hero: overridden by @";
+// it, and this rule recognises an override by it. An override an older action wrote starts
+// `pr-hero: overridden by @`; readers rewrite that lead (canonicalStatusText) before they
+// compare, so this one prefix serves both.
+export const OVERRIDE_DESCRIPTION_PREFIX = `${STATUS_CONTEXT}: overridden by @`;
 
-// The context both the review's verdict and an override are written on. preflight.ts's
-// COMMIT_STATUS_CONTEXT is the same string; a drift test pins the two together
-// (test/ci/override.test.ts).
-export const OVERRIDE_STATUS_CONTEXT = "pr-hero";
+// The context both the review's verdict and an override are written on. It is brand's
+// STATUS_CONTEXT, the one preflight.ts's COMMIT_STATUS_CONTEXT also is; a drift test pins
+// the two together (test/ci/override.test.ts). A row on the legacy `pr-hero` name counts
+// as the same context (newestStatusInContext).
+export const OVERRIDE_STATUS_CONTEXT = STATUS_CONTEXT;
 
 // WHY the allowance: a run's start is read on the runner's clock, and GitHub's created_at
 // is server time, so the two can differ by a few seconds. Without the allowance an
@@ -64,7 +73,9 @@ export function isOverrideStatus(status: OverrideStatusFact): boolean {
   return (
     status.state === "success" &&
     typeof status.description === "string" &&
-    status.description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)
+    canonicalStatusText(status.description).startsWith(
+      OVERRIDE_DESCRIPTION_PREFIX,
+    )
   );
 }
 
@@ -97,14 +108,13 @@ export function overrideStandsOverRun(
 }
 
 // The login an override was written by: the text after the prefix up to the first space. The
-// publisher writes `pr-hero: overridden by @<login> — no review on this head`, and a GitHub
-// login has no space, so this is the login exactly. Null when the description is not an
-// override or names no one.
+// publisher writes `crysk: overridden by @<login> — no review on this head` (an older action
+// wrote `pr-hero: …`, which reads the same), and a GitHub login has no space, so this is the
+// login exactly. Null when the description is not an override or names no one.
 export function overrideActorOf(description: string): string | null {
-  if (!description.startsWith(OVERRIDE_DESCRIPTION_PREFIX)) return null;
-  const actor = description
-    .slice(OVERRIDE_DESCRIPTION_PREFIX.length)
-    .split(" ")[0];
+  const text = canonicalStatusText(description);
+  if (!text.startsWith(OVERRIDE_DESCRIPTION_PREFIX)) return null;
+  const actor = text.slice(OVERRIDE_DESCRIPTION_PREFIX.length).split(" ")[0];
   return actor === undefined || actor === "" ? null : actor;
 }
 
@@ -113,7 +123,14 @@ export function overrideActorOf(description: string): string | null {
 // the first of two same-second rows is the newer one: `[success@t, failure@t]` reads as success.
 // The combined endpoint has one row per context, so it never ties. This is the same selection
 // as preflight.ts's latestStatusInContext except on a tie, where that one takes the later row
-// (`>=`). This builtins-only module cannot import it. The publisher's reads use this one too.
+// (`>=`). This module cannot import it. The publisher's reads use this one too.
+//
+// WHY one context means two names: for one version the gate is written on `crysk` and on the
+// legacy `pr-hero`, and an older action still writes only `pr-hero`. The newest row across both
+// names is the gate, so an override posted by an older action still beats a newer-version
+// verdict that is older than it. Two rows with the same time are a pair one run wrote, with
+// identical content, so either would do; the crysk row is taken so the answer never depends
+// on the order of the list.
 export function newestStatusInContext(
   statuses: readonly OverrideStatusFact[],
   context: string,
@@ -121,10 +138,16 @@ export function newestStatusInContext(
   let latest: OverrideStatusFact | undefined;
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const status of statuses) {
-    if (status.context !== context) continue;
+    if (!isStatusContext(status.context, context)) continue;
     const createdMs = Date.parse(status.created_at);
     if (Number.isNaN(createdMs)) continue;
-    if (createdMs > latestMs) {
+    const newer =
+      createdMs > latestMs ||
+      (createdMs === latestMs &&
+        latest !== undefined &&
+        isLegacyStatusContext(latest.context) &&
+        !isLegacyStatusContext(status.context));
+    if (newer) {
       latest = status;
       latestMs = createdMs;
     }

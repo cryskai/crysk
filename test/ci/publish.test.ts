@@ -39,6 +39,7 @@ import {
   runCancelSettle,
   runPublish,
 } from "#ci/publish";
+import { COMMIT_STATUS_CONTEXT } from "#pr/preflight";
 import { CliError } from "../../src/errors";
 import type { TransportFailureCause } from "../../src/execution/contracts";
 
@@ -144,7 +145,7 @@ describe("decidePublication — the pure table", () => {
     // it on the head that record names (the status's head, not the trigger's), then
     // cleans up as it does for any reviewed record.
     test("a reviewed record with an unsettled status names that status on the record's head, and still cleans up", () => {
-      const description = "pr-hero: 2 blocking finding(s) — fix and push";
+      const description = "crysk: 2 blocking finding(s) — fix and push";
       expect(
         decidePublication({
           record: record({ head_sha: TRIGGER_HEAD }),
@@ -164,7 +165,7 @@ describe("decidePublication — the pure table", () => {
         headSha: REVIEWED_HEAD,
         status: {
           state: "failure",
-          context: "pr-hero",
+          context: "crysk",
           description,
           targetUrl: RUN_URL,
         },
@@ -194,7 +195,7 @@ describe("decidePublication — the pure table", () => {
         headSha: REVIEWED_HEAD,
         status: {
           state: "success",
-          context: "pr-hero",
+          context: "crysk",
           description: "review complete",
           targetUrl: RUN_URL,
         },
@@ -614,7 +615,7 @@ describe("decidePublication — the pure table", () => {
       );
       expect(plan.headSha).toBe(REVIEWED_HEAD);
       expect(plan.status?.state).toBe("error");
-      expect(plan.status?.context).toBe("pr-hero");
+      expect(plan.status?.context).toBe("crysk");
       expect(plan.status?.targetUrl).toBe(RUN_URL);
       expect(plan.status?.description.startsWith("PRH-UNCLASSIFIED: ")).toBe(
         true,
@@ -719,13 +720,13 @@ describe("decidePublication — the pure table", () => {
     expect(plan.headSha).toBe(SHA);
   });
 
-  test("the status is an error on pr-hero's own context, linked to the run", () => {
+  test("the status is an error on the gate's context, linked to the run", () => {
     const plan = decidePublication({ record: record(), cliStarted: false });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
     expect(plan.status).toEqual({
       state: "error",
-      context: "pr-hero",
+      context: "crysk",
       description: "PRH-INSTALL-FAILED: An install step failed",
       targetUrl: RUN_URL,
     });
@@ -969,20 +970,12 @@ describe("decidePublication — the pure table", () => {
   });
 
   test("the status context is the name the required check reads (COMMIT_STATUS_CONTEXT)", () => {
-    // WHY a drift test: publish.ts runs before install and cannot import the
-    // constant from src/pr/preflight.ts, so the two are pinned to each other.
-    const preflight = readFileSync(
-      path.resolve(import.meta.dir, "../../src/pr/preflight.ts"),
-      "utf8",
-    );
-    const expected = /export const COMMIT_STATUS_CONTEXT = "([^"]+)"/.exec(
-      preflight,
-    )?.[1];
+    // WHY a drift test: publish.ts runs before install and cannot import the constant from
+    // src/pr/preflight.ts, so it takes brand's STATUS_CONTEXT, which preflight.ts also uses.
     const plan = decidePublication({ record: record(), cliStarted: false });
     expect(plan.kind).toBe("remote");
-    expect(expected).toBeDefined();
     if (plan.kind === "remote") {
-      expect(plan.status?.context as string).toBe(expected as string);
+      expect(plan.status?.context as string).toBe(COMMIT_STATUS_CONTEXT);
     }
   });
 
@@ -1143,6 +1136,18 @@ function runPublishIn(options: {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// The `-f key=value` flags of a status write, read back as an object.
+function statusFlags(args: readonly string[]): Record<string, string> {
+  const flags: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== "-f") continue;
+    const raw = args[i + 1] ?? "";
+    const eq = raw.indexOf("=");
+    if (eq !== -1) flags[raw.slice(0, eq)] = raw.slice(eq + 1);
+  }
+  return flags;
 }
 
 function statusCalls(calls: Call[]): Call[] {
@@ -1334,18 +1339,54 @@ describe("runPublish — the shell", () => {
       `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
     ]);
     const statuses = statusCalls(run.calls);
-    expect(statuses).toHaveLength(1);
+    expect(statuses).toHaveLength(2);
     expect(statuses[0]?.args).toContain(
       `repos/${REPO}/statuses/${REVIEWED_HEAD}`,
     );
     expect(statuses[0]?.args).toContain("state=error");
-    expect(statuses[0]?.args).toContain("context=pr-hero");
+    expect(statuses.map((call) => statusFlags(call.args).context)).toEqual([
+      "crysk",
+      "pr-hero",
+    ]);
     const comment = commentPost(run.calls);
     expect(comment?.args).toContain(`repos/${REPO}/issues/7/comments`);
     expect(comment?.stdin).toContain(`head=${REVIEWED_HEAD} run=4242`);
     expect(run.calls.indexOf(statuses[0] as Call)).toBeLessThan(
       run.calls.indexOf(comment as Call),
     );
+  });
+
+  // One gate over two names: a pending lock on either context is a CLI that never settled.
+  test.each(["crysk", "pr-hero"])(
+    "a reviewing record with a pending %s status on its head replaces it with an error status on both contexts",
+    (context) => {
+      const run = runPublishIn({
+        record: record({ head_sha: TRIGGER_HEAD }),
+        cliStarted: true,
+        cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+        latestStatus: statusRows([context, "pending", "2026-10-16T10:00:00Z"]),
+        list: listing(),
+      });
+      expect(
+        statusCalls(run.calls).map((call) =>
+          call.args.find((arg) => arg.startsWith("context=")),
+        ),
+      ).toEqual(["context=crysk", "context=pr-hero"]);
+    },
+  );
+
+  test("a settled crysk row newer than a stale pending pr-hero row is a finished CLI: nothing is replaced", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+      latestStatus: statusRows(
+        ["pr-hero", "pending", "2026-10-16T10:00:00Z"],
+        ["crysk", "success", "2026-10-16T10:05:00Z"],
+      ),
+      list: listing(),
+    });
+    expect(statusCalls(run.calls)).toEqual([]);
   });
 
   test.each([
@@ -1388,7 +1429,7 @@ describe("runPublish — the shell", () => {
       `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
     ]);
     const statuses = statusCalls(run.calls);
-    expect(statuses).toHaveLength(1);
+    expect(statuses).toHaveLength(2);
     expect(statuses[0]?.args).toContain(
       `repos/${REPO}/statuses/${REVIEWED_HEAD}`,
     );
@@ -1502,11 +1543,60 @@ describe("runPublish — the shell", () => {
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
     expect(status?.args).toContain("state=error");
-    expect(status?.args).toContain("context=pr-hero");
+    expect(status?.args).toContain("context=crysk");
     expect(status?.args).toContain(
       "description=PRH-INSTALL-FAILED: An install step failed",
     );
     expect(status?.args).toContain(`target_url=${RUN_URL}`);
+  });
+
+  // The rename publishes the status on BOTH names for one version: a repository that
+  // requires `pr-hero` in branch protection keeps getting it while it adds `crysk`.
+  test("the status is written on crysk first, then on the legacy pr-hero, with the same fields", () => {
+    const run = runPublishIn({ record: record() });
+    const statuses = statusCalls(run.calls);
+    expect(statuses).toHaveLength(2);
+    const contextOf = (call: Call | undefined) =>
+      call?.args.find((arg) => arg.startsWith("context="));
+    expect(statuses.map(contextOf)).toEqual([
+      "context=crysk",
+      "context=pr-hero",
+    ]);
+    const withoutContext = (call: Call | undefined) =>
+      call?.args.filter((arg) => !arg.startsWith("context="));
+    expect(withoutContext(statuses[1])).toEqual(withoutContext(statuses[0]));
+    expect(withoutContext(statuses[0])).toContain("state=error");
+  });
+
+  test("a crysk write that fails both attempts still attempts pr-hero, and the failure is reported", () => {
+    // crysk: fail, fail. The last answer repeats, so pr-hero lands.
+    const run = runPublishIn({
+      record: record(),
+      status: [
+        fail("gh: Server Error (HTTP 503)"),
+        fail("gh: Server Error (HTTP 503)"),
+        ok(),
+      ],
+    });
+    const contexts = statusCalls(run.calls).map((call) =>
+      call.args.find((arg) => arg.startsWith("context=")),
+    );
+    expect(contexts).toEqual([
+      "context=crysk",
+      "context=crysk",
+      "context=pr-hero",
+    ]);
+    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(run.exitCode).toBe(1);
+  });
+
+  test("a pr-hero write that fails reports the failure although crysk landed", () => {
+    const run = runPublishIn({
+      record: record(),
+      status: [ok(), fail("gh: Forbidden (HTTP 403)")],
+    });
+    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(run.exitCode).toBe(1);
   });
 
   test("the comment is a new issue comment whose first line is the marker", () => {
@@ -1700,7 +1790,7 @@ describe("runPublish — the shell", () => {
       record: record(),
       status: [fail("gh: Server Error (HTTP 500)"), ok()],
     });
-    expect(statusCalls(run.calls)).toHaveLength(2);
+    expect(statusCalls(run.calls)).toHaveLength(3);
     expect(run.exitCode).toBe(0);
     expect(commentPost(run.calls)).toBeDefined();
   });
@@ -1710,7 +1800,7 @@ describe("runPublish — the shell", () => {
       record: record(),
       status: [fail("gh: Resource not accessible (HTTP 403)")],
     });
-    expect(statusCalls(run.calls)).toHaveLength(2);
+    expect(statusCalls(run.calls)).toHaveLength(4);
     expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
     expect(run.stdout).toContain("statuses: write");
     expect(commentPost(run.calls)).toBeDefined();
@@ -2042,28 +2132,16 @@ describe("runPublish — cleanup once the CLI started", () => {
       ),
     });
     expect(run.exitCode).toBe(0);
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
     expect(commentPost(run.calls)).toBeDefined();
     expect(run.calls.some((call) => call.args.includes("graphql"))).toBe(false);
     expect(removedIds(run)).toEqual(["10"]);
   });
 
-  // The `-f key=value` flags of a status write, read back as an object.
-  function statusFlags(args: readonly string[]): Record<string, string> {
-    const flags: Record<string, string> = {};
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] !== "-f") continue;
-      const raw = args[i + 1] ?? "";
-      const eq = raw.indexOf("=");
-      if (eq !== -1) flags[raw.slice(0, eq)] = raw.slice(eq + 1);
-    }
-    return flags;
-  }
-
   // WHY this post: the CLI's review completed, but its final status write did not land,
   // and the CLI recorded that status. The publisher posts it once, on the head the record
   // names, before the cleanup of older comments.
-  test("a reviewed record with an unsettled status posts that state and description on pr-hero for the record's head, then cleans up", () => {
+  test("a reviewed record with an unsettled status posts that state and description on crysk and pr-hero for the record's head, then cleans up", () => {
     const run = runPublishIn({
       record: record({ head_sha: TRIGGER_HEAD }),
       cliStarted: true,
@@ -2078,15 +2156,20 @@ describe("runPublish — cleanup once the CLI started", () => {
     });
     expect(run.exitCode).toBe(0);
     const posted = statusCalls(run.calls);
-    expect(posted).toHaveLength(1);
+    expect(posted).toHaveLength(2);
     const status = posted[0] as Call;
     expect(status.args).toContain(`repos/${REPO}/statuses/${REVIEWED_HEAD}`);
-    expect(statusFlags(status.args)).toEqual({
-      state: "success",
-      context: "pr-hero",
-      description: "review complete",
-      target_url: RUN_URL,
-    });
+    for (const [call, context] of [
+      [posted[0], "crysk"],
+      [posted[1], "pr-hero"],
+    ] as const) {
+      expect(statusFlags((call as Call).args)).toEqual({
+        state: "success",
+        context,
+        description: "review complete",
+        target_url: RUN_URL,
+      });
+    }
     const firstDeletion = run.calls.findIndex((call) =>
       call.args.includes("DELETE"),
     );
@@ -2097,7 +2180,7 @@ describe("runPublish — cleanup once the CLI started", () => {
   // WHY one attempt: the teardown already retried the write twice, so the publisher's
   // one more chance is one call. A failure is named as the status write failure, on one
   // annotation line, and the cleanup still runs.
-  test("a failed unsettled status is one attempt, names PRH-STATUS-WRITE-FAILED on one line, still cleans up, and exits 1", () => {
+  test("a failed unsettled status is one attempt per name, names PRH-STATUS-WRITE-FAILED on one line, still cleans up, and exits 1", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
@@ -2106,14 +2189,14 @@ describe("runPublish — cleanup once the CLI started", () => {
         head_sha: REVIEWED_HEAD,
         unsettled_status: {
           state: "failure",
-          description: "pr-hero: 2 blocking finding(s) — fix and push",
+          description: "crysk: 2 blocking finding(s) — fix and push",
         },
       },
       status: [fail("gh: Server Error (HTTP 500)")],
       viewer: ok("pr-hero-bot"),
       list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
     });
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
     const annotations = run.stdout
       .split("\n")
       .filter((line) => line.startsWith("::error"));
@@ -2177,6 +2260,38 @@ describe("runPublish — the repost of an unsettled status, against an override 
     expect(deletions(run.calls)).toEqual([`repos/${REPO}/issues/comments/10`]);
   });
 
+  // The same rule over the new spelling, and over an override that only the legacy name carries
+  // (an older action wrote it) beside a crysk row older than the override.
+  test.each<[string, Array<[string, string, string, string]>]>([
+    [
+      "a crysk override",
+      [
+        [
+          "crysk",
+          "success",
+          at(RUN_START + 30_000),
+          "crysk: overridden by @maintainer — no review on this head",
+        ],
+      ],
+    ],
+    [
+      "a legacy-only override newer than the crysk verdict",
+      [
+        ["crysk", "failure", at(RUN_START + 10_000), "crysk: 2 blocking"],
+        [
+          "pr-hero",
+          "success",
+          at(RUN_START + 30_000),
+          "pr-hero: overridden by @maintainer — no review on this head",
+        ],
+      ],
+    ],
+  ])("%s stands: the repost is skipped", (_label, rows) => {
+    const run = runWith(withCutoff(), describedStatusRows(...rows));
+    expect(run.exitCode).toBe(0);
+    expect(statusCalls(run.calls)).toEqual([]);
+  });
+
   test("a newest status that is not an override is reposted", () => {
     const run = runWith(
       withCutoff(),
@@ -2188,7 +2303,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
       ]),
     );
     const posted = statusCalls(run.calls);
-    expect(posted).toHaveLength(1);
+    expect(posted).toHaveLength(2);
     expect((posted[0] as Call).args).toEqual(
       expect.arrayContaining(["state=success", "description=review complete"]),
     );
@@ -2204,7 +2319,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
         OVERRIDE,
       ]),
     );
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
   });
 
   // The pending did not land, so the CLI's cutoff is the run's start with no allowance. An
@@ -2222,7 +2337,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
       ]),
     );
     expect(statusReadEndpoints(run.calls)).toEqual([HEAD_READ]);
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
   });
 
   // The pending landed, so the CLI's cutoff is the start less the 5 s allowance. The same
@@ -2244,7 +2359,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
 
   test("a failed head read reposts, as before", () => {
     const run = runWith(withCutoff(), fail("gh: Server Error (HTTP 500)"));
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
     expect(run.exitCode).toBe(0);
   });
 
@@ -2259,7 +2374,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
       ]),
     );
     expect(statusReadEndpoints(run.calls)).toEqual([]);
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
   });
 });
 
@@ -2267,7 +2382,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
 // status on the head it names and an audit comment. Nothing renders an error, and
 // no cleanup may ever remove the comment.
 const OVERRIDE_DESCRIPTION =
-  "pr-hero: overridden by @maintainer — no review on this head";
+  "crysk: overridden by @maintainer — no review on this head";
 const overrideRecord = (overrides: Partial<TriggerRecord> = {}) =>
   record({ decision: "override", actor: "maintainer", ...overrides });
 
@@ -2304,9 +2419,14 @@ describe("runPublish — the override (S8)", () => {
     });
     expect(run.exitCode).toBe(0);
     const statuses = statusCalls(run.calls);
-    expect(statuses).toHaveLength(1);
+    expect(statuses).toHaveLength(2);
     expect(statuses[0]?.args).toContain("state=success");
     expect(statuses[0]?.args).toContain(`description=${OVERRIDE_DESCRIPTION}`);
+    expect(statuses.map((call) => statusFlags(call.args).context)).toEqual([
+      "crysk",
+      "pr-hero",
+    ]);
+    expect(statuses[1]?.args).toContain(`description=${OVERRIDE_DESCRIPTION}`);
     const comment = commentPost(run.calls);
     expect(comment).toBeDefined();
     expect(run.calls.indexOf(statuses[0] as Call)).toBeLessThan(
@@ -2333,14 +2453,15 @@ describe("runPublish — the override (S8)", () => {
       record: overrideRecord({ actor: login }),
     });
     const statuses = statusCalls(run.calls);
-    expect(statuses).toHaveLength(1);
+    expect(statuses).toHaveLength(2);
     const descriptionArg = statuses[0]?.args.find((arg) =>
       arg.startsWith("description="),
     );
     const description = descriptionArg?.slice("description=".length) ?? "";
     expect(description.length).toBeLessThanOrEqual(140);
+    // `crysk: overridden by @` is 22 characters and the suffix 25: 138 in all, inside GitHub's 140.
     expect(description).toBe(
-      `pr-hero: overridden by @${login} — no review on this head`,
+      `crysk: overridden by @${login} — no review on this head`,
     );
   });
 
@@ -2741,7 +2862,7 @@ describe("runPublish — the override read before a repost is strict and logged"
 
   test("a failed head read reposts the unsettled status, and logs one warning", () => {
     const run = runWith(fail("gh: Server Error (HTTP 500)"));
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
     expect(run.exitCode).toBe(0);
     const warnings = run.stdout
       .split("\n")
@@ -3046,11 +3167,12 @@ describe("runCancelSettle — the shell (SB3)", () => {
     });
     expect(run.exitCode).toBe(0);
     const posts = statusCalls(run.calls);
-    expect(posts).toHaveLength(1);
+    expect(posts).toHaveLength(2);
     const post = posts[0];
     expect(post?.args).toContain(`repos/${REPO}/statuses/${CANCEL_HEAD}`);
     expect(post?.args).toContain("state=error");
-    expect(post?.args).toContain("context=pr-hero");
+    expect(post?.args).toContain("context=crysk");
+    expect(posts[1]?.args).toContain("context=pr-hero");
     expect(post?.args).toContain(`description=${CANCELLED_STATUS_DESCRIPTION}`);
     expect(post?.args).toContain(
       "target_url=https://github.com/acme/widgets/actions/runs/4242",
@@ -3182,7 +3304,7 @@ describe("runCancelSettle — the run URL and one retry of the status read", () 
       env: IN_ACTIONS,
     });
     expect(run.exitCode).toBe(0);
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
     expect(run.stdout).toContain("the pr-hero status is now PRH-CANCELLED");
   });
 
@@ -3214,7 +3336,7 @@ describe("runCancelSettle — the run URL and one retry of the status read", () 
     expect(run.exitCode).toBe(0);
     expect(reads(run.calls)).toHaveLength(2);
     expect(run.sleeps).toEqual([2_000]);
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
   });
 
   test("a status read that fails twice keeps the fallback: no write, and one warning", () => {

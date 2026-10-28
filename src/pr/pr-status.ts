@@ -49,7 +49,12 @@ import {
   type TriageVerdict,
 } from "#triage/triage";
 import { parsePrCommentMarker } from "#watch/preflight";
-import { commandHint, isCommand, matchMarkerPrefix } from "../brand";
+import {
+  canonicalStatusText,
+  commandHint,
+  isCommand,
+  matchMarkerPrefix,
+} from "../brand";
 
 export const PR_STATUS_SCHEMA = "pr-hero.status/v1" as const;
 
@@ -200,8 +205,9 @@ export function buildPrStatus(input: PrStatusInput): PrStatusJson {
   };
 }
 
-// The gate is pr-hero's own commit status on the head, read by its context alone, so a
-// local run's pr-hero/local status never answers for the gate.
+// The gate is crysk's own commit status on the head, read by its context alone (the legacy
+// pr-hero name counts as the same context), so a local run's crysk/local status never
+// answers for the gate.
 function readGate(input: PrStatusInput): PrStatusGate {
   const latest = latestStatusInContext(input.statuses, COMMIT_STATUS_CONTEXT);
   if (latest === null) {
@@ -492,12 +498,12 @@ function newestReply(
 // (admission.ts carriedPartialDescription). The prefix is what this reader needs: the full text is
 // written by those builders, and the gate's own state already says the review is red.
 const PARTIAL_REVIEW_GATE =
-  /^pr-hero: review partial \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\)/;
+  /^crysk: review partial \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\)/;
 
 // W3-PARTIAL F004: the repeat form, the same N of M failure set as the head's previous partial verdict.
 // A retry already failed that way, so the unlock is a route fix or an override, never review again.
 const PARTIAL_REVIEW_AGAIN_GATE =
-  /^pr-hero: review partial again \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\)/;
+  /^crysk: review partial again \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\)/;
 
 // unresolved_blocking has two sources, and the description wins when it has one. A red
 // gate's description names the count its own rule counted (rereview/state.ts
@@ -514,8 +520,8 @@ function unresolvedBlocking(
 // The count a red gate's own description names, or null when it names none.
 function gateBlockingCount(gate: PrStatusGate): number | null {
   if (gate.state !== "failure" || gate.description === null) return null;
-  const counted = /^pr-hero: (\d+) blocking finding\(s\)/.exec(
-    gate.description,
+  const counted = /^crysk: (\d+) blocking finding\(s\)/.exec(
+    canonicalStatusText(gate.description),
   );
   return counted?.[1] === undefined ? null : Number(counted[1]);
 }
@@ -523,7 +529,7 @@ function gateBlockingCount(gate: PrStatusGate): number | null {
 // The gate descriptions that name no review of this head: the automatic budget is used up, or the
 // policy is manual (src/pr/admission.ts). Their text is the gate's own, so no count is read.
 const REVIEW_TRIGGER_GATE =
-  /^pr-hero: review (budget for this PR is used up|needs a manual trigger)/;
+  /^crysk: review (budget for this PR is used up|needs a manual trigger)/;
 
 // A blocking finding whose newest reply is a dismissal the CI adjudicator upheld on this head.
 function upheldDismissal(a: AnalyzedFinding): boolean {
@@ -611,7 +617,7 @@ function decideNext(
   // used up, or the policy is manual_only). No push gets an automatic review there, so a fix cannot
   // clear anything; the review the human asks for is the only unlock, whatever the summary's rows
   // (from an older head) say (review #348 R006).
-  if (REVIEW_TRIGGER_GATE.test(gate.description ?? "")) {
+  if (REVIEW_TRIGGER_GATE.test(canonicalStatusText(gate.description ?? ""))) {
     return {
       next_action: "review",
       reason: `The automatic review budget for this PR is used up, or the review policy is manual (ci_review_policy is manual_only); comment ${commandHint(REVIEW_COMMAND, "")} to review this head.`,
@@ -685,7 +691,11 @@ function decideNext(
       reason: `The CI adjudicator upheld every dismissal on this head; run ${commandHint(REVIEW_COMMAND, "")}, and that review no longer counts them.`,
     };
   }
-  if (gate.description?.startsWith("pr-hero skipped the review") === true) {
+  if (
+    canonicalStatusText(gate.description ?? "").startsWith(
+      "crysk skipped the review",
+    )
+  ) {
     return {
       next_action: "override-or-fix",
       reason: `The review on this head was skipped (${gate.description}); run ${commandHint(REVIEW_COMMAND, "")} to review it anyway, or override the gate.`,
@@ -693,13 +703,15 @@ function decideNext(
   }
   // S6: a red gate that is a partial review (its own text, or the carried form) is not a finding to fix.
   // Nothing blocking was found, so the retry is the unlock. Its text is the gate's own, so no count is read.
-  if (PARTIAL_REVIEW_AGAIN_GATE.test(gate.description ?? "")) {
+  if (
+    PARTIAL_REVIEW_AGAIN_GATE.test(canonicalStatusText(gate.description ?? ""))
+  ) {
     return {
       next_action: "override-or-fix",
       reason: `The review is partial again with the same hunters failing: a retry already failed the same way; fix the failing hunter's route (model or provider) or run ${commandHint(OVERRIDE_COMMAND, "")}.`,
     };
   }
-  if (PARTIAL_REVIEW_GATE.test(gate.description ?? "")) {
+  if (PARTIAL_REVIEW_GATE.test(canonicalStatusText(gate.description ?? ""))) {
     return {
       next_action: "review",
       reason: `The last review of this head was partial (some reviewers failed); run ${commandHint(REVIEW_COMMAND, "")}, which retries it. If the same reviewers fail every time (an unavailable model, a broken route), fix that route or override the gate.`,

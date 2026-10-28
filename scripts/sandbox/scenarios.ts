@@ -208,7 +208,7 @@ export const SCENARIOS: readonly Scenario[] = [
           {
             kind: "status",
             state: "failure",
-            descriptionStartsWith: "pr-hero skipped the review",
+            descriptionStartsWith: "crysk skipped the review",
           },
           { kind: "no-report" },
         ],
@@ -249,7 +249,7 @@ export const SCENARIOS: readonly Scenario[] = [
           {
             kind: "status",
             state: "success",
-            descriptionStartsWith: "pr-hero: overridden by @",
+            descriptionStartsWith: "crysk: overridden by @",
           },
           { kind: "override-comment" },
         ],

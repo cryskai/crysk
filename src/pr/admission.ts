@@ -44,6 +44,7 @@ import {
 } from "#pr/preflight";
 import { publishFinalCommitStatus } from "#pr/status";
 import { log } from "#ui/primitives";
+import { canonicalStatusText, STATUS_CONTEXT } from "../brand";
 
 // ROADMAP Pillar 3 (GitHub Actions CI). The mechanical glue behind a gate
 // skip in CI mode: every DECISION (what to say, which marker, what the
@@ -332,12 +333,14 @@ function isCarriedReason(
   );
 }
 
-const BLOCKING_COUNT = /^pr-hero: (\d+) blocking finding\(s\)/;
+// The readers below rewrite a legacy `pr-hero` lead into `crysk` first (canonicalStatusText), so the
+// patterns and the builders speak one spelling.
+const BLOCKING_COUNT = /^crysk: (\d+) blocking finding\(s\)/;
 
 function blockingCountIn(
   description: string | null | undefined,
 ): number | null {
-  const match = BLOCKING_COUNT.exec(description ?? "");
+  const match = BLOCKING_COUNT.exec(canonicalStatusText(description ?? ""));
   if (match === null) return null;
   const count = Number(match[1]);
   return count > 0 ? count : null;
@@ -352,14 +355,14 @@ const CARRIED_SHA = new RegExp(`${CARRIED_FROM}([0-9a-f]{7})`);
 // carried-from sha. The carry writes it, and isReviewVerdictStatus rebuilds it, so the two cannot drift.
 export function carriedSuccessDescription(label: string, sha: string): string {
   return clipStatusDescription(
-    `pr-hero: no review needed (${label}); ${CARRIED_FROM}${sha.slice(0, 7)}`,
+    `${STATUS_CONTEXT}: no review needed (${label}); ${CARRIED_FROM}${sha.slice(0, 7)}`,
   );
 }
 
 // The text a skip writes when it inherits a finished review's blocking failure, with that review's count.
 export function carriedBlockingDescription(count: number, sha: string): string {
   return clipStatusDescription(
-    `pr-hero: ${count} blocking finding(s) ${CARRIED_FROM}${sha.slice(0, 7)} — fix and push, or /pr-hero override`,
+    `${STATUS_CONTEXT}: ${count} blocking finding(s) ${CARRIED_FROM}${sha.slice(0, 7)} — fix and push, or /pr-hero override`,
   );
 }
 
@@ -372,7 +375,7 @@ export function carriedPartialDescription(
 ): string {
   const suffix = set === undefined ? "" : `, set ${set}`;
   return clipStatusDescription(
-    `pr-hero: review partial (${failed} of ${total} hunters failed${suffix}) ${CARRIED_FROM}${sha.slice(0, 7)} — /pr-hero review retries it`,
+    `${STATUS_CONTEXT}: review partial (${failed} of ${total} hunters failed${suffix}) ${CARRIED_FROM}${sha.slice(0, 7)} — /pr-hero review retries it`,
   );
 }
 
@@ -383,7 +386,8 @@ const CARRY_REASONS: readonly CarriedReason[] = [
   "stopped",
 ];
 
-function finishedSuccessMatches(description: string): boolean {
+function finishedSuccessMatches(rawDescription: string): boolean {
+  const description = canonicalStatusText(rawDescription);
   return [true, false].some(
     (posted) =>
       commitStatusRequest({
@@ -395,7 +399,8 @@ function finishedSuccessMatches(description: string): boolean {
   );
 }
 
-function finishedBlockingMatches(description: string): boolean {
+function finishedBlockingMatches(rawDescription: string): boolean {
+  const description = canonicalStatusText(rawDescription);
   const count = blockingCountIn(description);
   return (
     count !== null &&
@@ -411,7 +416,8 @@ function carriedSha(description: string): string | null {
   return CARRIED_SHA.exec(description)?.[1] ?? null;
 }
 
-function carriedSuccessMatches(description: string): boolean {
+function carriedSuccessMatches(rawDescription: string): boolean {
+  const description = canonicalStatusText(rawDescription);
   const sha = carriedSha(description);
   return (
     sha !== null &&
@@ -423,7 +429,8 @@ function carriedSuccessMatches(description: string): boolean {
   );
 }
 
-function carriedBlockingMatches(description: string): boolean {
+function carriedBlockingMatches(rawDescription: string): boolean {
+  const description = canonicalStatusText(rawDescription);
   const sha = carriedSha(description);
   const count = blockingCountIn(description);
   return (
@@ -438,12 +445,12 @@ function carriedBlockingMatches(description: string): boolean {
 // W3-PARTIAL S2: the repeat form ('again') reads the same counts; the flag only picks the builder that must rebuild the text.
 // W4-R363 S1: the failed-set key (", set abc123") is read when present; a text from before the key has none.
 const PARTIAL_COUNTS =
-  /^pr-hero: review partial( again)? \((\d+) of (\d+) hunters failed(?:, set ([0-9a-f]{6}))?\)/;
+  /^crysk: review partial( again)? \((\d+) of (\d+) hunters failed(?:, set ([0-9a-f]{6}))?\)/;
 
 export function partialCountsIn(
   description: string | null | undefined,
 ): { failed: number; total: number; again: boolean; set?: string } | null {
-  const match = PARTIAL_COUNTS.exec(description ?? "");
+  const match = PARTIAL_COUNTS.exec(canonicalStatusText(description ?? ""));
   if (match === null) return null;
   return {
     failed: Number(match[2]),
@@ -455,7 +462,8 @@ export function partialCountsIn(
 
 // Exported for the teardown's repeat check (teardown.ts previousPartialIsSame): the one rule for a finished
 // partial verdict, so a carried row never counts as a review's own verdict.
-export function finishedPartialMatches(description: string): boolean {
+export function finishedPartialMatches(rawDescription: string): boolean {
+  const description = canonicalStatusText(rawDescription);
   const counts = partialCountsIn(description);
   if (counts === null) return false;
   const rebuilt = counts.again
@@ -464,7 +472,8 @@ export function finishedPartialMatches(description: string): boolean {
   return rebuilt === description;
 }
 
-function carriedPartialMatches(description: string): boolean {
+function carriedPartialMatches(rawDescription: string): boolean {
+  const description = canonicalStatusText(rawDescription);
   const sha = carriedSha(description);
   const counts = partialCountsIn(description);
   return (
@@ -517,7 +526,7 @@ function failClosed(label: string): AdmissionStatusDecision {
   return {
     state: "failure",
     description: clipStatusDescription(
-      `pr-hero skipped the review (${label}) and found no earlier verdict — /pr-hero review reviews it`,
+      `${STATUS_CONTEXT} skipped the review (${label}) and found no earlier verdict — /pr-hero review reviews it`,
     ),
   };
 }
@@ -534,14 +543,14 @@ export function admissionSkipDecision(
       return {
         state: "failure",
         description: clipStatusDescription(
-          "pr-hero: review budget for this PR is used up — /pr-hero review reviews this head",
+          `${STATUS_CONTEXT}: review budget for this PR is used up — /pr-hero review reviews this head`,
         ),
       };
     case "manual-only-policy":
       return {
         state: "failure",
         description: clipStatusDescription(
-          "pr-hero: review needs a manual trigger (ci_review_policy is manual_only) — /pr-hero review reviews this head",
+          `${STATUS_CONTEXT}: review needs a manual trigger (ci_review_policy is manual_only) — /pr-hero review reviews this head`,
         ),
       };
     case "once-per-pr":

@@ -53,7 +53,7 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
 3. **Merge the workflow and `.prhero/` into the default branch.** A comment-triggered run
    (`/crysk review`) reads both from the base branch, so it starts nothing until the workflow is
    there, and fails `PRH-GOTCHAS-MISSING` until `.prhero/` is.
-   Then require the `pr-hero` status check in branch protection if you want it to block merges.
+   Then require the `crysk` status check in branch protection (`pr-hero` is still posted for one version) if you want it to block merges.
 
 4. **Open pull requests as usual.** Every new PR gets a review posted as PR comments; later pushes
    follow the level you chose (balanced re-reviews a push only when it is risky or the last pass
