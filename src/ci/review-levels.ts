@@ -5,7 +5,7 @@
 //
 // WHY presets at all: before this, CI admission ran on defaults nobody was
 // shown (risk_aware, 2 passes). A preset names the behaviour in words, and the
-// keys it sets are always written to .prhero/config.json, so what a repo does
+// keys it sets are always written to .crysk/config.json, so what a repo does
 // is visible in the file it versions, never inherited silently.
 
 import { DEFAULT_SIZE_GATE } from "#review/size-gate";
@@ -98,7 +98,7 @@ export interface AdvancedChoices {
   ci_admission_observe_only?: boolean;
   ci_trusted_actors?: string[];
   max_changed_files?: number;
-  // Lines appended to .prheroignore; exclusions have no config key.
+  // Lines appended to .cryskignore; exclusions have no config key.
   ignorePatterns?: string[];
 }
 
@@ -226,7 +226,7 @@ export function budgetInput(choices: CiSetupChoices): string | undefined {
   return undefined;
 }
 
-// How the choices land in .prhero/config.json. `set` overrides; each group in
+// How the choices land in .crysk/config.json. `set` overrides; each group in
 // `fillIfAbsent` is written only when the file has none of its keys, and kept
 // whole otherwise, so a tuned policy is never half-replaced by a preset.
 export interface ConfigPlan {
@@ -303,8 +303,8 @@ export function renderChoicesSummary(
     `  observe only     ${a.ci_admission_observe_only === true ? "yes: skip decisions are logged, every push is reviewed" : "no"}`,
     `  trusted actors   ${a.ci_trusted_actors && a.ci_trusted_actors.length > 0 ? a.ci_trusted_actors.join(", ") : "none beyond the workflow actor"}`,
     `  size limit       ${"max_changed_lines" in kept ? `${JSON.stringify(kept.max_changed_lines)} changed lines (kept)` : choices.maxChangedLines === 0 ? "no changed-lines limit (0)" : `${choices.maxChangedLines} changed lines`}, ${a.max_changed_files === undefined ? "files resolved from how the review is paid" : `${a.max_changed_files} files`}`,
-    `  exclusions       ${a.ignorePatterns && a.ignorePatterns.length > 0 ? `${a.ignorePatterns.join(", ")} (.prheroignore)` : "none added (.prheroignore)"}`,
-    "Change them later in .prhero/config.json and .github/workflows/pr-hero.yml (`npx -y pr-hero config` shows the effective values).",
+    `  exclusions       ${a.ignorePatterns && a.ignorePatterns.length > 0 ? `${a.ignorePatterns.join(", ")} (.cryskignore)` : "none added (.cryskignore)"}`,
+    "Change them later in .crysk/config.json and .github/workflows/pr-hero.yml (`npx -y pr-hero config` shows the effective values).",
   ];
   return lines;
 }

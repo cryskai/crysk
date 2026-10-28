@@ -26,12 +26,12 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    the two are byte-identical. The template wires quoted `routing` / `opencode-auth` inputs; empty
    values are absent, so Claude-only repos keep those lines.
 3. **Write the repository gotchas.** Run `npx -y pr-hero init` in a clone of your repo: it creates
-   `.prhero/config.json` and `.prhero/gotchas.md`. Replace the placeholder lines in `gotchas.md` with real
+   `.crysk/config.json` and `.crysk/gotchas.md`. Replace the placeholder lines in `gotchas.md` with real
    facts about your repository (a deliberate oddity that looks like a bug, an invariant enforced outside
    the diff, an ownership rule a newcomer would break), then delete the `human-attention-required` marker
    line. Gotchas are injected into every hunter's prompt; without them the run fails
    [`PRH-GOTCHAS-MISSING`](#prh-gotchas-missing).
-4. **Commit `.prhero/` to the default branch.** Comment-triggered runs read the base branch, so the file
+4. **Commit `.crysk/` to the default branch.** Comment-triggered runs read the base branch, so the file
    must be there, not only on your feature branch.
 5. **Require the check.** In branch protection, require the `crysk` status check (the gate); `pr-hero` is still posted for one version, so a repository that already requires it keeps working while you switch. Do not require the
    `review` job, which stays green even when it finds blocking issues. A private repository on GitHub Free
@@ -178,7 +178,7 @@ trim it.
 | `CLAUDE_CODE_OAUTH_TOKEN` | secret | One of the three credential secrets | The long-lived token printed by `claude setup-token` (valid ~1 year). Consumes directly from your Claude subscription (Pro/Team/Enterprise) with **zero extra API billing/costs**. Must come from that command — see the warning under Option 1. |
 | `ANTHROPIC_API_KEY` | secret | One of the three credential secrets | A standard Anthropic API key, billed per token via your Anthropic Console account. |
 | `OPENCODE_AUTH_JSON` | secret | One of the three credential secrets | Whole OpenCode `auth.json` blob (not a single key field). Cap **48 KB**. Never echo, log, or paste it into the workflow. The Action writes it `0600` at the OpenCode auth path. Leave unset for Claude-only CI. |
-| `CRYSK_ROUTING` | repository **variable** | OpenCode path (with the secret above) | JSON object with the same shape as `config.routing` — the routing object, not the whole `~/.prhero/config.json`. Quoted in workflow `with.routing`. Unset = empty string. Cap **48 KB**. Written to the person-layer `$HOME/.prhero/config.json` on the runner. Repo `.prhero/config.json` **rejects** `routing`. |
+| `CRYSK_ROUTING` | repository **variable** | OpenCode path (with the secret above) | JSON object with the same shape as `config.routing` — the routing object, not the whole `~/.crysk/config.json`. Quoted in workflow `with.routing`. Unset = empty string. Cap **48 KB**. Written to the person-layer `$HOME/.crysk/config.json` on the runner. Repo `.crysk/config.json` **rejects** `routing`. |
 
 The action treats Anthropic key **or** Claude OAuth **or** `OPENCODE_AUTH_JSON` as present. With none of
 the three set, the run fails red before any spend, and its step summary lists the commands that set one.
@@ -287,8 +287,8 @@ secret), not a new Action input.
 3. Keep the generated workflow `with:` lines (`routing: "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"` and
    `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`). Open a same-repo PR.
 
-The Action writes routing to `$HOME/.prhero/config.json` on the runner (person layer) wrapping
-`{"routing": <parsed>}`. It never writes repo `.prhero/config.json`; that file's parser rejects
+The Action writes routing to `$HOME/.crysk/config.json` on the runner (person layer) wrapping
+`{"routing": <parsed>}`. It never writes repo `.crysk/config.json`; that file's parser rejects
 `routing`. Empty or unset routing skips the person-layer write, so Claude-default CI stays available.
 `OPENCODE_AUTH_JSON` is written `0600` at the OpenCode auth path; brokers read that file. Invalid JSON
 fails the job loud.
@@ -409,7 +409,7 @@ produce an invoice. Setting `budget-usd` explicitly is honoured verbatim on eith
 **Leaving `max-changed-lines` / `max-changed-files` unset resolves them the same way.** On a Claude
 subscription route there is no size limit, so large pull requests are reviewed instead of skipped, and
 the run emits a `::notice::` saying so. A metered route keeps `4000` lines / `50` files. A value set in
-the workflow, or `max_changed_lines` / `max_changed_files` in `.prhero/config.json`, is honoured on
+the workflow, or `max_changed_lines` / `max_changed_files` in `.crysk/config.json`, is honoured on
 either route, and `0` disables that limit.
 
 If **both** Claude credentials are set, the ceiling is applied: this project does not record which one
@@ -449,10 +449,10 @@ Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only 
 
 Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). Unlike the budget it applies on any billing: left unset, a subscription route reviews a PR of any size.
 
-### Policy configuration (`.prhero/config.json`)
+### Policy configuration (`.crysk/config.json`)
 
 These keys live in the **repository** config (not the PR branch worktree). A PR author cannot change
-them to suppress review of their own PR. The same rule applies to `.prheroignore` (size-gate/diff
+them to suppress review of their own PR. The same rule applies to `.cryskignore` (size-gate/diff
 exclusions, see the README): under CI it is read from the PR's base ref, never the PR's own branch.
 
 | Key | Default | Meaning |
@@ -801,7 +801,7 @@ pr-hero triage reply --pr <n> --from <run-dir> --finding F001 \
 `--from` needs the **run directory that produced those findings** — the driver opens
 `comparison.json` there and reads `findings.json` to map `F001` onto the posted
 `<!-- crysk-finding` marker. Locally that directory is still on your disk. In Actions it lives on the
-runner at `~/.prhero/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` and **dies with the job**, so the
+runner at `~/.crysk/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` and **dies with the job**, so the
 action uploads it as an artifact in its last step.
 
 ### Downloading the run directory
@@ -1171,7 +1171,7 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 **Fix:**
 
 ```bash
-gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"
+gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"
 ```
 
 A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `pr-hero ci init --force` so the workflow also reads CRYSK_ROUTING.
@@ -1270,19 +1270,19 @@ pr-hero review --pr {pr} --dry-run
 
 **Owner:** your configuration
 
-**What:** .prhero/gotchas.md is missing or still the scaffold
+**What:** .crysk/gotchas.md is missing or still the scaffold
 
 **Why:** reviews need real repository facts to be accurate
 
 **Fix:**
 
-Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).
+Run `npx -y pr-hero init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).
 
 ### PRH-CONFIG-INVALID
 
 **Owner:** your configuration
 
-**What:** .prhero/config.json is invalid: {detail}
+**What:** .crysk/config.json is invalid: {detail}
 
 **Why:** pr-hero refuses to guess repository settings
 

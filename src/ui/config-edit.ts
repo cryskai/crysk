@@ -6,6 +6,7 @@ import {
   parseGlobalConfig,
   parseLocalConfig,
 } from "#review/preflight";
+import { resolveHomeDir, resolveRepoDir } from "../brand-paths";
 import { bold, box, cyan, dim, sanitizeText, yellow } from "./primitives";
 import type { KeyReader } from "./select";
 
@@ -344,11 +345,11 @@ export async function saveLayerConfig(input: {
         "cannot edit team configuration outside a git repository",
       );
     }
-    targetFile = path.join(input.repoRoot, ".prhero", "config.json");
+    targetFile = path.join(resolveRepoDir(input.repoRoot), "config.json");
   } else if (input.layer === "person") {
-    targetFile = path.join(home, ".prhero", "config.json");
+    targetFile = path.join(resolveHomeDir(home), "config.json");
   } else {
-    targetFile = path.join(home, ".prhero", "watch.json");
+    targetFile = path.join(resolveHomeDir(home), "watch.json");
   }
 
   const dir = path.dirname(targetFile);
@@ -360,7 +361,7 @@ export async function saveLayerConfig(input: {
 
   let annotation: string | undefined;
   if (input.layer === "team") {
-    const personFile = path.join(home, ".prhero", "config.json");
+    const personFile = path.join(resolveHomeDir(home), "config.json");
     if (existsSync(personFile)) {
       try {
         const personData = JSON.parse(readFileSync(personFile, "utf-8"));
@@ -413,7 +414,10 @@ export async function setConfigValue(input: {
         "cannot edit team configuration outside a git repository",
       );
     }
-    const repoConfigPath = path.join(input.repoRoot, ".prhero", "config.json");
+    const repoConfigPath = path.join(
+      resolveRepoDir(input.repoRoot),
+      "config.json",
+    );
     let currentRepo: Record<string, unknown> = {};
     if (existsSync(repoConfigPath)) {
       try {
@@ -519,7 +523,7 @@ export async function setConfigValue(input: {
 
     // Check annotation from mergeConfig
     let annotation: string | undefined;
-    const personConfigPath = path.join(home, ".prhero", "config.json");
+    const personConfigPath = path.join(resolveHomeDir(home), "config.json");
     if (existsSync(personConfigPath)) {
       try {
         const globalLayer = parseGlobalConfig(
@@ -585,7 +589,7 @@ export async function setConfigValue(input: {
       );
     }
 
-    const personConfigPath = path.join(home, ".prhero", "config.json");
+    const personConfigPath = path.join(resolveHomeDir(home), "config.json");
     let currentPerson: Record<string, unknown> = {};
     if (existsSync(personConfigPath)) {
       try {
@@ -657,7 +661,7 @@ export async function setConfigValue(input: {
   }
 
   if (input.layer === "watch") {
-    const watchConfigPath = path.join(home, ".prhero", "watch.json");
+    const watchConfigPath = path.join(resolveHomeDir(home), "watch.json");
     let currentWatch: Record<string, unknown> = {};
     if (existsSync(watchConfigPath)) {
       try {
@@ -729,7 +733,10 @@ export async function unsetConfigValue(input: {
         "cannot edit team configuration outside a git repository",
       );
     }
-    const repoConfigPath = path.join(input.repoRoot, ".prhero", "config.json");
+    const repoConfigPath = path.join(
+      resolveRepoDir(input.repoRoot),
+      "config.json",
+    );
     if (existsSync(repoConfigPath)) {
       const current = JSON.parse(readFileSync(repoConfigPath, "utf-8"));
       removeKey(current, input.key);
@@ -739,7 +746,7 @@ export async function unsetConfigValue(input: {
   }
 
   if (input.layer === "person") {
-    const personConfigPath = path.join(home, ".prhero", "config.json");
+    const personConfigPath = path.join(resolveHomeDir(home), "config.json");
     if (existsSync(personConfigPath)) {
       const current = JSON.parse(readFileSync(personConfigPath, "utf-8"));
       removeKey(current, input.key);
@@ -749,7 +756,7 @@ export async function unsetConfigValue(input: {
   }
 
   if (input.layer === "watch") {
-    const watchConfigPath = path.join(home, ".prhero", "watch.json");
+    const watchConfigPath = path.join(resolveHomeDir(home), "watch.json");
     if (existsSync(watchConfigPath)) {
       const current = JSON.parse(readFileSync(watchConfigPath, "utf-8"));
       removeKey(current, input.key);
@@ -779,18 +786,18 @@ export async function runConfigEditor(
 
   io.line();
   io.line(bold("Interactive Configuration Editor", styles));
-  io.line(dim("Person layer: ~/.prhero/config.json", styles));
+  io.line(dim("Person layer: ~/.crysk/config.json", styles));
   if (deps.repoRoot) {
     io.line(
       dim(
-        `Team layer: ${path.join(deps.repoRoot, ".prhero", "config.json")}`,
+        `Team layer: ${path.join(resolveRepoDir(deps.repoRoot), "config.json")}`,
         styles,
       ),
     );
   } else {
     io.line(dim("Team layer: (disabled outside git repository)", styles));
   }
-  io.line(dim("Watcher layer: ~/.prhero/watch.json", styles));
+  io.line(dim("Watcher layer: ~/.crysk/watch.json", styles));
   io.line();
   io.line(
     "Use 'pr-hero config set <key> <value> [--person|--team|--watch]' to modify configuration.",

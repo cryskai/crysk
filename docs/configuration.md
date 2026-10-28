@@ -18,19 +18,24 @@ covers the two things that section does not: `routing` and credentials.
 
 | Layer | File | Holds |
 | --- | --- | --- |
-| Global / per-person | `~/.prhero/config.json` | `routing`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
-| Repo | `<repo>/.prhero/config.json` | `agents_dir`, `default_base`, `parity_trigger_paths`, `suspicion_priors`, gotchas |
+| Global / per-person | `~/.crysk/config.json` | `routing`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
+| Repo | `<repo>/.crysk/config.json` | `agents_dir`, `default_base`, `parity_trigger_paths`, `suspicion_priors`, gotchas |
 
 `max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate, scout and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and pr-hero can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
+
+**Renamed from pr-hero.** The directories used to be `~/.prhero/` and `<repo>/.prhero/`, and the ignore file
+`.prheroignore`. Those are still read, for one version, when the new name does not exist. Nothing is moved for
+you: `pr-hero doctor` prints the exact command (`mv ~/.prhero ~/.crysk`, `git mv .prhero .crysk`,
+`git mv .prheroignore .cryskignore`). If both names exist, the `.crysk` one wins and the old one is ignored.
 
 `routing` is a **person-layer-only** key. Put it in a repo file and the parser refuses it by name:
 
 ```
-.prhero/config.json: routing is a per-person key — put it in ~/.prhero/config.json
+.crysk/config.json: routing is a per-person key — put it in ~/.crysk/config.json
 ```
 
 The reverse also throws (a repo-only key in the global file gets ` is a per-repo key — put it in
-<repo>/.prhero/config.json`). Run `pr-hero config` to see, per key, which of the two files actually
+<repo>/.crysk/config.json`). Run `pr-hero config` to see, per key, which of the two files actually
 spoke.
 
 **`--config <file>` replaces the repo layer only.** There is no flag that repoints the global one —
@@ -42,7 +47,7 @@ same per-person rejection above, because `--config` still parses as a repo-layer
 Nothing in the engine reads a `PRHERO_ROUTING` environment variable directly. `PRHERO_ROUTING` is the
 *repository variable name* the scaffolded workflow uses to fill the action's `routing:` input
 (`vars.PRHERO_ROUTING`). The action passes that input to its setup step as the `ROUTING_INPUT`
-environment variable, which then gets parsed and written to `$HOME/.prhero/config.json` on the
+environment variable, which then gets parsed and written to `$HOME/.crysk/config.json` on the
 runner — the same global layer described above, never the repo file. Full wiring (secrets, the
 `opencode-auth` input, pinned OpenCode CLI version, budget ceilings) is in
 [`docs/github-actions.md`](github-actions.md#opencode-in-ci); scaffolding it is
@@ -117,7 +122,7 @@ never registered pr-hero's aliases, so this route has no provider model id to se
 
 ### A working example
 
-Written to `~/.prhero/config.json` and validated against the engine's own parser and resolver
+Written to `~/.crysk/config.json` and validated against the engine's own parser and resolver
 (`parseRoutingConfig` + `resolveModelRoute`, offline, $0):
 
 ```json
@@ -240,8 +245,8 @@ this writing.
 
 ```
 $ pr-hero config
-  repo   <repo>/.prhero/config.json (absent)
-  global ~/.prhero/config.json (present)
+  repo   <repo>/.crysk/config.json (absent)
+  global ~/.crysk/config.json (present)
 
   agents_dir                default (unset)
   routing                   default (unset)

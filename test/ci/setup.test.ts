@@ -782,10 +782,10 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
   }
 
   // Threat matrix RED (1): person-layer writes use prheroLayout(home), never
-  // the workspace checkout's .prhero/config.json (repo parser rejects routing).
+  // the workspace checkout's .crysk/config.json (repo parser rejects routing).
   test("writes routing at prheroLayout(home).reviewConfigPath and not the workspace", async () => {
     await withFixture(async ({ home, workspace }) => {
-      const workspaceConfig = path.join(workspace, ".prhero", "config.json");
+      const workspaceConfig = path.join(workspace, ".crysk", "config.json");
       await mkdir(path.dirname(workspaceConfig), { recursive: true });
       const workspaceBefore = `${JSON.stringify({ max_changed_lines: 50 })}\n`;
       await writeFile(workspaceConfig, workspaceBefore);
@@ -798,7 +798,7 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
       });
 
       const expected = prheroLayout(home).reviewConfigPath;
-      expect(expected).toBe(path.join(home, ".prhero", "config.json"));
+      expect(expected).toBe(path.join(home, ".crysk", "config.json"));
       expect(existsSync(expected)).toBe(true);
       const layer = parseGlobalConfig(await readFile(expected, "utf8"));
       expect(layer.routing?.default?.backend).toBe("opencode");
@@ -835,7 +835,7 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
   // Threat matrix RED (3): empty HOME fails loud; never fall back to cwd.
   test("empty HOME is non-zero and leaves cwd untouched", async () => {
     await withFixture(async ({ workspace }) => {
-      const workspaceConfig = path.join(workspace, ".prhero", "config.json");
+      const workspaceConfig = path.join(workspace, ".crysk", "config.json");
       await expect(
         materializeCiOpenCodeData({
           env: { HOME: "" },
@@ -845,7 +845,7 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
       ).rejects.toThrow(/HOME/);
 
       expect(existsSync(workspaceConfig)).toBe(false);
-      expect(existsSync(path.join(workspace, ".prhero"))).toBe(false);
+      expect(existsSync(path.join(workspace, ".crysk"))).toBe(false);
       expect(existsSync(path.join(workspace, ".local"))).toBe(false);
 
       const proc = Bun.spawn(
@@ -1070,8 +1070,8 @@ describe("ci init gotchas steps (CLI)", () => {
     try {
       Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
       if (gotchas !== undefined) {
-        await mkdir(path.join(dir, ".prhero"), { recursive: true });
-        await writeFile(path.join(dir, ".prhero", "gotchas.md"), gotchas);
+        await mkdir(path.join(dir, ".crysk"), { recursive: true });
+        await writeFile(path.join(dir, ".crysk", "gotchas.md"), gotchas);
       }
       const result = Bun.spawnSync(
         [
@@ -1091,12 +1091,12 @@ describe("ci init gotchas steps (CLI)", () => {
     }
   }
 
-  test("a repo without .prhero/gotchas.md is told to run init, write gotchas, and commit .prhero/ before opening the PR", async () => {
+  test("a repo without .crysk/gotchas.md is told to run init, write gotchas, and commit .crysk/ before opening the PR", async () => {
     const { output, code } = await runInit(undefined);
     expect(code).toBe(0);
     expect(output).toContain("npx -y pr-hero init");
     expect(output).toContain("human-attention-required");
-    expect(output).toContain("Commit .prhero/ to the default branch");
+    expect(output).toContain("Commit .crysk/ to the default branch");
     expect(output.indexOf("npx -y pr-hero init")).toBeLessThan(
       output.indexOf("Open a pull request"),
     );
@@ -1108,7 +1108,7 @@ describe("ci init gotchas steps (CLI)", () => {
     );
     expect(output).toContain("npx -y pr-hero init");
     expect(output).toContain("human-attention-required");
-    expect(output).toContain("Commit .prhero/ to the default branch");
+    expect(output).toContain("Commit .crysk/ to the default branch");
   });
 
   test("a scaffold whose marker line was deleted gets the same init steps", async () => {
@@ -1116,7 +1116,7 @@ describe("ci init gotchas steps (CLI)", () => {
       "# Repo gotchas\n\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n",
     );
     expect(output).toContain("npx -y pr-hero init");
-    expect(output).toContain("Commit .prhero/ to the default branch");
+    expect(output).toContain("Commit .crysk/ to the default branch");
   });
 
   test("real gotchas without the marker print no init steps, and still name the required check", async () => {

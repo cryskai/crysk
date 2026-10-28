@@ -62,9 +62,9 @@ describe("repo-optional commands", () => {
       });
 
       expect(exitCode).toBe(0);
-      const setupPath = path.join(tmpDir, ".prhero", "setup.json");
+      const setupPath = path.join(tmpDir, ".crysk", "setup.json");
       expect(written[setupPath]).toBeDefined();
-      const dotPrheroConfig = path.join(tmpDir, ".prhero", "config.json");
+      const dotPrheroConfig = path.join(tmpDir, ".crysk", "config.json");
       expect(written[dotPrheroConfig]).toBeUndefined();
     });
   });

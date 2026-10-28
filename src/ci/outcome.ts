@@ -1416,10 +1416,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "the run would fail later at the Claude credential check",
       [
-        '$ gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"',
+        '$ gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"',
         LEGACY_ROUTING_NOTE,
       ],
-      `set CRYSK_ROUTING from your routing config: \`gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.prhero/config.json)"\` (PRHERO_ROUTING on a workflow set up before the rename)`,
+      `set CRYSK_ROUTING from your routing config: \`gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"\` (PRHERO_ROUTING on a workflow set up before the rename)`,
     ),
   },
   "PRH-ROUTING-INVALID": {
@@ -1505,23 +1505,23 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-GOTCHAS-MISSING": {
     level: "error",
     owner: "config",
-    what: ".prhero/gotchas.md is missing or still the scaffold",
+    what: ".crysk/gotchas.md is missing or still the scaffold",
     variants: single(
       "reviews need real repository facts to be accurate",
       [
-        "Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
+        "Run `npx -y pr-hero init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
       ],
-      "write real facts into .prhero/gotchas.md, remove the scaffold marker line if present, and commit it to the base branch",
+      "write real facts into .crysk/gotchas.md, remove the scaffold marker line if present, and commit it to the base branch",
     ),
   },
   "PRH-CONFIG-INVALID": {
     level: "error",
     owner: "config",
-    what: ".prhero/config.json is invalid: {detail}",
+    what: ".crysk/config.json is invalid: {detail}",
     variants: single(
       "pr-hero refuses to guess repository settings",
       ["Fix the file, then check it:", "$ pr-hero review --pr {pr} --dry-run"],
-      "fix `.prhero/config.json` ({detail}), then check it with `pr-hero review --pr {pr} --dry-run`",
+      "fix `.crysk/config.json` ({detail}), then check it with `pr-hero review --pr {pr} --dry-run`",
     ),
   },
   "PRH-TOKEN-PERMISSION": {

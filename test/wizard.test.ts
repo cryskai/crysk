@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   GOTCHAS_PLACEHOLDER_MARKER,
   gotchasUnusableReason,
-  INIT_GIT_REMINDER,
+  initGitReminder,
 } from "#review/preflight";
 import type { ExactBindingCapabilityReport } from "../src/execution/contracts";
 import {
@@ -83,7 +83,7 @@ describe("Wizard state machine & steps", () => {
   });
 
   describe("Step 4 (workspace) apply behavior", () => {
-    test("apply writes ~/.prhero/setup.json and NEVER touches ~/.prhero/config.json", async () => {
+    test("apply writes ~/.crysk/setup.json and NEVER touches ~/.crysk/config.json", async () => {
       const written: Record<string, string> = {};
       const executed: string[][] = [];
 
@@ -117,17 +117,17 @@ describe("Wizard state machine & steps", () => {
       expect(result?.setupStateWritten).toBe(true);
 
       // Verify setup.json content
-      const setupRaw = written["/home/user/.prhero/setup.json"];
+      const setupRaw = written["/home/user/.crysk/setup.json"];
       expect(setupRaw).toBeDefined();
       const setup = JSON.parse(setupRaw);
       expect(setup.onboarding_version).toBe(CURRENT_ONBOARDING_VERSION);
       expect(setup.completed_at).toBeDefined();
 
-      // Crucial invariant: never touches ~/.prhero/config.json
-      expect(written["/home/user/.prhero/config.json"]).toBeUndefined();
+      // Crucial invariant: never touches ~/.crysk/config.json
+      expect(written["/home/user/.crysk/config.json"]).toBeUndefined();
 
       // Verify skipped gotchas marker
-      const gotchasRaw = written["/repo/.prhero/gotchas.md"];
+      const gotchasRaw = written["/repo/.crysk/gotchas.md"];
       expect(gotchasRaw).toBeDefined();
       expect(gotchasRaw).toContain(
         "<!-- human-attention-required: zero invariants defined during onboarding -->",
@@ -138,7 +138,7 @@ describe("Wizard state machine & steps", () => {
       // dispatches no reducer actions, so `gotchas.entries` is always empty
       // and this file is what `pr-hero setup` produces WHENEVER it writes one
       // — which, since neither write overwrites, is only in a repo that had
-      // no `.prhero/gotchas.md` yet.
+      // no `.crysk/gotchas.md` yet.
       expect(gotchasUnusableReason(gotchasRaw)).toBe("placeholder");
       // ...and the flag step 5 reads before warning about that file agrees
       // with the bytes just asserted.
@@ -148,11 +148,11 @@ describe("Wizard state machine & steps", () => {
 
     test("a gotchas file already on disk is neither rewritten nor claimed", async () => {
       // The other half of "never overwrites": when both files exist, this run
-      // wrote nothing into `.prhero/`, and both of step 5's flags must say so.
+      // wrote nothing into `.crysk/`, and both of step 5's flags must say so.
       // They used to be one flag assigned `isRepo`, which was true here.
       const written: Record<string, string> = {
-        "/repo/.prhero/config.json": '{"default_base": "main"}\n',
-        "/repo/.prhero/gotchas.md":
+        "/repo/.crysk/config.json": '{"default_base": "main"}\n',
+        "/repo/.crysk/gotchas.md":
           "# Repo gotchas\n\n- auth: tokens are refreshed by the broker, never in-process.\n",
       };
       const before = { ...written };
@@ -171,15 +171,15 @@ describe("Wizard state machine & steps", () => {
 
       expect(result?.workspaceFilesWritten).toBe(false);
       expect(result?.placeholderGotchasWritten).toBe(false);
-      expect(written["/repo/.prhero/gotchas.md"]).toBe(
-        before["/repo/.prhero/gotchas.md"],
+      expect(written["/repo/.crysk/gotchas.md"]).toBe(
+        before["/repo/.crysk/gotchas.md"],
       );
-      expect(written["/repo/.prhero/config.json"]).toBe(
-        before["/repo/.prhero/config.json"],
+      expect(written["/repo/.crysk/config.json"]).toBe(
+        before["/repo/.crysk/config.json"],
       );
     });
 
-    test("apply with commitChoice 'commit' stages .prhero and creates chore commit", async () => {
+    test("apply with commitChoice 'commit' stages .crysk and creates chore commit", async () => {
       const written: Record<string, string> = {};
       const executed: string[][] = [];
 
@@ -220,11 +220,11 @@ describe("Wizard state machine & steps", () => {
       // reachable endings are asserted through `runWizardSteps` further down.
       expect(result?.placeholderGotchasWritten).toBe(false);
       expect(result?.workspaceFilesWritten).toBe(true);
-      expect(written["/repo/.prhero/gotchas.md"]).not.toContain(
+      expect(written["/repo/.crysk/gotchas.md"]).not.toContain(
         GOTCHAS_PLACEHOLDER_MARKER,
       );
 
-      expect(executed).toContainEqual(["git", "add", ".prhero"]);
+      expect(executed).toContainEqual(["git", "add", ".crysk"]);
       expect(executed).toContainEqual([
         "git",
         "commit",
@@ -233,7 +233,7 @@ describe("Wizard state machine & steps", () => {
       ]);
     });
 
-    test("apply with commitChoice 'ignore' appends .prhero/ to .gitignore", async () => {
+    test("apply with commitChoice 'ignore' appends .crysk/ to .gitignore", async () => {
       const written: Record<string, string> = {
         "/repo/.gitignore": "node_modules/\n",
       };
@@ -259,13 +259,13 @@ describe("Wizard state machine & steps", () => {
 
       await step?.apply(initialState, deps);
 
-      expect(written["/repo/.gitignore"]).toContain(".prhero/");
+      expect(written["/repo/.gitignore"]).toContain(".crysk/");
     });
   });
 
   describe("isMachineOnboarded", () => {
-    test("returns true when ~/.prhero/setup.json exists with current version", () => {
-      const exists = (p: string) => p === "/home/user/.prhero/setup.json";
+    test("returns true when ~/.crysk/setup.json exists with current version", () => {
+      const exists = (p: string) => p === "/home/user/.crysk/setup.json";
       const readFile = () => JSON.stringify({ onboarding_version: 1 });
       expect(isMachineOnboarded({ home: "/home/user", exists, readFile })).toBe(
         true,
@@ -706,7 +706,7 @@ describe("runWizardSteps — the loop `runWizard` renders", () => {
 // `workspaceCommitted` is ALWAYS false. Two of the old tests in this block
 // overrode exactly those two fields to assert the short ending; both were
 // asserting branches production cannot reach. They are gone. The short ending
-// is reached below the way a user reaches it: a repo whose `.prhero/` files
+// is reached below the way a user reaches it: a repo whose `.crysk/` files
 // already exist, so this run wrote nothing.
 // ---------------------------------------------------------------------------
 
@@ -738,13 +738,13 @@ describe("verification step — the ending matches what the run actually did", (
     const text = lines.join("\n");
     // Precondition, asserted rather than assumed: the run really did write a
     // placeholder gotchas file, which is what makes both halves TRUE here.
-    expect(files["/repo/.prhero/config.json"]).toBeDefined();
-    expect(gotchasUnusableReason(files["/repo/.prhero/gotchas.md"])).toBe(
+    expect(files["/repo/.crysk/config.json"]).toBeDefined();
+    expect(gotchasUnusableReason(files["/repo/.crysk/gotchas.md"])).toBe(
       "placeholder",
     );
 
-    expect(text).toContain(INIT_GIT_REMINDER);
-    expect(text).toContain(".prhero/gotchas.md");
+    expect(text).toContain(initGitReminder());
+    expect(text).toContain(".crysk/gotchas.md");
     expect(text).toContain(GOTCHAS_PLACEHOLDER_MARKER);
   });
 
@@ -754,7 +754,7 @@ describe("verification step — the ending matches what the run actually did", (
     const { lines } = await verificationLines({ isRepo: true });
     const reviewLine = lines.findIndex((l) => l.includes("pr-hero review"));
     const reminderLine = lines.findIndex((l) =>
-      l.includes(INIT_GIT_REMINDER.slice(0, 40)),
+      l.includes(initGitReminder().slice(0, 40)),
     );
     const gotchasLine = lines.findIndex((l) =>
       l.includes(GOTCHAS_PLACEHOLDER_MARKER),
@@ -774,27 +774,27 @@ describe("verification step — the ending matches what the run actually did", (
   });
 
   // THE regression. A repo that ran `pr-hero setup` in a previous session,
-  // committed `.prhero/`, and wrote real gotchas into it re-runs setup: this
-  // run writes nothing into `.prhero/`, so neither "commit the untracked
-  // .prhero/" nor "the one just scaffolded is a placeholder" is true of it.
+  // committed `.crysk/`, and wrote real gotchas into it re-runs setup: this
+  // run writes nothing into `.crysk/`, so neither "commit the untracked
+  // .crysk/" nor "the one just scaffolded is a placeholder" is true of it.
   // Both were printed anyway, because `repoScaffolded` meant "cwd is a git
   // repo".
-  test("a repo whose .prhero/ already holds real gotchas gets NEITHER warning", async () => {
+  test("a repo whose .crysk/ already holds real gotchas gets NEITHER warning", async () => {
     const { lines, files } = await verificationLines({
       isRepo: true,
       files: {
-        "/repo/.prhero/config.json": '{"default_base": "main"}\n',
-        "/repo/.prhero/gotchas.md": REAL_GOTCHAS,
+        "/repo/.crysk/config.json": '{"default_base": "main"}\n',
+        "/repo/.crysk/gotchas.md": REAL_GOTCHAS,
       },
     });
     const text = lines.join("\n");
 
     // The gotchas the user wrote are untouched — the claim the message would
     // be making is false in both directions.
-    expect(files["/repo/.prhero/gotchas.md"]).toBe(REAL_GOTCHAS);
+    expect(files["/repo/.crysk/gotchas.md"]).toBe(REAL_GOTCHAS);
     expect(gotchasUnusableReason(REAL_GOTCHAS)).toBeUndefined();
 
-    expect(text).not.toContain(INIT_GIT_REMINDER);
+    expect(text).not.toContain(initGitReminder());
     expect(text).not.toContain(GOTCHAS_PLACEHOLDER_MARKER);
     expect(text).toContain("pr-hero review");
   });
@@ -802,9 +802,9 @@ describe("verification step — the ending matches what the run actually did", (
   test("outside a repo nothing was scaffolded, so there is nothing to commit", async () => {
     const { lines, files } = await verificationLines({ isRepo: false });
     const text = lines.join("\n");
-    expect(files["/repo/.prhero/config.json"]).toBeUndefined();
-    expect(files["/repo/.prhero/gotchas.md"]).toBeUndefined();
-    expect(text).not.toContain(INIT_GIT_REMINDER);
+    expect(files["/repo/.crysk/config.json"]).toBeUndefined();
+    expect(files["/repo/.crysk/gotchas.md"]).toBeUndefined();
+    expect(text).not.toContain(initGitReminder());
     expect(text).not.toContain(GOTCHAS_PLACEHOLDER_MARKER);
   });
 });

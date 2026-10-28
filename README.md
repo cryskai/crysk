@@ -43,16 +43,16 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    threshold above which a PR is skipped (default 4000, on any billing), and whether to tune the
    advanced settings (score weights, observe-only, trusted actors, files limit, exclusions). Then it runs
    `npx -y pr-hero setup --ci` with your answers (writes `.github/workflows/pr-hero.yml` and the
-   level's keys in `.prhero/config.json`, and prints a summary) and `npx -y pr-hero init`
-   (writes `.prhero/gotchas.md`), writes the repository gotchas, and stores
+   level's keys in `.crysk/config.json`, and prints a summary) and `npx -y pr-hero init`
+   (writes `.crysk/gotchas.md`), writes the repository gotchas, and stores
    one secret with `gh secret set`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription; `claude setup-token`
    prints it on any machine that has the Claude Code CLI, so this one does not need it) or
    `ANTHROPIC_API_KEY` (pay as you go). Without an agent, run the same
    commands yourself and follow the [Quick path](docs/github-actions.md#quick-path).
 
-3. **Merge the workflow and `.prhero/` into the default branch.** A comment-triggered run
+3. **Merge the workflow and `.crysk/` into the default branch.** A comment-triggered run
    (`/crysk review`) reads both from the base branch, so it starts nothing until the workflow is
-   there, and fails `PRH-GOTCHAS-MISSING` until `.prhero/` is.
+   there, and fails `PRH-GOTCHAS-MISSING` until `.crysk/` is.
    Then require the `crysk` status check in branch protection (`pr-hero` is still posted for one version) if you want it to block merges.
 
 4. **Open pull requests as usual.** Every new PR gets a review posted as PR comments; later pushes
@@ -140,20 +140,20 @@ curl -fsSL https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh |
 
 # 2. Put it on THIS shell's PATH. The installer edited your rc file, and an rc
 #    file only reaches shells started after it — the one you are in is not one.
-export PATH="$HOME/.prhero/bin:$PATH"     # fish: set -gx PATH $HOME/.prhero/bin $PATH
+export PATH="$HOME/.crysk/bin:$PATH"     # fish: set -gx PATH $HOME/.crysk/bin $PATH
 
 # 3. What is installed, what is missing, what blocks a review.
 pr-hero doctor
 
-# 4. Skills + MCP registration, and — inside a git repo — scaffold .prhero/.
+# 4. Skills + MCP registration, and — inside a git repo — scaffold .crysk/.
 cd /path/to/your-repo && pr-hero setup
 
 # 5. Track that scaffold, or ignore it. Local review refuses to run on a dirty
-#    tree, and an untracked .prhero/ is a dirty tree.
-git add .prhero && git commit -m "chore: pr-hero config"   # or: echo '.prhero/' >> .gitignore
+#    tree, and an untracked .crysk/ is a dirty tree.
+git add .crysk && git commit -m "chore: pr-hero config"   # or: echo '.crysk/' >> .gitignore
 
 # 6. Replace the placeholder gotchas with real ones. Not paperwork — see below.
-$EDITOR .prhero/gotchas.md
+$EDITOR .crysk/gotchas.md
 
 # 7. Review the checked-out branch against its merge base.
 pr-hero review
@@ -203,10 +203,10 @@ Four things go wrong when an agent runs the sequence above:
 
 1. **Step 2 is not optional, and not deferrable.** If each of your commands runs in its own
    shell, an `export PATH=...` in one does not reach the next. Either prepend the export to
-   every pr-hero invocation, or call the binary by absolute path: `~/.prhero/bin/pr-hero`.
-2. **Step 5 is yours.** `pr-hero setup` scaffolds `.prhero/` and neither commits nor
+   every pr-hero invocation, or call the binary by absolute path: `~/.crysk/bin/pr-hero`.
+2. **Step 5 is yours.** `pr-hero setup` scaffolds `.crysk/` and neither commits nor
    ignores it, so the next `pr-hero review` fails the clean-tree gate — on files `setup`
-   itself created. Commit them or add `.prhero/` to `.gitignore` before reviewing.
+   itself created. Commit them or add `.crysk/` to `.gitignore` before reviewing.
 3. **Write the gotchas yourself (step 6).** You have the repository in context, which makes
    you the best gotchas author available. Read the code and write the real ones: the
    deliberate oddity that looks like a bug, the invariant enforced in a file the diff never
@@ -224,14 +224,19 @@ There are two config files, and the difference between them is *who they belong 
 
 | File | Whose | Committed? |
 | --- | --- | --- |
-| `~/.prhero/config.json` | **yours**, across every repo on this machine | no — it is your machine |
-| `<repo>/.prhero/config.json` | **the team's** | yes, normally — it is shared through git |
+| `~/.crysk/config.json` | **yours**, across every repo on this machine | no — it is your machine |
+| `<repo>/.crysk/config.json` | **the team's** | yes, normally — it is shared through git |
 
 `pr-hero init` creates the repo file and `gotchas.md`, and never overwrites existing ones —
 `pr-hero setup` scaffolds the same two files when it runs inside a git repo, so a repo you set up
 needs no separate `init`. (Running `init` afterwards is harmless: it keeps what exists and reprints
-the git reminder.) Commit `.prhero/` or add it to `.gitignore` — an untracked one trips local
+the git reminder.) Commit `.crysk/` or add it to `.gitignore` — an untracked one trips local
 mode's clean-tree gate.
+
+**Renamed from pr-hero.** The directories used to be `~/.prhero/` and `<repo>/.prhero/`, and the ignore file
+`.prheroignore`. Those are still read, for one version, when the new name does not exist. Nothing is moved for
+you: `pr-hero doctor` prints the exact command (`mv ~/.prhero ~/.crysk`, `git mv .prhero .crysk`,
+`git mv .prheroignore .cryskignore`). If both names exist, the `.crysk` one wins and the old one is ignored.
 
 **Run `pr-hero config` to see which layer decided what.** It lists every key with its value, the
 layer it came from, and both file paths whether or not they exist. It never edits anything.
@@ -292,7 +297,7 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 | `pr-hero review --pr [n]` | Review a GitHub PR: by number, or — bare, no number — the PR that belongs to the current branch (errors loudly if it has none). Resolves the range through `gh`, runs in a detached worktree with its own codegraph index, then records the result in the run's `findings.json`. |
 | `pr-hero review --pr <n> --post` | Same, then publish the report as **one** marked PR comment — re-runs update it in place, never stack. |
 | `pr-hero doctor` | Run diagnostic environment and dependency checks (git, claude auth, gh, codegraph, config). Works inside or outside a repository. |
-| `pr-hero setup` | Machine-level onboarding: skill synchronization and MCP registration — and, when run inside a git repo, it also scaffolds that repo's `.prhero/config.json` and `.prhero/gotchas.md`, so no separate `init` is needed there. Fully non-interactive. It does **not** commit or `.gitignore` what it scaffolds; do that yourself before reviewing. |
+| `pr-hero setup` | Machine-level onboarding: skill synchronization and MCP registration — and, when run inside a git repo, it also scaffolds that repo's `.crysk/config.json` and `.crysk/gotchas.md`, so no separate `init` is needed there. Fully non-interactive. It does **not** commit or `.gitignore` what it scaffolds; do that yourself before reviewing. |
 | `pr-hero activity [--kill <pid>]` | Inspect running reviews (with elapsed time, PID, repo/PR), watcher spend against daily cap, and completed run history. `--kill <pid>` safely terminates a running review. |
 | `pr-hero post --pr <n> --from <run-dir>` | Replay-publish a previous run's findings onto the PR (same plan as `--pr --post`). `--dry-run` previews at $0. |
 | `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N --tag <tag> --body-file <path>` | Post one triage reply. The driver picks the parent from the posted `<!-- crysk-finding` marker (never path/line), renders the marker + badge, posts, and resolves the inline review thread. Reads `anchor.patch` (else `diff.patch`) from the run dir to remap post lines the same way `--post` does. `--body-file` is reasoning only. |
@@ -302,19 +307,19 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 | `pr-hero config unset <key> [--person\|--team\|--watch]` | Remove a configuration value from the selected layer. |
 | `pr-hero config --edit` | Open the interactive configuration editor across Person, Team, and Watcher layers with buffered draft editing, Save/Discard/Clear actions, and capped ceiling annotations. |
 | `pr-hero upgrade [--check]` | Upgrade `pr-hero` to the latest release and reconcile installed skills and MCP registrations. `--check` checks for updates without installing. |
-| `pr-hero uninstall [--purge]` | Managed uninstallation: unloads launchd background daemons, cleans up skills, unregisters MCPs, and optionally purges `~/.prhero` with `--purge`. |
-| `pr-hero init` | Scaffold `.prhero/` in the current repo — the command for every repo after the one you ran `setup` in. Omits keys your global file already supplies, so a new repo does not re-state what you have already said once. Idempotent: existing files are kept untouched, and it reprints the commit-or-ignore reminder. |
+| `pr-hero uninstall [--purge]` | Managed uninstallation: unloads launchd background daemons, cleans up skills, unregisters MCPs, and optionally purges `~/.crysk` with `--purge`. |
+| `pr-hero init` | Scaffold `.crysk/` in the current repo — the command for every repo after the one you ran `setup` in. Omits keys your global file already supplies, so a new repo does not re-state what you have already said once. Idempotent: existing files are kept untouched, and it reprints the commit-or-ignore reminder. |
 | `pr-hero watch add` | Opt the current repo (or `--repo <path>`) into the watcher; `--post` makes its reviews publish to the PR. Idempotent — re-adding updates the post flag. See [Watching PRs automatically](#watching-prs-automatically--pr-hero-watch). |
 | `pr-hero watch remove` | Take the current repo (or `--repo <path>`) back out. Idempotent — removing what is not listed just says so. |
 | `pr-hero watch status` | Read-only, $0: config summary, today's launches vs the cap, launchd state, lock, last activity. |
 | `pr-hero watch --once` | Run ONE watcher tick: scan the watched repos, pick the next unreviewed open PR, review it. `--dry-run` shows the whole decision for $0. |
 | `pr-hero watch install` | Install the macOS launchd agent that runs a tick every `--interval` minutes (default 15). **This is the opt-in to automatic spend.** |
 | `pr-hero watch uninstall` | Unload and remove that agent. |
-| `pr-hero gc` | Collect worktrees under `~/.prhero` that are merged/closed or idle >72h. `--dry-run` prints the table and removes nothing. `--repo <clone>` scopes to one origin; default is the whole home. Also removes leftover verified execution snapshots under `$TMPDIR/prhero-exec-snapshots` (dead owner process or older than 6h). |
+| `pr-hero gc` | Collect worktrees under `~/.crysk` that are merged/closed or idle >72h. `--dry-run` prints the table and removes nothing. `--repo <clone>` scopes to one origin; default is the whole home. Also removes leftover verified execution snapshots under `$TMPDIR/prhero-exec-snapshots` (dead owner process or older than 6h). |
 | `pr-hero gc install` | Install the macOS launchd agent that runs `pr-hero gc` every `--interval` minutes (default 360 = 6h). No reviews, no `watch.json`, no daily cap — the $0 sweeper so trees do not wait for a review or the watcher. |
 | `pr-hero gc uninstall` | Unload and remove that GC agent. |
 | `pr-hero gc status` | Read-only, $0: whether the GC agent is installed, its interval, plist, and tick log. |
-| `pr-hero usage [--all]` | Read-only, $0: print the observability store's per-run rows (cost, tokens, findings) — every completed review, local and PR, auto-ingests into one global `~/.prhero/metrics.db`. Scoped to the current checkout's origin by default; `--all` shows every origin instead. |
+| `pr-hero usage [--all]` | Read-only, $0: print the observability store's per-run rows (cost, tokens, findings) — every completed review, local and PR, auto-ingests into one global `~/.crysk/metrics.db`. Scoped to the current checkout's origin by default; `--all` shows every origin instead. |
 
 Flags worth knowing: `--dry-run` (plan + cost band, creates nothing), `--yes`, `--model <m>`,
 `--scout` / `--no-scout` (toggle pre-hunt reconnaissance scout),
@@ -336,7 +341,7 @@ which runs on the Actions runner; `/crysk override` instead unlocks a red gate w
 `--pr` resolves the range from the PR itself: a merged PR diffs from its merge commit's first parent
 (the base as it was when the PR landed — merge, squash and rebase all converge at the fork point),
 an open one from the recorded base tip. The review runs in a worktree at
-`~/.prhero/repos/<origin>/worktrees/pr-<n>` — your checkout, your index and your uncommitted work are
+`~/.crysk/repos/<origin>/worktrees/pr-<n>` — your checkout, your index and your uncommitted work are
 never touched, and reviews run while you keep working. Two checkouts of the same GitHub repo share
 one worktree. Worktrees are kept and reused across re-runs until GC (`pr-hero gc`: merged/closed or
 72h idle). That collector is not a background timer — it runs when you invoke it, at the end of
@@ -381,7 +386,7 @@ and each PR is reviewed **once** by default — see the `on_push` knob below.
 
 ```bash
 cd /path/to/your-repo
-pr-hero init             # once per repo, if .prhero/ does not exist yet
+pr-hero init             # once per repo, if .crysk/ does not exist yet
 pr-hero watch add --post # opt THIS repo in; --post publishes each review to its PR
 pr-hero watch install    # start ticking — this is the moment automatic spending starts
 pr-hero watch status     # anytime: config, cap usage, launchd, lock, last activity
@@ -399,7 +404,7 @@ Worktree GC is a **separate** agent: `pr-hero gc install` (default every 6 hours
 minutes). It runs `pr-hero gc` — no reviews, no `watch.json`, no daily cap. Preview with
 `pr-hero gc --dry-run`; `gc status` / `gc uninstall` match the watcher verbs.
 
-### The underlying file — `~/.prhero/watch.json`
+### The underlying file — `~/.crysk/watch.json`
 
 `watch add`/`watch remove` own the repo list — there is no need to edit the file by hand for
 membership, and their rewrites preserve any keys they do not know. The two global knobs are still
@@ -415,7 +420,7 @@ plain JSON you may tune directly:
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `repos[].path` | — | Operator checkout of a repo to watch (its `.prhero/` config and gotchas are used, exactly like `review --pr`). Managed by `watch add`/`remove`. |
+| `repos[].path` | — | Operator checkout of a repo to watch (its `.crysk/` config and gotchas are used, exactly like `review --pr`). Managed by `watch add`/`remove`. |
 | `repos[].post` | `false` | Pass `--post` to the spawned review — publish each result as the PR's one marked comment. Managed by `watch add [--post]`. |
 | `repos[].on_push` | `false` | Re-review the repo's PRs on every new push. Default: one review per PR — see below. Managed by `watch add [--on-push]`. |
 | `daily_cap` | `5` | Global max reviews launched per local calendar day, across all repos. `0` pauses launching entirely. |
@@ -436,7 +441,7 @@ re-reviewing from scratch.
 
 - **The cap and the window** exist because the watcher and your interactive Claude sessions share
   the same subscription quota — a runaway watcher would starve the work you are actually doing.
-  The cap is counted from `~/.prhero/watch.log` (the `launched` lines ARE the counter), and a
+  The cap is counted from `~/.crysk/watch.log` (the `launched` lines ARE the counter), and a
   launch is logged *before* it starts, so even a crashed review counts.
 - **Max 2 attempts per (pr, head)**: a PR that keeps killing the review is dropped until it gets
   a new push, instead of eating the cap every day.
@@ -453,11 +458,11 @@ closes the rest of the race once either review has started — two watchers can 
 if both launch before either posts `pending`. With `post: true` the PR still converges to a
 single comment. Not macOS? `watch --once` from cron works the same —
 the PID lockfile keeps overlapping ticks from doubling up. Logs: structured events in
-`~/.prhero/watch.log`, raw tick/review output in `~/.prhero/launchd.log`.
+`~/.crysk/watch.log`, raw tick/review output in `~/.crysk/launchd.log`.
 
 ## What a run produces
 
-Run artifacts land **outside** the repo, in `~/.prhero/repos/<origin>/runs/<run>/`:
+Run artifacts land **outside** the repo, in `~/.crysk/repos/<origin>/runs/<run>/`:
 
 | File | What it is |
 | --- | --- |
@@ -492,22 +497,22 @@ that one run. `gh run rerun` on a skipped run does not: it measures the gates ag
 The gate counts **effective** changed lines (insertions + deletions) and files — excluded content is
 subtracted first, so a regenerated lockfile beside a ten-line change does not trip it. Excluded by
 default: `bun.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `go.sum`,
-`*.min.js`, `*.min.css`, `*.snap`. A repo can add its own exclusions with `.prheroignore` — see
+`*.min.js`, `*.min.css`, `*.snap`. A repo can add its own exclusions with `.cryskignore` — see
 below.
 
 Those exclusions come out of the **reviewed diff itself**: `diff.patch` is what the hunters are
 handed, so the number the gate measures is the number that gets paid for. If every changed file is
 excluded, there is nothing to review — pr-hero exits without spawning anything.
 
-### `.prheroignore` — repo-defined exclusions
+### `.cryskignore` — repo-defined exclusions
 
-A `.prheroignore` file at the **repo root** adds your own exclusions on top of the 9 defaults above.
+A `.cryskignore` file at the **repo root** adds your own exclusions on top of the 9 defaults above.
 The dialect is a **subset of gitignore(5)**, not a full reimplementation — most everyday patterns
 work exactly like `.gitignore`, but two things are worth knowing before you rely on it:
 
-- **Only one file, at the repo root, is read.** Nested per-directory `.prheroignore` files (the way
+- **Only one file, at the repo root, is read.** Nested per-directory `.cryskignore` files (the way
   git supports a `.gitignore` in every directory) are **not** read. A file at
-  `openspec/.prheroignore` is silently ignored — put every rule in the one at the repo root instead.
+  `openspec/.cryskignore` is silently ignored — put every rule in the one at the repo root instead.
 - **Matching is case-sensitive**, matching git's own behavior. This is a deliberate departure from
   the `ignore` npm package (the common JS gitignore implementation), which is case-insensitive by
   default — if that is where your intuition comes from, `README.md` will not match `readme.md` here.
@@ -524,15 +529,15 @@ directory is itself excluded (gitignore(5) states this outright — it is a tree
 this engine matches a finite diff file list, not a tree walk, so `docs/` then `!docs/keep.md` DOES
 re-include `docs/keep.md` here.
 
-Under CI (GitHub Actions, or any `CI`/`GITHUB_ACTIONS` environment), `.prheroignore` is read from
+Under CI (GitHub Actions, or any `CI`/`GITHUB_ACTIONS` environment), `.cryskignore` is read from
 the PR's **base ref**, never the PR's own branch — a PR cannot widen its own exclusions to hide
 changes from its own review. Local review, and local `--pr <n>` review without CI, read it from your
 working tree instead. A malformed file aborts the whole review before anything is spent, naming the
 file, line number, and offending text.
 
-`pr-hero watch` honors `.prheroignore` too, in its per-tick scheduling filter (both the aggregate
+`pr-hero watch` honors `.cryskignore` too, in its per-tick scheduling filter (both the aggregate
 check and the per-file rescue), and in a one-call pre-launch check that catches a PR whose files are
-all excluded but whose aggregate alone would not have flagged it. It reads `.prheroignore` from the
+all excluded but whose aggregate alone would not have flagged it. It reads `.cryskignore` from the
 watched repo's own working tree on the machine running the watcher — never a base ref — because the
 watcher runs from an operator's own checkout of a repo that operator explicitly opted in, with no PR
 author supplying that checkout the way CI's PR-triggered runs have one.

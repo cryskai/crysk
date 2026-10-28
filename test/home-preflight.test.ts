@@ -1,8 +1,11 @@
-// Pure-decision tests for the global ~/.prhero/ product home (W3 / #24):
+// Decision tests for the global ~/.crysk/ product home (W3 / #24):
 // origin canonicalization, the layout, registry upsert, and the leftover
 // sibling-path hint. All offline.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { CliUsageError } from "../src/errors";
 import {
   canonicalRemoteId,
@@ -28,27 +31,25 @@ const REPO_ID = "github.com/juanmaagd/musive";
 describe("prheroLayout", () => {
   test("repos hang off the same home as the watcher files", () => {
     expect(prheroLayout(HOME)).toEqual({
-      dir: "/Users/x/.prhero",
-      nodeModulesDir: "/Users/x/.prhero/node_modules",
-      reposDir: "/Users/x/.prhero/repos",
-      watchConfigPath: "/Users/x/.prhero/watch.json",
-      reviewConfigPath: "/Users/x/.prhero/config.json",
-      logPath: "/Users/x/.prhero/watch.log",
-      lockPath: "/Users/x/.prhero/watch.lock",
-      launchdLogPath: "/Users/x/.prhero/launchd.log",
-      metricsDbPath: "/Users/x/.prhero/metrics.db",
-      prheroDbPath: "/Users/x/.prhero/prhero.db",
-      storeSocketPath: "/Users/x/.prhero/store.sock",
-      upgradeCheckPath: "/Users/x/.prhero/upgrade-check.json",
-      bucketKeyPath: "/Users/x/.prhero/bucket-key",
+      dir: "/Users/x/.crysk",
+      nodeModulesDir: "/Users/x/.crysk/node_modules",
+      reposDir: "/Users/x/.crysk/repos",
+      watchConfigPath: "/Users/x/.crysk/watch.json",
+      reviewConfigPath: "/Users/x/.crysk/config.json",
+      logPath: "/Users/x/.crysk/watch.log",
+      lockPath: "/Users/x/.crysk/watch.lock",
+      launchdLogPath: "/Users/x/.crysk/launchd.log",
+      metricsDbPath: "/Users/x/.crysk/metrics.db",
+      prheroDbPath: "/Users/x/.crysk/prhero.db",
+      storeSocketPath: "/Users/x/.crysk/store.sock",
+      upgradeCheckPath: "/Users/x/.crysk/upgrade-check.json",
+      bucketKeyPath: "/Users/x/.crysk/bucket-key",
     });
   });
 
   test("the metrics db and prhero db are siblings of the repos tree, not nested under it", () => {
-    expect(prheroLayout(HOME).metricsDbPath).toBe(
-      "/Users/x/.prhero/metrics.db",
-    );
-    expect(prheroLayout(HOME).prheroDbPath).toBe("/Users/x/.prhero/prhero.db");
+    expect(prheroLayout(HOME).metricsDbPath).toBe("/Users/x/.crysk/metrics.db");
+    expect(prheroLayout(HOME).prheroDbPath).toBe("/Users/x/.crysk/prhero.db");
   });
 
   // C5 / O-13. The compile-time half of this is the retirement itself: with
@@ -59,9 +60,39 @@ describe("prheroLayout", () => {
   test("the layout exposes watchConfigPath and reviewConfigPath and no configPath", () => {
     const layout = prheroLayout(HOME);
     expect(Object.keys(layout)).not.toContain("configPath");
-    expect(layout.watchConfigPath).toBe("/Users/x/.prhero/watch.json");
-    expect(layout.reviewConfigPath).toBe("/Users/x/.prhero/config.json");
+    expect(layout.watchConfigPath).toBe("/Users/x/.crysk/watch.json");
+    expect(layout.reviewConfigPath).toBe("/Users/x/.crysk/config.json");
     expect(layout.watchConfigPath).not.toBe(layout.reviewConfigPath);
+  });
+});
+
+describe("prheroLayout home resolution", () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(path.join(tmpdir(), "crysk-layout-"));
+  });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  test("a legacy-only ~/.prhero keeps being used, for every path in the layout", () => {
+    mkdirSync(path.join(home, ".prhero"));
+    const layout = prheroLayout(home);
+    expect(layout.dir).toBe(path.join(home, ".prhero"));
+    expect(layout.reviewConfigPath).toBe(
+      path.join(home, ".prhero", "config.json"),
+    );
+    expect(repoHomePaths(home, REPO_ID).root).toBe(
+      path.join(home, ".prhero", "repos", REPO_ID),
+    );
+  });
+
+  test("a fresh home resolves to ~/.crysk", () => {
+    expect(prheroLayout(home).dir).toBe(path.join(home, ".crysk"));
+  });
+
+  test("when both exist, ~/.crysk wins", () => {
+    mkdirSync(path.join(home, ".prhero"));
+    mkdirSync(path.join(home, ".crysk"));
+    expect(prheroLayout(home).dir).toBe(path.join(home, ".crysk"));
   });
 });
 
@@ -120,17 +151,17 @@ describe("repo home paths", () => {
     const fromS1 = prWorktreePath(HOME, REPO_ID, 1724);
     const fromS3 = prWorktreePath(HOME, REPO_ID, 1724);
     expect(fromS1).toBe(
-      "/Users/x/.prhero/repos/github.com/juanmaagd/musive/worktrees/pr-1724",
+      "/Users/x/.crysk/repos/github.com/juanmaagd/musive/worktrees/pr-1724",
     );
     expect(fromS3).toBe(fromS1);
   });
 
   test("the default runs root hangs off the same repo id", () => {
     expect(defaultRunRoot(HOME, REPO_ID)).toBe(
-      "/Users/x/.prhero/repos/github.com/juanmaagd/musive/runs",
+      "/Users/x/.crysk/repos/github.com/juanmaagd/musive/runs",
     );
     expect(repoHomePaths(HOME, REPO_ID).registry).toBe(
-      "/Users/x/.prhero/repos/github.com/juanmaagd/musive/registry.json",
+      "/Users/x/.crysk/repos/github.com/juanmaagd/musive/registry.json",
     );
   });
 

@@ -302,7 +302,7 @@ export interface PrDryRunSizeGateResult {
 //
 // Ported from watch/watch.ts's tier-2 pattern, not rewritten: the aggregate path
 // (`{files, insertions, deletions}`, no paths) cannot express exclusions at
-// all, so `.prheroignore` widens what was already a "wrong in the
+// all, so `.cryskignore` widens what was already a "wrong in the
 // conservative direction" gap (see the WHY this replaces at the call site)
 // from tens of lines (lockfiles) to potentially thousands (a whole ignored
 // directory) — a gate that SKIPs a PR the real per-file run happily accepts
@@ -322,7 +322,7 @@ export function resolvePrDryRunSizeGate(input: {
     return {
       verdict: evaluateSizeGate(input.perFile, input.gateConfig),
       note:
-        "(estimate from gh's per-file list; `.prheroignore` exclusions " +
+        "(estimate from gh's per-file list; `.cryskignore` exclusions " +
         "apply, but the count is still not whitespace-adjusted — GitHub's " +
         "counters carry no whitespace information)",
     };

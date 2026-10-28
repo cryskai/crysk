@@ -775,7 +775,7 @@ describe("renderCode and renderError: the annotation", () => {
           const label = `${code} ${ctx} ${variant ?? "default"}`;
           // "Already in upper-case form" holds for a capital letter and for a
           // caseless character: a backtick, or the dot of a path such as
-          // .prhero/gotchas.md. A lowercase letter fails it.
+          // .crysk/gotchas.md. A lowercase letter fails it.
           const capitalized = (char: string | undefined): boolean =>
             char !== undefined &&
             char.length === 1 &&
@@ -1174,7 +1174,7 @@ describe("renderCode and renderError: the annotation", () => {
       ],
       [
         renderCode("PRH-CONFIG-INVALID", FULL, "action").annotation,
-        "fix `.prhero/config.json` (DETAIL), then check it with `pr-hero review --pr 42 --dry-run`",
+        "fix `.crysk/config.json` (DETAIL), then check it with `pr-hero review --pr 42 --dry-run`",
       ],
       [
         renderCode("PRH-PROMPTSET-INVALID", FULL, "action").annotation,
@@ -2287,7 +2287,7 @@ describe("parseCliRecord — the hunter_failures field", () => {
 });
 
 // A first-time user reads only the Fix line; it must name the command that
-// creates .prhero/gotchas.md, or the user writes the file by hand in the wrong
+// creates .crysk/gotchas.md, or the user writes the file by hand in the wrong
 // place or never writes it at all.
 describe("PRH-GOTCHAS-MISSING fix names the init command", () => {
   test("the fix starts by running `npx -y pr-hero init`, then the existing steps", () => {
@@ -2295,7 +2295,7 @@ describe("PRH-GOTCHAS-MISSING fix names the init command", () => {
       entryOf("PRH-GOTCHAS-MISSING").variants.default.fixes,
     );
     expect(fix).toBe(
-      "Run `npx -y pr-hero init` in a clone of the repository (it creates .prhero/config.json and .prhero/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
+      "Run `npx -y pr-hero init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
     );
   });
 });

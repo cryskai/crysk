@@ -51,16 +51,16 @@ describe("resolveGotchasPath", () => {
     );
   });
 
-  test("no flag: <root>/.prhero/gotchas.md", () => {
+  test("no flag: <root>/.crysk/gotchas.md", () => {
     expect(resolveGotchasPath(undefined, "/repo/root")).toBe(
-      path.join("/repo/root", ".prhero", "gotchas.md"),
+      path.join("/repo/root", ".crysk", "gotchas.md"),
     );
   });
 
   test("works for each of the three roots this replaces (repoRoot / operatorRoot / repoDir)", () => {
     for (const root of ["/repo/root", "/operator/root", "/some/repo/dir"]) {
       expect(resolveGotchasPath(undefined, root)).toBe(
-        path.join(root, ".prhero", "gotchas.md"),
+        path.join(root, ".crysk", "gotchas.md"),
       );
     }
   });

@@ -233,7 +233,7 @@ current head:
    marker (never a comment id, never the nearest line), prepends the triage
    marker and the visible badge, posts the reply, records the triage event
    transactionally in the canonical product store (`finding_triage` table in
-   `~/.prhero/prhero.db`), and — when the parent is an inline review
+   `~/.crysk/prhero.db`), and — when the parent is an inline review
    comment — resolves that review thread. If the driver says no posted marker
    matches this `F00N`, the finding lives in the summary bucket (or was
    never posted): stop. Do not fall back to `gh`. `applied` takes no
@@ -387,7 +387,7 @@ under Greptile on Musive #1724. Do not do that. Do not reply on
 is the finding id (`F001`, …) from that file — never a comment id.
 
 **When the review ran in CI, that directory is not on your machine.** A GitHub Actions review
-writes it to `~/.prhero/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` on an ephemeral runner
+writes it to `~/.crysk/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` on an ephemeral runner
 that is destroyed when the job ends. The workflow uploads it as an artifact; download it before
 you triage:
 

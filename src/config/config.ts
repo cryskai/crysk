@@ -25,6 +25,7 @@ import {
 import { type FailSoftIngestInput, failSoftIngest } from "#store/metrics";
 import { projectCompleteRun } from "#store/preflight";
 import { openProductStore, saveRunTransaction } from "#store/store";
+import { resolveHomeDir, resolveRepoDir } from "../brand-paths";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 
@@ -205,7 +206,10 @@ export async function loadGlobalConfigLayer(home: string): Promise<{
   if (!existsSync(filePath)) return { filePath, layer: undefined };
   return {
     filePath,
-    layer: parseGlobalConfig(await Bun.file(filePath).text()),
+    layer: parseGlobalConfig(
+      await Bun.file(filePath).text(),
+      `~/${path.basename(path.dirname(filePath))}/config.json`,
+    ),
   };
 }
 
@@ -217,8 +221,8 @@ export async function loadEffectiveConfig(input: {
   const repoConfigPath = input.configFlag
     ? path.resolve(input.configFlag)
     : input.root
-      ? path.join(input.root, ".prhero", "config.json")
-      : path.join(input.home, ".prhero", "config.json");
+      ? path.join(resolveRepoDir(input.root), "config.json")
+      : path.join(resolveHomeDir(input.home), "config.json");
   if (input.configFlag && !existsSync(repoConfigPath)) {
     throw new CliError(`config file not found: ${repoConfigPath}`);
   }
@@ -231,7 +235,12 @@ export async function loadEffectiveConfig(input: {
   const globalPresent = global !== undefined;
   const repo =
     (input.configFlag || input.root) && existsSync(repoConfigPath)
-      ? parseLocalConfig(await Bun.file(repoConfigPath).text())
+      ? parseLocalConfig(
+          await Bun.file(repoConfigPath).text(),
+          input.configFlag
+            ? undefined
+            : `${path.basename(path.dirname(repoConfigPath))}/config.json`,
+        )
       : {};
   return {
     ...mergeConfig(global, repo),

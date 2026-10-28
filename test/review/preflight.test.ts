@@ -549,7 +549,7 @@ describe("resolveAgentsDirSetting", () => {
     expect(
       resolveAgentsDirSetting({
         flag: "agents",
-        config: seat("/from/config", "/repo/.prhero"),
+        config: seat("/from/config", "/repo/.crysk"),
         env: "/from/env",
         cwd: "/work",
       }),
@@ -563,11 +563,11 @@ describe("resolveAgentsDirSetting", () => {
   test("a relative config path resolves against the config file's dir", () => {
     expect(
       resolveAgentsDirSetting({
-        // Two levels up: the config lives in <repo>/.prhero/, so a sibling
+        // Two levels up: the config lives in <repo>/.crysk/, so a sibling
         // repo is `../../` from there, not `../`.
         config: seat(
           "../../deep-review/agents/clean",
-          "/Users/x/Desktop/musive/.prhero",
+          "/Users/x/Desktop/musive/.crysk",
         ),
         env: "/from/env",
         cwd: "/somewhere/else",
@@ -585,11 +585,11 @@ describe("resolveAgentsDirSetting", () => {
   test("the source names the layer, not the word config", () => {
     expect(
       resolveAgentsDirSetting({
-        config: seat("./prompts", "/Users/x/.prhero", "global"),
+        config: seat("./prompts", "/Users/x/.crysk", "global"),
         cwd: "/work",
       }),
     ).toEqual({
-      dir: "/Users/x/.prhero/prompts",
+      dir: "/Users/x/.crysk/prompts",
       source: "global",
       kind: "dir",
     });
@@ -598,7 +598,7 @@ describe("resolveAgentsDirSetting", () => {
   test("an absolute config path is taken as is", () => {
     expect(
       resolveAgentsDirSetting({
-        config: seat("/abs/agents", "/repo/.prhero"),
+        config: seat("/abs/agents", "/repo/.crysk"),
         cwd: "/work",
       }).dir,
     ).toBe("/abs/agents");
@@ -620,8 +620,8 @@ describe("resolveAgentsDirSetting", () => {
 // throws "agents dir does not exist" naming a path in neither file.
 describe("agentsDirSeat", () => {
   const paths = {
-    repoConfigPath: "/Users/x/Desktop/musive/.prhero/config.json",
-    globalConfigPath: "/Users/x/.prhero/config.json",
+    repoConfigPath: "/Users/x/Desktop/musive/.crysk/config.json",
+    globalConfigPath: "/Users/x/.crysk/config.json",
   };
 
   test("a global value carries the GLOBAL dir, not the repo's", () => {
@@ -633,12 +633,12 @@ describe("agentsDirSeat", () => {
     expect(seat).toEqual({
       value: "./prompts",
       layer: "global",
-      dir: "/Users/x/.prhero",
+      dir: "/Users/x/.crysk",
     });
     // The end-to-end fact the seat exists to protect: resolved, it lands
-    // under the operator's home and NOT under the repo's .prhero/.
+    // under the operator's home and NOT under the repo's .crysk/.
     expect(resolveAgentsDirSetting({ config: seat, cwd: "/work" })).toEqual({
-      dir: "/Users/x/.prhero/prompts",
+      dir: "/Users/x/.crysk/prompts",
       source: "global",
       kind: "dir",
     });
@@ -652,7 +652,7 @@ describe("agentsDirSeat", () => {
     });
     expect(seat?.layer).toBe("repo");
     expect(resolveAgentsDirSetting({ config: seat, cwd: "/work" }).dir).toBe(
-      "/Users/x/Desktop/musive/.prhero/prompts",
+      "/Users/x/Desktop/musive/.crysk/prompts",
     );
   });
 
@@ -679,7 +679,7 @@ describe("agentsDirSeat", () => {
         sources: quiet.sources,
         ...paths,
       })?.dir,
-    ).toBe("/Users/x/.prhero");
+    ).toBe("/Users/x/.crysk");
 
     const team = mergeConfig(
       { agents_dir: "./prompts" },
@@ -691,7 +691,7 @@ describe("agentsDirSeat", () => {
         sources: team.sources,
         ...paths,
       })?.dir,
-    ).toBe("/Users/x/Desktop/musive/.prhero");
+    ).toBe("/Users/x/Desktop/musive/.crysk");
   });
 });
 
@@ -861,7 +861,7 @@ describe("run dir naming", () => {
       CliUsageError,
     );
     expect(() => assertOutsideRepo("/repo", "/repo")).toThrow(CliUsageError);
-    expect(() => assertOutsideRepo("/repo/.prhero/x", "/repo")).toThrow(
+    expect(() => assertOutsideRepo("/repo/.crysk/x", "/repo")).toThrow(
       CliUsageError,
     );
   });
@@ -1319,8 +1319,8 @@ describe("resolveScout & resolvePost", () => {
 });
 
 // The exact message a rejection produced. `toThrow(string)` matches a
-// SUBSTRING, and `.prhero/config.json …` is a substring of
-// `~/.prhero/config.json …` — so substring matching cannot tell the two files
+// SUBSTRING, and `.crysk/config.json …` is a substring of
+// `~/.crysk/config.json …` — so substring matching cannot tell the two files
 // apart, which is precisely the confusion these tests exist to catch.
 function messageOf(run: () => unknown): string {
   try {
@@ -1440,8 +1440,8 @@ describe("parseGlobalConfig", () => {
       const raw = JSON.stringify({ [key]: value });
       expect(() => parseGlobalConfig(raw)).toThrow(CliUsageError);
       expect(messageOf(() => parseGlobalConfig(raw))).toBe(
-        `~/.prhero/config.json: ${key} is a per-repo key — ` +
-          "put it in <repo>/.prhero/config.json",
+        `~/.crysk/config.json: ${key} is a per-repo key — ` +
+          "put it in <repo>/.crysk/config.json",
       );
     }
   });
@@ -1460,7 +1460,7 @@ describe("parseGlobalConfig", () => {
 
   test("an unknown key is fatal there too", () => {
     expect(messageOf(() => parseGlobalConfig('{"unknown_key": {}}'))).toBe(
-      "~/.prhero/config.json unknown key: unknown_key",
+      "~/.crysk/config.json unknown key: unknown_key",
     );
   });
 
@@ -1471,7 +1471,7 @@ describe("parseGlobalConfig", () => {
   test("every rejection names the file it is actually in", () => {
     expect(
       messageOf(() => parseGlobalConfig("nope")).startsWith(
-        "~/.prhero/config.json is not valid JSON:",
+        "~/.crysk/config.json is not valid JSON:",
       ),
     ).toBe(true);
     const cases: [string, string][] = [
@@ -1493,12 +1493,12 @@ describe("parseGlobalConfig", () => {
     ];
     for (const [raw, tail] of cases) {
       expect(messageOf(() => parseGlobalConfig(raw))).toBe(
-        `~/.prhero/config.json ${tail}`,
+        `~/.crysk/config.json ${tail}`,
       );
       // The repo file's own text is byte-identical to what it was before C5 —
       // exact equality, because substring matching cannot tell `~/x` from `x`.
       expect(messageOf(() => parseLocalConfig(raw))).toBe(
-        `.prhero/config.json ${tail}`,
+        `.crysk/config.json ${tail}`,
       );
     }
   });
@@ -1532,7 +1532,7 @@ describe("parseLocalConfig admits the same keys it does today", () => {
     const raw = JSON.stringify({ routing: { mappings: [] } });
     expect(() => parseLocalConfig(raw)).toThrow(CliUsageError);
     expect(messageOf(() => parseLocalConfig(raw))).toBe(
-      ".prhero/config.json: routing is a per-person key — put it in ~/.prhero/config.json",
+      ".crysk/config.json: routing is a per-person key — put it in ~/.crysk/config.json",
     );
   });
 });
@@ -1569,7 +1569,7 @@ describe("Task 1.3: D2 Routing in preflight and credential rejection", () => {
       CliUsageError,
     );
     expect(messageOf(() => parseGlobalConfig('{"routing": "invalid"}'))).toBe(
-      "~/.prhero/config.json routing must be an object",
+      "~/.crysk/config.json routing must be an object",
     );
   });
 
@@ -1996,7 +1996,7 @@ describe("initConfigTemplate", () => {
         config: {
           value: config.agents_dir as string,
           layer: "repo",
-          dir: "/repo/.prhero",
+          dir: "/repo/.crysk",
         },
         cwd: "/work",
       }).dir,
@@ -2146,7 +2146,7 @@ describe("allExcludedMessage", () => {
     expect(message).toContain("nothing was spent");
   });
 
-  // A `.prheroignore` user rule can exclude anything, not only generated
+  // A `.cryskignore` user rule can exclude anything, not only generated
   // content (lockfiles, minified bundles) — the wording must not claim a
   // reason it cannot know.
   test("does not claim every exclusion is generated content", () => {
@@ -2163,13 +2163,13 @@ describe("allExcludedMessage", () => {
   });
 });
 
-// The default exclusions are generated content, but a `.prheroignore` rule
+// The default exclusions are generated content, but a `.cryskignore` rule
 // can drop anything the operator names — the help text must say so, or a
 // user who defines their own rules never learns the flag interacts with
 // them at all.
-describe("HELP_TEXT — --max-changed-lines names .prheroignore", () => {
-  test("mentions .prheroignore beside the generated-file examples", () => {
-    expect(HELP_TEXT).toContain(".prheroignore");
+describe("HELP_TEXT — --max-changed-lines names .cryskignore", () => {
+  test("mentions .cryskignore beside the generated-file examples", () => {
+    expect(HELP_TEXT).toContain(".cryskignore");
   });
 });
 
@@ -2309,8 +2309,8 @@ describe("gotchasErrorMessage distinguishes the two reasons", () => {
     // carries a marker whose presence is itself a refusal. A reader who
     // copies it and stops has produced a file pr-hero still rejects, so the
     // message has to say the last step out loud.
-    const message = gotchasErrorMessage("/repo/.prhero/gotchas.md", "empty");
-    expect(message).toContain("/repo/.prhero/gotchas.md");
+    const message = gotchasErrorMessage("/repo/.crysk/gotchas.md", "empty");
+    expect(message).toContain("/repo/.crysk/gotchas.md");
     expect(message).toContain("Create it with something like:");
     expect(message).toContain(GOTCHAS_TEMPLATE);
     expect(message).toContain(GOTCHAS_PLACEHOLDER_MARKER);
@@ -2319,10 +2319,10 @@ describe("gotchasErrorMessage distinguishes the two reasons", () => {
 
   test("'placeholder' does not tell you to create a file that already exists", () => {
     const message = gotchasErrorMessage(
-      "/repo/.prhero/gotchas.md",
+      "/repo/.crysk/gotchas.md",
       "placeholder",
     );
-    expect(message).toContain("/repo/.prhero/gotchas.md");
+    expect(message).toContain("/repo/.crysk/gotchas.md");
     expect(message).toContain(GOTCHAS_PLACEHOLDER_MARKER);
     expect(message).not.toContain("Create it with something like:");
     expect(message.toLowerCase()).toContain("replace");
@@ -2378,7 +2378,7 @@ describe("initGotchasInstructions — only claims what the run did", () => {
     expect(text.toLowerCase()).not.toContain("placeholder");
     expect(text.toLowerCase()).not.toContain("refuses");
     // It says something useful and checkable instead: the gate is satisfied.
-    expect(text).toContain(".prhero/gotchas.md");
+    expect(text).toContain(".crysk/gotchas.md");
     expect(lines.length).toBeGreaterThan(0);
   });
 
@@ -2466,7 +2466,7 @@ describe("parse errors carry their record class (T2d-1)", () => {
     expect(error).toBeInstanceOf(CliUsageError);
     expect(error.cls).toEqual({ kind: "config-parse", source: "repo-config" });
     expect(
-      error.message.startsWith(".prhero/config.json is not valid JSON: "),
+      error.message.startsWith(".crysk/config.json is not valid JSON: "),
     ).toBe(true);
   });
 
@@ -2474,7 +2474,7 @@ describe("parse errors carry their record class (T2d-1)", () => {
     const error = thrownBy(() => parseLocalConfig('{"routing": {}}'));
     expect(error.cls).toEqual({ kind: "config-parse", source: "repo-config" });
     expect(error.message).toBe(
-      ".prhero/config.json: routing is a per-person key — put it in ~/.prhero/config.json",
+      ".crysk/config.json: routing is a per-person key — put it in ~/.crysk/config.json",
     );
   });
 
@@ -2483,7 +2483,7 @@ describe("parse errors carry their record class (T2d-1)", () => {
     expect(error).toBeInstanceOf(CliUsageError);
     expect(error.cls).toBeUndefined();
     expect(error.message).toBe(
-      "~/.prhero/config.json: default_base is a per-repo key — put it in <repo>/.prhero/config.json",
+      "~/.crysk/config.json: default_base is a per-repo key — put it in <repo>/.crysk/config.json",
     );
   });
 
@@ -2495,17 +2495,17 @@ describe("parse errors carry their record class (T2d-1)", () => {
     expect(error).toBeInstanceOf(CliUsageError);
     expect(error.cls).toBeUndefined();
     expect(error.message).toBe(
-      "~/.prhero/config.json routing must be an object",
+      "~/.crysk/config.json routing must be an object",
     );
   });
 
   test("parseRoutingConfig names routing for any file it is given", () => {
     const error = thrownBy(() =>
-      parseRoutingConfig("invalid", "~/.prhero/config.json"),
+      parseRoutingConfig("invalid", "~/.crysk/config.json"),
     );
     expect(error.cls).toEqual({ kind: "config-parse", source: "routing" });
     expect(error.message).toBe(
-      "~/.prhero/config.json routing must be an object",
+      "~/.crysk/config.json routing must be an object",
     );
   });
 

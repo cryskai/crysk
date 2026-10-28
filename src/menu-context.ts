@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { resolveRepoDir } from "./brand-paths";
 
 export type RepoContext =
   | { kind: "not-a-repo"; cwd: string }
@@ -82,7 +83,7 @@ export async function resolveMenuContext(
   }
 
   const name = path.basename(root) || "repository";
-  const configPath = path.join(root, ".prhero", "config.json");
+  const configPath = path.join(resolveRepoDir(root), "config.json");
 
   if (!exists(configPath)) {
     return { kind: "unconfigured-repo", root, name };
@@ -119,7 +120,7 @@ export function getMenuOptions(
     items.push({
       id: "init",
       label: "Initialize repo",
-      desc: "Scaffold <repo>/.prhero/ config & gotchas",
+      desc: "Scaffold <repo>/.crysk/ config & gotchas",
       cliHint: "init",
       action: "init",
     });
