@@ -1050,6 +1050,25 @@ describe("localReviewSpec", () => {
     });
   });
 
+  test("reads CRYSK_EXTRA_HUNTERS before the legacy name", () => {
+    const spec = localReviewSpec({
+      CRYSK_EXTRA_HUNTERS: "reliability-b:deep-review-reliability.md",
+      PRHERO_EXTRA_HUNTERS: "logic-b:deep-review-logic.md",
+    });
+    const keys = spec.agents.map((agent) => agent.key);
+    expect(keys).toContain("reliability-b");
+    expect(keys).not.toContain("logic-b");
+  });
+
+  test("names the variable it actually read in a parse error", () => {
+    expect(() => localReviewSpec({ CRYSK_EXTRA_HUNTERS: "logic" })).toThrow(
+      'CRYSK_EXTRA_HUNTERS[0] must be "key:file.md"',
+    );
+    expect(() => localReviewSpec({ PRHERO_EXTRA_HUNTERS: "logic" })).toThrow(
+      'PRHERO_EXTRA_HUNTERS[0] must be "key:file.md"',
+    );
+  });
+
   test("rejects a trailing comma (fail loud, never silently ignore)", () => {
     expect(() =>
       localReviewSpec({

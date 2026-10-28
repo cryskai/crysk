@@ -27,6 +27,7 @@ import {
   type TriageVerdict,
 } from "#triage/triage";
 import { type EngineAssets, resolveEngineAssets } from "../assets";
+import { type BrandEnvValue, readBrandEnv } from "../brand";
 // CliError/CliUsageError and the git/ref pure helpers used to be DEFINED here
 // and imported by value into git.ts — the bottom layer depending on a
 // review-domain module. They live in ../errors and ../git/refs; this file
@@ -2011,7 +2012,7 @@ export function resolveAgentsDir(
   const resolution = resolveAgentsDirSetting({
     flag: options.agents,
     ...(seat === undefined ? {} : { config: seat }),
-    env: process.env.PRHERO_AGENTS_DIR,
+    env: readBrandEnv(process.env, "AGENTS_DIR")?.value,
     cwd: process.cwd(),
     ...(assets === undefined ? {} : { assets }),
   });
@@ -2068,8 +2069,9 @@ export async function preflightAgentsDir(
 // second leg on an EXISTING hunter file, distinguished only by key). Strict
 // on purpose: a malformed value must fail loud rather than silently run
 // fewer hunters than the operator asked for.
-function parseExtraHunters(raw: string | undefined): AgentSpec[] {
-  if (raw === undefined) return [];
+function parseExtraHunters(read: BrandEnvValue | undefined): AgentSpec[] {
+  if (read === undefined) return [];
+  const { value: raw, name } = read;
   const trimmed = raw.trim();
   if (trimmed === "") return [];
   return trimmed.split(",").map((rawEntry, i) => {
@@ -2077,20 +2079,20 @@ function parseExtraHunters(raw: string | undefined): AgentSpec[] {
     const sep = entry.indexOf(":");
     if (sep <= 0 || sep === entry.length - 1) {
       throw new CliUsageError(
-        `PRHERO_EXTRA_HUNTERS[${i}] must be "key:file.md", got: ${JSON.stringify(rawEntry)}`,
+        `${name}[${i}] must be "key:file.md", got: ${JSON.stringify(rawEntry)}`,
       );
     }
     const key = entry.slice(0, sep).trim();
     const file = entry.slice(sep + 1).trim();
     if (!isSafeSlug(key)) {
       throw new CliUsageError(
-        `PRHERO_EXTRA_HUNTERS[${i}].key "${key}" is not a safe slug ` +
+        `${name}[${i}].key "${key}" is not a safe slug ` +
           "(^[a-z0-9]+(?:-[a-z0-9]+)*$, 1-64 chars)",
       );
     }
     if (!file.endsWith(".md") || file.length <= ".md".length) {
       throw new CliUsageError(
-        `PRHERO_EXTRA_HUNTERS[${i}].file "${file}" must be a ".md" basename`,
+        `${name}[${i}].file "${file}" must be a ".md" basename`,
       );
     }
     assertBasenameOnly(file, i);
@@ -2130,7 +2132,7 @@ export function localReviewSpec(
       // The boundary, not the three throws: assertBasenameOnly inside
       // parseExtraHunters is a fourth usage throw of the same parse (T2d-1).
       ...withUsageClass({ kind: "config-parse", source: "extra-hunters" }, () =>
-        parseExtraHunters(env.PRHERO_EXTRA_HUNTERS),
+        parseExtraHunters(readBrandEnv(env, "EXTRA_HUNTERS")),
       ),
       { key: "refuter", file: "review-refuter.md", role: "refuter" },
     ],
