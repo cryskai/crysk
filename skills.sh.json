@@ -1,0 +1,16 @@
+{
+  "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
+  "notGrouped": "bottom",
+  "groupings": [
+    {
+      "title": "Crysk",
+      "description": "Crysk's skills: operate it locally, open PRs, close the review loop, set up CI.",
+      "skills": ["crysk", "crysk-pr", "crysk-loop", "crysk-ci-setup"]
+    },
+    {
+      "title": "Previous names (pr-hero)",
+      "description": "Renamed in 0.3.0: pr-hero → crysk, pr-hero-pr → crysk-pr, pr-hero-triage → crysk-loop, pr-hero-ci-setup → crysk-ci-setup. Install the Crysk ones above.",
+      "skills": ["pr-hero", "pr-hero-pr", "pr-hero-triage", "pr-hero-ci-setup"]
+    }
+  ]
+}
