@@ -194,6 +194,12 @@ export const LEGACY_SKILL_NAMES = {
   general: "pr-hero",
 } as const satisfies Record<keyof typeof SKILL_NAMES, string>;
 
+// The key the agent MCP configs register this server under, and the key
+// installs set up under pr-hero still hold. Register writes the first and
+// retires the second; inspect and unregister read both.
+export const MCP_SERVER_KEY = "crysk";
+export const LEGACY_MCP_SERVER_KEY = "pr-hero";
+
 // MCP tool names. The server advertises only the current prefix; a call under
 // the legacy one is mapped onto it, so an agent prompt or skill written before
 // the rename keeps working.

@@ -16,7 +16,12 @@ import {
   isNpxCacheInvocation,
   NPX_REGISTRATION_REFUSED,
 } from "./assets";
-import { LEGACY_SKILL_NAMES, SKILL_NAMES } from "./brand";
+import {
+  LEGACY_MCP_SERVER_KEY,
+  LEGACY_SKILL_NAMES,
+  MCP_SERVER_KEY,
+  SKILL_NAMES,
+} from "./brand";
 
 export type AgentEnvId =
   | "claude"
@@ -807,7 +812,7 @@ export async function registerMcpServer(
   }
 
   let config: {
-    mcpServers?: Record<string, { command: string; args: string[] }>;
+    mcpServers?: Record<string, Record<string, unknown>>;
   } = {};
 
   if (exists(configFile)) {
@@ -829,12 +834,10 @@ export async function registerMcpServer(
     config.mcpServers = {};
   }
 
-  const existing = config.mcpServers["pr-hero"];
-  if (
-    existing &&
-    existing.command === reg.command &&
-    JSON.stringify(existing.args) === JSON.stringify(reg.args)
-  ) {
+  const current = config.mcpServers[MCP_SERVER_KEY];
+  const legacy = config.mcpServers[LEGACY_MCP_SERVER_KEY];
+  // A leftover legacy entry is not "already registered": it still has to go.
+  if (matchesRegistration(current, reg) && legacy === undefined) {
     return {
       registered: true,
       alreadyRegistered: true,
@@ -850,10 +853,16 @@ export async function registerMcpServer(
     }
   }
 
-  config.mcpServers["pr-hero"] = {
+  // The legacy entry moves to the new key in this one write. Its fields the
+  // registration does not own (env, timeout, disabled...) are the user's
+  // edits, so they carry over; command and args come from the registration.
+  config.mcpServers[MCP_SERVER_KEY] = {
+    ...asRecord(legacy),
+    ...asRecord(current),
     command: reg.command,
     args: reg.args,
   };
+  delete config.mcpServers[LEGACY_MCP_SERVER_KEY];
 
   await writeFile(configFile, `${JSON.stringify(config, null, 2)}\n`);
 
@@ -863,6 +872,23 @@ export async function registerMcpServer(
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function matchesRegistration(entry: unknown, reg: McpRegistration): boolean {
+  const server = asRecord(entry);
+  return (
+    server !== undefined &&
+    server.command === reg.command &&
+    JSON.stringify(server.args) === JSON.stringify(reg.args)
+  );
+}
+
+// "legacy" is registered and working, but under the pre-rename key; setup
+// moves it.
 export function inspectMcpRegistration(
   env: AgentEnvDetection,
   reg: McpRegistration,
@@ -870,8 +896,8 @@ export function inspectMcpRegistration(
     exists?: (p: string) => boolean;
     readFile?: (p: string) => string | undefined;
   } = {},
-): boolean {
-  if (!env.mcpConfigFile) return false;
+): "current" | "legacy" | "missing" {
+  if (!env.mcpConfigFile) return "missing";
   const exists = options.exists ?? existsSync;
   const readFile =
     options.readFile ??
@@ -883,20 +909,42 @@ export function inspectMcpRegistration(
       }
     });
 
-  if (!exists(env.mcpConfigFile)) return false;
+  if (!exists(env.mcpConfigFile)) return "missing";
   try {
     const raw = readFile(env.mcpConfigFile);
-    if (!raw) return false;
-    const config = JSON.parse(raw);
-    const server = config.mcpServers?.["pr-hero"];
-    if (!server) return false;
-    return (
-      server.command === reg.command &&
-      JSON.stringify(server.args) === JSON.stringify(reg.args)
-    );
+    if (!raw) return "missing";
+    const servers = asRecord(JSON.parse(raw)?.mcpServers);
+    if (matchesRegistration(servers?.[MCP_SERVER_KEY], reg)) return "current";
+    if (matchesRegistration(servers?.[LEGACY_MCP_SERVER_KEY], reg)) {
+      return "legacy";
+    }
+    return "missing";
   } catch {
-    return false;
+    return "missing";
   }
+}
+
+// Deletes this server's entry under both its keys (and `extraKey`, a name a
+// caller was asked to remove), so an unregister or an uninstall leaves nothing
+// of either generation. True when something was removed.
+export function removeMcpServerEntries(
+  config: unknown,
+  extraKey?: string,
+): boolean {
+  const servers = asRecord(asRecord(config)?.mcpServers);
+  if (!servers) return false;
+  let removed = false;
+  for (const key of new Set([
+    MCP_SERVER_KEY,
+    LEGACY_MCP_SERVER_KEY,
+    ...(extraKey ? [extraKey] : []),
+  ])) {
+    if (key in servers) {
+      delete servers[key];
+      removed = true;
+    }
+  }
+  return removed;
 }
 
 export interface UnregisterMcpOptions {
@@ -913,7 +961,7 @@ export interface UnregisterMcpResult {
 
 export async function unregisterMcpServer(
   env: AgentEnvDetection,
-  serverName = "pr-hero",
+  serverName = MCP_SERVER_KEY,
   options: UnregisterMcpOptions = {},
 ): Promise<UnregisterMcpResult> {
   if (!env.mcpConfigFile) {
@@ -947,8 +995,7 @@ export async function unregisterMcpServer(
     const raw = readFile(env.mcpConfigFile);
     if (!raw) return { unregistered: true, configFile: env.mcpConfigFile };
     const config = JSON.parse(raw);
-    if (config.mcpServers?.[serverName]) {
-      delete config.mcpServers[serverName];
+    if (removeMcpServerEntries(config, serverName)) {
       await writeFile(
         env.mcpConfigFile,
         `${JSON.stringify(config, null, 2)}\n`,

@@ -179,5 +179,46 @@ describe("uninstaller (lifecycle foundations)", () => {
       expect(result.dryRun).toBe(true);
       expect(mutations).toBe(0);
     });
+
+    test("unregister_mcp removes the crysk and the legacy entry and leaves other servers", async () => {
+      const mcpPath = path.join(home, ".claude", "mcp.json");
+      const written: Record<string, string> = {};
+      const plan: UninstallPlan = {
+        platform: "linux",
+        purge: false,
+        launchdServices: [],
+        rcFilesCleaned: [],
+        binariesRemoved: [],
+        agentEnvCleanups: [],
+        programSteps: [
+          {
+            type: "unregister_mcp",
+            targetPath: mcpPath,
+            desc: "Unregister MCP",
+          },
+        ],
+        dataSteps: [],
+        warnings: [],
+      };
+
+      const result = await executeUninstallPlan(plan, {
+        exists: () => true,
+        readFile: () =>
+          JSON.stringify({
+            mcpServers: {
+              crysk: { command: "crysk", args: ["mcp"] },
+              "pr-hero": { command: "pr-hero", args: ["mcp"] },
+              keep: { command: "keep", args: [] },
+            },
+          }),
+        writeFile: (p, c) => {
+          written[p] = c;
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      const parsed = JSON.parse(written[mcpPath]);
+      expect(Object.keys(parsed.mcpServers)).toEqual(["keep"]);
+    });
   });
 });

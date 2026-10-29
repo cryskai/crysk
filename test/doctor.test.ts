@@ -56,7 +56,7 @@ describe("doctor tri-state evaluation", () => {
         if (p === "/home/user/.claude/mcp.json")
           return JSON.stringify({
             mcpServers: {
-              "pr-hero": {
+              crysk: {
                 command: self.command,
                 args: [...self.args, "mcp"],
               },
@@ -434,6 +434,36 @@ describe("doctor tri-state evaluation", () => {
       const mcpCheck = report.checks.find((c) => c.name.startsWith("mcp:"));
       expect(mcpCheck?.severity).toBe("degraded");
       expect(mcpCheck?.hint).toBeDefined();
+    });
+
+    test("mcp registered under the pre-rename key reports degraded with a migrate hint", async () => {
+      const self = selfInvocation();
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) => p === "/home/user/.claude/mcp.json",
+        readFile: (p) =>
+          p === "/home/user/.claude/mcp.json"
+            ? JSON.stringify({
+                mcpServers: {
+                  "pr-hero": {
+                    command: self.command,
+                    args: [...self.args, "mcp"],
+                  },
+                },
+              })
+            : bundledPromptBody(p),
+        checkToolsOptions: {
+          which: (bin) => (bin === "claude" ? "/bin/claude" : `/bin/${bin}`),
+          exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      const mcpCheck = report.checks.find((c) => c.name === "mcp:claude");
+      expect(mcpCheck?.severity).toBe("degraded");
+      expect(mcpCheck?.message).toContain("pre-rename key");
+      expect(mcpCheck?.hint).toContain("setup");
     });
   });
 

@@ -230,7 +230,7 @@ describe("Agent environment detector and sync", () => {
   });
 
   describe("MCP registration", () => {
-    test("registerMcpServer adds pr-hero entry without altering existing servers", async () => {
+    test("registerMcpServer adds the crysk entry without altering existing servers", async () => {
       const initialConfig = JSON.stringify({
         mcpServers: {
           existingServer: {
@@ -270,7 +270,7 @@ describe("Agent environment detector and sync", () => {
       expect(result.registered).toBe(true);
       const parsed = JSON.parse(written["/home/user/.cursor/mcp.json"]);
       expect(parsed.mcpServers.existingServer).toBeDefined();
-      expect(parsed.mcpServers["pr-hero"]).toEqual({
+      expect(parsed.mcpServers.crysk).toEqual({
         command: reg.command,
         args: reg.args,
       });
@@ -287,7 +287,7 @@ describe("Agent environment detector and sync", () => {
       expect(secondResult.alreadyRegistered).toBe(true);
     });
 
-    test("inspectMcpRegistration returns true when configured, false otherwise", () => {
+    test("inspectMcpRegistration tells a current entry from a legacy one from none", () => {
       const self = selfInvocation();
       const reg = {
         command: self.command,
@@ -302,22 +302,123 @@ describe("Agent environment detector and sync", () => {
         auth: { authenticated: true, message: "ok" },
         mcpConfigFile: "/home/user/.claude/mcp.json",
       };
+      const inspect = (mcpServers: Record<string, unknown>) =>
+        inspectMcpRegistration(env, reg, {
+          exists: () => true,
+          readFile: () => JSON.stringify({ mcpServers }),
+        });
+      const entry = { command: reg.command, args: reg.args };
 
-      const notRegistered = inspectMcpRegistration(env, reg, {
-        exists: () => false,
-      });
-      expect(notRegistered).toBe(false);
+      expect(inspectMcpRegistration(env, reg, { exists: () => false })).toBe(
+        "missing",
+      );
+      expect(inspect({ crysk: entry })).toBe("current");
+      // Registered under the old key: it works, but setup still has to migrate it.
+      expect(inspect({ "pr-hero": entry })).toBe("legacy");
+      // Either key with a different command is not this install's registration.
+      expect(inspect({ crysk: { command: "other", args: [] } })).toBe(
+        "missing",
+      );
+      expect(inspect({ "pr-hero": { command: "other", args: [] } })).toBe(
+        "missing",
+      );
+      // The new key wins when both are present and the new one matches.
+      expect(inspect({ crysk: entry, "pr-hero": entry })).toBe("current");
+    });
 
-      const registered = inspectMcpRegistration(env, reg, {
-        exists: () => true,
-        readFile: () =>
-          JSON.stringify({
-            mcpServers: {
-              "pr-hero": { command: reg.command, args: reg.args },
+    describe("migrating the legacy pr-hero entry", () => {
+      const configFile = "/home/user/.cursor/mcp.json";
+      const env: AgentEnvDetection = {
+        id: "cursor",
+        displayName: "Cursor",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        mcpConfigFile: configFile,
+      };
+      const self = selfInvocation();
+      const reg = { command: self.command, args: [...self.args, "mcp"] };
+
+      function fakeFs(initial: unknown) {
+        const files: Record<string, string> = {
+          [configFile]: JSON.stringify(initial),
+        };
+        const writes: string[] = [];
+        return {
+          files,
+          writes,
+          options: {
+            readFile: (p: string) => files[p],
+            writeFile: async (p: string, content: string) => {
+              writes.push(p);
+              files[p] = content;
             },
-          }),
+            exists: (p: string) => p in files,
+          },
+        };
+      }
+
+      test("moves a legacy entry to crysk in one write, keeping its extra fields", async () => {
+        const initial = {
+          topLevelUnknown: { keep: true },
+          mcpServers: {
+            other: { command: "other", args: [] },
+            "pr-hero": {
+              command: "/old/pr-hero",
+              args: ["mcp"],
+              env: { A: "1" },
+              timeout: 5000,
+              disabled: false,
+            },
+          },
+        };
+        const fs = fakeFs(initial);
+
+        const result = await registerMcpServer(env, reg, fs.options);
+
+        expect(result).toEqual({ registered: true, configFile });
+        // One write to the config itself (the backup is a different path).
+        expect(fs.writes.filter((p) => p === configFile)).toHaveLength(1);
+        const parsed = JSON.parse(fs.files[configFile]);
+        expect(parsed.mcpServers.crysk).toEqual({
+          command: reg.command,
+          args: reg.args,
+          env: { A: "1" },
+          timeout: 5000,
+          disabled: false,
+        });
+        expect(Object.keys(parsed.mcpServers)).not.toContain("pr-hero");
+        expect(parsed.mcpServers.other).toEqual({ command: "other", args: [] });
+        expect(parsed.topLevelUnknown).toEqual({ keep: true });
+        // The backup holds the config exactly as it was before the migration.
+        expect(JSON.parse(fs.files[`${configFile}.bak`])).toEqual(initial);
       });
-      expect(registered).toBe(true);
+
+      test("is a no-op when crysk already matches and no legacy entry remains", async () => {
+        const fs = fakeFs({
+          mcpServers: { crysk: { command: reg.command, args: reg.args } },
+        });
+
+        const result = await registerMcpServer(env, reg, fs.options);
+
+        expect(result.alreadyRegistered).toBe(true);
+        expect(fs.writes).toEqual([]);
+      });
+
+      test("a matching crysk entry does not hide a leftover legacy one", async () => {
+        const fs = fakeFs({
+          mcpServers: {
+            crysk: { command: reg.command, args: reg.args },
+            "pr-hero": { command: "/old/pr-hero", args: ["mcp"] },
+          },
+        });
+
+        const result = await registerMcpServer(env, reg, fs.options);
+
+        expect(result.alreadyRegistered).toBeUndefined();
+        const parsed = JSON.parse(fs.files[configFile]);
+        expect(Object.keys(parsed.mcpServers)).toEqual(["crysk"]);
+      });
     });
 
     test("registerMcpServer refuses an npx-cache registration before any read or write", async () => {
@@ -668,6 +769,41 @@ describe("Agent environment detector and sync", () => {
       const parsed = JSON.parse(content);
       expect(parsed.mcpServers["pr-hero"]).toBeUndefined();
       expect(parsed.mcpServers["other-server"]).toBeDefined();
+    });
+
+    test("unregisterMcpServer removes the crysk and the legacy entry, nothing else", async () => {
+      const written: Record<string, string> = {};
+      const env: AgentEnvDetection = {
+        id: "claude",
+        displayName: "Claude Code",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        mcpConfigFile: "/home/user/.claude/mcp.json",
+      };
+
+      const res = await (await import("../src/agent-env")).unregisterMcpServer(
+        env,
+        undefined,
+        {
+          exists: () => true,
+          readFile: () =>
+            JSON.stringify({
+              mcpServers: {
+                crysk: { command: "crysk", args: ["mcp"] },
+                "pr-hero": { command: "pr-hero", args: ["mcp"] },
+                "other-server": { command: "other", args: [] },
+              },
+            }),
+          writeFile: (p, c) => {
+            written[p] = c;
+          },
+        },
+      );
+
+      expect(res.unregistered).toBe(true);
+      const parsed = JSON.parse(written["/home/user/.claude/mcp.json"]);
+      expect(Object.keys(parsed.mcpServers)).toEqual(["other-server"]);
     });
 
     test("removeSkills removes only unmodified files matching digest.json", async () => {
