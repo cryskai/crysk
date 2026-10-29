@@ -1368,8 +1368,11 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       api_key: {
         why: "the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN",
         fixes: [
-          "Create a new key in the Claude Console and set it, or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN. Setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set:",
+          // Prose between the two commands keeps them in separate code blocks: they are
+          // alternatives, and one copied block would set the new key and then delete it.
+          "Create a new key in the Claude Console and set it:",
           "$ gh secret set {secret}",
+          "Or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set):",
           "$ gh secret delete {secret}",
           "Then ask for a new review:",
           REVIEW_AGAIN,

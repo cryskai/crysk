@@ -643,6 +643,21 @@ describe("decidePublication — the pure table", () => {
           expect(p.rendered.annotation).toContain("claude setup-token");
         });
 
+        // The set and delete commands are alternatives: one copied block must never run both.
+        test("the per-token fix keeps set and delete in separate code blocks", () => {
+          const summary =
+            rejected("ANTHROPIC_API_KEY").rendered.summary.join("\n");
+          const blocks = summary.split("```").filter((_, i) => i % 2 === 1);
+          expect(
+            blocks.some(
+              (block) =>
+                block.includes("gh secret set") &&
+                block.includes("gh secret delete"),
+            ),
+          ).toBe(false);
+          expect(summary).toContain("gh secret delete ANTHROPIC_API_KEY");
+        });
+
         // Per-token credentials win over the OAuth token in the CLI, so a rejected
         // ANTHROPIC_AUTH_TOKEN is fixed like a rejected key, never by setup-token.
         test("ANTHROPIC_AUTH_TOKEN gets the per-token fix, naming that secret", () => {

@@ -1120,11 +1120,13 @@ The rejected secret is a per-token credential, `ANTHROPIC_API_KEY` or `ANTHROPIC
 
 **Fix:**
 
-Create a new key in the Claude Console and set it, or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN. Setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set:
+Create a new key in the Claude Console and set it:
 
 ```bash
 gh secret set {secret}
 ```
+
+Or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set):
 
 ```bash
 gh secret delete {secret}
