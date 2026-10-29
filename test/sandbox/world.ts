@@ -582,7 +582,7 @@ export class FakeGithub {
       );
       this.statuses.set(sha, {
         state: "success",
-        description: `crysk: overridden by @${FAKE_ACTOR} — no review on this head`,
+        description: `crysk: overridden by @${FAKE_ACTOR} — no new review run`,
       });
     } else {
       const as =
