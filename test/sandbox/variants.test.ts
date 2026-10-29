@@ -26,10 +26,7 @@ function actionWith(yaml: string): Record<string, unknown> {
   };
   for (const job of Object.values(doc.jobs)) {
     for (const step of job.steps) {
-      if (
-        step.uses?.startsWith("cryskai/crysk@") &&
-        step.with !== undefined
-      ) {
+      if (step.uses?.startsWith("cryskai/crysk@") && step.with !== undefined) {
         return step.with;
       }
     }

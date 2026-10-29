@@ -1645,7 +1645,8 @@ describe("scaffold writes the gate mode explicitly (S4)", () => {
   function withBlock(template: string): string[] {
     const lines = template.split("\n");
     const uses = lines.findIndex(
-      (line) => line.trim().startsWith("uses:") && /crysk|pr-hero|\.\//.test(line),
+      (line) =>
+        line.trim().startsWith("uses:") && /crysk|pr-hero|\.\//.test(line),
     );
     expect(uses).toBeGreaterThan(-1);
     const start = lines.findIndex(

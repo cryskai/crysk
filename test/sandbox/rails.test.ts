@@ -69,12 +69,7 @@ describe("gh rail: the sandbox repo is the only target", () => {
       ["api", sandboxApi("issues/1/comments"), "--field", "body=x"],
       ["api", sandboxApi("git/refs/heads/main"), "-X", "DELETE"],
       ["api", sandboxApi("git/refs/heads/dev"), "-X", "DELETE"],
-      [
-        "api",
-        "repos/cryskai/crysk/git/refs/heads/sandbox/x",
-        "-X",
-        "DELETE",
-      ],
+      ["api", "repos/cryskai/crysk/git/refs/heads/sandbox/x", "-X", "DELETE"],
     ];
     for (const args of refused) {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
