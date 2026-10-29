@@ -172,9 +172,11 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
       );
     } else if (installed.alias === "failed") {
       // A re-run would find crysk up to date and never reach the alias, so the
-      // fix is the link itself; the run still exits non-zero (below).
+      // fix is the alias itself; the run still exits non-zero (below). Plain
+      // `ln -sf` is not suggested: with a directory at that path it links inside
+      // it, exits 0 and leaves pr-hero unresolved.
       log(
-        `warning: crysk is upgraded, but ${plan.aliasBinary} could not be updated (${installed.aliasError ?? "unknown error"}). Use 'crysk', or recreate the alias: ln -sf crysk ${plan.aliasBinary}`,
+        `warning: crysk is upgraded, but ${plan.aliasBinary} could not be updated (${installed.aliasError ?? "unknown error"}). Use 'crysk', or move whatever is at ${plan.aliasBinary} out of the way and link it again: ln -s crysk ${plan.aliasBinary}`,
       );
     }
 
