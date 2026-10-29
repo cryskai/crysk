@@ -30,6 +30,7 @@ import {
   parseAdmissionRecord,
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
+import { CI_FORCE_WORKFLOW_FILE } from "#ci/force-comment";
 import {
   canonicalAdmissionFindings,
   nextStateReviewCount,
@@ -65,7 +66,14 @@ import {
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { log } from "#ui/primitives";
 import { parseMarkerHead } from "#watch/preflight";
-import { matchMarkerPrefix, statusContextForms } from "../brand";
+import {
+  isAdmissionCheckRunName,
+  LEGACY_ADMISSION_CHECK_RUN_NAME,
+  LEGACY_WORKFLOW_FILE_NAME,
+  matchMarkerPrefix,
+  statusContextForms,
+  WORKFLOW_FILE_NAME,
+} from "../brand";
 import { CliError } from "../errors";
 import {
   buildPostPlan,
@@ -1458,7 +1466,6 @@ export async function ghCollaboratorPermission(
   return permission === "" ? null : permission;
 }
 
-const PR_HERO_WORKFLOW_FILE = "pr-hero.yml";
 const COMPLETED_WORKFLOW_CONCLUSIONS = new Set(["success", "failure"]);
 
 // Distinct head SHAs from completed pr-hero workflow runs on a branch.
@@ -1493,30 +1500,64 @@ export function parsePrHeroWorkflowRunHeads(stdout: string): Set<string> {
   return heads;
 }
 
+// The workflow file this run belongs to, from GITHUB_WORKFLOW_REF
+// (`owner/repo/.github/workflows/<file>@<ref>`), so a repo that renamed or kept
+// its file is asked about its own file. The legacy dispatch-only force workflow
+// is not the review workflow: its runs are not the review runs the gate counts,
+// so a run started from it falls through to the lookup by name.
+export function workflowFileFromRef(
+  ref: string | undefined,
+): string | undefined {
+  if (ref === undefined) return undefined;
+  const match = /\/\.github\/workflows\/([^/@]+\.ya?ml)@/.exec(ref);
+  const file = match?.[1];
+  if (file === undefined || file === CI_FORCE_WORKFLOW_FILE) return undefined;
+  return file;
+}
+
+// `gh run list --workflow <file>` for a file the repository does not have.
+function isWorkflowNotFound(stderr: string): boolean {
+  return /could not find any workflows named|workflow .* not found|HTTP 404/i.test(
+    stderr,
+  );
+}
+
 export async function ghPrHeroWorkflowRunHeads(
   operatorRoot: string,
   branch: string,
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<Set<string>> {
-  const result = await gh(
-    operatorRoot,
-    [
-      "run",
-      "list",
-      "--workflow",
-      PR_HERO_WORKFLOW_FILE,
-      "--branch",
-      branch,
-      "--json",
-      "headSha,conclusion",
-    ],
-    undefined,
-    options?.spawnFn,
-  );
-  if (!result.ok) {
-    throw new CliError(`gh run list failed: ${result.stderr.trim()}`);
+  // Inside the action the run knows its own workflow file. Anywhere else the
+  // new name is asked first and the pre-rename one only when the repository
+  // has no such workflow; any other failure keeps its error.
+  const derived = workflowFileFromRef(process.env.GITHUB_WORKFLOW_REF);
+  const candidates =
+    derived === undefined
+      ? [WORKFLOW_FILE_NAME, LEGACY_WORKFLOW_FILE_NAME]
+      : [derived];
+  let failure = "";
+  for (const [index, file] of candidates.entries()) {
+    const result = await gh(
+      operatorRoot,
+      [
+        "run",
+        "list",
+        "--workflow",
+        file,
+        "--branch",
+        branch,
+        "--json",
+        "headSha,conclusion",
+      ],
+      undefined,
+      options?.spawnFn,
+    );
+    if (result.ok) return parsePrHeroWorkflowRunHeads(result.stdout);
+    failure = result.stderr.trim();
+    const hasNext = index < candidates.length - 1;
+    if (!hasNext || !isWorkflowNotFound(result.stderr)) break;
   }
-  return parsePrHeroWorkflowRunHeads(result.stdout);
+  throw new CliError(`gh run list failed: ${failure}`);
 }
 
 async function ghGraphql(
@@ -2386,6 +2427,14 @@ export { ADMISSION_CHECK_RUN_NAME };
 
 const ADMISSION_CHECK_RUN_TIMEOUT_MS = 15_000;
 
+// The jq condition that matches the ledger's check runs under either name, so a
+// head first reviewed by an older release keeps its attempt count.
+function admissionCheckRunNameJq(): string {
+  return [ADMISSION_CHECK_RUN_NAME, LEGACY_ADMISSION_CHECK_RUN_NAME]
+    .map((name) => `.name == "${name}"`)
+    .join(" or ");
+}
+
 function admissionCheckRunConclusion(
   status: AdmissionAttemptStatus,
 ): "success" | "failure" | "neutral" | "cancelled" | "skipped" {
@@ -2425,7 +2474,9 @@ function admissionCheckRunStatus(
   return "completed";
 }
 
-function parseAdmissionCheckRunRow(line: string): AdmissionRecord | null {
+function parseAdmissionCheckRunRow(
+  line: string,
+): { id: number; record: AdmissionRecord } | null {
   if (line.trim() === "") return null;
   try {
     const row = JSON.parse(line) as {
@@ -2434,10 +2485,12 @@ function parseAdmissionCheckRunRow(line: string): AdmissionRecord | null {
       status?: string;
       output?: { text?: string | null };
     };
-    if (row.name !== ADMISSION_CHECK_RUN_NAME) return null;
+    if (row.name === undefined || !isAdmissionCheckRunName(row.name))
+      return null;
     const text = row.output?.text;
     if (typeof text !== "string") return null;
-    return parseAdmissionRecord(text);
+    const record = parseAdmissionRecord(text);
+    return record === null ? null : { id: row.id ?? 0, record };
   } catch {
     return null;
   }
@@ -2471,19 +2524,26 @@ export async function listAdmissionCheckRuns(
         `repos/{owner}/{repo}/commits/${ref}/check-runs${historyQuery}`,
         "--paginate",
         "--jq",
-        `.check_runs[] | select(.name == "${ADMISSION_CHECK_RUN_NAME}") | {id: .id, name: .name, status: .status, output: {text: .output.text}}`,
+        `.check_runs[] | select(${admissionCheckRunNameJq()}) | {id: .id, name: .name, status: .status, output: {text: .output.text}}`,
       ],
       undefined,
       options?.spawnFn,
       ADMISSION_CHECK_RUN_TIMEOUT_MS,
     );
     if (!result.ok) return [];
-    const records: AdmissionRecord[] = [];
+    const rows: { id: number; record: AdmissionRecord }[] = [];
     for (const line of result.stdout.split("\n")) {
-      const record = parseAdmissionCheckRunRow(line);
-      if (record !== null) records.push(record);
+      const row = parseAdmissionCheckRunRow(line);
+      if (row !== null) rows.push(row);
     }
-    return records;
+    if (options?.includeHistory === true || rows.length < 2) {
+      return rows.map((row) => row.record);
+    }
+    // filter=latest is per NAME, so a head admitted both before and after the
+    // rename returns one row under each name. The current state is the newest
+    // check run (ids only grow); returning both would count an extra attempt.
+    const newest = rows.reduce((a, b) => (b.id > a.id ? b : a));
+    return [newest.record];
   } catch {
     return [];
   }
@@ -2524,7 +2584,7 @@ async function findAdmissionCheckRunForAttempt(
     );
     if (!result.ok) return null;
     for (const line of result.stdout.split("\n")) {
-      const parsedRecord = parseAdmissionCheckRunRow(line);
+      const parsedRecord = parseAdmissionCheckRunRow(line)?.record ?? null;
       if (parsedRecord === null) continue;
       const row = JSON.parse(line) as {
         id?: number;

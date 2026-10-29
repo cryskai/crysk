@@ -8,10 +8,12 @@
 // --force (a safety property, not a nicety — see spec.md §4.1), and writes
 // the template.
 //
-// This module writes `.github/workflows/pr-hero.yml` into WHATEVER repo the
-// caller points it at (via `pr-hero setup --ci` / `pr-hero ci init`). Pillar
-// 3 Phase 5 (tasks.md 5.2) reuses this SAME function to produce this repo's
-// own canonical example workflow at the identical relative path, rather than
+// This module writes `.github/workflows/crysk.yml` into WHATEVER repo the
+// caller points it at (via `crysk setup --ci` / `crysk ci init`); a repo that
+// already has the pre-rename `pr-hero.yml` keeps that file, updated in place.
+// Pillar 3 Phase 5 (tasks.md 5.2) reuses this SAME function to produce this
+// repo's own canonical example workflow (which stays at `pr-hero.yml`: this
+// repo is the existing-repo case), rather than
 // hand-authoring a second copy that could silently drift from what every
 // caller of `setup --ci` actually gets — test/packaging.test.ts asserts the
 // committed file's bytes equal generateCiWorkflowTemplate()'s output exactly.
@@ -46,17 +48,24 @@ import {
 } from "#ci/trigger";
 import { parseLocalConfig, parseRoutingConfig } from "#review/preflight";
 import { commandForms } from "../brand";
-import { resolveIgnoreFileName, resolveRepoDir } from "../brand-paths";
+import {
+  duplicateWorkflowProblem,
+  LEGACY_WORKFLOW_RELATIVE_PATH,
+  resolveIgnoreFileName,
+  resolveRepoDir,
+  resolveWorkflowRelativePath,
+  WORKFLOW_RELATIVE_PATH,
+} from "../brand-paths";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import { parseIgnoreFile } from "../ignore-file";
 import { resolveOpenCodeAuthPath } from "../security/credential-broker";
 
-export const CI_WORKFLOW_RELATIVE_PATH = path.join(
-  ".github",
-  "workflows",
-  "pr-hero.yml",
-);
+// The file a repo with no workflow yet gets. A repo that already has the
+// pre-rename `pr-hero.yml` keeps it: use resolveWorkflowRelativePath to find the
+// file to act on, and LEGACY_CI_WORKFLOW_RELATIVE_PATH to name that one.
+export const CI_WORKFLOW_RELATIVE_PATH = WORKFLOW_RELATIVE_PATH;
+export const LEGACY_CI_WORKFLOW_RELATIVE_PATH = LEGACY_WORKFLOW_RELATIVE_PATH;
 
 // The action reference the generated workflow resolves. A consumer repo has
 // no copy of this action, so it must go through the published tag — that is
@@ -231,7 +240,7 @@ export function generateCiWorkflowTemplate(
               *"HTTP 404"*) break ;;
             esac
             if [ "$attempt" = 2 ]; then
-              echo "::error title=pr-hero::could not verify the commenter's write access: the GitHub API call failed twice, so nothing was reviewed or overridden. Comment /crysk review, /crysk recheck or /crysk override again to retry"
+              echo "::error title=crysk::could not verify the commenter's write access: the GitHub API call failed twice, so nothing was reviewed or overridden. Comment /crysk review, /crysk recheck or /crysk override again to retry"
               exit 1
             fi
             sleep 2
@@ -239,14 +248,14 @@ export function generateCiWorkflowTemplate(
           case "$permission" in
             admin|write) ;;
             *)
-              echo "::notice title=pr-hero::only users with write access to this repository can run /crysk review, /crysk recheck or /crysk override"
+              echo "::notice title=crysk::only users with write access to this repository can run /crysk review, /crysk recheck or /crysk override"
               echo "proceed=false" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
           esac
           case "$PR" in
             ''|*[!0-9]*)
-              echo "::error title=pr-hero::pr must be a positive integer"
+              echo "::error title=crysk::pr must be a positive integer"
               exit 1
               ;;
           esac
@@ -256,7 +265,7 @@ export function generateCiWorkflowTemplate(
           head_repo=\${pr_head% *}
           sha=\${pr_head##* }
           if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
-            echo "::notice title=pr-hero::fork pull requests are not reviewed here: uses ./ would run the fork's own engine with this repository's secrets"
+            echo "::notice title=crysk::fork pull requests are not reviewed here: uses ./ would run the fork's own engine with this repository's secrets"
             echo "proceed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -265,7 +274,7 @@ export function generateCiWorkflowTemplate(
           # engine this pin exists to avoid, and any other value would be
           # resolved as a ref name.
           if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error title=pr-hero::could not resolve the pull request head commit"
+            echo "::error title=crysk::could not resolve the pull request head commit"
             exit 1
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
@@ -307,7 +316,7 @@ export function generateCiWorkflowTemplate(
           ref: \${{ steps.gate.outputs.sha }}`
     : "";
   const runStepGate = pinEngine ? `\n        if: ${proceedIf}` : "";
-  return `# Generated by \`pr-hero setup --ci\` (or \`pr-hero ci init\`).
+  return `# Generated by \`crysk setup --ci\` (or \`crysk ci init\`).
 # Customize freely — re-running setup will not overwrite this file again
 # unless you pass --force.
 #
@@ -321,7 +330,7 @@ export function generateCiWorkflowTemplate(
 # pending dismissals of blocking findings. The action parses the comment and
 # refuses a commenter without write access. The older \`/pr-hero ...\` forms
 # of these commands still work for one version.
-name: pr-hero Review
+name: Crysk Review
 
 on:
   pull_request:
@@ -332,7 +341,7 @@ on:
   issue_comment:
     types: [created]
 
-# pull-requests: write lets pr-hero post inline comments and a step summary.
+# pull-requests: write lets Crysk post inline comments and a step summary.
 # contents: read is enough for actions/checkout. issues: write lets it
 # resolve/reply on review threads (GitHub models PR conversations as issues).
 # checks: write persists the durable CI admission attempt ledger (WU-02).
@@ -404,7 +413,7 @@ jobs:
       group: \${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || ${groupCommentClauses}) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: \${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
-    # Backstop for a HUNG runner, not a second review budget. pr-hero already
+    # Backstop for a HUNG runner, not a second review budget. Crysk already
     # enforces its own 75-minute whole-pipeline ceiling, which closes
     # artifacts and reports before exiting; a CI bound at or below that would
     # kill the job first and throw away the salvage. Above it, this only ever
@@ -414,18 +423,18 @@ jobs:
 ${gateStep}      - name: Checkout${checkoutGate}
         uses: actions/checkout@v4
         with:${checkoutRef}
-          # fetch-depth: 0 is load-bearing, not cosmetic: pr-hero computes
+          # fetch-depth: 0 is load-bearing, not cosmetic: Crysk computes
           # the pull request's diff range and commit ancestry from full git
           # history. actions/checkout's default is a SHALLOW clone, which
           # cannot produce an accurate diff or blame — trimming this line
           # does not fail loudly, it makes reviews silently miss context.
           fetch-depth: 0
 
-      - name: Run pr-hero
+      - name: Run Crysk
         # The id keeps this step's outputs (\`status\`, \`run-dir\`, ...)
         # readable from any step you add below.
         # The action uploads the run directory as an artifact itself, so
-        # \`pr-hero triage reply --from\` has an input in CI (see action.yml).
+        # \`crysk triage reply --from\` has an input in CI (see action.yml).
         id: pr-hero${runStepGate}
         uses: ${actionRef}
         with:
@@ -469,21 +478,31 @@ export interface RunCiSetupOptions {
 export type CiSetupResult =
   | { status: "created"; path: string }
   | { status: "overwritten"; path: string }
-  | { status: "skipped-existing"; path: string; hint: string };
+  | { status: "skipped-existing"; path: string; hint: string }
+  // Both workflow files exist: writing either would leave two workflows
+  // reviewing every pull request, so nothing is written, --force or not.
+  | { status: "refused-duplicate"; hint: string };
 
 export async function runCiSetup(
   options: RunCiSetupOptions = {},
 ): Promise<CiSetupResult> {
   const cwd = options.cwd ?? process.cwd();
   const exists = options.exists ?? existsSync;
-  const targetPath = path.join(cwd, CI_WORKFLOW_RELATIVE_PATH);
+  const duplicate = duplicateWorkflowProblem(cwd, exists);
+  if (duplicate !== undefined) {
+    return { status: "refused-duplicate", hint: duplicate };
+  }
+  // The file a repo already has is rewritten in place; only a repo with none
+  // gets the new name.
+  const relativePath = resolveWorkflowRelativePath(cwd, exists);
+  const targetPath = path.join(cwd, relativePath);
   const alreadyExisted = exists(targetPath);
 
   if (alreadyExisted && !options.force) {
     return {
       status: "skipped-existing",
       path: targetPath,
-      hint: `${CI_WORKFLOW_RELATIVE_PATH} already exists; pass --force to overwrite it`,
+      hint: `${relativePath} already exists; pass --force to overwrite it`,
     };
   }
 

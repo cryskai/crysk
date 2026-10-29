@@ -123,7 +123,7 @@ GET. The check `the triggering comment has the <content> reaction` asserts the r
 it: `eyes` for an accepted command (`comment-trigger`), `confused` for a near miss (`near-miss`). A read
 that fails leaves the reactions unread, and the check fails on that; it never passes. The check
 `the run left no review evidence of its own` asserts that a near miss's run reviewed nothing. It reads the run's artifact and
-its skip marker, not its step: the composite `Run pr-hero` step has no `if:` and always concludes, so a near miss's step reads
+its skip marker, not its step: the composite `Run Crysk` step (`Run pr-hero` on a ref from before the rename) has no `if:` and always concludes, so a near miss's step reads
 `success` (GitHub reports it that way). The check `this run posted no outcome comment` reads only the outcome comments this run
 created, so a `PRH-HUNTERS-FAILED` outcome from phase 1 does not fail it.
 

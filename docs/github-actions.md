@@ -11,7 +11,7 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. Pick one — never both blank. Leave OpenCode unset:
    that is today's Claude CI.
 2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
-   to `.github/workflows/pr-hero.yml`, or run `npx -y crysk setup --ci` (or `crysk ci init`) in a clone of
+   to `.github/workflows/crysk.yml`, or run `npx -y crysk setup --ci` (or `crysk ci init`) in a clone of
    your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need Crysk
    installed locally: the file is the whole install. The command also checks the GitHub CLI: if `gh` is
    missing or logged out, it prints why the CI loop needs it (`gh secret set`, `crysk status`,
@@ -19,7 +19,7 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    Homebrew) and to run `gh auth login`; the workflow is written either way. It reviews every push to a pull request, answers a
    `/crysk review` comment (see [Re-review on demand](#re-review-on-demand)), and answers a
    `/crysk override` comment (see [Overriding a red gate](#overriding-a-red-gate)). Do **not** copy this
-   repository's own `.github/workflows/pr-hero.yml`: that file is generated with
+   repository's own `.github/workflows/pr-hero.yml` (the pre-rename file name, kept here): that file is generated with
    `OWN_CI_WORKFLOW_OPTIONS` so this repo can dogfood the checkout (`uses: ./`,
    `max-changed-lines: 5000`, and a step that pins the pull request head on a comment run).
    `test/packaging.test.ts` asserts each file against its own generator options; it does **not** assert
@@ -49,7 +49,7 @@ Action.
 ## What the workflow does
 
 ```yaml
-name: pr-hero Review
+name: Crysk Review
 
 on:
   pull_request:
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # see "Why fetch-depth: 0" below
-      - name: Run pr-hero
+      - name: Run Crysk
         id: pr-hero
         uses: juanmaagd/pr-hero@v0
         with:
@@ -97,9 +97,14 @@ jobs:
 ```
 
 `crysk setup --ci` generates this file, with comments explaining each piece — see
-`generateCiWorkflowTemplate` in `src/ci/setup.ts`. It refuses to overwrite a customized workflow already
-at that path unless you pass `--force`, and it never touches a `pr-hero-force.yml` scaffolded by an
-older version (that file keeps working; you can delete it once this one is on your default branch).
+`generateCiWorkflowTemplate` in `src/ci/setup.ts`. It writes `.github/workflows/crysk.yml`, unless the
+repository already has the pre-rename `.github/workflows/pr-hero.yml`: that file stays where it is, and
+`--force` rewrites it in place (no `crysk.yml` appears beside it, because two workflow files would review
+every pull request twice; if both exist, setup refuses to write either and `crysk doctor` reports it).
+It refuses to overwrite a customized workflow unless you pass `--force`, and it never touches a
+`pr-hero-force.yml` scaffolded by an older version (that file keeps working; you can delete it once this
+one is on your default branch). The name of the file does not matter to Crysk, so you can also keep
+`pr-hero.yml` for good or rename it to `crysk.yml` yourself.
 
 **Upgrading from the `/pr-hero` commands.** The commands are now `/crysk review`, `/crysk review --full`,
 `/crysk recheck`, `/crysk override` and `/crysk stop`. The action still accepts the `/pr-hero …` spellings
@@ -297,7 +302,7 @@ fails the job loud.
 
 The Action installs OpenCode CLI **1.18.30** in its own step, only when `opencode-auth` is non-empty
 **or** `routing` contains `opencode`. It never uses `latest`. The install appends `$HOME/.opencode/bin`
-to `GITHUB_PATH` so a **later** step (Run pr-hero) sees the binary — the install step itself is not
+to `GITHUB_PATH` so a **later** step (Run Crysk) sees the binary — the install step itself is not
 the review. Claude-only CI (no OpenCode secret, routing does not mention `opencode`) skips this
 install and still starts.
 
@@ -543,8 +548,8 @@ gh workflow run pr-hero-force.yml -f pr=<number> -f full=true # force and re-dis
 ```
 
 Re-scaffold with `crysk ci init --force` to switch to the comment trigger. It rewrites
-`pr-hero.yml` only and leaves `pr-hero-force.yml` in place; delete that file yourself once the new
-`pr-hero.yml` is on the default branch.
+the review workflow only (`pr-hero.yml` or `crysk.yml`, whichever the repository has) and leaves
+`pr-hero-force.yml` in place; delete that file yourself once the new workflow is on the default branch.
 
 In this repository, a comment run reviews with the pull request's own engine: `pr-hero.yml` is
 generated with `OWN_CI_WORKFLOW_OPTIONS`, so on a comment a first step resolves the PR head commit and
@@ -553,7 +558,8 @@ pin it would run the default branch's engine instead of the one under review. Co
 the published `juanmaagd/pr-hero@v0`, where the checkout does not select the engine.
 
 - **When it takes effect.** GitHub reads a comment-triggered workflow from the default branch, so the
-  comment trigger works only once `pr-hero.yml` with its `issue_comment` trigger is on the default
+  comment trigger works only once the workflow (`crysk.yml`, or `pr-hero.yml` in a repository set up before
+  the rename) with its `issue_comment` trigger is on the default
   branch; in this repository that means `main`, not `dev`. Until then a comment starts nothing. In a
   consumer repository, the comment handling also needs an action release that has it, reached through
   the `@v0` tag the workflow pins.
@@ -573,7 +579,9 @@ the published `juanmaagd/pr-hero@v0`, where the checkout does not select the eng
 
 ### Check Runs ledger
 
-Admission attempts are persisted as Check Runs named `pr-hero/ci-admission` on the reviewed commit.
+Admission attempts are persisted as Check Runs named `crysk/ci-admission` on the reviewed commit (a commit
+first reviewed by an older release holds them under `pr-hero/ci-admission`, which Crysk still reads, so the
+attempt count carries over).
 The workflow needs **`checks: write`** (listed under [Token permissions](#token-permissions)) so Crysk can
 reserve attempts before provider spend and record outcomes. PR comments remain presentation only; the
 Check Run ledger is authoritative.
@@ -808,17 +816,18 @@ action uploads it as an artifact in its last step.
 
 ```bash
 # Find the review run for the PR (or read the run id off the checks tab)
-gh run list --workflow "pr-hero Review" --branch <head-branch> --limit 5
+gh run list --workflow "Crysk Review" --branch <head-branch> --limit 5
 # A `/crysk review` comment run is listed under the default branch instead
-gh run list --workflow "pr-hero Review" --event issue_comment --limit 5
+gh run list --workflow "Crysk Review" --event issue_comment --limit 5
+# A workflow set up before the rename is still named "pr-hero Review": use that name for it
 
-# Download the artifact into ./pr-hero-run/
+# Download the artifact into ./crysk-run/
 gh run download <run-id> \
-  -n pr-hero-run-<pr-number>-<head-sha> \
-  -D pr-hero-run
+  -n crysk-run-<pr-number>-<head-sha> \
+  -D crysk-run
 
 # Then triage against it
-crysk triage reply --pr <n> --from pr-hero-run --finding F001 \
+crysk triage reply --pr <n> --from crysk-run --finding F001 \
   --tag applied --body-file reasoning.md
 ```
 
@@ -1108,7 +1117,9 @@ Then ask for a new review:
 gh pr comment {pr} --body "/crysk review"
 ```
 
-On a workflow set up before the rename, comment `/pr-hero review` instead.
+On a workflow set up before the rename, comment `/pr-hero review` instead. Its workflow is still named
+`pr-hero Review`. The artifact name comes from the action, so a run of this release uploads
+`crysk-run-<pr-number>-<head-sha>` and a run of an older action release `pr-hero-run-<pr-number>-<head-sha>`.
 
 When every failed hunter reports the secret it ran on, the fix starts with the one for that secret.
 
@@ -1714,15 +1725,16 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 ## Troubleshooting
 
-- **`crysk doctor`** locally reports whether `.github/workflows/pr-hero.yml` exists; inside Actions it
+- **`crysk doctor`** locally reports whether `.github/workflows/crysk.yml` (or the pre-rename
+  `pr-hero.yml`) exists, and is degraded if both do; inside Actions it
   reports whether the required secrets (or OpenCode auth file) are present (never their values).
 - **The review was skipped** (size, budget, or admission) — comment `/crysk review` on the pull
-  request. `gh run rerun` on `pr-hero.yml` re-evaluates the gates and skips again. On a workflow
+  request. `gh run rerun` on the workflow re-evaluates the gates and skips again. On a workflow
   scaffolded before the comment trigger, run `gh workflow run pr-hero-force.yml -f pr=<n>` instead.
-- **A `/crysk review` comment did nothing** — the comment trigger reads `pr-hero.yml` from the
+- **A `/crysk review` comment did nothing** — the comment trigger reads the workflow file from the
   default branch, so it works only once that file (with its `issue_comment` trigger) is merged there.
   The comment must be exactly `/crysk review` or `/crysk review --full`, and its author needs
-  write access to the repository. An older `pr-hero.yml` has no comment trigger at all: re-scaffold
+  write access to the repository. An older workflow file has no comment trigger at all: re-scaffold
   with `crysk ci init --force`.
 - **The run is red and names a missing credential** — none of `ANTHROPIC_API_KEY`,
   `CLAUDE_CODE_OAUTH_TOKEN`, or `OPENCODE_AUTH_JSON` is set. The step summary lists the `gh secret set`

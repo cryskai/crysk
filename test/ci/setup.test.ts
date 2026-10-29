@@ -22,6 +22,7 @@ import path from "node:path";
 import {
   CI_WORKFLOW_RELATIVE_PATH,
   generateCiWorkflowTemplate,
+  LEGACY_CI_WORKFLOW_RELATIVE_PATH,
   materializeCiOpenCodeData,
   OWN_CI_WORKFLOW_OPTIONS,
   runCiSetup,
@@ -227,7 +228,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
       docs.indexOf("## What the workflow does"),
     );
     const snippet = /```yaml\n([\s\S]*?)\n```/.exec(workflowSection)?.[1] ?? "";
-    expect(snippet).toContain("name: pr-hero Review");
+    expect(snippet).toContain("name: Crysk Review");
     const generatedIf = String(
       parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
     );
@@ -447,9 +448,9 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     const parsed = Bun.YAML.parse(template) as {
       jobs: { review: { steps: Array<Record<string, unknown>> } };
     };
-    const step = parsed.jobs.review.steps.find(
-      (s) => s.name === "Run pr-hero",
-    ) as { with?: Record<string, string> } | undefined;
+    const step = parsed.jobs.review.steps.find((s) => s.name === "Run Crysk") as
+      | { with?: Record<string, string> }
+      | undefined;
     expect(step?.with?.routing).toBe(
       `\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}`,
     );
@@ -676,7 +677,7 @@ describe("this repo's own comment runs pin the pull request head", () => {
       const gate = runGate(own(), sameRepoPr, { stderr, times: 2 });
       expect(gate.exitCode).toBe(1);
       expect(gate.outputs).toEqual({});
-      expect(gate.stdout).toContain("::error title=pr-hero::");
+      expect(gate.stdout).toContain("::error title=crysk::");
       expect(gate.stdout).toContain("/crysk review");
       expect(gate.lookups).toBe(2);
       expect(gate.sleeps).toHaveLength(1);
@@ -1149,7 +1150,7 @@ describe("runCiSetup (impure edge)", () => {
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
-  test("creates .github/workflows/pr-hero.yml when absent", async () => {
+  test("creates .github/workflows/crysk.yml when absent", async () => {
     dir = await mkdtemp(path.join(tmpdir(), "pr-hero-ci-setup-"));
 
     const result = await runCiSetup({ cwd: dir });
@@ -1170,7 +1171,7 @@ describe("runCiSetup (impure edge)", () => {
     "pr-hero-force.yml",
   );
 
-  test("writes only pr-hero.yml, never a force workflow", async () => {
+  test("writes only the one workflow file, never a force workflow", async () => {
     dir = await mkdtemp(path.join(tmpdir(), "pr-hero-ci-setup-"));
 
     await runCiSetup({ cwd: dir });
@@ -1218,6 +1219,133 @@ describe("runCiSetup (impure edge)", () => {
     expect(result.status).toBe("overwritten");
     const written = await readFile(target, "utf8");
     expect(written).toBe(generateCiWorkflowTemplate());
+  });
+});
+
+// S10: a repo that already has the pre-rename pr-hero.yml keeps it; the code
+// never ends with both.
+describe("runCiSetup — which workflow file (impure edge)", () => {
+  let dir: string;
+  const WORKFLOWS = path.join(".github", "workflows");
+  const legacyFile = () => path.join(dir, WORKFLOWS, "pr-hero.yml");
+  const freshFile = () => path.join(dir, WORKFLOWS, "crysk.yml");
+
+  async function seed(...files: string[]): Promise<void> {
+    dir = await mkdtemp(path.join(tmpdir(), "crysk-ci-setup-"));
+    await mkdir(path.join(dir, WORKFLOWS), { recursive: true });
+    for (const f of files) {
+      await writeFile(path.join(dir, WORKFLOWS, f), `# ${f}, customized\n`);
+    }
+  }
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  test("--force on a pr-hero.yml repo rewrites that file and never creates crysk.yml", async () => {
+    await seed("pr-hero.yml");
+
+    const result = await runCiSetup({ cwd: dir, force: true });
+
+    expect(result).toEqual({ status: "overwritten", path: legacyFile() });
+    expect(await readFile(legacyFile(), "utf8")).toBe(
+      generateCiWorkflowTemplate(),
+    );
+    expect(existsSync(freshFile())).toBe(false);
+  });
+
+  test("without --force the refusal names the pr-hero.yml that exists, and leaves it alone", async () => {
+    await seed("pr-hero.yml");
+
+    const result = await runCiSetup({ cwd: dir });
+
+    expect(result).toEqual({
+      status: "skipped-existing",
+      path: legacyFile(),
+      hint: `${path.join(WORKFLOWS, "pr-hero.yml")} already exists; pass --force to overwrite it`,
+    });
+    expect(await readFile(legacyFile(), "utf8")).toBe(
+      "# pr-hero.yml, customized\n",
+    );
+    expect(existsSync(freshFile())).toBe(false);
+  });
+
+  test("a crysk.yml repo is acted on by name: the refusal names crysk.yml", async () => {
+    await seed("crysk.yml");
+
+    const result = await runCiSetup({ cwd: dir });
+
+    expect(result.status).toBe("skipped-existing");
+    if (result.status !== "skipped-existing") return;
+    expect(result.path).toBe(freshFile());
+    expect(result.hint).toContain("crysk.yml already exists");
+  });
+
+  test.each([false, true])(
+    "both files present (force: %p): nothing is written, the reason names both",
+    async (force) => {
+      await seed("crysk.yml", "pr-hero.yml");
+
+      const result = await runCiSetup({ cwd: dir, force });
+
+      expect(result.status).toBe("refused-duplicate");
+      if (result.status !== "refused-duplicate") return;
+      expect(result.hint).toContain("crysk.yml");
+      expect(result.hint).toContain("pr-hero.yml");
+      expect(result.hint).toContain("review every pull request twice");
+      expect(await readFile(freshFile(), "utf8")).toBe(
+        "# crysk.yml, customized\n",
+      );
+      expect(await readFile(legacyFile(), "utf8")).toBe(
+        "# pr-hero.yml, customized\n",
+      );
+    },
+  );
+});
+
+describe("checkCiConfiguration — either workflow file, never both", () => {
+  const root = "/repo";
+  const at = (file: string) => path.join(root, ".github", "workflows", file);
+
+  test("a pre-rename pr-hero.yml counts as configured and is named", () => {
+    const status = checkCiConfiguration({
+      cwd: root,
+      isCi: false,
+      exists: (p) => p === at("pr-hero.yml"),
+    });
+    expect(status.configured).toBe(true);
+    expect(status.message).toContain("pr-hero.yml");
+  });
+
+  test("crysk.yml counts as configured and is named", () => {
+    const status = checkCiConfiguration({
+      cwd: root,
+      isCi: false,
+      exists: (p) => p === at("crysk.yml"),
+    });
+    expect(status.configured).toBe(true);
+    expect(status.message).toContain("crysk.yml");
+  });
+
+  test("both present is not configured: the reason is the double review", () => {
+    const status = checkCiConfiguration({
+      cwd: root,
+      isCi: false,
+      exists: (p) => p === at("crysk.yml") || p === at("pr-hero.yml"),
+    });
+    expect(status.configured).toBe(false);
+    expect(status.message).toContain("crysk.yml");
+    expect(status.message).toContain("pr-hero.yml");
+    expect(status.message).toContain("review every pull request twice");
+  });
+
+  test("the setup hint scaffolds crysk.yml", () => {
+    const status = checkCiConfiguration({
+      cwd: root,
+      isCi: false,
+      exists: () => false,
+    });
+    expect(status.hint).toContain(".github/workflows/crysk.yml");
   });
 });
 
@@ -1356,6 +1484,36 @@ describe("doctor CI diagnostics (Pillar 3)", () => {
     const ciCheck = report.checks.find((c) => c.name === "ci");
     expect(ciCheck?.severity).toBe("degraded");
     expect(ciCheck?.hint).toMatch(/setup --ci|ci init/);
+  });
+
+  test("local repo context: a repo on the pre-rename pr-hero.yml is healthy", async () => {
+    const report = await runDoctor({
+      cwd: "/repo",
+      repoRoot: "/repo",
+      home: "/home/user",
+      exists: (p) => p === path.join("/repo", LEGACY_CI_WORKFLOW_RELATIVE_PATH),
+      readFile: () => undefined,
+      checkToolsOptions: { ...installedTools, env: {} },
+    });
+    const ciCheck = report.checks.find((c) => c.name === "ci");
+    expect(ciCheck?.severity).toBe("healthy");
+    expect(ciCheck?.message).toContain("pr-hero.yml");
+  });
+
+  test("local repo context: both workflow files is degraded, naming the double review", async () => {
+    const report = await runDoctor({
+      cwd: "/repo",
+      repoRoot: "/repo",
+      home: "/home/user",
+      exists: (p) =>
+        p === path.join("/repo", CI_WORKFLOW_RELATIVE_PATH) ||
+        p === path.join("/repo", LEGACY_CI_WORKFLOW_RELATIVE_PATH),
+      readFile: () => undefined,
+      checkToolsOptions: { ...installedTools, env: {} },
+    });
+    const ciCheck = report.checks.find((c) => c.name === "ci");
+    expect(ciCheck?.severity).toBe("degraded");
+    expect(ciCheck?.message).toContain("review every pull request twice");
   });
 
   test("generic non-GitHub CI (CI=true) is degraded, never blocking", async () => {

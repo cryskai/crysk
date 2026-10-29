@@ -11,7 +11,6 @@ import {
 } from "#ci/review-levels";
 import {
   appendIgnorePatterns,
-  CI_WORKFLOW_RELATIVE_PATH,
   ignorePatternsError,
   runCiSetup,
   writeRepoReviewConfig,
@@ -23,7 +22,12 @@ import {
   gotchasUnusableReason,
 } from "#review/preflight";
 import { log } from "#ui/primitives";
-import { resolveIgnoreFileName, resolveRepoDir } from "../brand-paths";
+import {
+  duplicateWorkflowProblem,
+  resolveIgnoreFileName,
+  resolveRepoDir,
+  resolveWorkflowRelativePath,
+} from "../brand-paths";
 import { CliError } from "../errors";
 import {
   checkGhStatus,
@@ -226,12 +230,18 @@ export async function ciSetupCommand(
 
   // Before any question: an existing workflow without --force writes nothing,
   // so asking first would collect answers that are then thrown away.
-  const target = path.join(repoRoot, CI_WORKFLOW_RELATIVE_PATH);
+  const duplicate = duplicateWorkflowProblem(repoRoot);
+  if (duplicate !== undefined) {
+    log(duplicate);
+    return 1;
+  }
+  // The file the repo already has (a pre-rename pr-hero.yml stays where it is),
+  // else the new name.
+  const workflowRelative = resolveWorkflowRelativePath(repoRoot);
+  const target = path.join(repoRoot, workflowRelative);
   if (existsSync(target) && !options.force) {
     log(`${target} already exists.`);
-    log(
-      `${CI_WORKFLOW_RELATIVE_PATH} already exists; pass --force to overwrite it`,
-    );
+    log(`${workflowRelative} already exists; pass --force to overwrite it`);
     return 1;
   }
 
@@ -272,6 +282,10 @@ export async function ciSetupCommand(
         : { maxChangedFiles: current.workflow.maxChangedFiles }),
     },
   });
+  if (result.status === "refused-duplicate") {
+    log(result.hint);
+    return 1;
+  }
   if (result.status === "skipped-existing") {
     log(`${result.path} already exists.`);
     log(result.hint);
@@ -317,9 +331,7 @@ export async function ciSetupCommand(
   log("Next steps:");
   let step = 0;
   const next = () => `  ${++step}.`;
-  log(
-    `${next()} Commit .github/workflows/pr-hero.yml and ${repoDirName}/config.json`,
-  );
+  log(`${next()} Commit ${workflowRelative} and ${repoDirName}/config.json`);
   log(
     `${next()} Add a repository secret: ${
       choices.billing === "subscription"

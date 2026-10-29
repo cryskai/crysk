@@ -8,6 +8,7 @@
 // variant that quietly edits some other line would test a different workflow
 // and report it as this one.
 
+import { RUN_STEP_NAME } from "./markers";
 import { workflowFor } from "./seed";
 
 export const VARIANT_NAMES = [
@@ -64,7 +65,7 @@ const SIZE_SKIP_LINE = "          max-changed-lines: 1";
 // these must not break the run. The fault is a step the sandbox adds before the action
 // step, in the runner's own temp directory, where the product's outcome records go.
 // The anchor is the action step's name line; the injected step keeps its indentation.
-const RUN_STEP_LINE = "      - name: Run pr-hero";
+const RUN_STEP_LINE = `      - name: ${RUN_STEP_NAME}`;
 const STALE_TMP_STEP = [
   "      - name: Leave stale temp records from a killed run",
   "        run: |",

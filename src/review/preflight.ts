@@ -234,7 +234,7 @@ export interface CliOptions {
   //
   // Phase 4 (CI Scaffolding) gave `--ci` a SECOND, command-scoped meaning:
   // on `review` it activates the CI headless shell (requires --pr); on
-  // `setup` it means "scaffold .github/workflows/pr-hero.yml instead of
+  // `setup` it means "scaffold .github/workflows/crysk.yml instead of
   // running the interactive wizard" — see `ci init`'s dedicated command
   // below for the same scaffolding without touching `setup`'s wizard
   // default. `budgetUsd`/`stepSummary` still require the REVIEW reading of
@@ -317,7 +317,8 @@ Usage:
   crysk init [options]     Scaffold <repo>/.crysk/ (config.json + gotchas.md)
   crysk setup [options]    Run interactive onboarding wizard
   crysk setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
-                             Scaffold .github/workflows/pr-hero.yml instead
+                             Scaffold .github/workflows/crysk.yml (or update
+                             an existing pr-hero.yml) instead
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed. Asks how CI
                              re-reviews (in a terminal) or takes the flags:
@@ -572,8 +573,9 @@ Options:
                       offers the size-gate choice as a menu; this flag is
                       the unattended hatch. Does NOT imply --yes — the
                       cost-band prompt still asks. With setup --ci /
-                      ci init: overwrite an existing
-                      .github/workflows/pr-hero.yml instead of refusing
+                      ci init: overwrite the existing review workflow
+                      (.github/workflows/crysk.yml or pr-hero.yml) instead
+                      of refusing
   --all               usage only: show every origin's rows instead of just
                       the current checkout's
   --yes               Skip the confirmation prompt
