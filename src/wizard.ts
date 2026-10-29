@@ -533,6 +533,13 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
               `pr-hero: ${outcome.skill} not updated for ${env.displayName}: ${outcome.reason ?? "local edits kept"}\n`,
             );
           }
+          // An old-name copy kept for the user's edits stays on disk; say so.
+          for (const old of sync.legacy ?? []) {
+            if (old.status !== "kept") continue;
+            process.stderr.write(
+              `pr-hero: old ${old.skill} skill kept for ${env.displayName} (${old.reason}); delete it by hand when you no longer need it\n`,
+            );
+          }
         }
         if (env.mcpConfigFile) {
           const registration = await registerMcpServer(env, mcpReg, {

@@ -552,6 +552,19 @@ export async function runDoctor(
             hint: "Run 'pr-hero setup' or 'pr-hero init' to sync skills.",
           });
         }
+        // Sync removes the old-name copies it can prove untouched; one left
+        // behind holds a file the user edited (or one sync never recorded).
+        if (syncStatus.legacy.length > 0) {
+          const dirs = syncStatus.legacy
+            .map((name) => path.join(env.skillsDir as string, name))
+            .join(", ");
+          checks.push({
+            name: `skills-legacy:${env.id}`,
+            severity: "degraded",
+            message: `Skills installed under their old names remain for ${env.displayName}: ${dirs}`,
+            hint: "Run 'pr-hero setup' to remove the unedited ones, then delete the rest by hand once you have copied any edits you want to keep.",
+          });
+        }
       }
 
       if (env.mcpConfigFile && isNpxCacheInvocation(self)) {

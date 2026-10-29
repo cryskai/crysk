@@ -175,3 +175,21 @@ export function canonicalStatusText(text: string): string {
   if (next !== ":" && next !== " ") return text;
   return STATUS_CONTEXT + text.slice(LEGACY_STATUS_CONTEXT.length);
 }
+
+// The bundled agent skills, by role, in sync order. The role key joins a skill
+// to its pre-rename name: sync removes a legacy dir only once the skill of the
+// same role is installed under the new name. Plain strings, so every site that
+// lists skills (sync, inspect, remove, uninstall) reads this one list.
+export const SKILL_NAMES = {
+  triage: "crysk-loop",
+  ciSetup: "crysk-ci-setup",
+  pr: "crysk-pr",
+  general: "crysk",
+} as const;
+
+export const LEGACY_SKILL_NAMES = {
+  triage: "pr-hero-triage",
+  ciSetup: "pr-hero-ci-setup",
+  pr: "pr-hero-pr",
+  general: "pr-hero",
+} as const satisfies Record<keyof typeof SKILL_NAMES, string>;

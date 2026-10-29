@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { detectAgentEnvironments } from "./agent-env";
+import { allSkillDirNames, detectAgentEnvironments } from "./agent-env";
 import {
   HOME_DIR_NAME,
   LEGACY_HOME_DIR_NAME,
@@ -171,12 +171,7 @@ export async function planUninstallation(
       });
     }
     if (env.skillsDir) {
-      for (const skillName of [
-        "pr-hero-triage",
-        "pr-hero-ci-setup",
-        "pr-hero-pr",
-        "pr-hero",
-      ]) {
+      for (const skillName of allSkillDirNames()) {
         const skillPath = path.join(env.skillsDir, skillName);
         if (exists(skillPath)) {
           agentEnvCleanups.push(`${env.displayName} Skill: ${skillName}`);
@@ -448,6 +443,8 @@ export async function executeUninstallPlan(
 
         case "remove_skills":
           if (step.targetPath && exists(step.targetPath)) {
+            // An uninstall the user asked for removes the whole dir, both names, as
+            // it always has; only the upgrade sync's legacy cleanup is digest-gated.
             if (options.rmdir) {
               options.rmdir(step.targetPath, { recursive: true });
             } else {

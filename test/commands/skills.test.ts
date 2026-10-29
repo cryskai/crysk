@@ -2,14 +2,24 @@
 // injected deps (an in-memory filesystem over a fake HOME), so nothing touches the real ~/.
 // The skill sources are the real bundled assets, read through the readFile fallback.
 
-import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import crypto from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { skillsInstallCommand } from "#commands/skills";
 import { parseArgs } from "#review/preflight";
 import { resolveEngineAssets } from "../../src/assets";
 
 const HOME = "/fake/home";
-const SKILL_DIR = `${HOME}/.claude/skills/pr-hero-triage`;
+const SKILL_DIR = `${HOME}/.claude/skills/crysk-loop`;
 const SKILL_FILE = `${SKILL_DIR}/SKILL.md`;
 
 function makeDeps(seed: Record<string, string> = {}, dirs: string[] = []) {
@@ -102,5 +112,61 @@ describe("skillsInstallCommand", () => {
     expect(lines).toEqual([
       "no coding agent with a skills directory was found (Claude Code, Cursor, Windsurf, Codex, Antigravity, OpenCode)",
     ]);
+  });
+
+  // The old-name cleanup is real file removal, so these use a real temporary HOME.
+  describe("pre-rename skill dirs", () => {
+    const sha = (text: string) =>
+      crypto.createHash("sha256").update(text).digest("hex");
+    let realHome: string;
+    beforeEach(() => {
+      realHome = mkdtempSync(path.join(tmpdir(), "crysk-skills-cmd-"));
+    });
+    afterEach(() => {
+      rmSync(realHome, { recursive: true, force: true });
+    });
+
+    function legacyDir(name: string, content: string, recorded = content) {
+      const dir = path.join(realHome, ".claude", "skills", name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "SKILL.md"), content);
+      writeFileSync(
+        path.join(dir, "digest.json"),
+        JSON.stringify({ files: { "SKILL.md": sha(recorded) } }),
+      );
+      return dir;
+    }
+
+    test("reports an unedited old copy as removed", async () => {
+      const dir = legacyDir("pr-hero-triage", "old\n");
+      const lines: string[] = [];
+      const code = await skillsInstallCommand(install(), {
+        home: realHome,
+        which: () => null,
+        log: (l) => lines.push(l),
+      });
+
+      expect(code).toBe(0);
+      expect(existsSync(dir)).toBe(false);
+      expect(lines).toContain(
+        "removed the old pr-hero-triage skill from Claude Code",
+      );
+    });
+
+    test("keeps and reports an edited old copy", async () => {
+      const dir = legacyDir("pr-hero-triage", "mine\n", "old\n");
+      const lines: string[] = [];
+      const code = await skillsInstallCommand(install(), {
+        home: realHome,
+        which: () => null,
+        log: (l) => lines.push(l),
+      });
+
+      expect(code).toBe(0);
+      expect(readFileSync(path.join(dir, "SKILL.md"), "utf-8")).toBe("mine\n");
+      expect(
+        lines.find((l) => l.startsWith("kept the old pr-hero-triage skill")),
+      ).toContain("edited SKILL.md kept");
+    });
   });
 });

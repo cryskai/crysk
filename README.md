@@ -34,10 +34,10 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    npx skills add juanmaagd/pr-hero
    ```
 
-   `pr-hero-ci-setup` sets up the workflow, `pr-hero-pr` opens a PR and waits for its review, and
-   `pr-hero-triage` answers the findings. `pr-hero` covers the local CLI, which this path does not use.
+   `crysk-ci-setup` sets up the workflow, `crysk-pr` opens a PR and waits for its review, and
+   `crysk-loop` answers the findings. `crysk` covers the local CLI, which this path does not use.
 
-2. **Ask your agent to set up pr-hero CI** in the repository. `pr-hero-ci-setup` first asks you how
+2. **Ask your agent to set up pr-hero CI** in the repository. `crysk-ci-setup` first asks you how
    re-reviews should work: a level (minimal, balanced, thorough or manual), gate or advisory, how CI
    pays (a subscription gets no spend ceiling, an API key gets one you choose), the changed-lines
    threshold above which a PR is skipped (default 4000, on any billing), and whether to tune the
@@ -59,8 +59,8 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    follow the level you chose (balanced re-reviews a push only when it is risky or the last pass
    found enough, at most 2 automatic passes), and a PR above the size threshold is skipped. Comment
    `/crysk review` to review a skipped push anyway. Ask your agent
-   to open the PR (`pr-hero-pr`), and it waits for the review with `npx -y pr-hero status --pr <n>
-   --wait --json`, then hands the findings to `pr-hero-triage`, which replies to each one in its
+   to open the PR (`crysk-pr`), and it waits for the review with `npx -y pr-hero status --pr <n>
+   --wait --json`, then hands the findings to `crysk-loop`, which replies to each one in its
    thread and pushes the fixes.
 
 Everything about the workflow (credentials, OpenCode routing, spend limits, the gate, error codes)
@@ -176,7 +176,7 @@ directory. A skill copy that differs from the bundled one and has no recorded di
 
 ```bash
 npx skills add juanmaagd/pr-hero                            # pick interactively
-npx skills add juanmaagd/pr-hero --skill pr-hero            # or pr-hero-pr, pr-hero-triage, pr-hero-ci-setup
+npx skills add juanmaagd/pr-hero --skill crysk              # or crysk-pr, crysk-loop, crysk-ci-setup
 ```
 
 **On step 6.** `gotchas.md` is injected verbatim into every hunter's system prompt, and

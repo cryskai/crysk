@@ -48,7 +48,7 @@ before it merges.
 1. Branch per slice off latest `dev` (`feat/d1-09-capability-report`, ...).
 2. Work-unit commits on the branch (one purpose each, tests included).
 3. Open the PR targeting `dev`, let the pr-hero review post, triage its findings
-   with `skills/pr-hero-triage/SKILL.md`, then merge into `dev`.
+   with `skills/crysk-loop/SKILL.md`, then merge into `dev`.
 4. `ci.yml` runs on every PR and on pushes to `main` only. Merging into `dev`
    does not trigger a separate push CI run, so the PR run is the required verification.
 5. `release.yml` fires only on semver tags, so merging into `dev` never publishes
@@ -80,10 +80,10 @@ bun scripts/sandbox.ts init --ref <ref> [--route claude|opencode:<modelSnapshot>
 ## Project skills
 
 - `skills/martian-bench/SKILL.md` — Martian Code Review Bench (n-vs-n vs Greptile/CodeRabbit on public PRs). Load on Cal.com evals, Surface A/B, or “how did we do” on that corpus. Flow + existing scores: `skills/martian-bench/references/`.
-- `skills/pr-hero/SKILL.md` — operate or configure pr-hero locally (models/routing, effort, credentials, config keys, gotchas, `.prheroignore`, reviews, watcher/GC, doctor).
-- `skills/pr-hero-pr/SKILL.md` — open or update a PR with a structured template and auto-subscribe to the pr-hero review loop.
-- `skills/pr-hero-triage/SKILL.md` — answer posted `<!-- pr-hero-finding` comments on a PR you authored.
-- `skills/pr-hero-ci-setup/SKILL.md` — scaffold GitHub Actions review workflow and configure repository secrets.
+- `skills/crysk/SKILL.md` — operate or configure pr-hero locally (models/routing, effort, credentials, config keys, gotchas, `.cryskignore`, reviews, watcher/GC, doctor).
+- `skills/crysk-pr/SKILL.md` — open or update a PR with a structured template and auto-subscribe to the pr-hero review loop.
+- `skills/crysk-loop/SKILL.md` — answer posted `<!-- pr-hero-finding` comments on a PR you authored.
+- `skills/crysk-ci-setup/SKILL.md` — scaffold GitHub Actions review workflow and configure repository secrets.
 
 `refuter-probe` is the FIRST gate for any refuter prompt change (ROADMAP A2): it plants claims whose
 correct verdict is known and asserts all four outcomes — `corroborated`, `refuted` (adjacent and 3-hop),

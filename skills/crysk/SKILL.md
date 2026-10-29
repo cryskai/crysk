@@ -1,6 +1,6 @@
 ---
-name: pr-hero
-description: "Trigger: use or configure pr-hero locally — change the review model or backend (routing, OpenCode, DeepSeek, custom model), effort, credentials, config.json keys, gotchas.md, .cryskignore, size gate, run a review, pr-hero watch/gc, pr-hero doctor/config. Not CI (pr-hero-ci-setup) and not answering findings (pr-hero-triage)."
+name: crysk
+description: "Trigger: use or configure pr-hero locally — change the review model or backend (routing, OpenCode, DeepSeek, custom model), effort, credentials, config.json keys, gotchas.md, .cryskignore, size gate, run a review, pr-hero watch/gc, pr-hero doctor/config. Not CI (crysk-ci-setup) and not answering findings (crysk-loop)."
 license: Apache-2.0
 metadata:
   author: juanmaagd
@@ -16,7 +16,7 @@ Load when the user wants to **operate or configure pr-hero on their machine or r
 - Set up the watcher (`pr-hero watch`) or worktree GC (`pr-hero gc`).
 - Diagnose a broken install or a refused run (`pr-hero doctor`, `pr-hero config`).
 
-Route away: GitHub Actions, CI secrets, `CRYSK_ROUTING`, `/crysk review` comments → load `pr-hero-ci-setup`. Replying to posted `<!-- crysk-finding` comments → load `pr-hero-triage`.
+Route away: GitHub Actions, CI secrets, `CRYSK_ROUTING`, `/crysk review` comments → load `crysk-ci-setup`. Replying to posted `<!-- crysk-finding` comments → load `crysk-loop`.
 
 ## Source of Truth
 

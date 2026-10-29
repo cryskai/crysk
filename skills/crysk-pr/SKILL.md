@@ -1,6 +1,6 @@
 ---
-name: pr-hero-pr
-description: "Open or update a GitHub pull request with a structured title and reviewer-focused description, then automatically subscribe to the pr-hero review via `pr-hero status --pr <n> --wait --json` and hand off to `pr-hero-triage` if findings are reported. Trigger: open a PR, create a PR, gh pr create, submit PR, push branch and open PR, ship PR, crear PR, abrir PR."
+name: crysk-pr
+description: "Open or update a GitHub pull request with a structured title and reviewer-focused description, then automatically subscribe to the pr-hero review via `pr-hero status --pr <n> --wait --json` and hand off to `crysk-loop` if findings are reported. Trigger: open a PR, create a PR, gh pr create, submit PR, push branch and open PR, ship PR, crear PR, abrir PR."
 license: Apache-2.0
 metadata:
   author: juanmaagd
@@ -63,4 +63,4 @@ When `pr-hero` is active on the repository, **never stop right after `gh pr crea
 2. **Route on `next_action`:**
    - **`next_action === "done"`:** Check whether `report.head` is non-null and `report.head !== head` (a green status carried forward over an unreviewed push under `once_per_pr`, `thresholded`, or `risk_aware`). If so and `git diff <report.head>..<head>` contains non-trivial logic or risky changes, explicitly recommend running `/crysk review` to the user naming those changes. Otherwise, the review passed the gate with zero untriaged findings: report the PR URL and clean review summary to the user.
    - **`next_action !== "done"` (`"triage"`, `"fix"`, `"recheck"`, `"review"`, `"override-or-fix"`):**
-     Immediately load the `pr-hero-triage` skill (`skills/pr-hero-triage/SKILL.md`) and run its autonomous loop (`while (next_action !== "done")`) to judge findings, reply, push verified fixes, and wait for re-review until the PR is ready to merge.
+     Immediately load the `crysk-loop` skill (`skills/crysk-loop/SKILL.md`) and run its autonomous loop (`while (next_action !== "done")`) to judge findings, reply, push verified fixes, and wait for re-review until the PR is ready to merge.

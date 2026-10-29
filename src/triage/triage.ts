@@ -5,7 +5,7 @@
 //
 // NO I/O. Same contract as pr/preflight.ts/pr/inline.ts: no gh, no git, no
 // network, no filesystem, no clock. The consuming skill (this repo's
-// `skills/pr-hero-triage/`) runs in the CONSUMER's coding agent, outside
+// `skills/crysk-loop/`) runs in the CONSUMER's coding agent, outside
 // this process entirely — this module only defines the wire format both
 // sides agree on.
 //
