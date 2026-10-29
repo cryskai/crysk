@@ -786,7 +786,12 @@ export async function runConfigEditor(
 
   io.line();
   io.line(bold("Interactive Configuration Editor", styles));
-  io.line(dim("Person layer: ~/.crysk/config.json", styles));
+  io.line(
+    dim(
+      "Person layer: ~/.crysk/config.json (~/.prhero/config.json on a pre-rename install)",
+      styles,
+    ),
+  );
   if (deps.repoRoot) {
     io.line(
       dim(
@@ -797,7 +802,12 @@ export async function runConfigEditor(
   } else {
     io.line(dim("Team layer: (disabled outside git repository)", styles));
   }
-  io.line(dim("Watcher layer: ~/.crysk/watch.json", styles));
+  io.line(
+    dim(
+      "Watcher layer: ~/.crysk/watch.json (~/.prhero/watch.json on a pre-rename install)",
+      styles,
+    ),
+  );
   io.line();
   io.line(
     "Use 'pr-hero config set <key> <value> [--person|--team|--watch]' to modify configuration.",

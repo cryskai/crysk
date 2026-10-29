@@ -2391,13 +2391,17 @@ function parseConfigLayer(
     if (!admitted.has(key)) {
       if (isRepoFile) {
         throw new CliUsageError(
-          `${file}: ${key} is a per-person key — put it in ` +
-            "~/.crysk/config.json",
+          // Both homes are named: the resolver picks ~/.crysk as soon as it exists, so
+          // telling a pre-rename install to create it would hide its ~/.prhero data.
+          `${file}: ${key} is a per-person key — put it in your person config ` +
+            "(~/.crysk/config.json, or ~/.prhero/config.json on an install set up " +
+            "before the rename; do not create ~/.crysk while ~/.prhero is in use)",
         );
       }
       throw new CliUsageError(
-        `${file}: ${key} is a per-repo key — put it in ` +
-          "<repo>/.crysk/config.json",
+        `${file}: ${key} is a per-repo key — put it in the repo config ` +
+          "(<repo>/.crysk/config.json, or <repo>/.prhero/config.json in a repo set " +
+          "up before the rename)",
       );
     }
   }

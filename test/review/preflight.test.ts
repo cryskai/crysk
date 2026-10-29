@@ -1441,7 +1441,8 @@ describe("parseGlobalConfig", () => {
       expect(() => parseGlobalConfig(raw)).toThrow(CliUsageError);
       expect(messageOf(() => parseGlobalConfig(raw))).toBe(
         `~/.crysk/config.json: ${key} is a per-repo key — ` +
-          "put it in <repo>/.crysk/config.json",
+          "put it in the repo config (<repo>/.crysk/config.json, or " +
+          "<repo>/.prhero/config.json in a repo set up before the rename)",
       );
     }
   });
@@ -1532,7 +1533,7 @@ describe("parseLocalConfig admits the same keys it does today", () => {
     const raw = JSON.stringify({ routing: { mappings: [] } });
     expect(() => parseLocalConfig(raw)).toThrow(CliUsageError);
     expect(messageOf(() => parseLocalConfig(raw))).toBe(
-      ".crysk/config.json: routing is a per-person key — put it in ~/.crysk/config.json",
+      ".crysk/config.json: routing is a per-person key — put it in your person config (~/.crysk/config.json, or ~/.prhero/config.json on an install set up before the rename; do not create ~/.crysk while ~/.prhero is in use)",
     );
   });
 });
@@ -2474,7 +2475,7 @@ describe("parse errors carry their record class (T2d-1)", () => {
     const error = thrownBy(() => parseLocalConfig('{"routing": {}}'));
     expect(error.cls).toEqual({ kind: "config-parse", source: "repo-config" });
     expect(error.message).toBe(
-      ".crysk/config.json: routing is a per-person key — put it in ~/.crysk/config.json",
+      ".crysk/config.json: routing is a per-person key — put it in your person config (~/.crysk/config.json, or ~/.prhero/config.json on an install set up before the rename; do not create ~/.crysk while ~/.prhero is in use)",
     );
   });
 
@@ -2483,7 +2484,7 @@ describe("parse errors carry their record class (T2d-1)", () => {
     expect(error).toBeInstanceOf(CliUsageError);
     expect(error.cls).toBeUndefined();
     expect(error.message).toBe(
-      "~/.crysk/config.json: default_base is a per-repo key — put it in <repo>/.crysk/config.json",
+      "~/.crysk/config.json: default_base is a per-repo key — put it in the repo config (<repo>/.crysk/config.json, or <repo>/.prhero/config.json in a repo set up before the rename)",
     );
   });
 
