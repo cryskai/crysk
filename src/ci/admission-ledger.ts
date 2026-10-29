@@ -2,9 +2,12 @@
 // Persistence is GitHub Check Runs (pr/pr.ts); PR comments stay presentation-only.
 
 import { createHash } from "node:crypto";
+import { ADMISSION_CHECK_RUN_NAME } from "../brand";
 
 export const ADMISSION_LEDGER_SCHEMA_VERSION = 1;
-export const ADMISSION_CHECK_RUN_NAME = "pr-hero/ci-admission";
+// Written under the new name; the ledger's readers (pr/pr.ts) also accept the
+// legacy name, see brand.ts.
+export { ADMISSION_CHECK_RUN_NAME };
 
 // `"yielded"`: this run stood down because another pr-hero review already
 // held a pending commit status on the same head (musive #1935: a local hook

@@ -217,6 +217,21 @@ describe("evaluateCheck: each kind passes and fails on its own fact", () => {
     expect(result.detail).toBe(`got failure for ${RUN_STEP_NAME}`);
     expect(evaluateCheck(check, obs({ run: undefined })).pass).toBe(false);
   });
+
+  // A run of a ref from before the rename still carries the old step name.
+  test("step-succeeded reads the pre-rename step name too", () => {
+    const check = { kind: "step-succeeded" as const };
+    const legacy = obs({
+      run: {
+        id: 9,
+        event: "issue_comment",
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: "Run pr-hero", conclusion: "success" }],
+      },
+    });
+    expect(evaluateCheck(check, legacy).pass).toBe(true);
+  });
 });
 
 describe("evaluateChecks: labels say what was asserted", () => {
@@ -957,7 +972,23 @@ describe("own-evidence: only this run's artifact or skip marker counts", () => {
     expect(evaluateCheck(check, commentRun()).pass).toBe(true);
     const missing = evaluateCheck(check, commentRun({ artifacts: [] }));
     expect(missing.pass).toBe(false);
-    expect(missing.detail).toContain(`pr-hero-run-7-${NEW}`);
+    expect(missing.detail).toContain(`crysk-run-7-${NEW}`);
+  });
+
+  test("the run directory artifact counts under either name: crysk-run- or a pre-rename ref's pr-hero-run-", () => {
+    const check = { kind: "own-evidence" } as const;
+    expect(
+      evaluateCheck(check, commentRun({ artifacts: [`crysk-run-7-${NEW}`] }))
+        .pass,
+    ).toBe(true);
+    expect(
+      evaluateCheck(check, commentRun({ artifacts: [`pr-hero-run-7-${NEW}`] }))
+        .pass,
+    ).toBe(true);
+    expect(
+      evaluateCheck(check, commentRun({ artifacts: [`crysk-run-8-${NEW}`] }))
+        .pass,
+    ).toBe(false);
   });
 
   test("a skip passes with a skip marker created after the trigger, and fails with one from before it", () => {
@@ -1266,6 +1297,15 @@ describe("no-run-evidence: the comment's run left no review evidence of its own 
     );
     expect(uploaded.pass).toBe(false);
     expect(uploaded.detail).toBe(`this run uploaded pr-hero-run-7-${NEW}`);
+  });
+
+  test("a near miss that uploaded the new crysk-run artifact fails too", () => {
+    const uploaded = evaluateCheck(
+      check,
+      nearMissRun({ artifacts: [`crysk-run-7-${NEW}`] }),
+    );
+    expect(uploaded.pass).toBe(false);
+    expect(uploaded.detail).toBe(`this run uploaded crysk-run-7-${NEW}`);
   });
 
   test("a skip marker posted after this run's trigger fails, and one from before it passes", () => {

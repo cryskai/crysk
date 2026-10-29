@@ -1,4 +1,4 @@
-name: 'pr-hero'
+name: 'Crysk'
 description: 'Multi-agent AI code review engine with adversarial refutation. Its commit status is a gate by default (mode: gate); mode: advisory keeps it green'
 author: 'juanmaagd'
 branding:
@@ -67,22 +67,22 @@ inputs:
 outputs:
   status:
     description: 'Review outcome: reviewed, skipped-size, skipped-budget, or error'
-    value: ${{ steps.run-pr-hero.outputs.status }}
+    value: ${{ steps.run-crysk.outputs.status }}
   findings-count:
     description: 'Total number of verified findings'
-    value: ${{ steps.run-pr-hero.outputs.findings_count }}
+    value: ${{ steps.run-crysk.outputs.findings_count }}
   blocking-count:
     description: 'Total number of blocking-tier findings'
-    value: ${{ steps.run-pr-hero.outputs.blocking_count }}
+    value: ${{ steps.run-crysk.outputs.blocking_count }}
   advisory-count:
     description: 'Total number of advisory-tier findings'
-    value: ${{ steps.run-pr-hero.outputs.advisory_count }}
+    value: ${{ steps.run-crysk.outputs.advisory_count }}
   cost-usd-est:
     description: 'Estimated cost of the review, in USD'
-    value: ${{ steps.run-pr-hero.outputs.cost_usd_est }}
+    value: ${{ steps.run-crysk.outputs.cost_usd_est }}
   run-dir:
     description: 'Path to the run directory containing findings.json and report.md'
-    value: ${{ steps.run-pr-hero.outputs.run_dir }}
+    value: ${{ steps.run-crysk.outputs.run_dir }}
 
 # No `runs-on` here on purpose: a composite action runs on whatever runner
 # the CALLING workflow's job selects (spec 1.1 requires ubuntu-latest AND
@@ -184,7 +184,7 @@ runs:
       run: bun "${{ github.action_path }}/src/ci/setup.ts"
 
     # Pin 1.18.30 as its own step so GITHUB_PATH updates later steps only
-    # (install ≠ Run pr-hero). Never unpinned. Digest verify of the official
+    # (install ≠ Run Crysk). Never unpinned. Digest verify of the official
     # installer is named, not built.
     - name: Install OpenCode CLI
       if: ${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || contains(inputs.routing, 'opencode')) }}
@@ -193,8 +193,8 @@ runs:
         curl -fsSL https://opencode.ai/install | bash -s -- --version 1.18.30
         echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
 
-    - name: Run pr-hero
-      id: run-pr-hero
+    - name: Run Crysk
+      id: run-crysk
       if: steps.trigger.outputs.run == 'true'
       shell: bash
       env:
@@ -299,7 +299,7 @@ runs:
     # attempt of the same run. An error, a hunters-failed run, or a run that left
     # no record is published here with its code, because the CLI posts no
     # comment for those. A run that stopped before it reported is named as such.
-    - name: Publish pr-hero outcome
+    - name: Publish Crysk outcome
       id: publish
       # Wrapped in ${{ }}: a bare `!cancelled()` is a YAML tag, not an expression.
       if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' }}
@@ -335,7 +335,7 @@ runs:
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
     # Without this step the triage half of the review loop has no input.
-    # `pr-hero triage reply --pr <n> --from <run-dir> --finding F00N` is the
+    # `crysk triage reply --pr <n> --from <run-dir> --finding F00N` is the
     # ONLY supported way to answer a posted finding, and `--from` REQUIRES a
     # completed run directory on disk (findings.json maps F00N onto the
     # posted `<!-- pr-hero-finding` marker). In CI that directory lives at
@@ -369,21 +369,21 @@ runs:
     # is deliberately short.
     #
     # Download it with:
-    #   gh run download <run-id> -n pr-hero-run-<pr>-<head-sha>
-    # then point `pr-hero triage reply --from` at the download directory.
-    - name: Upload pr-hero run directory
+    #   gh run download <run-id> -n crysk-run-<pr>-<head-sha>
+    # then point `crysk triage reply --from` at the download directory.
+    - name: Upload Crysk run directory
       # A size-gated, budget-gated or concurrent review writes no run
       # directory and publishes no outputs; the emptiness check keeps
       # upload-artifact from being handed an empty `path:` in that case.
-      if: always() && steps.trigger.outputs.run == 'true' && steps.run-pr-hero.outputs.run_dir != ''
+      if: always() && steps.trigger.outputs.run == 'true' && steps.run-crysk.outputs.run_dir != ''
       uses: actions/upload-artifact@v4
       with:
         # Both the PR number and the head sha, so a download is unambiguous
         # when a PR is reviewed more than once — the run directory itself is
         # named `pr-<n>-<sha>-1` for the same reason. Both come from the
         # trigger, because a comment event carries no pull_request payload.
-        name: pr-hero-run-${{ steps.trigger.outputs.pr }}-${{ steps.trigger.outputs.head_sha }}
-        path: ${{ steps.run-pr-hero.outputs.run_dir }}
+        name: crysk-run-${{ steps.trigger.outputs.pr }}-${{ steps.trigger.outputs.head_sha }}
+        path: ${{ steps.run-crysk.outputs.run_dir }}
         # upload-artifact excludes hidden files by default since v4.4, and
         # this directory lives under a hidden `~/.crysk` ancestor. Paired
         # with `if-no-files-found: warn` below, an exclusion here would

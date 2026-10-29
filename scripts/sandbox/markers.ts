@@ -18,7 +18,13 @@ import {
   STATUS_CONTEXT as BRAND_STATUS_CONTEXT,
   isLegacyStatusContext,
   isStatusContext,
+  LEGACY_RUN_ARTIFACT_PREFIX,
+  LEGACY_RUN_STEP_DISPLAY_NAME,
+  LEGACY_WORKFLOW_DISPLAY_NAME,
   MARKER_OPEN,
+  RUN_ARTIFACT_PREFIX,
+  RUN_STEP_DISPLAY_NAME,
+  WORKFLOW_DISPLAY_NAME,
 } from "../../src/brand";
 
 // The summary comment and the per-finding comments. The summary is an issue
@@ -77,5 +83,29 @@ export const PRH_CODE = /PRH-[A-Z]+(?:-[A-Z]+)*/;
 
 // The workflow the sandbox scaffolds, and the step that runs the action. A
 // composite action is one step to the jobs API, so the classifier reads this step.
-export const WORKFLOW_NAME = "pr-hero Review";
-export const RUN_STEP_NAME = "Run pr-hero";
+// The current names are what a scaffold of this tree writes; a run of an older ref
+// carries the pre-rename ones, so every reader goes through the is* helpers.
+export const WORKFLOW_NAME = WORKFLOW_DISPLAY_NAME;
+export const RUN_STEP_NAME = RUN_STEP_DISPLAY_NAME;
+
+export function isWorkflowName(name: string): boolean {
+  return name === WORKFLOW_NAME || name === LEGACY_WORKFLOW_DISPLAY_NAME;
+}
+
+export function isRunStepName(name: string): boolean {
+  return name === RUN_STEP_NAME || name === LEGACY_RUN_STEP_DISPLAY_NAME;
+}
+
+// The run directory artifact of a PR head, under either prefix.
+export function runArtifactNames(prNumber: number, headSha: string): string[] {
+  return [RUN_ARTIFACT_PREFIX, LEGACY_RUN_ARTIFACT_PREFIX].map(
+    (prefix) => `${prefix}${prNumber}-${headSha}`,
+  );
+}
+
+export function isRunArtifactName(name: string): boolean {
+  return (
+    name.startsWith(RUN_ARTIFACT_PREFIX) ||
+    name.startsWith(LEGACY_RUN_ARTIFACT_PREFIX)
+  );
+}

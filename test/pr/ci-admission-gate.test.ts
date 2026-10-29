@@ -66,6 +66,7 @@ const GATE_ENV_KEYS = [
   "GITHUB_OUTPUT",
   "GITHUB_HEAD_REF",
   "GITHUB_ACTOR",
+  "GITHUB_WORKFLOW_REF",
 ] as const;
 type GateEnvKey = (typeof GATE_ENV_KEYS)[number];
 
@@ -601,6 +602,136 @@ describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an atte
     expect(readsOf(HEAD_A)).toBe(1);
     expect(readsOf(HEAD_B)).toBe(1);
     expect(readsOf(HEAD_C)).toBe(1);
+  });
+
+  // A repository scaffolded before the rename keeps .github/workflows/pr-hero.yml.
+  // The gate must still find its past runs (and must not crash on the missing
+  // crysk.yml), and a ledger row written under the new check-run name counts the
+  // same as one under the old name.
+  test("a repo on pr-hero.yml: the gate falls back to that file and reads the ledger under both names", async () => {
+    const reviewed = admissionCheckRunRecord({ headSha: HEAD_A });
+    const rowNamed = (name: string, record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name,
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    for (const name of ["crysk/ci-admission", "pr-hero/ci-admission"]) {
+      const calls: string[][] = [];
+      const spawnFn = makeFakeGh(
+        [
+          {
+            match: ["run", "list", "crysk.yml"],
+            response: {
+              stderr: "could not find any workflows named crysk.yml",
+              exitCode: 1,
+            },
+          },
+          {
+            match: ["run", "list", "pr-hero.yml"],
+            response: {
+              stdout: JSON.stringify([
+                { headSha: HEAD_A, conclusion: "success" },
+              ]),
+            },
+          },
+          {
+            match: [`commits/${HEAD_A}/check-runs`],
+            response: { stdout: rowNamed(name, reviewed) },
+          },
+          {
+            match: ["issues", "comments"],
+            response: {
+              stdout: `${JSON.stringify(summaryComment(1, HEAD_A, { blocking: 0, advisory: 1 }, 1))}\n`,
+            },
+          },
+          EMPTY_REVIEW_COMMENTS,
+          REPO_VIEW,
+          compareResponse("src/pipeline.ts"),
+          EMPTY_CHECK_RUNS,
+        ],
+        calls,
+      );
+      const { summaryPath, outputPath } = await tmpCiFiles();
+      const result = await withGateEnv(
+        {
+          GITHUB_STEP_SUMMARY: summaryPath,
+          GITHUB_OUTPUT: outputPath,
+          GITHUB_HEAD_REF: "feat/legacy-file",
+        },
+        () =>
+          evaluateCiAdmissionGate({
+            ciMode: "advisory",
+            operatorRoot: "/repo",
+            prNumber: PR,
+            headSha: HEAD_B,
+            config: EMPTY_LOCAL_CONFIG,
+            isCi: true,
+            options: baseOptions(),
+            spawnFn,
+            recordSkip: async () => {},
+          }),
+      );
+      expect(result.exitCode).toBeUndefined();
+      const workflows = calls
+        .filter((argv) => argv[0] === "run" || argv.includes("--workflow"))
+        .map((argv) => argv[argv.indexOf("--workflow") + 1]);
+      expect(workflows).toEqual(["crysk.yml", "pr-hero.yml"]);
+      // The head only the pr-hero.yml lookup returned had its ledger read.
+      expect(
+        calls.some((argv) =>
+          argv.join(" ").includes(`commits/${HEAD_A}/check-runs`),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  test("inside the action the gate asks for the workflow file the run came from", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: { stdout: JSON.stringify([]) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: { stdout: "" },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/legacy-file",
+        GITHUB_WORKFLOW_REF:
+          "acme/widgets/.github/workflows/pr-hero.yml@refs/pull/42/merge",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          ciMode: "advisory",
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_B,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions(),
+          spawnFn,
+          recordSkip: async () => {},
+        }),
+    );
+    const workflows = calls
+      .filter((argv) => argv.includes("--workflow"))
+      .map((argv) => argv[argv.indexOf("--workflow") + 1]);
+    expect(workflows).toEqual(["pr-hero.yml"]);
   });
 
   // F002: GitHub's check-runs endpoint defaults to filter=latest, which hides

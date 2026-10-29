@@ -93,17 +93,23 @@ describe("clean", () => {
 // the review still runs. The fake keeps a run in flight until a cancel is seen, so
 // what is checked is the order of the calls.
 describe("clean: a run still going on the head is cancelled before its PR closes", () => {
-  const runOn = (status: string) => ({
+  const runOn = (status: string, workflowName = WORKFLOW_NAME) => ({
     databaseId: 42,
     headSha: "b".repeat(40),
     status,
     conclusion: null,
-    workflowName: WORKFLOW_NAME,
+    workflowName,
     url: "https://x/run/42",
   });
 
-  for (const status of ["queued", "in_progress"]) {
-    test(`a ${status} run is cancelled and awaited, and only then is the PR closed`, async () => {
+  // A run of a ref from before the rename carries the old workflow name; it is
+  // still this scenario's run.
+  for (const [status, workflowName] of [
+    ["queued", WORKFLOW_NAME],
+    ["in_progress", WORKFLOW_NAME],
+    ["in_progress", "pr-hero Review"],
+  ] as const) {
+    test(`a ${status} run of "${workflowName}" is cancelled and awaited, and only then is the PR closed`, async () => {
       let cancelled = false;
       const h = harness({
         gh: (args) => {
@@ -111,7 +117,7 @@ describe("clean: a run still going on the head is cancelled before its PR closes
             return ok(JSON.stringify([OPEN[0]]));
           }
           if (args[0] === "run" && args[1] === "list") {
-            return ok(JSON.stringify([runOn(status)]));
+            return ok(JSON.stringify([runOn(status, workflowName)]));
           }
           if (args[0] === "run" && args[1] === "cancel") {
             cancelled = true;

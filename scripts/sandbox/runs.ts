@@ -4,7 +4,7 @@
 // together with the poll and the interrupt types they share. It is a module of its
 // own because clean (pr.ts) cannot import scenario.ts, which imports pr.ts.
 
-import { WORKFLOW_NAME } from "./markers";
+import { isWorkflowName } from "./markers";
 import { COMMENT_RUN_CLOCK_SKEW_MS } from "./observe";
 import type { SandboxDeps, Signal } from "./ports";
 import { SANDBOX_REPO } from "./rails";
@@ -121,7 +121,7 @@ export async function listBranchRuns(
     "--json",
     RUN_FIELDS,
   ]);
-  return runs.filter((r) => r.workflowName === WORKFLOW_NAME);
+  return runs.filter((r) => isWorkflowName(r.workflowName));
 }
 
 // The issue_comment runs of the workflow, newest first. A comment run is on main, so
@@ -151,7 +151,7 @@ export function isPrCommentRun(
   sinceMs: number,
 ): boolean {
   return (
-    run.workflowName === WORKFLOW_NAME &&
+    isWorkflowName(run.workflowName) &&
     run.displayTitle === title &&
     Date.parse(run.createdAt) >= sinceMs - COMMENT_RUN_CLOCK_SKEW_MS
   );

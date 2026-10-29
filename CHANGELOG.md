@@ -31,9 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `.prheroignore` are still read when the new name does not exist; nothing is moved for you and `crysk doctor`
     prints the migration. The launchd labels are `io.crysk.watch` and `io.crysk.gc`; installing replaces the old
     `io.prhero.*` ones.
-  - **Unchanged for now**: the GitHub repository and the action reference `juanmaagd/pr-hero@v0`, the workflow file
-    `.github/workflows/pr-hero.yml` and its name `pr-hero Review`, the `pr-hero-run-<pr>-<sha>` artifact, and the
-    findings envelope.
+  - **CI**: `crysk setup --ci` writes `.github/workflows/crysk.yml`, named `Crysk Review`, with a `Run Crysk` step.
+    A repository that already has `.github/workflows/pr-hero.yml` keeps that file: `crysk ci init --force` rewrites
+    it in place and never adds a second one (with both present, setup refuses and `crysk doctor` reports a double
+    review). The action finds its own workflow's past runs from `GITHUB_WORKFLOW_REF`, so either file name works.
+    The action is named `Crysk`, uploads the run directory as `crysk-run-<pr>-<sha>`, and writes the admission
+    ledger as the check run `crysk/ci-admission`; the old `pr-hero/ci-admission` rows are still read, so attempt
+    counts survive the upgrade. The step id `pr-hero` and the `pr-hero-review-` concurrency group are unchanged.
+  - **Unchanged for now**: the GitHub repository and the action reference `juanmaagd/pr-hero@v0`, and the findings
+    envelope.
 
 ## [0.2.6] - 2026-10-28
 

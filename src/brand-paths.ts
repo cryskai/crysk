@@ -6,6 +6,7 @@
 
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { LEGACY_WORKFLOW_FILE_NAME, WORKFLOW_FILE_NAME } from "./brand";
 
 export const HOME_DIR_NAME = ".crysk";
 export const LEGACY_HOME_DIR_NAME = ".prhero";
@@ -107,5 +108,48 @@ export function resolveIgnoreFileName(
     LEGACY_IGNORE_FILE_NAME,
     exists,
     alwaysState,
+  );
+}
+
+// The review workflow file, relative to a repo root. A repo that already has the
+// pre-rename `pr-hero.yml` keeps it (it is updated in place); every other repo,
+// a fresh one included, gets `crysk.yml`. The code only ever acts on one file.
+export const WORKFLOW_DIR = path.join(".github", "workflows");
+export const WORKFLOW_RELATIVE_PATH = path.join(
+  WORKFLOW_DIR,
+  WORKFLOW_FILE_NAME,
+);
+export const LEGACY_WORKFLOW_RELATIVE_PATH = path.join(
+  WORKFLOW_DIR,
+  LEGACY_WORKFLOW_FILE_NAME,
+);
+
+export function resolveWorkflowRelativePath(
+  root: string,
+  exists: Exists = existsSync,
+): string {
+  const legacyOnly =
+    exists(path.join(root, LEGACY_WORKFLOW_RELATIVE_PATH)) &&
+    !exists(path.join(root, WORKFLOW_RELATIVE_PATH));
+  return legacyOnly ? LEGACY_WORKFLOW_RELATIVE_PATH : WORKFLOW_RELATIVE_PATH;
+}
+
+// Both files present means two workflows review every pull request: the reason
+// setup refuses to write and doctor reports degraded. Undefined when at most
+// one exists.
+export function duplicateWorkflowProblem(
+  root: string,
+  exists: Exists = existsSync,
+): string | undefined {
+  if (
+    !exists(path.join(root, WORKFLOW_RELATIVE_PATH)) ||
+    !exists(path.join(root, LEGACY_WORKFLOW_RELATIVE_PATH))
+  ) {
+    return undefined;
+  }
+  return (
+    `${WORKFLOW_RELATIVE_PATH} and ${LEGACY_WORKFLOW_RELATIVE_PATH} both exist, ` +
+    "so two workflows review every pull request twice; delete the one you do " +
+    "not want (keep the one your branch protection and secrets already rely on)"
   );
 }

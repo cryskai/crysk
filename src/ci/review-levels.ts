@@ -304,7 +304,7 @@ export function renderChoicesSummary(
     `  trusted actors   ${a.ci_trusted_actors && a.ci_trusted_actors.length > 0 ? a.ci_trusted_actors.join(", ") : "none beyond the workflow actor"}`,
     `  size limit       ${"max_changed_lines" in kept ? `${JSON.stringify(kept.max_changed_lines)} changed lines (kept)` : choices.maxChangedLines === 0 ? "no changed-lines limit (0)" : `${choices.maxChangedLines} changed lines`}, ${a.max_changed_files === undefined ? "files resolved from how the review is paid" : `${a.max_changed_files} files`}`,
     `  exclusions       ${a.ignorePatterns && a.ignorePatterns.length > 0 ? `${a.ignorePatterns.join(", ")} (.cryskignore)` : "none added (.cryskignore)"}`,
-    "Change them later in the repo config (.crysk/config.json, or .prhero/config.json in a repo set up before the rename) and .github/workflows/pr-hero.yml (`npx -y crysk config` shows the effective values).",
+    "Change them later in the repo config (.crysk/config.json, or .prhero/config.json in a repo set up before the rename) and the review workflow (.github/workflows/crysk.yml, or pr-hero.yml in a repo set up before the rename) (`npx -y crysk config` shows the effective values).",
   ];
   return lines;
 }

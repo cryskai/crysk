@@ -220,3 +220,36 @@ export function currentMcpToolName(name: string): string {
 // the fallbacks that read it.
 export const BIN_NAME = "crysk";
 export const LEGACY_BIN_NAME = "pr-hero";
+
+// CI identifiers. The workflow file new repos get, and the one a repo set up
+// before the rename keeps (it is updated in place, never duplicated: two
+// workflow files would review every pull request twice). Filesystem lookups
+// that choose between them live in brand-paths.ts.
+export const WORKFLOW_FILE_NAME = "crysk.yml";
+export const LEGACY_WORKFLOW_FILE_NAME = "pr-hero.yml";
+
+// The generated workflow's display name and the step that runs the action. A
+// reader of the Actions API (the sandbox) matches runs of a workflow scaffolded
+// before the rename too, so each has a legacy form.
+export const WORKFLOW_DISPLAY_NAME = "Crysk Review";
+export const LEGACY_WORKFLOW_DISPLAY_NAME = "pr-hero Review";
+export const RUN_STEP_DISPLAY_NAME = "Run Crysk";
+export const LEGACY_RUN_STEP_DISPLAY_NAME = "Run pr-hero";
+
+// The artifact the action uploads the run directory as: `<prefix><pr>-<sha>`.
+export const RUN_ARTIFACT_PREFIX = "crysk-run-";
+export const LEGACY_RUN_ARTIFACT_PREFIX = "pr-hero-run-";
+
+// The check run that is the durable CI admission ledger. A head first reviewed
+// by an older release holds its attempts under the legacy name, so a reader
+// accepts both: the attempt count must survive the rename. Only the new name
+// is written.
+export const ADMISSION_CHECK_RUN_NAME = "crysk/ci-admission";
+export const LEGACY_ADMISSION_CHECK_RUN_NAME = "pr-hero/ci-admission";
+
+export function isAdmissionCheckRunName(name: string): boolean {
+  return (
+    name === ADMISSION_CHECK_RUN_NAME ||
+    name === LEGACY_ADMISSION_CHECK_RUN_NAME
+  );
+}

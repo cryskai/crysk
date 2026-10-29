@@ -129,10 +129,13 @@ Suspect a flawed integration or architecture when **either** of these signals ap
 This skill names the commands as `/crysk review`, `/crysk recheck` and `/crysk override`. A
 workflow set up before the rename to Crysk listens only for `/pr-hero review`, `/pr-hero recheck`
 and `/pr-hero override`, and ignores `/crysk` comments. Comment triggers run the workflow on the
-default branch, so check that file once per PR before posting any command:
+default branch, so check that file once per PR before posting any command. The workflow file is
+`crysk.yml`, or `pr-hero.yml` in a repository set up before the rename (never both), so try either:
 
 ```bash
-gh api "repos/{owner}/{repo}/contents/.github/workflows/pr-hero.yml" --jq .content | base64 -d | grep -q "'/crysk review'"
+for f in crysk.yml pr-hero.yml; do
+  gh api "repos/{owner}/{repo}/contents/.github/workflows/$f" --jq .content 2>/dev/null | base64 -d | grep -q "'/crysk review'" && exit 0
+done; exit 1
 ```
 
 Exit 0 means the workflow accepts `/crysk`: post the `/crysk` form. Otherwise post the same
@@ -392,10 +395,13 @@ that is destroyed when the job ends. The workflow uploads it as an artifact; dow
 you triage:
 
 ```bash
-NAME=pr-hero-run-<pr>-<head-sha>
-gh api "repos/{owner}/{repo}/actions/artifacts?name=$NAME" \
-  --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[].workflow_run.id'
-gh run download <run-id> -n "$NAME" -D "pr-hero-run-<run-id>"
+# The artifact is crysk-run-<pr>-<head-sha>; a run of an action release from before the rename
+# uploaded pr-hero-run-<pr>-<head-sha>. Try the new name first, then the old one.
+for NAME in crysk-run-<pr>-<head-sha> pr-hero-run-<pr>-<head-sha>; do
+  gh api "repos/{owner}/{repo}/actions/artifacts?name=$NAME" \
+    --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[].workflow_run.id'
+done
+gh run download <run-id> -n "$NAME" -D "crysk-run-<run-id>"
 ```
 
 Look the run up by artifact name, not with `gh run list --branch`: a `/crysk review` or
@@ -407,7 +413,7 @@ in `action.yml` only dedupes within one run). Try the candidates newest first an
 into its own fresh directory, as above: reusing one directory mixes `findings.json` from one run
 with the patches of another, and the bind then judges files no single run wrote.
 
-Then pass `--from pr-hero-run-<run-id>` for the candidate that bound. `gh run download` unpacks the run directory's *contents*, so the
+Then pass `--from crysk-run-<run-id>` for the candidate that bound. `gh run download` unpacks the run directory's *contents*, so the
 `--from` target is the directory you downloaded into — not a `pr-<n>-<sha>-1` path inside it. If
 the artifact is missing (a size- or budget-gated review writes no run directory, and so does a
 run where every hunter died), you have no `--from` input: say so and stop rather than inventing

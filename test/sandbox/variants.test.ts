@@ -15,7 +15,7 @@ import {
 const REF = "v0.2.0";
 const NORMAL = workflowFor(REF);
 
-// The Run pr-hero step's `with:` block, found by walking the parsed YAML rather
+// The Run Crysk step's `with:` block, found by walking the parsed YAML rather
 // than by line position, so the test does not depend on where the scaffold puts it.
 function actionWith(yaml: string): Record<string, unknown> {
   const doc = Bun.YAML.parse(yaml) as {
@@ -189,11 +189,9 @@ describe("the stale-tmp variant (SB3): the stale records are planted before the 
     const normal = NORMAL.split("\n");
     // Six lines before the action step: its name, `run: |`, the mkdir and the two writes, a blank.
     expect(lines.length).toBe(normal.length + 6);
-    const at = lines.indexOf("      - name: Run pr-hero");
+    const at = lines.indexOf("      - name: Run Crysk");
     expect(at).toBeGreaterThan(0);
-    expect(lines.filter((l) => l === "      - name: Run pr-hero").length).toBe(
-      1,
-    );
+    expect(lines.filter((l) => l === "      - name: Run Crysk").length).toBe(1);
     expect(lines[at - 6]).toBe(
       "      - name: Leave stale temp records from a killed run",
     );

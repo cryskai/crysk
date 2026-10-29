@@ -50,7 +50,7 @@ Load this skill whenever the user asks to open, create, submit, or update a pull
 
 ## Step 3: Auto-Subscribe to `crysk` & Enter the Triage Loop (No Human Friction)
 
-Check whether the repository uses Crysk (e.g., `.github/workflows/pr-hero.yml` or `.crysk/` (`.prhero/` before the rename) exists in the repo, or `crysk` (`pr-hero` before the rename) status checks run on PRs). If not, report the PR URL and stop.
+Check whether the repository uses Crysk (e.g., `.github/workflows/crysk.yml` (`pr-hero.yml` before the rename) or `.crysk/` (`.prhero/` before the rename) exists in the repo, or `crysk` (`pr-hero` before the rename) status checks run on PRs). If not, report the PR URL and stop.
 
 When `crysk` is active on the repository, **never stop right after `gh pr create`**. Immediately continue in the same turn:
 

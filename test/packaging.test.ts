@@ -576,7 +576,7 @@ describe("Packaging & distribution configuration", () => {
     test("run step invokes bin/pr-hero.js — the entrypoint verified to actually run", () => {
       const action = parsedAction();
       const runStep = action.runs.steps.find(
-        (step) => step.id === "run-pr-hero",
+        (step) => step.id === "run-crysk",
       ) as { run?: string } | undefined;
       expect(runStep?.run).toContain("bin/pr-hero.js");
     });
@@ -584,7 +584,7 @@ describe("Packaging & distribution configuration", () => {
     test("passes --ci unconditionally (--budget-usd/--step-summary require it at parse time)", () => {
       const action = parsedAction();
       const runStep = action.runs.steps.find(
-        (step) => step.id === "run-pr-hero",
+        (step) => step.id === "run-crysk",
       ) as { run?: string } | undefined;
       expect(runStep?.run).toContain("--ci");
       expect(runStep?.run).toContain("--yes");
@@ -740,7 +740,7 @@ describe("Packaging & distribution configuration", () => {
           };
         }
 
-        const runStep = steps().find((step) => step.id === "run-pr-hero");
+        const runStep = steps().find((step) => step.id === "run-crysk");
         const env = resolveEnv(runStep?.env ?? {}, {
           inputs,
           github,
@@ -943,7 +943,7 @@ describe("Packaging & distribution configuration", () => {
     // ---------------------------------------------------------------------
 
     test("the outcome directory is bound the same way in the trigger, run and publish steps", () => {
-      for (const id of ["trigger", "run-pr-hero", "publish"]) {
+      for (const id of ["trigger", "run-crysk", "publish"]) {
         const step = steps().find((candidate) => candidate.id === id);
         expect(step?.env?.CRYSK_OUTCOME_DIR, id).toBe(
           `\${{ runner.temp }}/pr-hero-outcome`,
@@ -960,10 +960,10 @@ describe("Packaging & distribution configuration", () => {
 
     test("the publish step skips a cancelled job, still runs after a failed one, and is publish-gated", () => {
       const all = steps();
-      const run = all.findIndex((step) => step.id === "run-pr-hero");
+      const run = all.findIndex((step) => step.id === "run-crysk");
       const publish = all.findIndex((step) => step.id === "publish");
       const upload = all.findIndex(
-        (step) => step.name === "Upload pr-hero run directory",
+        (step) => step.name === "Upload Crysk run directory",
       );
       expect(publish).toBe(run + 1);
       // The cancel settle (SB3) sits between publish and the upload, right after publish.
@@ -1033,7 +1033,7 @@ describe("Packaging & distribution configuration", () => {
     });
 
     test("the run step writes cli-started as its first command, before anything can fail", () => {
-      const run = steps().find((step) => step.id === "run-pr-hero");
+      const run = steps().find((step) => step.id === "run-crysk");
       const firstCommand = String(run?.run ?? "")
         .split("\n")
         .map((line) => line.trim())
@@ -1083,7 +1083,7 @@ describe("Packaging & distribution configuration", () => {
     });
 
     test("the run step's last command is the CLI itself, so the job's result is the CLI's", () => {
-      const run = steps().find((step) => step.id === "run-pr-hero");
+      const run = steps().find((step) => step.id === "run-crysk");
       const lastCommand = String(run?.run ?? "")
         .split("\n")
         .map((line) => line.trim())
@@ -1186,7 +1186,7 @@ describe("Packaging & distribution configuration", () => {
       // to the step's `env:` mapping, where binding them is exactly right).
       const action = parsedAction();
       const runStep = action.runs.steps.find(
-        (step) => step.id === "run-pr-hero",
+        (step) => step.id === "run-crysk",
       ) as { run?: string } | undefined;
       const script = runStep?.run ?? "";
       const interpolations = script.match(/\$\{\{[^}]*\}\}/g) ?? [];
@@ -1197,7 +1197,7 @@ describe("Packaging & distribution configuration", () => {
     });
 
     // Threat matrix RED (4): every composite `run:` body, not just
-    // run-pr-hero. env: may bind inputs; the script text may not.
+    // run-crysk. env: may bind inputs; the script text may not.
     test("every step run: interpolation is github.action_path only", () => {
       const action = parsedAction();
       let seen = 0;
@@ -1214,17 +1214,17 @@ describe("Packaging & distribution configuration", () => {
 
     // Threat matrix RED (7): pin is its own step so GITHUB_PATH applies to
     // later steps. Never `latest`. Install `if` may read inputs, not secrets.
-    test("OpenCode CLI install is not run-pr-hero, pins 1.18.30, and gates on inputs", () => {
+    test("OpenCode CLI install is not run-crysk, pins 1.18.30, and gates on inputs", () => {
       const action = parsedAction();
       const install = action.runs.steps.find((step) =>
         String(step.run ?? "").includes("opencode.ai/install"),
       ) as
         | { id?: string; name?: string; if?: string; run?: string }
         | undefined;
-      const run = action.runs.steps.find((step) => step.id === "run-pr-hero");
+      const run = action.runs.steps.find((step) => step.id === "run-crysk");
       expect(install).toBeDefined();
       expect(install).not.toBe(run);
-      expect(install?.id).not.toBe("run-pr-hero");
+      expect(install?.id).not.toBe("run-crysk");
       expect(String(install?.if)).toContain("inputs.");
       expect(String(install?.if)).not.toContain("secrets.");
       expect(install?.run).toContain("--version 1.18.30");
@@ -1270,10 +1270,10 @@ describe("Packaging & distribution configuration", () => {
       // `run_dir` is the key the CLI writes to $GITHUB_OUTPUT
       // (formatCiOutputs); `run-dir` would read as empty and skip forever.
       expect(upload?.with?.path).toBe(
-        `\${{ steps.run-pr-hero.outputs.run_dir }}`,
+        `\${{ steps.run-crysk.outputs.run_dir }}`,
       );
       expect(parsedAction().outputs["run-dir"].value).toBe(
-        `\${{ steps.run-pr-hero.outputs.run_dir }}`,
+        `\${{ steps.run-crysk.outputs.run_dir }}`,
       );
     });
 
@@ -1286,7 +1286,7 @@ describe("Packaging & distribution configuration", () => {
       const condition = String(uploadStep()?.if);
       expect(condition).toContain("always()");
       expect(condition).toContain("steps.trigger.outputs.run == 'true'");
-      expect(condition).toContain("steps.run-pr-hero.outputs.run_dir != ''");
+      expect(condition).toContain("steps.run-crysk.outputs.run_dir != ''");
     });
 
     test("a review that wrote no run directory never turns the job red", () => {
@@ -1303,7 +1303,7 @@ describe("Packaging & distribution configuration", () => {
       // event that reviews.
       const name = String(uploadStep()?.with?.name);
       expect(name).toBe(
-        `pr-hero-run-\${{ steps.trigger.outputs.pr }}-\${{ steps.trigger.outputs.head_sha }}`,
+        `crysk-run-\${{ steps.trigger.outputs.pr }}-\${{ steps.trigger.outputs.head_sha }}`,
       );
     });
 

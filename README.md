@@ -49,7 +49,7 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    pays (a subscription gets no spend ceiling, an API key gets one you choose), the changed-lines
    threshold above which a PR is skipped (default 4000, on any billing), and whether to tune the
    advanced settings (score weights, observe-only, trusted actors, files limit, exclusions). Then it runs
-   `npx -y crysk setup --ci` with your answers (writes `.github/workflows/pr-hero.yml` and the
+   `npx -y crysk setup --ci` with your answers (writes `.github/workflows/crysk.yml`, or updates an existing `pr-hero.yml` in place, and the
    level's keys in `.crysk/config.json`, and prints a summary) and `npx -y crysk init`
    (writes `.crysk/gotchas.md`), writes the repository gotchas, and stores
    one secret with `gh secret set`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription; `claude setup-token`
@@ -386,7 +386,7 @@ Reviews launch two ways: **by hand**, or through the opt-in local watcher (`crys
 | --- | --- |
 | Manual CLI (`review`, `--pr`, `--post`) | **Available now** — this README. |
 | Auto-trigger on new PRs / new pushes (local watcher) | **Available now** — `crysk watch`, below. Deliberately opt-in: every review spends real money, so nothing fires until you `watch add` a repo AND `watch install` the agent. |
-| CI mode (GitHub Actions) | **Available now** — official `action.yml` at the repo root, canonical `.github/workflows/pr-hero.yml`, full setup in [`docs/github-actions.md`](docs/github-actions.md). The commit-status gate (`mode: gate`, the default; `mode: advisory` opts out), exit 0 on findings, the size/budget gates, and `crysk setup --ci` scaffolding all apply. |
+| CI mode (GitHub Actions) | **Available now** — official `action.yml` at the repo root, canonical `.github/workflows/crysk.yml` (a repo that already has `pr-hero.yml` keeps it), full setup in [`docs/github-actions.md`](docs/github-actions.md). The commit-status gate (`mode: gate`, the default; `mode: advisory` opts out), exit 0 on findings, the size/budget gates, and `crysk setup --ci` scaffolding all apply. |
 | Required status check that blocks merges | **Available in CI** — the `crysk` commit status is the check (`mode: gate`, the default; `pr-hero` is still posted for one version). Require it in branch protection. Fail-closed for a head with no run stays deferred. |
 
 ## Watching PRs automatically — `crysk watch`
