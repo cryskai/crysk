@@ -1416,9 +1416,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "the run would fail later at the Claude credential check",
       [
         '$ gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"',
+        "On a machine set up before the rename the config is ~/.prhero/config.json: use that path in the command.",
         LEGACY_ROUTING_NOTE,
       ],
-      `set CRYSK_ROUTING from your routing config: \`gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"\` (PRHERO_ROUTING on a workflow set up before the rename)`,
+      `set CRYSK_ROUTING from your routing config: \`gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"\` (~/.prhero/config.json on a machine set up before the rename; PRHERO_ROUTING on a workflow set up before the rename)`,
     ),
   },
   "PRH-ROUTING-INVALID": {
@@ -1773,12 +1774,12 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       context_window_exceeded: {
         why: "the review input is too large for the model, so every hunter was refused and a re-run would send the same request",
         fixes: [
-          "Lower `max-changed-lines` in the workflow's `with:` block (or `max_changed_lines` in the repo config), or exclude paths in `.prheroignore`, then ask for a new review:",
+          "Lower `max-changed-lines` in the workflow's `with:` block (or `max_changed_lines` in the repo config), or exclude paths in `.cryskignore` (`.prheroignore` in a repo set up before the rename), then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "lower `max-changed-lines` (or `max_changed_lines` in the repo config) or exclude paths in `.prheroignore`",
+          "lower `max-changed-lines` (or `max_changed_lines` in the repo config) or exclude paths in `.cryskignore` (`.prheroignore` before the rename)",
       },
     },
   },
