@@ -256,12 +256,16 @@ So the move keeps a repository at the old name. Each step is run by the maintain
 3. **Every final release while the mirror lives also goes to the mirror.** `release.yml`'s `mirror-legacy` job
    does it after `publish-release`, by running `scripts/mirror-release.sh vX.Y.Z`. The script pushes the release
    commit to the mirror's `main`, pushes `vX.Y.Z` and force-pushes the moved `v0`, copies the GitHub Release with
-   the same assets and `SHA256SUMS` (checked before publishing), and then verifies the result. A binary from
+   the same assets and `SHA256SUMS`, and then verifies the result. It downloads and checks the source assets
+   before its first write to the mirror. The floating tag is the release's major (`v0` for 0.x). A binary from
    before the move (`src/updater.ts` read `juanmaagd/pr-hero`) finds its upgrade there; without the mirrored
    release, `pr-hero upgrade` on such a binary reports no new version. Prereleases are not mirrored.
    - The job needs the repository secret `LEGACY_MIRROR_TOKEN`: a fine-grained personal access token of the
-     mirror's owner, with **Contents: Read and write** on `juanmaagd/pr-hero` only. Without it the job ends with
-     a warning and mirrors nothing.
+     mirror's owner, on `juanmaagd/pr-hero` only, with **Contents** and **Workflows** set to *Read and write*.
+     Workflows is required because the pushed commits change `.github/workflows/`, and GitHub refuses such a
+     push without it. Without the secret the job fails (after the release is already published): set it and
+     re-run the job. Fine-grained tokens expire, so a red `mirror-legacy` on a later release usually means it
+     needs renewing.
    - **By hand** (no token, or a failed job): from an up-to-date checkout of `cryskai/crysk`, with `gh` logged in
      as an account that can write the mirror, run `scripts/mirror-release.sh vX.Y.Z`. The script is idempotent:
      a re-run verifies what is already there and changes nothing.

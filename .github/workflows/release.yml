@@ -210,8 +210,9 @@ jobs:
   # `uses: juanmaagd/pr-hero@v0` resolves its tags (runbook Step 4d). Without
   # this job those installs silently stop upgrading. Prereleases are not
   # mirrored. Writing another account's repository needs LEGACY_MIRROR_TOKEN
-  # (a fine-grained token with contents:write on juanmaagd/pr-hero only); when
-  # it is missing the job warns and the runbook's manual run applies.
+  # (a fine-grained token on juanmaagd/pr-hero only, with Contents and Workflows
+  # read and write: the pushed commits change .github/workflows). Without it the
+  # job fails after the release is out, and the runbook's manual run applies.
   mirror-legacy:
     name: Mirror the release to juanmaagd/pr-hero
     needs: publish-release
@@ -224,6 +225,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # WHY: a persisted checkout token is sent as an extraheader to every
+          # github.com URL, before git asks the credential helper, so the push
+          # to the mirror would go out as this repository's token and get 403.
+          persist-credentials: false
 
       - name: Mirror release, tags and main
         env:
@@ -231,7 +236,9 @@ jobs:
           MIRROR_TOKEN: ${{ secrets.LEGACY_MIRROR_TOKEN }}
         run: |
           if [ -z "${MIRROR_TOKEN}" ]; then
-            echo "::warning title=crysk::LEGACY_MIRROR_TOKEN is not set: mirror ${GITHUB_REF_NAME} to juanmaagd/pr-hero by hand (scripts/mirror-release.sh ${GITHUB_REF_NAME}, runbook Step 4d)."
-            exit 0
+            # Red, not a warning: a skipped mirror is exactly the silent failure
+            # this job exists to prevent. The release itself is already out.
+            echo "::error title=crysk::LEGACY_MIRROR_TOKEN is not set: ${GITHUB_REF_NAME} did not reach juanmaagd/pr-hero. Set the secret and re-run this job, or run scripts/mirror-release.sh ${GITHUB_REF_NAME} by hand (runbook Step 4d)."
+            exit 1
           fi
           bash scripts/mirror-release.sh "${GITHUB_REF_NAME}"
