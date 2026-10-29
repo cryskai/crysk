@@ -1229,7 +1229,7 @@ function reportStatusWriteFailure(
 // the text the override rule (src/ci/override.ts) recognises. Its description names the actor, so the
 // status alone says who unlocked the gate.
 function overrideDescription(actor: string): string {
-  return `${OVERRIDE_DESCRIPTION_PREFIX}${actor} — no review on this head`;
+  return `${OVERRIDE_DESCRIPTION_PREFIX}${actor} — no new review run`;
 }
 
 // The audit comment. Its first line is the marker, which is not an outcome marker,

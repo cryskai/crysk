@@ -562,7 +562,7 @@ describe("renderPrComment", () => {
       [],
       undefined,
     );
-    expect(body).toContain("## crysk review");
+    expect(body).toContain("## Crysk review");
     expect(body).toContain(
       "🔴 2 critical · 🟡 1 warning — `bbbbbbbb`, diff from `aaaaaaaa`",
     );
@@ -1043,7 +1043,7 @@ describe("renderPrComment", () => {
     ).split("\n");
     expect(lines.slice(0, 4)).toEqual([
       prCommentMarker("b".repeat(40)),
-      "## crysk review",
+      "## Crysk review",
       "",
       "🔴 0 critical · 🟡 0 warning — `bbbbbbbb`, diff from `aaaaaaaa`",
     ]);
@@ -1822,7 +1822,7 @@ describe("renderPrComment", () => {
     const body = renderPrComment(doc(), undefined, undefined, [], undefined);
     expect(body).toBe(
       "<!-- crysk-report head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->\n" +
-        "## crysk review\n\n" +
+        "## Crysk review\n\n" +
         "🔴 0 critical · 🟡 0 warning — `bbbbbbbb`, diff from `aaaaaaaa`\n\n" +
         "✅ Crysk reviewed this PR and found nothing to report.\n\n" +
         "---\n\n" +

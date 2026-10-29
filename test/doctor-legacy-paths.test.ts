@@ -51,6 +51,17 @@ describe("migrate:home", () => {
     expect(c?.hint).toBe("1) mv ~/.prhero ~/.crysk");
   });
 
+  test("a home that holds review worktrees gets the worktree repair step right after the move", async () => {
+    const checks = await doctorWith({
+      files: { ...LEGACY_HOME, "/home/user/.prhero/repos": "" },
+    });
+    const hint = byName(checks, "migrate:home")?.hint ?? "";
+    expect(hint).toContain("1) mv ~/.prhero ~/.crysk");
+    expect(hint).toContain(
+      "2) in each repository whose `git worktree list` shows a path under ~/.prhero/repos, run `git worktree repair` with that worktree's new path under ~/.crysk/repos (or `git worktree prune` to drop it)",
+    );
+  });
+
   test("a machine with the standalone binary, rc PATH line, both launchd agents and MCP gets every re-arm step", async () => {
     const checks = await doctorWith({
       bins: ["git", "gh", "claude"],

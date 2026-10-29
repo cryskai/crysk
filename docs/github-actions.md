@@ -699,7 +699,7 @@ so the comment is refused with a notice and a 👎 reaction.
 **Overriding a red gate.** Comment exactly `/crysk override` on the pull request. The same rule as
 `/crysk review` applies: a user with write or admin access may do it, and the pull request's author may too
 when they have that access. Anyone else is refused with a notice and a 👎 reaction on the comment, and nothing is posted. The override turns the `crysk` status on the head it names
-into `success`, with the description `crysk: overridden by @<login> — no review on this head`. It runs no
+into `success`, with the description `crysk: overridden by @<login> — no new review run` (an older action wrote `— no review on this head`). It runs no
 review and spends nothing, and it needs no credential, so a repository without one can still unlock its gate.
 
 Every override is recorded. The status names who acted, and a Crysk comment on the pull request names who,

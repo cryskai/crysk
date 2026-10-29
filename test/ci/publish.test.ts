@@ -2917,7 +2917,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
 // status on the head it names and an audit comment. Nothing renders an error, and
 // no cleanup may ever remove the comment.
 const OVERRIDE_DESCRIPTION =
-  "crysk: overridden by @maintainer — no review on this head";
+  "crysk: overridden by @maintainer — no new review run";
 const overrideRecord = (overrides: Partial<TriggerRecord> = {}) =>
   record({ decision: "override", actor: "maintainer", ...overrides });
 
@@ -2994,9 +2994,9 @@ describe("runPublish — the override (S8)", () => {
     );
     const description = descriptionArg?.slice("description=".length) ?? "";
     expect(description.length).toBeLessThanOrEqual(140);
-    // `crysk: overridden by @` is 22 characters and the suffix 25: 138 in all, inside GitHub's 140.
+    // `crysk: overridden by @` is 22 characters and the suffix 20: 133 in all, inside GitHub's 140.
     expect(description).toBe(
-      `crysk: overridden by @${login} — no review on this head`,
+      `crysk: overridden by @${login} — no new review run`,
     );
   });
 

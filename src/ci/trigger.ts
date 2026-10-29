@@ -53,7 +53,8 @@ export const STOP_COMMAND = "/crysk stop";
 // User login is `handle_shortcode`), plus the `[bot]` suffix an app posts under. The
 // override records the login, so it must be one. The bound is 91 characters in all,
 // `[bot]` included: the override status's description is 47 characters around the
-// login (`crysk: overridden by @` is 22, ` — no review on this head` is 25), and GitHub
+// login (`crysk: overridden by @` is 22, ` — no new review run` is 20; older actions wrote
+// ` — no review on this head`, 25), and GitHub
 // refuses a description over 140, so 91 leaves two spare. The bound stays at the 91 that
 // the longer legacy prefix (`pr-hero: overridden by @`, 24, so 49 around the login) needed:
 // a shorter prefix only loosens it, and the copy below must not drift. A copy lives in src/ci/outcome.ts
