@@ -914,7 +914,13 @@ export function inspectMcpRegistration(
     const raw = readFile(env.mcpConfigFile);
     if (!raw) return "missing";
     const servers = asRecord(JSON.parse(raw)?.mcpServers);
-    if (matchesRegistration(servers?.[MCP_SERVER_KEY], reg)) return "current";
+    // A leftover legacy key next to a matching new one is still a migration to do,
+    // exactly as registerMcpServer sees it.
+    if (matchesRegistration(servers?.[MCP_SERVER_KEY], reg)) {
+      return servers?.[LEGACY_MCP_SERVER_KEY] === undefined
+        ? "current"
+        : "legacy";
+    }
     if (matchesRegistration(servers?.[LEGACY_MCP_SERVER_KEY], reg)) {
       return "legacy";
     }
@@ -927,18 +933,18 @@ export function inspectMcpRegistration(
 // Deletes this server's entry under both its keys (and `extraKey`, a name a
 // caller was asked to remove), so an unregister or an uninstall leaves nothing
 // of either generation. True when something was removed.
-export function removeMcpServerEntries(
-  config: unknown,
-  extraKey?: string,
-): boolean {
+function removeOneMcpServer(config: unknown, key: string): boolean {
+  const servers = asRecord(asRecord(config)?.mcpServers);
+  if (!servers || !(key in servers)) return false;
+  delete servers[key];
+  return true;
+}
+
+export function removeMcpServerEntries(config: unknown): boolean {
   const servers = asRecord(asRecord(config)?.mcpServers);
   if (!servers) return false;
   let removed = false;
-  for (const key of new Set([
-    MCP_SERVER_KEY,
-    LEGACY_MCP_SERVER_KEY,
-    ...(extraKey ? [extraKey] : []),
-  ])) {
+  for (const key of [MCP_SERVER_KEY, LEGACY_MCP_SERVER_KEY]) {
     if (key in servers) {
       delete servers[key];
       removed = true;
@@ -959,9 +965,11 @@ export interface UnregisterMcpResult {
   error?: string;
 }
 
+// With no name, removes this product's entry under both keys. A caller naming
+// another server removes only that one.
 export async function unregisterMcpServer(
   env: AgentEnvDetection,
-  serverName = MCP_SERVER_KEY,
+  serverName?: string,
   options: UnregisterMcpOptions = {},
 ): Promise<UnregisterMcpResult> {
   if (!env.mcpConfigFile) {
@@ -995,7 +1003,13 @@ export async function unregisterMcpServer(
     const raw = readFile(env.mcpConfigFile);
     if (!raw) return { unregistered: true, configFile: env.mcpConfigFile };
     const config = JSON.parse(raw);
-    if (removeMcpServerEntries(config, serverName)) {
+    const removed =
+      serverName === undefined ||
+      serverName === MCP_SERVER_KEY ||
+      serverName === LEGACY_MCP_SERVER_KEY
+        ? removeMcpServerEntries(config)
+        : removeOneMcpServer(config, serverName);
+    if (removed) {
       await writeFile(
         env.mcpConfigFile,
         `${JSON.stringify(config, null, 2)}\n`,

@@ -322,8 +322,9 @@ describe("Agent environment detector and sync", () => {
       expect(inspect({ "pr-hero": { command: "other", args: [] } })).toBe(
         "missing",
       );
-      // The new key wins when both are present and the new one matches.
-      expect(inspect({ crysk: entry, "pr-hero": entry })).toBe("current");
+      // Both keys present: registerMcpServer still has a migration to do (the old
+      // key must go), so inspect agrees with it and reports legacy (#424 review).
+      expect(inspect({ crysk: entry, "pr-hero": entry })).toBe("legacy");
     });
 
     describe("migrating the legacy pr-hero entry", () => {
@@ -769,6 +770,39 @@ describe("Agent environment detector and sync", () => {
       const parsed = JSON.parse(content);
       expect(parsed.mcpServers["pr-hero"]).toBeUndefined();
       expect(parsed.mcpServers["other-server"]).toBeDefined();
+    });
+
+    // A caller naming another server removes only that one, never this product's.
+    test("unregisterMcpServer with another name removes only that entry", async () => {
+      const written: Record<string, string> = {};
+      const env: AgentEnvDetection = {
+        id: "claude",
+        displayName: "Claude Code",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        mcpConfigFile: "/home/user/.claude/mcp.json",
+      };
+      await (await import("../src/agent-env")).unregisterMcpServer(
+        env,
+        "other-server",
+        {
+          exists: () => true,
+          readFile: () =>
+            JSON.stringify({
+              mcpServers: {
+                crysk: { command: "crysk", args: ["mcp"] },
+                "other-server": { command: "other", args: [] },
+              },
+            }),
+          writeFile: (p, c) => {
+            written[p] = c;
+          },
+        },
+      );
+      const parsed = JSON.parse(written["/home/user/.claude/mcp.json"] || "{}");
+      expect(parsed.mcpServers["other-server"]).toBeUndefined();
+      expect(parsed.mcpServers.crysk).toBeDefined();
     });
 
     test("unregisterMcpServer removes the crysk and the legacy entry, nothing else", async () => {
