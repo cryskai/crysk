@@ -245,7 +245,7 @@ current head:
    - **If no code changes were needed:** run `npx -y pr-hero status --pr <n> --wait --json` and execute its `next_action` (`recheck` when blocking findings were `dismissed`, or `done` when the gate is already green).
 
    *(Note: The MCP server is strictly read-only for querying runs, findings, and
-   past triage records via `prhero_get_triage` and `prhero_get_findings`. All
+   past triage records via `crysk_get_triage` and `crysk_get_findings`. All
    mutations — posting comments, resolving threads, and updating the database —
    must be performed via `npx -y pr-hero triage reply`.)*
 

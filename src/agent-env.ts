@@ -16,7 +16,12 @@ import {
   isNpxCacheInvocation,
   NPX_REGISTRATION_REFUSED,
 } from "./assets";
-import { LEGACY_SKILL_NAMES, SKILL_NAMES } from "./brand";
+import {
+  LEGACY_MCP_SERVER_KEY,
+  LEGACY_SKILL_NAMES,
+  MCP_SERVER_KEY,
+  SKILL_NAMES,
+} from "./brand";
 
 export type AgentEnvId =
   | "claude"
@@ -289,6 +294,9 @@ interface SkillDirIo {
 export interface RemoveSkillDirResult {
   removed: string[];
   skippedModified: string[];
+  // Recorded files still on disk because they could not be read or unlinked. Their
+  // digest is kept, so a later run can retry them.
+  failed: string[];
   errors: string[];
   // False when anything is left in the dir: an edited file, or a copy with no
   // recorded digest. Nothing here ever deletes a dir recursively.
@@ -320,22 +328,24 @@ export function removeSkillDir(
   }
 
   let skillSkippedModified = false;
-  // A recorded file still on disk after this pass: unreadable, or its unlink failed.
-  let recordedLeft = false;
+  // Recorded files still on disk after this pass: unreadable, or their unlink failed.
+  const failed: string[] = [];
   const subdirs = new Set<string>();
   if (io.allOrNothing && digest?.files) {
-    const touched = Object.entries(digest.files).filter(
-      ([logicalName, hash]) => {
-        const filePath = path.join(targetDir, logicalName);
-        if (!io.exists(filePath)) return false;
-        const content = io.readFile(filePath);
-        return content === undefined || sha256(content) !== hash;
-      },
-    );
-    if (touched.length > 0) {
+    const edited: string[] = [];
+    const unreadable: string[] = [];
+    for (const [logicalName, hash] of Object.entries(digest.files)) {
+      const filePath = path.join(targetDir, logicalName);
+      if (!io.exists(filePath)) continue;
+      const content = io.readFile(filePath);
+      if (content === undefined) unreadable.push(logicalName);
+      else if (sha256(content) !== hash) edited.push(logicalName);
+    }
+    if (edited.length > 0 || unreadable.length > 0) {
       return {
         removed: [],
-        skippedModified: touched.map(([logicalName]) => logicalName),
+        skippedModified: edited,
+        failed: unreadable,
         errors: [],
         dirRemoved: false,
       };
@@ -348,7 +358,7 @@ export function removeSkillDir(
 
       const content = io.readFile(filePath);
       if (content === undefined) {
-        recordedLeft = true;
+        failed.push(logicalName);
         continue;
       }
 
@@ -364,7 +374,7 @@ export function removeSkillDir(
             subdirs.add(dir);
           }
         } catch (err) {
-          recordedLeft = true;
+          failed.push(logicalName);
           errors.push(
             `Failed to remove ${filePath}: ${(err as Error).message}`,
           );
@@ -378,7 +388,7 @@ export function removeSkillDir(
 
   // The digest goes only once every recorded file is gone: it is the only record that
   // makes a leftover provably removable on a later run.
-  if (!skillSkippedModified && !recordedLeft && io.exists(digestFile)) {
+  if (!skillSkippedModified && failed.length === 0 && io.exists(digestFile)) {
     try {
       unlink(digestFile);
       removed.push("digest.json");
@@ -405,7 +415,7 @@ export function removeSkillDir(
     // Not empty, or already gone.
   }
 
-  return { removed, skippedModified, errors, dirRemoved };
+  return { removed, skippedModified, failed, errors, dirRemoved };
 }
 
 // Every dir name a skill may sit under on disk: current names, then old ones.
@@ -415,8 +425,17 @@ export function allSkillDirNames(): string[] {
 }
 
 function legacyKeptReason(res: RemoveSkillDirResult): string {
-  return res.skippedModified.length > 0
-    ? `edited ${res.skippedModified.join(", ")} kept`
+  const parts: string[] = [];
+  if (res.skippedModified.length > 0) {
+    parts.push(`edited ${res.skippedModified.join(", ")} kept`);
+  }
+  if (res.failed.length > 0) {
+    parts.push(
+      `${res.failed.join(", ")} could not be read or removed (digest kept for a retry)`,
+    );
+  }
+  return parts.length > 0
+    ? parts.join("; ")
     : "files with no recorded digest kept";
 }
 
@@ -793,7 +812,7 @@ export async function registerMcpServer(
   }
 
   let config: {
-    mcpServers?: Record<string, { command: string; args: string[] }>;
+    mcpServers?: Record<string, Record<string, unknown>>;
   } = {};
 
   if (exists(configFile)) {
@@ -815,12 +834,10 @@ export async function registerMcpServer(
     config.mcpServers = {};
   }
 
-  const existing = config.mcpServers["pr-hero"];
-  if (
-    existing &&
-    existing.command === reg.command &&
-    JSON.stringify(existing.args) === JSON.stringify(reg.args)
-  ) {
+  const current = config.mcpServers[MCP_SERVER_KEY];
+  const legacy = config.mcpServers[LEGACY_MCP_SERVER_KEY];
+  // A leftover legacy entry is not "already registered": it still has to go.
+  if (matchesRegistration(current, reg) && legacy === undefined) {
     return {
       registered: true,
       alreadyRegistered: true,
@@ -836,10 +853,16 @@ export async function registerMcpServer(
     }
   }
 
-  config.mcpServers["pr-hero"] = {
+  // The legacy entry moves to the new key in this one write. Its fields the
+  // registration does not own (env, timeout, disabled...) are the user's
+  // edits, so they carry over; command and args come from the registration.
+  config.mcpServers[MCP_SERVER_KEY] = {
+    ...asRecord(legacy),
+    ...asRecord(current),
     command: reg.command,
     args: reg.args,
   };
+  delete config.mcpServers[LEGACY_MCP_SERVER_KEY];
 
   await writeFile(configFile, `${JSON.stringify(config, null, 2)}\n`);
 
@@ -849,6 +872,23 @@ export async function registerMcpServer(
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function matchesRegistration(entry: unknown, reg: McpRegistration): boolean {
+  const server = asRecord(entry);
+  return (
+    server !== undefined &&
+    server.command === reg.command &&
+    JSON.stringify(server.args) === JSON.stringify(reg.args)
+  );
+}
+
+// "legacy" is registered and working, but under the pre-rename key; setup
+// moves it.
 export function inspectMcpRegistration(
   env: AgentEnvDetection,
   reg: McpRegistration,
@@ -856,8 +896,8 @@ export function inspectMcpRegistration(
     exists?: (p: string) => boolean;
     readFile?: (p: string) => string | undefined;
   } = {},
-): boolean {
-  if (!env.mcpConfigFile) return false;
+): "current" | "legacy" | "missing" {
+  if (!env.mcpConfigFile) return "missing";
   const exists = options.exists ?? existsSync;
   const readFile =
     options.readFile ??
@@ -869,20 +909,48 @@ export function inspectMcpRegistration(
       }
     });
 
-  if (!exists(env.mcpConfigFile)) return false;
+  if (!exists(env.mcpConfigFile)) return "missing";
   try {
     const raw = readFile(env.mcpConfigFile);
-    if (!raw) return false;
-    const config = JSON.parse(raw);
-    const server = config.mcpServers?.["pr-hero"];
-    if (!server) return false;
-    return (
-      server.command === reg.command &&
-      JSON.stringify(server.args) === JSON.stringify(reg.args)
-    );
+    if (!raw) return "missing";
+    const servers = asRecord(JSON.parse(raw)?.mcpServers);
+    // A leftover legacy key next to a matching new one is still a migration to do,
+    // exactly as registerMcpServer sees it.
+    if (matchesRegistration(servers?.[MCP_SERVER_KEY], reg)) {
+      return servers?.[LEGACY_MCP_SERVER_KEY] === undefined
+        ? "current"
+        : "legacy";
+    }
+    if (matchesRegistration(servers?.[LEGACY_MCP_SERVER_KEY], reg)) {
+      return "legacy";
+    }
+    return "missing";
   } catch {
-    return false;
+    return "missing";
   }
+}
+
+// Deletes this server's entry under both its keys (and `extraKey`, a name a
+// caller was asked to remove), so an unregister or an uninstall leaves nothing
+// of either generation. True when something was removed.
+function removeOneMcpServer(config: unknown, key: string): boolean {
+  const servers = asRecord(asRecord(config)?.mcpServers);
+  if (!servers || !(key in servers)) return false;
+  delete servers[key];
+  return true;
+}
+
+export function removeMcpServerEntries(config: unknown): boolean {
+  const servers = asRecord(asRecord(config)?.mcpServers);
+  if (!servers) return false;
+  let removed = false;
+  for (const key of [MCP_SERVER_KEY, LEGACY_MCP_SERVER_KEY]) {
+    if (key in servers) {
+      delete servers[key];
+      removed = true;
+    }
+  }
+  return removed;
 }
 
 export interface UnregisterMcpOptions {
@@ -897,9 +965,11 @@ export interface UnregisterMcpResult {
   error?: string;
 }
 
+// With no name, removes this product's entry under both keys. A caller naming
+// another server removes only that one.
 export async function unregisterMcpServer(
   env: AgentEnvDetection,
-  serverName = "pr-hero",
+  serverName?: string,
   options: UnregisterMcpOptions = {},
 ): Promise<UnregisterMcpResult> {
   if (!env.mcpConfigFile) {
@@ -933,8 +1003,13 @@ export async function unregisterMcpServer(
     const raw = readFile(env.mcpConfigFile);
     if (!raw) return { unregistered: true, configFile: env.mcpConfigFile };
     const config = JSON.parse(raw);
-    if (config.mcpServers?.[serverName]) {
-      delete config.mcpServers[serverName];
+    const removed =
+      serverName === undefined ||
+      serverName === MCP_SERVER_KEY ||
+      serverName === LEGACY_MCP_SERVER_KEY
+        ? removeMcpServerEntries(config)
+        : removeOneMcpServer(config, serverName);
+    if (removed) {
       await writeFile(
         env.mcpConfigFile,
         `${JSON.stringify(config, null, 2)}\n`,

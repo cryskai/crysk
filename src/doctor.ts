@@ -577,12 +577,20 @@ export async function runDoctor(
           hint: NPX_REGISTRATION_REFUSED,
         });
       } else if (env.mcpConfigFile) {
-        const mcpOk = inspectMcpRegistration(env, mcpReg, { exists, readFile });
-        if (mcpOk) {
+        const mcp = inspectMcpRegistration(env, mcpReg, { exists, readFile });
+        if (mcp === "current") {
           checks.push({
             name: `mcp:${env.id}`,
             severity: "healthy",
             message: `pr-hero MCP server registered for ${env.displayName} (${env.mcpConfigFile})`,
+          });
+        } else if (mcp === "legacy") {
+          // It still works; only the key predates the rename.
+          checks.push({
+            name: `mcp:${env.id}`,
+            severity: "degraded",
+            message: `pr-hero MCP server for ${env.displayName} is registered under its pre-rename key`,
+            hint: "Run 'pr-hero setup' to migrate the registration.",
           });
         } else {
           checks.push({

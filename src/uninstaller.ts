@@ -7,7 +7,11 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { allSkillDirNames, detectAgentEnvironments } from "./agent-env";
+import {
+  allSkillDirNames,
+  detectAgentEnvironments,
+  removeMcpServerEntries,
+} from "./agent-env";
 import {
   HOME_DIR_NAME,
   LEGACY_HOME_DIR_NAME,
@@ -419,13 +423,7 @@ export async function executeUninstallPlan(
             if (raw) {
               try {
                 const config = JSON.parse(raw);
-                if (
-                  config &&
-                  typeof config === "object" &&
-                  !Array.isArray(config) &&
-                  config.mcpServers?.["pr-hero"]
-                ) {
-                  delete config.mcpServers["pr-hero"];
+                if (removeMcpServerEntries(config)) {
                   await writeFile(
                     step.targetPath,
                     `${JSON.stringify(config, null, 2)}\n`,

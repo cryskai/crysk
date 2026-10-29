@@ -173,6 +173,27 @@ describe("sync removes the old-name dirs", () => {
     expect(existsSync(path.join(dir, "SKILL.md"))).toBe(true);
     expect(existsSync(path.join(dir, "digest.json"))).toBe(true);
     expect(result.errors.join("\n")).toContain("EACCES");
+    // The reason names the real cause, not a missing digest (#423 round 2).
+    const kept = result.legacy?.find((l) => l.skill === "pr-hero-pr");
+    expect(kept?.reason).toContain("could not be read or removed");
+    expect(kept?.reason).not.toContain("no recorded digest");
+  });
+
+  test("an unreadable legacy file is reported as unreadable, not edited", async () => {
+    const dir = installLegacy("pr-hero-pr", ["SKILL.md"]);
+    const skill = path.join(dir, "SKILL.md");
+    const result = await syncSkills(env, resolveEngineAssets(), {
+      readFile: (p: string) =>
+        p === skill
+          ? undefined
+          : existsSync(p)
+            ? readFileSync(p, "utf-8")
+            : undefined,
+    });
+    const kept = result.legacy?.find((l) => l.skill === "pr-hero-pr");
+    expect(kept?.status).toBe("kept");
+    expect(kept?.reason).toContain("could not be read or removed");
+    expect(kept?.reason).not.toContain("edited");
   });
 
   test("a legacy dir with no recorded digest is left alone and reported", async () => {

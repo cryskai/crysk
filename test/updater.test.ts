@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { selfInvocation } from "../src/assets";
 import { prheroLayout } from "../src/home-preflight";
 import { SUPPORTED_OPENCODE_SDK_VERSION } from "../src/transport-registry";
 import {
@@ -624,6 +625,42 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
       const text = result.errors.join("\n");
       expect(text).toContain("collision");
       expect(text).not.toContain("already running");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+});
+
+describe("reconcile re-registers the MCP server", () => {
+  test("moves a pre-rename pr-hero entry to the crysk key", async () => {
+    const fixture = await withHome(undefined);
+    try {
+      const mcpPath = path.join(fixture.home, ".claude", "mcp.json");
+      await mkdir(path.dirname(mcpPath), { recursive: true });
+      await writeFile(
+        mcpPath,
+        JSON.stringify({
+          mcpServers: {
+            "pr-hero": { command: "/old/pr-hero", args: ["mcp"], timeout: 9 },
+          },
+        }),
+      );
+
+      // No verifyMcp: the default path is the one that registers.
+      const result = await quietReconcile(fixture.home, {
+        verifyMcp: undefined,
+      });
+
+      expect(result.errors).toEqual([]);
+      const self = selfInvocation();
+      const parsed = JSON.parse(await readFile(mcpPath, "utf-8"));
+      expect(parsed.mcpServers).toEqual({
+        crysk: {
+          command: self.command,
+          args: [...self.args, "mcp"],
+          timeout: 9,
+        },
+      });
     } finally {
       await fixture.cleanup();
     }
