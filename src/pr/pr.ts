@@ -2474,7 +2474,9 @@ function admissionCheckRunStatus(
   return "completed";
 }
 
-function parseAdmissionCheckRunRow(line: string): AdmissionRecord | null {
+function parseAdmissionCheckRunRow(
+  line: string,
+): { id: number; record: AdmissionRecord } | null {
   if (line.trim() === "") return null;
   try {
     const row = JSON.parse(line) as {
@@ -2487,7 +2489,8 @@ function parseAdmissionCheckRunRow(line: string): AdmissionRecord | null {
       return null;
     const text = row.output?.text;
     if (typeof text !== "string") return null;
-    return parseAdmissionRecord(text);
+    const record = parseAdmissionRecord(text);
+    return record === null ? null : { id: row.id ?? 0, record };
   } catch {
     return null;
   }
@@ -2528,12 +2531,19 @@ export async function listAdmissionCheckRuns(
       ADMISSION_CHECK_RUN_TIMEOUT_MS,
     );
     if (!result.ok) return [];
-    const records: AdmissionRecord[] = [];
+    const rows: { id: number; record: AdmissionRecord }[] = [];
     for (const line of result.stdout.split("\n")) {
-      const record = parseAdmissionCheckRunRow(line);
-      if (record !== null) records.push(record);
+      const row = parseAdmissionCheckRunRow(line);
+      if (row !== null) rows.push(row);
     }
-    return records;
+    if (options?.includeHistory === true || rows.length < 2) {
+      return rows.map((row) => row.record);
+    }
+    // filter=latest is per NAME, so a head admitted both before and after the
+    // rename returns one row under each name. The current state is the newest
+    // check run (ids only grow); returning both would count an extra attempt.
+    const newest = rows.reduce((a, b) => (b.id > a.id ? b : a));
+    return [newest.record];
   } catch {
     return [];
   }
@@ -2574,7 +2584,7 @@ async function findAdmissionCheckRunForAttempt(
     );
     if (!result.ok) return null;
     for (const line of result.stdout.split("\n")) {
-      const parsedRecord = parseAdmissionCheckRunRow(line);
+      const parsedRecord = parseAdmissionCheckRunRow(line)?.record ?? null;
       if (parsedRecord === null) continue;
       const row = JSON.parse(line) as {
         id?: number;

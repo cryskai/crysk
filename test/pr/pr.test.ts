@@ -2796,12 +2796,49 @@ describe("listAdmissionCheckRuns", () => {
     ]);
     const records = await listAdmissionCheckRuns(OPERATOR_ROOT, HEAD, {
       spawnFn,
+      includeHistory: true,
     });
     expect(records).toEqual([old, fresh]);
     // The server-side filter has to let both names through too.
     const jq = (calls[0]?.argv ?? []).join(" ");
     expect(jq).toContain('.name == "crysk/ci-admission"');
     expect(jq).toContain('.name == "pr-hero/ci-admission"');
+  });
+
+  test("a current-state read keeps one row across both names: the newest check run", async () => {
+    // filter=latest returns the newest run PER NAME, so a head reviewed before
+    // and after the rename comes back with one row under each name. The old
+    // single-name read returned one row; two would count an extra attempt.
+    const fresh = admissionRecordFixture({ attemptNumber: 2 });
+    const old = admissionRecordFixture({
+      attemptNumber: 1,
+      reservationId: "older-release",
+    });
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["check-runs"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 7,
+              name: "crysk/ci-admission",
+              status: "completed",
+              output: { text: serializeAdmissionRecord(fresh) },
+            },
+            {
+              id: 3,
+              name: "pr-hero/ci-admission",
+              status: "completed",
+              output: { text: serializeAdmissionRecord(old) },
+            },
+          ]),
+        },
+      },
+    ]);
+    const records = await listAdmissionCheckRuns(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    expect(records).toEqual([fresh]);
   });
 
   test("fail-open returns an empty list on gh errors", async () => {
