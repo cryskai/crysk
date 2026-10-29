@@ -1,5 +1,7 @@
 # Crysk
 
+**[crysk.dev](https://crysk.dev)** · [npm](https://www.npmjs.com/package/crysk) · [skills](https://skills.sh/cryskai/crysk)
+
 A multi-agent PR-review engine. Specialty hunter agents fan out in parallel over a repo checkout and
 its diff, a mechanical dedupe merges their drafts, an adversarial refuter challenges every severe
 finding, and deterministic code — never a model — assigns blocking/advisory tiers.
