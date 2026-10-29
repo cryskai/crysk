@@ -160,8 +160,8 @@ export interface TransportOutcome {
   // attempt's outcome. Absent on a success and when the transport has nothing to say.
   readonly failureDetail?: string;
   // The secret the failed attempt ran on, when the transport can tell: a CI run names it
-  // so the fix says WHICH secret to replace or top up. Only the two Claude credentials
-  // exist today, and ANTHROPIC_API_KEY wins over CLAUDE_CODE_OAUTH_TOKEN in the CLI.
+  // so the fix says WHICH secret to replace or top up. The per-token variables win over
+  // CLAUDE_CODE_OAUTH_TOKEN in the CLI (see credentialOf in the Claude transport).
   readonly failureCredential?: FailureCredential;
   readonly completion: "success" | "failed" | "cancelled";
   readonly protocolIntegrity:
@@ -222,7 +222,10 @@ export interface TransportOutcome {
 
 // The GitHub secrets a Claude review can run on (see TransportOutcome.failureCredential).
 // The CI record mirrors this list in src/ci/outcome.ts, tied by `satisfies`.
-export type FailureCredential = "ANTHROPIC_API_KEY" | "CLAUDE_CODE_OAUTH_TOKEN";
+export type FailureCredential =
+  | "ANTHROPIC_API_KEY"
+  | "ANTHROPIC_AUTH_TOKEN"
+  | "CLAUDE_CODE_OAUTH_TOKEN";
 
 export type TransportFailureCause =
   | "auth_invalid"

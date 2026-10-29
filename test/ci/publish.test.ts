@@ -549,6 +549,107 @@ describe("decidePublication — the pure table", () => {
         expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
       });
 
+      // F001: the commit status is clipped at 140 characters, so the provider's words
+      // (with the reset time) must come right after the code, before any explanation.
+      describe("the status description keeps the provider's words", () => {
+        const CREDIT = "Anthropic API: Credit balance is too low (HTTP 400)";
+        const LIMIT =
+          "Anthropic API: You've hit your 5-hour limit · resets 12:40pm (Asia/Tokyo) (HTTP 429)";
+
+        test("an API key out of credit", () => {
+          const entry = {
+            cause: "quota_exhausted",
+            provider: "anthropic",
+            credential: "ANTHROPIC_API_KEY",
+            detail: CREDIT,
+          };
+          const description = plan([entry, entry]).status?.description ?? "";
+          expect(description).toStartWith(`PRH-PROVIDER-LIMITED: ${CREDIT}`);
+          expect(description.length).toBeLessThanOrEqual(140);
+        });
+
+        test("a subscription usage limit keeps its reset time", () => {
+          const entry = {
+            cause: "quota_exhausted",
+            provider: "anthropic",
+            credential: "CLAUDE_CODE_OAUTH_TOKEN",
+            detail: LIMIT,
+          };
+          const description = plan([entry, entry]).status?.description ?? "";
+          expect(description).toStartWith(`PRH-PROVIDER-LIMITED: ${LIMIT}`);
+          expect(description).toContain("resets 12:40pm (Asia/Tokyo)");
+        });
+
+        test("a quota whose credential is unknown or a bearer token keeps it too", () => {
+          for (const credential of [undefined, "ANTHROPIC_AUTH_TOKEN"]) {
+            const entry = {
+              cause: "quota_exhausted",
+              provider: "anthropic",
+              detail: LIMIT,
+              ...(credential === undefined ? {} : { credential }),
+            };
+            const description = plan([entry, entry]).status?.description ?? "";
+            expect(description).toContain("resets 12:40pm (Asia/Tokyo)");
+          }
+        });
+
+        test("the generic code keeps it for any other shared detail", () => {
+          const entry = { cause: "network_transient", detail: LIMIT };
+          const description = plan([entry, entry]).status?.description ?? "";
+          expect(description).toStartWith("PRH-HUNTERS-FAILED: ");
+          expect(description).toContain("resets 12:40pm (Asia/Tokyo)");
+        });
+      });
+
+      // F003: the fix list starts with the fix for the secret that was rejected.
+      describe("PRH-CRED-REJECTED leads with the fix for the secret it names", () => {
+        function rejected(credential: string) {
+          const entry = {
+            cause: "auth_invalid",
+            provider: "anthropic",
+            credential,
+            detail: "Anthropic API: Invalid API key (HTTP 401)",
+          };
+          const p = plan([entry, entry]);
+          expect(p.rendered.code).toBe("PRH-CRED-REJECTED");
+          return p;
+        }
+
+        test("ANTHROPIC_API_KEY: a new key, or delete it, and the OAuth token alone changes nothing", () => {
+          const p = rejected("ANTHROPIC_API_KEY");
+          const summary = p.rendered.summary.join("\n");
+          expect(
+            summary.indexOf("gh secret set ANTHROPIC_API_KEY"),
+          ).toBeGreaterThan(-1);
+          expect(summary).toContain("gh secret delete ANTHROPIC_API_KEY");
+          expect(summary).toContain(
+            "changes nothing while ANTHROPIC_API_KEY is set",
+          );
+          expect(summary).not.toContain("claude setup-token");
+          expect(p.rendered.annotation).toContain(
+            "delete the ANTHROPIC_API_KEY secret",
+          );
+          expect(p.rendered.annotation).toContain(
+            "changes nothing while the key is set",
+          );
+        });
+
+        test("CLAUDE_CODE_OAUTH_TOKEN: claude setup-token first", () => {
+          const p = rejected("CLAUDE_CODE_OAUTH_TOKEN");
+          const summary = p.rendered.summary.join("\n");
+          expect(summary).toContain("claude setup-token");
+          expect(summary).not.toContain("changes nothing");
+          expect(summary).not.toContain("gh secret delete");
+          expect(p.rendered.annotation).toContain("claude setup-token");
+        });
+
+        test("ANTHROPIC_AUTH_TOKEN keeps the general list", () => {
+          const p = rejected("ANTHROPIC_AUTH_TOKEN");
+          expect(p.rendered.annotation).toContain("ANTHROPIC_AUTH_TOKEN");
+          expect(p.rendered.summary.join("\n")).toContain("claude setup-token");
+        });
+      });
+
       test("a quota cause whose credential is unknown keeps the quoted-detail wording", () => {
         const entry = {
           cause: "quota_exhausted",

@@ -1781,6 +1781,28 @@ describe("ClaudeCodeCliTransport error map", () => {
     );
   });
 
+  test("a long or multi-line tag is cut and flattened like the message, and the detail stays within 160", async () => {
+    const outcome = await run(
+      JSON.stringify({
+        is_error: true,
+        terminal_reason: `reason\nwith a break ${"r".repeat(300)}`,
+        result: "boom",
+      }),
+      1,
+    );
+    expect(outcome.failureCause).toBe("provider_configuration_invalid");
+    const detail = outcome.failureDetail ?? "";
+    expect(detail.length).toBeLessThanOrEqual(160);
+    expect(detail).toStartWith("Claude CLI: boom (reason with a break rrr");
+    expect(detail).toEndWith("…)");
+    expect(
+      Array.from(detail).some((char) => {
+        const code = char.charCodeAt(0);
+        return code < 0x20 || code === 0x7f;
+      }),
+    ).toBe(false);
+  });
+
   test("an unnamed error with neither reason nor subtype is still failed, and the detail stays short", async () => {
     const outcome = await run(
       JSON.stringify({ is_error: true, result: "x".repeat(400) }),
@@ -1826,6 +1848,18 @@ describe("ClaudeCodeCliTransport error map", () => {
     ],
     [
       { ANTHROPIC_API_KEY: "  ", CLAUDE_CODE_OAUTH_TOKEN: "t" },
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    ],
+    [
+      { ANTHROPIC_AUTH_TOKEN: "b", CLAUDE_CODE_OAUTH_TOKEN: "t" },
+      "ANTHROPIC_AUTH_TOKEN",
+    ],
+    [
+      { ANTHROPIC_API_KEY: "k", ANTHROPIC_AUTH_TOKEN: "b" },
+      "ANTHROPIC_API_KEY",
+    ],
+    [
+      { ANTHROPIC_AUTH_TOKEN: " ", CLAUDE_CODE_OAUTH_TOKEN: "t" },
       "CLAUDE_CODE_OAUTH_TOKEN",
     ],
     [{}, undefined],

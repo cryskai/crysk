@@ -368,6 +368,7 @@ export function safeModelName(value: unknown): string | undefined {
 // cause list above: this file cannot import the runtime list from execution/contracts).
 const FAILURE_CREDENTIAL_LOOKUP = {
   ANTHROPIC_API_KEY: true,
+  ANTHROPIC_AUTH_TOKEN: true,
   CLAUDE_CODE_OAUTH_TOKEN: true,
 } satisfies Record<FailureCredential, true>;
 
@@ -1360,20 +1361,49 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "config",
     what: "provider {provider} rejected the credential in {secret}",
-    variants: single(
-      "it is expired, revoked, or a short-lived /login session token",
-      [
-        "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
-        "Or, for an API key, create a new key in the Claude Console and set it:",
-        "$ gh secret set ANTHROPIC_API_KEY",
-        "Or, for OpenCode, re-export the auth store and re-set the secret:",
-        OPENCODE_STORE,
-        "Then ask for a new review:",
-        REVIEW_AGAIN,
-        LEGACY_REVIEW_NOTE,
-      ],
-      "replace the credential in {secret} with a new one, then run `gh secret set {secret}`",
-    ),
+    variants: {
+      // The rejected secret is the per-token key: the CLI prefers it to the OAuth token, so
+      // setting CLAUDE_CODE_OAUTH_TOKEN alone leaves the next run rejected the same way.
+      api_key: {
+        why: "the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN",
+        fixes: [
+          "Create a new key in the Claude Console and set it, or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN. Setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while ANTHROPIC_API_KEY is set:",
+          "$ gh secret set ANTHROPIC_API_KEY",
+          "$ gh secret delete ANTHROPIC_API_KEY",
+          "Then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "create a new key and run `gh secret set ANTHROPIC_API_KEY`, or delete the ANTHROPIC_API_KEY secret so the OAuth token is used (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while the key is set)",
+      },
+      oauth: {
+        why: "it is expired, revoked, or a short-lived /login session token",
+        fixes: [
+          "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+          "Then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
+      },
+      default: {
+        why: "it is expired, revoked, or a short-lived /login session token",
+        fixes: [
+          "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+          "Or, for an API key, create a new key in the Claude Console and set it:",
+          "$ gh secret set ANTHROPIC_API_KEY",
+          "Or, for OpenCode, re-export the auth store and re-set the secret:",
+          OPENCODE_STORE,
+          "Then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "replace the credential in {secret} with a new one, then run `gh secret set {secret}`",
+      },
+    },
   },
   "PRH-ROUTING-MISSING": {
     level: "error",
@@ -1641,16 +1671,19 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: {
       default: PROVIDER_LIMITED,
       // Every failed hunter hit the same limit and the provider said which one (an empty
-      // credit balance, say): the sentence quotes it, and the fix is the default's.
+      // credit balance, say): the sentence quotes it, and the fix is the default's. The
+      // quote comes FIRST in this and the next two variants: the commit status clips the
+      // code plus the sentence at 140 characters, and the provider's words (with a reset
+      // time) must survive that. The explanation after them is for the comment.
       every_hunter: {
         ...PROVIDER_LIMITED,
-        what: "rate limit or quota reached: {detail}",
+        what: "{detail} (rate limit or quota reached)",
       },
       // The credit balance or spend limit of the account behind ANTHROPIC_API_KEY (the CLI
       // prefers that key over the subscription token, so it is the credential in use).
       // Waiting does not help: the fix is to top up, or to stop using the key.
       api_key: {
-        what: "the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit: {detail}",
+        what: "{detail}: the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit",
         why: "the provider refuses every request until the account has credit again, so a retry would fail the same way",
         fixes: [
           "Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN:",
@@ -1665,7 +1698,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       // The Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached a usage window. The
       // provider's own sentence carries the reset time, so the what quotes it.
       subscription: {
-        what: "the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached its usage limit: {detail}",
+        what: "{detail}: the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached its usage limit",
         why: "the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way",
         fixes: [
           "Re-run after the limit resets (the reset time is in the sentence above):",
@@ -1721,7 +1754,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     // sees directly (the hunter set), so "Unclassified:" would blame an unknown
     // cause that does not exist. The owner stays unclassified for the table.
     lead: "Not reviewed:",
-    what: "Every review hunter failed in {step}: {detail}",
+    what: "Every hunter failed in {step}: {detail}",
     variants: {
       default: {
         why: "no hunter returned a result, so there is no finding to report",
@@ -1920,6 +1953,12 @@ function paramVariant(
 ): string | undefined {
   if (code === "PRH-TOKEN-PERMISSION" && isBlank(params.scope)) {
     return "no-scope";
+  }
+  // The credential in the secret picks the fix: a rejected API key and a rejected OAuth
+  // token are replaced differently, and the CLI uses the key ahead of the token.
+  if (code === "PRH-CRED-REJECTED" && variant === undefined) {
+    if (params.secret === "ANTHROPIC_API_KEY") return "api_key";
+    if (params.secret === "CLAUDE_CODE_OAUTH_TOKEN") return "oauth";
   }
   // A caller that names a variant keeps it, so the default wording stays
   // reachable with a detail present.

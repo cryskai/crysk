@@ -144,10 +144,16 @@ export type UsageCostSource =
 export function envBillsMetered(
   env: Readonly<Record<string, string | undefined>>,
 ): boolean {
-  return Boolean(
-    env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_AUTH_TOKEN?.trim(),
-  );
+  return METERED_CREDENTIAL_ENV.some((name) => Boolean(env[name]?.trim()));
 }
+
+// The per-token credential variables, in the order the CLI prefers them. The one list
+// envBillsMetered reads and the failure-credential naming of the Claude transport reads,
+// so a variable that bills as metered is also a variable a failure can name.
+export const METERED_CREDENTIAL_ENV = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+] as const;
 
 // §8 lines 429-450, verbatim field names (camelCase — the legacy flat shape
 // keeps its own snake_case names; `projectLegacyUsage` below is the ONLY

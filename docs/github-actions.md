@@ -1104,6 +1104,54 @@ gh pr comment {pr} --body "/crysk review"
 
 On a workflow set up before the rename, comment `/pr-hero review` instead.
 
+When every failed hunter reports the secret it ran on, the fix starts with the one for that secret.
+
+#### `api_key`
+
+**Why:** the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN
+
+The rejected secret is `ANTHROPIC_API_KEY`. The CLI prefers it to the OAuth token (observed with CLI 2.1.312: with both present it prints that the key "takes precedence over your claude.ai login"), so setting the OAuth token alone changes nothing while the key is set.
+
+**Fix:**
+
+Create a new key in the Claude Console and set it, or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN. Setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while ANTHROPIC_API_KEY is set:
+
+```bash
+gh secret set ANTHROPIC_API_KEY
+```
+
+```bash
+gh secret delete ANTHROPIC_API_KEY
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+#### `oauth`
+
+**Why:** it is expired, revoked, or a short-lived /login session token
+
+The rejected secret is `CLAUDE_CODE_OAUTH_TOKEN`.
+
+**Fix:**
+
+```bash
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
 ### PRH-ROUTING-MISSING
 
 **Owner:** your configuration
@@ -1452,17 +1500,17 @@ gh pr comment {pr} --body "/crysk review"
 
 On a workflow set up before the rename, comment `/pr-hero review` instead.
 
-When every failed hunter ran out of quota (the Claude CLI reports an empty Anthropic credit balance, a spend limit and a subscription usage window this way), the run renders this code with the provider's own words in the sentence, so the commit status says which limit it was. These causes are not retried: a retry within minutes cannot succeed. The variants below pick the fix from the secret the hunters ran on.
+When every failed hunter ran out of quota (the Claude CLI reports an empty Anthropic credit balance, a spend limit and a subscription usage window this way), the run renders this code with the provider's own words in the sentence, so the commit status says which limit it was. These causes are not retried: a retry within minutes cannot succeed. The variants below pick the fix from the secret the hunters ran on. The provider's words come first in the sentence of every variant that quotes them, so the 140-character commit status keeps them (the reset time of a usage limit included) and the explanation after them is what gets clipped.
 
 #### `every_hunter`
 
-**What:** rate limit or quota reached: {detail}
+**What:** {detail} (rate limit or quota reached)
 
 Every hunter of the run failed on the same limit, and all of them reported the same words from the provider, which fill `{detail}`. The secret they ran on is not known, so the fix is the default one. Hunters that reported different words, or none, render this code without the quote.
 
 #### `api_key`
 
-**What:** the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit: {detail}
+**What:** {detail}: the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit
 
 **Why:** the provider refuses every request until the account has credit again, so a retry would fail the same way
 
@@ -1484,7 +1532,7 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 #### `subscription`
 
-**What:** the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached its usage limit: {detail}
+**What:** {detail}: the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached its usage limit
 
 **Why:** the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way
 
@@ -1560,7 +1608,7 @@ gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body
 
 **Owner:** unclassified
 
-**What:** Every review hunter failed in {step}: {detail}
+**What:** Every hunter failed in {step}: {detail}
 
 **Why:** no hunter returned a result, so there is no finding to report
 

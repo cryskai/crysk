@@ -23,6 +23,7 @@ import {
 import type { NormalizedUsage } from "../execution/usage-normalized";
 import {
   envBillsMetered,
+  METERED_CREDENTIAL_ENV,
   normalizePartialUsage,
   normalizeUnavailableUsage,
 } from "../execution/usage-normalized";
@@ -1114,15 +1115,24 @@ interface ProviderApiError {
 }
 
 const API_ERROR_DETAIL_MAX = 160;
+const UNNAMED_TAG_MAX = 60;
 
 // Text witnesses that split ONE status into two causes (S3 of odd/tasks/claude-error-map.md).
 // A 400 is a spent balance or limit, or a plain malformed request; a 429 is a usage limit
 // that will not clear within minutes ("You've hit your 5-hour limit · resets 12:40pm", a
 // tier spend cap), or a rate limit that will. They are read ONLY once a status picked the
 // branch, never alone.
-const CREDIT_OR_SPEND_LIMIT = /credit balance|spend limit/i;
+//
+// The patterns are Anthropic's real wordings: "Credit balance is too low", "You have reached
+// your specified workspace API usage limits" (a 400), "You've hit your 5-hour limit"
+// (a subscription), a tier "spend cap". Bare "limit reached" and "resets" are NOT witnesses:
+// an ordinary per-minute rate-limit message can say either and must keep its backoff retry.
+const CREDIT_OR_SPEND_LIMIT = /credit balance|spend limit|usage limit/i;
 const SUBSCRIPTION_OR_SPEND_CAP =
-  /hit your .*limit|usage limit|limit reached|resets|spend cap|spend limit/i;
+  /hit your .*limit|usage limit|spend cap|spend limit/i;
+// A usage-limit message that arrives with no status is the same terminal limit.
+const USAGE_LIMIT_NO_STATUS =
+  /hit your .*limit|usage limit|credit balance|spend cap|spend limit/i;
 const NOT_LOGGED_IN = /Not logged in\s*[·.]\s*Please run \/login/i;
 
 // The map from one error envelope to its typed cause. The CLI prints `is_error: true` with
@@ -1173,7 +1183,10 @@ function claudeCliErrorCause(
         ? "quota_exhausted"
         : "rate_limit";
     }
-    if (status === 529) return "rate_limit";
+    // 503 backs off like 529: an instant retry against a saturated server burns the whole
+    // transient budget in milliseconds (the same reason classifyFailure reads it as
+    // rate_limit). Every other 5xx is a failure to try again at once.
+    if (status === 529 || status === 503) return "rate_limit";
     if (status >= 500) return "network_transient";
     if (status >= 400) return "provider_configuration_invalid";
     return undefined;
@@ -1190,7 +1203,10 @@ function claudeCliErrorCause(
   if (reason === "model_error" || reason === "malformed_tool_use_exhausted") {
     return "protocol_mismatch";
   }
-  if (/overloaded|rate_limit_error/i.test(message)) return "rate_limit";
+  if (USAGE_LIMIT_NO_STATUS.test(message)) return "quota_exhausted";
+  if (/overloaded|rate_limit_error|service unavailable/i.test(message)) {
+    return "rate_limit";
+  }
   if (
     reason === "aborted_streaming" ||
     reason === "aborted_tools" ||
@@ -1226,9 +1242,14 @@ function providerApiErrorOf(
   // the request is not one a retry can fix, so it is terminal, and the reason is quoted
   // beside the CLI's words so CI shows what happened instead of a generic failure.
   if (cause === undefined) {
+    // The tag is the CLI's text too: one line, and short enough that the message keeps
+    // room in the 160 characters.
     const tag =
-      reason ??
-      (subtype !== undefined && subtype !== "success" ? subtype : "unknown");
+      oneLine(
+        reason ??
+          (subtype !== undefined && subtype !== "success" ? subtype : ""),
+        UNNAMED_TAG_MAX,
+      ) || "unknown";
     const suffix = ` (${tag}${status === undefined ? "" : `, HTTP ${status}`})`;
     const prefix = "Claude CLI: ";
     const words = oneLine(
@@ -1269,13 +1290,20 @@ function oneLine(words: string, room: number): string {
   return flat.length <= room ? flat : `${flat.slice(0, room - 1)}…`;
 }
 
-// The secret the child ran on. ANTHROPIC_API_KEY wins over CLAUDE_CODE_OAUTH_TOKEN in the
-// CLI ("claude.ai connectors are disabled because ANTHROPIC_API_KEY takes precedence"),
-// and a whitespace-only value is no credential (the same trim as envBillsMetered).
+// The secret the child ran on. The per-token variables (the list envBillsMetered reads) win
+// over CLAUDE_CODE_OAUTH_TOKEN, and a whitespace-only value is no credential (the same trim).
+//
+// The precedence is observed, not assumed. With CLI 2.1.312 and both an API key and an
+// OAuth login present, the CLI prints "claude.ai connectors are disabled because
+// ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai
+// login". On juanmaagd/pr-hero CI with both secrets bound, every request used the API key
+// ("Credit balance is too low") while CLAUDE_CODE_OAUTH_TOKEN was valid.
 function credentialOf(
   env: Readonly<Record<string, string | undefined>>,
 ): FailureCredential | undefined {
-  if (env.ANTHROPIC_API_KEY?.trim()) return "ANTHROPIC_API_KEY";
+  for (const name of METERED_CREDENTIAL_ENV) {
+    if (env[name]?.trim()) return name;
+  }
   if (env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return "CLAUDE_CODE_OAUTH_TOKEN";
   return undefined;
 }

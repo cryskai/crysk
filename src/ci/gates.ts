@@ -333,9 +333,13 @@ export type CiBillingMode = "subscription" | "metered";
 // ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN, so no generated workflow can
 // newly acquire a ceiling from it.
 //
-// This repo does NOT settle which credential actually bills when BOTH
-// CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are present, and it is worth
-// being explicit that the gap is real rather than papering over it:
+// Which credential bills when BOTH CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are
+// present was settled by observation after this rule was written: CLI 2.1.312 prints
+// "claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is
+// set and takes precedence over your claude.ai login", and on this repo's CI with both
+// secrets bound every request used the API key (see credentialOf in
+// transports/claude-code-cli.ts). The rule below still does not depend on that answer,
+// and the gap it describes was real when it was written:
 // action.yml:111-112 binds both into the child env unconditionally,
 // test/harness/env-projection.test.ts:48-56 deliberately asserts both survive
 // the projection with no precedence between them, and `defaultClaudeAuthProbe`
