@@ -14,7 +14,7 @@ describe("the CI adjudication marker", () => {
       head: HEAD,
     });
     expect(line).toBe(
-      `<!-- pr-hero-adjudication verdict=upheld reply=4302848786 head=${HEAD} -->`,
+      `<!-- crysk-adjudication verdict=upheld reply=4302848786 head=${HEAD} -->`,
     );
     expect(parseAdjudicationMarker(`${line}\n\nprose`)).toEqual({
       verdict: "upheld",

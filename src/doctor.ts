@@ -26,6 +26,12 @@ import {
   resolveEngineAssets,
   selfInvocation,
 } from "./assets";
+import { REPO_DIR_NAME, resolveHomeDir, resolveRepoDir } from "./brand-paths";
+import {
+  gitIsTracked,
+  type IsTracked,
+  migrationChecks,
+} from "./doctor-migration";
 import type { ExactBindingCapabilityReport } from "./execution/contracts";
 import {
   type CheckSystemToolsOptions,
@@ -54,6 +60,10 @@ export interface DoctorReport {
 }
 
 export interface RunDoctorOptions {
+  // Whether git tracks <repoDir>/<rel>: picks `git mv` over `mv` in the
+  // migration hint. Injectable so tests need no repository.
+  isTracked?: IsTracked;
+  platform?: string;
   cwd?: string;
   repoRoot?: string;
   home?: string;
@@ -110,7 +120,7 @@ export const PROVIDER_HINTS: Record<string, string> = {
 // produces ZERO capability reports, Claude-backed steps included. Degraded
 // here means "unverified", not "verified fine".
 const OPENCODE_SDK_UNAVAILABLE_HINT =
-  "Run pr-hero upgrade --reconcile to install @opencode-ai/sdk where this binary can resolve it, or route the affected steps through Claude instead. The probe stops at the first OpenCode step, so this run verified no capabilities for ANY route in the plan — Claude-backed steps are unverified here, not confirmed healthy.";
+  "Run crysk upgrade --reconcile to install @opencode-ai/sdk where this binary can resolve it, or route the affected steps through Claude instead. The probe stops at the first OpenCode step, so this run verified no capabilities for ANY route in the plan — Claude-backed steps are unverified here, not confirmed healthy.";
 
 function pushCapabilityProbeFailure(
   checks: DoctorCheckItem[],
@@ -167,7 +177,7 @@ export function openCodeRoutingSdkCheck(input: {
     message:
       `Unsupported OpenCode SDK version "${version}". ` +
       `Expected exact version "${SUPPORTED_OPENCODE_SDK_VERSION}". ` +
-      "Run pr-hero upgrade --reconcile.",
+      "Run crysk upgrade --reconcile.",
   };
 }
 
@@ -203,6 +213,11 @@ export async function runDoctor(
     });
 
   const repoDir = options.repoRoot ?? options.cwd;
+  // The directory the engine actually reads (.crysk/, or a legacy .prhero/), so
+  // every message names a file that exists.
+  const repoDirName = repoDir
+    ? path.basename(resolveRepoDir(repoDir, exists))
+    : REPO_DIR_NAME;
 
   const checks: DoctorCheckItem[] = [];
 
@@ -306,9 +321,12 @@ export async function runDoctor(
 
   // 2. Config layer / agents_dir check
   const repoConfigPath = repoDir
-    ? path.join(repoDir, ".prhero", "config.json")
+    ? path.join(resolveRepoDir(repoDir, exists), "config.json")
     : undefined;
-  const globalConfigPath = path.join(home, ".prhero", "config.json");
+  const globalConfigPath = path.join(
+    resolveHomeDir(home, exists),
+    "config.json",
+  );
 
   let parsedAgentsDir: string | undefined;
   if (repoConfigPath && exists(repoConfigPath)) {
@@ -349,7 +367,7 @@ export async function runDoctor(
         name: "agents_dir",
         severity: "blocking",
         message: `Configured agents_dir not found: ${parsedAgentsDir}`,
-        hint: `Delete "agents_dir" from .prhero/config.json to fall through to the bundled default prompt set.`,
+        hint: `Delete "agents_dir" from ${repoDirName}/config.json to fall through to the bundled default prompt set.`,
       });
     } else {
       checks.push({
@@ -405,7 +423,7 @@ export async function runDoctor(
         message: `Bundled prompt set is incomplete: cannot read ${unreadable.join(", ")}`,
         hint:
           "This build cannot review anything. Reinstall the engine with " +
-          "'pr-hero upgrade', or set \"agents_dir\" in .prhero/config.json to " +
+          "'crysk upgrade', or set \"agents_dir\" in .crysk/config.json to " +
           "a checked-out prompt set.",
       });
     } else {
@@ -421,7 +439,7 @@ export async function runDoctor(
 
   // 3. Gotchas check (only when repo root is supplied or discovered)
   if (repoDir) {
-    const gotchasPath = resolveGotchasPath(undefined, repoDir);
+    const gotchasPath = resolveGotchasPath(undefined, repoDir, exists);
     const gotchasContent = exists(gotchasPath)
       ? readFile(gotchasPath)
       : undefined;
@@ -434,44 +452,42 @@ export async function runDoctor(
       checks.push({
         name: "gotchas",
         severity: "blocking",
-        message:
-          "Repository gotchas file (.prhero/gotchas.md) is still the untouched scaffold",
+        message: `Repository gotchas file (${repoDirName}/gotchas.md) is still the untouched scaffold`,
         hint:
           `Replace the placeholder lines with real repository invariants, and delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` ` +
-          "marker line at the top if it is still there — pr-hero refuses to review the scaffold.",
+          "marker line at the top if it is still there — Crysk refuses to review the scaffold.",
       });
     } else if (unusable !== undefined) {
       checks.push({
         name: "gotchas",
         severity: "blocking",
-        message:
-          "Repository gotchas file (.prhero/gotchas.md) is empty or missing",
-        hint: "Create and populate .prhero/gotchas.md with repository-specific invariants and failure traps.",
+        message: `Repository gotchas file (${repoDirName}/gotchas.md) is empty or missing`,
+        hint: `Create and populate ${repoDirName}/gotchas.md with repository-specific invariants and failure traps.`,
       });
     } else {
       checks.push({
         name: "gotchas",
         severity: "healthy",
-        message: "Repository gotchas present (.prhero/gotchas.md)",
+        message: `Repository gotchas present (${repoDirName}/gotchas.md)`,
       });
     }
   }
 
-  // 4. Setup state check (~/.prhero/setup.json)
-  const setupJsonPath = path.join(home, ".prhero", "setup.json");
+  // 4. Setup state check (<home dir>/setup.json)
+  const setupJsonPath = path.join(resolveHomeDir(home, exists), "setup.json");
+  const homeDirName = path.basename(path.dirname(setupJsonPath));
   if (!exists(setupJsonPath)) {
     checks.push({
       name: "setup",
       severity: "degraded",
-      message:
-        "Global setup state not initialized (~/.prhero/setup.json absent)",
-      hint: "Run 'pr-hero init' or complete onboarding to initialize.",
+      message: `Global setup state not initialized (~/${homeDirName}/setup.json absent)`,
+      hint: "Run 'crysk init' or complete onboarding to initialize.",
     });
   } else {
     checks.push({
       name: "setup",
       severity: "healthy",
-      message: "Global setup state verified (~/.prhero/setup.json)",
+      message: `Global setup state verified (~/${homeDirName}/setup.json)`,
     });
   }
 
@@ -481,6 +497,21 @@ export async function runDoctor(
     exists,
     which: options.checkToolsOptions?.which,
   });
+
+  // The rename's migration hints need to know what is installed on this
+  // machine (binary on PATH, launchd agents, MCP registrations), so they run
+  // after the environment scan.
+  checks.push(
+    ...migrationChecks({
+      home,
+      repoDir,
+      exists,
+      readFile,
+      envs,
+      platform: options.platform ?? process.platform,
+      isTracked: options.isTracked ?? gitIsTracked,
+    }),
+  );
 
   const self = selfInvocation();
   const mcpReg = {
@@ -494,7 +525,7 @@ export async function runDoctor(
       severity: "degraded",
       message:
         "No AI agent coding environments detected (Claude Code, Cursor, Windsurf, Codex, Antigravity, OpenCode)",
-      hint: "Install or configure an AI agent environment to use pr-hero triage skills and MCP server.",
+      hint: "Install or configure an AI agent environment to use crysk triage skills and MCP server.",
     });
   } else {
     for (const env of envs) {
@@ -504,21 +535,34 @@ export async function runDoctor(
           checks.push({
             name: `skills:${env.id}`,
             severity: "healthy",
-            message: `pr-hero skills (triage, ci-setup) synced for ${env.displayName} (${env.skillsDir})`,
+            message: `crysk skills (triage, ci-setup) synced for ${env.displayName} (${env.skillsDir})`,
           });
         } else if (syncStatus.drift) {
           checks.push({
             name: `skills:${env.id}`,
             severity: "degraded",
             message: `Local modifications detected in skills for ${env.displayName}`,
-            hint: "Run 'pr-hero setup' or sync skills with force.",
+            hint: "Run 'crysk setup' or sync skills with force.",
           });
         } else {
           checks.push({
             name: `skills:${env.id}`,
             severity: "degraded",
-            message: `pr-hero skills not synced to ${env.displayName}`,
-            hint: "Run 'pr-hero setup' or 'pr-hero init' to sync skills.",
+            message: `crysk skills not synced to ${env.displayName}`,
+            hint: "Run 'crysk setup' or 'crysk init' to sync skills.",
+          });
+        }
+        // Sync removes the old-name copies it can prove untouched; one left
+        // behind holds a file the user edited (or one sync never recorded).
+        if (syncStatus.legacy.length > 0) {
+          const dirs = syncStatus.legacy
+            .map((name) => path.join(env.skillsDir as string, name))
+            .join(", ");
+          checks.push({
+            name: `skills-legacy:${env.id}`,
+            severity: "degraded",
+            message: `Skills installed under their old names remain for ${env.displayName}: ${dirs}`,
+            hint: "Run 'crysk setup' to remove the unedited ones, then delete the rest by hand once you have copied any edits you want to keep.",
           });
         }
       }
@@ -533,19 +577,27 @@ export async function runDoctor(
           hint: NPX_REGISTRATION_REFUSED,
         });
       } else if (env.mcpConfigFile) {
-        const mcpOk = inspectMcpRegistration(env, mcpReg, { exists, readFile });
-        if (mcpOk) {
+        const mcp = inspectMcpRegistration(env, mcpReg, { exists, readFile });
+        if (mcp === "current") {
           checks.push({
             name: `mcp:${env.id}`,
             severity: "healthy",
-            message: `pr-hero MCP server registered for ${env.displayName} (${env.mcpConfigFile})`,
+            message: `crysk MCP server registered for ${env.displayName} (${env.mcpConfigFile})`,
+          });
+        } else if (mcp === "legacy") {
+          // It still works; only the key predates the rename.
+          checks.push({
+            name: `mcp:${env.id}`,
+            severity: "degraded",
+            message: `crysk MCP server for ${env.displayName} is registered under its pre-rename key`,
+            hint: "Run 'crysk setup' to migrate the registration.",
           });
         } else {
           checks.push({
             name: `mcp:${env.id}`,
             severity: "degraded",
-            message: `pr-hero MCP server not registered for ${env.displayName}`,
-            hint: "Run 'pr-hero setup' to register the MCP server.",
+            message: `crysk MCP server not registered for ${env.displayName}`,
+            hint: "Run 'crysk setup' to register the MCP server.",
           });
         }
       }
@@ -631,7 +683,7 @@ export function renderDoctorReport(
   const bold = (s: string) => (styles ? `\x1b[1m${s}\x1b[0m` : s);
   const dim = (s: string) => (styles ? `\x1b[2m${s}\x1b[0m` : s);
 
-  lines.push(bold("pr-hero doctor"));
+  lines.push(bold("crysk doctor"));
   lines.push("");
 
   for (const check of report.checks) {

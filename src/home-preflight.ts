@@ -1,17 +1,18 @@
-// Everything the global ~/.prhero/ product home (W3 / GitHub #24) must
+// Everything the global ~/.crysk/ product home (W3 / GitHub #24) must
 // decide, expressed as pure functions so it is all testable offline. The
 // I/O shell in home.ts (and the CLI/watch shells that call it) reads origin,
-// the registry file, and the owner-present check; nothing here touches the
-// filesystem, git, or the clock.
+// the registry file, and the owner-present check. The one filesystem touch is
+// resolveHomeDir (~/.crysk, else a legacy ~/.prhero); no git, no clock.
 //
 // WHY a module the watcher does not own: ~/.prhero/ used to be watch-only
 // (watch.json, log, lock, plist). Worktrees and run artifacts lived as
 // siblings of each operator checkout, so two clones of the same GitHub repo
 // produced two trees for one PR. The product home now owns ephemeral machine
 // state; the watcher is one tenant. Per-repo trust (config, gotchas) stays
-// in <checkout>/.prhero/.
+// in <checkout>/.crysk/ (or a legacy .prhero/).
 
 import path from "node:path";
+import { resolveHomeDir } from "./brand-paths";
 import { CliUsageError } from "./errors";
 
 export const GC_TTL_HOURS = 72;
@@ -56,8 +57,11 @@ export interface PrheroLayout {
   bucketKeyPath: string;
 }
 
-export function prheroLayout(home: string): PrheroLayout {
-  const dir = path.join(home, ".prhero");
+export function prheroLayout(
+  home: string,
+  exists?: (p: string) => boolean,
+): PrheroLayout {
+  const dir = resolveHomeDir(home, exists);
   return {
     dir,
     nodeModulesDir: path.join(dir, "node_modules"),
@@ -424,7 +428,7 @@ export function legacyMigrationHint(input: {
 }): string[] {
   return [
     `legacy worktree still at ${input.legacyWorktree}`,
-    `pr-hero now keeps review trees under ${input.newWorktree}`,
+    `Crysk now keeps review trees under ${input.newWorktree}`,
     "remove the leftover with:",
     `  git -C ${input.operatorRoot} worktree remove --force ${input.legacyWorktree}`,
   ];
@@ -432,7 +436,7 @@ export function legacyMigrationHint(input: {
 
 export function missingOriginMessage(repoRoot: string): string {
   return (
-    `no git remote named origin in ${repoRoot} — pr-hero keys worktrees ` +
+    `no git remote named origin in ${repoRoot} — Crysk keys worktrees ` +
     "and run artifacts by the origin URL, so a checkout without origin " +
     "cannot use the global home. Add origin, or pass --out for this run."
   );

@@ -66,6 +66,7 @@ const GATE_ENV_KEYS = [
   "GITHUB_OUTPUT",
   "GITHUB_HEAD_REF",
   "GITHUB_ACTOR",
+  "GITHUB_WORKFLOW_REF",
 ] as const;
 type GateEnvKey = (typeof GATE_ENV_KEYS)[number];
 
@@ -603,6 +604,136 @@ describe("evaluateCiAdmissionGate — a gate-skipped head does not spend an atte
     expect(readsOf(HEAD_C)).toBe(1);
   });
 
+  // A repository scaffolded before the rename keeps .github/workflows/pr-hero.yml.
+  // The gate must still find its past runs (and must not crash on the missing
+  // crysk.yml), and a ledger row written under the new check-run name counts the
+  // same as one under the old name.
+  test("a repo on pr-hero.yml: the gate falls back to that file and reads the ledger under both names", async () => {
+    const reviewed = admissionCheckRunRecord({ headSha: HEAD_A });
+    const rowNamed = (name: string, record: AdmissionRecord) =>
+      `${JSON.stringify({
+        id: 1,
+        name,
+        status: "completed",
+        output: { text: JSON.stringify(record) },
+      })}\n`;
+    for (const name of ["crysk/ci-admission", "pr-hero/ci-admission"]) {
+      const calls: string[][] = [];
+      const spawnFn = makeFakeGh(
+        [
+          {
+            match: ["run", "list", "crysk.yml"],
+            response: {
+              stderr: "could not find any workflows named crysk.yml",
+              exitCode: 1,
+            },
+          },
+          {
+            match: ["run", "list", "pr-hero.yml"],
+            response: {
+              stdout: JSON.stringify([
+                { headSha: HEAD_A, conclusion: "success" },
+              ]),
+            },
+          },
+          {
+            match: [`commits/${HEAD_A}/check-runs`],
+            response: { stdout: rowNamed(name, reviewed) },
+          },
+          {
+            match: ["issues", "comments"],
+            response: {
+              stdout: `${JSON.stringify(summaryComment(1, HEAD_A, { blocking: 0, advisory: 1 }, 1))}\n`,
+            },
+          },
+          EMPTY_REVIEW_COMMENTS,
+          REPO_VIEW,
+          compareResponse("src/pipeline.ts"),
+          EMPTY_CHECK_RUNS,
+        ],
+        calls,
+      );
+      const { summaryPath, outputPath } = await tmpCiFiles();
+      const result = await withGateEnv(
+        {
+          GITHUB_STEP_SUMMARY: summaryPath,
+          GITHUB_OUTPUT: outputPath,
+          GITHUB_HEAD_REF: "feat/legacy-file",
+        },
+        () =>
+          evaluateCiAdmissionGate({
+            ciMode: "advisory",
+            operatorRoot: "/repo",
+            prNumber: PR,
+            headSha: HEAD_B,
+            config: EMPTY_LOCAL_CONFIG,
+            isCi: true,
+            options: baseOptions(),
+            spawnFn,
+            recordSkip: async () => {},
+          }),
+      );
+      expect(result.exitCode).toBeUndefined();
+      const workflows = calls
+        .filter((argv) => argv[0] === "run" || argv.includes("--workflow"))
+        .map((argv) => argv[argv.indexOf("--workflow") + 1]);
+      expect(workflows).toEqual(["crysk.yml", "pr-hero.yml"]);
+      // The head only the pr-hero.yml lookup returned had its ledger read.
+      expect(
+        calls.some((argv) =>
+          argv.join(" ").includes(`commits/${HEAD_A}/check-runs`),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  test("inside the action the gate asks for the workflow file the run came from", async () => {
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [
+        {
+          match: ["run", "list"],
+          response: { stdout: JSON.stringify([]) },
+        },
+        {
+          match: ["issues", "comments"],
+          response: { stdout: "" },
+        },
+        EMPTY_REVIEW_COMMENTS,
+        REPO_VIEW,
+        compareResponse("src/pipeline.ts"),
+        EMPTY_CHECK_RUNS,
+      ],
+      calls,
+    );
+    const { summaryPath, outputPath } = await tmpCiFiles();
+    await withGateEnv(
+      {
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_HEAD_REF: "feat/legacy-file",
+        GITHUB_WORKFLOW_REF:
+          "acme/widgets/.github/workflows/pr-hero.yml@refs/pull/42/merge",
+      },
+      () =>
+        evaluateCiAdmissionGate({
+          ciMode: "advisory",
+          operatorRoot: "/repo",
+          prNumber: PR,
+          headSha: HEAD_B,
+          config: EMPTY_LOCAL_CONFIG,
+          isCi: true,
+          options: baseOptions(),
+          spawnFn,
+          recordSkip: async () => {},
+        }),
+    );
+    const workflows = calls
+      .filter((argv) => argv.includes("--workflow"))
+      .map((argv) => argv[argv.indexOf("--workflow") + 1]);
+    expect(workflows).toEqual(["pr-hero.yml"]);
+  });
+
   // F002: GitHub's check-runs endpoint defaults to filter=latest, which hides
   // every earlier admission attempt on a head. The fake below answers with the
   // newest row only unless the request carries filter=all, so this goes red
@@ -926,11 +1057,10 @@ describe("yieldToInFlightReview", () => {
   // this run looked. Well inside the 90-minute in-flight TTL.
   const PENDING_AT = "2026-10-02T14:11:13Z";
   const NOW_MS = Date.parse("2026-10-02T14:12:00Z");
-  const YIELD_REASON =
-    "another pr-hero review is already in flight on this head";
-  const SKIP_LINE = "skip: a pr-hero review is already in-flight on this head";
+  const YIELD_REASON = "another crysk review is already in flight on this head";
+  const SKIP_LINE = "skip: a crysk review is already in-flight on this head";
   const WARNING_LINE =
-    "warning: a pr-hero review is already in-flight on this head; continuing";
+    "warning: a crysk review is already in-flight on this head; continuing";
   const LEDGER_CHECK_RUN_ID = 11;
 
   function commitStatus(
@@ -1022,7 +1152,7 @@ describe("yieldToInFlightReview", () => {
 
   test("standing down writes a yielded outcome record in action mode, and nothing without the outcome directory", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-yield-record-"));
-    const saved = process.env.PRHERO_OUTCOME_DIR;
+    const saved = process.env.CRYSK_OUTCOME_DIR;
     try {
       const yieldOnce = () =>
         capturingStderr(() =>
@@ -1037,21 +1167,21 @@ describe("yieldToInFlightReview", () => {
           }),
         );
 
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      process.env.CRYSK_OUTCOME_DIR = dir;
       const withDir = await yieldOnce();
       expect(withDir.result).toBe(0);
       const written = await readFile(path.join(dir, "cli.json"), "utf8");
       expect(JSON.parse(written)).toEqual({ v: 1, outcome: "yielded" });
 
-      delete process.env.PRHERO_OUTCOME_DIR;
+      delete process.env.CRYSK_OUTCOME_DIR;
       const without = await yieldOnce();
       expect(without).toEqual(withDir);
       expect(await readFile(path.join(dir, "cli.json"), "utf8")).toBe(written);
     } finally {
       if (saved === undefined) {
-        delete process.env.PRHERO_OUTCOME_DIR;
+        delete process.env.CRYSK_OUTCOME_DIR;
       } else {
-        process.env.PRHERO_OUTCOME_DIR = saved;
+        process.env.CRYSK_OUTCOME_DIR = saved;
       }
       await rm(dir, { recursive: true, force: true });
     }
@@ -1078,7 +1208,7 @@ describe("yieldToInFlightReview", () => {
     expect(checkRunCalls(calls)).toEqual([]);
   });
 
-  test("a head whose latest pr-hero status is not pending proceeds silently and settles nothing", async () => {
+  test("a head whose latest crysk status is not pending proceeds silently and settles nothing", async () => {
     const calls: string[][] = [];
     const spawnFn = makeFakeGh(
       [commitStatus("success"), CHECK_RUN_PATCH],
@@ -1251,9 +1381,21 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
   });
 
   // Every status write this run made: the POST to the statuses endpoint.
-  function statusWrites(calls: string[][]): string[][] {
+  // Every status goes out twice, crysk then the legacy pr-hero (postCommitStatus). This is the
+  // logical writes, the crysk side; legacyStatusWrites is the twin of each.
+  function allStatusPosts(calls: string[][]): string[][] {
     return calls.filter((argv) =>
       argv.some((token) => token.startsWith("repos/{owner}/{repo}/statuses/")),
+    );
+  }
+  function statusWrites(calls: string[][]): string[][] {
+    return allStatusPosts(calls).filter(
+      (argv) => !argv.includes("context=pr-hero"),
+    );
+  }
+  function legacyStatusWrites(calls: string[][]): string[][] {
+    return allStatusPosts(calls).filter((argv) =>
+      argv.includes("context=pr-hero"),
     );
   }
 
@@ -1308,9 +1450,15 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
     expect(writes[0]).toContain("state=failure");
-    expect(writes[0]).toContain("context=pr-hero");
+    expect(writes[0]).toContain("context=crysk");
+    // The legacy pr-hero twin carries the same state, description and target.
+    const twins = legacyStatusWrites(calls);
+    expect(twins).toHaveLength(1);
+    expect(twins[0]?.filter((token) => token !== "context=pr-hero")).toEqual(
+      writes[0]?.filter((token) => token !== "context=crysk"),
+    );
     expect(writes[0]).toContain(
-      "description=pr-hero: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+      "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
     );
   });
 
@@ -1329,7 +1477,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
     expect(writes[0]).toContain("state=failure");
     expect(writes[0]).toContain(
-      "description=pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+      "description=crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
     );
   });
 
@@ -1375,7 +1523,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain("state=failure");
     expect(writes[0]).toContain(
-      "description=pr-hero: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+      "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
     );
   });
 
@@ -1649,7 +1797,7 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
   }
 
   const STOP_REASON =
-    "a maintainer posted /pr-hero stop; /pr-hero review reviews this head";
+    "a maintainer stopped automatic reviews; /pr-hero review reviews this head";
 
   test("without a stop, this head runs (the baseline every case below changes)", async () => {
     const result = await runGate([priorSummary], []);
@@ -1667,6 +1815,24 @@ describe("evaluateCiAdmissionGate — /pr-hero stop", () => {
     // Recorded as spending nothing, so a later lift finds the budget intact.
     expect(result.unspent).toEqual([true]);
     expect(result.outputs).toContain("status=skipped-coverage");
+  });
+
+  test("a /crysk stop and a later /crysk review work like the legacy spellings", async () => {
+    const stopped = await runGate(
+      [priorSummary, comment(2, "maint", "/crysk stop")],
+      [permission("maint", { stdout: "write\n" })],
+    );
+    expect(stopped.exitCode).toBe(0);
+    expect(stopped.recorded).toEqual([STOP_REASON]);
+    const lifted = await runGate(
+      [
+        priorSummary,
+        comment(2, "maint", "/crysk stop"),
+        comment(3, "maint", "/crysk review"),
+      ],
+      [permission("maint", { stdout: "write\n" })],
+    );
+    expect(lifted.recorded).toEqual([]);
   });
 
   test("a skip for any other reason still spends an attempt, as before", async () => {

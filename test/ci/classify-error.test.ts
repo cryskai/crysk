@@ -172,7 +172,7 @@ describe("classifyCliError: the class an error carries", () => {
   });
 });
 
-// The routing class renders PRH-ROUTING-INVALID, whose text names PRHERO_ROUTING. The
+// The routing class renders PRH-ROUTING-INVALID, whose text names CRYSK_ROUTING. The
 // person file's routing error must not take it; the routing parser itself keeps it.
 describe("classifyCliError: the routing class depends on the layer that parsed", () => {
   function thrownBy(thrower: () => unknown): unknown {
@@ -188,7 +188,7 @@ describe("classifyCliError: the routing class depends on the layer that parsed",
     const error = thrownBy(() => parseGlobalConfig('{"routing": "invalid"}'));
     expect(error).toBeInstanceOf(CliUsageError);
     expect((error as CliUsageError).message).toBe(
-      "~/.prhero/config.json routing must be an object",
+      "~/.crysk/config.json routing must be an object",
     );
     expect(classifyCliError(error)).toEqual({ kind: "unknown" });
   });
@@ -197,10 +197,10 @@ describe("classifyCliError: the routing class depends on the layer that parsed",
     // The repo file cannot reach this parser today: `routing` is not a repo key, so the
     // repo layer rejects it first as a per-person key. The parser keeps its class anyway.
     const error = thrownBy(() =>
-      parseRoutingConfig("invalid", ".prhero/config.json"),
+      parseRoutingConfig("invalid", ".crysk/config.json"),
     );
     expect((error as CliUsageError).message).toBe(
-      ".prhero/config.json routing must be an object",
+      ".crysk/config.json routing must be an object",
     );
     expect(classifyCliError(error)).toEqual({
       kind: "config-parse",

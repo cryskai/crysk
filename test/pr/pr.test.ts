@@ -38,6 +38,7 @@ import {
   GRAPHQL_COMMENT_MAX_PAGES,
   ghPrFiles,
   ghPrHeadSha,
+  ghPrHeroWorkflowRunHeads,
   ghRepoWebUrl,
   listAdmissionCheckRuns,
   POSTING_GH_TIMEOUT_MS,
@@ -52,6 +53,7 @@ import {
   repostMarkedPrComment,
   resolveReviewThreadForComment,
   upsertAdmissionCheckRun,
+  workflowFileFromRef,
 } from "#pr/pr";
 import {
   CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
@@ -409,6 +411,141 @@ describe("parsePrHeroWorkflowRunHeads", () => {
         ]),
       ),
     ).toEqual(new Set([HEAD, OTHER]));
+  });
+});
+
+describe("workflowFileFromRef", () => {
+  test("reads the file out of GITHUB_WORKFLOW_REF", () => {
+    expect(
+      workflowFileFromRef(
+        "acme/widgets/.github/workflows/crysk.yml@refs/pull/7/merge",
+      ),
+    ).toBe("crysk.yml");
+    expect(
+      workflowFileFromRef(
+        "acme/widgets/.github/workflows/pr-hero.yml@refs/heads/main",
+      ),
+    ).toBe("pr-hero.yml");
+    expect(
+      workflowFileFromRef(
+        "acme/widgets/.github/workflows/code-review.yaml@refs/heads/main",
+      ),
+    ).toBe("code-review.yaml");
+  });
+
+  test("nothing to read when unset, unparsable, or the legacy force workflow", () => {
+    expect(workflowFileFromRef(undefined)).toBeUndefined();
+    expect(workflowFileFromRef("")).toBeUndefined();
+    expect(workflowFileFromRef("acme/widgets/other@refs/heads/main")).toBe(
+      undefined,
+    );
+    expect(
+      workflowFileFromRef(
+        "acme/widgets/.github/workflows/pr-hero-force.yml@refs/heads/main",
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe("ghPrHeroWorkflowRunHeads — which workflow file it asks about", () => {
+  const HEAD = "a".repeat(40);
+  const RUNS = JSON.stringify([{ headSha: HEAD, conclusion: "success" }]);
+  const NOT_FOUND = "could not find any workflows named crysk.yml";
+
+  async function withWorkflowRef<T>(
+    ref: string | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previous = process.env.GITHUB_WORKFLOW_REF;
+    if (ref === undefined) delete process.env.GITHUB_WORKFLOW_REF;
+    else process.env.GITHUB_WORKFLOW_REF = ref;
+    try {
+      return await fn();
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_WORKFLOW_REF;
+      else process.env.GITHUB_WORKFLOW_REF = previous;
+    }
+  }
+
+  const workflowArgs = (calls: { argv: string[] }[]) =>
+    calls.map((c) => c.argv[c.argv.indexOf("--workflow") + 1]);
+
+  test("outside the action it asks for crysk.yml first and stops there when it exists", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      { match: ["run", "list"], response: { stdout: RUNS } },
+    ]);
+    const heads = await withWorkflowRef(undefined, () =>
+      ghPrHeroWorkflowRunHeads(OPERATOR_ROOT, "feat/x", { spawnFn }),
+    );
+    expect(heads).toEqual(new Set([HEAD]));
+    expect(workflowArgs(calls)).toEqual(["crysk.yml"]);
+  });
+
+  test("a repo on pr-hero.yml works: crysk.yml is not found, so pr-hero.yml is asked", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["--workflow", "crysk.yml"],
+        response: { stderr: NOT_FOUND, exitCode: 1 },
+      },
+      { match: ["--workflow", "pr-hero.yml"], response: { stdout: RUNS } },
+    ]);
+    const heads = await withWorkflowRef(undefined, () =>
+      ghPrHeroWorkflowRunHeads(OPERATOR_ROOT, "feat/x", { spawnFn }),
+    );
+    expect(heads).toEqual(new Set([HEAD]));
+    expect(workflowArgs(calls)).toEqual(["crysk.yml", "pr-hero.yml"]);
+  });
+
+  test("any other failure keeps its error and does not try the second file", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["run", "list"],
+        response: { stderr: "HTTP 403: Resource not accessible", exitCode: 1 },
+      },
+    ]);
+    await expect(
+      withWorkflowRef(undefined, () =>
+        ghPrHeroWorkflowRunHeads(OPERATOR_ROOT, "feat/x", { spawnFn }),
+      ),
+    ).rejects.toThrow(/gh run list failed: HTTP 403/);
+    expect(workflowArgs(calls)).toEqual(["crysk.yml"]);
+  });
+
+  test("neither file found: the error names the last failure", async () => {
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["run", "list"],
+        response: { stderr: NOT_FOUND, exitCode: 1 },
+      },
+    ]);
+    await expect(
+      withWorkflowRef(undefined, () =>
+        ghPrHeroWorkflowRunHeads(OPERATOR_ROOT, "feat/x", { spawnFn }),
+      ),
+    ).rejects.toThrow(/gh run list failed: could not find any workflows/);
+  });
+
+  test("inside the action the file comes from GITHUB_WORKFLOW_REF, with no fallback", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      { match: ["--workflow", "pr-hero.yml"], response: { stdout: RUNS } },
+    ]);
+    const heads = await withWorkflowRef(
+      "acme/widgets/.github/workflows/pr-hero.yml@refs/pull/7/merge",
+      () => ghPrHeroWorkflowRunHeads(OPERATOR_ROOT, "feat/x", { spawnFn }),
+    );
+    expect(heads).toEqual(new Set([HEAD]));
+    expect(workflowArgs(calls)).toEqual(["pr-hero.yml"]);
+  });
+
+  test("a run started from the legacy force workflow still counts the review workflow's runs", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      { match: ["--workflow", "crysk.yml"], response: { stdout: RUNS } },
+    ]);
+    await withWorkflowRef(
+      "acme/widgets/.github/workflows/pr-hero-force.yml@refs/heads/main",
+      () => ghPrHeroWorkflowRunHeads(OPERATOR_ROOT, "feat/x", { spawnFn }),
+    );
+    expect(workflowArgs(calls)).toEqual(["crysk.yml"]);
   });
 });
 
@@ -1732,7 +1869,8 @@ describe("postCommitStatus", () => {
       context: COMMIT_STATUS_CONTEXT,
     });
     await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn);
-    expect(calls).toHaveLength(1);
+    // One POST per name of the context (crysk, then the legacy pr-hero).
+    expect(calls).toHaveLength(2);
     const argv = calls[0]?.argv ?? [];
     expect(argv).toContain("--method");
     expect(argv).toContain("POST");
@@ -1745,9 +1883,9 @@ describe("postCommitStatus", () => {
   });
 
   // T3 S7: the POST carries the context the request was built with, never a
-  // constant. A local run's status must land on pr-hero/local, so the gate's
-  // context is named only by a CI run's request.
-  test("POSTs the request's own context: a local request never names pr-hero", async () => {
+  // constant. A local run's status must land on crysk/local (and its legacy
+  // pr-hero/local), so the gate's context is named only by a CI run's request.
+  test("POSTs the request's own context: a local request never names the gate", async () => {
     const { spawnFn, calls } = makeFakeGh([
       {
         match: ["statuses", HEAD],
@@ -1763,7 +1901,10 @@ describe("postCommitStatus", () => {
     await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn);
     const argv = calls[0]?.argv ?? [];
     expect(argv).toContain(`context=${LOCAL_COMMIT_STATUS_CONTEXT}`);
-    expect(argv).not.toContain(`context=${COMMIT_STATUS_CONTEXT}`);
+    for (const call of calls) {
+      expect(call.argv).not.toContain(`context=${COMMIT_STATUS_CONTEXT}`);
+      expect(call.argv).not.toContain("context=pr-hero");
+    }
   });
 
   test("omits target_url when the request has none", async () => {
@@ -1811,7 +1952,8 @@ describe("postCommitStatus", () => {
         spawnFn,
       ),
     ).rejects.toThrow(/commit status pending/);
-    expect(calls).toHaveLength(2);
+    // Two attempts on each of the two names.
+    expect(calls).toHaveLength(4);
   });
 
   test("an abbreviated sha never reaches gh", async () => {
@@ -1830,6 +1972,177 @@ describe("postCommitStatus", () => {
       ),
     ).rejects.toThrow(/full 40-char id/);
     expect(calls).toHaveLength(0);
+  });
+});
+
+// The rename publishes every status on BOTH names for one version: users keep `pr-hero`
+// as a required check in branch protection, and a head that stops getting that context
+// blocks forever. The pair carries one state, one description and one target.
+describe("postCommitStatus publishes the crysk context and the legacy pr-hero one", () => {
+  // Keys a scripted answer off the exact `context=` argv element, so `crysk` never
+  // matches `crysk/local` the way a substring match would.
+  function pairFake(answers: Record<string, ScriptedResponse> = {}): {
+    spawnFn: typeof Bun.spawn;
+    calls: string[][];
+    contexts: () => string[];
+  } {
+    const calls: string[][] = [];
+    const encoder = new TextEncoder();
+    const spawnFn = ((argv: string[]) => {
+      calls.push(argv);
+      const context =
+        argv.find((arg) => arg.startsWith("context="))?.slice(8) ?? "";
+      const scripted = answers[context] ?? {
+        stdout: '{"created_at":"2026-10-29T10:00:00Z"}',
+      };
+      const stream = (text: string) =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (text) controller.enqueue(encoder.encode(text));
+            controller.close();
+          },
+        });
+      return {
+        stdout: stream(scripted.stdout ?? ""),
+        stderr: stream(scripted.stderr ?? ""),
+        exited: Promise.resolve(scripted.exitCode ?? 0),
+        kill() {},
+      };
+    }) as unknown as typeof Bun.spawn;
+    return {
+      spawnFn,
+      calls,
+      contexts: () =>
+        calls.map(
+          (argv) =>
+            argv.find((arg) => arg.startsWith("context="))?.slice(8) ?? "",
+        ),
+    };
+  }
+
+  const field = (argv: string[], name: string) =>
+    argv.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
+
+  test("a gate write POSTs crysk first, then pr-hero, with the same state, description and target_url", async () => {
+    const { spawnFn, calls, contexts } = pairFake();
+    await postCommitStatus(
+      OPERATOR_ROOT,
+      HEAD,
+      {
+        state: "failure",
+        context: "crysk",
+        description: "crysk: 2 blocking finding(s) — fix and push",
+        targetUrl: "https://github.com/org/repo/pull/7",
+      },
+      spawnFn,
+    );
+    expect(contexts()).toEqual(["crysk", "pr-hero"]);
+    for (const argv of calls) {
+      expect(argv.join(" ")).toContain(`repos/{owner}/{repo}/statuses/${HEAD}`);
+      expect(field(argv, "state")).toBe("failure");
+      expect(field(argv, "description")).toBe(
+        "crysk: 2 blocking finding(s) — fix and push",
+      );
+      expect(field(argv, "target_url")).toBe(
+        "https://github.com/org/repo/pull/7",
+      );
+    }
+  });
+
+  test("a local write POSTs the crysk/local and pr-hero/local pair, and never a gate context", async () => {
+    const { spawnFn, contexts } = pairFake();
+    await postCommitStatus(
+      OPERATOR_ROOT,
+      HEAD,
+      commitStatusRequest({
+        phase: "success",
+        posted: false,
+        targetUrl: undefined,
+        context: LOCAL_COMMIT_STATUS_CONTEXT,
+      }),
+      spawnFn,
+    );
+    expect(contexts()).toEqual(["crysk/local", "pr-hero/local"]);
+  });
+
+  test("resolves with the created_at of the crysk row", async () => {
+    const { spawnFn } = pairFake({
+      crysk: { stdout: '{"created_at":"2026-10-29T10:00:00Z"}' },
+      "pr-hero": { stdout: '{"created_at":"2026-10-29T10:00:01Z"}' },
+    });
+    expect(
+      await postCommitStatus(
+        OPERATOR_ROOT,
+        HEAD,
+        commitStatusRequest({
+          phase: "pending",
+          posted: false,
+          targetUrl: undefined,
+          context: COMMIT_STATUS_CONTEXT,
+        }),
+        spawnFn,
+      ),
+    ).toBe("2026-10-29T10:00:00Z");
+  });
+
+  test("a failed crysk POST still attempts pr-hero, then throws the same CliError", async () => {
+    const { spawnFn, contexts } = pairFake({
+      crysk: { stderr: "HTTP 500", exitCode: 1 },
+    });
+    await expect(
+      postCommitStatus(
+        OPERATOR_ROOT,
+        HEAD,
+        commitStatusRequest({
+          phase: "error",
+          posted: false,
+          targetUrl: undefined,
+          context: COMMIT_STATUS_CONTEXT,
+        }),
+        spawnFn,
+      ),
+    ).rejects.toThrow(/commit status error.*HTTP 500/);
+    // crysk: two attempts, pr-hero: one that landed.
+    expect(contexts().filter((c) => c === "crysk")).toHaveLength(2);
+    expect(contexts().filter((c) => c === "pr-hero")).toHaveLength(1);
+  });
+
+  test("a failed pr-hero POST throws even though crysk landed: the required check is the one that failed", async () => {
+    const { spawnFn, contexts } = pairFake({
+      "pr-hero": { stderr: "HTTP 403", exitCode: 1 },
+    });
+    await expect(
+      postCommitStatus(
+        OPERATOR_ROOT,
+        HEAD,
+        commitStatusRequest({
+          phase: "error",
+          posted: false,
+          targetUrl: undefined,
+          context: COMMIT_STATUS_CONTEXT,
+        }),
+        spawnFn,
+      ),
+    ).rejects.toThrow(/commit status error.*HTTP 403/);
+    expect(contexts().filter((c) => c === "crysk")).toHaveLength(1);
+    expect(contexts().filter((c) => c === "pr-hero")).toHaveLength(2);
+  });
+
+  test("the cancellation settle writes both contexts in one short window: one attempt each", async () => {
+    const { spawnFn, contexts } = pairFake();
+    await postCommitStatus(
+      OPERATOR_ROOT,
+      HEAD,
+      commitStatusRequest({
+        phase: "error",
+        posted: false,
+        targetUrl: undefined,
+        context: COMMIT_STATUS_CONTEXT,
+      }),
+      spawnFn,
+      { attempts: 1, timeoutMs: CANCELLATION_COMMIT_STATUS_TIMEOUT_MS },
+    );
+    expect(contexts()).toEqual(["crysk", "pr-hero"]);
   });
 });
 
@@ -1876,10 +2189,12 @@ describe("postCommitStatus bounds", () => {
     expect(timeouts).toEqual([
       COMMIT_STATUS_TIMEOUT_MS,
       COMMIT_STATUS_TIMEOUT_MS,
+      COMMIT_STATUS_TIMEOUT_MS,
+      COMMIT_STATUS_TIMEOUT_MS,
     ]);
   });
 
-  test("the cancellation settle is one attempt at the short bound", async () => {
+  test("the cancellation settle is one attempt per name at the short bound", async () => {
     const { spawnFn, timeouts } = makeTimeoutRecordingGh(1);
     await expect(
       postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn, {
@@ -1887,16 +2202,19 @@ describe("postCommitStatus bounds", () => {
         timeoutMs: CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
       }),
     ).rejects.toThrow(/commit status error/);
-    expect(timeouts).toEqual([CANCELLATION_COMMIT_STATUS_TIMEOUT_MS]);
+    expect(timeouts).toEqual([
+      CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
+      CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
+    ]);
   });
 
-  test("a successful cancellation settle still spends only one call", async () => {
+  test("a successful cancellation settle spends one call per name", async () => {
     const { spawnFn, timeouts } = makeTimeoutRecordingGh(0);
     await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn, {
       attempts: 1,
       timeoutMs: CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
     });
-    expect(timeouts).toHaveLength(1);
+    expect(timeouts).toHaveLength(2);
   });
 });
 
@@ -2449,6 +2767,80 @@ describe("listAdmissionCheckRuns", () => {
     expect(calls[0]?.argv).toContain("--paginate");
   });
 
+  test("reads the ledger under the new name and under the pre-rename one", async () => {
+    const fresh = admissionRecordFixture({ attemptNumber: 2 });
+    const old = admissionRecordFixture({
+      attemptNumber: 1,
+      reservationId: "older-release",
+    });
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["check-runs"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 1,
+              name: "pr-hero/ci-admission",
+              status: "completed",
+              output: { text: serializeAdmissionRecord(old) },
+            },
+            {
+              id: 2,
+              name: "crysk/ci-admission",
+              status: "completed",
+              output: { text: serializeAdmissionRecord(fresh) },
+            },
+          ]),
+        },
+      },
+    ]);
+    const records = await listAdmissionCheckRuns(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+      includeHistory: true,
+    });
+    expect(records).toEqual([old, fresh]);
+    // The server-side filter has to let both names through too.
+    const jq = (calls[0]?.argv ?? []).join(" ");
+    expect(jq).toContain('.name == "crysk/ci-admission"');
+    expect(jq).toContain('.name == "pr-hero/ci-admission"');
+  });
+
+  test("a current-state read keeps one row across both names: the newest check run", async () => {
+    // filter=latest returns the newest run PER NAME, so a head reviewed before
+    // and after the rename comes back with one row under each name. The old
+    // single-name read returned one row; two would count an extra attempt.
+    const fresh = admissionRecordFixture({ attemptNumber: 2 });
+    const old = admissionRecordFixture({
+      attemptNumber: 1,
+      reservationId: "older-release",
+    });
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["check-runs"],
+        response: {
+          stdout: ndjson([
+            {
+              id: 7,
+              name: "crysk/ci-admission",
+              status: "completed",
+              output: { text: serializeAdmissionRecord(fresh) },
+            },
+            {
+              id: 3,
+              name: "pr-hero/ci-admission",
+              status: "completed",
+              output: { text: serializeAdmissionRecord(old) },
+            },
+          ]),
+        },
+      },
+    ]);
+    const records = await listAdmissionCheckRuns(OPERATOR_ROOT, HEAD, {
+      spawnFn,
+    });
+    expect(records).toEqual([fresh]);
+  });
+
   test("fail-open returns an empty list on gh errors", async () => {
     const { spawnFn } = makeFakeGh([
       {
@@ -2491,6 +2883,9 @@ describe("upsertAdmissionCheckRun", () => {
       },
     );
     expect(argv.join(" ")).toContain(`name=${ADMISSION_CHECK_RUN_NAME}`);
+    // Only the new name is written; the old one is read, never written.
+    expect(argv).toContain("name=crysk/ci-admission");
+    expect(argv).not.toContain("name=pr-hero/ci-admission");
   });
 
   test("PATCHes when checkRunId is provided", async () => {

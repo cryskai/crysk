@@ -1,6 +1,6 @@
 # CI sandbox
 
-`juanmaagd/pr-hero-sandbox` is a public scratch repository where the pr-hero review
+`juanmaagd/pr-hero-sandbox` is a public scratch repository where the Crysk review
 action runs for real on GitHub's runners, against planted-bug pull requests. It exists so
 the pipeline and the Action can be run realistically, including their failure paths,
 without opening a PR on the product repo for every test. The goal is realistic runs
@@ -8,6 +8,9 @@ that are cheap. The repo is public, so Actions minutes are free.
 
 Code: `scripts/sandbox/` (runner, scenarios, rails). Tests: `test/sandbox/`, offline,
 under fakes. Run them with `bun test test/sandbox`.
+
+The scenarios comment the legacy `/pr-hero …` spelling, which every workflow accepts (one set up before the
+rename answers only that one); `/crysk …` starts the same runs.
 
 ## Commands
 
@@ -19,7 +22,7 @@ bun scripts/sandbox.ts list                             # open sandbox/ PRs, the
 bun scripts/sandbox.ts clean                            # close open sandbox/ PRs, delete their branches
 ```
 
-- `<ref>` is a tag or branch of `juanmaagd/pr-hero`, pinned into the sandbox workflow.
+- `<ref>` is a tag or branch of `cryskai/crysk`, pinned into the sandbox workflow.
   Letters, digits, `.`, `_`, `/`, `-`.
 - `init` creates the public repo if it is absent, seeds `main` with the fixture's correct
   sources, the product's scaffolded workflow, the repo config and the gotchas, and sets the
@@ -47,7 +50,7 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
 - A phase waits up to 2700 s (45 minutes) for its run: `DEFAULT_TIMEOUT_MS` in
   `scripts/sandbox/runs.ts`. A live free-model review once took 24m36s, and at the old
   25-minute ceiling it was cancelled just before it finished.
-- One invocation runs at a time on this machine. It takes `~/.prhero/sandbox.lock` exclusively
+- One invocation runs at a time on this machine. It takes `sandbox.lock` in the Crysk home (`~/.crysk`, or `~/.prhero` on an install from before the rename) exclusively
   and records its pid there. A second invocation is refused while the lock's process is alive;
   a lock whose process is gone is taken over. A lock that names no pid is refused, and is
   removed by hand once no run is in progress. The lock is released on exit, failure, or signal.
@@ -82,7 +85,7 @@ one observation of the PR. S7 invariants are checked on every observation.
 |---|---|---|---|
 | `no-credential` | With no model credential input, the action stops before any model. | Outcome comment `PRH-CRED-MISSING`; status `error` with that code; no report on the head. | $0 |
 | `bad-routing` | A malformed routing input is refused before any model runs. | Outcome comment `PRH-ROUTING-INVALID`; status `error` with that code; no report on the head. | $0 |
-| `bad-gotchas` | A scaffold `.prhero/gotchas.md` on the branch is refused before admission and spend, and the outcome names its owner. | Outcome comment `PRH-GOTCHAS-MISSING` with the owner lead `Your configuration:`; status `error` with that code; no report on the head. The branch commits the scaffold on top of the planted volume (the scenario's file override). | $0 |
+| `bad-gotchas` | A scaffold `.crysk/gotchas.md` on the branch is refused before admission and spend, and the outcome names its owner. | Outcome comment `PRH-GOTCHAS-MISSING` with the owner lead `Your configuration:`; status `error` with that code; no report on the head. The branch commits the scaffold on top of the planted volume (the scenario's file override). | $0 |
 | `review-free` | The normal workflow on the claude route reviews the planted bug end to end, its gate status agrees with the findings it posted, the review reports the planted bug, and no hunter failed. | Path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings on the PR (see Gate status below); at least one report on the head; no outcome comment; a finding anchored in `src/volume.ts` (lines 1-5, the planted file) on the head (`PLANTED_SITE` in `scripts/sandbox/seed.ts`); no `hunter <name>: failed` line in the run's log. | $0 (claude route, subscription quota) |
 | `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings; a report; no outcome comment. | $0 (phase 2 on the claude route) |
 | `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own artifact (`pr-hero-run-<pr>-<sha>`); path `reviewed`; the triggering comment has the `eyes` reaction. Only the run's own review passes: a skip is a failure, because a forced run bypasses admission and budget. Status and report are not asserted here, since phase 1 left them on the same head. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (claude route, subscription quota) |
@@ -90,12 +93,12 @@ one observation of the PR. S7 invariants are checked on every observation.
 | `same-head-rereview` | A blocking finding survives `/pr-hero review` on the same head, so the gate stays red and the author cannot re-run its way to green (S7). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings on the PR. Phase 2 (`/pr-hero review`, same head): the comment run completed and its review step succeeded. Its status must still be `failure`, but only when phase 1 posted a blocking finding to carry; otherwise that check is printed as `not asserted: no blocking finding to carry`, because the free model may find nothing to carry. | $0 (claude route, subscription quota) |
 | `rereview-fresh-finding` | A blocking finding first found by a re-review is kept in the state block, so the next re-review still counts it (D3, T5c). | Phase 1 (normal): path `reviewed`. Phase 2 (push adding `src/mute.ts`): the pull_request run completed. Phase 3 (`/pr-hero review`): the comment run completed; its review step succeeded; the status agrees with the findings; the report carries a state row at `src/mute.ts`. | $0 (claude route, subscription quota) |
 | `review-advisory` | With `mode: advisory`, the status stays `success` for a finished review, whatever it finds. | Path `reviewed`; the run's review step succeeded; status `success`; at least one report on the head; no outcome comment. | $0 (claude route, subscription quota) |
-| `override` | A red gate on a reviewed head is unlocked by `/pr-hero override` (S8): the status turns `success` with the actor's name, and an audit comment is posted on that head, with no review and no cost. | Phase 1 (`normal` variant): path `reviewed`; the run's review step succeeded; the status matches the blocking findings; a report; no outcome comment. Phase 2 (`/pr-hero override`): the comment run completed; the head's status is `success` with a description that starts `pr-hero: overridden by @`; the run posted an `<!-- pr-hero-override` comment on that head, after its trigger. | $0 (phase 1 on the claude route; phase 2 reaches no model) |
-| `size-skip` | In gate mode, a diff over the size gate sets a red head, and `/pr-hero review` reviews that same head. | Phase 1 (`size-skip` variant, `max-changed-lines: 1`): path `skipped:size`; status `failure` with a description that starts `pr-hero skipped the review`; no report. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own evidence; path `reviewed`. | $0 (phase 1 reaches no model; phase 2 on the claude route) |
-| `recheck-dismissal` | A false dismissal does not turn the gate green: `/pr-hero recheck` has the CI adjudicator rule on the dismissal, and the finding still counts (T5b, D5). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings. Phase 2 (a `dismissed` reply on the first blocking finding's thread, then `/pr-hero recheck`): the comment run completed; its review step succeeded; the head's status is still `failure`; this run posted a CI adjudication reply (`<!-- pr-hero-adjudication`) whose verdict is `rejected` or `inconclusive`. | $0 (claude route, subscription quota) |
-| `cancel` | A review run cancelled mid-review leaves the `pr-hero` status settled, not pending (SB3). | Phase 1 (normal): the run is cancelled while the head's `pr-hero` status is pending; the run concluded `cancelled`; the status is not pending. | Up to one cancelled review (cost not measured) |
+| `override` | A red gate on a reviewed head is unlocked by `/pr-hero override` (S8): the status turns `success` with the actor's name, and an audit comment is posted on that head, with no review and no cost. | Phase 1 (`normal` variant): path `reviewed`; the run's review step succeeded; the status matches the blocking findings; a report; no outcome comment. Phase 2 (`/pr-hero override`): the comment run completed; the head's status is `success` with a description that starts `crysk: overridden by @`; the run posted an `<!-- crysk-override` comment on that head, after its trigger. | $0 (phase 1 on the claude route; phase 2 reaches no model) |
+| `size-skip` | In gate mode, a diff over the size gate sets a red head, and `/pr-hero review` reviews that same head. | Phase 1 (`size-skip` variant, `max-changed-lines: 1`): path `skipped:size`; status `failure` with a description that starts `crysk skipped the review`; no report. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own evidence; path `reviewed`. | $0 (phase 1 reaches no model; phase 2 on the claude route) |
+| `recheck-dismissal` | A false dismissal does not turn the gate green: `/pr-hero recheck` has the CI adjudicator rule on the dismissal, and the finding still counts (T5b, D5). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings. Phase 2 (a `dismissed` reply on the first blocking finding's thread, then `/pr-hero recheck`): the comment run completed; its review step succeeded; the head's status is still `failure`; this run posted a CI adjudication reply (`<!-- crysk-adjudication`) whose verdict is `rejected` or `inconclusive`. | $0 (claude route, subscription quota) |
+| `cancel` | A review run cancelled mid-review leaves the `crysk` status settled, not pending (SB3). | Phase 1 (normal): the run is cancelled while the head's `crysk` status is pending; the run concluded `cancelled`; the status is not pending. | Up to one cancelled review (cost not measured) |
 | `stale-tmp` | A run directory left with stale `trigger.json.tmp` and `setup.json.tmp` by a killed earlier run does not break the next run (SB3). | Phase 1 (`stale-tmp` variant): path `reviewed`; the run's review step succeeded; no outcome comment. The variant adds one step before the action step that writes both fixed-name files into `$RUNNER_TEMP/pr-hero-outcome`, where the product's records go. The product's own writes use unique temp names, so the stale files must not change the outcome. | $0 (claude route, subscription quota) |
-| `rerun-after-push` | `gh run rerun` of the first run, after a second push, settles the old head and leaves the newer head's `pr-hero` status as it was (SB3). | Phase 1 (normal): path `reviewed` or `hunters-failed`; a precondition. Phase 2 (push adding `src/mute.ts`): the pull_request run completed. Phase 3 (`rerun-first`): the first run's next attempt completed (the wait reads the run's `run_attempt`, not its status, since the run reads `completed` until the rerun starts); the run's event is `pull_request`; the status of the first head (the one the rerun reviewed) is settled, not pending; the newer head's status is the same before the rerun and after it. | $0 (claude route, subscription quota) |
+| `rerun-after-push` | `gh run rerun` of the first run, after a second push, settles the old head and leaves the newer head's `crysk` status as it was (SB3). | Phase 1 (normal): path `reviewed` or `hunters-failed`; a precondition. Phase 2 (push adding `src/mute.ts`): the pull_request run completed. Phase 3 (`rerun-first`): the first run's next attempt completed (the wait reads the run's `run_attempt`, not its status, since the run reads `completed` until the rerun starts); the run's event is `pull_request`; the status of the first head (the one the rerun reviewed) is settled, not pending; the newer head's status is the same before the rerun and after it. | $0 (claude route, subscription quota) |
 
 **Planted site and hunters.** `review-free` reads two facts the other scenarios do not. The planted-site
 check reads the finding markers on the head (`path=<p> line=<n>`, the anchor the product posts). The
@@ -120,7 +123,7 @@ GET. The check `the triggering comment has the <content> reaction` asserts the r
 it: `eyes` for an accepted command (`comment-trigger`), `confused` for a near miss (`near-miss`). A read
 that fails leaves the reactions unread, and the check fails on that; it never passes. The check
 `the run left no review evidence of its own` asserts that a near miss's run reviewed nothing. It reads the run's artifact and
-its skip marker, not its step: the composite `Run pr-hero` step has no `if:` and always concludes, so a near miss's step reads
+its skip marker, not its step: the composite `Run Crysk` step (`Run pr-hero` on a ref from before the rename) has no `if:` and always concludes, so a near miss's step reads
 `success` (GitHub reports it that way). The check `this run posted no outcome comment` reads only the outcome comments this run
 created, so a `PRH-HUNTERS-FAILED` outcome from phase 1 does not fail it.
 
@@ -162,7 +165,7 @@ The runner can reach one repository, and nothing else.
   the pinned workflow.
 
 Faults enter only through the sandbox workflow's own inputs and steps, never through
-product code. The workflow is the product's scaffold, with `uses: juanmaagd/pr-hero@<ref>`.
+product code. The workflow is the product's scaffold, with `uses: cryskai/crysk@<ref>`.
 The `advisory` variant replaces the scaffold's `mode: gate` line, and `size-skip` adds
 `max-changed-lines: 1` after `opencode-auth`. Each refuses unless its anchor line appears exactly
 once, so a scaffold change fails the run loudly instead of testing a different workflow.

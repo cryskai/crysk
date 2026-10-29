@@ -1,12 +1,12 @@
 # Release Runbook
 
-This document is the operational runbook for releasing new versions of `pr-hero`. It covers the repository branching model, versioning rules, step-by-step release instructions, CI/CD pipeline automation, post-release verification, and rollback procedures.
+This document is the operational runbook for releasing new versions of Crysk (npm package `crysk`, GitHub repository `cryskai/crysk`; the package was called `pr-hero` before the rename, see Step 4c). It covers the repository branching model, versioning rules, step-by-step release instructions, CI/CD pipeline automation, post-release verification, and rollback procedures.
 
 ---
 
 ## 1. Branching Model & Commit Standards
 
-`pr-hero` uses **Trunk-Based Development** centered on the `main` branch:
+Crysk uses **Trunk-Based Development** centered on the `main` branch:
 
 - **Primary Branch (`main`)**: The stable source of truth. All releases are tagged directly from `main`.
 - **Feature & Fix Branches**: Work happens in short-lived branches branched off `main` (e.g. `feat/new-hunter`, `fix/tui-wrap`, `chore/bump-deps`).
@@ -25,7 +25,7 @@ This document is the operational runbook for releasing new versions of `pr-hero`
 
 ## 2. Versioning Scheme
 
-`pr-hero` adheres to **[Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)** (`MAJOR.MINOR.PATCH`):
+Crysk adheres to **[Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)** (`MAJOR.MINOR.PATCH`):
 
 - **`MAJOR`**: Breaking changes to CLI behavior, configuration schema, public API exports, or GitHub Actions contracts.
 - **`MINOR`**: Backwards-compatible new features, new agent classes, or enhanced tooling.
@@ -60,7 +60,7 @@ Two distinct tag types are used:
    - Floating tags pointing to the latest release within a major version line. The current floating
      tag is `v0` while the project is pre-1.0 (0.x minor bumps may still break the CLI/config/Action
      contract — see the pre-1.0 semantics note below).
-   - Consumed by GitHub Actions users referencing the composite action (e.g., `uses: juanmaagd/pr-hero@v0`).
+   - Consumed by GitHub Actions users referencing the composite action (e.g., `uses: cryskai/crysk@v0`).
    - Moved/force-updated on every release within that major version line.
    - `v1` is a **frozen legacy tag**: it stopped moving at the last 1.x release (1.1.0) when versions
      were renumbered to 0.x, and must never be moved again. It is kept only so pre-existing workflows
@@ -117,8 +117,8 @@ env CI=true GITHUB_ACTIONS=true HOME="$(mktemp -d)" bun test
 # Compile and smoke the binary exactly as release.yml does (use your own target)
 bun build --compile --target=bun-darwin-arm64 --minify --no-compile-autoload-dotenv \
   --no-compile-autoload-bunfig --define __PRHERO_VERSION__='"X.Y.Z"' src/cli.ts \
-  --outfile /tmp/pr-hero-darwin-arm64
-bun run scripts/compiled-smoke.ts /tmp/pr-hero-darwin-arm64
+  --outfile /tmp/crysk-darwin-arm64
+bun run scripts/compiled-smoke.ts /tmp/crysk-darwin-arm64
 ```
 
 ### Step 2: Update Changelog
@@ -129,8 +129,8 @@ Open `CHANGELOG.md` and prepare the release section:
 2. Add a fresh, empty `## [Unreleased]` section above it.
 3. Update the link references at the bottom of `CHANGELOG.md`:
    ```markdown
-   [Unreleased]: https://github.com/juanmaagd/pr-hero/compare/vX.Y.Z...HEAD
-   [X.Y.Z]: https://github.com/juanmaagd/pr-hero/releases/tag/vX.Y.Z
+   [Unreleased]: https://github.com/cryskai/crysk/compare/vX.Y.Z...HEAD
+   [X.Y.Z]: https://github.com/cryskai/crysk/releases/tag/vX.Y.Z
    ```
 
 ### Step 3: Bump Version Numbers
@@ -197,7 +197,7 @@ after the GitHub Release, so a failure left a half-release.
 git switch main && git pull --ff-only origin main   # the release commit, clean tree
 bun install --frozen-lockfile && bun run build      # the tarball ships dist/
 npm login             # interactive (browser or passkey); `npm whoami` fails with E401 without a session
-npm whoami            # must print the package owner (see `npm owner ls pr-hero`)
+npm whoami            # must print the package owner (see `npm owner ls crysk`)
 npm publish --access public
 ```
 
@@ -211,11 +211,74 @@ npm publish --access public
   it asynchronously: for `0.2.0` the version and `latest` took about 9 minutes to appear. Poll, and do not
   publish again:
   ```bash
-  until [ "$(curl -s -o /dev/null -w '%{http_code}' https://registry.npmjs.org/pr-hero/X.Y.Z)" = 200 ]; do sleep 30; done
-  npm view pr-hero dist-tags --prefer-online   # expect latest: X.Y.Z
+  until [ "$(curl -s -o /dev/null -w '%{http_code}' https://registry.npmjs.org/crysk/X.Y.Z)" = 200 ]; do sleep 30; done
+  npm view crysk dist-tags --prefer-online   # expect latest: X.Y.Z
   ```
 - The workflow's npm step stays in place and is skipped without the secret. If `NPM_TOKEN` is ever restored,
   stop publishing by hand: the step would fail on a version that already exists.
+
+### Step 4c: The rename release (`pr-hero` → `crysk`), one time
+
+The release that carries the rename publishes two packages built from the **same commit**, in this order. This
+section describes the sequence; each command is run by the maintainer, never by CI or an agent.
+
+1. **`crysk`** — Step 4b as written: the package whose `package.json` `name` is `crysk`.
+2. **One last `pr-hero`** — the same build and the same version, published once more under the old name, so an
+   install that runs `npx pr-hero` or `npm i -g pr-hero` lands on a CLI that already reads both the old and the
+   new names (markers, `/pr-hero` commands, `PRHERO_*` variables, `~/.prhero`). It must be the full dual-read
+   build, not a stub that only prints "renamed": an agent holding an old `pr-hero` cannot parse `<!-- crysk-`
+   markers, so the last `pr-hero` the registry serves has to understand them. Only the `name` field differs, set in
+   a scratch copy of the package; nothing about it is committed.
+3. **`npm deprecate pr-hero "renamed to crysk"`** — after both versions are visible on the registry (Step 5 below,
+   NPM Registry Verification), deprecate every `pr-hero` version with that message so `npm install` prints it. No
+   further `pr-hero` version is published after this one.
+
+`pr-hero` stays on the registry (an unpublish would break the pinned installs it is meant to carry forward). The GitHub
+Release uploads each binary under both names for one version (§4). The repository moved to `cryskai/crysk`;
+`juanmaagd/pr-hero` is a mirror kept for workflows and binaries that still name it (Step 4d).
+
+### Step 4d: The repository move (`juanmaagd/pr-hero` → `cryskai/crysk`), one time
+
+GitHub does not guarantee that `uses:` follows a renamed or transferred repository ("GitHub will not redirect
+calls to an action hosted by a renamed repository", [Renaming a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository)).
+So the move keeps a repository at the old name. Each step is run by the maintainer, never by CI or an agent:
+
+1. **Transfer and rename** `juanmaagd/pr-hero` to `cryskai/crysk` (Settings → Transfer, new name `crysk`).
+   Issues, pull requests, stars, history, tags, releases, secrets and variables move with it. Check the
+   repository's Actions secrets and variables afterwards.
+2. **Recreate `juanmaagd/pr-hero` at once** as a public mirror, with **Actions disabled** (`gh api -X PUT
+   repos/juanmaagd/pr-hero/actions/permissions -F enabled=false`; the mirror carries `release.yml`, which would
+   otherwise start a second release run on every tag pushed there). Then push `main` and every tag,
+   so `uses: juanmaagd/pr-hero@v0` (and every `@v0.x.y`) keeps resolving and
+   `https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh` keeps serving the installer.
+   Creating it stops GitHub's web and git redirect to `cryskai/crysk`: point local clones at the new remote
+   (`git remote set-url origin https://github.com/cryskai/crysk.git`).
+3. **Every final release while the mirror lives also goes to the mirror**, once `release.yml` has finished on
+   `cryskai/crysk` (CI force-moves `v0` and creates the release, so the mirror copies what CI produced). A
+   prerelease (`vX.Y.Z-rc.N`) is not mirrored: CI neither moves `v0` nor marks it latest, and pre-move binaries
+   must not be offered it. A binary from before the move (`src/updater.ts` read `juanmaagd/pr-hero`) finds its
+   upgrade on the mirror; without the mirrored release, `pr-hero upgrade` on such a binary reports no new
+   version. Run from the release checkout, with the mirror added as a remote
+   (`git remote add pr-hero-mirror https://github.com/juanmaagd/pr-hero.git`). The block runs in a subshell
+   with `set -e`, so the first failed command stops it before anything is published:
+   ```bash
+   ( set -euo pipefail
+   V=vX.Y.Z
+   case "$V" in *-*) echo "$V is a prerelease: do not mirror it"; exit 1;; esac
+   git fetch origin --tags --force                     # CI's v0 and $V tag objects
+   git push pr-hero-mirror origin/main:refs/heads/main
+   git push pr-hero-mirror "refs/tags/$V"
+   git push pr-hero-mirror refs/tags/v0 --force        # v0 already exists there, at the previous release
+   d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+   gh release download "$V" -R cryskai/crysk -D "$d/assets"
+   (cd "$d/assets" && shasum -a 256 -c SHA256SUMS)     # never publish a partial download
+   gh release view "$V" -R cryskai/crysk --json body -q .body > "$d/notes.md"
+   gh release create "$V" -R juanmaagd/pr-hero --verify-tag --latest --title "$V" \
+     --notes-file "$d/notes.md" "$d"/assets/* )
+   ```
+   Then run the mirror check in §5.
+4. Archive the mirror once the version that drops the legacy names ships; an archived repository keeps serving
+   its tags.
 
 ### Step 5: Push to Remote
 
@@ -272,12 +335,12 @@ flowchart TD
      failed leg leaves a pushed tag with no release: see §6, Scenario D.
    - Compiles standalone executables using `bun build --compile --minify` with embedded version definitions.
    - **Runs the compiled binary** (`scripts/compiled-smoke.ts`) before uploading it. v1.0.0 shipped a binary whose `review` failed for every user because this step did not exist.
-   - Uploads binary artifacts (`pr-hero-darwin-arm64`, `pr-hero-darwin-x64`, `pr-hero-linux-x64`, `pr-hero-linux-arm64`).
+   - Uploads each binary under both names for one version: `crysk-<target>` and a byte-identical `pr-hero-<target>` copy made after the smoke (targets `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`). The old name is what an installed `pr-hero upgrade` downloads.
 2. **`publish-release`**:
    - Gathers all compiled binaries and computes cryptographic `SHA256SUMS`.
    - Creates a GitHub Release via `softprops/action-gh-release@v2` containing all binaries and checksums,
      with `make_latest: true`. This is explicit rather than left to GitHub's own SemVer-highest default:
-     `pr-hero upgrade` and `install.sh` both resolve GitHub's "latest release", and after the 1.x → 0.x
+     `crysk upgrade` and `install.sh` both resolve GitHub's "latest release", and after the 1.x → 0.x
      renumbering the next release (`0.2.0`) is SemVer-**lower** than the already-published `1.1.0` —
      without `make_latest: true`, GitHub would keep calling `1.1.0` latest forever and every
      upgrade/install would silently stay stuck on the old numbering.
@@ -293,7 +356,7 @@ flowchart TD
 Perform these sanity checks immediately following a release:
 
 1. **GitHub Release Verification**:
-   - Visit `https://github.com/juanmaagd/pr-hero/releases/tag/vX.Y.Z`.
+   - Visit `https://github.com/cryskai/crysk/releases/tag/vX.Y.Z`.
    - Confirm all 4 platform binaries and `SHA256SUMS` are attached as release assets, and that the release
      is the one GitHub marks `Latest` (after the renumbering it must not be `1.1.0`):
      ```bash
@@ -301,24 +364,46 @@ Perform these sanity checks immediately following a release:
      gh release list --limit 3
      ```
    - Confirm the floating tag moved: `git ls-remote origin 'refs/tags/v0^{}'` must equal the release commit.
-2. **NPM Registry Verification** (the version can lag the upload by ~10 minutes, see Step 4b):
+2. **NPM Registry Verification** (the version can lag the upload by ~10 minutes, see Step 4b; on the rename release also run both commands for `pr-hero`, see Step 4c):
    ```bash
    # Check published package version
-   npm view pr-hero version --prefer-online
-   npm view pr-hero dist-tags --prefer-online
+   npm view crysk version --prefer-online
+   npm view crysk dist-tags --prefer-online
    ```
 3. **Installer Script Test**:
    - Test standalone installer download in a temporary environment:
      ```bash
-     PRHERO_VERSION="vX.Y.Z" curl -fsSL https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh | bash
-     ~/.prhero/bin/pr-hero --version
+     PRHERO_VERSION="vX.Y.Z" curl -fsSL https://raw.githubusercontent.com/cryskai/crysk/main/install.sh | bash
+     ~/.crysk/bin/crysk --version   # ~/.prhero/bin/pr-hero on a machine that already had ~/.prhero
      ```
 4. **GitHub Action Reference**:
-   - Confirm workflows referencing `juanmaagd/pr-hero@v0` or `juanmaagd/pr-hero@vX.Y.Z` resolve the new
+   - Confirm workflows referencing `cryskai/crysk@v0` or `cryskai/crysk@vX.Y.Z` resolve the new
      release. (Workflows still pinned to the frozen `@v1` continue resolving the last 1.x release, by
      design — they receive no further updates.)
-5. **Doctor Diagnostic**:
-   - Run `pr-hero doctor` locally to verify runtime integrity and toolchain health.
+5. **Mirror** (while `juanmaagd/pr-hero` lives; final releases only; read-only, after Step 4d.3): both tags on
+   the mirror point at the release commit, and the mirror's release is `Latest` and carries exactly the assets
+   of the `cryskai/crysk` release, byte for byte. Set `V` to the release tag; the block runs in a subshell and
+   stops at the first failure without closing your shell:
+   ```bash
+   ( set -euo pipefail
+   V=vX.Y.Z
+   COMMIT=$(git rev-parse --verify "$V^{commit}")      # fails here if the tag is missing or V is mistyped
+   d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+   for t in v0 "$V"; do                                # annotated tags: compare the commit they point at
+     got=$(git ls-remote https://github.com/juanmaagd/pr-hero.git "refs/tags/$t^{}" | cut -f1)
+     [ "$got" = "$COMMIT" ] || { echo "mirror $t is '${got:-missing}', expected $COMMIT"; exit 1; }
+   done
+   gh release list -R juanmaagd/pr-hero --limit 1 | grep -q "$V.*Latest" || { echo "mirror Latest is not $V"; exit 1; }
+   gh release download "$V" -R cryskai/crysk -D "$d/new"
+   gh release download "$V" -R juanmaagd/pr-hero -D "$d/mirror"
+   diff -r "$d/new" "$d/mirror"                        # same file names, same bytes
+   (cd "$d/mirror" && shasum -a 256 -c SHA256SUMS)
+   [ "$(ls "$d/mirror" | grep -cv '^SHA256SUMS$')" = "$(grep -c . "$d/mirror/SHA256SUMS")" ] \
+     || { echo "an asset has no SHA256SUMS line"; exit 1; }
+   echo "mirror OK" )
+   ```
+6. **Doctor Diagnostic**:
+   - Run `crysk doctor` locally to verify runtime integrity and toolchain health.
 
 ---
 
@@ -343,10 +428,10 @@ If a critical flaw requires immediately warning package consumers:
 
 1. **Deprecate the flawed version on npm**:
    ```bash
-   npm deprecate pr-hero@X.Y.Z "Critical issue in X.Y.Z; please upgrade to X.Y.Z+1 immediately."
+   npm deprecate crysk@X.Y.Z "Critical issue in X.Y.Z; please upgrade to X.Y.Z+1 immediately."
    ```
 2. **Unpublishing (Emergency only)**:
-   - NPM allows unpublishing only within 72 hours of initial release if no dependents exist (`npm unpublish pr-hero@X.Y.Z --force`).
+   - NPM allows unpublishing only within 72 hours of initial release if no dependents exist (`npm unpublish crysk@X.Y.Z --force`).
    - Prefer deprecation + immediate patch release (`vX.Y.Z+1`) to avoid breaking downstream builds.
 
 ### Scenario C: Mispointed Floating Tag

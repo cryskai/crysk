@@ -140,7 +140,6 @@ describe("ingestReviewMetrics — the review()/reviewPr() caller seam (W4 Phase 
         checkoutPath: OPERATOR_ROOT,
         doc: doc({ pr: 0 }),
         perAgent: {},
-        comparison: null,
         log: (line) => warnings.push(line),
         ingest: () => {
           throw new Error("disk full");
@@ -162,7 +161,6 @@ describe("ingestReviewMetrics — the review()/reviewPr() caller seam (W4 Phase 
       checkoutPath: OPERATOR_ROOT,
       doc: doc({ pr: 42 }),
       perAgent: {},
-      comparison: null,
       log: (line) => warnings.push(line),
       ingest: (input) => {
         seenRunDirs.push(input.runDir);
@@ -183,7 +181,6 @@ describe("persistCanonicalReview — canonical product store persistence (Fundam
       checkoutPath: OPERATOR_ROOT,
       doc: doc({ pr: 0 }),
       perAgent: {},
-      comparison: null,
       log: (line) => warnings.push(line),
     });
     expect(runId).toBe(0);
@@ -201,7 +198,6 @@ describe("persistCanonicalReview — canonical product store persistence (Fundam
       checkoutPath: OPERATOR_ROOT,
       doc: doc({ pr: 42 }),
       perAgent: {},
-      comparison: null,
       log: (line) => warnings.push(line),
     });
     expect(runId).toBe(0);
@@ -220,7 +216,6 @@ describe("persistCanonicalReview — canonical product store persistence (Fundam
       checkoutPath: OPERATOR_ROOT,
       doc: doc({ pr: 42 }),
       perAgent: {},
-      comparison: null,
       persist: (input) => {
         seen.push(input.runDir);
         return 123;
@@ -247,8 +242,8 @@ async function tmpHome(global?: string): Promise<{
 }> {
   const home = await mkdtemp(path.join(tmpdir(), "pr-hero-home-"));
   if (global !== undefined) {
-    await mkdir(path.join(home, ".prhero"), { recursive: true });
-    await Bun.write(path.join(home, ".prhero", "config.json"), global);
+    await mkdir(path.join(home, ".crysk"), { recursive: true });
+    await Bun.write(path.join(home, ".crysk", "config.json"), global);
   }
   return {
     home,
@@ -262,8 +257,8 @@ async function tmpRoot(repoConfig?: string): Promise<{
 }> {
   const root = await mkdtemp(path.join(tmpdir(), "pr-hero-root-"));
   if (repoConfig !== undefined) {
-    await mkdir(path.join(root, ".prhero"), { recursive: true });
-    await Bun.write(path.join(root, ".prhero", "config.json"), repoConfig);
+    await mkdir(path.join(root, ".crysk"), { recursive: true });
+    await Bun.write(path.join(root, ".crysk", "config.json"), repoConfig);
   }
   return { root, cleanup: () => rm(root, { recursive: true, force: true }) };
 }
@@ -323,10 +318,10 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
       });
       expect(loaded.globalPresent).toBe(false);
       expect(loaded.globalConfigPath).toBe(
-        path.join(home.home, ".prhero", "config.json"),
+        path.join(home.home, ".crysk", "config.json"),
       );
       expect(loaded.repoConfigPath).toBe(
-        path.join(repo.root, ".prhero", "config.json"),
+        path.join(repo.root, ".crysk", "config.json"),
       );
       // The two resolvers that read this layer see today's answers.
       expect(resolveSummary({}, loaded.effective)).toEqual({ enabled: false });
@@ -504,7 +499,7 @@ describe("loadEffectiveConfig — the global layer", () => {
       await expect(
         loadEffectiveConfig({ root: repo.root, home: home.home }),
       ).rejects.toThrow(
-        "~/.prhero/config.json: parity_trigger_paths is a per-repo key",
+        "~/.crysk/config.json: parity_trigger_paths is a per-repo key",
       );
     } finally {
       await home.cleanup();
@@ -516,7 +511,7 @@ describe("loadEffectiveConfig — the global layer", () => {
 // C5 O-9's shell half. `pr-hero init` needs the global layer WITHOUT the repo
 // file — it is writing that file — so it cannot go through
 // loadEffectiveConfig. It goes through the same helper loadEffectiveConfig
-// does instead, because a second read site for `~/.prhero/config.json` is a
+// does instead, because a second read site for `~/.crysk/config.json` is a
 // second chance for init and review to disagree about what the global layer
 // says.
 describe("loadGlobalConfigLayer", () => {
@@ -526,7 +521,7 @@ describe("loadGlobalConfigLayer", () => {
       const loaded = await loadGlobalConfigLayer(home.home);
       expect(loaded.layer).toBeUndefined();
       expect(loaded.filePath).toBe(
-        path.join(home.home, ".prhero", "config.json"),
+        path.join(home.home, ".crysk", "config.json"),
       );
     } finally {
       await home.cleanup();
@@ -565,7 +560,7 @@ describe("loadGlobalConfigLayer", () => {
     const home = await tmpHome('{"default_base": "dev"}');
     try {
       await expect(loadGlobalConfigLayer(home.home)).rejects.toThrow(
-        "~/.prhero/config.json: default_base is a per-repo key",
+        "~/.crysk/config.json: default_base is a per-repo key",
       );
     } finally {
       await home.cleanup();
@@ -574,7 +569,7 @@ describe("loadGlobalConfigLayer", () => {
 });
 
 // O-8. The offline half of the boundary: loadEffectiveConfig opens
-// `<root>/.prhero/config.json` and nothing else, so a config.json sitting in
+// `<root>/.crysk/config.json` and nothing else, so a config.json sitting in
 // the PR's head worktree is never even a candidate. reviewPr passes
 // `root: operatorRoot` (src/cli.ts, step 1) and the worktree does not exist
 // yet at that point — that wiring is what makes this test the whole story.
@@ -585,7 +580,7 @@ describe("loadEffectiveConfig — O-8, the worktree is never read", () => {
       JSON.stringify({ agents_dir: "/operator/set", default_base: "dev" }),
     );
     try {
-      // The reviewed PR's tree, as a sibling the way ~/.prhero/repos/<id>/
+      // The reviewed PR's tree, as a sibling the way ~/.crysk/repos/<id>/
       // worktrees actually live — with a config the PR author committed.
       //
       // mkdtemp, like every other fixture in this file, and NOT
@@ -602,9 +597,9 @@ describe("loadEffectiveConfig — O-8, the worktree is never read", () => {
       const worktree = await mkdtemp(
         path.join(tmpdir(), "pr-hero-decoy-worktree-"),
       );
-      await mkdir(path.join(worktree, ".prhero"), { recursive: true });
+      await mkdir(path.join(worktree, ".crysk"), { recursive: true });
       await Bun.write(
-        path.join(worktree, ".prhero", "config.json"),
+        path.join(worktree, ".crysk", "config.json"),
         JSON.stringify({
           agents_dir: "/attacker/set",
           default_base: "attacker-branch",
@@ -657,8 +652,8 @@ describe("pipelineConfigInput — O-6", () => {
         ci_trusted_actors: "repo" as const,
         ci_admission_observe_only: "default" as const,
       },
-      repoConfigPath: "/repo/.prhero/config.json",
-      globalConfigPath: "/home/.prhero/config.json",
+      repoConfigPath: "/repo/.crysk/config.json",
+      globalConfigPath: "/home/.crysk/config.json",
       globalPresent: true,
     };
     expect(pipelineConfigInput(loaded)).toEqual({

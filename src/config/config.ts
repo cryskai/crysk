@@ -10,7 +10,6 @@
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { StoredComparison } from "#compare/ledger";
 import { resolveRepoRoot } from "#git/git";
 import type { FindingsDocument } from "#review/findings";
 import type { PerAgentUsage, PipelineResult } from "#review/pipeline";
@@ -26,6 +25,7 @@ import {
 import { type FailSoftIngestInput, failSoftIngest } from "#store/metrics";
 import { projectCompleteRun } from "#store/preflight";
 import { openProductStore, saveRunTransaction } from "#store/store";
+import { resolveHomeDir, resolveRepoDir } from "../brand-paths";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 
@@ -96,7 +96,8 @@ export interface PersistCanonicalReviewInput {
   checkoutPath: string | null;
   doc: FindingsDocument;
   perAgent?: Record<string, PerAgentUsage>;
-  comparison: StoredComparison | null;
+  // The PR's diff base. Local runs pass none; the store keeps the value it has.
+  diffFromSha?: string | null;
   generatedAt?: string;
   log?: (line: string) => void;
   // Test seam
@@ -125,7 +126,7 @@ export function persistCanonicalReview(
       const projected = projectCompleteRun({
         doc: input.doc,
         perAgent: input.perAgent,
-        comparison: input.comparison,
+        diffFromSha: input.diffFromSha,
         repoId: input.repoId,
         runDir: input.runDir,
         checkoutPath: input.checkoutPath,
@@ -205,7 +206,10 @@ export async function loadGlobalConfigLayer(home: string): Promise<{
   if (!existsSync(filePath)) return { filePath, layer: undefined };
   return {
     filePath,
-    layer: parseGlobalConfig(await Bun.file(filePath).text()),
+    layer: parseGlobalConfig(
+      await Bun.file(filePath).text(),
+      `~/${path.basename(path.dirname(filePath))}/config.json`,
+    ),
   };
 }
 
@@ -217,8 +221,8 @@ export async function loadEffectiveConfig(input: {
   const repoConfigPath = input.configFlag
     ? path.resolve(input.configFlag)
     : input.root
-      ? path.join(input.root, ".prhero", "config.json")
-      : path.join(input.home, ".prhero", "config.json");
+      ? path.join(resolveRepoDir(input.root), "config.json")
+      : path.join(resolveHomeDir(input.home), "config.json");
   if (input.configFlag && !existsSync(repoConfigPath)) {
     throw new CliError(`config file not found: ${repoConfigPath}`);
   }
@@ -231,7 +235,12 @@ export async function loadEffectiveConfig(input: {
   const globalPresent = global !== undefined;
   const repo =
     (input.configFlag || input.root) && existsSync(repoConfigPath)
-      ? parseLocalConfig(await Bun.file(repoConfigPath).text())
+      ? parseLocalConfig(
+          await Bun.file(repoConfigPath).text(),
+          input.configFlag
+            ? undefined
+            : `${path.basename(path.dirname(repoConfigPath))}/config.json`,
+        )
       : {};
   return {
     ...mergeConfig(global, repo),

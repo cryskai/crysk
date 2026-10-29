@@ -11,7 +11,7 @@
 // computeDroppedFindingIds) moved to test/pr/inline-post.test.ts alongside
 // src/pr/pr.ts and src/pr/inline.ts (cli-decomp S2, Cluster C). The
 // `post`/`triage`/`usage`/`doctor` verbs' own wiring tests (runPostCommand,
-// runTriageCommand/runTriageReplyCommand, originUsageScope,
+// runTriageReplyCommand, originUsageScope,
 // runDoctorCommand) moved to test/commands/*.test.ts alongside
 // src/commands/*.ts (cli-decomp S3), duplicating the doc()/finding() half of
 // the fixture block below; the makeFakeGh/ndjson/OPERATOR_ROOT half stays
@@ -873,7 +873,7 @@ describe("main — the outcome record in action mode", () => {
   let savedStderrWrite: typeof process.stderr.write;
 
   beforeEach(() => {
-    savedOutcome = process.env.PRHERO_OUTCOME_DIR;
+    savedOutcome = process.env.CRYSK_OUTCOME_DIR;
     savedStderrWrite = process.stderr.write.bind(process.stderr);
     process.stderr.write = (() => true) as typeof process.stderr.write;
   });
@@ -881,9 +881,9 @@ describe("main — the outcome record in action mode", () => {
   afterEach(() => {
     process.stderr.write = savedStderrWrite;
     if (savedOutcome === undefined) {
-      delete process.env.PRHERO_OUTCOME_DIR;
+      delete process.env.CRYSK_OUTCOME_DIR;
     } else {
-      process.env.PRHERO_OUTCOME_DIR = savedOutcome;
+      process.env.CRYSK_OUTCOME_DIR = savedOutcome;
     }
   });
 
@@ -892,7 +892,7 @@ describe("main — the outcome record in action mode", () => {
     const outcome = path.join(dir, "outcome");
     const notARepo = path.join(dir, "not-a-repo");
     await mkdir(notARepo, { recursive: true });
-    process.env.PRHERO_OUTCOME_DIR = outcome;
+    process.env.CRYSK_OUTCOME_DIR = outcome;
     try {
       const code = await main([
         "post",
@@ -921,7 +921,7 @@ describe("main — the outcome record in action mode", () => {
     const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-main-noparse-"));
     const outcome = path.join(dir, "outcome");
     await mkdir(outcome, { recursive: true });
-    process.env.PRHERO_OUTCOME_DIR = outcome;
+    process.env.CRYSK_OUTCOME_DIR = outcome;
     try {
       expect(await main(["review", "--no-such-flag"])).toBe(2);
       expect(await Bun.file(path.join(outcome, "cli.json")).exists()).toBe(

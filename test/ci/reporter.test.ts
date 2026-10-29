@@ -141,7 +141,7 @@ describe("renderStepSummary — completed review with findings", () => {
   const out = renderStepSummary(data);
 
   test("renders the review status header with the PR number", () => {
-    expect(out).toContain("### 🔍 pr-hero Review — PR #123");
+    expect(out).toContain("### 🔍 Crysk Review — PR #123");
   });
 
   test("renders the metrics table with findings/cost/duration/model chips", () => {
@@ -223,9 +223,9 @@ describe("renderStepSummary — the footer follows the gate mode (S4)", () => {
     model: "haiku+sonnet",
   };
   const ADVISORY_FOOTER =
-    "<sub>pr-hero — AI code review assistant. Assistant report, not a merge gate.</sub>";
+    "<sub>Crysk — AI code review assistant. Assistant report, not a merge gate.</sub>";
   const GATE_FOOTER =
-    "<sub>pr-hero — AI code review assistant. Assistant report backing the pr-hero commit status, the required check in gate mode.</sub>";
+    "<sub>Crysk — AI code review assistant. Assistant report backing the crysk commit status, the required check in gate mode.</sub>";
 
   test("advisory: the footer is byte-identical to today's, and the default call is advisory", () => {
     const advisory = renderStepSummary(data, "advisory");
@@ -258,7 +258,7 @@ describe("renderStepSummary — skipped, size gate limit exceeded", () => {
   const out = renderStepSummary(data);
 
   test("renders the skipped-review header with the PR number", () => {
-    expect(out).toContain("### ⚠️ pr-hero Review Skipped — PR #55");
+    expect(out).toContain("### ⚠️ Crysk Review Skipped — PR #55");
   });
 
   test("states the size gate reason", () => {
@@ -292,7 +292,7 @@ describe("renderStepSummary — skipped, budget ceiling exceeded", () => {
   const out = renderStepSummary(data);
 
   test("renders the skipped-review header with the PR number", () => {
-    expect(out).toContain("### ⚠️ pr-hero Review Skipped — PR #56");
+    expect(out).toContain("### ⚠️ Crysk Review Skipped — PR #56");
   });
 
   test("states the budget gate reason", () => {

@@ -207,9 +207,9 @@ export type CiSummaryData =
 // backs the commit status that is the required check (S4), because a gate
 // that disclaims being one would contradict its own red status.
 const ADVISORY_FOOTER =
-  "<sub>pr-hero — AI code review assistant. Assistant report, not a merge gate.</sub>";
+  "<sub>Crysk — AI code review assistant. Assistant report, not a merge gate.</sub>";
 const GATE_FOOTER =
-  "<sub>pr-hero — AI code review assistant. Assistant report backing the pr-hero commit status, the required check in gate mode.</sub>";
+  "<sub>Crysk — AI code review assistant. Assistant report backing the crysk commit status, the required check in gate mode.</sub>";
 
 function footerFor(ciMode: CiMode): string {
   return ciMode === "gate" ? GATE_FOOTER : ADVISORY_FOOTER;
@@ -307,7 +307,7 @@ export function sizeLimitText(limit: number): string {
 
 function skipSizeLines(data: CiSkipSizeSummary): string[] {
   return [
-    `### ⚠️ pr-hero Review Skipped — PR #${data.prNumber}`,
+    `### ⚠️ Crysk Review Skipped — PR #${data.prNumber}`,
     "",
     "**Reason:** the diff exceeds the configured size gate limits.",
     "",
@@ -316,14 +316,14 @@ function skipSizeLines(data: CiSkipSizeSummary): string[] {
     `| Changed lines | ${data.changedLines} (${sizeLimitText(data.maxChangedLines)}) |`,
     `| Changed files | ${data.changedFiles} (${sizeLimitText(data.maxChangedFiles)}) |`,
     "",
-    "pr-hero did not run to avoid reviewing an unbounded diff. Split the " +
+    "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
       "PR or raise `max-changed-lines` / `max-changed-files`.",
   ];
 }
 
 function skipBudgetLines(data: CiSkipBudgetSummary): string[] {
   return [
-    `### ⚠️ pr-hero Review Skipped — PR #${data.prNumber}`,
+    `### ⚠️ Crysk Review Skipped — PR #${data.prNumber}`,
     "",
     "**Reason:** the estimated cost exceeds the configured budget ceiling.",
     "",
@@ -331,7 +331,7 @@ function skipBudgetLines(data: CiSkipBudgetSummary): string[] {
     "| --- | --- |",
     `| Estimated cost | ${usd(data.estimatedCostUsd)} (budget ${usd(data.budgetUsd)}) |`,
     "",
-    "pr-hero did not run to stay within the configured `--budget-usd` " +
+    "Crysk did not run to stay within the configured `--budget-usd` " +
       "ceiling.",
   ];
 }
@@ -381,7 +381,7 @@ function skipCoverageLines(data: CiSkipCoverageSummary): string[] {
   // PR comment, gates.ts buildCoverageSkipComment).
   const stopped = data.admissionReason === "stopped";
   return [
-    `### ⚠️ pr-hero Review Skipped — PR #${data.prNumber}`,
+    `### ⚠️ Crysk Review Skipped — PR #${data.prNumber}`,
     "",
     stopped
       ? "**Reason:** a maintainer stopped automatic reviews on this pull request."
@@ -402,7 +402,7 @@ function skipCoverageLines(data: CiSkipCoverageSummary): string[] {
 
 function manualRequiredLines(data: CiManualRequiredSummary): string[] {
   return [
-    `### 🛑 pr-hero Review — Manual Override Required — PR #${data.prNumber}`,
+    `### 🛑 Crysk Review — Manual Override Required — PR #${data.prNumber}`,
     "",
     "**Reason:** automatic review did not run on this push.",
     "",
@@ -421,7 +421,7 @@ function reviewedLines(data: CiReviewSummary): string[] {
   const blocking = data.findings.filter((f) => f.tier === "blocking");
   const advisory = data.findings.filter((f) => f.tier === "advisory");
   const out = [
-    `### 🔍 pr-hero Review — PR #${data.prNumber}`,
+    `### 🔍 Crysk Review — PR #${data.prNumber}`,
     "",
     "| Metric | Value |",
     "| --- | --- |",
@@ -453,7 +453,7 @@ function reviewedLines(data: CiReviewSummary): string[] {
 
 // Formatted Markdown for `$GITHUB_STEP_SUMMARY` (spec 2.1). Pure — the
 // caller supplies every byte, so the summary is re-renderable from a stored
-// findings.json/comparison.json months later, same contract as
+// findings.json months later, same contract as
 // renderReport/renderPrComment (report.ts).
 // `ciMode` picks the footer only. Omitted means advisory: the footer every
 // caller has today, until a caller passes the mode its status was set under.

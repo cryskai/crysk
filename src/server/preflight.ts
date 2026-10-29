@@ -107,11 +107,6 @@ export type RoutePattern =
       pathPattern: "/v1/runs/:id/findings-document";
     }
   | {
-      name: "get_run_comparison";
-      method: "GET";
-      pathPattern: "/v1/runs/:id/comparison";
-    }
-  | {
       name: "get_run_triage";
       method: "GET";
       pathPattern: "/v1/runs/:id/triage";
@@ -131,7 +126,6 @@ export interface MatchedRoute {
     | "list_runs"
     | "get_run"
     | "get_run_findings_doc"
-    | "get_run_comparison"
     | "get_run_triage"
     | "record_run_triage"
     | "get_usage"
@@ -185,14 +179,6 @@ export function matchRoute(
     return {
       name: "get_run_findings_doc",
       params: { id: findingsDocMatch[1] ?? "" },
-    };
-  }
-
-  const comparisonMatch = /^\/v1\/runs\/(\d+)\/comparison$/.exec(pathname);
-  if (m === "GET" && comparisonMatch) {
-    return {
-      name: "get_run_comparison",
-      params: { id: comparisonMatch[1] ?? "" },
     };
   }
 

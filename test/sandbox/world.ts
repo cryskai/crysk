@@ -464,7 +464,7 @@ export class FakeGithub {
     if (pendingUntilCancel) {
       this.statuses.set(headSha, {
         state: "pending",
-        description: "pr-hero reviewing",
+        description: "crysk reviewing",
       });
     }
     if (stuck) {
@@ -582,7 +582,7 @@ export class FakeGithub {
       );
       this.statuses.set(sha, {
         state: "success",
-        description: `pr-hero: overridden by @${FAKE_ACTOR} — no review on this head`,
+        description: `crysk: overridden by @${FAKE_ACTOR} — no new review run`,
       });
     } else {
       const as =
@@ -835,8 +835,15 @@ export class FakeGithub {
       const status = this.statuses.get(sha);
       return ok(
         JSON.stringify({
+          // The product writes the gate on both names, crysk first (postStatus), so the fake
+          // answers with the pair.
           statuses:
-            status === undefined ? [] : [{ context: "pr-hero", ...status }],
+            status === undefined
+              ? []
+              : [
+                  { context: "crysk", ...status },
+                  { context: "pr-hero", ...status },
+                ],
         }),
       );
     }

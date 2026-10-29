@@ -27,6 +27,8 @@ import {
   type TriageVerdict,
 } from "#triage/triage";
 import { type EngineAssets, resolveEngineAssets } from "../assets";
+import { type BrandEnvValue, readBrandEnv } from "../brand";
+import { REPO_DIR_NAME } from "../brand-paths";
 // CliError/CliUsageError and the git/ref pure helpers used to be DEFINED here
 // and imported by value into git.ts — the bottom layer depending on a
 // review-domain module. They live in ../errors and ../git/refs; this file
@@ -101,7 +103,7 @@ export interface CliOptions {
   // triage, and classification still run (R2-C5). Review-only, like --scout.
   full: boolean;
   // T5b: with --pr --ci, also have the CI adjudicator rule on each pending
-  // dismissal of a blocking finding. Set by a /pr-hero recheck comment. Absent
+  // dismissal of a blocking finding. Set by a /crysk recheck comment. Absent
   // means off.
   adjudicate?: boolean;
   hopBudget: number;
@@ -119,14 +121,8 @@ export interface CliOptions {
   // undefined means no flag, resolved via flag > config > default (false).
   // Requires --pr (parseArgs enforces it): a comment needs a PR to land on.
   post?: boolean;
-  // ledger only (ROADMAP B4): the runs root to scan for comparison.json
-  // files. Unset means defaultRunRoot(home, repoId) — the shell resolves it,
-  // because the default needs origin + ~/.prhero and parseArgs stays pure.
-  runs?: string;
   // post/triage only (ROADMAP B6/B6c): the run dir to read findings.json +
-  // diff.patch (post) or comparison.json (triage) from, instead of
-  // producing a new run — the `ledger` verb's precedent (read run artifacts
-  // off disk) applied to publishing/triaging instead of aggregating.
+  // diff.patch (post and triage reply) from, instead of producing a new run.
   // Required by both; parseArgs enforces it.
   from?: string;
   // `status` only (ROADMAP S9): print one JSON object on stdout instead of the human lines.
@@ -161,7 +157,7 @@ export interface CliOptions {
   onPush: boolean;
   // Bypass the CI skips for THIS run: the size gate, review-policy
   // admission, and (in CI) the budget ceiling. The GitHub comment
-  // `/pr-hero review` is what sets this flag from Actions. Deliberately
+  // `/crysk review` is what sets this flag from Actions. Deliberately
   // does NOT imply --yes: the interactive cost-band prompt is a separate
   // question from those skips.
   force: boolean;
@@ -174,9 +170,10 @@ export interface CliOptions {
   // distinct value that DISABLES the limit, so these cannot default to 0.
   maxChangedLines?: number;
   maxChangedFiles?: number;
-  // `triage reply` sub-word (W1). Unset means the existing bind-ledger
-  // `triage` verb. Same pattern as watch's sub-words: `reply` is not its
-  // own command, so `pr-hero reply` still fails as unknown.
+  // `triage reply` sub-word (W1). Required for the triage command: the bare
+  // `triage --pr --from` verb was removed with comparison.json, so parseArgs rejects `triage` without it. Same pattern as watch's
+  // sub-words: `reply` is not its own command, so `pr-hero reply` still fails
+  // as unknown.
   triage?: "reply";
   finding?: string;
   tag?: TriageTag;
@@ -237,7 +234,7 @@ export interface CliOptions {
   //
   // Phase 4 (CI Scaffolding) gave `--ci` a SECOND, command-scoped meaning:
   // on `review` it activates the CI headless shell (requires --pr); on
-  // `setup` it means "scaffold .github/workflows/pr-hero.yml instead of
+  // `setup` it means "scaffold .github/workflows/crysk.yml instead of
   // running the interactive wizard" — see `ci init`'s dedicated command
   // below for the same scaffolding without touching `setup`'s wizard
   // default. `budgetUsd`/`stepSummary` still require the REVIEW reading of
@@ -293,7 +290,6 @@ export interface ParsedCli {
     | "doctor"
     | "menu"
     | "activity"
-    | "ledger"
     | "watch"
     | "post"
     | "triage"
@@ -312,16 +308,17 @@ export interface ParsedCli {
   options: CliOptions;
 }
 
-export const HELP_TEXT = `pr-hero — multi-agent review of a real repo + branch
+export const HELP_TEXT = `crysk — multi-agent review of a real repo + branch
 
 Usage:
-  pr-hero [options]          Open interactive terminal user interface (TTY)
-  pr-hero menu [options]     Open interactive terminal user interface
-  pr-hero review [options]   Review a branch (zero flags inside a configured repo)
-  pr-hero init [options]     Scaffold <repo>/.prhero/ (config.json + gotchas.md)
-  pr-hero setup [options]    Run interactive onboarding wizard
-  pr-hero setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
-                             Scaffold .github/workflows/pr-hero.yml instead
+  crysk [options]          Open interactive terminal user interface (TTY)
+  crysk menu [options]     Open interactive terminal user interface
+  crysk review [options]   Review a branch (zero flags inside a configured repo)
+  crysk init [options]     Scaffold <repo>/.crysk/ (config.json + gotchas.md)
+  crysk setup [options]    Run interactive onboarding wizard
+  crysk setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
+                             Scaffold .github/workflows/crysk.yml (or update
+                             an existing pr-hero.yml) instead
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed. Asks how CI
                              re-reviews (in a terminal) or takes the flags:
@@ -329,25 +326,23 @@ Usage:
                              --ci-mode gate|advisory, --billing
                              subscription|api, --budget-usd (api only),
                              --max-changed-lines (default 4000).
-                             Writes the level to .prhero/config.json and
+                             Writes the level to .crysk/config.json and
                              prints a summary. Then checks gh and, in a
                              terminal, offers to install it and run gh auth
                              login
-  pr-hero skills install [--force]
-                             Install the pr-hero, pr-hero-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
-  pr-hero ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
+  crysk skills install [--force]
+                             Install the crysk, crysk-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
+  crysk ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
                              command
-  pr-hero doctor [options]   Check system tools and environment readiness
-  pr-hero activity [options] View currently running reviews and recent store history
-  pr-hero activity --kill <pid> [--yes]
+  crysk doctor [options]   Check system tools and environment readiness
+  crysk activity [options] View currently running reviews and recent store history
+  crysk activity --kill <pid> [--yes]
                              Safely terminate a running review (checks process identity)
-  pr-hero upgrade [options]  Upgrade pr-hero to latest version & sync agent assets
-  pr-hero uninstall [opts]   Remove pr-hero daemons, MCP registrations & skills
-  pr-hero ledger [options]   Accumulate every run's comparison.json into one
-                             markdown ledger (the three buckets as a rate)
-  pr-hero mcp [options]      Start the read-only Model Context Protocol (MCP)
+  crysk upgrade [options]  Upgrade crysk to latest version & sync agent assets
+  crysk uninstall [opts]   Remove crysk daemons, MCP registrations & skills
+  crysk mcp [options]      Start the read-only Model Context Protocol (MCP)
                              server over stdio for AI coding assistants. Read-only, $0
-  pr-hero post --pr <n> --from <run-dir> [--dry-run]
+  crysk post --pr <n> --from <run-dir> [--dry-run]
                              Publish a PREVIOUSLY RUN review's findings.json
                              to PR <n>, reading it (and diff.patch) off disk
                              instead of running a fresh review — the same
@@ -356,24 +351,16 @@ Usage:
                              and posts nothing (the only way to preview a
                              plan, since --pr --dry-run returns before any
                              findings exist)
-  pr-hero triage --pr <n> --from <run-dir> [--dry-run]
-                             Read the PR's reply threads, bind every triage
-                             reply (ROADMAP B6b's marker) to its finding's
-                             row in that run's comparison.json, and write
-                             verdict/reasoning/actor back — the ledger's two
-                             null columns, filled from the loop instead of by
-                             hand. --dry-run reports what would be bound and
-                             writes nothing
-  pr-hero triage reply --pr <n> --from <run-dir> --finding <id> --tag <tag>
+  crysk triage reply --pr <n> --from <run-dir> --finding <id> --tag <tag>
                    --body-file <path> [--verdict <v>] [--issue <n>] [--dry-run]
                              Post one triage reply. The driver resolves the
-                             parent from the posted <!-- pr-hero-finding
+                             parent from the posted <!-- crysk-finding
                              marker (never path/line), renders the marker +
                              badge, posts, and resolves the inline review
                              thread. --body-file is reasoning prose only.
                              --dry-run prints the parent and posts nothing
-  pr-hero status --pr <n> [--wait] [--json]
-                             Read the PR's pr-hero gate, posted findings and
+  crysk status --pr <n> [--wait] [--json]
+                             Read the PR's crysk gate, posted findings and
                              next action, through gh only and read-only. With
                              --wait, poll until an in-flight or newly-triggered
                              review settles before printing. With
@@ -382,12 +369,12 @@ Usage:
                              stderr. Exits 1 with no stdout when any read
                              fails. Skills drive review -> reply -> fix -> wait
                              from its next_action
-  pr-hero reverts [options]  Mine the repo's default branch for PRs that were
+  crysk reverts [options]  Mine the repo's default branch for PRs that were
                              later reverted or hotfixed, and write them as
                              markdown CANDIDATES for human confirmation. Runs
                              git log + gh api only: no review, no scoring, no
                              labelling of what the defect was, $0
-  pr-hero corpus [options]   Widen the known-bad corpus beyond reverts with
+  crysk corpus [options]   Widen the known-bad corpus beyond reverts with
                              five candidate sources, gated by their flags:
                              --fixes (fix-shaped merged PRs, blame-resolved
                              to their likely introducer), --incidents
@@ -401,43 +388,43 @@ Usage:
                              and/or --incidents. All output is CANDIDATES
                              for human confirmation. git log + gh api only:
                              no review, no scoring, $0
-  pr-hero watch --once       Run ONE watcher tick over ~/.prhero/watch.json:
+  crysk watch --once       Run ONE watcher tick over ~/.crysk/watch.json:
                              pick the next unreviewed open PR across the
                              configured repos and review it. launchd (or cron)
                              is the scheduler; this never daemonizes
-  pr-hero watch add          Opt the current repo (or --repo) into the watch
+  crysk watch add          Opt the current repo (or --repo) into the watch
                              config; --post makes its reviews publish to the
                              PR, --on-push re-reviews on every push,
                              --max-changed-lines/--max-changed-files set the
                              repo's size gate.
                              Idempotent — re-adding updates the flags
-  pr-hero watch remove       Remove the current repo (or --repo) from the
+  crysk watch remove       Remove the current repo (or --repo) from the
                              watch config (idempotent)
-  pr-hero watch status       Read-only: config summary, today's launch count
+  crysk watch status       Read-only: config summary, today's launch count
                              vs the cap, launchd state, lock, last activity
-  pr-hero watch install      Install the macOS launchd agent that runs
+  crysk watch install      Install the macOS launchd agent that runs
                              "watch --once" every --interval minutes
-  pr-hero watch uninstall    Unload and remove that launchd agent
-  pr-hero gc [--dry-run] [--repo <dir>]
-                             Collect review worktrees under ~/.prhero/repos
+  crysk watch uninstall    Unload and remove that launchd agent
+  crysk gc [--dry-run] [--repo <dir>]
+                             Collect review worktrees under ~/.crysk/repos
                              that are merged/closed or idle >72h. --dry-run
                              prints the table and removes nothing. --repo
                              scopes to one origin; default is the whole home
-  pr-hero gc install         Install the macOS launchd agent that runs
-                             "pr-hero gc" every --interval minutes (default
+  crysk gc install         Install the macOS launchd agent that runs
+                             "crysk gc" every --interval minutes (default
                              ${DEFAULT_GC_INTERVAL_MIN} = 6h). No reviews,
                              no watch.json — the $0 sweeper so trees do not
                              wait for a review or the watcher
-  pr-hero gc uninstall       Unload and remove that launchd agent
-  pr-hero gc status          Read-only: whether the GC agent is installed
-  pr-hero usage [--all]      Print the observability store's per-run rows
+  crysk gc uninstall       Unload and remove that launchd agent
+  crysk gc status          Read-only: whether the GC agent is installed
+  crysk usage [--all]      Print the observability store's per-run rows
                              (cost, tokens, findings) for the current
                              checkout's origin — every review, local and
                              PR, auto-ingests into it. --all shows every
                              origin instead of just this one. Read-only, $0
-  pr-hero config [options]   Print every config key's effective value and the
-                             LAYER it came from — global (~/.prhero/config.json),
-                             repo (<repo>/.prhero/config.json), capped (the
+  crysk config [options]   Print every config key's effective value and the
+                             LAYER it came from — global (~/.crysk/config.json),
+                             repo (<repo>/.crysk/config.json), capped (the
                              global ceiling narrowed the repo's value away) or
                              default (neither file spoke). Names both file
                              paths whether or not they exist. Resolves through
@@ -450,8 +437,8 @@ Options:
   --pr [n]            Review GitHub PR #n — or, with no number, the PR that
                       belongs to the current branch. head and base come from
                       gh, the review runs in a detached worktree with its
-                      own codegraph index, and the result is compared
-                      against Greptile's comment on the PR. Excludes --base,
+                      own codegraph index, and the result is written to the
+                      run directory's findings.json. Excludes --base,
                       --head and --two-dot
   --post              With --pr only: publish the review to the PR as one
                       marked comment — created the first time, updated in
@@ -466,9 +453,9 @@ Options:
                       agents_dir (relative paths resolve against the config
                       file), then PRHERO_AGENTS_DIR
   --out <dir>         Run directory; must live OUTSIDE the reviewed repo
-                      (default: ~/.prhero/repos/<origin>/runs/<sha>-<n>).
-                      For ledger, reverts and corpus: the file to write
-                      instead of stdout
+                      (default: ~/.crysk/repos/<origin>/runs/<sha>-<n>).
+                      For reverts and corpus: the file to write instead of
+                      stdout
   --since <git-date>  reverts and corpus only: how far back to scan the
                       default branch, in any form git's --since accepts
                       ("6 months ago", "2025-01-01"). Default: 24 months ago
@@ -493,13 +480,10 @@ Options:
   --bug-labels <csv>  corpus only: with --issues, issue labels that mark a
                       referenced issue as a bug (comma-separated,
                       case-sensitive). Default: bug
-  --runs <dir>        ledger only: the runs root to scan for comparison.json
-                      files (default: ~/.prhero/repos/<origin>/runs)
   --json              status only: print the status as one JSON object on
                       stdout (schema pr-hero.status/v1)
   --from <dir>        post/triage only: the run dir to read findings.json and
-                      anchor.patch or diff.patch (post and triage reply) or comparison.json
-                      (triage bind) from (required). triage reply maps
+                      anchor.patch or diff.patch from (required). triage reply maps
                       --finding F00N onto the posted marker via the same
                       post-line remapping post uses
   --finding <id>      triage reply only: the finding id in that run's
@@ -516,9 +500,9 @@ Options:
                       deferred. Not required — deferred is a tag plus
                       reasoning; the coding agent decides whether an issue
                       exists
-  --gotchas <file>    Repo gotchas file (default: <repo>/.prhero/gotchas.md);
+  --gotchas <file>    Repo gotchas file (default: <repo>/.crysk/gotchas.md);
                       supply it from outside to review a tree you cannot dirty
-  --config <file>     Local config (default: <repo>/.prhero/config.json) with
+  --config <file>     Local config (default: <repo>/.crysk/config.json) with
                       agents_dir, default_base, parity_trigger_paths and
                       suspicion_priors, optional summary settings, and
                       optional max_verification_steps (re-review verify cap;
@@ -543,11 +527,11 @@ Options:
   --full              review only: on a re-review, widen discovery to the
                       full PR range (B..H). Verification and triage still
                       run; the recorded case does not change. On GitHub,
-                      comment /pr-hero review --full on the PR
+                      comment /crysk review --full on the PR
   --adjudicate        with --pr --ci: also have the CI adjudicator rule on
                       each pending dismissal of a blocking finding (at most
                       5 per run) and post its verdict on the finding's
-                      thread. Set by a /pr-hero recheck comment.
+                      thread. Set by a /crysk recheck comment.
   --hop-budget <n>    Hops per hunter (default: ${DEFAULT_HOP_BUDGET}); the biggest
                       per-hunter cost lever there is
   --two-dot           Diff the literal <base>..<head> two-point range instead
@@ -570,7 +554,7 @@ Options:
                       Size gate: skip the review when the diff has more than
                       n effective changed lines (insertions + deletions,
                       generated files like lockfiles and minified bundles
-                      excluded, plus anything a repo's own .prheroignore
+                      excluded, plus anything a repo's own .cryskignore
                       names). Default ${DEFAULT_SIZE_GATE.maxChangedLines}; 0 disables the limit.
                       With watch add: record the threshold for the repo
   --max-changed-files <n>
@@ -578,19 +562,20 @@ Options:
                       Default ${DEFAULT_SIZE_GATE.maxChangedFiles}; 0 disables the limit
   --ci-mode <gate|advisory>
                       With review --ci only. gate (the default): the
-                      pr-hero commit status is failure on blocking findings
+                      crysk commit status is failure on blocking findings
                       and on a size or budget skip, and error on a crash.
                       advisory: the status stays success whatever the
                       findings, as before
   --force             Review even when CI would skip: the size gate, the
                       review-policy admission rules, and the budget ceiling.
-                      On GitHub, comment /pr-hero review on the PR to pass
+                      On GitHub, comment /crysk review on the PR to pass
                       this flag from Actions. An interactive TTY already
                       offers the size-gate choice as a menu; this flag is
                       the unattended hatch. Does NOT imply --yes — the
                       cost-band prompt still asks. With setup --ci /
-                      ci init: overwrite an existing
-                      .github/workflows/pr-hero.yml instead of refusing
+                      ci init: overwrite the existing review workflow
+                      (.github/workflows/crysk.yml or pr-hero.yml) instead
+                      of refusing
   --all               usage only: show every origin's rows instead of just
                       the current checkout's
   --yes               Skip the confirmation prompt
@@ -604,7 +589,7 @@ Every run costs real money. --dry-run costs nothing and answers most
 questions; use it first.
 
 The size gate is a COST gate, not a quality gate: past its limits a diff bills
-several times more with a much wider spread, so pr-hero skips it unattended
+several times more with a much wider spread, so Crysk skips it unattended
 rather than guess at the bill. An interactive run asks first. It says nothing
 about how well a large diff reviews.`;
 
@@ -614,7 +599,6 @@ const VALUE_FLAGS = new Set([
   "--head",
   "--agents",
   "--out",
-  "--runs",
   "--from",
   "--gotchas",
   "--config",
@@ -666,7 +650,6 @@ export function parseArgs(argv: string[]): ParsedCli {
     | "doctor"
     | "menu"
     | "activity"
-    | "ledger"
     | "watch"
     | "post"
     | "triage"
@@ -939,7 +922,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     // `skills` has exactly one subcommand, `install`; any other word in that
     // slot is a usage error, not a generic unexpected argument.
     if (command === "skills" && options.skills === undefined) {
-      throw new CliUsageError("pr-hero skills needs a subcommand: install");
+      throw new CliUsageError("crysk skills needs a subcommand: install");
     }
     if (
       command === "triage" &&
@@ -971,7 +954,6 @@ export function parseArgs(argv: string[]): ParsedCli {
       arg !== "doctor" &&
       arg !== "menu" &&
       arg !== "activity" &&
-      arg !== "ledger" &&
       arg !== "watch" &&
       arg !== "post" &&
       arg !== "triage" &&
@@ -990,19 +972,17 @@ export function parseArgs(argv: string[]): ParsedCli {
     ) {
       throw new CliUsageError(
         `unknown command: ${arg} (the commands are "menu", "review", "init", "setup", "doctor", ` +
-          '"activity", "ledger", "watch", "post", "triage", "status", "gc", "usage", ' +
+          '"activity", "watch", "post", "triage", "status", "gc", "usage", ' +
           '"reverts", "corpus", "config", "mcp", "upgrade", "uninstall", "ci" and "skills")',
       );
     }
     command = arg === "update" ? "upgrade" : arg;
   }
   if (command === undefined) {
-    throw new CliUsageError(
-      'no command given (did you mean "pr-hero review"?)',
-    );
+    throw new CliUsageError('no command given (did you mean "crysk review"?)');
   }
   if (command === "skills" && options.skills === undefined) {
-    throw new CliUsageError("pr-hero skills needs a subcommand: install");
+    throw new CliUsageError("crysk skills needs a subcommand: install");
   }
   // --pr derives the whole range from the PR record — head from GitHub, base
   // from the merge commit's parent or the base branch — so a hand-picked
@@ -1181,6 +1161,12 @@ export function parseArgs(argv: string[]): ParsedCli {
   // named by --pr. Both flags required for either — a command with neither
   // has nothing to read and nowhere to bind it, and guessing either would
   // silently act on the wrong run or the wrong PR.
+  if (command === "triage" && options.triage !== "reply") {
+    throw new CliUsageError(
+      "triage needs a subcommand: use `crysk triage reply` (the bare " +
+        "`triage --pr --from` verb was removed with comparison.json)",
+    );
+  }
   if (command === "post" || command === "triage") {
     if (options.pr === undefined) {
       throw new CliUsageError(`${command} requires --pr <n>`);
@@ -1414,9 +1400,6 @@ function applyValueFlag(
       return;
     case "--scout-model":
       options.scoutModel = value;
-      return;
-    case "--runs":
-      options.runs = value;
       return;
     case "--from":
       options.from = value;
@@ -1657,7 +1640,7 @@ export function agentFilePath(
 // The config seat as ONE object rather than three loose optionals. A value,
 // the layer that spoke it, and the directory that value is relative TO are a
 // single fact: split apart, a caller can hand over the GLOBAL file's
-// `agents_dir` with the REPO's `.prhero/` as its base, which resolves a
+// `agents_dir` with the REPO's `.crysk/` as its base, which resolves a
 // relative path against a directory the value never lived in and then labels
 // the result `repo`. Grouped, that mistake does not type-check — which is the
 // only mitigation available, because the two are both `string` and tsc cannot
@@ -1675,7 +1658,7 @@ export interface AgentsDirConfigSeat {
 // WHY `agents_dir` belongs in the config at all: requiring a flag that points
 // into a SIBLING repository is the single thing that stopped this from being a
 // one-word command inside the repo being reviewed. Recorded once in
-// .prhero/config.json, `pr-hero review` needs no arguments.
+// .crysk/config.json, `pr-hero review` needs no arguments.
 //
 // The relative case resolves against the CONFIG FILE's directory, not cwd: the
 // config is the thing that names the path, so the path travels with it. A
@@ -1742,8 +1725,8 @@ export function resolveAgentsDirSetting(input: {
 // The seat, assembled from the merge's own source record. THIS is the one
 // place that record is load-bearing at RUNTIME rather than for display
 // (judgment ledger JD-14): a relative `"agents_dir": "./prompts"` in the
-// global file must resolve under `~/.prhero/`, while the same string in the
-// repo file resolves under `<repo>/.prhero/`. They are two different prompt
+// global file must resolve under `~/.crysk/`, while the same string in the
+// repo file resolves under `<repo>/.crysk/`. They are two different prompt
 // sets — one the operator's, one the team's — and resolving the global value
 // against the repo's directory picks a set nobody configured, or throws
 // "agents dir does not exist" naming a path that appears in neither file.
@@ -1919,7 +1902,7 @@ export function assertOutsideRepo(runDir: string, repoRoot: string): void {
 // repoId rides along with the run dir so the caller's fail-soft metrics
 // ingest (W4 / #23) can reuse the SAME resolveRepoHome call below instead of
 // paying for a second gitOriginUrl lookup. --out still skips resolveRepoHome
-// itself (an explicit dir needs no ~/.prhero/repos/<id> registry, and must
+// itself (an explicit dir needs no ~/.crysk/repos/<id> registry, and must
 // never gain the side effect of creating one just to learn an id — W4 Phase
 // 6 remediation, GitHub #23 option D) — but it now tries origin via
 // tryOriginRepoId (persist:false semantics) so a --out run on a checkout
@@ -2030,7 +2013,7 @@ export function resolveAgentsDir(
   const resolution = resolveAgentsDirSetting({
     flag: options.agents,
     ...(seat === undefined ? {} : { config: seat }),
-    env: process.env.PRHERO_AGENTS_DIR,
+    env: readBrandEnv(process.env, "AGENTS_DIR")?.value,
     cwd: process.cwd(),
     ...(assets === undefined ? {} : { assets }),
   });
@@ -2087,8 +2070,9 @@ export async function preflightAgentsDir(
 // second leg on an EXISTING hunter file, distinguished only by key). Strict
 // on purpose: a malformed value must fail loud rather than silently run
 // fewer hunters than the operator asked for.
-function parseExtraHunters(raw: string | undefined): AgentSpec[] {
-  if (raw === undefined) return [];
+function parseExtraHunters(read: BrandEnvValue | undefined): AgentSpec[] {
+  if (read === undefined) return [];
+  const { value: raw, name } = read;
   const trimmed = raw.trim();
   if (trimmed === "") return [];
   return trimmed.split(",").map((rawEntry, i) => {
@@ -2096,20 +2080,20 @@ function parseExtraHunters(raw: string | undefined): AgentSpec[] {
     const sep = entry.indexOf(":");
     if (sep <= 0 || sep === entry.length - 1) {
       throw new CliUsageError(
-        `PRHERO_EXTRA_HUNTERS[${i}] must be "key:file.md", got: ${JSON.stringify(rawEntry)}`,
+        `${name}[${i}] must be "key:file.md", got: ${JSON.stringify(rawEntry)}`,
       );
     }
     const key = entry.slice(0, sep).trim();
     const file = entry.slice(sep + 1).trim();
     if (!isSafeSlug(key)) {
       throw new CliUsageError(
-        `PRHERO_EXTRA_HUNTERS[${i}].key "${key}" is not a safe slug ` +
+        `${name}[${i}].key "${key}" is not a safe slug ` +
           "(^[a-z0-9]+(?:-[a-z0-9]+)*$, 1-64 chars)",
       );
     }
     if (!file.endsWith(".md") || file.length <= ".md".length) {
       throw new CliUsageError(
-        `PRHERO_EXTRA_HUNTERS[${i}].file "${file}" must be a ".md" basename`,
+        `${name}[${i}].file "${file}" must be a ".md" basename`,
       );
     }
     assertBasenameOnly(file, i);
@@ -2149,7 +2133,7 @@ export function localReviewSpec(
       // The boundary, not the three throws: assertBasenameOnly inside
       // parseExtraHunters is a fourth usage throw of the same parse (T2d-1).
       ...withUsageClass({ kind: "config-parse", source: "extra-hunters" }, () =>
-        parseExtraHunters(env.PRHERO_EXTRA_HUNTERS),
+        parseExtraHunters(readBrandEnv(env, "EXTRA_HUNTERS")),
       ),
       { key: "refuter", file: "review-refuter.md", role: "refuter" },
     ],
@@ -2298,10 +2282,10 @@ const GLOBAL_CONFIG_KEYS = new Set<string>(
 // The two file labels every rejection is templated over. A shared validator
 // that hardcodes one file name sends the operator to edit the wrong file the
 // moment the other file is the malformed one.
-const REPO_CONFIG_LABEL = ".prhero/config.json";
-const GLOBAL_CONFIG_LABEL = "~/.prhero/config.json";
+const REPO_CONFIG_LABEL = ".crysk/config.json";
+const GLOBAL_CONFIG_LABEL = "~/.crysk/config.json";
 
-// `.prhero/config.json` is optional and every setting inside it is optional —
+// `.crysk/config.json` is optional and every setting inside it is optional —
 // an absent config is a legal, complete configuration (parity simply never
 // fires, while summary activation is resolved by resolveSummary). What is NOT
 // tolerated is a malformed one: a typo'd key silently
@@ -2323,14 +2307,15 @@ const GLOBAL_CONFIG_LABEL = "~/.prhero/config.json";
 // classed routing parser for symmetry only: `routing` is not a repo key, so the file is
 // rejected as a per-person key before any routing value is parsed. The person layer's
 // errors carry no class (see parseGlobalConfig).
-export function parseLocalConfig(raw: string): ConfigLayer {
+// `label` is the file name an error should show: a repo still on the legacy
+// `.prhero/` passes `.prhero/config.json`, so the message names the file that
+// was actually read.
+export function parseLocalConfig(
+  raw: string,
+  label: string = REPO_CONFIG_LABEL,
+): ConfigLayer {
   return withUsageClass({ kind: "config-parse", source: "repo-config" }, () =>
-    parseConfigLayer(
-      raw,
-      REPO_CONFIG_LABEL,
-      LOCAL_CONFIG_KEYS,
-      parseRoutingConfig,
-    ),
+    parseConfigLayer(raw, label, LOCAL_CONFIG_KEYS, parseRoutingConfig, true),
   );
 }
 
@@ -2341,14 +2326,18 @@ export function parseLocalConfig(raw: string): ConfigLayer {
 // right: two are lists of paths inside one repository and the third selects a
 // commit range ahead of an autodetection that already works.
 // Its routing object is parsed without the routing class. That class renders
-// PRH-ROUTING-INVALID, whose text names PRHERO_ROUTING and `gh variable set`: the
+// PRH-ROUTING-INVALID, whose text names CRYSK_ROUTING and `gh variable set`: the
 // fix for the CI routing input, not for this personal file. The message is the same.
-export function parseGlobalConfig(raw: string): ConfigLayer {
+export function parseGlobalConfig(
+  raw: string,
+  label: string = GLOBAL_CONFIG_LABEL,
+): ConfigLayer {
   return parseConfigLayer(
     raw,
-    GLOBAL_CONFIG_LABEL,
+    label,
     GLOBAL_CONFIG_KEYS,
     parseRoutingValue,
+    false,
   );
 }
 
@@ -2378,6 +2367,7 @@ function parseConfigLayer(
   file: string,
   admitted: ReadonlySet<string>,
   parseRouting: typeof parseRoutingConfig,
+  isRepoFile: boolean,
 ): ConfigLayer {
   let parsed: unknown;
   try {
@@ -2399,15 +2389,19 @@ function parseConfigLayer(
     // key name across three rejections sends two operators out of three
     // looking for the wrong line in their config.
     if (!admitted.has(key)) {
-      if (file === REPO_CONFIG_LABEL) {
+      if (isRepoFile) {
         throw new CliUsageError(
-          `${file}: ${key} is a per-person key — put it in ` +
-            "~/.prhero/config.json",
+          // Both homes are named: the resolver picks ~/.crysk as soon as it exists, so
+          // telling a pre-rename install to create it would hide its ~/.prhero data.
+          `${file}: ${key} is a per-person key — put it in your person config ` +
+            "(~/.crysk/config.json, or ~/.prhero/config.json on an install set up " +
+            "before the rename; do not create ~/.crysk while ~/.prhero is in use)",
         );
       }
       throw new CliUsageError(
-        `${file}: ${key} is a per-repo key — put it in ` +
-          "<repo>/.prhero/config.json",
+        `${file}: ${key} is a per-repo key — put it in the repo config ` +
+          "(<repo>/.crysk/config.json, or <repo>/.prhero/config.json in a repo set " +
+          "up before the rename)",
       );
     }
   }
@@ -3257,7 +3251,7 @@ function optionalString(
 export interface InitTemplateInput {
   agentsDir?: string | undefined;
   defaultBase: string;
-  // What `~/.prhero/config.json` ALREADY says, or undefined when the operator
+  // What `~/.crysk/config.json` ALREADY says, or undefined when the operator
   // has no global file. C5 O-9: a scaffold that re-states what the global
   // layer already supplies ships the exact duplication C5 exists to delete —
   // §0.5 measured three byte-identical 212-byte configs on one machine.
@@ -3350,14 +3344,19 @@ export function initConfigTemplate(input: InitTemplateInput): string {
   )}\n`;
 }
 
-// WHY init says this out loud: an untracked file under .prhero/ dirties the
+// WHY init says this out loud: an untracked file under .crysk/ dirties the
 // working tree, and the clean-tree gate in cli.ts then refuses to run at all.
 // A first-time user who scaffolds and immediately hits "the working tree is
 // dirty" has no way to connect the two.
-export const INIT_GIT_REMINDER =
-  "Now either commit .prhero/ or add it to .gitignore. Every review step " +
-  "reads the checkout directly, so pr-hero refuses to run on a dirty tree — " +
-  "and an untracked .prhero/ is exactly that.";
+// `dirName` is the directory the command actually wrote into (an existing
+// legacy .prhero/ is updated in place), so the advice names a real path.
+export function initGitReminder(dirName: string = REPO_DIR_NAME): string {
+  return (
+    `Now either commit ${dirName}/ or add it to .gitignore. Every review step ` +
+    "reads the checkout directly, so Crysk refuses to run on a dirty tree — " +
+    `and an untracked ${dirName}/ is exactly that.`
+  );
+}
 
 // The token every scaffolded gotchas file carries, and the primary signal
 // that distinguishes "nobody has written this yet" from a real file (the
@@ -3380,7 +3379,7 @@ export const INIT_GIT_REMINDER =
 // every hunter as if it were real.
 export const GOTCHAS_PLACEHOLDER_MARKER = "human-attention-required";
 
-export const GOTCHAS_TEMPLATE = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: delete THIS line once the gotchas below are real — pr-hero refuses to review while it is here. -->
+export const GOTCHAS_TEMPLATE = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: delete THIS line once the gotchas below are real — Crysk refuses to review while it is here. -->
 # Repo gotchas
 
 Facts a reviewer cannot infer from the diff alone. Each line is injected
@@ -3394,7 +3393,7 @@ verbatim into every hunter's system prompt, so keep them short and true.
 // `pr-hero setup`'s fallback scaffold (wizard.ts writes it when onboarding
 // collected zero invariants). It lives here, beside GOTCHAS_TEMPLATE, so the
 // gate below can recognise both scaffolds from one place.
-export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero invariants defined during onboarding -->\n\n# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Replace this with your project's real failure modes, then delete the marker line at the top — pr-hero refuses to review while it is there.)\n`;
+export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero invariants defined during onboarding -->\n\n# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Replace this with your project's real failure modes, then delete the marker line at the top — Crysk refuses to review while it is there.)\n`;
 
 // Every non-blank line the two scaffolds write, minus the marker line. A file
 // made ONLY of these lines is a scaffold nobody filled in, whether its marker
@@ -3469,6 +3468,7 @@ export function gotchasUnusableReason(
 // kept arm that forgot to pass the bytes.
 export function initGotchasInstructions(
   outcome: { written: true } | { written: false; contents: string },
+  dirName: string = REPO_DIR_NAME,
 ): string[] {
   if (outcome.written) {
     // Safe ONLY on this arm: the file is GOTCHAS_TEMPLATE, so it really does
@@ -3480,11 +3480,11 @@ export function initGotchasInstructions(
     // placeholders. The marker is what makes the old sentence true, so the
     // instruction has to name the marker.
     return [
-      "Then edit .prhero/gotchas.md — two steps, both required:",
+      `Then edit ${dirName}/gotchas.md — two steps, both required:`,
       "  1. replace the <subsystem> lines with facts about this repo",
       `  2. delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line at the top`,
       "",
-      "pr-hero refuses to review while that marker is present. It is not " +
+      "Crysk refuses to review while that marker is present. It is not " +
         "pedantry: the file above is non-empty, so without the marker a " +
         "review would bill in full for hunters primed with placeholder text " +
         "and report a clean-LOOKING result.",
@@ -3498,9 +3498,9 @@ export function initGotchasInstructions(
     // `<subsystem>` lines at all. Naming them would be this same defect one
     // layer down.
     return [
-      "The .prhero/gotchas.md already on disk is still a scaffold: it carries " +
+      `The ${dirName}/gotchas.md already on disk is still a scaffold: it carries ` +
         `the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line or nothing but the ` +
-        "scaffold's own lines, and pr-hero refuses to review it.",
+        "scaffold's own lines, and Crysk refuses to review it.",
       "",
       "Write facts about THIS repo into it, and delete the marker line if it " +
         "is still there.",
@@ -3510,7 +3510,7 @@ export function initGotchasInstructions(
     // No marker in an empty file, so nothing to delete — saying otherwise
     // would send the reader looking for a line that is not there.
     return [
-      "The .prhero/gotchas.md already on disk is empty, and pr-hero refuses " +
+      `The ${dirName}/gotchas.md already on disk is empty, and Crysk refuses ` +
         "to review without gotchas: an empty file makes the whole review a " +
         "zero-cost no-op that LOOKS like a clean result.",
       "",
@@ -3522,7 +3522,7 @@ export function initGotchasInstructions(
   // non-empty and marker-free; it does not prove the contents are good, so
   // this line reports the gate and claims nothing beyond it.
   return [
-    "The .prhero/gotchas.md already on disk passes the gotchas gate and will " +
+    `The ${dirName}/gotchas.md already on disk passes the gotchas gate and will ` +
       "be used as-is.",
   ];
 }
@@ -3547,7 +3547,7 @@ export function gotchasErrorMessage(
       ...why,
       "",
       `It still carries the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line, or`,
-      "nothing but the lines `pr-hero init` and `pr-hero setup` scaffold.",
+      "nothing but the lines `crysk init` and `crysk setup` scaffold.",
       "Reviewing with it would spend real money feeding every hunter",
       "placeholder text, and return a clean-LOOKING result.",
       "",
@@ -3570,6 +3570,6 @@ export function gotchasErrorMessage(
     // pr-hero still rejects. Saying the last step out loud is not politeness;
     // without it this message hands you the next error.
     `Then replace the <subsystem> lines and delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\``,
-    "marker line — pr-hero refuses to review while that line is present.",
+    "marker line — Crysk refuses to review while that line is present.",
   ].join("\n");
 }

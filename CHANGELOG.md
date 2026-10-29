@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-29
+
+### Changed
+- **Renamed to Crysk.** The product, its documentation, CLI output and bundled skills now use the name Crysk. The
+  new names are written everywhere; every old name is still read for one version, so an install made under
+  `pr-hero` keeps working:
+  - **Package and binary**: the npm package is `crysk` and the binary is `crysk`; `pr-hero` stays as an alias.
+    Release binaries are uploaded under both names. The last `pr-hero` npm release is the same build, and
+    `pr-hero` is then deprecated in favour of `crysk`.
+  - **Skills**: `crysk`, `crysk-pr`, `crysk-ci-setup` and `crysk-loop` replace `pr-hero`, `pr-hero-pr`,
+    `pr-hero-ci-setup` and `pr-hero-triage`. Setup and upgrade remove the old directories when they are unedited.
+  - **MCP**: tools are `crysk_*` under the server key `crysk`; the old `prhero_*` tool names are still answered
+    and the `pr-hero` registration is rewritten on sync.
+  - **PR comments**: markers are `<!-- crysk-…` (the `<!-- pr-hero-…` ones are still read) and the commands are
+    `/crysk review`, `/crysk review --full`, `/crysk recheck`, `/crysk override` and `/crysk stop`; `/pr-hero …` is
+    still accepted. A workflow file scaffolded before this release only answers `/pr-hero …`: re-run
+    `crysk ci init --force` to accept both.
+  - **Commit status**: the gate is the `crysk` context, and `pr-hero` is posted beside it for one version so a
+    branch protection rule that requires `pr-hero` keeps working (the same for `crysk/local` and `pr-hero/local`).
+    Descriptions start `crysk:`; older ones are still read.
+  - **Environment**: `CRYSK_*` variables win, then `PRHERO_*`; the workflow reads `vars.CRYSK_ROUTING`, then
+    `vars.PRHERO_ROUTING`.
+  - **Files and directories**: `~/.crysk`, `<repo>/.crysk/` and `.cryskignore`. `~/.prhero`, `.prhero/` and
+    `.prheroignore` are still read when the new name does not exist; nothing is moved for you and `crysk doctor`
+    prints the migration. The launchd labels are `io.crysk.watch` and `io.crysk.gc`; installing replaces the old
+    `io.prhero.*` ones.
+  - **CI**: `crysk setup --ci` writes `.github/workflows/crysk.yml`, named `Crysk Review`, with a `Run Crysk` step.
+    A repository that already has `.github/workflows/pr-hero.yml` keeps that file: `crysk ci init --force` rewrites
+    it in place and never adds a second one (with both present, setup refuses and `crysk doctor` reports a double
+    review). The action finds its own workflow's past runs from `GITHUB_WORKFLOW_REF`, so either file name works.
+    The action is named `Crysk`, uploads the run directory as `crysk-run-<pr>-<sha>`, and writes the admission
+    ledger as the check run `crysk/ci-admission`; the old `pr-hero/ci-admission` rows are still read, so attempt
+    counts survive the upgrade. The step id `pr-hero` and the `pr-hero-review-` concurrency group are unchanged.
+  - **Repository**: the project moved to `cryskai/crysk`, and new workflows use `uses: cryskai/crysk@v0`.
+    `juanmaagd/pr-hero` is kept as a mirror with the same tags and releases, so `uses: juanmaagd/pr-hero@v0`, the
+    old install URL and `pr-hero upgrade` on an older binary keep working.
+  - **Unchanged**: the findings envelope (`name: "pr-hero"`), the `pr-hero.status/v1` schema id and the `[pr-hero]`
+    stderr tags.
+
+### Fixed
+- **A CI review whose every hunter fails names the provider error.** A spent API key, a rejected credential or a
+  rate limit is reported as `PRH-PROVIDER-LIMITED` or `PRH-CRED-REJECTED`, naming the secret, instead of the generic
+  `PRH-HUNTERS-FAILED`. Partial failures say which step failed and why.
+- **The override status says what it did**: `crysk: overridden by @<login> — no new review run`. The older
+  `— no review on this head` read as if the head had never been reviewed; both are still recognised.
+
+### Removed
+- **The Greptile head-to-head**: no Greptile fetch, no `comparison.md`, no "vs Greptile" section.
+- **`comparison.json`**, with the `ledger` command, the MCP tool `prhero_get_comparison`, the HTTP route
+  `/v1/runs/:id/comparison` and the bare `triage --pr --from` harvest. Triage verdicts live only in the
+  `finding_triage` table (`crysk triage reply`); the historical comparison rows stay readable.
+
 ## [0.2.6] - 2026-10-28
 
 0.2.5 reached npm but was never tagged on GitHub, so it has no GitHub Release and the `v0` Action tag stayed on
@@ -515,7 +567,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/cryskai/crysk/compare/v0.2.6...v0.3.0
 [0.2.6]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...v0.2.6
 [0.2.5]: https://www.npmjs.com/package/pr-hero/v/0.2.5
 [0.2.4]: https://github.com/juanmaagd/pr-hero/compare/v0.2.3...v0.2.4

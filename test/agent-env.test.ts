@@ -17,8 +17,8 @@ describe("Agent environment detector and sync", () => {
   const fakeAssets = {
     ...resolveEngineAssets(),
     triageSkillFiles: {
-      "SKILL.md": "/abs/skills/pr-hero-triage/SKILL.md",
-      "adjudicator.md": "/abs/skills/pr-hero-triage/adjudicator.md",
+      "SKILL.md": "/abs/skills/crysk-loop/SKILL.md",
+      "adjudicator.md": "/abs/skills/crysk-loop/adjudicator.md",
     },
     ciSetupSkillFiles: {},
     prSkillFiles: {},
@@ -82,14 +82,14 @@ describe("Agent environment detector and sync", () => {
       });
 
       expect(result.synced).toEqual(["SKILL.md", "adjudicator.md"]);
-      expect(written["/home/user/.claude/skills/pr-hero-triage/SKILL.md"]).toBe(
+      expect(written["/home/user/.claude/skills/crysk-loop/SKILL.md"]).toBe(
         "content of SKILL.md",
       );
       expect(
-        written["/home/user/.claude/skills/pr-hero-triage/adjudicator.md"],
+        written["/home/user/.claude/skills/crysk-loop/adjudicator.md"],
       ).toBe("content of adjudicator.md");
       expect(
-        written["/home/user/.claude/skills/pr-hero-triage/digest.json"],
+        written["/home/user/.claude/skills/crysk-loop/digest.json"],
       ).toBeDefined();
 
       // Second sync is a no-op when digest matches
@@ -111,11 +111,11 @@ describe("Agent environment detector and sync", () => {
 
     test("manual user edit triggers drift protection unless force: true", async () => {
       const written: Record<string, string> = {
-        "/home/user/.claude/skills/pr-hero-triage/SKILL.md":
+        "/home/user/.claude/skills/crysk-loop/SKILL.md":
           "user modified content",
-        "/home/user/.claude/skills/pr-hero-triage/adjudicator.md":
+        "/home/user/.claude/skills/crysk-loop/adjudicator.md":
           "content of adjudicator.md",
-        "/home/user/.claude/skills/pr-hero-triage/digest.json": JSON.stringify({
+        "/home/user/.claude/skills/crysk-loop/digest.json": JSON.stringify({
           files: {
             "SKILL.md": "original_hash",
             "adjudicator.md": "content_hash",
@@ -168,7 +168,7 @@ describe("Agent environment detector and sync", () => {
       });
 
       expect(resultForce.synced).toEqual(["SKILL.md", "adjudicator.md"]);
-      expect(written["/home/user/.claude/skills/pr-hero-triage/SKILL.md"]).toBe(
+      expect(written["/home/user/.claude/skills/crysk-loop/SKILL.md"]).toBe(
         "new upstream content",
       );
     });
@@ -187,21 +187,21 @@ describe("Agent environment detector and sync", () => {
       const multiSkillAssets = {
         ...fakeAssets,
         ciSetupSkillFiles: {
-          "SKILL.md": "/abs/skills/pr-hero-ci-setup/SKILL.md",
+          "SKILL.md": "/abs/skills/crysk-ci-setup/SKILL.md",
           "assets/workflow.yml":
-            "/abs/skills/pr-hero-ci-setup/assets/workflow.yml",
+            "/abs/skills/crysk-ci-setup/assets/workflow.yml",
         },
       };
 
       const result = await syncSkills(env, multiSkillAssets, {
         readFile: (p) => {
-          if (p === "/abs/skills/pr-hero-triage/SKILL.md")
+          if (p === "/abs/skills/crysk-loop/SKILL.md")
             return "triage skill content";
-          if (p === "/abs/skills/pr-hero-triage/adjudicator.md")
+          if (p === "/abs/skills/crysk-loop/adjudicator.md")
             return "triage adjudicator content";
-          if (p === "/abs/skills/pr-hero-ci-setup/SKILL.md")
+          if (p === "/abs/skills/crysk-ci-setup/SKILL.md")
             return "ci-setup skill content";
-          if (p === "/abs/skills/pr-hero-ci-setup/assets/workflow.yml")
+          if (p === "/abs/skills/crysk-ci-setup/assets/workflow.yml")
             return "ci-setup workflow template content";
           return written[p];
         },
@@ -217,22 +217,20 @@ describe("Agent environment detector and sync", () => {
         "SKILL.md",
         "assets/workflow.yml",
       ]);
-      expect(written["/home/user/.claude/skills/pr-hero-triage/SKILL.md"]).toBe(
+      expect(written["/home/user/.claude/skills/crysk-loop/SKILL.md"]).toBe(
         "triage skill content",
       );
+      expect(written["/home/user/.claude/skills/crysk-ci-setup/SKILL.md"]).toBe(
+        "ci-setup skill content",
+      );
       expect(
-        written["/home/user/.claude/skills/pr-hero-ci-setup/SKILL.md"],
-      ).toBe("ci-setup skill content");
-      expect(
-        written[
-          "/home/user/.claude/skills/pr-hero-ci-setup/assets/workflow.yml"
-        ],
+        written["/home/user/.claude/skills/crysk-ci-setup/assets/workflow.yml"],
       ).toBe("ci-setup workflow template content");
     });
   });
 
   describe("MCP registration", () => {
-    test("registerMcpServer adds pr-hero entry without altering existing servers", async () => {
+    test("registerMcpServer adds the crysk entry without altering existing servers", async () => {
       const initialConfig = JSON.stringify({
         mcpServers: {
           existingServer: {
@@ -272,7 +270,7 @@ describe("Agent environment detector and sync", () => {
       expect(result.registered).toBe(true);
       const parsed = JSON.parse(written["/home/user/.cursor/mcp.json"]);
       expect(parsed.mcpServers.existingServer).toBeDefined();
-      expect(parsed.mcpServers["pr-hero"]).toEqual({
+      expect(parsed.mcpServers.crysk).toEqual({
         command: reg.command,
         args: reg.args,
       });
@@ -289,7 +287,7 @@ describe("Agent environment detector and sync", () => {
       expect(secondResult.alreadyRegistered).toBe(true);
     });
 
-    test("inspectMcpRegistration returns true when configured, false otherwise", () => {
+    test("inspectMcpRegistration tells a current entry from a legacy one from none", () => {
       const self = selfInvocation();
       const reg = {
         command: self.command,
@@ -304,22 +302,124 @@ describe("Agent environment detector and sync", () => {
         auth: { authenticated: true, message: "ok" },
         mcpConfigFile: "/home/user/.claude/mcp.json",
       };
+      const inspect = (mcpServers: Record<string, unknown>) =>
+        inspectMcpRegistration(env, reg, {
+          exists: () => true,
+          readFile: () => JSON.stringify({ mcpServers }),
+        });
+      const entry = { command: reg.command, args: reg.args };
 
-      const notRegistered = inspectMcpRegistration(env, reg, {
-        exists: () => false,
-      });
-      expect(notRegistered).toBe(false);
+      expect(inspectMcpRegistration(env, reg, { exists: () => false })).toBe(
+        "missing",
+      );
+      expect(inspect({ crysk: entry })).toBe("current");
+      // Registered under the old key: it works, but setup still has to migrate it.
+      expect(inspect({ "pr-hero": entry })).toBe("legacy");
+      // Either key with a different command is not this install's registration.
+      expect(inspect({ crysk: { command: "other", args: [] } })).toBe(
+        "missing",
+      );
+      expect(inspect({ "pr-hero": { command: "other", args: [] } })).toBe(
+        "missing",
+      );
+      // Both keys present: registerMcpServer still has a migration to do (the old
+      // key must go), so inspect agrees with it and reports legacy (#424 review).
+      expect(inspect({ crysk: entry, "pr-hero": entry })).toBe("legacy");
+    });
 
-      const registered = inspectMcpRegistration(env, reg, {
-        exists: () => true,
-        readFile: () =>
-          JSON.stringify({
-            mcpServers: {
-              "pr-hero": { command: reg.command, args: reg.args },
+    describe("migrating the legacy pr-hero entry", () => {
+      const configFile = "/home/user/.cursor/mcp.json";
+      const env: AgentEnvDetection = {
+        id: "cursor",
+        displayName: "Cursor",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        mcpConfigFile: configFile,
+      };
+      const self = selfInvocation();
+      const reg = { command: self.command, args: [...self.args, "mcp"] };
+
+      function fakeFs(initial: unknown) {
+        const files: Record<string, string> = {
+          [configFile]: JSON.stringify(initial),
+        };
+        const writes: string[] = [];
+        return {
+          files,
+          writes,
+          options: {
+            readFile: (p: string) => files[p],
+            writeFile: async (p: string, content: string) => {
+              writes.push(p);
+              files[p] = content;
             },
-          }),
+            exists: (p: string) => p in files,
+          },
+        };
+      }
+
+      test("moves a legacy entry to crysk in one write, keeping its extra fields", async () => {
+        const initial = {
+          topLevelUnknown: { keep: true },
+          mcpServers: {
+            other: { command: "other", args: [] },
+            "pr-hero": {
+              command: "/old/pr-hero",
+              args: ["mcp"],
+              env: { A: "1" },
+              timeout: 5000,
+              disabled: false,
+            },
+          },
+        };
+        const fs = fakeFs(initial);
+
+        const result = await registerMcpServer(env, reg, fs.options);
+
+        expect(result).toEqual({ registered: true, configFile });
+        // One write to the config itself (the backup is a different path).
+        expect(fs.writes.filter((p) => p === configFile)).toHaveLength(1);
+        const parsed = JSON.parse(fs.files[configFile]);
+        expect(parsed.mcpServers.crysk).toEqual({
+          command: reg.command,
+          args: reg.args,
+          env: { A: "1" },
+          timeout: 5000,
+          disabled: false,
+        });
+        expect(Object.keys(parsed.mcpServers)).not.toContain("pr-hero");
+        expect(parsed.mcpServers.other).toEqual({ command: "other", args: [] });
+        expect(parsed.topLevelUnknown).toEqual({ keep: true });
+        // The backup holds the config exactly as it was before the migration.
+        expect(JSON.parse(fs.files[`${configFile}.bak`])).toEqual(initial);
       });
-      expect(registered).toBe(true);
+
+      test("is a no-op when crysk already matches and no legacy entry remains", async () => {
+        const fs = fakeFs({
+          mcpServers: { crysk: { command: reg.command, args: reg.args } },
+        });
+
+        const result = await registerMcpServer(env, reg, fs.options);
+
+        expect(result.alreadyRegistered).toBe(true);
+        expect(fs.writes).toEqual([]);
+      });
+
+      test("a matching crysk entry does not hide a leftover legacy one", async () => {
+        const fs = fakeFs({
+          mcpServers: {
+            crysk: { command: reg.command, args: reg.args },
+            "pr-hero": { command: "/old/pr-hero", args: ["mcp"] },
+          },
+        });
+
+        const result = await registerMcpServer(env, reg, fs.options);
+
+        expect(result.alreadyRegistered).toBeUndefined();
+        const parsed = JSON.parse(fs.files[configFile]);
+        expect(Object.keys(parsed.mcpServers)).toEqual(["crysk"]);
+      });
     });
 
     test("registerMcpServer refuses an npx-cache registration before any read or write", async () => {
@@ -355,19 +455,19 @@ describe("Agent environment detector and sync", () => {
   });
 
   describe("skills sync decision table (digest-less and digest-recorded copies)", () => {
-    const skillDir = "/home/user/.claude/skills/pr-hero-triage";
+    const skillDir = "/home/user/.claude/skills/crysk-loop";
     const bundled: Record<string, string> = {
-      "/abs/skills/pr-hero-triage/SKILL.md": "bundled SKILL.md",
-      "/abs/skills/pr-hero-triage/adjudicator.md": "bundled adjudicator.md",
-      "/abs/skills/pr-hero-ci-setup/SKILL.md": "bundled ci SKILL.md",
-      "/abs/skills/pr-hero-pr/SKILL.md": "bundled pr SKILL.md",
-      "/abs/skills/pr-hero/SKILL.md": "bundled general SKILL.md",
+      "/abs/skills/crysk-loop/SKILL.md": "bundled SKILL.md",
+      "/abs/skills/crysk-loop/adjudicator.md": "bundled adjudicator.md",
+      "/abs/skills/crysk-ci-setup/SKILL.md": "bundled ci SKILL.md",
+      "/abs/skills/crysk-pr/SKILL.md": "bundled pr SKILL.md",
+      "/abs/skills/crysk/SKILL.md": "bundled general SKILL.md",
     };
     const assets = {
       ...fakeAssets,
       triageSkillFiles: {
-        "SKILL.md": "/abs/skills/pr-hero-triage/SKILL.md",
-        "adjudicator.md": "/abs/skills/pr-hero-triage/adjudicator.md",
+        "SKILL.md": "/abs/skills/crysk-loop/SKILL.md",
+        "adjudicator.md": "/abs/skills/crysk-loop/adjudicator.md",
       },
       ciSetupSkillFiles: {},
       prSkillFiles: {},
@@ -401,7 +501,7 @@ describe("Agent environment detector and sync", () => {
     }
 
     const noDigestReason =
-      "local copy differs and has no recorded digest; not overwritten — run `pr-hero upgrade` to replace it with the bundled copy";
+      "local copy differs and has no recorded digest; not overwritten — run `crysk upgrade` to replace it with the bundled copy";
 
     test("no digest + identical bytes: records the digest, writes no skill file, reports current", async () => {
       const disk = fakeDisk({
@@ -416,7 +516,7 @@ describe("Agent environment detector and sync", () => {
       expect(result.synced).toEqual([]);
       expect(result.driftDetected).toBeFalsy();
       expect(result.skills).toEqual([
-        { skill: "pr-hero-triage", status: "current" },
+        { skill: "crysk-loop", status: "current" },
       ]);
     });
 
@@ -434,7 +534,7 @@ describe("Agent environment detector and sync", () => {
       expect(result.synced).toEqual([]);
       expect(result.skills).toEqual([
         {
-          skill: "pr-hero-triage",
+          skill: "crysk-loop",
           status: "drift-kept",
           reason: noDigestReason,
         },
@@ -456,7 +556,7 @@ describe("Agent environment detector and sync", () => {
       expect(result.synced).toEqual(["SKILL.md", "adjudicator.md"]);
       expect(result.driftDetected).toBeFalsy();
       expect(result.skills).toEqual([
-        { skill: "pr-hero-triage", status: "updated" },
+        { skill: "crysk-loop", status: "updated" },
       ]);
     });
 
@@ -467,7 +567,7 @@ describe("Agent environment detector and sync", () => {
 
       expect(disk.files[`${skillDir}/SKILL.md`]).toBe("bundled SKILL.md");
       expect(result.skills).toEqual([
-        { skill: "pr-hero-triage", status: "installed" },
+        { skill: "crysk-loop", status: "installed" },
       ]);
     });
 
@@ -491,7 +591,7 @@ describe("Agent environment detector and sync", () => {
       const updated = await syncSkills(env, assets, untouched.options);
       expect(untouched.files[`${skillDir}/SKILL.md`]).toBe("bundled SKILL.md");
       expect(updated.skills).toEqual([
-        { skill: "pr-hero-triage", status: "updated" },
+        { skill: "crysk-loop", status: "updated" },
       ]);
 
       const edited = fakeDisk({
@@ -505,7 +605,7 @@ describe("Agent environment detector and sync", () => {
       expect(kept.driftDetected).toBe(true);
       expect(kept.skills).toEqual([
         {
-          skill: "pr-hero-triage",
+          skill: "crysk-loop",
           status: "drift-kept",
           reason:
             "Local edits detected in " +
@@ -522,68 +622,68 @@ describe("Agent environment detector and sync", () => {
       const bothSkills = {
         ...assets,
         ciSetupSkillFiles: {
-          "SKILL.md": "/abs/skills/pr-hero-ci-setup/SKILL.md",
+          "SKILL.md": "/abs/skills/crysk-ci-setup/SKILL.md",
         },
       };
 
       const result = await syncSkills(env, bothSkills, disk.options);
 
       expect(
-        disk.files["/home/user/.claude/skills/pr-hero-ci-setup/SKILL.md"],
+        disk.files["/home/user/.claude/skills/crysk-ci-setup/SKILL.md"],
       ).toBe("bundled ci SKILL.md");
       expect(result.skills).toEqual([
         {
-          skill: "pr-hero-triage",
+          skill: "crysk-loop",
           status: "drift-kept",
           reason: noDigestReason,
         },
-        { skill: "pr-hero-ci-setup", status: "installed" },
+        { skill: "crysk-ci-setup", status: "installed" },
       ]);
     });
 
-    test("installs the general pr-hero skill beside the triage skill", async () => {
+    test("installs the general crysk skill beside the triage skill", async () => {
       const disk = fakeDisk({});
       const withGeneral = {
         ...assets,
         generalSkillFiles: {
-          "SKILL.md": "/abs/skills/pr-hero/SKILL.md",
+          "SKILL.md": "/abs/skills/crysk/SKILL.md",
         },
       };
 
       const result = await syncSkills(env, withGeneral, disk.options);
 
-      expect(disk.files["/home/user/.claude/skills/pr-hero/SKILL.md"]).toBe(
+      expect(disk.files["/home/user/.claude/skills/crysk/SKILL.md"]).toBe(
         "bundled general SKILL.md",
       );
       expect(
-        disk.files["/home/user/.claude/skills/pr-hero/digest.json"],
+        disk.files["/home/user/.claude/skills/crysk/digest.json"],
       ).toBeDefined();
       expect(result.skills).toEqual([
-        { skill: "pr-hero-triage", status: "installed" },
-        { skill: "pr-hero", status: "installed" },
+        { skill: "crysk-loop", status: "installed" },
+        { skill: "crysk", status: "installed" },
       ]);
     });
 
-    test("installs the pr-hero-pr skill beside the triage skill", async () => {
+    test("installs the crysk-pr skill beside the triage skill", async () => {
       const disk = fakeDisk({});
       const withPrSkill = {
         ...assets,
         prSkillFiles: {
-          "SKILL.md": "/abs/skills/pr-hero-pr/SKILL.md",
+          "SKILL.md": "/abs/skills/crysk-pr/SKILL.md",
         },
       };
 
       const result = await syncSkills(env, withPrSkill, disk.options);
 
-      expect(disk.files["/home/user/.claude/skills/pr-hero-pr/SKILL.md"]).toBe(
+      expect(disk.files["/home/user/.claude/skills/crysk-pr/SKILL.md"]).toBe(
         "bundled pr SKILL.md",
       );
       expect(
-        disk.files["/home/user/.claude/skills/pr-hero-pr/digest.json"],
+        disk.files["/home/user/.claude/skills/crysk-pr/digest.json"],
       ).toBeDefined();
       expect(result.skills).toEqual([
-        { skill: "pr-hero-triage", status: "installed" },
-        { skill: "pr-hero-pr", status: "installed" },
+        { skill: "crysk-loop", status: "installed" },
+        { skill: "crysk-pr", status: "installed" },
       ]);
     });
   });
@@ -599,8 +699,8 @@ describe("Agent environment detector and sync", () => {
         skillsDir: "/home/user/.claude/skills",
       };
       const disk: Record<string, string> = {
-        "/home/user/.claude/skills/pr-hero-triage/SKILL.md": "my local edit",
-        "/home/user/.claude/skills/pr-hero-triage/adjudicator.md": "x",
+        "/home/user/.claude/skills/crysk-loop/SKILL.md": "my local edit",
+        "/home/user/.claude/skills/crysk-loop/adjudicator.md": "x",
       };
 
       const status = inspectSkillsSync(env, fakeAssets, {
@@ -672,6 +772,74 @@ describe("Agent environment detector and sync", () => {
       expect(parsed.mcpServers["other-server"]).toBeDefined();
     });
 
+    // A caller naming another server removes only that one, never this product's.
+    test("unregisterMcpServer with another name removes only that entry", async () => {
+      const written: Record<string, string> = {};
+      const env: AgentEnvDetection = {
+        id: "claude",
+        displayName: "Claude Code",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        mcpConfigFile: "/home/user/.claude/mcp.json",
+      };
+      await (await import("../src/agent-env")).unregisterMcpServer(
+        env,
+        "other-server",
+        {
+          exists: () => true,
+          readFile: () =>
+            JSON.stringify({
+              mcpServers: {
+                crysk: { command: "crysk", args: ["mcp"] },
+                "other-server": { command: "other", args: [] },
+              },
+            }),
+          writeFile: (p, c) => {
+            written[p] = c;
+          },
+        },
+      );
+      const parsed = JSON.parse(written["/home/user/.claude/mcp.json"] || "{}");
+      expect(parsed.mcpServers["other-server"]).toBeUndefined();
+      expect(parsed.mcpServers.crysk).toBeDefined();
+    });
+
+    test("unregisterMcpServer removes the crysk and the legacy entry, nothing else", async () => {
+      const written: Record<string, string> = {};
+      const env: AgentEnvDetection = {
+        id: "claude",
+        displayName: "Claude Code",
+        status: "active",
+        binaryFound: true,
+        auth: { authenticated: true, message: "ok" },
+        mcpConfigFile: "/home/user/.claude/mcp.json",
+      };
+
+      const res = await (await import("../src/agent-env")).unregisterMcpServer(
+        env,
+        undefined,
+        {
+          exists: () => true,
+          readFile: () =>
+            JSON.stringify({
+              mcpServers: {
+                crysk: { command: "crysk", args: ["mcp"] },
+                "pr-hero": { command: "pr-hero", args: ["mcp"] },
+                "other-server": { command: "other", args: [] },
+              },
+            }),
+          writeFile: (p, c) => {
+            written[p] = c;
+          },
+        },
+      );
+
+      expect(res.unregistered).toBe(true);
+      const parsed = JSON.parse(written["/home/user/.claude/mcp.json"]);
+      expect(Object.keys(parsed.mcpServers)).toEqual(["other-server"]);
+    });
+
     test("removeSkills removes only unmodified files matching digest.json", async () => {
       const deleted: string[] = [];
       const env: AgentEnvDetection = {
@@ -683,7 +851,7 @@ describe("Agent environment detector and sync", () => {
         skillsDir: "/home/user/.claude/skills",
       };
 
-      const skillDir = "/home/user/.claude/skills/pr-hero-triage";
+      const skillDir = "/home/user/.claude/skills/crysk-loop";
       const crypto = await import("node:crypto");
       const hashUnmodified = crypto
         .createHash("sha256")
@@ -729,7 +897,7 @@ describe("Agent environment detector and sync", () => {
         skillsDir: "/home/user/.claude/skills",
       };
 
-      const skillDir = "/home/user/.claude/skills/pr-hero";
+      const skillDir = "/home/user/.claude/skills/crysk";
       const crypto = await import("node:crypto");
       const hash = crypto
         .createHash("sha256")
@@ -756,7 +924,7 @@ describe("Agent environment detector and sync", () => {
       expect(deleted).toContain(`${skillDir}/SKILL.md`);
     });
 
-    test("removeSkills also removes the pr-hero-pr skill", async () => {
+    test("removeSkills also removes the crysk-pr skill", async () => {
       const deleted: string[] = [];
       const env: AgentEnvDetection = {
         id: "claude",
@@ -767,7 +935,7 @@ describe("Agent environment detector and sync", () => {
         skillsDir: "/home/user/.claude/skills",
       };
 
-      const skillDir = "/home/user/.claude/skills/pr-hero-pr";
+      const skillDir = "/home/user/.claude/skills/crysk-pr";
       const crypto = await import("node:crypto");
       const hash = crypto
         .createHash("sha256")

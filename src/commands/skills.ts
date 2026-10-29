@@ -1,5 +1,5 @@
 // `pr-hero skills install`: the non-interactive twin of the wizard's skills step. It installs
-// pr-hero's bundled agent skills (pr-hero-triage, plus pr-hero-ci-setup, pr-hero-pr, and the general pr-hero
+// pr-hero's bundled agent skills (crysk-loop, plus crysk-ci-setup, crysk-pr, and the general crysk
 // skill when bundled) into every detected coding agent that has a skills directory, so an agent
 // can run it with no TTY. It never registers the MCP server and never touches launchd; the wizard
 // still owns those.
@@ -42,10 +42,18 @@ export async function skillsInstallCommand(
       writeFile: deps.writeFile,
       force: options.force === true,
     });
+    // An old-name copy the sync removed, or kept because of the user's edits.
+    for (const old of res.legacy ?? []) {
+      log(
+        old.status === "removed"
+          ? `removed the old ${old.skill} skill from ${env.displayName}`
+          : `kept the old ${old.skill} skill in ${env.displayName} (${old.reason}); delete it by hand when you no longer need it`,
+      );
+    }
     if (res.driftDetected && !options.force) {
       failed = true;
       log(
-        `local edits found in ${env.displayName}'s pr-hero skills; rerun with --force to overwrite them`,
+        `local edits found in ${env.displayName}'s crysk skills; rerun with --force to overwrite them`,
       );
       continue;
     }

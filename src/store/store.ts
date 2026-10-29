@@ -8,8 +8,6 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import type { Bucket } from "#compare/compare";
-import type { StoredComparison, StoredComparisonRow } from "#compare/ledger";
 import {
   type DebugDedupedFinding,
   type DebugRefutedFinding,
@@ -60,6 +58,26 @@ export function openProductStore(dbPath: string): Database {
   return db;
 }
 
+// `generated_at` on conflict: a live re-run into the same run dir (an explicit
+// --out) is a new run, so its timestamp moves with its cost and head. The
+// historical backfill keeps the stored one only for the SAME run: it
+// re-derives the time from artifacts and must not rewrite when that run
+// happened. The live persist always stamps after the pipeline wrote its
+// artifacts (store/preflight.ts), so for the run a row describes the artifact
+// time is never later than the stored one. A different head, or a later
+// artifact time, is a later run in the same run dir whose live persist was
+// missed: it takes the artifact's own time along with its cost and head.
+function runUpsertSql(keepGeneratedAt: boolean): string {
+  return RUN_UPSERT_SQL.replace(
+    "generated_at = runs.generated_at",
+    keepGeneratedAt
+      ? "generated_at = CASE WHEN excluded.head_sha = runs.head_sha " +
+          "AND excluded.generated_at <= runs.generated_at " +
+          "THEN runs.generated_at ELSE excluded.generated_at END"
+      : "generated_at = excluded.generated_at",
+  );
+}
+
 const RUN_UPSERT_SQL = `
   INSERT INTO runs (
     repo_id, run_dir, pr, checkout_path, head_sha, base_sha, diff_from_sha,
@@ -79,7 +97,7 @@ const RUN_UPSERT_SQL = `
     checkout_path = excluded.checkout_path,
     head_sha = excluded.head_sha,
     base_sha = excluded.base_sha,
-    diff_from_sha = excluded.diff_from_sha,
+    diff_from_sha = COALESCE(excluded.diff_from_sha, runs.diff_from_sha),
     run_status = excluded.run_status,
     session_failed = excluded.session_failed,
     model = excluded.model,
@@ -95,7 +113,7 @@ const RUN_UPSERT_SQL = `
     summary_prose = excluded.summary_prose,
     summary_score = excluded.summary_score,
     summary_score_reason = excluded.summary_score_reason,
-    generated_at = excluded.generated_at,
+    generated_at = runs.generated_at,
     wall_ms = excluded.wall_ms,
     index_ms = excluded.index_ms,
     index_mode = excluded.index_mode,
@@ -108,7 +126,7 @@ const RUN_UPSERT_SQL = `
     blocking = excluded.blocking,
     advisory = excluded.advisory,
     root_causes_json = excluded.root_causes_json,
-    greptile_found = excluded.greptile_found,
+    greptile_found = COALESCE(excluded.greptile_found, runs.greptile_found),
     diversity_plan_json = excluded.diversity_plan_json
 `;
 
@@ -157,10 +175,13 @@ function runParams(row: CanonicalRunRow): SQLQueryBindings[] {
 export function saveRunTransaction(
   db: Database,
   projected: ProjectedCompleteRun,
+  options: { keepGeneratedAt?: boolean } = {},
 ): number {
   let runId = 0;
   db.transaction(() => {
-    db.query(RUN_UPSERT_SQL).run(...runParams(projected.run));
+    db.query(runUpsertSql(options.keepGeneratedAt === true)).run(
+      ...runParams(projected.run),
+    );
     const runRow = db
       .query("SELECT id FROM runs WHERE repo_id = ? AND run_dir = ?")
       .get(projected.run.repo_id, projected.run.run_dir) as { id: number };
@@ -170,7 +191,6 @@ export function saveRunTransaction(
     db.query("DELETE FROM findings WHERE run_id = ?").run(runId);
     db.query("DELETE FROM debug_findings WHERE run_id = ?").run(runId);
     db.query("DELETE FROM run_agents WHERE run_id = ?").run(runId);
-    db.query("DELETE FROM comparison_rows WHERE run_id = ?").run(runId);
     db.query("DELETE FROM diversity_observations WHERE run_id = ?").run(runId);
     db.query("DELETE FROM diversity_attempts WHERE run_id = ?").run(runId);
 
@@ -305,28 +325,6 @@ export function saveRunTransaction(
           a.cost_usd_est,
           a.attempts,
           a.status,
-        );
-      }
-    }
-
-    // Insert comparison rows
-    if (projected.comparisonRows.length > 0) {
-      const insertComp = db.query(`
-        INSERT INTO comparison_rows (
-          run_id, row_index, bucket, greptile_json, prhero_json, verdict,
-          reasoning, actor
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      for (const c of projected.comparisonRows) {
-        insertComp.run(
-          runId,
-          c.row_index,
-          c.bucket,
-          c.greptile_json,
-          c.prhero_json,
-          c.verdict,
-          c.reasoning,
-          c.actor,
         );
       }
     }
@@ -611,52 +609,6 @@ export function exportFindingsDocument(
   };
 
   return validateFindingsDocument(doc);
-}
-
-export function exportComparison(
-  db: Database,
-  runId: number,
-): StoredComparison | null {
-  const run = getRunById(db, runId);
-  if (!run || run.pr === null) return null;
-
-  const rows = db
-    .query(
-      "SELECT * FROM comparison_rows WHERE run_id = ? ORDER BY row_index ASC",
-    )
-    .all(runId) as {
-    row_index: number;
-    bucket: string;
-    greptile_json: string | null;
-    prhero_json: string | null;
-    verdict: string | null;
-    reasoning: string | null;
-    actor: string | null;
-  }[];
-
-  if (rows.length === 0 && run.greptile_found === null) {
-    return null;
-  }
-
-  const comparisonRows: StoredComparisonRow[] = rows.map((r) => ({
-    bucket: r.bucket as Bucket,
-    greptile: r.greptile_json ? JSON.parse(r.greptile_json) : null,
-    prhero: r.prhero_json ? JSON.parse(r.prhero_json) : null,
-    verdict: r.verdict,
-    reasoning: r.reasoning,
-    actor: (r.actor as "agent" | "human" | null) ?? null,
-  }));
-
-  return {
-    pr: run.pr,
-    head_sha: run.head_sha,
-    diff_from_sha: run.diff_from_sha ?? run.base_sha,
-    run_dir: run.run_dir,
-    run_status: run.run_status,
-    generated_at: run.generated_at,
-    greptile: { found: run.greptile_found === 1 },
-    rows: comparisonRows,
-  };
 }
 
 export type StoreQueryScope = { repoId: string } | { all: true };

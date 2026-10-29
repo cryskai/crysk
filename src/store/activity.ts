@@ -10,6 +10,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { countLaunchedToday, localIsoTimestamp } from "#watch/preflight";
+import { resolveHomeDir } from "../brand-paths";
 import { prheroLayout } from "../home-preflight";
 
 export interface ActiveRunRecord {
@@ -21,7 +22,7 @@ export interface ActiveRunRecord {
 }
 
 export function activeRunsDir(home: string): string {
-  return path.join(home, ".prhero", "active_runs");
+  return path.join(resolveHomeDir(home), "active_runs");
 }
 
 export function activeRunFilePath(home: string, pid: number): string {
@@ -181,6 +182,7 @@ export async function checkProcessIdentity(
     const trimmed = cmdline.trim();
     if (!trimmed) return false;
     return (
+      trimmed.includes("crysk") ||
       trimmed.includes("pr-hero") ||
       trimmed.includes("src/cli.ts") ||
       (trimmed.includes("bun") && trimmed.includes("review")) ||

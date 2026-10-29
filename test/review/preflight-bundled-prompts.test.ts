@@ -427,14 +427,19 @@ describe("the cli shell over a bundled resolution", () => {
   test("resolveAgentsDir does not existsSync-gate a bundled default", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "pr-hero-cfg-"));
     const loaded = await loadEffectiveConfig({ root, home: root });
-    const previous = process.env.PRHERO_AGENTS_DIR;
-    delete process.env.PRHERO_AGENTS_DIR;
+    // Both names: resolveAgentsDir reads CRYSK_AGENTS_DIR, then the legacy one.
+    const names = ["CRYSK_AGENTS_DIR", "PRHERO_AGENTS_DIR"] as const;
+    const previous = names.map((name) => process.env[name]);
+    for (const name of names) delete process.env[name];
     try {
       const resolution = resolveAgentsDir({}, loaded, compiledAssets());
       expect(resolution.kind).toBe("bundled");
       expect(resolution.dir).toBe(BUNDLED_AGENTS_DIR_LABEL);
     } finally {
-      if (previous !== undefined) process.env.PRHERO_AGENTS_DIR = previous;
+      names.forEach((name, i) => {
+        const value = previous[i];
+        if (value !== undefined) process.env[name] = value;
+      });
       await rm(root, { recursive: true, force: true });
     }
   });

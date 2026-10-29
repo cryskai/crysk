@@ -39,6 +39,7 @@ import {
   runCancelSettle,
   runPublish,
 } from "#ci/publish";
+import { COMMIT_STATUS_CONTEXT } from "#pr/preflight";
 import { CliError } from "../../src/errors";
 import type { TransportFailureCause } from "../../src/execution/contracts";
 
@@ -51,7 +52,7 @@ const TRIGGER_HEAD = "e".repeat(40);
 const REVIEWED_HEAD = "d".repeat(40);
 const RUN_URL = `https://github.com/${REPO}/actions/runs/4242`;
 const MODULE_PATH = path.resolve(import.meta.dir, "../../src/ci/publish.ts");
-const MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=4242 attempt=1 -->`;
+const MARKER = `<!-- crysk-outcome v=1 head=${SHA} run=4242 attempt=1 -->`;
 // The run this file's record belongs to is 4242, so a marker from an older run
 // is 4000 and one from a newer run is 5000. Cleanup deletes only the older one.
 const OLDER_MARKER = `<!-- pr-hero-outcome v=1 head=${SHA} run=4000 attempt=1 -->`;
@@ -144,7 +145,7 @@ describe("decidePublication — the pure table", () => {
     // it on the head that record names (the status's head, not the trigger's), then
     // cleans up as it does for any reviewed record.
     test("a reviewed record with an unsettled status names that status on the record's head, and still cleans up", () => {
-      const description = "pr-hero: 2 blocking finding(s) — fix and push";
+      const description = "crysk: 2 blocking finding(s) — fix and push";
       expect(
         decidePublication({
           record: record({ head_sha: TRIGGER_HEAD }),
@@ -164,7 +165,7 @@ describe("decidePublication — the pure table", () => {
         headSha: REVIEWED_HEAD,
         status: {
           state: "failure",
-          context: "pr-hero",
+          context: "crysk",
           description,
           targetUrl: RUN_URL,
         },
@@ -194,7 +195,7 @@ describe("decidePublication — the pure table", () => {
         headSha: REVIEWED_HEAD,
         status: {
           state: "success",
-          context: "pr-hero",
+          context: "crysk",
           description: "review complete",
           targetUrl: RUN_URL,
         },
@@ -282,7 +283,7 @@ describe("decidePublication — the pure table", () => {
       if (plan.kind !== "remote") return;
       expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
       expect(plan.rendered.annotation).toStartWith(
-        "::error title=pr-hero PRH-HUNTERS-FAILED::",
+        "::error title=crysk PRH-HUNTERS-FAILED::",
       );
       expect(plan.rendered.annotation).toContain(
         "each hunter's session ended without a result",
@@ -330,6 +331,409 @@ describe("decidePublication — the pure table", () => {
       expect(plan.rendered.annotation).toContain("Provider opencode: ");
       expect(plan.rendered.annotation).toContain("gpt-4o");
       expect(plan.status?.description).toStartWith("PRH-MODEL-UNAVAILABLE: ");
+    });
+
+    test("every failed hunter sharing one detail puts it in the status, annotation and summary", () => {
+      const detail =
+        "Anthropic API: Invalid API key · Fix external API key (HTTP 401)";
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            { cause: "auth_invalid", detail },
+            { cause: "auth_invalid", detail },
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      // The credential's secret name is unknown here, so the generic code carries the detail.
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.annotation).toContain("Invalid API key");
+      expect(plan.rendered.annotation).not.toContain(
+        "each hunter's session ended without a result",
+      );
+      expect(plan.rendered.summary.join("\n")).toContain("Invalid API key");
+      const description = plan.status?.description ?? "";
+      expect(description).toStartWith("PRH-HUNTERS-FAILED: ");
+      expect(description).toContain("Anthropic API: Invalid API key");
+      expect(description.length).toBeLessThanOrEqual(140);
+    });
+
+    test("a long shared detail is cut inside the status limit", () => {
+      const detail = `Anthropic API: ${"word ".repeat(40).trim()} (HTTP 400)`;
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [{ detail }, { detail }],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      const description = plan.status?.description ?? "";
+      expect(description.length).toBeLessThanOrEqual(140);
+      expect(description).toContain("Anthropic API: word");
+    });
+
+    test("every failed hunter out of quota renders PRH-PROVIDER-LIMITED with the provider's words", () => {
+      const detail =
+        "Anthropic API: Credit balance is too low to access the Anthropic API. (HTTP 400)";
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            { cause: "quota_exhausted", detail },
+            { cause: "quota_exhausted", detail },
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+      expect(plan.rendered.annotation).toContain("Credit balance is too low");
+      expect(plan.status?.description).toStartWith("PRH-PROVIDER-LIMITED: ");
+    });
+
+    test("hunters that failed with different details keep the generic text", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            { detail: "Anthropic API: Invalid API key (HTTP 401)" },
+            { detail: "Anthropic API: Forbidden (HTTP 403)" },
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.annotation).toContain(
+        "each hunter's session ended without a result",
+      );
+      expect(plan.rendered.annotation).not.toContain("Invalid API key");
+    });
+
+    test("a hunter with no detail among the failures keeps the generic text", () => {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: true,
+        cliRecord: {
+          v: 1,
+          outcome: "hunters-failed",
+          head_sha: REVIEWED_HEAD,
+          hunter_failures: [
+            { detail: "Anthropic API: Invalid API key (HTTP 401)" },
+            {},
+          ],
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.annotation).toContain(
+        "each hunter's session ended without a result",
+      );
+    });
+
+    // S4/S6 of odd/tasks/claude-error-map.md: the credential the hunters ran on is named,
+    // and the fix text matches the case instead of "wait or raise the quota".
+    describe("a shared credential or quota cause names the credential and the matching fix", () => {
+      function plan(failures: readonly Record<string, string>[]) {
+        const result = decidePublication({
+          record: record(),
+          cliStarted: true,
+          cliRecord: {
+            v: 1,
+            outcome: "hunters-failed",
+            head_sha: REVIEWED_HEAD,
+            hunter_failures: failures as never,
+          },
+        });
+        if (result.kind !== "remote") throw new Error("expected a remote plan");
+        return result;
+      }
+      const texts = (p: ReturnType<typeof plan>) =>
+        [
+          p.rendered.annotation,
+          p.rendered.summary.join("\n"),
+          p.rendered.what,
+          p.status?.description ?? "",
+          p.commentBody,
+        ].join("\n");
+
+      test.each(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"])(
+        "auth_invalid on %s renders PRH-CRED-REJECTED naming that secret",
+        (credential) => {
+          const entry = {
+            cause: "auth_invalid",
+            provider: "anthropic",
+            credential,
+            detail:
+              "Anthropic API: Invalid API key · Fix external API key (HTTP 401)",
+          };
+          const p = plan([entry, entry]);
+          expect(p.rendered.code).toBe("PRH-CRED-REJECTED");
+          expect(p.rendered.annotation).toContain(credential);
+          expect(p.rendered.annotation).toContain("Provider anthropic");
+          expect(p.status?.description).toStartWith("PRH-CRED-REJECTED: ");
+          expect(texts(p)).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+        },
+      );
+
+      test("auth_invalid with a credential but no known provider keeps the generic code and the detail", () => {
+        const entry = {
+          cause: "auth_invalid",
+          credential: "ANTHROPIC_API_KEY",
+          detail: "Anthropic API: Invalid API key (HTTP 401)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+        expect(p.rendered.annotation).toContain("Invalid API key");
+      });
+
+      test("an empty credit balance on an API key says to add credit or delete the secret", () => {
+        const entry = {
+          cause: "quota_exhausted",
+          provider: "anthropic",
+          credential: "ANTHROPIC_API_KEY",
+          detail: "Anthropic API: Credit balance is too low (HTTP 400)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+        const all = texts(p);
+        expect(all).toContain("Credit balance is too low");
+        expect(all).toContain(
+          "Add credit to the Anthropic account behind ANTHROPIC_API_KEY",
+        );
+        expect(all).toContain("delete the ANTHROPIC_API_KEY secret");
+        expect(all).not.toContain("Wait, or raise the quota");
+        expect(all).not.toContain(
+          "wait for the limit to reset or raise the quota",
+        );
+        expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+      });
+
+      test("a subscription usage limit on OAuth quotes the reset time and offers an API key", () => {
+        const entry = {
+          cause: "quota_exhausted",
+          provider: "anthropic",
+          credential: "CLAUDE_CODE_OAUTH_TOKEN",
+          detail:
+            "Anthropic API: You've hit your 5-hour limit · resets 12:40pm (Asia/Tokyo) (HTTP 429)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+        const all = texts(p);
+        expect(all).toContain(
+          "CLAUDE_CODE_OAUTH_TOKEN reached its usage limit",
+        );
+        expect(all).toContain("resets 12:40pm (Asia/Tokyo)");
+        expect(all).toContain("Re-run after");
+        expect(all).toContain("set ANTHROPIC_API_KEY");
+        expect(all).not.toContain("raise the quota");
+        expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+      });
+
+      // F001: the commit status is clipped at 140 characters, so the provider's words
+      // (with the reset time) must come right after the code, before any explanation.
+      describe("the status description keeps the provider's words", () => {
+        const CREDIT = "Anthropic API: Credit balance is too low (HTTP 400)";
+        const LIMIT =
+          "Anthropic API: You've hit your 5-hour limit · resets 12:40pm (Asia/Tokyo) (HTTP 429)";
+
+        test("an API key out of credit", () => {
+          const entry = {
+            cause: "quota_exhausted",
+            provider: "anthropic",
+            credential: "ANTHROPIC_API_KEY",
+            detail: CREDIT,
+          };
+          const description = plan([entry, entry]).status?.description ?? "";
+          expect(description).toStartWith(`PRH-PROVIDER-LIMITED: ${CREDIT}`);
+          expect(description.length).toBeLessThanOrEqual(140);
+        });
+
+        test("a subscription usage limit keeps its reset time", () => {
+          const entry = {
+            cause: "quota_exhausted",
+            provider: "anthropic",
+            credential: "CLAUDE_CODE_OAUTH_TOKEN",
+            detail: LIMIT,
+          };
+          const description = plan([entry, entry]).status?.description ?? "";
+          expect(description).toStartWith(`PRH-PROVIDER-LIMITED: ${LIMIT}`);
+          expect(description).toContain("resets 12:40pm (Asia/Tokyo)");
+        });
+
+        test("a quota whose credential is unknown or a bearer token keeps it too", () => {
+          for (const credential of [undefined, "ANTHROPIC_AUTH_TOKEN"]) {
+            const entry = {
+              cause: "quota_exhausted",
+              provider: "anthropic",
+              detail: LIMIT,
+              ...(credential === undefined ? {} : { credential }),
+            };
+            const description = plan([entry, entry]).status?.description ?? "";
+            expect(description).toContain("resets 12:40pm (Asia/Tokyo)");
+          }
+        });
+
+        test("the generic code keeps it for any other shared detail", () => {
+          const entry = { cause: "network_transient", detail: LIMIT };
+          const description = plan([entry, entry]).status?.description ?? "";
+          expect(description).toStartWith("PRH-HUNTERS-FAILED: ");
+          expect(description).toContain("resets 12:40pm (Asia/Tokyo)");
+        });
+      });
+
+      // F003: the fix list starts with the fix for the secret that was rejected.
+      describe("PRH-CRED-REJECTED leads with the fix for the secret it names", () => {
+        function rejected(credential: string) {
+          const entry = {
+            cause: "auth_invalid",
+            provider: "anthropic",
+            credential,
+            detail: "Anthropic API: Invalid API key (HTTP 401)",
+          };
+          const p = plan([entry, entry]);
+          expect(p.rendered.code).toBe("PRH-CRED-REJECTED");
+          return p;
+        }
+
+        test("ANTHROPIC_API_KEY: a new key, or delete it, and the OAuth token alone changes nothing", () => {
+          const p = rejected("ANTHROPIC_API_KEY");
+          const summary = p.rendered.summary.join("\n");
+          expect(
+            summary.indexOf("gh secret set ANTHROPIC_API_KEY"),
+          ).toBeGreaterThan(-1);
+          expect(summary).toContain("gh secret delete ANTHROPIC_API_KEY");
+          expect(summary).toContain(
+            "changes nothing while ANTHROPIC_API_KEY is set",
+          );
+          expect(summary).not.toContain("claude setup-token");
+          expect(p.rendered.annotation).toContain(
+            "delete the ANTHROPIC_API_KEY secret",
+          );
+          expect(p.rendered.annotation).toContain(
+            "changes nothing while the key is set",
+          );
+        });
+
+        test("CLAUDE_CODE_OAUTH_TOKEN: claude setup-token first", () => {
+          const p = rejected("CLAUDE_CODE_OAUTH_TOKEN");
+          const summary = p.rendered.summary.join("\n");
+          expect(summary).toContain("claude setup-token");
+          expect(summary).not.toContain("changes nothing");
+          expect(summary).not.toContain("gh secret delete");
+          expect(p.rendered.annotation).toContain("claude setup-token");
+        });
+
+        // The set and delete commands are alternatives: one copied block must never run both.
+        test("the per-token fix keeps set and delete in separate code blocks", () => {
+          const summary =
+            rejected("ANTHROPIC_API_KEY").rendered.summary.join("\n");
+          const blocks = summary.split("```").filter((_, i) => i % 2 === 1);
+          expect(
+            blocks.some(
+              (block) =>
+                block.includes("gh secret set") &&
+                block.includes("gh secret delete"),
+            ),
+          ).toBe(false);
+          expect(summary).toContain("gh secret delete ANTHROPIC_API_KEY");
+        });
+
+        // Per-token credentials win over the OAuth token in the CLI, so a rejected
+        // ANTHROPIC_AUTH_TOKEN is fixed like a rejected key, never by setup-token.
+        test("ANTHROPIC_AUTH_TOKEN gets the per-token fix, naming that secret", () => {
+          const p = rejected("ANTHROPIC_AUTH_TOKEN");
+          const summary = p.rendered.summary.join("\n");
+          expect(p.rendered.annotation).toContain("ANTHROPIC_AUTH_TOKEN");
+          expect(summary).toContain("gh secret delete ANTHROPIC_AUTH_TOKEN");
+          expect(summary).not.toContain("claude setup-token");
+          expect(summary).not.toContain("ANTHROPIC_API_KEY");
+        });
+      });
+
+      test("a quota cause whose credential is unknown keeps the quoted-detail wording", () => {
+        const entry = {
+          cause: "quota_exhausted",
+          provider: "anthropic",
+          detail: "Anthropic API: Credit balance is too low (HTTP 400)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+        expect(texts(p)).toContain("Credit balance is too low");
+      });
+
+      test("hunters that ran on different credentials do not name one", () => {
+        const base = {
+          cause: "auth_invalid",
+          provider: "anthropic",
+          detail: "Anthropic API: Invalid API key (HTTP 401)",
+        };
+        const p = plan([
+          { ...base, credential: "ANTHROPIC_API_KEY" },
+          { ...base, credential: "CLAUDE_CODE_OAUTH_TOKEN" },
+        ]);
+        expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      });
+
+      test("a request too large for the model says to lower the size gate or exclude paths", () => {
+        const entry = {
+          cause: "context_window_exceeded",
+          provider: "anthropic",
+          detail: "Anthropic API: Prompt is too long",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+        const all = texts(p);
+        expect(all).toContain("Prompt is too long");
+        expect(all).toContain("max-changed-lines");
+        expect(all).toContain(".cryskignore");
+        expect(all).toContain(".prheroignore");
+        expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
+      });
+
+      test("a model the credential cannot reach (404) renders PRH-MODEL-UNAVAILABLE", () => {
+        const entry = {
+          cause: "model_unavailable",
+          provider: "anthropic",
+          model: "claude-nope",
+          detail:
+            "Anthropic API: There's an issue with the selected model (HTTP 404)",
+        };
+        const p = plan([entry, entry]);
+        expect(p.rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+      });
+
+      test("transient causes keep PRH-HUNTERS-FAILED with the provider's words and the re-run fix", () => {
+        for (const cause of ["rate_limit", "network_transient"]) {
+          const entry = {
+            cause,
+            detail: "Anthropic API: Overloaded (HTTP 529)",
+          };
+          const p = plan([entry, entry]);
+          expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+          expect(texts(p)).toContain("Overloaded");
+          expect(p.rendered.annotation).toContain("gh run rerun");
+        }
+      });
     });
 
     test("every failed hunter with a missing provider record renders PRH-CRED-UNUSABLE, owned by the configuration", () => {
@@ -495,7 +899,7 @@ describe("decidePublication — the pure table", () => {
     test("a gotchas error written by the CLI renders PRH-GOTCHAS-MISSING under 'Your configuration:'", () => {
       const dir = mkdtempSync(path.join(os.tmpdir(), "pr-hero-gotchas-e2e-"));
       try {
-        const env = { PRHERO_OUTCOME_DIR: dir };
+        const env = { CRYSK_OUTCOME_DIR: dir };
         writeFatalCliRecord(
           classifyCliError(
             new CliError("gotchas file is still the scaffold", {
@@ -517,7 +921,7 @@ describe("decidePublication — the pure table", () => {
         expect(plan.rendered.code).toBe("PRH-GOTCHAS-MISSING");
         expect(plan.rendered.owner).toBe("config");
         expect(plan.rendered.summary.join("\n")).toContain(
-          "Your configuration: .prhero/gotchas.md is missing or still the scaffold",
+          "Your configuration: .crysk/gotchas.md is missing or still the scaffold",
         );
         expect(plan.status?.state).toBe("error");
         expect(plan.status?.description).toStartWith("PRH-GOTCHAS-MISSING");
@@ -553,7 +957,7 @@ describe("decidePublication — the pure table", () => {
       if (plan.kind !== "remote") return;
       expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
       expect(plan.rendered.annotation).toContain(
-        "pr-hero stopped at the review and could not tell why",
+        "Crysk stopped at the review and could not tell why",
       );
       expect(plan.status?.description).toStartWith("PRH-UNCLASSIFIED: ");
     });
@@ -610,17 +1014,17 @@ describe("decidePublication — the pure table", () => {
       expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
       expect(plan.rendered.owner).toBe("unclassified");
       expect(plan.rendered.annotation).toContain(
-        "pr-hero stopped at the review before it reported an outcome and could not tell why",
+        "Crysk stopped at the review before it reported an outcome and could not tell why",
       );
       expect(plan.headSha).toBe(REVIEWED_HEAD);
       expect(plan.status?.state).toBe("error");
-      expect(plan.status?.context).toBe("pr-hero");
+      expect(plan.status?.context).toBe("crysk");
       expect(plan.status?.targetUrl).toBe(RUN_URL);
       expect(plan.status?.description.startsWith("PRH-UNCLASSIFIED: ")).toBe(
         true,
       );
       expect(plan.commentBody.split("\n")[0]).toBe(
-        `<!-- pr-hero-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
+        `<!-- crysk-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
       );
     });
 
@@ -640,7 +1044,7 @@ describe("decidePublication — the pure table", () => {
       expect(plan.headSha).toBe(REVIEWED_HEAD);
       expect(plan.status?.state).toBe("error");
       expect(plan.commentBody.split("\n")[0]).toBe(
-        `<!-- pr-hero-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
+        `<!-- crysk-outcome v=1 head=${REVIEWED_HEAD} run=4242 attempt=1 -->`,
       );
     });
 
@@ -656,12 +1060,12 @@ describe("decidePublication — the pure table", () => {
       expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
       expect(plan.rendered.owner).toBe("unclassified");
       expect(plan.rendered.annotation).toContain(
-        "pr-hero stopped at the review before it reported an outcome and could not tell why",
+        "Crysk stopped at the review before it reported an outcome and could not tell why",
       );
       expect(plan.headSha).toBeUndefined();
       expect(plan.status).toBeUndefined();
       expect(plan.commentBody.split("\n")[0]).toBe(
-        `<!-- pr-hero-outcome v=1 head=unknown run=4242 attempt=1 -->`,
+        `<!-- crysk-outcome v=1 head=unknown run=4242 attempt=1 -->`,
       );
     });
 
@@ -710,7 +1114,7 @@ describe("decidePublication — the pure table", () => {
     if (plan.kind !== "remote") return;
     expect(plan.rendered.code).toBe("PRH-INSTALL-FAILED");
     expect(plan.rendered.annotation).toStartWith(
-      "::error title=pr-hero PRH-INSTALL-FAILED::",
+      "::error title=crysk PRH-INSTALL-FAILED::",
     );
     expect(plan.rendered.annotation).toContain("An install step failed");
     expect(plan.rendered.annotation).toContain("gh run rerun 4242 --failed");
@@ -719,13 +1123,13 @@ describe("decidePublication — the pure table", () => {
     expect(plan.headSha).toBe(SHA);
   });
 
-  test("the status is an error on pr-hero's own context, linked to the run", () => {
+  test("the status is an error on the gate's context, linked to the run", () => {
     const plan = decidePublication({ record: record(), cliStarted: false });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
     expect(plan.status).toEqual({
       state: "error",
-      context: "pr-hero",
+      context: "crysk",
       description: "PRH-INSTALL-FAILED: An install step failed",
       targetUrl: RUN_URL,
     });
@@ -757,7 +1161,7 @@ describe("decidePublication — the pure table", () => {
     expect(plan.rendered.code).toBe("PRH-PR-UNRESOLVED");
     expect(plan.rendered.owner).toBe("config");
     expect(plan.rendered.annotation).toContain(
-      "pr-hero could not determine the pull request number or head",
+      "Crysk could not determine the pull request number or head",
     );
   });
 
@@ -781,7 +1185,7 @@ describe("decidePublication — the pure table", () => {
     if (plan.kind !== "remote") return;
     expect(plan.status).toBeUndefined();
     expect(plan.commentBody.split("\n")[0]).toBe(
-      "<!-- pr-hero-outcome v=1 head=unknown run=4242 attempt=1 -->",
+      "<!-- crysk-outcome v=1 head=unknown run=4242 attempt=1 -->",
     );
   });
 
@@ -909,7 +1313,7 @@ describe("decidePublication — the pure table", () => {
     if (plan.kind !== "remote") return;
     expect(plan.status).toBeUndefined();
     expect(plan.commentBody.split("\n")[0]).toBe(
-      "<!-- pr-hero-outcome v=1 head=unknown run=4242 attempt=1 -->",
+      "<!-- crysk-outcome v=1 head=unknown run=4242 attempt=1 -->",
     );
   });
 
@@ -969,20 +1373,12 @@ describe("decidePublication — the pure table", () => {
   });
 
   test("the status context is the name the required check reads (COMMIT_STATUS_CONTEXT)", () => {
-    // WHY a drift test: publish.ts runs before install and cannot import the
-    // constant from src/pr/preflight.ts, so the two are pinned to each other.
-    const preflight = readFileSync(
-      path.resolve(import.meta.dir, "../../src/pr/preflight.ts"),
-      "utf8",
-    );
-    const expected = /export const COMMIT_STATUS_CONTEXT = "([^"]+)"/.exec(
-      preflight,
-    )?.[1];
+    // WHY a drift test: publish.ts runs before install and cannot import the constant from
+    // src/pr/preflight.ts, so it takes brand's STATUS_CONTEXT, which preflight.ts also uses.
     const plan = decidePublication({ record: record(), cliStarted: false });
     expect(plan.kind).toBe("remote");
-    expect(expected).toBeDefined();
     if (plan.kind === "remote") {
-      expect(plan.status?.context as string).toBe(expected as string);
+      expect(plan.status?.context as string).toBe(COMMIT_STATUS_CONTEXT);
     }
   });
 
@@ -1088,7 +1484,7 @@ function runPublishIn(options: {
     let summary = "";
     const exitCode = runPublish({
       env: {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
         GITHUB_REPOSITORY: REPO,
         GITHUB_RUN_ID: "4242",
         GITHUB_SERVER_URL: "https://github.com",
@@ -1143,6 +1539,18 @@ function runPublishIn(options: {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// The `-f key=value` flags of a status write, read back as an object.
+function statusFlags(args: readonly string[]): Record<string, string> {
+  const flags: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== "-f") continue;
+    const raw = args[i + 1] ?? "";
+    const eq = raw.indexOf("=");
+    if (eq !== -1) flags[raw.slice(0, eq)] = raw.slice(eq + 1);
+  }
+  return flags;
 }
 
 function statusCalls(calls: Call[]): Call[] {
@@ -1232,7 +1640,7 @@ describe("runPublish — the shell", () => {
     });
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain(
-      "::error title=pr-hero PRH-ROUTE-UNRESOLVABLE::",
+      "::error title=crysk PRH-ROUTE-UNRESOLVABLE::",
     );
     expect(run.summary).toContain("### PRH-ROUTE-UNRESOLVABLE");
     const [status] = statusCalls(run.calls);
@@ -1274,7 +1682,7 @@ describe("runPublish — the shell", () => {
     });
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
-    expect(run.stdout).toContain("::error title=pr-hero PRH-HUNTERS-FAILED::");
+    expect(run.stdout).toContain("::error title=crysk PRH-HUNTERS-FAILED::");
     expect(commentPost(run.calls)?.stdin).toContain(
       `head=${SHA} run=4242 attempt=1 -->`,
     );
@@ -1306,9 +1714,9 @@ describe("runPublish — the shell", () => {
       list: listing(),
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+    expect(run.stdout).toContain("::error title=crysk PRH-UNCLASSIFIED::");
     expect(run.stdout).toContain(
-      "pr-hero stopped at the review before it reported an outcome",
+      "Crysk stopped at the review before it reported an outcome",
     );
     expect(run.summary).toContain("### PRH-UNCLASSIFIED");
     expect(statusReadEndpoints(run.calls)).toEqual([]);
@@ -1334,18 +1742,187 @@ describe("runPublish — the shell", () => {
       `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
     ]);
     const statuses = statusCalls(run.calls);
-    expect(statuses).toHaveLength(1);
+    expect(statuses).toHaveLength(2);
     expect(statuses[0]?.args).toContain(
       `repos/${REPO}/statuses/${REVIEWED_HEAD}`,
     );
     expect(statuses[0]?.args).toContain("state=error");
-    expect(statuses[0]?.args).toContain("context=pr-hero");
+    expect(statuses.map((call) => statusFlags(call.args).context)).toEqual([
+      "crysk",
+      "pr-hero",
+    ]);
     const comment = commentPost(run.calls);
     expect(comment?.args).toContain(`repos/${REPO}/issues/7/comments`);
     expect(comment?.stdin).toContain(`head=${REVIEWED_HEAD} run=4242`);
     expect(run.calls.indexOf(statuses[0] as Call)).toBeLessThan(
       run.calls.indexOf(comment as Call),
     );
+  });
+
+  // One gate over two names: a pending lock on either context is a CLI that never settled.
+  test.each(["crysk", "pr-hero"])(
+    "a reviewing record with a pending %s status on its head replaces it with an error status on both contexts",
+    (context) => {
+      const run = runPublishIn({
+        record: record({ head_sha: TRIGGER_HEAD }),
+        cliStarted: true,
+        cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+        latestStatus: statusRows([context, "pending", "2026-10-16T10:00:00Z"]),
+        list: listing(),
+      });
+      expect(
+        statusCalls(run.calls).map((call) =>
+          call.args.find((arg) => arg.startsWith("context=")),
+        ),
+      ).toEqual(["context=crysk", "context=pr-hero"]);
+    },
+  );
+
+  // Every write posts the pair, so a name whose newest row is still pending behind the
+  // other name's later settled row missed that write. The settled row is the verdict
+  // (a finished review, or a human's override), so it is copied onto the stuck name
+  // alone, never replaced (the #418 reviews, F001 in both rounds).
+  test.each([
+    ["pr-hero", "crysk"],
+    ["crysk", "pr-hero"],
+  ])(
+    "a pending %s row behind a later settled %s row gets that verdict copied, and nothing else is written",
+    (pendingName, settledName) => {
+      const run = runPublishIn({
+        record: record({ head_sha: TRIGGER_HEAD }),
+        cliStarted: true,
+        cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+        latestStatus: statusRows(
+          [
+            pendingName,
+            "pending",
+            "2026-10-16T10:00:00Z",
+            "crysk reviewing",
+            RUN_URL,
+          ],
+          [
+            settledName,
+            "failure",
+            "2026-10-16T10:05:00Z",
+            "crysk: 1 blocking finding(s)",
+            RUN_URL,
+          ],
+        ),
+        list: listing(),
+      });
+      const statuses = statusCalls(run.calls);
+      expect(statuses).toHaveLength(1);
+      expect(statusFlags(statuses[0]?.args ?? []).context).toBe(pendingName);
+      expect(statuses[0]?.args).toContain("state=failure");
+      expect(statuses[0]?.args).toContain(
+        "description=crysk: 1 blocking finding(s)",
+      );
+    },
+  );
+
+  // Same second: the readers break a tie toward crysk, so the stale rows would still read
+  // the stuck crysk name as pending after the copy. The verdict decides the gate.
+  test("a stuck crysk row tied in time with a pr-hero override gets the override copied, and no error follows", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+      latestStatus: statusRows(
+        [
+          "crysk",
+          "pending",
+          "2026-10-16T10:00:00Z",
+          "crysk reviewing",
+          RUN_URL,
+        ],
+        [
+          "pr-hero",
+          "success",
+          "2026-10-16T10:00:00Z",
+          "pr-hero: overridden by @alice",
+          RUN_URL,
+        ],
+      ),
+      list: listing(),
+    });
+    const statuses = statusCalls(run.calls);
+    expect(statuses).toHaveLength(1);
+    expect(statusFlags(statuses[0]?.args ?? []).context).toBe("crysk");
+    expect(statuses[0]?.args).toContain("state=success");
+  });
+
+  test("a verdict with no description is not copied", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+      latestStatus: statusRows(
+        [
+          "pr-hero",
+          "pending",
+          "2026-10-16T10:00:00Z",
+          "crysk reviewing",
+          RUN_URL,
+        ],
+        ["crysk", "success", "2026-10-16T10:05:00Z", null, RUN_URL],
+      ),
+      list: listing(),
+    });
+    expect(
+      statusCalls(run.calls).filter(
+        (call) =>
+          statusFlags(call.args).context === "pr-hero" &&
+          call.args.includes("state=success"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("a human override on crysk is copied onto a stuck pr-hero, never overwritten with an error", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+      latestStatus: statusRows(
+        [
+          "pr-hero",
+          "pending",
+          "2026-10-16T10:00:00Z",
+          "crysk reviewing",
+          RUN_URL,
+        ],
+        [
+          "crysk",
+          "success",
+          "2026-10-16T10:05:00Z",
+          "crysk: overridden by @alice",
+          RUN_URL,
+        ],
+      ),
+      list: listing(),
+    });
+    const statuses = statusCalls(run.calls);
+    expect(statuses).toHaveLength(1);
+    expect(statusFlags(statuses[0]?.args ?? []).context).toBe("pr-hero");
+    expect(statuses[0]?.args).toContain("state=success");
+    expect(statuses[0]?.args).toContain(
+      "description=crysk: overridden by @alice",
+    );
+  });
+
+  test("a settled pair is a finished CLI: nothing is replaced", () => {
+    const run = runPublishIn({
+      record: record({ head_sha: TRIGGER_HEAD }),
+      cliStarted: true,
+      cliRecord: { v: 1, outcome: "reviewing", head_sha: REVIEWED_HEAD },
+      latestStatus: statusRows(
+        ["pr-hero", "pending", "2026-10-16T10:00:00Z"],
+        ["crysk", "pending", "2026-10-16T10:00:00Z"],
+        ["crysk", "success", "2026-10-16T10:05:00Z"],
+        ["pr-hero", "success", "2026-10-16T10:05:00Z"],
+      ),
+      list: listing(),
+    });
+    expect(statusCalls(run.calls)).toEqual([]);
   });
 
   test.each([
@@ -1388,7 +1965,7 @@ describe("runPublish — the shell", () => {
       `repos/${REPO}/commits/${REVIEWED_HEAD}/status?per_page=100`,
     ]);
     const statuses = statusCalls(run.calls);
-    expect(statuses).toHaveLength(1);
+    expect(statuses).toHaveLength(2);
     expect(statuses[0]?.args).toContain(
       `repos/${REPO}/statuses/${REVIEWED_HEAD}`,
     );
@@ -1468,7 +2045,7 @@ describe("runPublish — the shell", () => {
         cliRecord,
       });
       expect(run.exitCode).toBe(0);
-      expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+      expect(run.stdout).toContain("::error title=crysk PRH-UNCLASSIFIED::");
       // CHANGED (F001 and F002 on #330): an unreadable cli.json is the same as a
       // missing one, and a missing one has no progress record, so the publisher
       // cannot tell whose lock a head holds. It posts the comment alone: no status
@@ -1483,7 +2060,7 @@ describe("runPublish — the shell", () => {
   test("an install failure writes the annotation and the summary, then posts", () => {
     const run = runPublishIn({ record: record() });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::error title=pr-hero PRH-INSTALL-FAILED::");
+    expect(run.stdout).toContain("::error title=crysk PRH-INSTALL-FAILED::");
     expect(run.summary).toContain("### PRH-INSTALL-FAILED");
   });
 
@@ -1502,11 +2079,60 @@ describe("runPublish — the shell", () => {
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
     expect(status?.args).toContain("state=error");
-    expect(status?.args).toContain("context=pr-hero");
+    expect(status?.args).toContain("context=crysk");
     expect(status?.args).toContain(
       "description=PRH-INSTALL-FAILED: An install step failed",
     );
     expect(status?.args).toContain(`target_url=${RUN_URL}`);
+  });
+
+  // The rename publishes the status on BOTH names for one version: a repository that
+  // requires `pr-hero` in branch protection keeps getting it while it adds `crysk`.
+  test("the status is written on crysk first, then on the legacy pr-hero, with the same fields", () => {
+    const run = runPublishIn({ record: record() });
+    const statuses = statusCalls(run.calls);
+    expect(statuses).toHaveLength(2);
+    const contextOf = (call: Call | undefined) =>
+      call?.args.find((arg) => arg.startsWith("context="));
+    expect(statuses.map(contextOf)).toEqual([
+      "context=crysk",
+      "context=pr-hero",
+    ]);
+    const withoutContext = (call: Call | undefined) =>
+      call?.args.filter((arg) => !arg.startsWith("context="));
+    expect(withoutContext(statuses[1])).toEqual(withoutContext(statuses[0]));
+    expect(withoutContext(statuses[0])).toContain("state=error");
+  });
+
+  test("a crysk write that fails both attempts still attempts pr-hero, and the failure is reported", () => {
+    // crysk: fail, fail. The last answer repeats, so pr-hero lands.
+    const run = runPublishIn({
+      record: record(),
+      status: [
+        fail("gh: Server Error (HTTP 503)"),
+        fail("gh: Server Error (HTTP 503)"),
+        ok(),
+      ],
+    });
+    const contexts = statusCalls(run.calls).map((call) =>
+      call.args.find((arg) => arg.startsWith("context=")),
+    );
+    expect(contexts).toEqual([
+      "context=crysk",
+      "context=crysk",
+      "context=pr-hero",
+    ]);
+    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(run.exitCode).toBe(1);
+  });
+
+  test("a pr-hero write that fails reports the failure although crysk landed", () => {
+    const run = runPublishIn({
+      record: record(),
+      status: [ok(), fail("gh: Forbidden (HTTP 403)")],
+    });
+    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(run.exitCode).toBe(1);
   });
 
   test("the comment is a new issue comment whose first line is the marker", () => {
@@ -1612,7 +2238,7 @@ describe("runPublish — the shell", () => {
     });
     expect(deletions(run.calls)).toEqual([`repos/${REPO}/issues/comments/10`]);
     expect(commentPost(run.calls)?.stdin?.split("\n")[0]).toBe(
-      `<!-- pr-hero-outcome v=1 head=${SHA} run=4242 attempt=2 -->`,
+      `<!-- crysk-outcome v=1 head=${SHA} run=4242 attempt=2 -->`,
     );
   });
 
@@ -1677,7 +2303,7 @@ describe("runPublish — the shell", () => {
       list: fail("gh: Server Error (HTTP 502)"),
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
   });
 
   test("no PR writes when the PR is missing: annotation and summary only", () => {
@@ -1700,7 +2326,7 @@ describe("runPublish — the shell", () => {
       record: record(),
       status: [fail("gh: Server Error (HTTP 500)"), ok()],
     });
-    expect(statusCalls(run.calls)).toHaveLength(2);
+    expect(statusCalls(run.calls)).toHaveLength(3);
     expect(run.exitCode).toBe(0);
     expect(commentPost(run.calls)).toBeDefined();
   });
@@ -1710,7 +2336,7 @@ describe("runPublish — the shell", () => {
       record: record(),
       status: [fail("gh: Resource not accessible (HTTP 403)")],
     });
-    expect(statusCalls(run.calls)).toHaveLength(2);
+    expect(statusCalls(run.calls)).toHaveLength(4);
     expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
     expect(run.stdout).toContain("statuses: write");
     expect(commentPost(run.calls)).toBeDefined();
@@ -1733,7 +2359,7 @@ describe("runPublish — the shell", () => {
       create: fail("gh: Forbidden (HTTP 403)"),
     });
     expect(run.exitCode).toBe(1);
-    expect(run.stdout).toContain("::error title=pr-hero::");
+    expect(run.stdout).toContain("::error title=crysk::");
     expect(run.stdout).toContain("outcome comment");
     expect(deletions(run.calls)).toEqual([]);
   });
@@ -1754,7 +2380,7 @@ describe("runPublish — the shell", () => {
     const run = runPublishIn({ record: "{ not json" });
     expect(run.exitCode).toBe(1);
     expect(run.calls).toEqual([]);
-    expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+    expect(run.stdout).toContain("::error title=crysk PRH-UNCLASSIFIED::");
     expect(run.summary).toContain("### PRH-UNCLASSIFIED");
   });
 
@@ -1788,19 +2414,19 @@ describe("runPublish — the shell", () => {
         detail: "the routing input is not valid JSON",
       },
     });
-    expect(run.stdout).toContain("::error title=pr-hero PRH-ROUTING-INVALID::");
+    expect(run.stdout).toContain("::error title=crysk PRH-ROUTING-INVALID::");
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(
-      "description=PRH-ROUTING-INVALID: PRHERO_ROUTING is invalid: the routing input is not valid JSON",
+      "description=PRH-ROUTING-INVALID: The routing variable is invalid: the routing input is not valid JSON",
     );
     expect(commentPost(run.calls)).toBeDefined();
   });
 
   test("an unreadable setup record falls back to the install failure, with a warning", () => {
     const run = runPublishIn({ record: record(), setup: "{ not json" });
-    expect(run.stdout).toContain("::warning title=pr-hero::");
-    expect(run.stdout).toContain("::error title=pr-hero PRH-INSTALL-FAILED::");
+    expect(run.stdout).toContain("::warning title=crysk::");
+    expect(run.stdout).toContain("::error title=crysk PRH-INSTALL-FAILED::");
   });
 
   test("a setup record outside the two classes the setup step writes is refused the same way", () => {
@@ -1812,7 +2438,7 @@ describe("runPublish — the shell", () => {
         detail: "x",
       },
     });
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
     expect(run.stdout).toContain("PRH-INSTALL-FAILED");
     expect(run.stdout).not.toContain("PRH-CRED-MISSING");
   });
@@ -1992,7 +2618,7 @@ describe("runPublish — cleanup once the CLI started", () => {
     });
     expect(run.exitCode).toBe(0);
     expect(deletions(run.calls)).toEqual([]);
-    expect(run.stdout.match(/::notice title=pr-hero::/g)).toHaveLength(1);
+    expect(run.stdout.match(/::notice title=crysk::/g)).toHaveLength(1);
     expect(run.stdout).toContain(
       "could not clean up its older outcome comments",
     );
@@ -2015,7 +2641,7 @@ describe("runPublish — cleanup once the CLI started", () => {
       remove: fail("gh: Server Error (HTTP 500)"),
     });
     expect(deletions(run.calls)).toHaveLength(2);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
     expect(run.stdout).not.toContain("::error");
     expect(run.exitCode).toBe(0);
   });
@@ -2042,28 +2668,16 @@ describe("runPublish — cleanup once the CLI started", () => {
       ),
     });
     expect(run.exitCode).toBe(0);
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
     expect(commentPost(run.calls)).toBeDefined();
     expect(run.calls.some((call) => call.args.includes("graphql"))).toBe(false);
     expect(removedIds(run)).toEqual(["10"]);
   });
 
-  // The `-f key=value` flags of a status write, read back as an object.
-  function statusFlags(args: readonly string[]): Record<string, string> {
-    const flags: Record<string, string> = {};
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] !== "-f") continue;
-      const raw = args[i + 1] ?? "";
-      const eq = raw.indexOf("=");
-      if (eq !== -1) flags[raw.slice(0, eq)] = raw.slice(eq + 1);
-    }
-    return flags;
-  }
-
   // WHY this post: the CLI's review completed, but its final status write did not land,
   // and the CLI recorded that status. The publisher posts it once, on the head the record
   // names, before the cleanup of older comments.
-  test("a reviewed record with an unsettled status posts that state and description on pr-hero for the record's head, then cleans up", () => {
+  test("a reviewed record with an unsettled status posts that state and description on crysk and pr-hero for the record's head, then cleans up", () => {
     const run = runPublishIn({
       record: record({ head_sha: TRIGGER_HEAD }),
       cliStarted: true,
@@ -2078,15 +2692,20 @@ describe("runPublish — cleanup once the CLI started", () => {
     });
     expect(run.exitCode).toBe(0);
     const posted = statusCalls(run.calls);
-    expect(posted).toHaveLength(1);
+    expect(posted).toHaveLength(2);
     const status = posted[0] as Call;
     expect(status.args).toContain(`repos/${REPO}/statuses/${REVIEWED_HEAD}`);
-    expect(statusFlags(status.args)).toEqual({
-      state: "success",
-      context: "pr-hero",
-      description: "review complete",
-      target_url: RUN_URL,
-    });
+    for (const [call, context] of [
+      [posted[0], "crysk"],
+      [posted[1], "pr-hero"],
+    ] as const) {
+      expect(statusFlags((call as Call).args)).toEqual({
+        state: "success",
+        context,
+        description: "review complete",
+        target_url: RUN_URL,
+      });
+    }
     const firstDeletion = run.calls.findIndex((call) =>
       call.args.includes("DELETE"),
     );
@@ -2097,7 +2716,7 @@ describe("runPublish — cleanup once the CLI started", () => {
   // WHY one attempt: the teardown already retried the write twice, so the publisher's
   // one more chance is one call. A failure is named as the status write failure, on one
   // annotation line, and the cleanup still runs.
-  test("a failed unsettled status is one attempt, names PRH-STATUS-WRITE-FAILED on one line, still cleans up, and exits 1", () => {
+  test("a failed unsettled status is one attempt per name, names PRH-STATUS-WRITE-FAILED on one line, still cleans up, and exits 1", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
@@ -2106,14 +2725,14 @@ describe("runPublish — cleanup once the CLI started", () => {
         head_sha: REVIEWED_HEAD,
         unsettled_status: {
           state: "failure",
-          description: "pr-hero: 2 blocking finding(s) — fix and push",
+          description: "crysk: 2 blocking finding(s) — fix and push",
         },
       },
       status: [fail("gh: Server Error (HTTP 500)")],
       viewer: ok("pr-hero-bot"),
       list: listing([10, "pr-hero-bot", "Bot", OLDER_MARKER]),
     });
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
     const annotations = run.stdout
       .split("\n")
       .filter((line) => line.startsWith("::error"));
@@ -2177,6 +2796,38 @@ describe("runPublish — the repost of an unsettled status, against an override 
     expect(deletions(run.calls)).toEqual([`repos/${REPO}/issues/comments/10`]);
   });
 
+  // The same rule over the new spelling, and over an override that only the legacy name carries
+  // (an older action wrote it) beside a crysk row older than the override.
+  test.each<[string, Array<[string, string, string, string]>]>([
+    [
+      "a crysk override",
+      [
+        [
+          "crysk",
+          "success",
+          at(RUN_START + 30_000),
+          "crysk: overridden by @maintainer — no review on this head",
+        ],
+      ],
+    ],
+    [
+      "a legacy-only override newer than the crysk verdict",
+      [
+        ["crysk", "failure", at(RUN_START + 10_000), "crysk: 2 blocking"],
+        [
+          "pr-hero",
+          "success",
+          at(RUN_START + 30_000),
+          "pr-hero: overridden by @maintainer — no review on this head",
+        ],
+      ],
+    ],
+  ])("%s stands: the repost is skipped", (_label, rows) => {
+    const run = runWith(withCutoff(), describedStatusRows(...rows));
+    expect(run.exitCode).toBe(0);
+    expect(statusCalls(run.calls)).toEqual([]);
+  });
+
   test("a newest status that is not an override is reposted", () => {
     const run = runWith(
       withCutoff(),
@@ -2188,7 +2839,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
       ]),
     );
     const posted = statusCalls(run.calls);
-    expect(posted).toHaveLength(1);
+    expect(posted).toHaveLength(2);
     expect((posted[0] as Call).args).toEqual(
       expect.arrayContaining(["state=success", "description=review complete"]),
     );
@@ -2204,7 +2855,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
         OVERRIDE,
       ]),
     );
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
   });
 
   // The pending did not land, so the CLI's cutoff is the run's start with no allowance. An
@@ -2222,7 +2873,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
       ]),
     );
     expect(statusReadEndpoints(run.calls)).toEqual([HEAD_READ]);
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
   });
 
   // The pending landed, so the CLI's cutoff is the start less the 5 s allowance. The same
@@ -2244,7 +2895,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
 
   test("a failed head read reposts, as before", () => {
     const run = runWith(withCutoff(), fail("gh: Server Error (HTTP 500)"));
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
     expect(run.exitCode).toBe(0);
   });
 
@@ -2259,7 +2910,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
       ]),
     );
     expect(statusReadEndpoints(run.calls)).toEqual([]);
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
   });
 });
 
@@ -2267,7 +2918,7 @@ describe("runPublish — the repost of an unsettled status, against an override 
 // status on the head it names and an audit comment. Nothing renders an error, and
 // no cleanup may ever remove the comment.
 const OVERRIDE_DESCRIPTION =
-  "pr-hero: overridden by @maintainer — no review on this head";
+  "crysk: overridden by @maintainer — no new review run";
 const overrideRecord = (overrides: Partial<TriggerRecord> = {}) =>
   record({ decision: "override", actor: "maintainer", ...overrides });
 
@@ -2304,9 +2955,14 @@ describe("runPublish — the override (S8)", () => {
     });
     expect(run.exitCode).toBe(0);
     const statuses = statusCalls(run.calls);
-    expect(statuses).toHaveLength(1);
+    expect(statuses).toHaveLength(2);
     expect(statuses[0]?.args).toContain("state=success");
     expect(statuses[0]?.args).toContain(`description=${OVERRIDE_DESCRIPTION}`);
+    expect(statuses.map((call) => statusFlags(call.args).context)).toEqual([
+      "crysk",
+      "pr-hero",
+    ]);
+    expect(statuses[1]?.args).toContain(`description=${OVERRIDE_DESCRIPTION}`);
     const comment = commentPost(run.calls);
     expect(comment).toBeDefined();
     expect(run.calls.indexOf(statuses[0] as Call)).toBeLessThan(
@@ -2314,14 +2970,14 @@ describe("runPublish — the override (S8)", () => {
     );
     const body = comment?.stdin ?? "";
     expect(body.split("\n")[0]).toBe(
-      `<!-- pr-hero-override head=${SHA} run=4242 attempt=1 -->`,
+      `<!-- crysk-override head=${SHA} run=4242 attempt=1 -->`,
     );
     expect(body).toContain("@maintainer");
     expect(body).toContain("2026-10-17 12:34 UTC");
     expect(body).toContain(
-      "A new push or a later `/pr-hero review` on this head replaces it",
+      "A new push or a later `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) on this head replaces it",
     );
-    expect(run.stdout).toContain("::notice title=pr-hero::");
+    expect(run.stdout).toContain("::notice title=crysk::");
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
   });
 
@@ -2333,14 +2989,15 @@ describe("runPublish — the override (S8)", () => {
       record: overrideRecord({ actor: login }),
     });
     const statuses = statusCalls(run.calls);
-    expect(statuses).toHaveLength(1);
+    expect(statuses).toHaveLength(2);
     const descriptionArg = statuses[0]?.args.find((arg) =>
       arg.startsWith("description="),
     );
     const description = descriptionArg?.slice("description=".length) ?? "";
     expect(description.length).toBeLessThanOrEqual(140);
+    // `crysk: overridden by @` is 22 characters and the suffix 20: 133 in all, inside GitHub's 140.
     expect(description).toBe(
-      `pr-hero: overridden by @${login} — no review on this head`,
+      `crysk: overridden by @${login} — no new review run`,
     );
   });
 
@@ -2352,7 +3009,7 @@ describe("runPublish — the override (S8)", () => {
     expect(statusCalls(run.calls)).toHaveLength(0);
     const body = commentPost(run.calls)?.stdin ?? "";
     expect(body.split("\n")[0]).toBe(
-      `<!-- pr-hero-override head=unknown run=4242 attempt=1 -->`,
+      `<!-- crysk-override head=unknown run=4242 attempt=1 -->`,
     );
     expect(body).toContain("no commit status could be set");
   });
@@ -2435,6 +3092,45 @@ describe("runPublish — the override (S8)", () => {
     expect(run.calls.some((call) => call.args.includes("graphql"))).toBe(false);
   });
 
+  // #434 F001: the crysk gate landed and only the legacy pr-hero write failed. The head IS
+  // overridden, so the permanent audit comment must say so; the failed half is still reported.
+  test("an override whose crysk status lands but whose legacy pr-hero write fails records the override and still exits 1", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      status: [ok(""), fail("gh: HTTP 500"), fail("gh: HTTP 500")],
+    });
+    expect(run.exitCode).toBe(1);
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body).toContain("The `crysk` status on that head is now success");
+    expect(body).toContain("The `pr-hero` status could not be written");
+    expect(body).not.toContain("no commit status could be set");
+    expect(run.stdout).toContain("crysk gate overridden by @maintainer");
+    expect(run.stdout).not.toContain("set no commit status");
+  });
+
+  // #435 F001: the crysk write failed and only the legacy pr-hero landed. The comment names
+  // what was written and what was not; it never says the crysk status is success.
+  test("an override whose crysk write fails and whose pr-hero lands names only pr-hero, and says crysk is still blocked", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      status: [fail("gh: HTTP 500"), fail("gh: HTTP 500"), ok("")],
+      viewer: ok("github-actions"),
+      list: listing([502, "github-actions[bot]", "Bot", OLDER_MARKER]),
+    });
+    expect(run.exitCode).toBe(1);
+    // crysk is still red, so the earlier outcome comment that explains why stays.
+    expect(deletions(run.calls)).toEqual([]);
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body).toContain("The `pr-hero` status on that head is now success");
+    expect(body).not.toContain(
+      "The `crysk` status on that head is now success",
+    );
+    expect(body).not.toContain("Crysk's gate was overridden");
+    expect(body).toContain("The `crysk` status could not be written");
+    expect(run.stdout).not.toContain("crysk gate overridden");
+    expect(run.stdout).toContain("set only the pr-hero status");
+  });
+
   test("an override with no head sets no status, so it cleans up nothing", () => {
     const run = runPublishIn({
       record: overrideRecord({ head_sha: undefined }),
@@ -2457,7 +3153,7 @@ describe("runPublish — the override (S8)", () => {
     expect(deletions(run.calls)).toEqual([
       "repos/acme/widgets/issues/comments/502",
     ]);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
     expect(run.stdout).toContain("could not delete an older outcome comment");
     expect(run.exitCode).toBe(0);
   });
@@ -2481,7 +3177,7 @@ describe("publish.ts runs before `bun install`", () => {
       const result = Bun.spawnSync([process.execPath, MODULE_PATH], {
         cwd: dir,
         env: {
-          PRHERO_OUTCOME_DIR: dir,
+          CRYSK_OUTCOME_DIR: dir,
           GITHUB_REPOSITORY: REPO,
           GITHUB_RUN_ID: "4242",
           GITHUB_SERVER_URL: "https://github.com",
@@ -2510,7 +3206,7 @@ describe("publish.ts runs before `bun install`", () => {
       const result = Bun.spawnSync([process.execPath, MODULE_PATH], {
         cwd: dir,
         env: {
-          PRHERO_OUTCOME_DIR: dir,
+          CRYSK_OUTCOME_DIR: dir,
           GITHUB_REPOSITORY: REPO,
           GITHUB_RUN_ID: "4242",
           GITHUB_SERVER_URL: "https://github.com",
@@ -2521,17 +3217,22 @@ describe("publish.ts runs before `bun install`", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout.toString()).not.toContain("::error");
-      expect(result.stdout.toString()).toContain("::notice title=pr-hero::");
+      expect(result.stdout.toString()).toContain("::notice title=crysk::");
       expect(existsSync(path.join(dir, "summary"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("it imports only builtins, plus the builtins-only ./outcome and ./override siblings", () => {
+  test("it imports only builtins, plus the builtins-only ./outcome, ./override, ./trigger and ../brand", () => {
     const source = readFileSync(MODULE_PATH, "utf8");
     expect(
-      runtimeImportViolations(source, ["./outcome", "./override"]),
+      runtimeImportViolations(source, [
+        "./outcome",
+        "./override",
+        "./trigger",
+        "../brand",
+      ]),
     ).toEqual([]);
   });
 
@@ -2674,6 +3375,13 @@ describe("hunters-failed allowlist", () => {
     expect(plan.rendered.annotation).not.toContain("rejected the credential");
   });
 
+  test("quota_exhausted with no shared detail renders PRH-PROVIDER-LIMITED in its default wording", () => {
+    const plan = hunterFailedPlan("quota_exhausted", {});
+    if (plan.kind !== "remote") throw new Error("expected a remote plan");
+    expect(plan.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+    expect(plan.rendered.what).toBe("Rate limit or quota reached");
+  });
+
   test("model_unavailable with a provider renders PRH-MODEL-UNAVAILABLE without a model", () => {
     const plan = hunterFailedPlan("model_unavailable", {
       provider: "opencode",
@@ -2736,7 +3444,7 @@ describe("runPublish — the override read before a repost is strict and logged"
 
   test("a failed head read reposts the unsettled status, and logs one warning", () => {
     const run = runWith(fail("gh: Server Error (HTTP 500)"));
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
     expect(run.exitCode).toBe(0);
     const warnings = run.stdout
       .split("\n")
@@ -2848,7 +3556,7 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
         }),
       ).toEqual({
         settle: false,
-        reason: "the head's pr-hero status is not pending",
+        reason: "the head's crysk status is not pending",
       });
     }
   });
@@ -2998,7 +3706,7 @@ function runCancelSettleIn(options: {
     let stdout = "";
     const exitCode = runCancelSettle({
       env: {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
         GITHUB_REPOSITORY: REPO,
         GITHUB_RUN_ID: "4242",
         GITHUB_SERVER_URL: "https://github.com",
@@ -3041,16 +3749,38 @@ describe("runCancelSettle — the shell (SB3)", () => {
     });
     expect(run.exitCode).toBe(0);
     const posts = statusCalls(run.calls);
-    expect(posts).toHaveLength(1);
+    expect(posts).toHaveLength(2);
     const post = posts[0];
     expect(post?.args).toContain(`repos/${REPO}/statuses/${CANCEL_HEAD}`);
     expect(post?.args).toContain("state=error");
-    expect(post?.args).toContain("context=pr-hero");
+    expect(post?.args).toContain("context=crysk");
+    expect(posts[1]?.args).toContain("context=pr-hero");
     expect(post?.args).toContain(`description=${CANCELLED_STATUS_DESCRIPTION}`);
     expect(post?.args).toContain(
       "target_url=https://github.com/acme/widgets/actions/runs/4242",
     );
-    expect(run.stdout).toContain("the pr-hero status is now PRH-CANCELLED");
+    expect(run.stdout).toContain("the crysk status is now PRH-CANCELLED");
+  });
+
+  // A half-landed pair: this run's pending on pr-hero stayed behind a later crysk verdict.
+  // The verdict stands, so the cancel copies it onto pr-hero instead of cancelling.
+  test("this run's pending pr-hero row behind a later settled crysk row gets the crysk verdict, not a cancel", () => {
+    const later = new Date(Date.parse(PENDING_ISO) + 60_000).toISOString();
+    const run = runCancelSettleIn({
+      cliRecord: liveRecordText,
+      statuses: statusRows(
+        ["pr-hero", "pending", PENDING_ISO, "crysk reviewing", null],
+        ["crysk", "success", later, "crysk: no blocking findings", null],
+      ),
+    });
+    expect(run.exitCode).toBe(0);
+    const posts = statusCalls(run.calls);
+    expect(posts).toHaveLength(1);
+    expect(statusFlags(posts[0]?.args ?? []).context).toBe("pr-hero");
+    expect(posts[0]?.args).toContain("state=success");
+    expect(posts[0]?.args).not.toContain(
+      `description=${CANCELLED_STATUS_DESCRIPTION}`,
+    );
   });
 
   test("an unreadable pending-at still exits 0 and writes nothing", () => {
@@ -3065,7 +3795,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
       mkdirSync(path.join(dir, PENDING_AT_FILE));
       const calls: Call[] = [];
       const exitCode = runCancelSettle({
-        env: { PRHERO_OUTCOME_DIR: dir, GITHUB_REPOSITORY: REPO },
+        env: { CRYSK_OUTCOME_DIR: dir, GITHUB_REPOSITORY: REPO },
         gh: (args) => {
           calls.push({ args: [...args], stdin: undefined });
           return statusRows(["pr-hero", "pending", PENDING_ISO]);
@@ -3089,7 +3819,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
     expect(run.exitCode).toBe(0);
     expect(statusCalls(run.calls)).toHaveLength(0);
     expect(run.stdout).toContain(
-      "cancel: nothing to settle (the head's pr-hero status is not pending)",
+      "cancel: nothing to settle (the head's crysk status is not pending)",
     );
   });
 
@@ -3117,7 +3847,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
     });
     expect(run.exitCode).toBe(0);
     expect(statusCalls(run.calls)).toHaveLength(0);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
     expect(run.stdout).toContain(
       "could not read the head's status after the cancel",
     );
@@ -3130,7 +3860,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
       post: fail("gh: HTTP 500"),
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
   });
 });
 
@@ -3177,8 +3907,8 @@ describe("runCancelSettle — the run URL and one retry of the status read", () 
       env: IN_ACTIONS,
     });
     expect(run.exitCode).toBe(0);
-    expect(statusCalls(run.calls)).toHaveLength(1);
-    expect(run.stdout).toContain("the pr-hero status is now PRH-CANCELLED");
+    expect(statusCalls(run.calls)).toHaveLength(2);
+    expect(run.stdout).toContain("the crysk status is now PRH-CANCELLED");
   });
 
   test("another run's pending with this run's created_at is not settled", () => {
@@ -3209,7 +3939,7 @@ describe("runCancelSettle — the run URL and one retry of the status read", () 
     expect(run.exitCode).toBe(0);
     expect(reads(run.calls)).toHaveLength(2);
     expect(run.sleeps).toEqual([2_000]);
-    expect(statusCalls(run.calls)).toHaveLength(1);
+    expect(statusCalls(run.calls)).toHaveLength(2);
   });
 
   test("a status read that fails twice keeps the fallback: no write, and one warning", () => {

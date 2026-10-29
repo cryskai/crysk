@@ -15,6 +15,14 @@ import type { ParsedStateBlock } from "#rereview/state";
 import type { Tier } from "#review/findings";
 import type { LocalConfig } from "#review/preflight";
 import {
+  findMarker,
+  isCommand,
+  legacyCommand,
+  MARKER_BRAND_PATTERN,
+  MARKER_OPEN,
+  matchMarkerPrefix,
+} from "../brand";
+import {
   type AdmissionRecord,
   countTerminalAttempts,
   PROVABLY_UNSPENT_STATUSES,
@@ -24,7 +32,7 @@ import {
   type DeltaRiskAssessment,
   deltaRiskTriggersReview,
 } from "./review-risk";
-import { parseReviewCommand, STOP_COMMAND } from "./trigger";
+import { parseReviewCommand, REVIEW_COMMAND, STOP_COMMAND } from "./trigger";
 
 export const CI_REVIEW_POLICY_SCHEMA_VERSION = 1;
 export const DEFAULT_CI_REVIEW_POLICY_MODE = "risk_aware" as const;
@@ -103,7 +111,7 @@ export interface CiReviewAdmissionInput {
   // not a verdict: it must not satisfy the same-head skip, or a CI re-run of
   // that commit is skipped before the re-review can force full coverage.
   summaryComplete?: boolean;
-  // A write-access maintainer posted `/pr-hero stop` and no review or recheck
+  // A write-access maintainer posted `/crysk stop` and no review or recheck
   // command came after it. The gate decides it (it owns the permission
   // lookup); absent means not stopped, so every existing caller keeps today's
   // verdicts.
@@ -221,7 +229,7 @@ export function resolveReviewAttemptCount(input: {
 // no rows (listAdmissionCheckRuns fails open to []), which keeps the head
 // counted, the pre-fix behavior. So a failed read can only over-count and
 // refuse a review early; it never admits one the budget would have refused.
-// A forced row (a `/pr-hero review` or `/pr-hero recheck` comment run) also
+// A forced row (a `/crysk review` or `/crysk recheck` comment run) also
 // leaves the count whatever its status, so a head whose rows are all forced is
 // dropped as well. A head with one automatic row next to a forced one stays
 // counted, through that automatic row.
@@ -263,7 +271,7 @@ export function resolveCiAdmissionAttemptCount(input: {
 }
 
 // WHY a forced run keeps the count, unfloored: the budget bounds AUTOMATIC
-// reviews. A writer's explicit comment (`/pr-hero review`, `/pr-hero recheck`)
+// reviews. A writer's explicit comment (`/crysk review`, `/crysk recheck`)
 // is a deliberate spend outside that budget, so it must not move the counter
 // the budget reads. A forced FIRST review therefore writes 0, and the summary
 // it posts reads as zero automatic reviews (parseCiAdmissionBlock accepts 0 for
@@ -318,9 +326,10 @@ export function priorTierScore(
 // First reviews carry no item-7 `pr-hero-state` block (W-prov), but CI admission
 // still needs true tier counts. A separate marker keeps item-7 semantics intact
 // while giving the gate tier-accurate data on every post.
-export const PR_CI_ADMISSION_PREFIX = "<!-- pr-hero-ci-admission ";
-const CI_ADMISSION_HEADER =
-  /^<!-- pr-hero-ci-admission v=1 head=([0-9a-f]{40}) -->/;
+export const PR_CI_ADMISSION_PREFIX = `${MARKER_OPEN}ci-admission `;
+const CI_ADMISSION_HEADER = new RegExp(
+  `^<!-- ${MARKER_BRAND_PATTERN}-ci-admission v=1 head=([0-9a-f]{40}) -->`,
+);
 const HTML_COMMENT = /<!--([\s\S]*?)-->/;
 
 export interface ParsedCiAdmissionBlock {
@@ -377,8 +386,8 @@ export function renderCiAdmissionBlock(
 export function parseCiAdmissionBlock(
   body: string,
 ): ParsedCiAdmissionBlock | null {
-  const start = body.indexOf(PR_CI_ADMISSION_PREFIX);
-  if (start === -1) return null;
+  const start = findMarker(body, PR_CI_ADMISSION_PREFIX)?.index;
+  if (start === undefined) return null;
   const fromMarker = body.slice(start);
   const headerLine = fromMarker.split("\n", 1)[0] ?? "";
   const header = CI_ADMISSION_HEADER.exec(headerLine);
@@ -431,10 +440,10 @@ function encodeCiAdmissionJson(value: string): string {
 const FINDING_HEADER_TIER = /^\S+\s+(blocking|advisory)\s+·\s+/;
 
 export function parseFindingCommentTier(body: string): Tier | null {
-  if (!body.includes(PR_FINDING_MARKER_PREFIX)) return null;
+  if (findMarker(body, PR_FINDING_MARKER_PREFIX) === undefined) return null;
   let afterMarker = false;
   for (const line of body.split("\n")) {
-    if (line.startsWith(PR_FINDING_MARKER_PREFIX)) {
+    if (matchMarkerPrefix(line, PR_FINDING_MARKER_PREFIX) !== undefined) {
       afterMarker = true;
       continue;
     }
@@ -786,7 +795,9 @@ export function ciReviewSkipDetail(
     case "low-risk-delta":
       return `${counts}; delta touches only low-risk paths (docs, tests, fixtures)`;
     case "stopped":
-      return `a maintainer posted ${STOP_COMMAND}; /pr-hero review reviews this head`;
+      // A status description has little room, so it names the one spelling
+      // every workflow accepts during the rename.
+      return `a maintainer stopped automatic reviews; ${legacyCommand(REVIEW_COMMAND)} reviews this head`;
   }
 }
 
@@ -827,7 +838,7 @@ export function stopCommandsNewestFirst(
     if (comment === undefined || comment.user === "") continue;
     if (parseReviewCommand(comment.body) !== undefined) {
       commands.push({ user: comment.user, kind: "lift" });
-    } else if (comment.body.trim() === STOP_COMMAND) {
+    } else if (isCommand(comment.body, STOP_COMMAND)) {
       commands.push({ user: comment.user, kind: "stop" });
     }
   }
@@ -868,7 +879,7 @@ export function formatCiAdmissionObserveNotice(input: {
       ? ""
       : ` · risk=${input.deltaRisk.class}`;
   return (
-    `pr-hero admission (observe-only): ${would} — ${detail} ` +
+    `crysk admission (observe-only): ${would} — ${detail} ` +
     `(current \`${currentHead.slice(0, 8)}\`, reviewed ` +
     `${reviewedHead === null ? "none" : `\`${reviewedHead.slice(0, 8)}\``}, ` +
     `attempts ${verdict.reviewCount}/${verdict.maxAttempts}, ` +

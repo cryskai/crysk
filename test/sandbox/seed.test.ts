@@ -50,8 +50,8 @@ afterEach(async () => {
 describe("workflow", () => {
   test("is the product renderer's output pinned to the ref, with budget-usd 0", () => {
     const wf = workflowFor(REF);
-    expect(actionRefFor(REF)).toBe("juanmaagd/pr-hero@v0.3.0");
-    expect(wf).toContain("uses: juanmaagd/pr-hero@v0.3.0");
+    expect(actionRefFor(REF)).toBe("cryskai/crysk@v0.3.0");
+    expect(wf).toContain("uses: cryskai/crysk@v0.3.0");
     expect(wf).not.toContain("uses: ./");
     expect(wf).toContain("budget-usd: 0");
     // forceEngineFromPr is the `./`-only path; a published tag must not get it.
@@ -66,8 +66,10 @@ describe("workflow", () => {
     };
     const step = parsed.jobs.review.steps.find((s) => s.id === "pr-hero");
     // GitHub Actions expressions, not JS templates: the braces are literal.
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression syntax
-    expect(step?.with?.routing).toBe("${{ vars.PRHERO_ROUTING }}");
+    expect(step?.with?.routing).toBe(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression syntax
+      "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}",
+    );
     expect(step?.with?.["opencode-auth"]).toBe(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression syntax
       "${{ secrets.OPENCODE_AUTH_JSON }}",
@@ -107,7 +109,7 @@ describe("routing value", () => {
     for (const snapshot of ["big-pickle", "deepseek-v4.1-flash-free"]) {
       const routing = parseRoutingConfig(
         JSON.parse(routingValueFor(snapshot)),
-        "~/.prhero/config.json",
+        "~/.crysk/config.json",
       );
       for (const logical of [
         "sonnet",
@@ -189,7 +191,7 @@ describe("the override marker pinned against the product's publisher", () => {
       const posted: string[] = [];
       runPublish({
         env: {
-          PRHERO_OUTCOME_DIR: dir,
+          CRYSK_OUTCOME_DIR: dir,
           GITHUB_REPOSITORY: SANDBOX_REPO,
           GITHUB_RUN_ID: "1",
         },

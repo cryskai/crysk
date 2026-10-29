@@ -25,7 +25,6 @@ import { ciSetupCommand } from "#commands/ci-setup";
 import { configCommand } from "#commands/config";
 import { doctorCommand } from "#commands/doctor";
 import { init } from "#commands/init";
-import { ledgerCommand } from "#commands/ledger";
 import { mcpCommand } from "#commands/mcp";
 import { menuCommand } from "#commands/menu";
 import { postCommand } from "#commands/post";
@@ -128,6 +127,7 @@ import { startPanelRenderer } from "#ui/progress";
 export { startPanelRenderer };
 
 import { watchCommand } from "#watch/watch";
+import { readBrandEnv } from "./brand";
 import {
   closeAllServers,
   killAllChildProcesses,
@@ -143,7 +143,7 @@ import { isMachineOnboarded, runWizard } from "./wizard";
 export async function main(argv: string[]): Promise<number> {
   // Bare zero-argument entry
   if (argv.length === 0) {
-    if (process.env.PRHERO_NO_TUI !== undefined) {
+    if (readBrandEnv(process.env, "NO_TUI") !== undefined) {
       log(HELP_TEXT);
       return 0;
     }
@@ -229,37 +229,33 @@ export async function main(argv: string[]): Promise<number> {
             ? await doctorCommand(parsed.options)
             : parsed.command === "activity"
               ? await activityCommand(parsed.options)
-              : parsed.command === "ledger"
-                ? await ledgerCommand(parsed.options)
-                : parsed.command === "watch"
-                  ? await watchCommand(parsed.options)
-                  : parsed.command === "post"
-                    ? await postCommand(parsed.options)
-                    : parsed.command === "status"
-                      ? await statusCommand(parsed.options)
-                      : parsed.command === "skills"
-                        ? await skillsInstallCommand(parsed.options)
-                        : parsed.command === "triage"
-                          ? await triageCommand(parsed.options)
-                          : parsed.command === "gc"
-                            ? await gcCommand(parsed.options)
-                            : parsed.command === "usage"
-                              ? await usageCommand(parsed.options)
-                              : parsed.command === "reverts"
-                                ? await revertsCommand(parsed.options)
-                                : parsed.command === "corpus"
-                                  ? await corpusCommand(parsed.options)
-                                  : parsed.command === "config"
-                                    ? await configCommand(parsed.options)
-                                    : parsed.command === "mcp"
-                                      ? await mcpCommand(parsed.options)
-                                      : parsed.command === "upgrade"
-                                        ? await upgradeCommand(parsed.options)
-                                        : parsed.command === "uninstall"
-                                          ? await uninstallCommand(
-                                              parsed.options,
-                                            )
-                                          : await review(parsed.options);
+              : parsed.command === "watch"
+                ? await watchCommand(parsed.options)
+                : parsed.command === "post"
+                  ? await postCommand(parsed.options)
+                  : parsed.command === "status"
+                    ? await statusCommand(parsed.options)
+                    : parsed.command === "skills"
+                      ? await skillsInstallCommand(parsed.options)
+                      : parsed.command === "triage"
+                        ? await triageCommand(parsed.options)
+                        : parsed.command === "gc"
+                          ? await gcCommand(parsed.options)
+                          : parsed.command === "usage"
+                            ? await usageCommand(parsed.options)
+                            : parsed.command === "reverts"
+                              ? await revertsCommand(parsed.options)
+                              : parsed.command === "corpus"
+                                ? await corpusCommand(parsed.options)
+                                : parsed.command === "config"
+                                  ? await configCommand(parsed.options)
+                                  : parsed.command === "mcp"
+                                    ? await mcpCommand(parsed.options)
+                                    : parsed.command === "upgrade"
+                                      ? await upgradeCommand(parsed.options)
+                                      : parsed.command === "uninstall"
+                                        ? await uninstallCommand(parsed.options)
+                                        : await review(parsed.options);
   } catch (error) {
     if (error instanceof CliError || error instanceof CliUsageError) {
       writeFatalCliRecord(classifyCliError(error));

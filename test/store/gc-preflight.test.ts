@@ -145,13 +145,13 @@ describe("parseWorktreePr", () => {
 describe("worktreeRemoveArgs", () => {
   test("hands over worktree remove --force, never rm -rf", () => {
     const args = worktreeRemoveArgs(
-      "/Users/x/.prhero/repos/github.com/a/b/worktrees/pr-1",
+      "/Users/x/.crysk/repos/github.com/a/b/worktrees/pr-1",
     );
     expect(args).toEqual([
       "worktree",
       "remove",
       "--force",
-      "/Users/x/.prhero/repos/github.com/a/b/worktrees/pr-1",
+      "/Users/x/.crysk/repos/github.com/a/b/worktrees/pr-1",
     ]);
     expect(args.join(" ")).not.toContain("rm");
   });
@@ -175,13 +175,11 @@ describe("GH_PR_VIEW_TIMEOUT_MS", () => {
 });
 
 describe("gc launchd paths", () => {
-  test("the plist sits in LaunchAgents, the log under ~/.prhero", () => {
+  test("the plist sits in LaunchAgents, the log under ~/.crysk", () => {
     expect(gcPlistPath("/Users/x")).toBe(
       `/Users/x/Library/LaunchAgents/${GC_LAUNCHD_LABEL}.plist`,
     );
-    expect(gcLaunchdLogPath("/Users/x")).toBe(
-      "/Users/x/.prhero/gc-launchd.log",
-    );
+    expect(gcLaunchdLogPath("/Users/x")).toBe("/Users/x/.crysk/gc-launchd.log");
   });
 });
 
@@ -192,7 +190,7 @@ describe("renderGcPlist", () => {
       args: ["/Users/x/Desktop/pr-hero/src/cli.ts"],
     },
     intervalSeconds: 21600,
-    logPath: "/Users/x/.prhero/gc-launchd.log",
+    logPath: "/Users/x/.crysk/gc-launchd.log",
     pathEnv: "/opt/homebrew/bin:/usr/bin:/bin",
   };
 
@@ -240,7 +238,7 @@ describe("renderGcPlist", () => {
 });
 
 // W4 (#23): GC (store/gc.ts) walks ONLY `glob.scan({ cwd: reposDir })` — it never
-// lists ~/.prhero itself. metrics.db (W4) must stay a SIBLING of reposDir,
+// lists ~/.crysk itself. metrics.db (W4) must stay a SIBLING of reposDir,
 // never a descendant, or a future "collect everything idle under the home"
 // sweep could delete run history GC has no business touching. No prod
 // change: prheroLayout already places metricsDbPath outside reposDir
@@ -262,7 +260,7 @@ describe("metrics db is outside the GC scan root", () => {
 
 describe("renderGcStatus", () => {
   const plistPath = `/Users/x/Library/LaunchAgents/${GC_LAUNCHD_LABEL}.plist`;
-  const logPath = "/Users/x/.prhero/gc-launchd.log";
+  const logPath = "/Users/x/.crysk/gc-launchd.log";
 
   test("names the install command when nothing is loaded", () => {
     const text = renderGcStatus({
@@ -271,7 +269,7 @@ describe("renderGcStatus", () => {
       installed: false,
       intervalSeconds: null,
     }).join("\n");
-    expect(text).toContain('not installed — run "pr-hero gc install"');
+    expect(text).toContain('not installed — run "crysk gc install"');
     expect(text).not.toContain("watch install");
   });
 

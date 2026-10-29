@@ -144,7 +144,7 @@ export async function askChoices(
   const cfg = current.config;
 
   say();
-  say("How should pr-hero re-review a pull request after new pushes?");
+  say("How should Crysk re-review a pull request after new pushes?");
   const matching = presetMatching(cfg);
   const levelOptions: PromptOption<ReviewLevel | "keep">[] =
     REVIEW_LEVEL_ORDER.map((value) => ({
@@ -157,7 +157,7 @@ export async function askChoices(
       value: "keep",
       label: "Keep current settings",
       description:
-        "The re-review keys in .prhero/config.json match no preset; leave them as they are.",
+        "The re-review keys in .crysk/config.json match no preset; leave them as they are.",
     });
   }
   const level = await prompter.choose<ReviewLevel | "keep">(
@@ -175,13 +175,12 @@ export async function askChoices(
         value: "gate",
         label: "Gate",
         description:
-          "Blocking findings turn the pr-hero check red. Require it in branch protection to block merges.",
+          "Blocking findings turn the crysk check red. Require it in branch protection to block merges.",
       },
       {
         value: "advisory",
         label: "Advisory",
-        description:
-          "The pr-hero check stays green; findings are comments only.",
+        description: "The crysk check stays green; findings are comments only.",
       },
     ],
     current.workflow.mode ?? "gate",
@@ -295,7 +294,7 @@ async function askAdvanced(
 
   say();
   say(
-    "Trusted actors: extra GitHub logins (bots, other automation) whose pr-hero markers count, besides the workflow's own actor.",
+    "Trusted actors: extra GitHub logins (bots, other automation) whose crysk markers count, besides the workflow's own actor.",
   );
   const currentActors = Array.isArray(cfg.ci_trusted_actors)
     ? (cfg.ci_trusted_actors as string[]).join(", ")
@@ -329,7 +328,7 @@ async function askAdvanced(
 
   say();
   say(
-    "Exclusions: files the review never reads (generated code, lockfiles, fixtures). They go in .prheroignore, one pattern per line, gitignore syntax.",
+    "Exclusions: files the review never reads (generated code, lockfiles, fixtures). They go in .cryskignore, one pattern per line, gitignore syntax.",
   );
   for (;;) {
     const patterns = commaList(

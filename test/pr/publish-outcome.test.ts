@@ -7,11 +7,10 @@
 //
 // Boundary-doubling note — a DELIBERATE exception to "double at boundaries
 // you do not control" (robust-testing rule 4), disclosed rather than hidden
-// behind an internal mock: `postFindingsIfEnabled` (src/pr/posting.ts) and
-// `computeGreptileComparison` (src/pr/comparison.ts) call real `gh`-backed
-// helpers (`ghRepoWebUrl`, `postInlineFindings`, `fetchPrComments`) WITHOUT
-// exposing an injectable `spawnFn` at their own parameter surface —
-// confirmed by reading both files. That is the same "genuine I/O shell, no
+// behind an internal mock: `postFindingsIfEnabled` (src/pr/posting.ts) calls
+// real `gh`-backed helpers (`ghRepoWebUrl`, `postInlineFindings`,
+// `fetchPrComments`) WITHOUT exposing an injectable `spawnFn` at its own
+// parameter surface — confirmed by reading that file. That is the same "genuine I/O shell, no
 // offline seam" limitation test/cli.test.ts already documents for
 // reviewPr() itself and for src/pr/discovery.ts's own fetches. Consequently
 // this suite cannot make `postFindingsIfEnabled` PRODUCE a truthy posted
@@ -23,8 +22,7 @@
 //     (verified manually: `gh pr view <n>` against a non-git directory
 //     returns in ~20ms with "fatal: not a git repository", no network
 //     round-trip) — `ghRepoWebUrl` and `gitRemoteWebUrl` both degrade to
-//     `undefined` on that failure, and `computeGreptileComparison`'s own
-//     try/catch degrades to `comparison: null`. None of this throws. This
+//     `undefined` on that failure. None of this throws. This
 //     only holds with `GH_REPO` unset (it overrides gh's repo detection
 //     regardless of cwd) — saved/deleted/restored below, same as
 //     `GITHUB_STEP_SUMMARY`/`GITHUB_OUTPUT`, so the suite controls its own
@@ -43,6 +41,7 @@
 // before that later throw, and reverts to "never called" the instant the
 // call is moved past it (mutation-checked below).
 
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -66,6 +65,7 @@ import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import { CliError } from "../../src/errors";
+import { prheroLayout } from "../../src/home-preflight";
 import { zeroUsage } from "../../src/usage";
 
 function baseOptions(over: Partial<CliOptions> = {}): CliOptions {
@@ -131,11 +131,12 @@ function baseResult(
     sessionFailed?: boolean;
     skillOutput?: SkillOutput;
     gatePriors?: readonly GateRow[];
+    perAgent?: PipelineResult["perAgent"];
   } = {},
 ): PipelineResult {
   return {
     skillOutput: over.skillOutput ?? baseSkillOutput(),
-    perAgent: {},
+    perAgent: over.perAgent ?? {},
     usage: { ...zeroUsage(), cost_usd_est: 0.42 },
     sessionFailed: over.sessionFailed ?? false,
     unresolved: [],
@@ -201,7 +202,7 @@ const ISOLATED_ENV_VARS = [
   "GITHUB_STEP_SUMMARY",
   "GITHUB_OUTPUT",
   "GH_REPO",
-  "PRHERO_OUTCOME_DIR",
+  "CRYSK_OUTCOME_DIR",
 ];
 
 describe("publishRunOutcome", () => {
@@ -492,7 +493,7 @@ describe("publishRunOutcome", () => {
     await publishRunOutcome(baseInput({ isCi: true, ciMode: "gate" }));
     const report = readFileSync(path.join(runDir, "report.md"), "utf8");
     expect(report).toContain(
-      "This report backs the pr-hero commit status, the required check in gate mode",
+      "This report backs the crysk commit status, the required check in gate mode",
     );
     expect(report).not.toContain("not a merge gate");
   });
@@ -505,6 +506,69 @@ describe("publishRunOutcome", () => {
     );
   });
 
+  // An incomplete review is announced in the Actions UI with the failed agent's own words.
+  describe("the incomplete-review annotation", () => {
+    const failedRefuter = {
+      refuter: {
+        tokens_total: 0,
+        duration_ms: 0,
+        tokens_in: 0,
+        tokens_out: 0,
+        cost_usd_est: 0,
+        attempts: 1,
+        status: "failed",
+        detail: "Anthropic API: Credit balance is too low (HTTP 400)",
+      },
+    };
+    const partialResult = () =>
+      baseResult({
+        skillOutput: { ...baseSkillOutput(), run_status: "partial" },
+        perAgent: failedRefuter,
+      });
+
+    async function stdoutOf(run: () => Promise<unknown>): Promise<string> {
+      const chunks: string[] = [];
+      const spy = spyOn(process.stdout, "write").mockImplementation(((
+        chunk: string | Uint8Array,
+      ) => {
+        chunks.push(String(chunk));
+        return true;
+      }) as typeof process.stdout.write);
+      try {
+        await run();
+      } finally {
+        spy.mockRestore();
+      }
+      return chunks.join("");
+    }
+
+    test("under CI, a partial review prints a ::warning:: naming the failed agent and why", async () => {
+      const out = await stdoutOf(() =>
+        publishRunOutcome(baseInput({ result: partialResult(), isCi: true })),
+      );
+      expect(out).toContain("::warning title=crysk::");
+      expect(out).toContain(
+        "refuter (failed — Anthropic API: Credit balance is too low (HTTP 400))",
+      );
+    });
+
+    test("outside CI the result block carries it and no annotation is printed", async () => {
+      const out = await stdoutOf(() =>
+        publishRunOutcome(baseInput({ result: partialResult(), isCi: false })),
+      );
+      expect(out).not.toContain("::warning title=crysk::");
+      expect(out).not.toContain("::warning title=pr-hero::");
+    });
+
+    test("a complete review with every agent finished prints none", async () => {
+      const out = await stdoutOf(() =>
+        publishRunOutcome(baseInput({ isCi: true })),
+      );
+      expect(out).not.toContain("::warning title=crysk::");
+      expect(out).not.toContain("::warning title=pr-hero::");
+    });
+  });
+
   // S4, step summary chain: publishRunOutcome -> publishCiReviewIfEligible ->
   // planCiReview -> renderStepSummary -> $GITHUB_STEP_SUMMARY.
   test("a CI gate run's step summary carries the gate footer", async () => {
@@ -512,7 +576,7 @@ describe("publishRunOutcome", () => {
     process.env.GITHUB_STEP_SUMMARY = summaryPath;
     await publishRunOutcome(baseInput({ isCi: true, ciMode: "gate" }));
     expect(readFileSync(summaryPath, "utf8")).toContain(
-      "Assistant report backing the pr-hero commit status, the required check in gate mode.</sub>",
+      "Assistant report backing the crysk commit status, the required check in gate mode.</sub>",
     );
   });
 
@@ -528,6 +592,28 @@ describe("publishRunOutcome", () => {
     expect(doc.head_sha).toBe(HEAD_SHA);
     expect(doc.base_sha).toBe(BASE_SHA);
     expect(doc.run_status).toBe("complete");
+  });
+
+  // PR mode no longer writes comparison.json: the run dir holds findings.json and
+  // report.md only, and the canonical store receives the PR's diffFromSha directly.
+  test("PR publish writes no comparison.json and passes diffFromSha to the canonical store", async () => {
+    const exitCode = await publishRunOutcome(
+      baseInput({ repoId: "github.com/acme/repo" }),
+    );
+    expect(exitCode).toBe(0);
+    expect(existsSync(path.join(runDir, "comparison.json"))).toBe(false);
+
+    const db = new Database(prheroLayout(home).prheroDbPath, {
+      readonly: true,
+    });
+    try {
+      const row = db
+        .query("SELECT diff_from_sha FROM runs WHERE pr = ?")
+        .get(42) as { diff_from_sha: string | null } | null;
+      expect(row?.diff_from_sha).toBe(BASE_SHA);
+    } finally {
+      db.close();
+    }
   });
 
   // Task item 1: posting "succeeds" (postFindingsIfEnabled's real, offline
@@ -581,7 +667,7 @@ describe("publishRunOutcome", () => {
 
     beforeEach(() => {
       outcome = path.join(home, "outcome");
-      process.env.PRHERO_OUTCOME_DIR = outcome;
+      process.env.CRYSK_OUTCOME_DIR = outcome;
     });
 
     function readCli(): unknown {
@@ -620,7 +706,7 @@ describe("publishRunOutcome", () => {
     });
 
     test("a posting that throws with no outcome directory writes nothing and still rethrows", async () => {
-      delete process.env.PRHERO_OUTCOME_DIR;
+      delete process.env.CRYSK_OUTCOME_DIR;
       const postError = new Error("gh went away");
       const input = baseInput({
         postEnabled: true,
@@ -688,7 +774,7 @@ describe("publishRunOutcome", () => {
       );
       expect(readCli()).toEqual(REVIEWED);
       expect(chunks).toEqual([
-        "pr-hero: kept the recorded reviewed outcome; a later step failed\n",
+        "crysk: kept the recorded reviewed outcome; a later step failed\n",
       ]);
     });
 

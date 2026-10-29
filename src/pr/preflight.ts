@@ -17,14 +17,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
-import type {
-  Bucket,
-  ComparisonResult,
-  PrHeroFindingRef,
-} from "#compare/compare";
-import type { GreptileFinding } from "#compare/greptile";
 import { isFullCommitId } from "#git/refs";
-import type { RunStatus } from "#review/findings";
 import {
   assertOutsideRepo,
   type CliOptions,
@@ -37,6 +30,14 @@ import {
   type SizeGateConfig,
   type SizeGateVerdict,
 } from "#review/size-gate";
+import {
+  isLegacyStatusContext,
+  isStatusContext,
+  LOCAL_STATUS_CONTEXT,
+  MARKER_OPEN,
+  matchMarkerPrefix,
+  STATUS_CONTEXT,
+} from "../brand";
 import { CliError, CliUsageError } from "../errors";
 
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
@@ -301,7 +302,7 @@ export interface PrDryRunSizeGateResult {
 //
 // Ported from watch/watch.ts's tier-2 pattern, not rewritten: the aggregate path
 // (`{files, insertions, deletions}`, no paths) cannot express exclusions at
-// all, so `.prheroignore` widens what was already a "wrong in the
+// all, so `.cryskignore` widens what was already a "wrong in the
 // conservative direction" gap (see the WHY this replaces at the call site)
 // from tens of lines (lockfiles) to potentially thousands (a whole ignored
 // directory) — a gate that SKIPs a PR the real per-file run happily accepts
@@ -321,7 +322,7 @@ export function resolvePrDryRunSizeGate(input: {
     return {
       verdict: evaluateSizeGate(input.perFile, input.gateConfig),
       note:
-        "(estimate from gh's per-file list; `.prheroignore` exclusions " +
+        "(estimate from gh's per-file list; `.cryskignore` exclusions " +
         "apply, but the count is still not whitespace-adjusted — GitHub's " +
         "counters carry no whitespace information)",
     };
@@ -412,7 +413,7 @@ export function decideWorktree(input: {
 // comment instead of updating. The trailing space in the prefix is
 // deliberate: both formats continue with a space (` -->` / ` head=`), while
 // a foreign lookalike marker such as `<!-- pr-hero-reporter -->` does not.
-export const PR_COMMENT_MARKER_PREFIX = "<!-- pr-hero-report ";
+export const PR_COMMENT_MARKER_PREFIX = `${MARKER_OPEN}report `;
 
 // The re-review closing comment (pr/pr.ts's postInlineFindings). A re-review
 // only PATCHes the summary, and GitHub neither notifies on an edit nor moves
@@ -420,7 +421,7 @@ export const PR_COMMENT_MARKER_PREFIX = "<!-- pr-hero-report ";
 // looking untouched. This marker tags the short comment that closes the run.
 // Its own `pr-hero-<noun>` namespace, so findMarkedCommentId's summary lookup
 // (prefix `pr-hero-report `) can never mistake it for the summary.
-export const PR_REREVIEW_CLOSED_MARKER_PREFIX = "<!-- pr-hero-rereview-closed ";
+export const PR_REREVIEW_CLOSED_MARKER_PREFIX = `${MARKER_OPEN}rereview-closed `;
 
 // Rereview-coverage fix (GitHub #42's re-review half, MusiveTech/musive
 // #1823): a PARTIAL run (some hunters or the refuter failed, but not all —
@@ -440,8 +441,8 @@ export const PR_COMMENT_COVERAGE_PARTIAL_TOKEN = "coverage=partial";
 // passes `false`.
 export function prCommentMarker(headSha: string, complete = true): string {
   return complete
-    ? `<!-- pr-hero-report head=${headSha} -->`
-    : `<!-- pr-hero-report head=${headSha} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`;
+    ? `${PR_COMMENT_MARKER_PREFIX}head=${headSha} -->`
+    : `${PR_COMMENT_MARKER_PREFIX}head=${headSha} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`;
 }
 
 // Finds the comment a --post run should update. A comment matches only when
@@ -466,7 +467,7 @@ export function findMarkedCommentId(
   let found: number | null = null;
   for (const comment of comments) {
     if (typeof comment?.body !== "string") continue;
-    if (!comment.body.startsWith(prefix)) continue;
+    if (matchMarkerPrefix(comment.body, prefix) === undefined) continue;
     found = comment.id;
   }
   return found;
@@ -507,7 +508,7 @@ export function findMarkedCommentId(
 // marker family for the other would either orphan the summary comment or
 // treat a per-finding comment as the summary. See the prefix-disjointness
 // test in test/pr/preflight.test.ts.
-export const PR_FINDING_MARKER_PREFIX = "<!-- pr-hero-finding ";
+export const PR_FINDING_MARKER_PREFIX = `${MARKER_OPEN}finding `;
 
 export interface FindingMarkerFields {
   path: string;
@@ -559,11 +560,12 @@ export interface ParsedFindingMarker {
 // not a fatal error, and the caller (the matcher) treats "unparseable" the
 // same as "no prior comment": it posts fresh rather than guess.
 export function parseFindingMarker(body: string): ParsedFindingMarker | null {
-  if (!body.startsWith(PR_FINDING_MARKER_PREFIX)) return null;
+  const prefix = matchMarkerPrefix(body, PR_FINDING_MARKER_PREFIX);
+  if (prefix === undefined) return null;
   const firstLine = body.split("\n", 1)[0] ?? "";
   if (!firstLine.endsWith(" -->")) return null;
   const fields = firstLine.slice(
-    PR_FINDING_MARKER_PREFIX.length,
+    prefix.length,
     firstLine.length - " -->".length,
   );
   const parts = new Map<string, string>();
@@ -597,159 +599,29 @@ export function parseFindingMarker(body: string): ParsedFindingMarker | null {
 }
 
 // ---------------------------------------------------------------------------
-// comparison.json — the machine-readable half of the head-to-head artifact.
-
-export interface ComparisonGreptileClaim {
-  index: number;
-  path: string;
-  start_line: number;
-  end_line: number;
-  title: string;
-  description: string;
-}
-
-export interface ComparisonPrHeroClaim {
-  id: string;
-  path: string;
-  line: number;
-  claim: string;
-  tier: string;
-}
-
-export interface ComparisonRow {
-  bucket: Bucket;
-  greptile: ComparisonGreptileClaim | null;
-  prhero: ComparisonPrHeroClaim | null;
-  // Always null here, and present ON PURPOSE — the A3 lesson: a verdict
-  // recorded without its reasoning cannot be re-examined when new evidence
-  // arrives. These two columns exist to be filled by the triage (6b/6c),
-  // and the ledger (B4) will accumulate them across PRs.
-  verdict: null;
-  reasoning: null;
-  // Who will eventually write verdict/reasoning — always null at build time
-  // for the same reason verdict/reasoning are: this row is fresh off a
-  // review, nobody has triaged it yet. `comparison.json` carries no
-  // `schema_version` (it is pr-hero's own artifact, not the findings schema
-  // shared with the lab — rule 5 does not apply), so this field costs no
-  // coordination (ROADMAP B6c, decided 2026-08-12).
-  actor: null;
-}
-
-export interface ComparisonJson {
-  pr: number;
-  head_sha: string;
-  diff_from_sha: string;
-  run_dir: string;
-  // ISO 8601, stamped by the I/O caller (this module owns no clock): the
-  // ledger (B4) orders a PR's runs by it so the LATEST run is the one that
-  // votes. Files written before this field existed are ordered by mtime.
-  generated_at: string;
-  // "complete" or "partial" — stamped so B4's ledger can weigh a comparison
-  // by how much of the engine actually ran. (A run where EVERY hunter died
-  // never reaches this file: the caller skips the comparison outright,
-  // because "pr-hero 0" from a review that never happened would be recorded
-  // as a measured miss.)
-  run_status: RunStatus;
-  // found: false is "Greptile left no comment", which must stay
-  // distinguishable from "Greptile commented and reported nothing" —
-  // renderComparison keeps them apart in prose, and the JSON must not
-  // collapse them either.
-  greptile: { found: boolean };
-  rows: ComparisonRow[];
-}
-
-// A mechanical projection of the SAME ComparisonResult renderComparison
-// consumes — never a second comparison pass, or the .md and the .json could
-// disagree about what matched. Row order mirrors the rendering: the measured
-// miss (greptile_only) leads.
-export function buildComparisonJson(input: {
-  pr: number;
-  headSha: string;
-  diffFromSha: string;
-  runDir: string;
-  generatedAt: string;
-  runStatus: RunStatus;
-  greptileFound: boolean;
-  result: ComparisonResult;
-}): ComparisonJson {
-  const rows: ComparisonRow[] = [];
-  for (const finding of input.result.greptileOnly) {
-    rows.push(row("greptile_only", greptileClaim(finding), null));
-  }
-  for (const pair of input.result.both) {
-    rows.push(
-      row("both", greptileClaim(pair.greptile), prheroClaim(pair.prhero)),
-    );
-  }
-  for (const finding of input.result.prheroOnly) {
-    rows.push(row("prhero_only", null, prheroClaim(finding)));
-  }
-  return {
-    pr: input.pr,
-    head_sha: input.headSha,
-    diff_from_sha: input.diffFromSha,
-    run_dir: input.runDir,
-    generated_at: input.generatedAt,
-    run_status: input.runStatus,
-    greptile: { found: input.greptileFound },
-    rows,
-  };
-}
-
-function row(
-  bucket: Bucket,
-  greptile: ComparisonGreptileClaim | null,
-  prhero: ComparisonPrHeroClaim | null,
-): ComparisonRow {
-  return {
-    bucket,
-    greptile,
-    prhero,
-    verdict: null,
-    reasoning: null,
-    actor: null,
-  };
-}
-
-function greptileClaim(finding: GreptileFinding): ComparisonGreptileClaim {
-  return {
-    index: finding.index,
-    path: finding.path,
-    start_line: finding.startLine,
-    end_line: finding.endLine,
-    title: finding.title,
-    description: finding.description,
-  };
-}
-
-function prheroClaim(finding: PrHeroFindingRef): ComparisonPrHeroClaim {
-  return {
-    id: finding.id,
-    path: finding.path,
-    line: finding.line,
-    claim: finding.claim,
-    tier: finding.tier,
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Commit status (in-flight signal on the PR head). GitHub Check Runs need a
 // GitHub App; this CLI posts as the operator via `gh`, so the write path is
 // the Commit Statuses API. Same yellow/green dot in the merge box, no
 // Conversation comment. context is stable so the CI admission gate can read
-// the latest `pr-hero` status back as the cross-machine in-flight lock.
+// the latest `crysk` status back as the cross-machine in-flight lock.
+//
+// Every status is published on this name AND, for one version, on the legacy
+// `pr-hero` one (postCommitStatus): users have `pr-hero` as a required check in
+// branch protection, and a head that stops getting it blocks forever. The
+// constants below name the new context; the readers here take a row on either
+// name as the same context (isStatusContext).
 
 // The gate. The required check reads this name, and only an explicit `--ci`
 // run writes it (T3 S7): the author's agent, a local run and the watcher can
 // never move the gate, so their statuses go to LOCAL_COMMIT_STATUS_CONTEXT.
-export const COMMIT_STATUS_CONTEXT = "pr-hero";
+export const COMMIT_STATUS_CONTEXT = STATUS_CONTEXT;
 
 // Every non-CI run posts here: a local `review --pr`, the watcher's child, and
 // CI=1 without --ci. Advisory states and descriptions only, so a local run
 // that finishes with blocking findings cannot overwrite a red gate on the same
 // head. A different context, not a different state set, is what keeps the gate
 // safe: the posting code is shared and only the context name differs.
-export const LOCAL_COMMIT_STATUS_CONTEXT = "pr-hero/local";
+export const LOCAL_COMMIT_STATUS_CONTEXT = LOCAL_STATUS_CONTEXT;
 
 export type CommitStatusContext =
   | typeof COMMIT_STATUS_CONTEXT
@@ -796,7 +668,7 @@ export const COMMIT_STATUS_DESCRIPTION_MAX = 140;
 
 export type CommitStatusState = "pending" | "success" | "failure" | "error";
 
-// S4. `gate` (the CI default): the pr-hero commit status, which is the
+// S4. `gate` (the CI default): the crysk commit status, which is the
 // required check, goes red on blocking findings, a size or budget skip, and a
 // crash. `advisory`: today's posture, a finished review is always green. Only
 // CI runs have a mode; a local run is always advisory (see resolveCiMode).
@@ -868,7 +740,7 @@ export function commitStatusRequest(input: {
 }): CommitStatusRequest {
   const description =
     input.phase === "pending"
-      ? "pr-hero reviewing"
+      ? `${STATUS_CONTEXT} reviewing`
       : input.phase === "error"
         ? "review did not finish"
         : input.posted
@@ -900,7 +772,7 @@ export function blockingCommitStatusRequest(input: {
     state: "failure",
     context: input.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
     description: clipStatusDescription(
-      `pr-hero: ${input.blockingCount} blocking finding(s) — fix and push, or /pr-hero override`,
+      `${STATUS_CONTEXT}: ${input.blockingCount} blocking finding(s) — fix and push, or /pr-hero override`,
     ),
     targetUrl: input.targetUrl,
   };
@@ -910,7 +782,7 @@ export function blockingCommitStatusRequest(input: {
 // read as a clean one. `/pr-hero review` force-runs the review past both
 // gates, which is the unlock the description names.
 // Gate-only, like blockingCommitStatusRequest: the context defaults to LOCAL, and
-// the one production caller (the admission gate's publishCiSkip) passes pr-hero.
+// the one production caller (the admission gate's publishCiSkip) passes the gate's context.
 export function skipCommitStatusRequest(input: {
   kind: "size" | "budget";
   targetUrl: string | undefined;
@@ -924,7 +796,7 @@ export function skipCommitStatusRequest(input: {
     state: "failure",
     context: input.context ?? LOCAL_COMMIT_STATUS_CONTEXT,
     description: clipStatusDescription(
-      `pr-hero skipped the review: ${reason}. /pr-hero review reviews it anyway`,
+      `${STATUS_CONTEXT} skipped the review: ${reason}. /pr-hero review reviews it anyway`,
     ),
     targetUrl: input.targetUrl,
   };
@@ -1017,7 +889,7 @@ export function partialReviewDescription(
   set?: string,
 ): string {
   return clipStatusDescription(
-    `pr-hero: review partial (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — /pr-hero review retries it`,
+    `${STATUS_CONTEXT}: review partial (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — /pr-hero review retries it`,
   );
 }
 
@@ -1029,7 +901,7 @@ export function partialReviewAgainDescription(
   set?: string,
 ): string {
   return clipStatusDescription(
-    `pr-hero: review partial again (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — fix the failing route or /pr-hero override`,
+    `${STATUS_CONTEXT}: review partial again (${failed} of ${total} hunters failed${partialCountsSuffix(set)}) — fix the failing route or /pr-hero override`,
   );
 }
 
@@ -1107,6 +979,11 @@ export function prHtmlUrl(
   return URL.canParse(url) ? url : undefined;
 }
 
+// The newest row of one context by created_at, across both of its names (crysk and the legacy
+// pr-hero): an override an older action posted only on `pr-hero` is the gate when it is newer
+// than this version's `crysk` verdict. A tie within one name goes to the later row in the list
+// (`>=`); a tie across the names goes to the crysk row, because the pair a run writes has one
+// content on both and the answer must not depend on the order of the list.
 export function latestStatusInContext(
   statuses: readonly CommitStatusFact[],
   context: CommitStatusContext,
@@ -1114,10 +991,15 @@ export function latestStatusInContext(
   let latest: CommitStatusFact | null = null;
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const status of statuses) {
-    if (status.context !== context) continue;
+    if (!isStatusContext(status.context, context)) continue;
     const createdMs = Date.parse(status.created_at);
     if (Number.isNaN(createdMs)) continue;
-    if (createdMs >= latestMs) {
+    const keepsLatest =
+      createdMs === latestMs &&
+      latest !== null &&
+      !isLegacyStatusContext(latest.context) &&
+      isLegacyStatusContext(status.context);
+    if (createdMs >= latestMs && !keepsLatest) {
       latest = status;
       latestMs = createdMs;
     }

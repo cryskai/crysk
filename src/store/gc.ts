@@ -38,6 +38,7 @@ import {
   repoHomePaths,
   worktreeLockPath,
 } from "../home-preflight";
+import { LEGACY_GC_LAUNCHD_LABEL, retireLegacyAgent } from "../legacy-launchd";
 import {
   decideGc,
   GC_LAUNCHD_LABEL,
@@ -328,7 +329,7 @@ async function gcInstall(intervalMin: number): Promise<number> {
   if (process.platform !== "darwin") {
     throw new CliError(
       "gc install renders a macOS launchd agent. On other systems run " +
-        "`pr-hero gc` from cron.",
+        "`crysk gc` from cron.",
     );
   }
   // selfInvocation(), not a hand-built runtime + src/cli.ts pair: the pair
@@ -358,6 +359,12 @@ async function gcInstall(intervalMin: number): Promise<number> {
         : "previous plist present but not loaded (fine, replacing it)",
     );
   }
+  await retireLegacyAgent({
+    home,
+    legacyLabel: LEGACY_GC_LAUNCHD_LABEL,
+    run,
+    log,
+  });
   await Bun.write(plistPath, plist);
   const loaded = await run(["launchctl", "load", "-w", plistPath]);
   if (!loaded.ok) {
@@ -379,6 +386,12 @@ async function gcUninstall(): Promise<number> {
     );
   }
   const plistPath = gcPlistPath(os.homedir());
+  await retireLegacyAgent({
+    home: os.homedir(),
+    legacyLabel: LEGACY_GC_LAUNCHD_LABEL,
+    run,
+    log,
+  });
   if (!existsSync(plistPath)) {
     log(`nothing installed (no ${plistPath})`);
     return 0;

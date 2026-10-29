@@ -1579,7 +1579,7 @@ const TIER_NOTE: Record<CorpusConfidence, string> = {
 
 export function renderCorpusArtifact(artifact: CorpusArtifact): string {
   const out: string[] = [];
-  out.push("# pr-hero — known-bad corpus candidates (beyond reverts)");
+  out.push("# crysk — known-bad corpus candidates (beyond reverts)");
   out.push("");
   out.push(`- repository: \`${artifact.repoSlug}\``);
   out.push(`- ref: \`${artifact.ref}\``);
@@ -1616,7 +1616,7 @@ export function renderCorpusArtifact(artifact: CorpusArtifact): string {
   out.push("");
   out.push(
     "> Tier order below is descending confidence and sits BELOW the revert " +
-      "tiers of `pr-hero reverts` — git's machine-written body linkage " +
+      "tiers of `crysk reverts` — git's machine-written body linkage " +
       "outranks everything inferred here. The revert candidates themselves " +
       "live in that command's artifact; this one widens the corpus beyond " +
       "reverts.",

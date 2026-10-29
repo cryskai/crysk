@@ -121,7 +121,10 @@ import {
   recordDiversityHunterResult,
 } from "../diversity/pipeline-integration";
 import { writeJsonAtomically } from "../execution/atomic-write";
-import type { TransportFailureCause } from "../execution/contracts";
+import type {
+  FailureCredential,
+  TransportFailureCause,
+} from "../execution/contracts";
 // One predicate, owned beside the appends it recognizes. Already in this
 // module's graph through step-runner's value import of the harness, so it
 // adds no weight (the atomic-write WHY above is about a NEW dependency).
@@ -533,6 +536,10 @@ export interface PerAgentUsage {
   cost_usd_est: number;
   attempts: number;
   status: string;
+  // Why a failed step failed, in the provider's own words: the transport's one-line
+  // explanation, redacted and capped (failureDetailOf). Absent on a step that finished and on
+  // a failure the transport did not explain. The incomplete-review notice quotes it.
+  detail?: string;
 }
 
 export interface PipelineResult {
@@ -2532,6 +2539,7 @@ async function runRefuter(
         cost_usd_est: usage.cost_usd_est,
         attempts,
         status: anyFailed ? "failed" : "ok",
+        ...(anyFailed ? firstFailureDetail(settled) : {}),
       }
     : failedAgentEntry();
   if (anyFailed) state.partial = true;
@@ -2713,6 +2721,7 @@ async function runVerify(
         cost_usd_est: usage.cost_usd_est,
         attempts,
         status: anyFailed ? "failed" : "ok",
+        ...(anyFailed ? firstFailureDetail(settled) : {}),
       }
     : failedAgentEntry();
   if (anyFailed) state.partial = true;
@@ -2868,6 +2877,7 @@ async function runAdjudicate(
         cost_usd_est: usage.cost_usd_est,
         attempts,
         status: anyFailed ? "failed" : "ok",
+        ...(anyFailed ? firstFailureDetail(settled) : {}),
       }
     : failedAgentEntry();
   if (anyFailed) state.partial = true;
@@ -3525,6 +3535,17 @@ export interface HunterFailure {
   readonly cause?: TransportFailureCause;
   readonly provider?: string;
   readonly model?: string;
+  // The transport's one-line explanation, redacted and capped (see failureDetailOf).
+  readonly detail?: string;
+  // The secret the hunter ran on, when its transport named one.
+  readonly credential?: FailureCredential;
+}
+
+// The step's failureDetail as the CLI record may carry it. It is provider text, so it
+// goes through the same redaction as every other copy of a step's stderr, and the cap
+// is the stepFailureReason one, so a detail never outgrows what the record accepts.
+function failureDetailOf(raw: string | undefined): string | undefined {
+  return raw === undefined ? undefined : stepFailureReason(raw);
 }
 
 function hunterFailureOf(
@@ -3534,11 +3555,16 @@ function hunterFailureOf(
   const cause = result?.failureCause;
   const provider = spec.route?.provider.trim();
   const model = spec.route?.modelSnapshot.trim();
+  const detail = failureDetailOf(result?.failureDetail);
   return {
     name: spec.name,
     ...(cause === undefined ? {} : { cause }),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
+    ...(detail === undefined ? {} : { detail }),
+    ...(result?.failureCredential === undefined
+      ? {}
+      : { credential: result.failureCredential }),
   };
 }
 
@@ -3765,7 +3791,29 @@ function perAgentEntry(result: StepResult): PerAgentUsage {
     cost_usd_est: result.usage.cost_usd_est,
     attempts: result.attempts,
     status: result.status,
+    ...detailField(result.status === "ok" ? undefined : result),
   };
+}
+
+// The detail of the first failed step among a fan-out's settled results (the refuter, the
+// verifier and the adjudicator run one step per finding but keep one row).
+function firstFailureDetail(
+  settled: readonly PromiseSettledResult<StepResult>[],
+): { detail: string } | Record<string, never> {
+  for (const outcome of settled) {
+    if (outcome.status !== "fulfilled" || outcome.value.status === "ok")
+      continue;
+    const found = detailField(outcome.value);
+    if ("detail" in found) return found;
+  }
+  return {};
+}
+
+function detailField(
+  result: StepResult | undefined,
+): { detail: string } | Record<string, never> {
+  const detail = failureDetailOf(result?.failureDetail);
+  return detail === undefined ? {} : { detail };
 }
 
 function failedAgentEntry(): PerAgentUsage {

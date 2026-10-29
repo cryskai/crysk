@@ -36,10 +36,10 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.bin["pr-hero"]).toBeDefined();
     expect(pkg.files).toBeDefined();
     expect(pkg.files).toContain("prompts");
-    expect(pkg.files).toContain("skills/pr-hero-triage");
-    expect(pkg.files).toContain("skills/pr-hero-ci-setup");
-    expect(pkg.files).toContain("skills/pr-hero-pr");
-    expect(pkg.files).toContain("skills/pr-hero");
+    expect(pkg.files).toContain("skills/crysk-loop");
+    expect(pkg.files).toContain("skills/crysk-ci-setup");
+    expect(pkg.files).toContain("skills/crysk-pr");
+    expect(pkg.files).toContain("skills/crysk");
     expect(pkg.files).toContain("dist");
     expect(pkg.files).not.toContain("docs");
     expect(pkg.files).not.toContain("scripts");
@@ -48,6 +48,18 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.files).not.toContain("openspec");
     expect(pkg.files).not.toContain("skills/martian-bench");
     expect(pkg.scripts.build).toBeDefined();
+  });
+
+  // The rename ships `crysk` as the command and keeps `pr-hero` answering for
+  // one version. Both must be the SAME file: a second launcher would be a
+  // second place for the Bun-discovery logic to drift.
+  test("package.json exposes crysk and pr-hero as one launcher file", () => {
+    const pkg = JSON.parse(
+      readFileSync(path.join(rootDir, "package.json"), "utf-8"),
+    );
+    expect(pkg.bin.crysk).toBe("./bin/pr-hero.js");
+    expect(pkg.bin["pr-hero"]).toBe(pkg.bin.crysk);
+    expect(Object.keys(pkg.bin).sort()).toEqual(["crysk", "pr-hero"]);
   });
 
   // release.yml only compares the tag against package.json, so this is what
@@ -143,7 +155,9 @@ describe("Packaging & distribution configuration", () => {
     expect(content).toContain("darwin");
     expect(content).toContain("linux");
     expect(content).toContain("SHA256SUMS");
-    expect(content).toContain(".prhero/bin");
+    expect(content).toContain(".crysk");
+    expect(content).toContain(".prhero");
+    expect(content).toContain("HOME_NAME");
   });
 
   test("release workflow exists and defines matrix and artifacts", () => {
@@ -227,7 +241,7 @@ describe("Packaging & distribution configuration", () => {
     // a regex rather than a literal because the workflow's `${{ ... }}` reads
     // to a linter as a template placeholder in the wrong kind of quotes.
     expect(release).toMatch(
-      /bun run scripts\/compiled-smoke\.ts \.\/pr-hero-\$\{\{ matrix\.target \}\}/,
+      /bun run scripts\/compiled-smoke\.ts \.\/crysk-\$\{\{ matrix\.target \}\}/,
     );
 
     // Ordering is load-bearing, not cosmetic. A binary that cannot resolve its
@@ -298,6 +312,65 @@ describe("Packaging & distribution configuration", () => {
         ok: wantsArm === runnerIsArm,
       }).toEqual({ target: leg.target, os: leg.os, ok: true });
     }
+  });
+
+  // Dual-named assets for one version: an installed pr-hero running
+  // `pr-hero upgrade` downloads `pr-hero-<target>`, a new one downloads
+  // `crysk-<target>`. Both must exist on the release, be byte-identical (the
+  // second is a copy of the SMOKED binary, never a rebuild), and be listed in
+  // the one SHA256SUMS both updaters parse.
+  test("release builds crysk-<target> and a pr-hero-<target> copy, uploads and checksums both", () => {
+    const release = Bun.YAML.parse(
+      readFileSync(path.join(rootDir, ".github", "workflows", "release.yml"), {
+        encoding: "utf-8",
+      }),
+    ) as {
+      jobs: Record<string, { steps: Record<string, unknown>[] }>;
+    };
+    const build = release.jobs["build-binaries"]?.steps ?? [];
+    const publish = release.jobs["publish-release"]?.steps ?? [];
+    // The Actions expression, assembled so the literal `${{` does not read to
+    // the linter as a template placeholder in the wrong kind of quotes.
+    const expr = ["$", "{{ matrix.target }}"].join("");
+    const named = (steps: Record<string, unknown>[], needle: string) =>
+      steps.find((s) => String(s.name ?? "").includes(needle));
+
+    const compile = String(named(build, "Compile standalone")?.run ?? "");
+    expect(compile).toContain(`--outfile crysk-${expr}`);
+    // One bun build only: the legacy name is a copy, not a second compile.
+    expect(compile.match(/bun build --compile/g)?.length).toBe(1);
+
+    const buildNames = build.map((s) => String(s.name ?? ""));
+    const copy = named(build, "legacy");
+    expect(String(copy?.run ?? "")).toMatch(
+      /cp crysk-\$\{\{ matrix\.target \}\} pr-hero-\$\{\{ matrix\.target \}\}/,
+    );
+    // The copy is taken from the binary that was smoked, and before upload.
+    expect(buildNames.indexOf(String(copy?.name))).toBeGreaterThan(
+      buildNames.findIndex((n) => n.includes("Compiled-binary smoke")),
+    );
+    expect(buildNames.indexOf(String(copy?.name))).toBeLessThan(
+      buildNames.findIndex((n) => n.includes("Upload binary artifact")),
+    );
+
+    const uploadPath = String(
+      (named(build, "Upload binary artifact")?.with as { path?: string })?.path,
+    );
+    expect(uploadPath).toContain(`crysk-${expr}`);
+    expect(uploadPath).toContain(`pr-hero-${expr}`);
+
+    const sums = String(named(publish, "Generate SHA256SUMS")?.run ?? "");
+    expect(sums).toContain("crysk-*");
+    expect(sums).toContain("pr-hero-*");
+    expect(sums).toContain("> SHA256SUMS");
+
+    const files = String(
+      (named(publish, "Create GitHub Release")?.with as { files?: string })
+        ?.files,
+    );
+    expect(files).toContain("release-binaries/crysk-*");
+    expect(files).toContain("release-binaries/pr-hero-*");
+    expect(files).toContain("release-binaries/SHA256SUMS");
   });
 
   // The other half of "nothing ships". The smoke stops a BROKEN binary from
@@ -503,7 +576,7 @@ describe("Packaging & distribution configuration", () => {
     test("run step invokes bin/pr-hero.js — the entrypoint verified to actually run", () => {
       const action = parsedAction();
       const runStep = action.runs.steps.find(
-        (step) => step.id === "run-pr-hero",
+        (step) => step.id === "run-crysk",
       ) as { run?: string } | undefined;
       expect(runStep?.run).toContain("bin/pr-hero.js");
     });
@@ -511,7 +584,7 @@ describe("Packaging & distribution configuration", () => {
     test("passes --ci unconditionally (--budget-usd/--step-summary require it at parse time)", () => {
       const action = parsedAction();
       const runStep = action.runs.steps.find(
-        (step) => step.id === "run-pr-hero",
+        (step) => step.id === "run-crysk",
       ) as { run?: string } | undefined;
       expect(runStep?.run).toContain("--ci");
       expect(runStep?.run).toContain("--yes");
@@ -667,7 +740,7 @@ describe("Packaging & distribution configuration", () => {
           };
         }
 
-        const runStep = steps().find((step) => step.id === "run-pr-hero");
+        const runStep = steps().find((step) => step.id === "run-crysk");
         const env = resolveEnv(runStep?.env ?? {}, {
           inputs,
           github,
@@ -870,9 +943,9 @@ describe("Packaging & distribution configuration", () => {
     // ---------------------------------------------------------------------
 
     test("the outcome directory is bound the same way in the trigger, run and publish steps", () => {
-      for (const id of ["trigger", "run-pr-hero", "publish"]) {
+      for (const id of ["trigger", "run-crysk", "publish"]) {
         const step = steps().find((candidate) => candidate.id === id);
-        expect(step?.env?.PRHERO_OUTCOME_DIR, id).toBe(
+        expect(step?.env?.CRYSK_OUTCOME_DIR, id).toBe(
           `\${{ runner.temp }}/pr-hero-outcome`,
         );
       }
@@ -880,17 +953,17 @@ describe("Packaging & distribution configuration", () => {
 
     test("the materialize step binds the outcome directory, so a malformed input can leave setup.json there", () => {
       const step = steps().find((candidate) => candidate.id === "materialize");
-      expect(step?.env?.PRHERO_OUTCOME_DIR).toBe(
+      expect(step?.env?.CRYSK_OUTCOME_DIR).toBe(
         `\${{ runner.temp }}/pr-hero-outcome`,
       );
     });
 
     test("the publish step skips a cancelled job, still runs after a failed one, and is publish-gated", () => {
       const all = steps();
-      const run = all.findIndex((step) => step.id === "run-pr-hero");
+      const run = all.findIndex((step) => step.id === "run-crysk");
       const publish = all.findIndex((step) => step.id === "publish");
       const upload = all.findIndex(
-        (step) => step.name === "Upload pr-hero run directory",
+        (step) => step.name === "Upload Crysk run directory",
       );
       expect(publish).toBe(run + 1);
       // The cancel settle (SB3) sits between publish and the upload, right after publish.
@@ -920,7 +993,7 @@ describe("Packaging & distribution configuration", () => {
       );
       expect(step?.run).toContain("src/ci/publish.ts");
       const env = step?.env as Record<string, string> | undefined;
-      expect(env?.PRHERO_PUBLISH_MODE).toBe("cancelled");
+      expect(env?.CRYSK_PUBLISH_MODE).toBe("cancelled");
       const publishEnv = (all[publish]?.env ?? {}) as Record<string, string>;
       // Every value it reads is bound as the publish step binds it. It reads no
       // run attempt: its lock is the outcome directory the trigger cleared.
@@ -960,12 +1033,12 @@ describe("Packaging & distribution configuration", () => {
     });
 
     test("the run step writes cli-started as its first command, before anything can fail", () => {
-      const run = steps().find((step) => step.id === "run-pr-hero");
+      const run = steps().find((step) => step.id === "run-crysk");
       const firstCommand = String(run?.run ?? "")
         .split("\n")
         .map((line) => line.trim())
         .find((line) => line !== "" && !line.startsWith("#"));
-      expect(firstCommand).toBe(': > "$PRHERO_OUTCOME_DIR/cli-started"');
+      expect(firstCommand).toBe(': > "$CRYSK_OUTCOME_DIR/cli-started"');
     });
 
     test("the trigger learns only whether the routing names OpenCode, never the routing text", () => {
@@ -1010,7 +1083,7 @@ describe("Packaging & distribution configuration", () => {
     });
 
     test("the run step's last command is the CLI itself, so the job's result is the CLI's", () => {
-      const run = steps().find((step) => step.id === "run-pr-hero");
+      const run = steps().find((step) => step.id === "run-crysk");
       const lastCommand = String(run?.run ?? "")
         .split("\n")
         .map((line) => line.trim())
@@ -1113,7 +1186,7 @@ describe("Packaging & distribution configuration", () => {
       // to the step's `env:` mapping, where binding them is exactly right).
       const action = parsedAction();
       const runStep = action.runs.steps.find(
-        (step) => step.id === "run-pr-hero",
+        (step) => step.id === "run-crysk",
       ) as { run?: string } | undefined;
       const script = runStep?.run ?? "";
       const interpolations = script.match(/\$\{\{[^}]*\}\}/g) ?? [];
@@ -1124,7 +1197,7 @@ describe("Packaging & distribution configuration", () => {
     });
 
     // Threat matrix RED (4): every composite `run:` body, not just
-    // run-pr-hero. env: may bind inputs; the script text may not.
+    // run-crysk. env: may bind inputs; the script text may not.
     test("every step run: interpolation is github.action_path only", () => {
       const action = parsedAction();
       let seen = 0;
@@ -1141,17 +1214,17 @@ describe("Packaging & distribution configuration", () => {
 
     // Threat matrix RED (7): pin is its own step so GITHUB_PATH applies to
     // later steps. Never `latest`. Install `if` may read inputs, not secrets.
-    test("OpenCode CLI install is not run-pr-hero, pins 1.18.30, and gates on inputs", () => {
+    test("OpenCode CLI install is not run-crysk, pins 1.18.30, and gates on inputs", () => {
       const action = parsedAction();
       const install = action.runs.steps.find((step) =>
         String(step.run ?? "").includes("opencode.ai/install"),
       ) as
         | { id?: string; name?: string; if?: string; run?: string }
         | undefined;
-      const run = action.runs.steps.find((step) => step.id === "run-pr-hero");
+      const run = action.runs.steps.find((step) => step.id === "run-crysk");
       expect(install).toBeDefined();
       expect(install).not.toBe(run);
-      expect(install?.id).not.toBe("run-pr-hero");
+      expect(install?.id).not.toBe("run-crysk");
       expect(String(install?.if)).toContain("inputs.");
       expect(String(install?.if)).not.toContain("secrets.");
       expect(install?.run).toContain("--version 1.18.30");
@@ -1174,8 +1247,8 @@ describe("Packaging & distribution configuration", () => {
     //
     // `pr-hero triage reply --from <run-dir>` is the ONLY supported way to
     // answer a posted finding, and it hard-fails without a run directory on
-    // disk (runTriageCommand needs comparison.json; the reply path needs
-    // findings.json to map F00N onto the posted marker). In CI that directory
+    // disk (the reply path needs findings.json to map F00N onto the posted
+    // marker). In CI that directory
     // is `~/.prhero/.../runs/pr-<n>-<sha>-1` on an EPHEMERAL runner — it dies
     // with the job. Uploading it is what keeps the triage half of the loop
     // reachable once reviews move to Actions.
@@ -1197,10 +1270,10 @@ describe("Packaging & distribution configuration", () => {
       // `run_dir` is the key the CLI writes to $GITHUB_OUTPUT
       // (formatCiOutputs); `run-dir` would read as empty and skip forever.
       expect(upload?.with?.path).toBe(
-        `\${{ steps.run-pr-hero.outputs.run_dir }}`,
+        `\${{ steps.run-crysk.outputs.run_dir }}`,
       );
       expect(parsedAction().outputs["run-dir"].value).toBe(
-        `\${{ steps.run-pr-hero.outputs.run_dir }}`,
+        `\${{ steps.run-crysk.outputs.run_dir }}`,
       );
     });
 
@@ -1213,7 +1286,7 @@ describe("Packaging & distribution configuration", () => {
       const condition = String(uploadStep()?.if);
       expect(condition).toContain("always()");
       expect(condition).toContain("steps.trigger.outputs.run == 'true'");
-      expect(condition).toContain("steps.run-pr-hero.outputs.run_dir != ''");
+      expect(condition).toContain("steps.run-crysk.outputs.run_dir != ''");
     });
 
     test("a review that wrote no run directory never turns the job red", () => {
@@ -1230,7 +1303,7 @@ describe("Packaging & distribution configuration", () => {
       // event that reviews.
       const name = String(uploadStep()?.with?.name);
       expect(name).toBe(
-        `pr-hero-run-\${{ steps.trigger.outputs.pr }}-\${{ steps.trigger.outputs.head_sha }}`,
+        `crysk-run-\${{ steps.trigger.outputs.pr }}-\${{ steps.trigger.outputs.head_sha }}`,
       );
     });
 
@@ -1297,7 +1370,7 @@ describe("Packaging & distribution configuration", () => {
         path.join(
           rootDir,
           "skills",
-          "pr-hero-ci-setup",
+          "crysk-ci-setup",
           "assets",
           "workflow-force.yml",
         ),
@@ -1305,11 +1378,11 @@ describe("Packaging & distribution configuration", () => {
     ).toBe(false);
   });
 
-  test("skills/pr-hero-ci-setup/assets/workflow.yml never drifts from generateCiWorkflowTemplate()", () => {
+  test("skills/crysk-ci-setup/assets/workflow.yml never drifts from generateCiWorkflowTemplate()", () => {
     const assetPath = path.join(
       rootDir,
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "assets",
       "workflow.yml",
     );
@@ -1322,13 +1395,13 @@ describe("Packaging & distribution configuration", () => {
     const skillPath = path.join(
       rootDir,
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "SKILL.md",
     );
     const refPath = path.join(
       rootDir,
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "references",
       "opencode-ci.md",
     );
@@ -1337,17 +1410,17 @@ describe("Packaging & distribution configuration", () => {
     const skill = readFileSync(skillPath, "utf-8");
     expect(skill).toContain("references/opencode-ci.md");
     expect(skill).toContain("OPENCODE_AUTH_JSON");
-    expect(skill).toContain("PRHERO_ROUTING");
+    expect(skill).toContain("CRYSK_ROUTING");
     const ref = readFileSync(refPath, "utf-8");
     expect(ref).toContain("modelSnapshot");
     expect(ref).toContain("Do **not** create `OPENAI_API_KEY`");
   });
 
-  test(".agents/skills/pr-hero-ci-setup/assets/workflow.yml matches the skills workflow asset", () => {
+  test(".agents/skills/crysk-ci-setup/assets/workflow.yml matches the skills workflow asset", () => {
     const skillsPath = path.join(
       rootDir,
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "assets",
       "workflow.yml",
     );
@@ -1355,7 +1428,7 @@ describe("Packaging & distribution configuration", () => {
       rootDir,
       ".agents",
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "assets",
       "workflow.yml",
     );
@@ -1373,15 +1446,13 @@ describe("Packaging & distribution configuration", () => {
   // the checked-out tree, which is also the only form that actually tests the
   // action being changed in the PR that changes it.
   test("the default action ref targets the published tag for consumer repos", () => {
-    expect(generateCiWorkflowTemplate()).toContain(
-      "uses: juanmaagd/pr-hero@v0",
-    );
+    expect(generateCiWorkflowTemplate()).toContain("uses: cryskai/crysk@v0");
   });
 
   test("this repo's own workflow runs the local action, not an unpublished tag", () => {
     const own = generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
     expect(own).toContain("uses: ./");
-    expect(own).not.toContain("juanmaagd/pr-hero@v0");
+    expect(own).not.toContain("cryskai/crysk@v0");
   });
 
   // The byte-equality drift tests above already fail if these lines change, but
@@ -1435,15 +1506,16 @@ describe("Packaging & distribution configuration", () => {
   });
 });
 
-// `/pr-hero recheck` reaches the CI adjudicator through action.yml's review args
-// and the three workflow copies, which must all accept the command.
-describe("/pr-hero recheck wiring", () => {
+// `/crysk recheck` reaches the CI adjudicator through action.yml's review args
+// and the workflow copies, which must all accept the command (and its legacy
+// `/pr-hero` spelling).
+describe("/crysk recheck wiring", () => {
   const rootDir = path.resolve(__dirname, "..");
-  const recheckClause =
-    "startsWith(github.event.comment.body, '/pr-hero recheck')";
+  const clause = (command: string) =>
+    `startsWith(github.event.comment.body, '${command}')`;
   const copies = [
     ".github/workflows/pr-hero.yml",
-    "skills/pr-hero-ci-setup/assets/workflow.yml",
+    "skills/crysk-ci-setup/assets/workflow.yml",
   ];
 
   test("action.yml passes TRIGGER_ADJUDICATE as --adjudicate", () => {
@@ -1457,18 +1529,20 @@ describe("/pr-hero recheck wiring", () => {
   });
 
   test.each(copies)(
-    "%s accepts the recheck command in if and concurrency",
+    "%s accepts the recheck command in if and concurrency, in both names",
     (file) => {
       const content = readFileSync(path.join(rootDir, file), "utf-8");
-      const review =
-        content.split(
-          "startsWith(github.event.comment.body, '/pr-hero review')",
-        ).length - 1;
-      expect(review).toBeGreaterThan(0);
-      expect(content.split(recheckClause).length - 1).toBe(review);
+      for (const [review, recheck] of [
+        ["/crysk review", "/crysk recheck"],
+        ["/pr-hero review", "/pr-hero recheck"],
+      ] as const) {
+        const reviewCount = content.split(clause(review)).length - 1;
+        expect(reviewCount).toBeGreaterThan(0);
+        expect(content.split(clause(recheck)).length - 1).toBe(reviewCount);
+      }
       if (file.startsWith(".github")) {
         expect(content).toContain(
-          "/pr-hero review, /pr-hero recheck or /pr-hero override",
+          "/crysk review, /crysk recheck or /crysk override",
         );
       }
     },

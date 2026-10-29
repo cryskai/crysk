@@ -172,7 +172,7 @@ describe("isNpxCacheInvocation", () => {
   });
 
   test("the refusal message names the fix", () => {
-    expect(NPX_REGISTRATION_REFUSED).toContain("npm i -g pr-hero");
+    expect(NPX_REGISTRATION_REFUSED).toContain("npm i -g crysk");
   });
 });
 

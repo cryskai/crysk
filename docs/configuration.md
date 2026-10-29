@@ -1,7 +1,7 @@
 # Configuration, Routing and Credentials
 
 An operator guide: where config lives, how to route a model to a backend and provider, which
-credentials pr-hero reads and from where, and how to check all of it without spending money.
+credentials Crysk reads and from where, and how to check all of it without spending money.
 For the architecture and the reasoning behind these rules, see
 [`docs/multi-runtime-model-diversity-design.md`](multi-runtime-model-diversity-design.md). For the
 day-to-day config keys and the two-layer merge rule, see the README's
@@ -10,27 +10,38 @@ covers the two things that section does not: `routing` and credentials.
 
 ## Quick path
 
-1. `pr-hero config` — every key's effective value and which layer it came from. Read-only, $0.
-2. `pr-hero doctor` — probes the *real* binding: binary, credential, isolation, billing mode. Read-only, $0.
-3. `pr-hero review --dry-run` — resolves the plan and prints the cost band without spawning anything. $0.
+1. `crysk config` — every key's effective value and which layer it came from. Read-only, $0.
+2. `crysk doctor` — probes the *real* binding: binary, credential, isolation, billing mode. Read-only, $0.
+3. `crysk review --dry-run` — resolves the plan and prints the cost band without spawning anything. $0.
 
 ## Where a key belongs, and the two traps
 
 | Layer | File | Holds |
 | --- | --- | --- |
-| Global / per-person | `~/.prhero/config.json` | `routing`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
-| Repo | `<repo>/.prhero/config.json` | `agents_dir`, `default_base`, `parity_trigger_paths`, `suspicion_priors`, gotchas |
+| Global / per-person | `~/.crysk/config.json` (or `~/.prhero/config.json`, see below) | `routing`, personal caps (`max_verification_steps`, `max_concurrent_steps`, `max_changed_lines`, `max_changed_files`) |
+| Repo | `<repo>/.crysk/config.json` | `agents_dir`, `default_base`, `parity_trigger_paths`, `suspicion_priors`, gotchas |
 
-`max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate, scout and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and pr-hero can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
+`max_concurrent_steps` caps how many steps (hunter, refuter, verify, adjudicate, scout and summarizer attempts) are in flight at once. It is a `capped` key, so the lowest layer wins, and unset means unlimited: no admission gate is built and the run behaves exactly as before. Set it below your provider's concurrency limit: a provider that allows 10 in-flight requests (OpenCode's `aiand` does) returns HTTP 429 when more are sent at once, and Crysk can lose refuters to that error, so a cap such as `8` keeps the fan-out inside the limit.
+
+**Old directory names.** The directories used to be `~/.prhero/` and `<repo>/.prhero/`, and the ignore file
+`.prheroignore`. Those are still read, for one version, when the new name does not exist. Nothing is moved for
+you: `crysk doctor` prints the full procedure for your machine. For the home that is the `mv ~/.prhero ~/.crysk`
+plus whatever still points at the old path (the `.prhero/bin` PATH line, the launchd agents, the MCP registration),
+and for a repo `git mv .prhero .crysk` (plain `mv` plus a `.gitignore` edit if the directory is not tracked) and
+`git mv .prheroignore .cryskignore`. A new-named directory only wins while it holds Crysk's own files
+(`~/.crysk` needs a `config.json`, `prhero.db`, `repos/` and the like; `<repo>/.crysk` needs `config.json` or
+`gotchas.md`), so an empty `~/.crysk` never hides a `~/.prhero` in use. Do not create `~/.crysk` by hand while
+`~/.prhero` is in use. When both hold files, the `.crysk` one wins and the old one is ignored.
 
 `routing` is a **person-layer-only** key. Put it in a repo file and the parser refuses it by name:
 
 ```
-.prhero/config.json: routing is a per-person key — put it in ~/.prhero/config.json
+.crysk/config.json: routing is a per-person key — put it in your person config (~/.crysk/config.json, or ~/.prhero/config.json on an install set up before the rename; do not create ~/.crysk while ~/.prhero is in use)
 ```
 
-The reverse also throws (a repo-only key in the global file gets ` is a per-repo key — put it in
-<repo>/.prhero/config.json`). Run `pr-hero config` to see, per key, which of the two files actually
+The reverse also throws (a repo-only key in the global file gets ` is a per-repo key — put it in the
+repo config (<repo>/.crysk/config.json, or <repo>/.prhero/config.json in a repo set up before the
+rename)`). Run `crysk config` to see, per key, which of the two files actually
 spoke.
 
 **`--config <file>` replaces the repo layer only.** There is no flag that repoints the global one —
@@ -39,14 +50,15 @@ same per-person rejection above, because `--config` still parses as a repo-layer
 
 ## CI: routing is a GitHub Actions variable, not an environment variable
 
-Nothing in the engine reads a `PRHERO_ROUTING` environment variable directly. `PRHERO_ROUTING` is the
+Nothing in the engine reads a `CRYSK_ROUTING` environment variable directly. `CRYSK_ROUTING` is the
 *repository variable name* the scaffolded workflow uses to fill the action's `routing:` input
-(`vars.PRHERO_ROUTING`). The action passes that input to its setup step as the `ROUTING_INPUT`
-environment variable, which then gets parsed and written to `$HOME/.prhero/config.json` on the
-runner — the same global layer described above, never the repo file. Full wiring (secrets, the
+(`vars.CRYSK_ROUTING`; a workflow scaffolded before the rename reads `vars.PRHERO_ROUTING` instead, and the
+current one falls back to it when `CRYSK_ROUTING` is unset). The action passes that input to its setup step as the `ROUTING_INPUT`
+environment variable, which then gets parsed and written to `$HOME/.crysk/config.json` on the
+runner (a fresh runner has no `~/.prhero`) — the same global layer described above, never the repo file. Full wiring (secrets, the
 `opencode-auth` input, pinned OpenCode CLI version, budget ceilings) is in
 [`docs/github-actions.md`](github-actions.md#opencode-in-ci); scaffolding it is
-[`skills/pr-hero-ci-setup/SKILL.md`](../skills/pr-hero-ci-setup/SKILL.md).
+[`skills/crysk-ci-setup/SKILL.md`](../skills/crysk-ci-setup/SKILL.md).
 
 ## Routing
 
@@ -104,20 +116,20 @@ supplying a full provider/model identity (slash grammar, e.g. `openai/gpt-5`) ne
 but that also means there is no catalog to catch a typo: the bundled model catalog
 (`config/models/anthropic.json`) only holds Anthropic aliases, so an OpenAI (or any other
 non-Anthropic) model must be spelled out in full, and a wrong id fails at the provider, not at
-pr-hero. Routing an alias to a non-direct backend without `modelSnapshot` fails loud instead:
+Crysk. Routing an alias to a non-direct backend without `modelSnapshot` fails loud instead:
 
 ```
 Model alias "sonnet" is routed to backend "opencode" over the "configured" gateway by the routing
 mapping, which supplies no "modelSnapshot". Only the Claude CLI reached over the "direct" gateway
 resolves a bare alias; every other gateway forwards the model identity verbatim to an endpoint that
-never registered pr-hero's aliases, so this route has no provider model id to send. Add an explicit
+never registered Crysk's aliases, so this route has no provider model id to send. Add an explicit
 "modelSnapshot" naming the provider's model id to that routing mapping, or set its "gateway" to
 "direct" if the Claude CLI really is resolving this alias.
 ```
 
 ### A working example
 
-Written to `~/.prhero/config.json` and validated against the engine's own parser and resolver
+Written to `~/.crysk/config.json` (or `~/.prhero/config.json` on an install from before the rename) and validated against the engine's own parser and resolver
 (`parseRoutingConfig` + `resolveModelRoute`, offline, $0):
 
 ```json
@@ -143,7 +155,7 @@ admission — see [Credentials](#credentials) below.
 
 ## Effort
 
-How hard a model works is set per step with the Claude CLI's `--effort` control, and **pr-hero owns it**:
+How hard a model works is set per step with the Claude CLI's `--effort` control, and **Crysk owns it**:
 every Claude Code step is spawned with an explicit `--effort <level>`, never the CLI's implicit default.
 That default is `high`, except on Sonnet 5.5 and Opus 5.5, where it is `medium`, so leaving it implicit
 meant a model alias moving to a new release could silently change how deeply a step explores.
@@ -191,7 +203,7 @@ in `pipeline.json`.
 
 ## Credentials
 
-**pr-hero never stores a credential.** It reads them from wherever they already live and projects
+**Crysk never stores a credential.** It reads them from wherever they already live and projects
 a minimal, ephemeral copy into the child process's isolated environment. Four credential kinds
 exist today:
 
@@ -236,12 +248,12 @@ this writing.
 
 ## Verifying at $0
 
-### `pr-hero config`
+### `crysk config`
 
 ```
-$ pr-hero config
-  repo   <repo>/.prhero/config.json (absent)
-  global ~/.prhero/config.json (present)
+$ crysk config
+  repo   <repo>/.crysk/config.json (absent)
+  global ~/.crysk/config.json (present)
 
   agents_dir                default (unset)
   routing                   default (unset)
@@ -256,13 +268,13 @@ $ pr-hero config
   run time.
 ```
 
-### `pr-hero doctor`
+### `crysk doctor`
 
 The exact-binding probe: which binary, which credential kind, whether its projection is ready, and
 what isolation actually holds — not a generic "is claude installed" check.
 
 ```
-$ pr-hero doctor
+$ crysk doctor
   [✓] claude: Claude Code CLI is installed and authenticated (2.1.281 (Claude Code))
   [!] provider:codegraph_policy_unenforced: no dedicated codegraph sensitive-file policy is
       enforced yet; isolation relies on --strict-mcp-config with a codegraph-only mcp.json
@@ -270,9 +282,9 @@ $ pr-hero doctor
 Environment is operational, but some optional tools or configurations are degraded.
 ```
 
-### `pr-hero review --dry-run` — two caveats
+### `crysk review --dry-run` — two caveats
 
-- **In PR mode it returns before route admission.** `pr-hero review --pr <n> --dry-run` prints the
+- **In PR mode it returns before route admission.** `crysk review --pr <n> --dry-run` prints the
   plan and the cost band from the diff and the config alone, before any credential is projected or
   route bound, so a plan that would die immediately at admission (a missing `modelSnapshot`, a
   refused credential, an unmapped route) can still print a clean dry-run. Local dry-run resolves the

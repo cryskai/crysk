@@ -48,7 +48,7 @@ before it merges.
 1. Branch per slice off latest `dev` (`feat/d1-09-capability-report`, ...).
 2. Work-unit commits on the branch (one purpose each, tests included).
 3. Open the PR targeting `dev`, let the pr-hero review post, triage its findings
-   with `skills/pr-hero-triage/SKILL.md`, then merge into `dev`.
+   with `skills/crysk-loop/SKILL.md`, then merge into `dev`.
 4. `ci.yml` runs on every PR and on pushes to `main` only. Merging into `dev`
    does not trigger a separate push CI run, so the PR run is the required verification.
 5. `release.yml` fires only on semver tags, so merging into `dev` never publishes
@@ -78,10 +78,10 @@ bun run scripts/martian-judge.ts     # LIVE: Martian Surface A judge on existing
 ## Project skills
 
 - `skills/martian-bench/SKILL.md` — Martian Code Review Bench (n-vs-n vs Greptile/CodeRabbit on public PRs). Load on Cal.com evals, Surface A/B, or “how did we do” on that corpus. Flow + existing scores: `skills/martian-bench/references/`.
-- `skills/pr-hero/SKILL.md` — operate or configure pr-hero locally (models/routing, effort, credentials, config keys, gotchas, `.prheroignore`, reviews, watcher/GC, doctor).
-- `skills/pr-hero-pr/SKILL.md` — open or update a PR with a structured template and auto-subscribe to the pr-hero review loop.
-- `skills/pr-hero-triage/SKILL.md` — answer posted `<!-- pr-hero-finding` comments on a PR you authored.
-- `skills/pr-hero-ci-setup/SKILL.md` — scaffold GitHub Actions review workflow and configure repository secrets.
+- `skills/crysk/SKILL.md` — operate or configure pr-hero locally (models/routing, effort, credentials, config keys, gotchas, `.cryskignore`, reviews, watcher/GC, doctor).
+- `skills/crysk-pr/SKILL.md` — open or update a PR with a structured template and auto-subscribe to the pr-hero review loop.
+- `skills/crysk-loop/SKILL.md` — answer posted `<!-- pr-hero-finding` comments on a PR you authored.
+- `skills/crysk-ci-setup/SKILL.md` — scaffold GitHub Actions review workflow and configure repository secrets.
 
 `refuter-probe` is the FIRST gate for any refuter prompt change (ROADMAP A2): it plants claims whose
 correct verdict is known and asserts all four outcomes — `corroborated`, `refuted` (adjacent and 3-hop),
@@ -116,9 +116,8 @@ over** (found while wiring C5, 2026-08-23):
 - `src/cli.ts` + `src/preflight.ts` + `src/report.ts` — local mode (B0): the I/O shell, its pure
   decisions (all offline-tested), and the cost band + report renderer.
 - `src/pr.ts` + `src/pr-preflight.ts` — PR mode (B1, `--pr <n>`): gh/worktree/codegraph I/O shell and
-  its pure decisions — PR record → range, the worktree reuse gate, comparison.json (B4's seed).
-- `src/greptile.ts` + `src/compare.ts` + `src/compare-report.ts` — the head-to-head: parse Greptile's
-  PR comment, bucket findings against ours, render the comparison.
+  its pure decisions — PR record → range, the worktree reuse gate.
+- `src/compare/compare.ts` — shared PR path normalization and the default line window, used by the floor test.
 - `src/floor-test.ts` — M6's primary instrument, pure: the case list's validator, the per-case gate (a
   refuter-CORROBORATED finding within compare.ts's ±25 of the site), the per-arm tally, the table. Arm
   identity is read off `pipeline.json`'s `scout.enabled`, never a directory name. Cases live in
@@ -142,8 +141,6 @@ over** (found while wiring C5, 2026-08-23):
   renderer has tests over its lines, one of them asserting zero `\x1b` bytes with styles off; and
   nothing is exported without a real consumer (a module or a test — biome does not flag unused
   *exported* symbols, so an `export` for a hypothetical consumer is how dead code hides).
-- `src/ledger.ts` — B4 pure half (`pr-hero ledger`): comparison.json read-back, one-vote-per-PR
-  aggregation, as-is verdict tally, markdown ledger with the pending-triage list.
 - `src/assets.ts` + `src/asset-manifest.ts` — bundled productized prompts, triage skills, and self-invocation resolution.
 - `src/system-tools.ts` — pure and system checkers for git, claude CLI auth, gh, and codegraph.
 - `src/doctor.ts` — tri-state (`healthy | degraded | blocking`) environment diagnostic report evaluator and renderer.

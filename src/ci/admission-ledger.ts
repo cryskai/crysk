@@ -2,9 +2,12 @@
 // Persistence is GitHub Check Runs (pr/pr.ts); PR comments stay presentation-only.
 
 import { createHash } from "node:crypto";
+import { ADMISSION_CHECK_RUN_NAME } from "../brand";
 
 export const ADMISSION_LEDGER_SCHEMA_VERSION = 1;
-export const ADMISSION_CHECK_RUN_NAME = "pr-hero/ci-admission";
+// Written under the new name; the ledger's readers (pr/pr.ts) also accept the
+// legacy name, see brand.ts.
+export { ADMISSION_CHECK_RUN_NAME };
 
 // `"yielded"`: this run stood down because another pr-hero review already
 // held a pending commit status on the same head (musive #1935: a local hook
@@ -72,7 +75,7 @@ export interface AdmissionRecord {
 // which is in this set (admission skips keep it on purpose), so every gate
 // skip spent an attempt. The workflow-heads leg then counted that head a second
 // time, and a PR with one review run reported "2/2 attempts" (#326).
-// A forced row (`forced: true`, a `/pr-hero review` or `/pr-hero recheck`
+// A forced row (`forced: true`, a `/crysk review` or `/crysk recheck`
 // comment) is excluded whatever its status: the budget bounds AUTOMATIC reviews,
 // and a writer's explicit comment is a deliberate spend outside it. The filter
 // is in countTerminalAttempts, not in this set, because a forced `completed`

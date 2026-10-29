@@ -76,7 +76,7 @@ describe("ghPreflight", () => {
     const output = lines.join("\n");
     expect(output).toContain("GitHub CLI (gh) is not installed");
     expect(output).toContain("gh secret set");
-    expect(output).toContain("pr-hero status");
+    expect(output).toContain("crysk status");
     expect(output).toContain("brew install gh");
     expect(output).toContain("gh auth login");
     expect(asked).toEqual([]);
@@ -164,7 +164,7 @@ describe("ciSetupCommand with gh missing", () => {
       expect(code).toBe(0);
       expect(
         await Bun.file(
-          path.join(dir, ".github", "workflows", "pr-hero.yml"),
+          path.join(dir, ".github", "workflows", "crysk.yml"),
         ).exists(),
       ).toBe(true);
       expect(lines.join("\n")).toContain("GitHub CLI (gh) is not installed");
@@ -210,8 +210,12 @@ describe("setup --ci review choices (CLI)", () => {
       ],
       { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
     );
-    const wf = path.join(dir, ".github", "workflows", "pr-hero.yml");
-    const cfg = path.join(dir, ".prhero", "config.json");
+    // A repo seeded with the pre-rename file keeps it; a fresh one gets crysk.yml.
+    const fresh = path.join(dir, ".github", "workflows", "crysk.yml");
+    const wf = (await Bun.file(fresh).exists())
+      ? fresh
+      : path.join(dir, ".github", "workflows", "pr-hero.yml");
+    const cfg = path.join(dir, ".crysk", "config.json");
     return {
       code: result.exitCode,
       output: `${result.stdout}${result.stderr}`,
@@ -283,7 +287,7 @@ describe("setup --ci review choices (CLI)", () => {
   test("an existing config keeps its other keys", async () => {
     const r = await runSetup(["--level", "minimal"], async (dir) => {
       await Bun.write(
-        path.join(dir, ".prhero", "config.json"),
+        path.join(dir, ".crysk", "config.json"),
         JSON.stringify({ post: true }),
       );
     });
@@ -302,7 +306,7 @@ describe("setup --ci review choices (CLI)", () => {
 
   test("an invalid existing config is refused before the workflow is written", async () => {
     const r = await runSetup([], async (dir) => {
-      await Bun.write(path.join(dir, ".prhero", "config.json"), "{ nope");
+      await Bun.write(path.join(dir, ".crysk", "config.json"), "{ nope");
     });
     try {
       expect(r.code).not.toBe(0);
@@ -328,7 +332,7 @@ describe("setup --ci review choices (CLI)", () => {
         "old\n",
       );
       await Bun.write(
-        path.join(dir, ".prhero", "config.json"),
+        path.join(dir, ".crysk", "config.json"),
         JSON.stringify(tuned),
       );
     });
@@ -379,7 +383,7 @@ describe("setup --ci review choices (CLI)", () => {
   test("--level alone changes the level keys, reports them, and keeps the line threshold", async () => {
     const r = await runSetup(["--level", "minimal"], async (dir) => {
       await Bun.write(
-        path.join(dir, ".prhero", "config.json"),
+        path.join(dir, ".crysk", "config.json"),
         JSON.stringify({ ci_max_attempts: 5, max_changed_lines: 9000 }),
       );
     });
@@ -397,7 +401,7 @@ describe("setup --ci review choices (CLI)", () => {
 
   test("a non-object config is refused with a CLI error, not a stack trace, before the workflow is written", async () => {
     const r = await runSetup([], async (dir) => {
-      await Bun.write(path.join(dir, ".prhero", "config.json"), "[]");
+      await Bun.write(path.join(dir, ".crysk", "config.json"), "[]");
     });
     try {
       expect(r.code).not.toBe(0);
@@ -491,13 +495,13 @@ describe("ciSetupCommand at a terminal", () => {
       expect(code).toBe(0);
       expect(asked).toHaveLength(6);
       const workflow = await Bun.file(
-        path.join(dir, ".github", "workflows", "pr-hero.yml"),
+        path.join(dir, ".github", "workflows", "crysk.yml"),
       ).text();
       expect(workflow).toContain("mode: advisory");
       expect(workflow).toContain("budget-usd: 3\n");
       expect(
         JSON.parse(
-          await Bun.file(path.join(dir, ".prhero", "config.json")).text(),
+          await Bun.file(path.join(dir, ".crysk", "config.json")).text(),
         ),
       ).toMatchObject({
         ci_review_policy: "manual_only",
@@ -509,12 +513,12 @@ describe("ciSetupCommand at a terminal", () => {
   });
 });
 
-describe("ciSetupCommand with a broken .prheroignore", () => {
+describe("ciSetupCommand with a broken .cryskignore", () => {
   test("a new pattern over a broken file stops before anything is written", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-ignore-"));
     try {
       Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
-      await Bun.write(path.join(dir, ".prheroignore"), "!\n");
+      await Bun.write(path.join(dir, ".cryskignore"), "!\n");
       const answers = [
         "balanced",
         "gate",
@@ -555,10 +559,124 @@ describe("ciSetupCommand with a broken .prheroignore", () => {
         ).exists(),
       ).toBe(false);
       expect(
-        await Bun.file(path.join(dir, ".prhero", "config.json")).exists(),
+        await Bun.file(path.join(dir, ".crysk", "config.json")).exists(),
       ).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
+});
+
+// Which workflow file the command acts on (S10): a fresh repo gets crysk.yml, a
+// repo that already has the pre-rename pr-hero.yml keeps that file, and both at
+// once is refused. Through the real CLI, no TTY: the agent's path.
+describe("setup --ci workflow file (CLI)", () => {
+  const WORKFLOWS = [".github", "workflows"] as const;
+
+  async function run(
+    args: string[],
+    seed: Record<string, string>,
+  ): Promise<{
+    code: number;
+    output: string;
+    dir: string;
+    read: (file: string) => Promise<string | undefined>;
+  }> {
+    const dir = await mkdtemp(path.join(tmpdir(), "crysk-ci-file-"));
+    Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+    for (const [file, text] of Object.entries(seed)) {
+      await Bun.write(path.join(dir, ...WORKFLOWS, file), text);
+    }
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        path.join(import.meta.dir, "../../src/cli.ts"),
+        "setup",
+        "--ci",
+        ...args,
+      ],
+      { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
+    );
+    return {
+      code: result.exitCode,
+      output: `${result.stdout}${result.stderr}`,
+      dir,
+      read: async (file) => {
+        const f = Bun.file(path.join(dir, ...WORKFLOWS, file));
+        return (await f.exists()) ? f.text() : undefined;
+      },
+    };
+  }
+
+  test("a fresh repo gets crysk.yml and no pr-hero.yml", async () => {
+    const r = await run([], {});
+    try {
+      expect(r.code).toBe(0);
+      expect(await r.read("crysk.yml")).toContain("name: Crysk Review");
+      expect(await r.read("pr-hero.yml")).toBeUndefined();
+      expect(r.output).toContain("Commit .github/workflows/crysk.yml");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a repo with pr-hero.yml: --force rewrites it in place and never creates crysk.yml", async () => {
+    const r = await run(["--force"], { "pr-hero.yml": "# old\n" });
+    try {
+      expect(r.code).toBe(0);
+      expect(await r.read("pr-hero.yml")).toContain("name: Crysk Review");
+      expect(await r.read("crysk.yml")).toBeUndefined();
+      expect(r.output).toContain("Overwrote");
+      expect(r.output).toContain("Commit .github/workflows/pr-hero.yml");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a repo with pr-hero.yml and no --force: refused, naming that file, nothing written", async () => {
+    const r = await run([], { "pr-hero.yml": "# mine\n" });
+    try {
+      expect(r.code).toBe(1);
+      expect(r.output).toContain(
+        ".github/workflows/pr-hero.yml already exists; pass --force to overwrite it",
+      );
+      expect(await r.read("pr-hero.yml")).toBe("# mine\n");
+      expect(await r.read("crysk.yml")).toBeUndefined();
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a repo with crysk.yml and no --force: refused, naming crysk.yml", async () => {
+    const r = await run([], { "crysk.yml": "# mine\n" });
+    try {
+      expect(r.code).toBe(1);
+      expect(r.output).toContain(
+        ".github/workflows/crysk.yml already exists; pass --force to overwrite it",
+      );
+      expect(await r.read("crysk.yml")).toBe("# mine\n");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([[[]], [["--force"]]])(
+    "both files present (%j): refused with both named, neither touched",
+    async (args) => {
+      const r = await run(args, {
+        "crysk.yml": "# new\n",
+        "pr-hero.yml": "# old\n",
+      });
+      try {
+        expect(r.code).toBe(1);
+        expect(r.output).toContain("crysk.yml");
+        expect(r.output).toContain("pr-hero.yml");
+        expect(r.output).toContain("review every pull request twice");
+        expect(await r.read("crysk.yml")).toBe("# new\n");
+        expect(await r.read("pr-hero.yml")).toBe("# old\n");
+      } finally {
+        await rm(r.dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

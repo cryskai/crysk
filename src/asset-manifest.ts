@@ -25,29 +25,27 @@ import refuterPrompt from "../prompts/default/review-refuter.md" with {
 };
 import scoutPrompt from "../prompts/scout.md" with { type: "file" };
 import summarizerPrompt from "../prompts/summarizer.md" with { type: "file" };
-import generalSkill from "../skills/pr-hero/SKILL.md" with { type: "file" };
-import ciSetupAdmissionExample from "../skills/pr-hero-ci-setup/assets/admission-config.example.json" with {
+import generalSkill from "../skills/crysk/SKILL.md" with { type: "file" };
+import ciSetupAdmissionExample from "../skills/crysk-ci-setup/assets/admission-config.example.json" with {
   type: "file",
 };
-import ciSetupWorkflow from "../skills/pr-hero-ci-setup/assets/workflow.yml" with {
+import ciSetupWorkflow from "../skills/crysk-ci-setup/assets/workflow.yml" with {
   type: "file",
 };
-import ciSetupAdmissionRef from "../skills/pr-hero-ci-setup/references/ci-admission.md" with {
+import ciSetupAdmissionRef from "../skills/crysk-ci-setup/references/ci-admission.md" with {
   type: "file",
 };
-import ciSetupOpenCodeRef from "../skills/pr-hero-ci-setup/references/opencode-ci.md" with {
+import ciSetupOpenCodeRef from "../skills/crysk-ci-setup/references/opencode-ci.md" with {
   type: "file",
 };
-import ciSetupSkill from "../skills/pr-hero-ci-setup/SKILL.md" with {
+import ciSetupSkill from "../skills/crysk-ci-setup/SKILL.md" with {
   type: "file",
 };
-import prSkill from "../skills/pr-hero-pr/SKILL.md" with { type: "file" };
-import triageAdjudicator from "../skills/pr-hero-triage/adjudicator.md" with {
+import triageAdjudicator from "../skills/crysk-loop/adjudicator.md" with {
   type: "file",
 };
-import triageSkill from "../skills/pr-hero-triage/SKILL.md" with {
-  type: "file",
-};
+import triageSkill from "../skills/crysk-loop/SKILL.md" with { type: "file" };
+import prSkill from "../skills/crysk-pr/SKILL.md" with { type: "file" };
 
 export const BUNDLED_AGENT_FILES: Record<string, string> = {
   "deep-review-lifecycle.md": lifecyclePrompt,

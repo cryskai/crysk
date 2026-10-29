@@ -2038,8 +2038,8 @@ describe("OpenCode bounded version admission policy (OA1b)", () => {
     expect(unavailable).toContain(
       `@opencode-ai/sdk@${SUPPORTED_OPENCODE_SDK_VERSION}`,
     );
-    expect(unavailable).toContain("pr-hero upgrade --reconcile");
-    expect(unavailable).toContain("~/.prhero/node_modules");
+    expect(unavailable).toContain("crysk upgrade --reconcile");
+    expect(unavailable).toContain("~/.crysk/node_modules");
     expect(unavailable).not.toContain("/$bunfs");
     expect(unavailable).not.toContain("undefined");
 
@@ -2137,7 +2137,7 @@ describe("OpenCode SDK import plan", () => {
     const { planOpenCodeSdkImport, resolveOpenCodeSdkV2Entry } = await import(
       "../../src/transport-registry"
     );
-    const nodeModulesDir = "/Users/x/.prhero/node_modules";
+    const nodeModulesDir = "/Users/x/.crysk/node_modules";
     const compiled = planOpenCodeSdkImport({
       mode: "compiled",
       nodeModulesDir,

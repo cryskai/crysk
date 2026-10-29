@@ -3,7 +3,7 @@
 // actually took. resolvePrPlanAndConfirm reaches gh directly and has no seam for
 // its status post, so this guard reads the source and pins the call order, the
 // same way test/architecture/gate-skip-settlement.test.ts pins the gate skips.
-// The env gate of recordReviewing (no file without PRHERO_OUTCOME_DIR) is tested
+// The env gate of recordReviewing (no file without CRYSK_OUTCOME_DIR) is tested
 // behaviorally in test/ci/cli-record.test.ts.
 
 import { describe, expect, test } from "bun:test";

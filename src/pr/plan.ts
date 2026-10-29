@@ -195,7 +195,7 @@ export async function resolvePrPlanAndConfirm(params: {
         stepSummaryFlag: params.options.stepSummary,
         plan: budgetPlan,
         noticeMessage:
-          "pr-hero review skipped — estimated cost exceeds the configured CI budget ceiling",
+          "crysk review skipped — estimated cost exceeds the configured CI budget ceiling",
         ciMode: params.ciMode,
         headSha: params.headSha,
       });

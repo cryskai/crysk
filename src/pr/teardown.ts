@@ -36,6 +36,7 @@ import {
 import type { PipelineResult } from "#review/pipeline";
 import { runGc } from "#store/gc";
 import { log } from "#ui/primitives";
+import { isStatusContext } from "../brand";
 import { releasePidLock } from "../home";
 
 // The ledger has no equivalent hand-off to the SIGTERM/SIGINT handlers (which
@@ -134,7 +135,7 @@ function overrideReadFallback(headSha: string): false {
   log(
     formatWorkflowCommand(
       "warning",
-      `pr-hero: could not read the statuses of ${headSha.slice(0, 7)}, so the override check could not read the head and the verdict is written`,
+      `crysk: could not read the statuses of ${headSha.slice(0, 7)}, so the override check could not read the head and the verdict is written`,
     ),
   );
   return false;
@@ -161,7 +162,9 @@ async function previousPartialIsSame(
   }
   if (history === null) return false;
   const previous = history.find(
-    (row) => row.context === COMMIT_STATUS_CONTEXT && row.state !== "pending",
+    (row) =>
+      isStatusContext(row.context, COMMIT_STATUS_CONTEXT) &&
+      row.state !== "pending",
   );
   const description = previous?.description;
   if (typeof description !== "string" || !finishedPartialMatches(description)) {
@@ -238,7 +241,7 @@ export async function settleCommitStatusAndLedger(input: {
   readHistory?: typeof fetchCommitStatusList;
   // The wait before the override read's one retry. Production omits it (Bun.sleep); a test injects one.
   sleep?: (ms: number) => Promise<void>;
-  // Where the CLI's outcome record is written (PRHERO_OUTCOME_DIR). Production omits
+  // Where the CLI's outcome record is written (CRYSK_OUTCOME_DIR). Production omits
   // it, and the record writer then reads process.env, as every other writer does.
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<void> {
@@ -342,7 +345,7 @@ export async function settleCommitStatusAndLedger(input: {
       // WHY one line and no status: the override stays the head's status. This run's
       // findings and PR comments are not affected by this write.
       log(
-        "pr-hero: an override on this head stands, so this review's verdict is not written over it.",
+        "crysk: an override on this head stands, so this review's verdict is not written over it.",
       );
     } else if (effectiveMode === "gate" && input.bodyFailed !== true) {
       try {

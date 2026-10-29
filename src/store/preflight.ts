@@ -1,12 +1,11 @@
 // Canonical product store (Fundamentals #6 / observability-canonical-store.md),
 // pure half: Schema DDL, table types, and projection from a completed run's facts
-// (FindingsDocument, per-agent usage, optional StoredComparison) into the complete
+// (FindingsDocument, per-agent usage, the PR's diff base) into the complete
 // relational model.
 //
 // Pure and testable offline: never opens a connection, never touches the clock or fs.
 
 import path from "node:path";
-import type { StoredComparison } from "#compare/ledger";
 import type {
   CausalDisposition,
   EvidenceClass,
@@ -480,16 +479,6 @@ export interface RunAgentRow {
   status: string;
 }
 
-export interface ComparisonRowProjection {
-  row_index: number;
-  bucket: string;
-  greptile_json: string | null;
-  prhero_json: string | null;
-  verdict: string | null;
-  reasoning: string | null;
-  actor: string | null;
-}
-
 export interface FindingTriageRow {
   id?: number;
   run_id: number;
@@ -535,7 +524,6 @@ export interface ProjectedCompleteRun {
   findings: ProjectedFinding[];
   debugFindings: DebugFindingRow[];
   agents: RunAgentRow[];
-  comparisonRows: ComparisonRowProjection[];
   diversityAttempts: DiversityAttemptRow[];
   diversityObservations: DiversityObservationRow[];
 }
@@ -543,7 +531,7 @@ export interface ProjectedCompleteRun {
 export function projectCompleteRun(input: {
   doc: FindingsDocument;
   perAgent?: Record<string, PerAgentUsage>;
-  comparison?: StoredComparison | null;
+  diffFromSha?: string | null;
   repoId: string;
   runDir: string;
   checkoutPath: string | null;
@@ -568,7 +556,7 @@ export function projectCompleteRun(input: {
     checkout_path: input.checkoutPath,
     head_sha: input.doc.head_sha,
     base_sha: input.doc.base_sha,
-    diff_from_sha: input.comparison?.diff_from_sha ?? null,
+    diff_from_sha: input.diffFromSha ?? null,
     run_status: input.doc.run_status,
     session_failed,
     model: input.doc.model,
@@ -584,10 +572,7 @@ export function projectCompleteRun(input: {
     summary_prose: input.doc.summary?.prose ?? null,
     summary_score: input.doc.summary?.score ?? null,
     summary_score_reason: input.doc.summary?.score_reason ?? null,
-    generated_at:
-      input.generatedAt ??
-      input.comparison?.generated_at ??
-      new Date().toISOString(),
+    generated_at: input.generatedAt ?? new Date().toISOString(),
     wall_ms: input.doc.telemetry.wall_ms,
     index_ms: input.doc.telemetry.index_ms,
     index_mode: input.doc.telemetry.index_mode,
@@ -602,11 +587,7 @@ export function projectCompleteRun(input: {
     root_causes_json: input.doc.debug.root_causes
       ? JSON.stringify(input.doc.debug.root_causes)
       : null,
-    greptile_found: input.comparison
-      ? input.comparison.greptile.found
-        ? 1
-        : 0
-      : null,
+    greptile_found: null,
     diversity_plan_json: input.doc.debug.diversity
       ? JSON.stringify(input.doc.debug.diversity)
       : null,
@@ -712,18 +693,6 @@ export function projectCompleteRun(input: {
         }),
       );
 
-  const comparisonRows: ComparisonRowProjection[] = (
-    input.comparison?.rows ?? []
-  ).map((row, index) => ({
-    row_index: index,
-    bucket: row.bucket,
-    greptile_json: row.greptile ? JSON.stringify(row.greptile) : null,
-    prhero_json: row.prhero ? JSON.stringify(row.prhero) : null,
-    verdict: row.verdict,
-    reasoning: row.reasoning,
-    actor: row.actor,
-  }));
-
   const diversityAttempts: DiversityAttemptRow[] = [];
   const diversityObservations: DiversityObservationRow[] = [];
   const diversityDebug = input.doc.debug.diversity;
@@ -773,7 +742,6 @@ export function projectCompleteRun(input: {
     findings,
     debugFindings,
     agents,
-    comparisonRows,
     diversityAttempts,
     diversityObservations,
   };

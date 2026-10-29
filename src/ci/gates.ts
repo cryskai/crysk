@@ -65,6 +65,7 @@ import type { CiMode } from "#pr/preflight";
 import type { Finding, FindingsDocument } from "#review/findings";
 import type { PrCommentDelta } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
+import { MARKER_OPEN } from "../brand";
 import { CliUsageError } from "../errors";
 import { envBillsMetered } from "../execution/usage-normalized";
 import { ciForceReviewHintLine } from "./force-comment";
@@ -158,11 +159,10 @@ export interface CiGateSkip {
 // self-closing, field-less tags (unlike the four `<!-- pr-hero-<noun> ` +
 // trailing-space prefixes above): a skip decision has no code to anchor a
 // `head=` declaration to, and no fields to encode — see the module header.
-export const SKIP_SIZE_COMMENT_MARKER = "<!-- pr-hero-skip-size -->";
-export const SKIP_BUDGET_COMMENT_MARKER = "<!-- pr-hero-skip-budget -->";
-export const SKIP_COVERAGE_COMMENT_MARKER = "<!-- pr-hero-skip-coverage -->";
-export const MANUAL_REQUIRED_COMMENT_MARKER =
-  "<!-- pr-hero-manual-required -->";
+export const SKIP_SIZE_COMMENT_MARKER = `${MARKER_OPEN}skip-size -->`;
+export const SKIP_BUDGET_COMMENT_MARKER = `${MARKER_OPEN}skip-budget -->`;
+export const SKIP_COVERAGE_COMMENT_MARKER = `${MARKER_OPEN}skip-coverage -->`;
+export const MANUAL_REQUIRED_COMMENT_MARKER = `${MARKER_OPEN}manual-required -->`;
 
 // Same register as ci/reporter.ts's `skipSizeLines`/`skipBudgetLines` and
 // project rule 4 (assistant posture): a gate skip is a courteous notice
@@ -190,13 +190,13 @@ function sizeLimitsText(maxLines: number, maxFiles: number): string {
 function buildSizeSkipComment(data: SkipSizeSummary): string {
   const lines = [
     SKIP_SIZE_COMMENT_MARKER,
-    "## pr-hero review skipped",
+    "## Crysk review skipped",
     "",
     `⚠️ This diff changes ${data.changedLines} line(s) across ` +
       `${data.changedFiles} file(s), exceeding the configured size gate ` +
       `(${sizeLimitsText(data.maxChangedLines, data.maxChangedFiles)}).`,
     "",
-    "pr-hero did not run to avoid reviewing an unbounded diff. Split the " +
+    "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
       "PR or raise `max-changed-lines` / `max-changed-files` to change the " +
       "limit for later pushes.",
     "",
@@ -208,12 +208,12 @@ function buildSizeSkipComment(data: SkipSizeSummary): string {
 function buildBudgetSkipComment(data: SkipBudgetSummary): string {
   const lines = [
     SKIP_BUDGET_COMMENT_MARKER,
-    "## pr-hero review skipped",
+    "## Crysk review skipped",
     "",
     `⚠️ The estimated review cost (${usd(data.estimatedCostUsd)}) exceeds ` +
       `the configured CI budget ceiling (${usd(data.budgetUsd)}).`,
     "",
-    "pr-hero did not run to stay within the configured `--budget-usd` " +
+    "Crysk did not run to stay within the configured `--budget-usd` " +
       "ceiling.",
     "",
     ciForceReviewHintLine(data.prNumber),
@@ -333,9 +333,13 @@ export type CiBillingMode = "subscription" | "metered";
 // ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN, so no generated workflow can
 // newly acquire a ceiling from it.
 //
-// This repo does NOT settle which credential actually bills when BOTH
-// CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are present, and it is worth
-// being explicit that the gap is real rather than papering over it:
+// Which credential bills when BOTH CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are
+// present was settled by observation after this rule was written: CLI 2.1.312 prints
+// "claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is
+// set and takes precedence over your claude.ai login", and on this repo's CI with both
+// secrets bound every request used the API key (see credentialOf in
+// transports/claude-code-cli.ts). The rule below still does not depend on that answer,
+// and the gap it describes was real when it was written:
 // action.yml:111-112 binds both into the child env unconditionally,
 // test/harness/env-projection.test.ts:48-56 deliberately asserts both survive
 // the projection with no precedence between them, and `defaultClaudeAuthProbe`
@@ -538,7 +542,7 @@ export function sizeGateUnlimitedNoticeMessage(
     .map((k) => (k === "lines" ? "changed-lines" : "changed-files"))
     .join(" or ");
   return (
-    `pr-hero size gate: no ${what} limit on a Claude subscription route — ` +
+    `crysk size gate: no ${what} limit on a Claude subscription route — ` +
     "a run draws on quota, not a per-token invoice, so large PRs are " +
     "reviewed instead of skipped. Set `max-changed-lines` / " +
     "`max-changed-files` to impose a limit."
@@ -604,7 +608,7 @@ export function planCiSizeSkip(
 export function planCiBudgetSkip(
   input: CiBudgetGateSkipInput & { force: boolean; ciMode: CiMode },
 ): CiGateSkipPlan | null {
-  // CI `--force` is the `/pr-hero review` comment. It answers "run this one
+  // CI `--force` is the `/crysk review` comment. It answers "run this one
   // anyway" for every CI skip, including the spend ceiling. Outside that
   // explicit comment the ceiling still holds. Local `--force` never reaches
   // here: the caller only invokes this plan when `isCi` is set.
@@ -639,7 +643,7 @@ function buildCoverageSkipComment(
   const stopped = reason === "stopped";
   const lines = [
     SKIP_COVERAGE_COMMENT_MARKER,
-    "## pr-hero review skipped",
+    "## Crysk review skipped",
     "",
     stopped
       ? "⏸️ A maintainer stopped automatic reviews on this pull request."
@@ -652,7 +656,7 @@ function buildCoverageSkipComment(
       : `Prior score: ${data.priorScore} (re-review needs ≥ ${data.minScore}). ` +
         `Attempts on this PR: ${data.reviewCount}/${data.maxAttempts}.`,
     "",
-    "The existing review comment still describes the last head pr-hero " +
+    "The existing review comment still describes the last head Crysk " +
       "reviewed.",
     "",
     ciForceReviewHintLine(data.prNumber),
@@ -663,7 +667,7 @@ function buildCoverageSkipComment(
 function buildManualRequiredComment(data: ManualRequiredSummary): string {
   const lines = [
     MANUAL_REQUIRED_COMMENT_MARKER,
-    "## pr-hero review requires manual override",
+    "## Crysk review requires manual override",
     "",
     "🛑 Automatic review did not run on this push.",
     "",
@@ -671,7 +675,7 @@ function buildManualRequiredComment(data: ManualRequiredSummary): string {
     "",
     `Attempts on this PR: ${data.reviewCount}/${data.maxAttempts}.`,
     "",
-    "The existing review comment still describes the last head pr-hero " +
+    "The existing review comment still describes the last head Crysk " +
       "reviewed.",
     "",
     ciForceReviewHintLine(data.prNumber),

@@ -35,7 +35,7 @@ describe("recordPipelineOutcome", () => {
     setup();
     try {
       recordPipelineOutcome({ sessionFailed: false }, SHA, {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
       });
       expect(written()).toBeUndefined();
     } finally {
@@ -47,7 +47,7 @@ describe("recordPipelineOutcome", () => {
     setup();
     try {
       recordPipelineOutcome({ sessionFailed: true }, SHA, {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
       });
       expect(parseCliRecord(written() ?? "")).toEqual({
         v: 1,
@@ -62,7 +62,7 @@ describe("recordPipelineOutcome", () => {
   test("a pipeline that never returned writes nothing: its throw reaches the fatal record", () => {
     setup();
     try {
-      recordPipelineOutcome(undefined, SHA, { PRHERO_OUTCOME_DIR: dir });
+      recordPipelineOutcome(undefined, SHA, { CRYSK_OUTCOME_DIR: dir });
       expect(written()).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -73,7 +73,7 @@ describe("recordPipelineOutcome", () => {
     setup();
     try {
       recordPipelineOutcome({ sessionFailed: true }, "not-a-sha", {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
       });
       expect(parseCliRecord(written() ?? "")).toEqual({
         v: 1,
@@ -164,7 +164,7 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
         ],
       },
       SHA,
-      { PRHERO_OUTCOME_DIR: dir },
+      { CRYSK_OUTCOME_DIR: dir },
     );
     expect(
       parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
@@ -201,7 +201,7 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
         ],
       },
       SHA,
-      { PRHERO_OUTCOME_DIR: dir },
+      { CRYSK_OUTCOME_DIR: dir },
     );
     expect(
       parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
@@ -213,13 +213,82 @@ describe("recordPipelineOutcome carries each failed hunter's cause", () => {
     });
   });
 
+  test("the record carries each hunter's short detail, and drops one that is not a safe single line", () => {
+    const dir = outcomeDir();
+    recordPipelineOutcome(
+      {
+        sessionFailed: true,
+        hunterFailures: [
+          {
+            name: "hunter-a",
+            cause: "auth_invalid",
+            detail: "Anthropic API: Invalid API key (HTTP 401)",
+          },
+          { name: "hunter-b", cause: "auth_invalid", detail: "two\nlines" },
+          { name: "hunter-c", detail: "x".repeat(161) },
+        ],
+      },
+      SHA,
+      { CRYSK_OUTCOME_DIR: dir },
+    );
+    expect(
+      parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
+    ).toEqual({
+      v: 1,
+      outcome: "hunters-failed",
+      head_sha: SHA,
+      hunter_failures: [
+        {
+          cause: "auth_invalid",
+          detail: "Anthropic API: Invalid API key (HTTP 401)",
+        },
+        { cause: "auth_invalid" },
+        {},
+      ],
+    });
+  });
+
+  test("the record names the credential a hunter ran on, and drops any other name", () => {
+    const dir = outcomeDir();
+    recordPipelineOutcome(
+      {
+        sessionFailed: true,
+        hunterFailures: [
+          {
+            name: "hunter-a",
+            cause: "auth_invalid",
+            credential: "ANTHROPIC_API_KEY",
+          },
+          {
+            name: "hunter-b",
+            cause: "auth_invalid",
+            credential: "GITHUB_TOKEN" as never,
+          },
+        ],
+      },
+      SHA,
+      { CRYSK_OUTCOME_DIR: dir },
+    );
+    expect(
+      parseCliRecord(readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8")),
+    ).toEqual({
+      v: 1,
+      outcome: "hunters-failed",
+      head_sha: SHA,
+      hunter_failures: [
+        { cause: "auth_invalid", credential: "ANTHROPIC_API_KEY" },
+        { cause: "auth_invalid" },
+      ],
+    });
+  });
+
   test("a failure with no transport cause is recorded as an entry without one", () => {
     const dir = outcomeDir();
     recordPipelineOutcome(
       { sessionFailed: true, hunterFailures: [{ name: "hunter-reliability" }] },
       SHA,
       {
-        PRHERO_OUTCOME_DIR: dir,
+        CRYSK_OUTCOME_DIR: dir,
       },
     );
     expect(
@@ -294,7 +363,7 @@ describe("postAdjudicationReplies", () => {
     const body = calls[0]?.stdin ?? "";
     expect(
       body.startsWith(
-        `<!-- pr-hero-adjudication verdict=upheld reply=200 head=${HEAD} -->`,
+        `<!-- crysk-adjudication verdict=upheld reply=200 head=${HEAD} -->`,
       ),
     ).toBe(true);
     expect(body).toContain("✅ **CI adjudication: upheld**");
@@ -323,7 +392,7 @@ describe("postAdjudicationReplies", () => {
     expect(
       lines.some((line) =>
         line.includes(
-          "::warning::pr-hero: could not post the CI adjudication for R001:",
+          "::warning::crysk: could not post the CI adjudication for R001:",
         ),
       ),
     ).toBe(true);
@@ -380,7 +449,7 @@ describe("postAdjudicationReplies", () => {
   }
 
   const UNLANDED_WARNING =
-    "::warning::pr-hero: the CI adjudication for R001 was not recorded under github-actions[bot]; the finding still counts toward the gate";
+    "::warning::crysk: the CI adjudication for R001 was not recorded under github-actions[bot]; the finding still counts toward the gate";
 
   test("a failed adjudication posts nothing and prints the pending notice", async () => {
     const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
@@ -402,7 +471,7 @@ describe("postAdjudicationReplies", () => {
     );
     expect(calls).toHaveLength(0);
     expect(out).toContain(
-      "::notice::pr-hero: the CI adjudicator could not rule on R001; it stays pending for the next /pr-hero recheck",
+      "::notice::crysk: the CI adjudicator could not rule on R001; it stays pending for the next /crysk recheck",
     );
   });
 

@@ -11,7 +11,6 @@ import {
 } from "#ci/review-levels";
 import {
   appendIgnorePatterns,
-  CI_WORKFLOW_RELATIVE_PATH,
   ignorePatternsError,
   runCiSetup,
   writeRepoReviewConfig,
@@ -23,6 +22,12 @@ import {
   gotchasUnusableReason,
 } from "#review/preflight";
 import { log } from "#ui/primitives";
+import {
+  duplicateWorkflowProblem,
+  resolveIgnoreFileName,
+  resolveRepoDir,
+  resolveWorkflowRelativePath,
+} from "../brand-paths";
 import { CliError } from "../errors";
 import {
   checkGhStatus,
@@ -54,7 +59,7 @@ export interface GhPreflightDeps {
 }
 
 const GH_WHY =
-  "pr-hero's CI loop needs it on this machine: to add the repository secret (gh secret set), and after a pull request opens, to wait for its review (pr-hero status) and answer the findings (pr-hero triage reply).";
+  "Crysk's CI loop needs it on this machine: to add the repository secret (gh secret set), and after a pull request opens, to wait for its review (crysk status) and answer the findings (crysk triage reply).";
 
 // Never blocks and never changes the exit code: the workflow file does not
 // need gh, and a user may add the secret in GitHub's web UI instead.
@@ -192,7 +197,9 @@ async function readCurrentSettings(
   workflowPath: string,
 ): Promise<CurrentSettings> {
   let config: Record<string, unknown> = {};
-  const configFile = Bun.file(path.join(repoRoot, ".prhero", "config.json"));
+  const configFile = Bun.file(
+    path.join(resolveRepoDir(repoRoot), "config.json"),
+  );
   if (await configFile.exists()) {
     try {
       const parsed: unknown = JSON.parse(await configFile.text());
@@ -223,12 +230,18 @@ export async function ciSetupCommand(
 
   // Before any question: an existing workflow without --force writes nothing,
   // so asking first would collect answers that are then thrown away.
-  const target = path.join(repoRoot, CI_WORKFLOW_RELATIVE_PATH);
+  const duplicate = duplicateWorkflowProblem(repoRoot);
+  if (duplicate !== undefined) {
+    log(duplicate);
+    return 1;
+  }
+  // The file the repo already has (a pre-rename pr-hero.yml stays where it is),
+  // else the new name.
+  const workflowRelative = resolveWorkflowRelativePath(repoRoot);
+  const target = path.join(repoRoot, workflowRelative);
   if (existsSync(target) && !options.force) {
     log(`${target} already exists.`);
-    log(
-      `${CI_WORKFLOW_RELATIVE_PATH} already exists; pass --force to overwrite it`,
-    );
+    log(`${workflowRelative} already exists; pass --force to overwrite it`);
     return 1;
   }
 
@@ -239,13 +252,19 @@ export async function ciSetupCommand(
   // file, a value the review parser rejects), and refusing before the workflow
   // is written leaves the repository as it was.
   const patterns = choices.advanced.ignorePatterns ?? [];
-  const ignoreFile = Bun.file(path.join(repoRoot, ".prheroignore"));
+  // An existing .prheroignore keeps being extended in place; a fresh repo gets
+  // .cryskignore.
+  const ignoreFile = Bun.file(
+    path.join(repoRoot, resolveIgnoreFileName(repoRoot)),
+  );
   const patternProblem = ignorePatternsError(
     patterns,
     (await ignoreFile.exists()) ? await ignoreFile.text() : "",
   );
   if (patternProblem !== undefined) throw new CliError(patternProblem);
   const config = await writeRepoReviewConfig(repoRoot, configPlan(choices));
+  // After the write, so a fresh repo reports the .crysk/ it just got.
+  const repoDirName = path.basename(resolveRepoDir(repoRoot));
   const result = await runCiSetup({
     cwd: repoRoot,
     force: options.force,
@@ -263,6 +282,10 @@ export async function ciSetupCommand(
         : { maxChangedFiles: current.workflow.maxChangedFiles }),
     },
   });
+  if (result.status === "refused-duplicate") {
+    log(result.hint);
+    return 1;
+  }
   if (result.status === "skipped-existing") {
     log(`${result.path} already exists.`);
     log(result.hint);
@@ -294,21 +317,21 @@ export async function ciSetupCommand(
   ] as const) {
     if (value !== undefined) {
       log(
-        `Kept the workflow's ${input}: ${value}; it takes precedence over .prhero/config.json`,
+        `Kept the workflow's ${input}: ${value}; it takes precedence over ${repoDirName}/config.json`,
       );
     }
   }
   const keptKeys = Object.keys(config.kept);
   if (keptKeys.length > 0) {
     log(
-      `Kept existing ${keptKeys.map((key) => `${key} ${JSON.stringify(config.kept[key])}`).join(", ")} in .prhero/config.json: nobody chose them this run (pass --level or --max-changed-lines, or answer in a terminal, to change them)`,
+      `Kept existing ${keptKeys.map((key) => `${key} ${JSON.stringify(config.kept[key])}`).join(", ")} in ${repoDirName}/config.json: nobody chose them this run (pass --level or --max-changed-lines, or answer in a terminal, to change them)`,
     );
   }
   log();
   log("Next steps:");
   let step = 0;
   const next = () => `  ${++step}.`;
-  log(`${next()} Commit .github/workflows/pr-hero.yml and .prhero/config.json`);
+  log(`${next()} Commit ${workflowRelative} and ${repoDirName}/config.json`);
   log(
     `${next()} Add a repository secret: ${
       choices.billing === "subscription"
@@ -324,33 +347,33 @@ export async function ciSetupCommand(
   // a repo that already wrote real gotchas is not told to write them again.
   // Asked through gotchasUnusableReason, the one gate the review itself uses,
   // so a scaffold with no marker line gets the steps it will need.
-  const gotchasPath = path.join(repoRoot, ".prhero", "gotchas.md");
+  const gotchasPath = path.join(resolveRepoDir(repoRoot), "gotchas.md");
   const gotchas = (await Bun.file(gotchasPath).exists())
     ? await Bun.file(gotchasPath).text()
     : undefined;
   if (gotchas === undefined || gotchasUnusableReason(gotchas) !== undefined) {
     log(
-      `${next()} Run \`npx -y pr-hero init\` in a clone of the repository (it creates .prhero/gotchas.md; the config.json written above is kept as it is)`,
+      `${next()} Run \`npx -y crysk init\` in a clone of the repository (it creates ${repoDirName}/gotchas.md; the config.json written above is kept as it is)`,
     );
     log(
-      `${next()} Replace the placeholder lines in .prhero/gotchas.md with real facts about this repository, and delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line if it is there: pr-hero refuses to review the scaffold`,
+      `${next()} Replace the placeholder lines in ${repoDirName}/gotchas.md with real facts about this repository, and delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line if it is there: Crysk refuses to review the scaffold`,
     );
     log(
-      `${next()} Commit .prhero/ to the default branch (comment-triggered runs read the base branch)`,
+      `${next()} Commit ${repoDirName}/ to the default branch (comment-triggered runs read the base branch)`,
     );
   }
-  // The check to require is `pr-hero` (the commit status, the gate), not the
+  // The check to require is `crysk` (the commit status, the gate), not the
   // `review` job, which stays green even when it finds blocking issues.
   log(
-    `${next()} In branch protection, require the \`pr-hero\` status check (not the \`review\` job); a private repository on GitHub Free cannot require status checks`,
+    `${next()} In branch protection, require the \`crysk\` status check (not the \`review\` job; the legacy \`pr-hero\` status is still posted for one version, so an existing rule on \`pr-hero\` keeps working); a private repository on GitHub Free cannot require status checks`,
   );
   log(`${next()} Open a pull request to trigger the workflow`);
   // GitHub reads a comment-triggered workflow from the DEFAULT branch, so a
-  // `/pr-hero review` on a pull request that only ADDS this file starts
+  // `/crysk review` on a pull request that only ADDS this file starts
   // nothing, with no error anywhere. Said here because this is where a new
   // user first reads how to force a review.
   log(
-    `${next()} Comment /pr-hero review on a pull request to force a review; it works once this file is on the default branch`,
+    `${next()} Comment /crysk review on a pull request to force a review; it works once this file is on the default branch`,
   );
   // Last, so a prompt it may show comes after everything above is printed.
   await ghPreflight(deps.gh);

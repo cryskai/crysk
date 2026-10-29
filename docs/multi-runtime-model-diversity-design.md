@@ -15,7 +15,7 @@ Review lifecycle ownership and settlement first (§§3–5), then isolation and 
 
 ## 1. Scope and non-negotiable invariants
 
-`pr-hero` will evolve from a Claude Code-only step runner into a shared harness over CLI and SDK transports. Later phases add explicit model routing and cross-model hunter diversity without weakening the existing refuter or deterministic tiering.
+`crysk` will evolve from a Claude Code-only step runner into a shared harness over CLI and SDK transports. Later phases add explicit model routing and cross-model hunter diversity without weakening the existing refuter or deterministic tiering.
 
 | Invariant | Contract |
 |---|---|
@@ -285,7 +285,7 @@ On step watchdog, user cancellation, or the global pipeline ceiling, the cancell
 6. If a transport has not produced a receipt, synthesize `local_termination_unconfirmed`, quarantine that transport/rate-limit bucket, and continue shutdown.
 7. Close every event sink and persist one atomic partial snapshot from already accepted, redacted state only.
 
-The grace expiry does **not** guarantee that a remote job or un-reaped local process stopped. It guarantees zero capacity for late mutation inside `pr-hero`: invalid lease, closed sink, detached persistence state, no retries, and no new work in the quarantined bucket.
+The grace expiry does **not** guarantee that a remote job or un-reaped local process stopped. It guarantees zero capacity for late mutation inside Crysk: invalid lease, closed sink, detached persistence state, no retries, and no new work in the quarantined bucket.
 
 For an SDK abort without provider confirmation, the receipt is `local_fenced_remote_unconfirmed`, `remoteStatus: "unknown_may_continue"`. The harness stops all new steps and retries on that credential/rate bucket, persists partial state with a visible warning, keeps the spend reservation unresolved (§9), and never claims remote execution or cost ended.
 

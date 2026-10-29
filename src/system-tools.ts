@@ -1,7 +1,11 @@
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CI_WORKFLOW_RELATIVE_PATH } from "#ci/setup";
+import {
+  duplicateWorkflowProblem,
+  LEGACY_WORKFLOW_RELATIVE_PATH,
+  WORKFLOW_RELATIVE_PATH,
+} from "./brand-paths";
 import { resolveOpenCodeAuthPath } from "./security/credential-broker";
 
 export type SystemTool = "git" | "claude" | "gh" | "codegraph";
@@ -326,17 +330,26 @@ export function checkCiConfiguration(
 
   const cwd = options.cwd ?? process.cwd();
   const exists = options.exists ?? existsSync;
-  const workflowPath = path.join(cwd, CI_WORKFLOW_RELATIVE_PATH);
-
-  if (exists(workflowPath)) {
-    return {
-      configured: true,
-      message: `CI workflow configured (${CI_WORKFLOW_RELATIVE_PATH})`,
-    };
+  // Either file counts: a repo set up before the rename keeps pr-hero.yml. Both
+  // at once is a defect, not a configuration: two workflows review every PR.
+  const duplicate = duplicateWorkflowProblem(cwd, exists);
+  if (duplicate !== undefined) {
+    return { configured: false, message: duplicate };
+  }
+  for (const relative of [
+    WORKFLOW_RELATIVE_PATH,
+    LEGACY_WORKFLOW_RELATIVE_PATH,
+  ]) {
+    if (exists(path.join(cwd, relative))) {
+      return {
+        configured: true,
+        message: `CI workflow configured (${relative})`,
+      };
+    }
   }
   return {
     configured: false,
     message: "No CI workflow configured",
-    hint: "Run 'pr-hero setup --ci' (or 'pr-hero ci init') to scaffold .github/workflows/pr-hero.yml",
+    hint: `Run 'crysk setup --ci' (or 'crysk ci init') to scaffold ${WORKFLOW_RELATIVE_PATH}`,
   };
 }

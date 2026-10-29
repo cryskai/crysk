@@ -338,7 +338,7 @@ describe("runPostCommand — CRIT-B: the $0 gate before the first live write", (
         calls.some(
           (c) =>
             c.argv.join(" ").includes("issues/42/comments") &&
-            c.stdin?.startsWith("<!-- pr-hero-report "),
+            c.stdin?.startsWith("<!-- crysk-report "),
         ),
       ).toBe(true);
       // WARN-2 (verify-report-pr3): post.json is written but was never
@@ -690,7 +690,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
 
   function summaryPatch(calls: RecordedCall[]): string {
     const patches = calls.filter((c) =>
-      c.stdin?.startsWith("<!-- pr-hero-report "),
+      c.stdin?.startsWith("<!-- crysk-report "),
     );
     return patches[patches.length - 1]?.stdin ?? "";
   }
@@ -721,8 +721,8 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       expect(body).not.toContain("resolved (verified)");
       // §3.6: the state block, AFTER the report marker, so the next run has
       // priors with real claims instead of `priorsFromPostedMarkers`' "".
-      expect(body).toContain(`<!-- pr-hero-state v=1 head=${RUN_HEAD} -->`);
-      expect(body.indexOf("<!-- pr-hero-state ")).toBeGreaterThan(0);
+      expect(body).toContain(`<!-- crysk-state v=1 head=${RUN_HEAD} -->`);
+      expect(body.indexOf("<!-- crysk-state ")).toBeGreaterThan(0);
       expect(body).toContain("the prior nobody touched");
       // C7: zero new findings is not a clean bill while priors are live.
       expect(body).not.toContain("found nothing to report");
@@ -785,7 +785,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
           dryRun: false,
           spawnFn,
         }),
-      ).rejects.toThrow(/no longer carries a pr-hero summary comment/);
+      ).rejects.toThrow(/no longer carries a Crysk summary comment/);
       // Refused BEFORE any write. Refusing after posting the very comment the
       // refusal is about would be worse than not refusing at all.
       expect(calls.filter((c) => c.argv.includes("--method"))).toHaveLength(0);
@@ -931,7 +931,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
           dryRun: true,
           spawnFn,
         }),
-      ).rejects.toThrow(/no longer carries a pr-hero summary comment/);
+      ).rejects.toThrow(/no longer carries a Crysk summary comment/);
       expect(calls.filter((c) => c.argv.includes("--method"))).toHaveLength(0);
     } finally {
       await cleanup();
@@ -1008,7 +1008,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       expect(exitCode).toBe(0);
       const body = summaryPatch(calls);
       expect(body).toContain("1 new · 0 persist");
-      expect(body).not.toContain("<!-- pr-hero-state ");
+      expect(body).not.toContain("<!-- crysk-state ");
     } finally {
       await cleanup();
     }

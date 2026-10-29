@@ -1,5 +1,5 @@
 // PR mode (ROADMAP B1): one command from a PR number to a reviewed range, a
-// detached worktree, a pipeline run, and a Greptile comparison. Moved out of
+// detached worktree, and a pipeline run. Moved out of
 // src/cli.ts (cli-decomp Phase 2, odd/tasks/cli-decomposition.md) as a
 // byte-for-byte relocation — no behaviour change.
 //
@@ -26,6 +26,7 @@ import {
 } from "#ci/cli-record";
 import { planCiSizeSkip } from "#ci/gates";
 import { withCiWorkflowGroup } from "#ci/reporter";
+import { RECHECK_COMMAND, REVIEW_COMMAND } from "#ci/trigger";
 import { pipelineConfigInput } from "#config/config";
 import {
   exclusionLines,
@@ -109,6 +110,7 @@ import { dryRunHunterCount, reviewingLine } from "#ui/plan";
 import { log, styleEnabled, terminalWidth } from "#ui/primitives";
 import { applySizeGate, startProgressRenderer } from "#ui/progress";
 import { parsePrFiles } from "#watch/preflight";
+import { commandHint } from "../brand";
 import { CliError } from "../errors";
 import { acquirePidLock } from "../home";
 import { worktreeLockPath } from "../home-preflight";
@@ -153,13 +155,12 @@ export function recordPipelineOutcome(
 // T5b: one reply per adjudication, on the finding's own thread. Posted after the
 // review is published. WHY a failed post only warns: no verdict changes this run's
 // gate. A reply that fails or does not land leaves the dismissal with no CI ruling,
-// so the next /pr-hero recheck rules on it again and the next review still counts
+// so the next /crysk recheck rules on it again and the next review still counts
 // the finding, which fails closed.
 const ADJUDICATION_REPLY_TIMEOUT_MS = 30_000;
 
 const ADJUDICATION_BADGES = {
-  upheld:
-    "✅ **CI adjudication: upheld** — the dismissal stands; from the next review of this head (`/pr-hero review`) this finding no longer counts toward the gate.",
+  upheld: `✅ **CI adjudication: upheld** — the dismissal stands; from the next review of this head (${commandHint(REVIEW_COMMAND)}) this finding no longer counts toward the gate.`,
   rejected:
     "❌ **CI adjudication: rejected** — the finding stands and still counts.",
   inconclusive:
@@ -211,7 +212,7 @@ export async function postAdjudicationReplies(input: {
     // No ruling exists: post nothing, so the dismissal stays pending for a later recheck.
     if (entry.failed === true) {
       process.stdout.write(
-        `::notice::pr-hero: the CI adjudicator could not rule on ${entry.priorId}; it stays pending for the next /pr-hero recheck\n`,
+        `::notice::crysk: the CI adjudicator could not rule on ${entry.priorId}; it stays pending for the next ${commandHint(RECHECK_COMMAND, "")}\n`,
       );
       continue;
     }
@@ -238,7 +239,7 @@ export async function postAdjudicationReplies(input: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       process.stdout.write(
-        `::warning::pr-hero: could not post the CI adjudication for ${entry.priorId}: ${message}\n`,
+        `::warning::crysk: could not post the CI adjudication for ${entry.priorId}: ${message}\n`,
       );
     }
     // Only an upheld verdict can clear the finding on the next review, so only its
@@ -254,7 +255,7 @@ export async function postAdjudicationReplies(input: {
           }).catch(() => undefined);
     if (author !== CI_ADJUDICATOR_LOGIN) {
       process.stdout.write(
-        `::warning::pr-hero: the CI adjudication for ${entry.priorId} was not recorded under ${CI_ADJUDICATOR_LOGIN}; the finding still counts toward the gate\n`,
+        `::warning::crysk: the CI adjudication for ${entry.priorId} was not recorded under ${CI_ADJUDICATOR_LOGIN}; the finding still counts toward the gate\n`,
       );
     }
   }
@@ -553,7 +554,7 @@ export async function reviewPr(
           stepSummaryFlag: options.stepSummary,
           plan: sizePlan,
           noticeMessage:
-            "pr-hero review skipped — diff exceeds the configured size gate",
+            "crysk review skipped — diff exceeds the configured size gate",
           ciMode,
           headSha,
         });
@@ -718,7 +719,7 @@ export async function reviewPr(
       // job log — the `::error::` annotation naming the cause included —
       // into a group nothing ever closes.
       let started = 0;
-      await withCiWorkflowGroup(isCi, "pr-hero review", log, async () => {
+      await withCiWorkflowGroup(isCi, "crysk review", log, async () => {
         log(reviewingLine(hunterCount, summary, options));
         // runnerAuthority resolved before confirm with the exact-binding gate.
         if (runnerAuthority.error !== undefined) {

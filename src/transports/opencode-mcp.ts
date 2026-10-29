@@ -227,7 +227,7 @@ export function assertMcpConnected(
   const extra = connected.filter((name) => !declared.has(name));
   if (extra.length > 0) {
     throw new Error(
-      `opencode connected MCP servers pr-hero did not declare: ${extra.join(", ")}` +
+      `opencode connected MCP servers Crysk did not declare: ${extra.join(", ")}` +
         ` (declared: ${expected.length === 0 ? "none" : [...declared].sort().join(", ")})`,
     );
   }

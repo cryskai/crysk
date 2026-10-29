@@ -1,7 +1,4 @@
-import crypto from "node:crypto";
-import { chmodSync, existsSync, renameSync, unlinkSync } from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import { engineIdentity } from "#git/identity";
 import type { CliOptions } from "#review/preflight";
 import { log } from "#ui/primitives";
@@ -9,6 +6,8 @@ import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import {
   detectInstallMethod,
+  downloadReleaseBinary,
+  installStandaloneBinary,
   PRHERO_GITHUB_REPO,
   planUpgrade,
   readUpgradeCache,
@@ -92,12 +91,12 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
   }
 
   if (options.check) {
-    log(`pr-hero version: v${currentVersion}`);
+    log(`crysk version: v${currentVersion}`);
     log(`latest release:  v${latestVersion} (${releaseUrl})`);
     if (currentVersion === latestVersion) {
-      log("✓ pr-hero is up to date.");
+      log("✓ Crysk is up to date.");
     } else {
-      log(`Update available! Run 'pr-hero upgrade' to update.`);
+      log(`Update available! Run 'crysk upgrade' to update.`);
     }
     return 0;
   }
@@ -118,7 +117,7 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
   }
 
   if (plan.action === "up_to_date") {
-    log(`✓ pr-hero is already up to date (v${currentVersion}).`);
+    log(`✓ Crysk is already up to date (v${currentVersion}).`);
     log("Running asset reconciliation to keep skills & MCP in sync...");
     await reconcileUpgrade({ home });
     log("✓ Synced skills & MCP registrations.");
@@ -134,105 +133,56 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
   }
 
   if (plan.action === "upgrade_package_manager") {
-    log("pr-hero is installed via global package manager.");
+    log("Crysk is installed via global package manager.");
     log(
-      `Please run: ${method.kind === "package_manager" ? method.manager : "npm"} install -g pr-hero@latest`,
+      `Please run: ${method.kind === "package_manager" ? method.manager : "npm"} install -g crysk@latest`,
+    );
+    // The crysk package also links the pr-hero bin, which a global install of
+    // the old package still owns, so that install fails until it is removed.
+    log(
+      `If the global package is still the old pr-hero one, remove it first: ${method.kind === "package_manager" ? method.manager : "npm"} uninstall -g pr-hero`,
     );
     return 0;
   }
 
   if (plan.action === "upgrade_standalone") {
-    const downloadUrl = plan.downloadUrl;
-    const checksumsUrl = plan.checksumsUrl;
-    const tempBinary = plan.tempBinary;
     const targetBinary = plan.targetBinary;
-    const bakBinary = plan.bakBinary;
-
-    if (
-      !downloadUrl ||
-      !checksumsUrl ||
-      !tempBinary ||
-      !targetBinary ||
-      !bakBinary
-    ) {
+    if (!plan.downloadUrl || !targetBinary) {
       throw new CliError("Incomplete standalone upgrade plan.");
     }
 
-    log(`Downloading ${downloadUrl}...`);
-    const binResp = await fetch(downloadUrl);
-    if (!binResp.ok) {
-      throw new CliError(
-        `Failed to download pr-hero binary from ${downloadUrl}`,
-      );
-    }
-    const binBuffer = await binResp.arrayBuffer();
-
-    log("Verifying SHA256 checksums...");
-    const sumsResp = await fetch(checksumsUrl);
-    if (!sumsResp.ok) {
-      throw new CliError(`Failed to download SHA256SUMS from ${checksumsUrl}`);
-    }
-    const sumsText = await sumsResp.text();
-
-    const actualHash = crypto
-      .createHash("sha256")
-      .update(Buffer.from(binBuffer))
-      .digest("hex");
-    const targetFileName = path.basename(downloadUrl);
-    const expectedLine = sumsText
-      .split("\n")
-      .find((l) => l.includes(targetFileName));
-    if (!expectedLine?.startsWith(actualHash)) {
-      throw new CliError(
-        `SHA256 checksum verification failed for ${targetFileName}!`,
-      );
-    }
-
-    await Bun.write(tempBinary, binBuffer);
-    chmodSync(tempBinary, 0o755);
-
-    if (!existsSync(targetBinary) && existsSync(bakBinary)) {
-      renameSync(bakBinary, targetBinary);
-    } else if (existsSync(bakBinary)) {
-      try {
-        unlinkSync(bakBinary);
-      } catch {
-        // ignore
-      }
-    }
-
-    if (existsSync(targetBinary)) {
-      renameSync(targetBinary, bakBinary);
-    }
-    renameSync(tempBinary, targetBinary);
-
-    // Smoke test that the upgraded binary can execute before removing backup
-    let smokeOk = false;
+    log(`Downloading ${plan.downloadUrl}...`);
+    let downloaded: Awaited<ReturnType<typeof downloadReleaseBinary>>;
     try {
-      const smokeProc = Bun.spawn([targetBinary, "--help"], {
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-      const smokeExit = await smokeProc.exited;
-      smokeOk = smokeExit === 0;
-    } catch {
-      smokeOk = false;
-    }
-
-    if (!smokeOk) {
-      log(
-        "warning: upgraded binary failed to execute. Restoring previous version...",
-      );
-      if (existsSync(bakBinary)) {
-        renameSync(bakBinary, targetBinary);
-      }
+      downloaded = await downloadReleaseBinary(plan);
+    } catch (error) {
       throw new CliError(
-        "Upgrade failed during binary validation and was rolled back.",
+        error instanceof Error ? error.message : String(error),
       );
     }
+    log(`Verified SHA256 of ${downloaded.assetName}.`);
 
-    if (existsSync(bakBinary)) {
-      unlinkSync(bakBinary);
+    const installed = await installStandaloneBinary(
+      plan,
+      Buffer.from(downloaded.bytes),
+    );
+    if (installed.status === "rolled_back") {
+      throw new CliError(
+        "Upgrade stopped: the downloaded binary did not answer --help (it failed, or hung past 30s). Nothing installed was changed.",
+      );
+    }
+    if (installed.alias === "copy") {
+      log(
+        `note: could not symlink ${plan.aliasBinary}; wrote a copy instead. 'upgrade' refreshes it.`,
+      );
+    } else if (installed.alias === "failed") {
+      // A re-run would find crysk up to date and never reach the alias, so the
+      // fix is the alias itself; the run still exits non-zero (below). Plain
+      // `ln -sf` is not suggested: with a directory at that path it links inside
+      // it, exits 0 and leaves pr-hero unresolved.
+      log(
+        `warning: crysk is upgraded, but ${plan.aliasBinary} could not be updated (${installed.aliasError ?? "unknown error"}). Use 'crysk', or move whatever is at ${plan.aliasBinary} out of the way and link it again: ln -s crysk ${plan.aliasBinary}`,
+      );
     }
 
     log("Running reconciliation via upgraded binary...");
@@ -249,12 +199,14 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
 
     if (exitCode !== 0) {
       log(
-        "warning: reconciliation reported errors. Run 'pr-hero upgrade --reconcile' to retry.",
+        "warning: reconciliation reported errors. Run 'crysk upgrade --reconcile' to retry.",
       );
       return exitCode;
     }
+    // A missing pr-hero alias is a failed upgrade for any script that calls it.
+    if (installed.alias === "failed") return 1;
 
-    log(`✓ Successfully upgraded pr-hero to v${latestVersion}!`);
+    log(`✓ Successfully upgraded Crysk to v${latestVersion}!`);
     return 0;
   }
 

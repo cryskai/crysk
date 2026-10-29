@@ -1,6 +1,6 @@
 // Pure-decision tests for PR mode (ROADMAP B1): the --pr flag surface, the
 // PR-record parser, the two-root naming rules, the worktree reuse gate, and
-// the comparison.json projection. All offline, literal in → literal out.
+// the commit-status contract. All offline, literal in → literal out.
 //
 // The two real fixtures below are REAL `gh pr view` bodies captured
 // 2026-08-10 with
@@ -16,11 +16,8 @@ import {
   SKIP_SIZE_COMMENT_MARKER,
 } from "#ci/gates";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
-import type { ComparisonResult, PrHeroFindingRef } from "#compare/compare";
-import type { GreptileFinding } from "#compare/greptile";
 import {
   blockingCommitStatusRequest,
-  buildComparisonJson,
   CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
   COMMIT_STATUS_CONTEXT,
   COMMIT_STATUS_DESCRIPTION_MAX,
@@ -316,7 +313,7 @@ describe("parseArgs post command", () => {
     expect(options.from).toBe("/runs/x");
     for (const argv of [
       ["review", "--from", "/runs/x"],
-      ["ledger", "--from", "/runs/x"],
+      ["status", "--pr", "5", "--from", "/runs/x"],
     ]) {
       try {
         parseArgs(argv);
@@ -350,14 +347,26 @@ describe("parseArgs post command", () => {
   });
 });
 
-// ROADMAP B6c: the `triage` verb — `pr-hero triage --pr <n> --from
-// <run-dir> [--dry-run]` — shares `post`'s exact shape (both --pr and
-// --from required, --from otherwise rejected everywhere else).
+const replyFlags = [
+  "--pr",
+  "5",
+  "--from",
+  "/runs/x",
+  "--finding",
+  "F001",
+  "--tag",
+  "applied",
+  "--body-file",
+  "/tmp/reason.md",
+];
+
+// The bare `triage --pr --from` verb (it bound verdicts into comparison.json)
+// was retired with that file; only `triage reply` remains.
 describe("parseArgs triage command", () => {
   test("is a recognized command, and the unknown-command list names it", () => {
-    expect(
-      parseArgs(["triage", "--pr", "5", "--from", "/runs/x"]).command,
-    ).toBe("triage");
+    expect(parseArgs(["triage", "reply", ...replyFlags]).command).toBe(
+      "triage",
+    );
     try {
       parseArgs(["audit"]);
       throw new Error("should have thrown");
@@ -367,28 +376,10 @@ describe("parseArgs triage command", () => {
     }
   });
 
-  test("requires --pr and --from", () => {
-    expect(() => parseArgs(["triage", "--from", "/runs/x"])).toThrow(/--pr/);
-    expect(() => parseArgs(["triage", "--pr", "5"])).toThrow(/--from/);
-  });
-
-  test("--from is read, and rejected on every other command", () => {
-    const { options } = parseArgs(["triage", "--pr", "5", "--from", "/runs/x"]);
-    expect(options.from).toBe("/runs/x");
-    expect(() => parseArgs(["review", "--from", "/runs/x"])).toThrow(/--from/);
-  });
-
-  test("accepts bare --pr (current branch's PR), and --dry-run parses beside it", () => {
-    const { options } = parseArgs([
-      "triage",
-      "--pr",
-      "--from",
-      "/runs/x",
-      "--dry-run",
-    ]);
-    expect(options.pr).toBe("current");
-    expect(options.from).toBe("/runs/x");
-    expect(options.dryRun).toBe(true);
+  test("bare triage fails loud and names triage reply", () => {
+    expect(() =>
+      parseArgs(["triage", "--pr", "5", "--from", "/runs/x"]),
+    ).toThrow(/triage reply/);
   });
 });
 
@@ -499,7 +490,7 @@ describe("parseArgs triage reply", () => {
     );
   });
 
-  test("reply flags are rejected on the bind-only triage verb", () => {
+  test("reply flags without the reply sub-word fail loud", () => {
     expect(() =>
       parseArgs([
         "triage",
@@ -510,7 +501,7 @@ describe("parseArgs triage reply", () => {
         "--finding",
         "F001",
       ]),
-    ).toThrow(/--finding only applies to triage reply/);
+    ).toThrow(/triage reply/);
   });
 
   test("an unknown tag fails loud", () => {
@@ -538,16 +529,22 @@ describe("prCommentMarker", () => {
 
   test("declares the full head sha and starts with the matcher's prefix", () => {
     const marker = prCommentMarker(HEAD);
-    expect(marker).toBe(`<!-- pr-hero-report head=${HEAD} -->`);
+    expect(marker).toBe(`<!-- crysk-report head=${HEAD} -->`);
     expect(marker.startsWith(PR_COMMENT_MARKER_PREFIX)).toBe(true);
   });
 
-  // The old headless marker must ALSO start with the prefix — that identity
-  // is the whole backward-compatibility argument for prefix matching.
-  test("the legacy headless marker starts with the same prefix", () => {
-    expect("<!-- pr-hero-report -->".startsWith(PR_COMMENT_MARKER_PREFIX)).toBe(
-      true,
-    );
+  // Comments already posted carry the old headless `<!-- pr-hero-report -->`
+  // and the pre-rename `<!-- pr-hero-report head=… -->`. The summary lookup
+  // must still find both, or --post stacks a second summary.
+  test("the summary lookup still finds a legacy pr-hero marker", () => {
+    expect(
+      findMarkedCommentId([{ id: 1, body: "<!-- pr-hero-report -->" }]),
+    ).toBe(1);
+    expect(
+      findMarkedCommentId([
+        { id: 2, body: `<!-- pr-hero-report head=${HEAD} -->\nbody` },
+      ]),
+    ).toBe(2);
   });
 
   // Rereview-coverage fix (partial-review posting a marker that reads as
@@ -555,10 +552,10 @@ describe("prCommentMarker", () => {
   // it explicitly true — must stay BYTE-IDENTICAL to the pre-fix marker.
   // Every already-posted comment, and every one-argument caller in this
   // codebase, depends on that.
-  test("complete (default, and explicit true) is byte-identical to the old marker", () => {
-    expect(prCommentMarker(HEAD)).toBe(`<!-- pr-hero-report head=${HEAD} -->`);
+  test("complete (default, and explicit true) is the plain head marker", () => {
+    expect(prCommentMarker(HEAD)).toBe(`<!-- crysk-report head=${HEAD} -->`);
     expect(prCommentMarker(HEAD, true)).toBe(
-      `<!-- pr-hero-report head=${HEAD} -->`,
+      `<!-- crysk-report head=${HEAD} -->`,
     );
   });
 
@@ -569,7 +566,7 @@ describe("prCommentMarker", () => {
   test("incomplete carries the named coverage token and still matches the prefix", () => {
     const marker = prCommentMarker(HEAD, false);
     expect(marker).toBe(
-      `<!-- pr-hero-report head=${HEAD} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`,
+      `<!-- crysk-report head=${HEAD} ${PR_COMMENT_COVERAGE_PARTIAL_TOKEN} -->`,
     );
     expect(marker.startsWith(PR_COMMENT_MARKER_PREFIX)).toBe(true);
   });
@@ -955,164 +952,6 @@ describe("decideWorktree", () => {
   });
 });
 
-describe("buildComparisonJson", () => {
-  const matched: GreptileFinding = {
-    index: 1,
-    path: "src/a.ts",
-    startLine: 100,
-    endLine: 104,
-    title: "Stale cache",
-    description: "The derived value is never invalidated.",
-  };
-  const missed: GreptileFinding = {
-    index: 2,
-    path: "src/b.ts",
-    startLine: 7,
-    endLine: 7,
-    title: "Missed",
-    description: "Only Greptile saw this.",
-  };
-  const paired: PrHeroFindingRef = {
-    id: "F001",
-    path: "src/a.ts",
-    line: 102,
-    claim: "Cached list survives the mutation.",
-    tier: "blocking",
-  };
-  const extra: PrHeroFindingRef = {
-    id: "F002",
-    path: "src/c.ts",
-    line: 40,
-    claim: "Only pr-hero saw this.",
-    tier: "advisory",
-  };
-  const result: ComparisonResult = {
-    greptileOnly: [missed],
-    both: [{ greptile: matched, prhero: paired }],
-    prheroOnly: [extra],
-  };
-
-  test("projects the same result the renderer consumes, miss first", () => {
-    const json = buildComparisonJson({
-      pr: 1682,
-      headSha: "e3ab386a63020c6f5c21d814d176ff33849eef8d",
-      diffFromSha: "b22c3b367f6ac8531ad40e172f7aa82384dbbeb1",
-      runDir: "/x/musive-prhero-runs/pr-1682-e3ab386a-1",
-      generatedAt: "2026-08-10T18:00:00.000Z",
-      runStatus: "complete",
-      greptileFound: true,
-      result,
-    });
-    expect(json.pr).toBe(1682);
-    expect(json.generated_at).toBe("2026-08-10T18:00:00.000Z");
-    expect(json.head_sha).toBe("e3ab386a63020c6f5c21d814d176ff33849eef8d");
-    expect(json.diff_from_sha).toBe("b22c3b367f6ac8531ad40e172f7aa82384dbbeb1");
-    expect(json.run_dir).toBe("/x/musive-prhero-runs/pr-1682-e3ab386a-1");
-    expect(json.run_status).toBe("complete");
-    expect(json.greptile).toEqual({ found: true });
-    expect(json.rows.map((r) => r.bucket)).toEqual([
-      "greptile_only",
-      "both",
-      "prhero_only",
-    ]);
-    expect(json.rows[0]).toEqual({
-      bucket: "greptile_only",
-      greptile: {
-        index: 2,
-        path: "src/b.ts",
-        start_line: 7,
-        end_line: 7,
-        title: "Missed",
-        description: "Only Greptile saw this.",
-      },
-      prhero: null,
-      verdict: null,
-      reasoning: null,
-      actor: null,
-    });
-    expect(json.rows[1]).toEqual({
-      bucket: "both",
-      greptile: {
-        index: 1,
-        path: "src/a.ts",
-        start_line: 100,
-        end_line: 104,
-        title: "Stale cache",
-        description: "The derived value is never invalidated.",
-      },
-      prhero: {
-        id: "F001",
-        path: "src/a.ts",
-        line: 102,
-        claim: "Cached list survives the mutation.",
-        tier: "blocking",
-      },
-      verdict: null,
-      reasoning: null,
-      actor: null,
-    });
-    expect(json.rows[2]).toEqual({
-      bucket: "prhero_only",
-      greptile: null,
-      prhero: {
-        id: "F002",
-        path: "src/c.ts",
-        line: 40,
-        claim: "Only pr-hero saw this.",
-        tier: "advisory",
-      },
-      verdict: null,
-      reasoning: null,
-      actor: null,
-    });
-  });
-
-  // The A3 lesson made structural: the triage columns exist, and they ship
-  // empty — never pre-filled, never omitted. `actor` (ROADMAP B6c) joins
-  // them for the same reason: nobody has triaged this row yet.
-  test("every row ships verdict, reasoning and actor as literal nulls", () => {
-    const json = buildComparisonJson({
-      pr: 1682,
-      headSha: "e3ab386a63020c6f5c21d814d176ff33849eef8d",
-      diffFromSha: "b22c3b367f6ac8531ad40e172f7aa82384dbbeb1",
-      runDir: "/x/runs/pr-1682-e3ab386a-1",
-      generatedAt: "2026-08-10T18:00:00.000Z",
-      runStatus: "complete",
-      greptileFound: true,
-      result,
-    });
-    expect(json.rows.length).toBeGreaterThan(0);
-    for (const row of json.rows) {
-      expect(row.verdict).toBeNull();
-      expect(row.reasoning).toBeNull();
-      expect(row.actor).toBeNull();
-    }
-  });
-
-  // found: false ("no Greptile comment") must stay distinguishable from
-  // "Greptile commented and reported nothing" (found: true, no rows).
-  test("a PR without a Greptile comment records found: false", () => {
-    const json = buildComparisonJson({
-      pr: 1660,
-      headSha: "30e038b0c71742432eea11a7d5964c97251c5e49",
-      diffFromSha: "7395db0d33d0f3fae8eb2f98795c8748335986ca",
-      runDir: "/x/runs/pr-1660-30e038b0-1",
-      generatedAt: "2026-08-10T18:05:00.000Z",
-      runStatus: "partial",
-      greptileFound: false,
-      result: { greptileOnly: [], both: [], prheroOnly: [extra] },
-    });
-    expect(json.greptile.found).toBe(false);
-    // A partial run's comparison stays readable, weighted by its status —
-    // only the all-hunters-dead case is never written at all (cli.ts skips
-    // it: "pr-hero 0" from a review that never ran is not a measured miss).
-    expect(json.run_status).toBe("partial");
-    expect(json.rows).toHaveLength(1);
-    expect(json.rows[0].bucket).toBe("prhero_only");
-    expect(json.rows[0].greptile).toBeNull();
-  });
-});
-
 describe("commitStatusRequest", () => {
   const targetUrl = "https://github.com/org/repo/pull/7";
 
@@ -1127,7 +966,7 @@ describe("commitStatusRequest", () => {
     ).toEqual({
       state: "pending",
       context: COMMIT_STATUS_CONTEXT,
-      description: "pr-hero reviewing",
+      description: "crysk reviewing",
       targetUrl,
     });
   });
@@ -1186,7 +1025,7 @@ describe("settleRequestForCancellation", () => {
     context: COMMIT_STATUS_CONTEXT as typeof COMMIT_STATUS_CONTEXT,
   };
 
-  test("a lock taken by a local run settles on pr-hero/local, never on pr-hero", () => {
+  test("a lock taken by a local run settles on crysk/local, never on crysk", () => {
     const request = settleRequestForCancellation({
       ...lock,
       context: LOCAL_COMMIT_STATUS_CONTEXT,
@@ -1390,7 +1229,7 @@ describe("blockingCommitStatusRequest", () => {
       state: "failure",
       context: COMMIT_STATUS_CONTEXT,
       description:
-        "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+        "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
       targetUrl: gateTargetUrl,
     });
     expect(request.description.length).toBeLessThanOrEqual(
@@ -1452,7 +1291,7 @@ describe("resolveCiMode", () => {
 });
 
 describe("resolveCiPosture: the explicit --ci flag alone picks the gate and the context", () => {
-  test("only --ci writes pr-hero; a run without it is advisory on pr-hero/local", () => {
+  test("only --ci writes crysk; a run without it is advisory on crysk/local", () => {
     expect(resolveCiPosture({ ci: true })).toEqual({
       ciMode: "gate",
       statusContext: COMMIT_STATUS_CONTEXT,
@@ -1480,7 +1319,7 @@ describe("resolveCiPosture: the explicit --ci flag alone picks the gate and the 
   });
 
   test("the local context is distinct from the gate's, and both are in the run's read set", () => {
-    expect(LOCAL_COMMIT_STATUS_CONTEXT).toBe("pr-hero/local");
+    expect(LOCAL_COMMIT_STATUS_CONTEXT).toBe("crysk/local");
     expect(LOCAL_COMMIT_STATUS_CONTEXT).not.toBe(COMMIT_STATUS_CONTEXT);
     expect(RUN_STATUS_CONTEXTS).toEqual([
       COMMIT_STATUS_CONTEXT,
@@ -1531,6 +1370,122 @@ describe("the readers: CI yields to pr-hero only, the watcher to both", () => {
         LOCAL_COMMIT_STATUS_CONTEXT,
       ),
     ).toEqual(localPending);
+  });
+});
+
+// The rename publishes the gate on `crysk` and, for one version, on the legacy `pr-hero`
+// (`crysk/local` and `pr-hero/local` for a local run). Every reader treats a pair as one gate.
+describe("one gate over two names (crysk and the legacy pr-hero)", () => {
+  const now = Date.parse("2026-10-29T17:00:00.000Z");
+  const fresh = "2026-10-29T16:30:00.000Z";
+  const fresher = "2026-10-29T16:40:00.000Z";
+  const stale = "2026-10-29T15:00:00.000Z";
+  const row = (context: string, state: string, created_at: string) => ({
+    state,
+    context,
+    created_at,
+  });
+
+  test("the contexts are written crysk and crysk/local", () => {
+    expect(COMMIT_STATUS_CONTEXT).toBe("crysk");
+    expect(LOCAL_COMMIT_STATUS_CONTEXT).toBe("crysk/local");
+  });
+
+  test("a pending on either name of the gate is in flight", () => {
+    for (const context of ["crysk", "pr-hero"]) {
+      expect(
+        isInFlightCommitStatus([row(context, "pending", fresh)], now),
+        context,
+      ).toBe(true);
+    }
+  });
+
+  test("a stale pending on one name never hides behind the other: the newest row across both decides", () => {
+    // An older action's pending, then this version's settled pair.
+    expect(
+      isInFlightCommitStatus(
+        [row("pr-hero", "pending", fresh), row("crysk", "success", fresher)],
+        now,
+      ),
+    ).toBe(false);
+    // The reverse: a legacy-only pending newer than a settled crysk row is a live lock.
+    expect(
+      isInFlightCommitStatus(
+        [row("crysk", "success", fresh), row("pr-hero", "pending", fresher)],
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      isInFlightCommitStatus([row("pr-hero", "pending", stale)], now),
+    ).toBe(false);
+  });
+
+  test("the local pair is its own lock: a CI yield ignores it, the run-wide read sees either name", () => {
+    for (const context of ["crysk/local", "pr-hero/local"]) {
+      expect(
+        isInFlightCommitStatus([row(context, "pending", fresh)], now),
+        context,
+      ).toBe(false);
+      expect(
+        isInFlightCommitStatus(
+          [row(context, "pending", fresh)],
+          now,
+          undefined,
+          RUN_STATUS_CONTEXTS,
+        ),
+        context,
+      ).toBe(true);
+    }
+  });
+
+  test("latestStatusInContext takes the newest row across both names, and a tie goes to crysk", () => {
+    const old = row("crysk", "failure", fresh);
+    const legacyOnly = row("pr-hero", "success", fresher);
+    expect(latestStatusInContext([old, legacyOnly], "crysk")).toEqual(
+      legacyOnly,
+    );
+    const pair = [
+      row("pr-hero", "success", fresh),
+      row("crysk", "success", fresh),
+    ];
+    expect(latestStatusInContext(pair, "crysk")?.context).toBe("crysk");
+    expect(latestStatusInContext([...pair].reverse(), "crysk")?.context).toBe(
+      "crysk",
+    );
+    expect(
+      latestStatusInContext([row("pr-hero/local", "success", fresh)], "crysk"),
+    ).toBeNull();
+  });
+
+  test("the descriptions a run writes start with crysk, and stay inside GitHub's limit", () => {
+    const texts = [
+      commitStatusRequest({
+        phase: "pending",
+        posted: false,
+        targetUrl: undefined,
+        context: COMMIT_STATUS_CONTEXT,
+      }).description,
+      blockingCommitStatusRequest({
+        blockingCount: 2,
+        targetUrl: undefined,
+        context: COMMIT_STATUS_CONTEXT,
+      }).description,
+      skipCommitStatusRequest({
+        kind: "size",
+        targetUrl: undefined,
+        context: COMMIT_STATUS_CONTEXT,
+      }).description,
+      partialReviewDescription(1, 4, "abc123"),
+      partialReviewAgainDescription(1, 4, "abc123"),
+    ];
+    for (const text of texts) {
+      expect(text.startsWith("crysk"), text).toBe(true);
+      expect(text, text).not.toContain("pr-hero:");
+      expect(text.length).toBeLessThanOrEqual(COMMIT_STATUS_DESCRIPTION_MAX);
+    }
+    expect(texts[1]).toBe(
+      "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
+    );
   });
 });
 
@@ -1724,7 +1679,7 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
 
   test("the exact partial text names N of M, the failed set, and the retry", () => {
     expect(partialReviewDescription(1, 4, "938084")).toBe(
-      "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it",
+      "crysk: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it",
     );
   });
 
@@ -1796,14 +1751,14 @@ describe("commitStatusCompletion — a partial review is red in gate mode (S1, S
 describe("partialReviewAgainDescription — a repeated partial review (W3-PARTIAL S1)", () => {
   test("the repeat text names the counts and the unlock", () => {
     expect(partialReviewAgainDescription(1, 4)).toBe(
-      "pr-hero: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override",
+      "crysk: review partial again (1 of 4 hunters failed) — fix the failing route or /pr-hero override",
     );
   });
 
   test("three-digit counts stay within the 140-character status description limit", () => {
     const text = partialReviewAgainDescription(999, 999);
     expect(text).toBe(
-      "pr-hero: review partial again (999 of 999 hunters failed) — fix the failing route or /pr-hero override",
+      "crysk: review partial again (999 of 999 hunters failed) — fix the failing route or /pr-hero override",
     );
     expect(text.length).toBeLessThanOrEqual(140);
   });
@@ -1811,14 +1766,14 @@ describe("partialReviewAgainDescription — a repeated partial review (W3-PARTIA
   test("the set key fits: the longest realistic counts with a key stay within 140 characters (W4-R363 S1)", () => {
     const text = partialReviewAgainDescription(12, 12, "938084");
     expect(text).toBe(
-      "pr-hero: review partial again (12 of 12 hunters failed, set 938084) — fix the failing route or /pr-hero override",
+      "crysk: review partial again (12 of 12 hunters failed, set 938084) — fix the failing route or /pr-hero override",
     );
     expect(text.length).toBeLessThanOrEqual(140);
   });
 
   test("the first partial text stays byte-identical (S3)", () => {
     expect(partialReviewDescription(1, 4)).toBe(
-      "pr-hero: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+      "crysk: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
     );
   });
 });

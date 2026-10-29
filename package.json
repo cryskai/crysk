@@ -1,15 +1,15 @@
 {
-  "name": "pr-hero",
-  "version": "0.2.6",
+  "name": "crysk",
+  "version": "0.3.0",
   "private": false,
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/juanmaagd/pr-hero.git"
+    "url": "git+https://github.com/cryskai/crysk.git"
   },
-  "homepage": "https://github.com/juanmaagd/pr-hero#readme",
+  "homepage": "https://github.com/cryskai/crysk#readme",
   "bugs": {
-    "url": "https://github.com/juanmaagd/pr-hero/issues"
+    "url": "https://github.com/cryskai/crysk/issues"
   },
   "type": "module",
   "main": "dist/index.js",
@@ -39,6 +39,7 @@
     "#commands/*": "./src/commands/*.ts"
   },
   "bin": {
+    "crysk": "./bin/pr-hero.js",
     "pr-hero": "./bin/pr-hero.js"
   },
   "preferGlobal": true,
@@ -47,10 +48,10 @@
     "config",
     "dist",
     "prompts",
-    "skills/pr-hero-triage",
-    "skills/pr-hero-ci-setup",
-    "skills/pr-hero-pr",
-    "skills/pr-hero",
+    "skills/crysk-loop",
+    "skills/crysk-ci-setup",
+    "skills/crysk-pr",
+    "skills/crysk",
     "src",
     "LICENSE",
     "README.md"

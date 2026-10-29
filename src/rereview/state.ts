@@ -20,6 +20,7 @@ import {
   identityFromLocs,
 } from "#rereview/identity";
 import type { Finding, Severity } from "#review/findings";
+import { findMarker, MARKER_BRAND_PATTERN, MARKER_OPEN } from "../brand";
 import {
   type FindingChannel,
   type GateStatus,
@@ -32,7 +33,7 @@ import {
   TIER_UNRECOVERABLE,
 } from "./classify";
 
-export const PR_STATE_MARKER_PREFIX = "<!-- pr-hero-state ";
+export const PR_STATE_MARKER_PREFIX = `${MARKER_OPEN}state `;
 export const GITHUB_ISSUE_COMMENT_MAX = 65536;
 
 export type LiveStatus = "carried" | "unconfirmed" | "suppressed" | "deferred";
@@ -60,7 +61,9 @@ export interface ParsedStateBlock {
   hw: number;
 }
 
-const STATE_HEADER = /^<!-- pr-hero-state v=1 head=([0-9a-f]{40}) -->/;
+const STATE_HEADER = new RegExp(
+  `^<!-- ${MARKER_BRAND_PATTERN}-state v=1 head=([0-9a-f]{40}) -->`,
+);
 const HTML_COMMENT = /<!--([\s\S]*?)-->/;
 const R_ID = /^R(\d{3,})$/;
 
@@ -69,8 +72,8 @@ export function stateMarker(headSha: string): string {
 }
 
 export function parseStateBlock(body: string): ParsedStateBlock | null {
-  const start = body.indexOf(PR_STATE_MARKER_PREFIX);
-  if (start === -1) return null;
+  const start = findMarker(body, PR_STATE_MARKER_PREFIX)?.index;
+  if (start === undefined) return null;
   const fromMarker = body.slice(start);
   const headerLine = fromMarker.split("\n", 1)[0] ?? "";
   const header = STATE_HEADER.exec(headerLine);

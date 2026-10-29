@@ -285,7 +285,7 @@ function findingIssueCommentPosts(calls: RecordedCall[]): RecordedCall[] {
 
 function summaryStdins(calls: RecordedCall[]): string[] {
   return calls
-    .filter((c) => c.stdin?.startsWith("<!-- pr-hero-report "))
+    .filter((c) => c.stdin?.startsWith("<!-- crysk-report "))
     .map((c) => c.stdin ?? "");
 }
 
@@ -327,7 +327,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       (c) =>
         c.argv.join(" ").includes("POST") &&
         c.argv.join(" ").includes("issues/42/comments") &&
-        c.stdin?.startsWith("<!-- pr-hero-report "),
+        c.stdin?.startsWith("<!-- crysk-report "),
     );
     const reviewIndex = calls.findIndex((c) =>
       c.argv.join(" ").includes("pulls/42/reviews"),
@@ -336,7 +336,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       (c) =>
         c.argv.join(" ").includes("PATCH") &&
         c.argv.join(" ").includes("issues/comments/") &&
-        c.stdin?.startsWith("<!-- pr-hero-report "),
+        c.stdin?.startsWith("<!-- crysk-report "),
     );
     expect(createIndex).toBeGreaterThanOrEqual(0);
     // The summary create is the FIRST mutating (POST/PATCH) call this run
@@ -392,7 +392,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       .filter(
         (c) =>
           c.argv.join(" ").includes("PATCH") &&
-          c.stdin?.startsWith("<!-- pr-hero-report "),
+          c.stdin?.startsWith("<!-- crysk-report "),
       )
       .at(-1);
     expect(patch?.stdin).toContain("⚠️ **The PR moved while this review ran.**");
@@ -404,7 +404,7 @@ describe("postInlineFindings — step-14 ordering", () => {
       (c) =>
         c.argv.join(" ").includes("POST") &&
         c.argv.join(" ").includes("issues/42/comments") &&
-        c.stdin?.startsWith("<!-- pr-hero-report "),
+        c.stdin?.startsWith("<!-- crysk-report "),
     );
     expect(create?.stdin).not.toContain("The PR moved");
   });
@@ -732,7 +732,7 @@ describe("postInlineFindings — the 422 recovery never drops a finding", () => 
       calls.find(
         (c) =>
           c.argv.join(" ").includes("PATCH") &&
-          c.stdin?.startsWith("<!-- pr-hero-report "),
+          c.stdin?.startsWith("<!-- crysk-report "),
       )?.stdin ?? "";
     expect(patchBody).toContain("### Comments Outside Diff (1)");
     expect(patchBody).toContain("`src/a.ts:103`");
@@ -839,7 +839,7 @@ describe("postInlineFindings — the 422 recovery never drops a finding", () => 
       calls.find(
         (c) =>
           c.argv.join(" ").includes("PATCH") &&
-          c.stdin?.startsWith("<!-- pr-hero-report "),
+          c.stdin?.startsWith("<!-- crysk-report "),
       )?.stdin ?? "";
     expect(patchBody).toContain("### Comments Outside Diff (1)");
     expect(patchBody).toContain("`src/a.ts:102`");
@@ -911,7 +911,7 @@ describe("postInlineFindings — no finding issue-comment POST (issues #16/#17)"
       calls.find(
         (c) =>
           c.argv.join(" ").includes("PATCH") &&
-          c.stdin?.startsWith("<!-- pr-hero-report "),
+          c.stdin?.startsWith("<!-- crysk-report "),
       )?.stdin ?? "";
     expect(patchBody).toContain("### Comments Outside Diff (1)");
     expect(patchBody).toContain("an un-anchorable finding");
@@ -1262,7 +1262,7 @@ describe("postInlineFindings — comment url map reaches the summary's index", (
     const patchCall = calls.find(
       (c) =>
         c.argv.join(" ").includes("PATCH") &&
-        c.stdin?.startsWith("<!-- pr-hero-report "),
+        c.stdin?.startsWith("<!-- crysk-report "),
     );
     // F001, persisting, linked from plan.persisting with no extra fetch.
     expect(patchCall?.stdin).toContain(`${WEB_URL}/pull/42#discussion_r7`);
@@ -1304,7 +1304,7 @@ describe("postInlineFindings — previousHeadSha reaches the rendered summary", 
       spawnFn,
     });
     const summaryCall = calls.find((c) =>
-      c.stdin?.startsWith("<!-- pr-hero-report "),
+      c.stdin?.startsWith("<!-- crysk-report "),
     );
     expect(summaryCall).toBeDefined();
     // "diff from `aaaaaaaa`" (base_sha) ALSO contains OLD_HEAD's 8-char
@@ -1674,7 +1674,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
     // delta line reads a bare "Δ:" even on the defect — an assertion that
     // would pass against the bug and prove nothing.
     expect(body).not.toContain("Still live:");
-    expect(body).not.toContain("<!-- pr-hero-state ");
+    expect(body).not.toContain("<!-- crysk-state ");
     expect(body).not.toContain("unconfirmed");
     expect(body).not.toContain("carried");
     expect(body).not.toContain("R001");
@@ -1688,7 +1688,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
     // Loud. An operator who expected a delta must be able to read WHY off the
     // log rather than suspect the re-review silently broke.
     expect(logged).toContain(
-      "the pr-hero summary comment this re-review was computed against is gone",
+      "the Crysk summary comment this re-review was computed against is gone",
     );
     expect(logged).toContain("drops the re-review framing");
     expect(logged).toContain("review --pr 42 --post");
@@ -1708,7 +1708,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
         ...postInput,
         refuseOnVanishedPriorSummary: true,
       }),
-    ).rejects.toThrow(/no longer carries a pr-hero summary comment/);
+    ).rejects.toThrow(/no longer carries a Crysk summary comment/);
     // Refused before any write, exactly as `post --from` always has.
     expect(calls.filter((c) => c.argv.includes("--method"))).toHaveLength(0);
   });
@@ -1743,7 +1743,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
     expect(body).toContain("0 unconfirmed · 1 carried · 0 deferred · 1 new");
     expect(body).toContain("Still live:");
     expect(body).toContain(PRIOR_CLAIM);
-    expect(body).toContain(`<!-- pr-hero-state v=1 head=${HEAD} -->`);
+    expect(body).toContain(`<!-- crysk-state v=1 head=${HEAD} -->`);
     expect(logged).not.toContain("drops the re-review framing");
   });
 });
@@ -2068,10 +2068,10 @@ describe("postInlineFindings — re-review closing comment", () => {
     const closing = closingPosts(calls);
     expect(closing.length).toBe(1);
     const body = closing[0]?.stdin ?? "";
-    expect(
-      body.startsWith(`<!-- pr-hero-rereview-closed head=${HEAD} -->`),
-    ).toBe(true);
-    expect(body).toContain("pr-hero re-review complete");
+    expect(body.startsWith(`<!-- crysk-rereview-closed head=${HEAD} -->`)).toBe(
+      true,
+    );
+    expect(body).toContain("Crysk re-review complete");
     expect(body).toContain(`\`${HEAD.slice(0, 8)}\``);
     expect(body).toContain("No findings in this pass.");
     expect(body).toContain(`Δ since \`${OLD_HEAD.slice(0, 8)}\``);
@@ -2081,7 +2081,7 @@ describe("postInlineFindings — re-review closing comment", () => {
     // Posted LAST: after the summary PATCH, so it closes the run.
     const patchIndex = calls.findIndex(
       (c) =>
-        c.argv.includes("PATCH") && c.stdin?.startsWith("<!-- pr-hero-report "),
+        c.argv.includes("PATCH") && c.stdin?.startsWith("<!-- crysk-report "),
     );
     const closingIndex = calls.indexOf(closing[0] as RecordedCall);
     expect(patchIndex).toBeGreaterThanOrEqual(0);
@@ -2125,7 +2125,7 @@ describe("postInlineFindings — re-review closing comment", () => {
     // partial pass must never read as a green "complete".
     const heading = body.split("\n")[1] ?? "";
     expect(heading).toContain(
-      "### ⚠️ pr-hero re-review finished with partial coverage",
+      "### ⚠️ Crysk re-review finished with partial coverage",
     );
     expect(heading).not.toContain("✅");
     expect(body).not.toContain("No findings in this pass.");
@@ -2451,7 +2451,7 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
     const bodies = summaryStdins(calls);
     expect(bodies.length).toBe(2);
     const stateOf = (body: string) =>
-      body.slice(body.indexOf("<!-- pr-hero-state "));
+      body.slice(body.indexOf("<!-- crysk-state "));
     expect(stateOf(bodies[0] ?? "")).toBe(stateOf(bodies[1] ?? ""));
     expect(stateOf(bodies[1] ?? "")).toContain("fresh blocker");
   });
@@ -2711,14 +2711,14 @@ describe("postInlineFindings — a forced zero survives a merged re-review rende
     expect(countAfter(first)).toBe(0);
     const second = await reReview(first, true);
     // The merged path really ran: it wrote a state block.
-    expect(second).toContain("<!-- pr-hero-state ");
+    expect(second).toContain("<!-- crysk-state ");
     expect(countAfter(second)).toBe(0);
   });
 
   test("automatic re-review after a forced zero: counts 1", async () => {
     const first = await firstReviewBody(true);
     const second = await reReview(first, false);
-    expect(second).toContain("<!-- pr-hero-state ");
+    expect(second).toContain("<!-- crysk-state ");
     expect(countAfter(second)).toBe(1);
   });
 });

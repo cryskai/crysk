@@ -19,10 +19,10 @@ describe("menu-context", () => {
       }
     });
 
-    test("classifies unconfigured-repo when .prhero config is absent", async () => {
+    test("classifies unconfigured-repo when .crysk config is absent", async () => {
       const ctx = await resolveMenuContext("/Users/anon/my-project", {
         resolveRoot: async () => "/Users/anon/my-project",
-        exists: (p) => !p.includes(".prhero"),
+        exists: (p) => !p.includes(".crysk"),
       });
 
       expect(ctx.kind).toBe("unconfigured-repo");
@@ -32,10 +32,10 @@ describe("menu-context", () => {
       }
     });
 
-    test("classifies configured-repo when .prhero config exists", async () => {
+    test("classifies configured-repo when .crysk config exists", async () => {
       const ctx = await resolveMenuContext("/Users/anon/my-project/src", {
         resolveRoot: async () => "/Users/anon/my-project",
-        exists: (p) => p.includes(".prhero"),
+        exists: (p) => p.includes(".crysk"),
         readConfig: () => ({ default_base: "main" }),
       });
 

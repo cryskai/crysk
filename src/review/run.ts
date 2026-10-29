@@ -76,6 +76,7 @@ import {
   validateReviewSpec,
 } from "#review/spec";
 import { ClaudeCodeRunner } from "#review/step-runner";
+import { resolveRepoDir } from "../brand-paths";
 import { CliError, withRecordClass } from "../errors";
 import {
   type AttemptAdmissionGate,
@@ -155,17 +156,18 @@ export function assertDistinctRange(baseSha: string, headSha: string): void {
 
 // The gotchas file path: an explicit `--gotchas` flag always wins (resolved
 // against cwd, exactly like path.resolve did inline); otherwise it is
-// `<root>/.prhero/gotchas.md`. `root` is the caller's own root — repoRoot in
+// `<root>/.crysk/gotchas.md` (or the legacy `.prhero/`). `root` is the caller's own root — repoRoot in
 // review(), operatorRoot in reviewPr(), repoDir in doctor.ts's default-branch
 // check — never resolved here, so this stays agnostic of which mode called
 // it.
 export function resolveGotchasPath(
   flag: string | undefined,
   root: string,
+  exists?: (p: string) => boolean,
 ): string {
   return flag !== undefined
     ? path.resolve(flag)
-    : path.join(root, ".prhero", "gotchas.md");
+    : path.join(resolveRepoDir(root, exists), "gotchas.md");
 }
 
 // Byte-identical gotchas read + validation in both orchestrators. Neither

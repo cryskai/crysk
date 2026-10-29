@@ -15,8 +15,8 @@ import {
 } from "../../fixtures/setup";
 
 export const WORKFLOW_PATH = ".github/workflows/pr-hero.yml";
-export const REPO_CONFIG_PATH = ".prhero/config.json";
-export const GOTCHAS_PATH = ".prhero/gotchas.md";
+export const REPO_CONFIG_PATH = ".crysk/config.json";
+export const GOTCHAS_PATH = ".crysk/gotchas.md";
 export const VOLUME_PATH = "src/volume.ts";
 
 // D3: the second planted bug, added by a later push of the rereview-fresh-finding
@@ -34,6 +34,10 @@ export const OPENCODE_AUTH_SECRET = "OPENCODE_AUTH_JSON";
 // An empty OpenCode auth store. The free broker projects an empty tree, so `{}`
 // is the minimum that passes the trigger's credential check (src/ci/trigger.ts).
 export const OPENCODE_AUTH_VALUE = "{}";
+// The legacy name on purpose: the scaffold reads CRYSK_ROUTING first and this one
+// as its fallback, and nothing here ever sets CRYSK_ROUTING, so the fallback is
+// what decides. The sandbox repo's variable and the rails' delete allow-list
+// keep one name; moving both is a later slice with the rest of the rename.
 export const ROUTING_VARIABLE = "PRHERO_ROUTING";
 // The subscription token the claude route runs on. The scaffold wires it to the
 // action's `claude-token` input (src/ci/setup.ts). init checks its presence only.
@@ -105,7 +109,7 @@ export const REPO_DESCRIPTION =
 
 export const PLANTED_COMMIT_MESSAGE = "refactor: simplify volume scaling";
 
-const ACTION_REPO = "juanmaagd/pr-hero";
+const ACTION_REPO = "cryskai/crysk";
 const REF_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
 
 export function validateRef(ref: string): void {

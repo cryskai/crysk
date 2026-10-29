@@ -51,6 +51,13 @@
 
 import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import {
+  commandHint,
+  MARKER_OPEN,
+  matchMarkerPrefix,
+  STATUS_CONTEXT,
+  statusContextForms,
+} from "../brand";
 import type {
   CliRecord,
   ErrorParams,
@@ -76,11 +83,10 @@ import {
   OVERRIDE_DESCRIPTION_PREFIX,
   type OverrideStatusFact,
   overrideStandsOverRun,
+  strandedStatusPair,
 } from "./override";
+import { OVERRIDE_COMMAND, REVIEW_COMMAND } from "./trigger";
 
-// The commit status context. The required check reads this name, so it must
-// equal COMMIT_STATUS_CONTEXT in src/pr/preflight.ts (a test pins the two).
-const STATUS_CONTEXT = "pr-hero";
 // The outcome marker's spelling is outcome.ts's, shared with the status reader.
 const MARKER_PREFIX = OUTCOME_MARKER_PREFIX.trimEnd();
 const CLI_STARTED_FILE = "cli-started";
@@ -94,9 +100,9 @@ const REVIEW_STEP = "the review";
 // crash or kill, or when its record write failed, and the publisher cannot tell
 // which, so the text claims only that it stopped before it reported an outcome.
 const STOPPED_STEP = "the review before it reported an outcome";
-// What a hunters-failed record says about the failure: the CLI writes no detail,
-// and the publisher's wording names what its own record means (sessionFailed:
-// every hunter failed, src/review/findings.ts).
+// What a hunters-failed record says when its hunters gave no shared detail: the
+// publisher's wording names what its own record means (sessionFailed: every hunter
+// failed, src/review/findings.ts).
 const HUNTERS_DETAIL = "each hunter's session ended without a result";
 // The step an unverifiable lookup stopped at. The trigger writes the same text
 // into its record; the publisher names it itself, so the message never depends
@@ -118,7 +124,7 @@ interface StatusPost {
   // `success` comes from an override (odd/tasks/agent-first-ci.md, S8) or from the
   // final status a CLI could not write; `failure` only from the latter.
   state: "error" | "success" | "failure";
-  context: "pr-hero";
+  context: typeof STATUS_CONTEXT;
   description: string;
   targetUrl: string;
 }
@@ -383,6 +389,10 @@ function huntersFailedRendering(
   runParams: ErrorParams,
 ): RenderedError {
   const failures = cliRecord.hunter_failures ?? [];
+  // The provider's own words, when every hunter reported the same ones. Hunters that
+  // disagree, or one that said nothing, leave the generic text: no single explanation
+  // covers the run.
+  const sharedDetail = sharedValue(failures.map((failure) => failure.detail));
   const cause = sharedValue(failures.map((failure) => failure.cause));
   if (cause !== undefined) {
     const rendered = renderHunterCause(
@@ -395,13 +405,19 @@ function huntersFailedRendering(
         model: sharedValue(failures.map((failure) => failure.model)),
       },
       "action",
+      {
+        detail: sharedDetail,
+        credential: sharedValue(failures.map((failure) => failure.credential)),
+      },
     );
     if (rendered !== undefined) return rendered;
   }
   return renderCode(
     "PRH-HUNTERS-FAILED",
-    { ...runParams, step: REVIEW_STEP, detail: HUNTERS_DETAIL },
+    { ...runParams, step: REVIEW_STEP, detail: sharedDetail ?? HUNTERS_DETAIL },
     "action",
+    // Every hunter was refused for the size of the request: the fix is a smaller review.
+    cause === "context_window_exceeded" ? "context_window_exceeded" : undefined,
   );
 }
 
@@ -535,7 +551,7 @@ export function decideCancelSettle(input: {
   if (latest?.state !== "pending") {
     return {
       settle: false,
-      reason: "the head's pr-hero status is not pending",
+      reason: "the head's crysk status is not pending",
     };
   }
   if (
@@ -597,12 +613,14 @@ function workflowCommand(
     .replaceAll("%", "%25")
     .replaceAll("\r", "%0D")
     .replaceAll("\n", "%0A");
-  return `::${command} title=pr-hero::${escaped}\n`;
+  return `::${command} title=crysk::${escaped}\n`;
 }
 
-// The status write, retried once unless `attempts` is 1. Returns the failure's HTTP
-// status when gh printed one, so the renderer can pick the permission or the server
-// wording.
+// The status write, on BOTH names of its context: the new one, then the legacy `pr-hero` one
+// (statusContextForms). Users have `pr-hero` as a required check in branch protection, and a
+// head that stops getting it blocks every PR, so the publisher keeps writing it for one version.
+// A failed write never skips the other: the required check may be either name. The first
+// failure is the one reported, so the renderer sees the same answer a single write gave.
 function postStatus(
   deps: PublishDeps,
   repository: string,
@@ -610,13 +628,39 @@ function postStatus(
   status: StatusPost,
   attempts = 2,
 ): { ok: true } | { ok: false; httpStatus: number | undefined } {
+  let failure: { ok: false; httpStatus: number | undefined } | undefined;
+  for (const context of statusContextForms(status.context)) {
+    const posted = postStatusOn(
+      deps,
+      repository,
+      headSha,
+      status,
+      context,
+      attempts,
+    );
+    if (!posted.ok) failure ??= posted;
+  }
+  return failure ?? { ok: true };
+}
+
+// One write on one context, retried once unless `attempts` is 1. Returns the failure's HTTP
+// status when gh printed one, so the renderer can pick the permission or the server
+// wording.
+function postStatusOn(
+  deps: PublishDeps,
+  repository: string,
+  headSha: string,
+  status: StatusPost,
+  context: string,
+  attempts: number,
+): { ok: true } | { ok: false; httpStatus: number | undefined } {
   const args = [
     "api",
     `repos/${repository}/statuses/${headSha}`,
     "-f",
     `state=${status.state}`,
     "-f",
-    `context=${status.context}`,
+    `context=${context}`,
     "-f",
     `description=${status.description}`,
     "-f",
@@ -787,10 +831,11 @@ function listComments(
 }
 
 // WHY only the outcome marker counts: an override comment is the audit trail of a
-// human's unlock (S8). Its marker starts `<!-- pr-hero-override`, which does not
+// human's unlock (S8). Its marker starts `<!-- crysk-override` (or the legacy
+// `<!-- pr-hero-override`), which does not
 // start with MARKER_PREFIX, so no cleanup or older-run pass can remove it.
 function isOutcomeComment(row: ListedComment): boolean {
-  return row.firstLine.startsWith(MARKER_PREFIX);
+  return matchMarkerPrefix(row.firstLine, MARKER_PREFIX) !== undefined;
 }
 
 // Deletes each comment. A failed delete is a warning, and the rest still run.
@@ -811,7 +856,7 @@ function deleteComments(
       deps.stdout(
         workflowCommand(
           "warning",
-          `pr-hero could not delete an older outcome comment (${id}) on #${pr}.`,
+          `Crysk could not delete an older outcome comment (${id}) on #${pr}.`,
         ),
       );
     }
@@ -879,7 +924,7 @@ function deleteOlderOutcomes(
     deps.stdout(
       workflowCommand(
         "warning",
-        `pr-hero could not list the older outcome comments on #${pr}; they were left in place.`,
+        `Crysk could not list the older outcome comments on #${pr}; they were left in place.`,
       ),
     );
     return;
@@ -934,7 +979,7 @@ function cleanupOlderOutcomes(
     deps.stdout(
       workflowCommand(
         "notice",
-        `pr-hero could not clean up its older outcome comments on #${plan.pr}; they were left in place.`,
+        `Crysk could not clean up its older outcome comments on #${plan.pr}; they were left in place.`,
       ),
     );
     return;
@@ -1067,6 +1112,59 @@ function parseStatusRow(line: string): HeadStatusRow | undefined {
 // The head's newest pr-hero status, as the three states the table needs. The newest row is
 // picked by its time, not by its place in the answer. A failed read, no pr-hero row, or a
 // state the table does not name is unknown, which the table answers with the status.
+// Copies the verdict of a half-landed pair onto the name that missed it (strandedStatusPair).
+// The stuck name may be the repository's required check, and the readers below take the
+// newest row across both names, so nothing else would ever settle it. Only the stuck name
+// is written: the verdict, which may be a human's override, is never replaced. A failed
+// copy is a warning, and the run goes on as it would have. Returns the verdict whenever
+// the pair is stranded, copied or not: it, not the stuck pending row, is the gate's state,
+// and the readers' newest-row pick could still choose the stuck row on a same-second tie.
+function repairStrandedPair(
+  deps: PublishDeps,
+  repo: string,
+  sha: string,
+  statuses: readonly HeadStatusRow[],
+): HeadStatusRow | undefined {
+  const pair = strandedStatusPair(statuses, STATUS_CONTEXT);
+  if (pair === undefined) return undefined;
+  const state = pair.verdict.state;
+  const description = pair.verdict.description;
+  // A verdict this step cannot reproduce faithfully is not copied: a blank description
+  // would not even read as the override it may have been.
+  if (
+    (state !== "success" && state !== "failure" && state !== "error") ||
+    typeof description !== "string" ||
+    description === ""
+  ) {
+    return pair.verdict;
+  }
+  const posted = postStatusOn(
+    deps,
+    repo,
+    sha,
+    {
+      state,
+      context: STATUS_CONTEXT,
+      description,
+      targetUrl: pair.verdict.targetUrl ?? actionsRunUrl(deps.env) ?? "",
+    },
+    pair.stranded.context,
+    2,
+  );
+  deps.stdout(
+    posted.ok
+      ? workflowCommand(
+          "notice",
+          `the ${pair.stranded.context} status missed the ${pair.verdict.context} verdict; copied it`,
+        )
+      : workflowCommand(
+          "warning",
+          `the ${pair.stranded.context} status is still pending behind the ${pair.verdict.context} verdict; copying it failed`,
+        ),
+  );
+  return pair.verdict;
+}
+
 function readLatestCliStatusState(
   deps: PublishDeps,
   repo: string,
@@ -1074,7 +1172,9 @@ function readLatestCliStatusState(
 ): LatestStatusState {
   const read = readHeadStatuses(deps, repo, sha);
   if (!read.ok) return "unknown";
-  const latest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
+  const latest =
+    repairStrandedPair(deps, repo, sha, read.statuses) ??
+    newestStatusInContext(read.statuses, STATUS_CONTEXT);
   if (latest === undefined) return "unknown";
   if (latest.state === "pending") return "pending";
   return SETTLED_STATES.has(latest.state) ? "settled" : "unknown";
@@ -1107,7 +1207,7 @@ function overrideStandsBeforeRepost(
     deps.stdout(
       workflowCommand(
         "warning",
-        `pr-hero: could not read the statuses of ${sha.slice(0, 7)}, so an override on it cannot be checked; the review's status is reposted as planned`,
+        `crysk: could not read the statuses of ${sha.slice(0, 7)}, so an override on it cannot be checked; the review's status is reposted as planned`,
       ),
     );
     return false;
@@ -1129,7 +1229,7 @@ function reportStatusWriteFailure(
 // the text the override rule (src/ci/override.ts) recognises. Its description names the actor, so the
 // status alone says who unlocked the gate.
 function overrideDescription(actor: string): string {
-  return `${OVERRIDE_DESCRIPTION_PREFIX}${actor} — no review on this head`;
+  return `${OVERRIDE_DESCRIPTION_PREFIX}${actor} — no new review run`;
 }
 
 // The audit comment. Its first line is the marker, which is not an outcome marker,
@@ -1137,18 +1237,31 @@ function overrideDescription(actor: string): string {
 // an override the status never received would be a false record.
 function overrideCommentBody(
   plan: Extract<Publication, { kind: "override" }>,
-  statusSet: boolean,
+  landed: readonly string[],
   at: Date,
 ): string {
   const when = `${at.toISOString().slice(0, 16).replace("T", " ")} UTC`;
-  const marker = `<!-- pr-hero-override head=${plan.headSha ?? "unknown"} run=${plan.runId} attempt=${plan.runAttempt} -->`;
-  if (statusSet && plan.headSha !== undefined) {
+  const marker = `${MARKER_OPEN}override head=${plan.headSha ?? "unknown"} run=${plan.runId} attempt=${plan.runAttempt} -->`;
+  if (landed.length > 0 && plan.headSha !== undefined) {
+    // Name exactly the contexts that were written: a branch protection that requires the
+    // other one is still blocked, and this comment is never cleaned up (#435 F001).
+    const names = landed.map((context) => `\`${context}\``).join(" and ");
+    const missed = statusContextForms(STATUS_CONTEXT).filter(
+      (context) => !landed.includes(context),
+    );
+    const missedNote =
+      missed.length === 0
+        ? ""
+        : ` The ${missed.map((context) => `\`${context}\``).join(" and ")} status could not be written, so a rule that requires it is still blocked: comment ${commandHint(OVERRIDE_COMMAND)} again to retry.`;
     return [
       marker,
       "",
-      `pr-hero's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. ` +
-        "The `pr-hero` status on that head is now success, with no review of this head. " +
-        "A new push or a later `/pr-hero review` on this head replaces it.",
+      (landed.includes(STATUS_CONTEXT)
+        ? `Crysk's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. `
+        : `@${plan.actor}'s override of Crysk's gate on head \`${plan.headSha}\` at ${when} landed only in part. `) +
+        `The ${names} status${landed.length > 1 ? "es" : ""} on that head ${landed.length > 1 ? "are" : "is"} now success, with no review of this head.` +
+        missedNote +
+        ` A new push or a later ${commandHint(REVIEW_COMMAND)} on this head replaces it.`,
     ].join("\n");
   }
   const where =
@@ -1158,7 +1271,7 @@ function overrideCommentBody(
   return [
     marker,
     "",
-    `@${plan.actor} asked to override pr-hero's gate at ${when}, but no commit status could be set${where}, so the gate is unchanged. Comment \`/pr-hero override\` again to retry.`,
+    `@${plan.actor} asked to override Crysk's gate at ${when}, but no commit status could be set${where}, so the gate is unchanged. Comment ${commandHint(OVERRIDE_COMMAND)} again to retry.`,
   ].join("\n");
 }
 
@@ -1170,25 +1283,41 @@ function publishOverride(
   deps: PublishDeps,
   plan: Extract<Publication, { kind: "override" }>,
 ): number {
-  let statusSet = false;
+  const landed: string[] = [];
   let exitCode = 0;
   if (plan.headSha !== undefined) {
-    const status = postStatus(deps, plan.repository, plan.headSha, {
-      state: "success",
-      context: STATUS_CONTEXT,
-      description: overrideDescription(plan.actor),
-      targetUrl: plan.runUrl,
-    });
-    if (status.ok) {
-      statusSet = true;
-      // WHY here, right after the success and before the audit comment: the head is green
-      // now, so an earlier run's outcome comment contradicts it. The audit comment does not
+    // Each context is written on its own (postStatus would fold the pair into one answer):
+    // when one lands and the other fails, the head IS overridden on the one that landed, and
+    // the permanent audit comment must say so (#434 F001). The failed half is still reported.
+    let failure: { ok: false; httpStatus: number | undefined } | undefined;
+    for (const context of statusContextForms(STATUS_CONTEXT)) {
+      const posted = postStatusOn(
+        deps,
+        plan.repository,
+        plan.headSha,
+        {
+          state: "success",
+          context: STATUS_CONTEXT,
+          description: overrideDescription(plan.actor),
+          targetUrl: plan.runUrl,
+        },
+        context,
+        2,
+      );
+      if (posted.ok) landed.push(context);
+      else failure ??= posted;
+    }
+    if (landed.includes(STATUS_CONTEXT)) {
+      // WHY here, right after the success and before the audit comment: the crysk gate is
+      // green now, so an earlier run's outcome comment contradicts it. When only the legacy
+      // pr-hero status landed, crysk is still red and that comment still explains why. The audit comment does not
       // gate this cleanup, and its warnings never change the exit code (as for a review).
       cleanupOlderOutcomes(deps, plan);
-    } else {
+    }
+    if (failure !== undefined) {
       reportStatusWriteFailure(
         deps,
-        status.httpStatus,
+        failure.httpStatus,
         plan.runId,
         plan.runUrl,
       );
@@ -1198,9 +1327,11 @@ function publishOverride(
   deps.stdout(
     workflowCommand(
       "notice",
-      statusSet
-        ? `pr-hero gate overridden by @${plan.actor} on head ${plan.headSha}.`
-        : `pr-hero override by @${plan.actor} set no commit status.`,
+      landed.includes(STATUS_CONTEXT)
+        ? `crysk gate overridden by @${plan.actor} on head ${plan.headSha}.`
+        : landed.length > 0
+          ? `crysk override by @${plan.actor} set only the ${landed.join(", ")} status on head ${plan.headSha}.`
+          : `crysk override by @${plan.actor} set no commit status.`,
     ),
   );
   const at = (deps.now ?? (() => new Date()))();
@@ -1208,13 +1339,13 @@ function publishOverride(
     deps,
     plan.repository,
     plan.pr,
-    overrideCommentBody(plan, statusSet, at),
+    overrideCommentBody(plan, landed, at),
   );
   if (!comment.ok) {
     deps.stdout(
       workflowCommand(
         "error",
-        `pr-hero could not post its override comment on #${plan.pr} (${comment.detail}).`,
+        `Crysk could not post its override comment on #${plan.pr} (${comment.detail}).`,
       ),
     );
     return 1;
@@ -1223,7 +1354,7 @@ function publishOverride(
 }
 
 export function runPublish(deps: PublishDeps): number {
-  const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = deps.env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return 0;
   const recordText = readIfExists(path.join(dir, RECORD_FILE));
   if (recordText === undefined) return 0;
@@ -1261,7 +1392,7 @@ export function runPublish(deps: PublishDeps): number {
     deps.stdout(
       workflowCommand(
         "error",
-        "pr-hero's outcome record belongs to another run or attempt, so nothing was posted.",
+        "Crysk's outcome record belongs to another run or attempt, so nothing was posted.",
       ),
     );
     return 1;
@@ -1271,7 +1402,7 @@ export function runPublish(deps: PublishDeps): number {
     deps.stdout(
       workflowCommand(
         "warning",
-        "pr-hero could not read its setup outcome record, so this failure is reported as an install failure.",
+        "Crysk could not read its setup outcome record, so this failure is reported as an install failure.",
       ),
     );
   }
@@ -1320,7 +1451,7 @@ export function runPublish(deps: PublishDeps): number {
         deps.stdout(
           workflowCommand(
             "notice",
-            "pr-hero: an override on this head stands, so the review's status is not reposted over it.",
+            "crysk: an override on this head stands, so the review's status is not reposted over it.",
           ),
         );
       } else {
@@ -1371,7 +1502,7 @@ export function runPublish(deps: PublishDeps): number {
     deps.stdout(
       workflowCommand(
         "error",
-        `pr-hero could not post its outcome comment on #${plan.pr} (${comment.detail}).`,
+        `Crysk could not post its outcome comment on #${plan.pr} (${comment.detail}).`,
       ),
     );
     return 1;
@@ -1383,7 +1514,7 @@ export function runPublish(deps: PublishDeps): number {
 // and it never fails the job: a cancel is not a failure, and a status it cannot write is a
 // warning. Its only write is this run's own pending on the head the CLI locked.
 export function runCancelSettle(deps: PublishDeps): number {
-  const dir = deps.env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = deps.env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return 0;
   const record = readCliRecord(dir);
   // Guarded like readCliRecord: this step must exit 0 whatever the file system does.
@@ -1404,12 +1535,14 @@ export function runCancelSettle(deps: PublishDeps): number {
       deps.stdout(
         workflowCommand(
           "warning",
-          "could not read the head's status after the cancel; the pr-hero status may stay pending",
+          "could not read the head's status after the cancel; the crysk status may stay pending",
         ),
       );
       return 0;
     }
-    const newest = newestStatusInContext(read.statuses, STATUS_CONTEXT);
+    const newest =
+      repairStrandedPair(deps, repository, head, read.statuses) ??
+      newestStatusInContext(read.statuses, STATUS_CONTEXT);
     // newestStatusInContext returns the row it was given, so the row's target is found by identity.
     latest =
       newest === undefined
@@ -1451,14 +1584,14 @@ export function runCancelSettle(deps: PublishDeps): number {
     deps.stdout(
       workflowCommand(
         "notice",
-        "the review was cancelled; the pr-hero status is now PRH-CANCELLED",
+        "the review was cancelled; the crysk status is now PRH-CANCELLED",
       ),
     );
   } else {
     deps.stdout(
       workflowCommand(
         "warning",
-        "could not settle the cancelled review's pr-hero status; it may stay pending",
+        "could not settle the cancelled review's crysk status; it may stay pending",
       ),
     );
   }
@@ -1468,7 +1601,7 @@ export function runCancelSettle(deps: PublishDeps): number {
 if (import.meta.main) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY ?? "";
   const run =
-    process.env.PRHERO_PUBLISH_MODE === "cancelled"
+    process.env.CRYSK_PUBLISH_MODE === "cancelled"
       ? runCancelSettle
       : runPublish;
   process.exit(

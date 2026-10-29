@@ -1,4 +1,4 @@
-// The `.prheroignore` I/O shell. `ignore-file.ts` beside it is the PURE
+// The ignore file I/O shell (`.cryskignore`, else the legacy `.prheroignore`). `ignore-file.ts` beside it is the PURE
 // half — dialect, translation, matching — and this module is the part that
 // touches a filesystem.
 //
@@ -26,6 +26,11 @@
 
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import {
+  IGNORE_FILE_NAME,
+  LEGACY_IGNORE_FILE_NAME,
+  resolveIgnoreFileName,
+} from "./brand-paths";
 import { CliError } from "./errors";
 import {
   IgnoreFileError,
@@ -38,19 +43,21 @@ export interface IgnoreFileReadResult {
   found: boolean;
 }
 
-// `IgnoreFileError` hardcodes its file name to the literal ".prheroignore"
-// (see ignore-file.ts) because that pure parser never sees which PHYSICAL
-// path it was asked to read — a working-tree file and a base-ref blob share
+// `IgnoreFileError` carries a default file name (see ignore-file.ts) because
+// that pure parser never sees which PHYSICAL path it was asked to read — a working-tree file and a base-ref blob share
 // the same dialect and the same parser. Every caller here re-contextualizes
 // the message with whichever path it actually resolved, so the abort names
 // something a human can go look at (local: a real filesystem path; CI: a
-// `<sha>:.prheroignore` locator, since there is no working-tree path to
+// `<sha>:<ignore file>` locator, since there is no working-tree path to
 // name).
 export function reContextualizeIgnoreError(
   error: IgnoreFileError,
   resolvedLocation: string,
 ): string {
-  return error.message.replace(/^\.prheroignore:/, `${resolvedLocation}:`);
+  return error.message.replace(
+    new RegExp(`^(?:${IGNORE_FILE_NAME}|${LEGACY_IGNORE_FILE_NAME}):`),
+    `${resolvedLocation}:`,
+  );
 }
 
 // Local working-tree read — local review, and PR review without --ci (O-8:
@@ -60,14 +67,17 @@ export function reContextualizeIgnoreError(
 // Absent is NOT an error (`.exists()`-style check would suffice for that
 // alone), but `Bun.file(...).exists()` ALSO reports false for a directory —
 // verified directly — so an absent-vs-directory distinction needs `stat`,
-// not `.exists()`. A directory named `.prheroignore`, or one this process
+// not `.exists()`. A directory named like the ignore file, or one this process
 // cannot read, must abort loudly and must NEVER be treated as "absent,
 // defaults apply": that silent equivalence is exactly the kind of quiet
 // partial review this whole design exists to prevent.
 export async function readLocalIgnoreRules(
   root: string,
 ): Promise<IgnoreFileReadResult> {
-  const ignorePath = path.join(root, ".prheroignore");
+  // .cryskignore first, then the legacy .prheroignore. A .cryskignore that
+  // exists but is unusable aborts; it never falls through to the old file.
+  const ignoreName = resolveIgnoreFileName(root);
+  const ignorePath = path.join(root, ignoreName);
   let fileStat: Awaited<ReturnType<typeof stat>>;
   try {
     fileStat = await stat(ignorePath);
@@ -76,13 +86,13 @@ export async function readLocalIgnoreRules(
       return { rules: [], found: false };
     }
     throw new CliError(
-      `.prheroignore at ${ignorePath} could not be accessed: ` +
+      `${ignoreName} at ${ignorePath} could not be accessed: ` +
         `${(error as Error).message}`,
     );
   }
   if (!fileStat.isFile()) {
     throw new CliError(
-      `.prheroignore at ${ignorePath} is not a regular file (found a ` +
+      `${ignoreName} at ${ignorePath} is not a regular file (found a ` +
         "directory or special file); refusing to read it as ignore rules",
     );
   }
@@ -93,12 +103,12 @@ export async function readLocalIgnoreRules(
     // The `stat` above already proved it is a regular file, so a read
     // failure here is something else — most likely permission denied.
     throw new CliError(
-      `.prheroignore at ${ignorePath} could not be read: ` +
+      `${ignoreName} at ${ignorePath} could not be read: ` +
         `${(error as Error).message}`,
     );
   }
   try {
-    return { rules: parseIgnoreFile(text, "user"), found: true };
+    return { rules: parseIgnoreFile(text, "user", ignoreName), found: true };
   } catch (error) {
     if (error instanceof IgnoreFileError) {
       throw new CliError(reContextualizeIgnoreError(error, ignorePath));

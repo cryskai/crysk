@@ -15,7 +15,7 @@ import {
 const REF = "v0.2.0";
 const NORMAL = workflowFor(REF);
 
-// The Run pr-hero step's `with:` block, found by walking the parsed YAML rather
+// The Run Crysk step's `with:` block, found by walking the parsed YAML rather
 // than by line position, so the test does not depend on where the scaffold puts it.
 function actionWith(yaml: string): Record<string, unknown> {
   const doc = Bun.YAML.parse(yaml) as {
@@ -26,10 +26,7 @@ function actionWith(yaml: string): Record<string, unknown> {
   };
   for (const job of Object.values(doc.jobs)) {
     for (const step of job.steps) {
-      if (
-        step.uses?.startsWith("juanmaagd/pr-hero@") &&
-        step.with !== undefined
-      ) {
+      if (step.uses?.startsWith("cryskai/crysk@") && step.with !== undefined) {
         return step.with;
       }
     }
@@ -68,7 +65,9 @@ describe("workflow variants: the real scaffold", () => {
       "mode",
       "routing",
     ]);
-    expect(inputs.routing).toBe(`\${{ vars.PRHERO_ROUTING }}`);
+    expect(inputs.routing).toBe(
+      `\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}`,
+    );
   });
 
   test("no-credential removes exactly the three credential lines and nothing else", () => {
@@ -95,7 +94,7 @@ describe("workflow variants: the real scaffold", () => {
     expect(after.length).toBe(before.length);
     const changed = before.filter((line, i) => line !== after[i]);
     expect(changed).toEqual([
-      `          routing: "\${{ vars.PRHERO_ROUTING }}"`,
+      `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
     ]);
   });
 
@@ -123,14 +122,14 @@ describe("workflow variants: a scaffold that changed", () => {
   });
 
   test("a duplicated anchor line throws rather than editing an arbitrary one", () => {
-    const routing = `          routing: "\${{ vars.PRHERO_ROUTING }}"`;
+    const routing = `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`;
     const changed = NORMAL.replace(routing, `${routing}\n${routing}`);
     expect(() => applyVariant("bad-routing", changed)).toThrow(/found 2/);
   });
 
   test("bad-routing refuses a scaffold whose routing input moved to another form", () => {
     const changed = NORMAL.replace(
-      `          routing: "\${{ vars.PRHERO_ROUTING }}"`,
+      `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
       `          routing: \${{ vars.PRHERO_ROUTING_V2 }}`,
     );
     expect(() => applyVariant("bad-routing", changed)).toThrow(
@@ -187,11 +186,9 @@ describe("the stale-tmp variant (SB3): the stale records are planted before the 
     const normal = NORMAL.split("\n");
     // Six lines before the action step: its name, `run: |`, the mkdir and the two writes, a blank.
     expect(lines.length).toBe(normal.length + 6);
-    const at = lines.indexOf("      - name: Run pr-hero");
+    const at = lines.indexOf("      - name: Run Crysk");
     expect(at).toBeGreaterThan(0);
-    expect(lines.filter((l) => l === "      - name: Run pr-hero").length).toBe(
-      1,
-    );
+    expect(lines.filter((l) => l === "      - name: Run Crysk").length).toBe(1);
     expect(lines[at - 6]).toBe(
       "      - name: Leave stale temp records from a killed run",
     );

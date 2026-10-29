@@ -1,5 +1,5 @@
 // PR mode's post-pipeline tail (ROADMAP B1): the artifact writes, the
-// Greptile comparison, the canonical store, posting, the terminal summary,
+// the canonical store, posting, the terminal summary,
 // CI publishing, and the CI admission ledger's terminal settlement — all of
 // it runs once `runPipeline` has returned. Extracted out of reviewPr()
 // (src/pr/review-pr.ts, cli-decomp/review-pr-publish-outcome): identifiers
@@ -41,7 +41,6 @@ import {
   settleCiAdmissionLedger,
 } from "#pr/admission";
 import { publishCiReviewIfEligible } from "#pr/ci-publish";
-import { computeGreptileComparison } from "#pr/comparison";
 import type { PrDiscoveryResult } from "#pr/discovery";
 import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
 import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
@@ -55,6 +54,7 @@ import {
   type DiffStat,
   envelopeModel,
   type estimateCost,
+  incompleteReviewAnnotation,
 } from "#review/report";
 import { buildTelemetry, writeRunFindings, writeRunReport } from "#review/run";
 import { log, styleEnabled } from "#ui/primitives";
@@ -171,26 +171,7 @@ export async function publishRunOutcome(
     recordReviewDelivered(input.headSha);
   }
 
-  // 13 — the Greptile head-to-head, then (13b) the comparison.json
-  // read-back for the observability store. See computeGreptileComparison
-  // (src/pr/comparison.ts) for the full rationale.
-  const { comparison, storedComparison } = await computeGreptileComparison({
-    sessionFailed: result.sessionFailed,
-    operatorRoot: input.operatorRoot,
-    pr: input.prNumber,
-    headSha: input.headSha,
-    diffFromSha: input.diffFromSha,
-    runDir: input.runDir,
-    runStatus: doc.run_status,
-    findings: doc.findings.map((f) => ({
-      id: f.id,
-      path: f.path,
-      line: f.line,
-      claim: f.claim,
-      tier: f.tier,
-    })),
-  });
-  // 13b — canonical product store & observability metrics.
+  // 13 — canonical product store & observability metrics.
   persistCanonicalReview({
     home: input.home,
     repoId: input.repoId,
@@ -198,7 +179,7 @@ export async function publishRunOutcome(
     checkoutPath: input.operatorRoot,
     doc,
     perAgent: result.perAgent,
-    comparison: storedComparison,
+    diffFromSha: input.diffFromSha,
     log,
   });
   ingestReviewMetrics({
@@ -208,7 +189,6 @@ export async function publishRunOutcome(
     checkoutPath: input.operatorRoot,
     doc,
     perAgent: result.perAgent,
-    comparison: storedComparison,
     log,
   });
 
@@ -269,8 +249,8 @@ export async function publishRunOutcome(
   input.onPosted(posted);
   const postedWebUrl = postingResult.postedWebUrl;
 
-  // 15 — the summary. One shared renderer with local mode; the mode-specific parts (comparison,
-  // the worktree hint) ride in as optional inputs. The `posted:` line that
+  // 15 — the summary. One shared renderer with local mode; the mode-specific parts
+  // (the worktree hint) ride in as optional inputs. The `posted:` line that
   // used to sit here is GONE on purpose: step 14 already printed a richer one
   // at the moment it happened, and two differently-worded reports of the same
   // POST read as two postings. What this block keeps is the durable trace —
@@ -308,19 +288,8 @@ export async function publishRunOutcome(
     artifacts: [
       path.basename(reportPath),
       path.basename(findingsPath),
-      ...(comparison ? [path.basename(comparison.markdownPath)] : []),
       ...(posted ? ["post.json"] : []),
     ],
-    ...(comparison
-      ? {
-          comparison: {
-            greptileFound: comparison.greptileFound,
-            // The buckets themselves, not their counts: writeComparison's
-            // widened outcome is what lets the block name a recall miss.
-            result: comparison.result,
-          },
-        }
-      : {}),
     worktree: {
       gitDirOwner: input.gitDirOwner,
       worktreePath: input.worktreePath,
@@ -338,6 +307,13 @@ export async function publishRunOutcome(
     styles: styleEnabled(),
   })) {
     log(line);
+  }
+  // An incomplete review, or a step that failed on a complete one, is announced where the
+  // Actions UI lists it, with the provider's words for each failed agent. Only under CI: a
+  // local run already prints the same sentence in the result block above.
+  if (input.isCi) {
+    const annotation = incompleteReviewAnnotation(doc);
+    if (annotation !== undefined) process.stdout.write(`${annotation}\n`);
   }
   // 16 — CI headless publishing (ROADMAP Pillar 3). `posted?.delta`
   // reuses postInlineFindings' own re-review delta — no separate

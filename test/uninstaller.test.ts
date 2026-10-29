@@ -36,12 +36,23 @@ describe("uninstaller (lifecycle foundations)", () => {
       expect(plan.platform).toBe("darwin");
       expect(plan.programSteps).toBeDefined();
       expect(plan.dataSteps).toHaveLength(0); // No purge requested
-      expect(plan.launchdServices).toContain("io.prhero.watch");
-      expect(plan.launchdServices).toContain("io.prhero.gc");
+      // Both generations of agent are removed.
+      for (const label of [
+        "io.crysk.watch",
+        "io.crysk.gc",
+        "io.prhero.watch",
+        "io.prhero.gc",
+      ]) {
+        expect(plan.launchdServices).toContain(label);
+      }
       expect(plan.rcFilesCleaned).toContain(path.join(home, ".zshrc"));
       expect(plan.binariesRemoved).toContain(standaloneBin);
-      // Every bundled skill is removed, the general pr-hero one included.
+      // Every bundled skill is removed under both its names, the general one included.
       for (const skillName of [
+        "crysk-loop",
+        "crysk-ci-setup",
+        "crysk-pr",
+        "crysk",
         "pr-hero-triage",
         "pr-hero-ci-setup",
         "pr-hero-pr",
@@ -53,6 +64,71 @@ describe("uninstaller (lifecycle foundations)", () => {
       }
     });
 
+    test("cleans both .crysk/bin and .prhero/bin PATH lines from an rc file", async () => {
+      for (const line of [
+        "export PATH=$HOME/.crysk/bin:$PATH\n",
+        "export PATH=$HOME/.prhero/bin:$PATH\n",
+      ]) {
+        const plan = await planUninstallation({
+          home,
+          platform: "linux",
+          installMethod: { kind: "source" },
+          exists: (p) => p.includes(".zshrc"),
+          readFile: () => line,
+        });
+        expect(plan.rcFilesCleaned).toEqual([path.join(home, ".zshrc")]);
+      }
+    });
+
+    // (g) The installer leaves crysk plus a pr-hero link; removing only the
+    // name that happens to be running would strand the other one on PATH.
+    test("removes both crysk and pr-hero, plus their backups, whichever one is running", async () => {
+      const dir = path.join(home, ".crysk", "bin");
+      const present = new Set([
+        path.join(dir, "crysk"),
+        path.join(dir, "pr-hero"),
+        path.join(dir, "crysk.bak"),
+      ]);
+      for (const running of ["crysk", "pr-hero"]) {
+        const plan = await planUninstallation({
+          home,
+          platform: "linux",
+          installMethod: {
+            kind: "standalone",
+            binaryPath: path.join(dir, running),
+          },
+          exists: (p) => present.has(p),
+        });
+        expect([...plan.binariesRemoved].sort()).toEqual([
+          path.join(dir, "crysk"),
+          path.join(dir, "pr-hero"),
+        ]);
+        const removed = plan.programSteps
+          .filter((s) => s.type === "remove_file")
+          .map((s) => s.targetPath);
+        expect(removed).toContain(path.join(dir, "crysk.bak"));
+        // The link goes before the file it points at: the executor skips a
+        // dangling link because existsSync follows it.
+        expect(removed.indexOf(path.join(dir, "pr-hero"))).toBeLessThan(
+          removed.indexOf(path.join(dir, "crysk")),
+        );
+      }
+    });
+
+    test("a sibling name that is not on disk is not planned", async () => {
+      const dir = path.join(home, ".prhero", "bin");
+      const plan = await planUninstallation({
+        home,
+        platform: "linux",
+        installMethod: {
+          kind: "standalone",
+          binaryPath: path.join(dir, "pr-hero"),
+        },
+        exists: () => false,
+      });
+      expect(plan.binariesRemoved).toEqual([path.join(dir, "pr-hero")]);
+    });
+
     test("generates full data purge plan when purge is true and no runs active", async () => {
       const plan = await planUninstallation({
         home,
@@ -61,15 +137,40 @@ describe("uninstaller (lifecycle foundations)", () => {
         installMethod: { kind: "standalone", binaryPath: standaloneBin },
         detectActiveRuns: async () => [],
         isWatchLockHeld: async () => false,
+        // Both homes present: the new one is resolved and the old one is
+        // removed too.
         exists: () => true,
       });
 
       expect(plan.dataSteps.length).toBeGreaterThan(0);
       const dataPaths = plan.dataSteps.map((s) => s.targetPath);
-      expect(dataPaths).toContain(path.join(home, ".prhero", "prhero.db"));
-      expect(dataPaths).toContain(path.join(home, ".prhero", "watch.json"));
-      expect(dataPaths).toContain(path.join(home, ".prhero", "config.json"));
-      expect(dataPaths).toContain(path.join(home, ".prhero", "setup.json"));
+      expect(dataPaths).toContain(path.join(home, ".crysk", "prhero.db"));
+      expect(dataPaths).toContain(path.join(home, ".crysk", "watch.json"));
+      expect(dataPaths).toContain(path.join(home, ".crysk", "config.json"));
+      expect(dataPaths).toContain(path.join(home, ".crysk", "setup.json"));
+      expect(dataPaths).toContain(path.join(home, ".prhero"));
+    });
+
+    test("a legacy-only home is purged exactly as before", async () => {
+      const present = new Set([
+        path.join(home, ".prhero"),
+        path.join(home, ".prhero", "prhero.db"),
+        path.join(home, ".prhero", "config.json"),
+      ]);
+      const plan = await planUninstallation({
+        home,
+        platform: "linux",
+        purge: true,
+        installMethod: { kind: "source" },
+        detectActiveRuns: async () => [],
+        isWatchLockHeld: async () => false,
+        exists: (p) => present.has(p),
+      });
+      expect(plan.dataSteps.map((s) => s.targetPath)).toEqual([
+        path.join(home, ".prhero", "prhero.db"),
+        path.join(home, ".prhero", "config.json"),
+        path.join(home, ".prhero"),
+      ]);
     });
 
     test("refuses purge when active runs or watch.lock are detected", async () => {
@@ -126,6 +227,47 @@ describe("uninstaller (lifecycle foundations)", () => {
 
       expect(result.dryRun).toBe(true);
       expect(mutations).toBe(0);
+    });
+
+    test("unregister_mcp removes the crysk and the legacy entry and leaves other servers", async () => {
+      const mcpPath = path.join(home, ".claude", "mcp.json");
+      const written: Record<string, string> = {};
+      const plan: UninstallPlan = {
+        platform: "linux",
+        purge: false,
+        launchdServices: [],
+        rcFilesCleaned: [],
+        binariesRemoved: [],
+        agentEnvCleanups: [],
+        programSteps: [
+          {
+            type: "unregister_mcp",
+            targetPath: mcpPath,
+            desc: "Unregister MCP",
+          },
+        ],
+        dataSteps: [],
+        warnings: [],
+      };
+
+      const result = await executeUninstallPlan(plan, {
+        exists: () => true,
+        readFile: () =>
+          JSON.stringify({
+            mcpServers: {
+              crysk: { command: "crysk", args: ["mcp"] },
+              "pr-hero": { command: "pr-hero", args: ["mcp"] },
+              keep: { command: "keep", args: [] },
+            },
+          }),
+        writeFile: (p, c) => {
+          written[p] = c;
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      const parsed = JSON.parse(written[mcpPath]);
+      expect(Object.keys(parsed.mcpServers)).toEqual(["keep"]);
     });
   });
 });

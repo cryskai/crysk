@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { selfInvocation } from "../src/assets";
 import { prheroLayout } from "../src/home-preflight";
 import { SUPPORTED_OPENCODE_SDK_VERSION } from "../src/transport-registry";
 import {
@@ -24,8 +25,8 @@ describe("updater (lifecycle foundations)", () => {
   const layout = prheroLayout(home);
   const standaloneBin = path.join(home, ".prhero", "bin", "pr-hero");
 
-  test("1.4 Canonical repo constant is pinned to juanmaagd/pr-hero", () => {
-    expect(PRHERO_GITHUB_REPO).toBe("juanmaagd/pr-hero");
+  test("1.4 Canonical repo constant is pinned to cryskai/crysk", () => {
+    expect(PRHERO_GITHUB_REPO).toBe("cryskai/crysk");
   });
 
   describe("1.1 Install method detection and shadow-installs", () => {
@@ -39,6 +40,16 @@ describe("updater (lifecycle foundations)", () => {
       if (method.kind === "standalone") {
         expect(method.binaryPath).toBe(standaloneBin);
       }
+    });
+
+    test("detects a standalone binary in ~/.crysk/bin", () => {
+      const bin = path.join(home, ".crysk", "bin", "pr-hero");
+      const method = detectInstallMethod({
+        execPath: bin,
+        home,
+        version: "1.0.0",
+      });
+      expect(method).toEqual({ kind: "standalone", binaryPath: bin });
     });
 
     test("detects source checkout when version is dev or running from source repo", () => {
@@ -102,13 +113,16 @@ describe("updater (lifecycle foundations)", () => {
       });
 
       expect(plan.action).toBe("upgrade_standalone");
-      expect(plan.targetBinary).toBe(standaloneBin);
+      // The binary is installed as `crysk` beside the one that is running
+      // (updater-binaries.test.ts covers the pr-hero alias).
+      const crysk = path.join(path.dirname(standaloneBin), "crysk");
+      expect(plan.targetBinary).toBe(crysk);
       expect(plan.tempBinary).toMatch(/\.tmp\.[a-z0-9]+$/);
       expect(path.dirname(plan.tempBinary || "")).toBe(
         path.dirname(standaloneBin),
       );
-      expect(plan.bakBinary).toBe(`${standaloneBin}.bak`);
-      expect(plan.downloadUrl).toContain("v1.1.0/pr-hero-darwin-arm64");
+      expect(plan.bakBinary).toBe(`${crysk}.bak`);
+      expect(plan.downloadUrl).toContain("v1.1.0/crysk-darwin-arm64");
       expect(plan.checksumsUrl).toContain("v1.1.0/SHA256SUMS");
     });
 
@@ -130,7 +144,7 @@ describe("updater (lifecycle foundations)", () => {
         current_version: "1.0.0",
         latest_version: "1.1.0",
         reconciled_version: "1.0.0",
-        release_url: "https://github.com/juanmaagd/pr-hero/releases/tag/v1.1.0",
+        release_url: "https://github.com/cryskai/crysk/releases/tag/v1.1.0",
       };
 
       const storage: Record<string, string> = {};
@@ -313,7 +327,7 @@ describe("selectOpenCodeSdkInstaller", () => {
         bunPath: null,
         layoutDir: "/Users/x/.prhero",
       }),
-    ).toThrow(/pr-hero upgrade --reconcile/);
+    ).toThrow(/crysk upgrade --reconcile/);
   });
 });
 
@@ -331,7 +345,7 @@ describe("spawnOpenCodeSdkInstaller", () => {
     expect(error).toBeInstanceOf(Error);
     if (!(error instanceof Error)) return;
     expect(error.message).toContain("timed out after 40ms");
-    expect(error.message).toContain("pr-hero upgrade --reconcile");
+    expect(error.message).toContain("crysk upgrade --reconcile");
     expect(error.message).not.toContain("/bin/sleep");
   });
 });
@@ -466,7 +480,7 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
       expect(result.ok).toBe(false);
       const text = result.errors.join("\n");
       expect(text).toContain("neither npm nor bun is on PATH");
-      expect(text).toContain("pr-hero upgrade --reconcile");
+      expect(text).toContain("crysk upgrade --reconcile");
     } finally {
       await fixture.cleanup();
     }
@@ -614,6 +628,42 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
       const text = result.errors.join("\n");
       expect(text).toContain("collision");
       expect(text).not.toContain("already running");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+});
+
+describe("reconcile re-registers the MCP server", () => {
+  test("moves a pre-rename pr-hero entry to the crysk key", async () => {
+    const fixture = await withHome(undefined);
+    try {
+      const mcpPath = path.join(fixture.home, ".claude", "mcp.json");
+      await mkdir(path.dirname(mcpPath), { recursive: true });
+      await writeFile(
+        mcpPath,
+        JSON.stringify({
+          mcpServers: {
+            "pr-hero": { command: "/old/pr-hero", args: ["mcp"], timeout: 9 },
+          },
+        }),
+      );
+
+      // No verifyMcp: the default path is the one that registers.
+      const result = await quietReconcile(fixture.home, {
+        verifyMcp: undefined,
+      });
+
+      expect(result.errors).toEqual([]);
+      const self = selfInvocation();
+      const parsed = JSON.parse(await readFile(mcpPath, "utf-8"));
+      expect(parsed.mcpServers).toEqual({
+        crysk: {
+          command: self.command,
+          args: [...self.args, "mcp"],
+          timeout: 9,
+        },
+      });
     } finally {
       await fixture.cleanup();
     }

@@ -299,8 +299,7 @@ export function selectRevertCandidates(
 }
 
 // ---------------------------------------------------------------------------
-// gh payload readers. Same split as compare/ledger.ts's parseComparisonJson: the pure
-// reader names the FIELD it could not read, and the shell re-wraps adding the
+// gh payload readers. The pure reader names the FIELD it could not read, and the shell re-wraps adding the
 // endpoint only it knows.
 
 export interface CommitPullRef {
@@ -453,7 +452,7 @@ const CLASS_NOTE: Record<RevertConfidence, string> = {
 
 export function renderRevertsArtifact(artifact: RevertsArtifact): string {
   const out: string[] = [];
-  out.push("# pr-hero — revert/hotfix candidates");
+  out.push("# crysk — revert/hotfix candidates");
   out.push("");
   out.push(`- repository: \`${artifact.repoSlug}\``);
   out.push(`- ref: \`${artifact.ref}\``);

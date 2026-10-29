@@ -6,6 +6,7 @@ import { spawnModelForClaudeCli } from "#model/routing";
 import type { BucketScope } from "../execution/bucket-id";
 import { deriveBucketId } from "../execution/bucket-id";
 import type {
+  FailureCredential,
   ObservedModel,
   ProviderCapabilityReport,
   ProviderTerminalProof,
@@ -22,6 +23,7 @@ import {
 import type { NormalizedUsage } from "../execution/usage-normalized";
 import {
   envBillsMetered,
+  METERED_CREDENTIAL_ENV,
   normalizePartialUsage,
   normalizeUnavailableUsage,
 } from "../execution/usage-normalized";
@@ -931,9 +933,11 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
       const wallMs = Math.round(performance.now() - start);
 
       let fullResult = "";
+      let apiError: ProviderApiError | undefined;
       try {
-        const parsed = JSON.parse(stdout) as { result?: string };
-        fullResult = parsed.result ?? "";
+        const parsed = JSON.parse(stdout) as CliResultEnvelope;
+        fullResult = typeof parsed.result === "string" ? parsed.result : "";
+        apiError = providerApiErrorOf(parsed);
       } catch {
         // non-json stdout
       }
@@ -965,10 +969,26 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
               ...(escalatedToKill ? { signal: "SIGKILL" } : {}),
             };
 
+      // The CLI exits 0 when the API rejected the request, with the provider's message in
+      // `result`. That message is not the agent's answer: it fails the attempt with its
+      // typed cause, is never handed to the draft parser (which would spend a format retry
+      // on it), and its words go to the attempt's diagnostics.
+      const failureCredential =
+        apiError === undefined
+          ? undefined
+          : credentialOf(request.isolation.env);
+      if (apiError !== undefined) {
+        fullResult = "";
+        stderrTail = `${stderrTail}\n[pr-hero] ${apiError.detail}`.slice(-4096);
+      }
+
       const isCancelled = context.signal.aborted;
       const completion: TransportOutcome["completion"] = isCancelled
         ? "cancelled"
-        : exitCode === 0 && fullResult && terminalProof !== undefined
+        : apiError === undefined &&
+            exitCode === 0 &&
+            fullResult &&
+            terminalProof !== undefined
           ? "success"
           : "failed";
 
@@ -988,6 +1008,13 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
               ? "verified"
               : "unverified",
         ...(terminalProof !== undefined ? { terminalProof } : {}),
+        ...(apiError === undefined
+          ? {}
+          : {
+              failureCause: apiError.cause,
+              failureDetail: apiError.detail,
+              ...(failureCredential === undefined ? {} : { failureCredential }),
+            }),
         finalText: fullResult,
         usage,
         stderrTail,
@@ -1070,6 +1097,215 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
     }
     return undefined;
   }
+}
+
+// The envelope fields the error map reads. `result` is the model's answer on a normal run
+// and the CLI's own message on an error.
+interface CliResultEnvelope {
+  readonly result?: unknown;
+  readonly subtype?: unknown;
+  readonly is_error?: unknown;
+  readonly terminal_reason?: unknown;
+  readonly api_error_status?: unknown;
+}
+
+interface ProviderApiError {
+  readonly cause: TransportFailureCause;
+  readonly detail: string;
+}
+
+const API_ERROR_DETAIL_MAX = 160;
+const UNNAMED_TAG_MAX = 60;
+
+// Text witnesses that split ONE status into two causes (S3 of odd/tasks/claude-error-map.md).
+// A 400 is a spent balance or limit, or a plain malformed request; a 429 is a usage limit
+// that will not clear within minutes ("You've hit your 5-hour limit · resets 12:40pm", a
+// tier spend cap), or a rate limit that will. They are read ONLY once a status picked the
+// branch, never alone.
+//
+// The patterns are Anthropic's real wordings: "Credit balance is too low", "You have reached
+// your specified workspace API usage limits" (a 400), "You've hit your 5-hour limit"
+// (a subscription), a tier "spend cap". Bare "limit reached" and "resets" are NOT witnesses:
+// an ordinary per-minute rate-limit message can say either and must keep its backoff retry.
+const CREDIT_OR_SPEND_LIMIT = /credit balance|spend limit|usage limit/i;
+const SUBSCRIPTION_OR_SPEND_CAP =
+  /hit your .*limit|usage limit|spend cap|spend limit/i;
+// A usage-limit message that arrives with no status is the same terminal limit.
+const USAGE_LIMIT_NO_STATUS =
+  /hit your .*limit|usage limit|credit balance|spend cap|spend limit/i;
+const NOT_LOGGED_IN = /Not logged in\s*[·.]\s*Please run \/login/i;
+
+// The map from one error envelope to its typed cause. The CLI prints `is_error: true` with
+// the HTTP status of the API's refusal in `api_error_status`, and `terminal_reason` /
+// `subtype` for the run-level errors that have no status. The exit code is NOT a signal:
+// an API rejection exits 0 (CLI 2.1.312) or 1 (anthropics/claude-code#103807).
+//
+// The status is read first, then the reason, and a message only to split one status. The
+// retry rule is the cause's own (failure-policy.ts): only rate_limit and network_transient
+// retry. So the causes that cannot clear in minutes (an empty balance, a subscription
+// window) are terminal, and a server-side failure is never made terminal, since the CLI
+// wraps 5xx and 529 in this same envelope.
+//
+// An `is_error` the map does not name (a stop hook, a budget cap, a reason a later CLI adds)
+// returns undefined here, and providerApiErrorOf fails it terminally rather than let the
+// error text be parsed as a draft and earn a format retry that hides the cause.
+function claudeCliErrorCause(
+  envelope: CliResultEnvelope,
+): TransportFailureCause | undefined {
+  const status =
+    typeof envelope.api_error_status === "number" &&
+    Number.isInteger(envelope.api_error_status)
+      ? envelope.api_error_status
+      : undefined;
+  const reason =
+    typeof envelope.terminal_reason === "string"
+      ? envelope.terminal_reason
+      : undefined;
+  const subtype =
+    typeof envelope.subtype === "string" ? envelope.subtype : undefined;
+  const message = typeof envelope.result === "string" ? envelope.result : "";
+
+  // The prompt-too-long reason is the CLI's own, and the API reports it as a 400.
+  if (reason === "prompt_too_long" || status === 413) {
+    return "context_window_exceeded";
+  }
+  if (status !== undefined) {
+    if (status === 401 || status === 403) return "auth_invalid";
+    if (status === 402) return "quota_exhausted";
+    if (status === 404) return "model_unavailable";
+    if (status === 400) {
+      return CREDIT_OR_SPEND_LIMIT.test(message)
+        ? "quota_exhausted"
+        : "provider_configuration_invalid";
+    }
+    if (status === 429) {
+      return SUBSCRIPTION_OR_SPEND_CAP.test(message)
+        ? "quota_exhausted"
+        : "rate_limit";
+    }
+    // 503 backs off like 529: an instant retry against a saturated server burns the whole
+    // transient budget in milliseconds (the same reason classifyFailure reads it as
+    // rate_limit). Every other 5xx is a failure to try again at once.
+    if (status === 529 || status === 503) return "rate_limit";
+    if (status >= 500) return "network_transient";
+    if (status >= 400) return "provider_configuration_invalid";
+    return undefined;
+  }
+
+  // No status: the CLI's own words, then the run-level reasons.
+  if (NOT_LOGGED_IN.test(message)) return "auth_invalid";
+  if (reason === "max_output_tokens" || /max_output_tokens/.test(message)) {
+    return "output_limit_exceeded";
+  }
+  if (subtype === "error_max_turns" || reason === "max_turns") {
+    return "output_limit_exceeded";
+  }
+  if (reason === "model_error" || reason === "malformed_tool_use_exhausted") {
+    return "protocol_mismatch";
+  }
+  if (USAGE_LIMIT_NO_STATUS.test(message)) return "quota_exhausted";
+  if (/overloaded|rate_limit_error|service unavailable/i.test(message)) {
+    return "rate_limit";
+  }
+  if (
+    reason === "aborted_streaming" ||
+    reason === "aborted_tools" ||
+    subtype === "error_during_execution" ||
+    reason === "api_error"
+  ) {
+    return "network_transient";
+  }
+  return undefined;
+}
+
+// The typed cause and one short line of the CLI's own words, or undefined for a result
+// that is not an error the map names.
+function providerApiErrorOf(
+  envelope: CliResultEnvelope,
+): ProviderApiError | undefined {
+  if (envelope.is_error !== true) return undefined;
+  const cause = claudeCliErrorCause(envelope);
+
+  const status =
+    typeof envelope.api_error_status === "number"
+      ? envelope.api_error_status
+      : undefined;
+  const reason =
+    typeof envelope.terminal_reason === "string"
+      ? envelope.terminal_reason
+      : undefined;
+  const subtype =
+    typeof envelope.subtype === "string" ? envelope.subtype : undefined;
+  const message = typeof envelope.result === "string" ? envelope.result : "";
+
+  // An error the map does not name. The CLI said it failed, so the text is not an answer;
+  // the request is not one a retry can fix, so it is terminal, and the reason is quoted
+  // beside the CLI's words so CI shows what happened instead of a generic failure.
+  if (cause === undefined) {
+    // The tag is the CLI's text too: one line, and short enough that the message keeps
+    // room in the 160 characters.
+    const tag =
+      oneLine(
+        reason ??
+          (subtype !== undefined && subtype !== "success" ? subtype : ""),
+        UNNAMED_TAG_MAX,
+      ) || "unknown";
+    const suffix = ` (${tag}${status === undefined ? "" : `, HTTP ${status}`})`;
+    const prefix = "Claude CLI: ";
+    const words = oneLine(
+      message.trim() === "" ? "no message" : message,
+      API_ERROR_DETAIL_MAX - prefix.length - suffix.length,
+    );
+    return {
+      cause: "provider_configuration_invalid",
+      detail: `${prefix}${words}${suffix}`,
+    };
+  }
+
+  // A run-level error has no message of its own; its reason names it.
+  const named =
+    subtype !== undefined && subtype !== "success" ? subtype : reason;
+  const words = message.trim() === "" ? (named ?? "") : message;
+  const prefix =
+    status !== undefined || reason === "api_error"
+      ? "Anthropic API: "
+      : "Claude CLI: ";
+
+  // One line, no control characters, and short enough for a commit status.
+  const suffix = status === undefined ? "" : ` (HTTP ${status})`;
+  const room = API_ERROR_DETAIL_MAX - prefix.length - suffix.length;
+  return { cause, detail: `${prefix}${oneLine(words, room)}${suffix}` };
+}
+
+// The CLI's words as one line: control characters become spaces, whitespace collapses, and
+// the text is cut with an ellipsis to fit `room` characters.
+function oneLine(words: string, room: number): string {
+  const flat = Array.from(words, (char) => {
+    const code = char.charCodeAt(0);
+    return code < 0x20 || code === 0x7f ? " " : char;
+  })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length <= room ? flat : `${flat.slice(0, room - 1)}…`;
+}
+
+// The secret the child ran on. The per-token variables (the list envBillsMetered reads) win
+// over CLAUDE_CODE_OAUTH_TOKEN, and a whitespace-only value is no credential (the same trim).
+//
+// The precedence is observed, not assumed. With CLI 2.1.312 and both an API key and an
+// OAuth login present, the CLI prints "claude.ai connectors are disabled because
+// ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai
+// login". On juanmaagd/pr-hero CI with both secrets bound, every request used the API key
+// ("Credit balance is too low") while CLAUDE_CODE_OAUTH_TOKEN was valid.
+function credentialOf(
+  env: Readonly<Record<string, string | undefined>>,
+): FailureCredential | undefined {
+  for (const name of METERED_CREDENTIAL_ENV) {
+    if (env[name]?.trim()) return name;
+  }
+  if (env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return "CLAUDE_CODE_OAUTH_TOKEN";
+  return undefined;
 }
 
 // The failed outcome execute() returns when spawn throws, and its exact

@@ -15,7 +15,7 @@ Status: **CAL.COM 10 SCORED 2026-08-19 (Surface A).** Harness: `scripts/martian-
 | Goal | Score **our** reviews on the **same diffs** other products already reviewed, so a pipeline change is an n-vs-n result, not a vibes comparison |
 | Primary instrument | Martian **offline**: 50 public PRs, human goldens, stored reviews from every listed tool, LLM judge |
 | Secondary | Martian **online** / Hugging Face dump — PRs where bots already commented; ground truth is author-fixes, not bugs. Do not treat as the comparable field |
-| What this is not | A replacement for the musive Greptile head-to-head (`src/compare.ts`). That remains the product instrument on *our* repo |
+| What this is not | A product bar on *our* repo. The musive Greptile head-to-head is retired from the code; Martian’s offline field is the comparison field |
 | What this fills | C10’s both-missed cell (goldens exist even when Greptile and we were silent); vendor-comparable precision/recall/F-beta |
 | How we run | **Local worktree** on the original PR SHA. Isolation flags stay. Hunters must never see GitHub review comments |
 | Official “add a tool” path | Fork 50 PRs into an org with a GitHub App. **We refuse that** for v0. CLI + adapter (CodeSheriff’s pattern) |
@@ -31,8 +31,8 @@ Status: **CAL.COM 10 SCORED 2026-08-19 (Surface A).** Harness: `scripts/martian-
 Until now we could do three things:
 
 1. Score against the lab’s sealed goldens — retired at THE PIVOT (contaminated, time-bound, not a vendor field).
-2. Bucket against Greptile on musive — live, cheap, **one** oracle, cannot see what both missed.
-3. A/B scout vs not on the frozen musive control set (M6) — one variable, still Greptile as the other reviewer.
+2. Bucket against Greptile on musive — retired with the head-to-head code; it was cheap, **one** oracle, and could not see what both missed.
+3. A/B scout vs not on the frozen musive control set (M6) — one variable; the Greptile head-to-head it leaned on is retired.
 
 None of those answers “did this pipeline catch what CodeRabbit caught on Grafana PR N, and did it catch the golden concurrency bug on Cal.com PR M?” Martian does, because **every tool already ran on the same 50 diffs** and the reviews are on disk.
 
@@ -137,9 +137,9 @@ Read it with Martian’s own caveat, which matches THE PIVOT and DashBench: **th
 
 ### Surface B — stored vendor reviews (our H2H, many oracles)
 
-`benchmark_data.json` already has Greptile’s (and everyone else’s) comments on that PR. After we emit findings we can bucket like `src/compare.ts`, except the other side is a stored review, not a live musive comment.
+`benchmark_data.json` already has Greptile’s (and everyone else’s) comments on that PR. After we emit findings we can bucket them the way the retired musive head-to-head did, except the other side is a stored review, not a live musive comment.
 
-Matching rule is an open implementation choice at harness time. Today’s H2H is **location-only** (path + line ±25, explicitly not claim text — `compare.ts`). Martian’s judge is **semantic**. Surface B should not silently mix the two. Recommendation: keep location-only for the mechanical buckets (deterministic, testable), and optionally run Martian’s judge as a second pass labelled as such.
+Matching rule is an open implementation choice at harness time. The retired musive H2H was **location-only** (path + line ±25, explicitly not claim text; its shared path rule and window live on in `src/compare/compare.ts`). Martian’s judge is **semantic**. Surface B should not silently mix the two. Recommendation: keep location-only for the mechanical buckets (deterministic, testable), and optionally run Martian’s judge as a second pass labelled as such.
 
 Surface B cannot see C10’s both-missed cell. Surface A can. That is why both exist.
 
@@ -175,7 +175,7 @@ If a run’s `pipeline.json` shows Bash or GitHub MCP in the hunter tool list, t
 | Instrument | Oracle | Both-missed cell | Vendor-comparable | Role after this doc |
 |---|---|---|---|---|
 | Lab `dataset/test.jsonl` | sealed goldens | yes (in theory) | no | **Stays sealed.** THE PIVOT. Not this bench |
-| Musive Greptile H2H | Greptile on *our* PRs | no (C10) | no (one vendor, one repo) | **Product instrument.** Unchanged |
+| Musive Greptile H2H | Greptile on *our* PRs | no (C10) | no (one vendor, one repo) | **Retired** from the code. Martian is the comparison field |
 | M6 scout A/B | same H2H, frozen musive set | no | no | **DoorDash track.** Not replaced. Paused 2026-08-19 |
 | Fixture eval | planted bug | n/a | no | Cheap gate before any Martian spend |
 | Refuter-probe | planted verdicts | n/a | no | First gate for refuter prompt edits |
@@ -602,5 +602,5 @@ provider health, guaranteed model quality, or approval for fifty-PR expansion.
 - https://withmartian.com/post/code-review-bench-v0
 - https://github.com/withmartian/code-review-benchmark/blob/main/methodology/full.md
 - https://huggingface.co/datasets/code-review-bench/code-review-bench
-- Internal: `ROADMAP.md` (THE PIVOT, C10, D3), `docs/review-strategies.md`, `docs/doordash-dashbench-trust.md`, `src/compare.ts`
+- Internal: `ROADMAP.md` (THE PIVOT, C10, D3), `docs/review-strategies.md`, `docs/doordash-dashbench-trust.md`, `src/compare/compare.ts`
 

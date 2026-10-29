@@ -163,6 +163,100 @@ describe("decideCiTrigger — the comment commands", () => {
   });
 });
 
+// The commands are written `/crysk …`; the `/pr-hero …` spelling still works for
+// one version (the tests above feed it as input).
+describe("decideCiTrigger — the /crysk commands", () => {
+  test.each([
+    ["/crysk review", { full: false, adjudicate: false }],
+    ["  /crysk review\n", { full: false, adjudicate: false }],
+    ["/crysk review --full", { full: true, adjudicate: false }],
+    ["/crysk recheck", { full: false, adjudicate: true }],
+  ])("%j reviews with force", (body, flags) => {
+    expect(decideCiTrigger(comment(body))).toEqual({
+      kind: "review",
+      force: true,
+      ...flags,
+    });
+  });
+
+  test("`/crysk override` overrides for a writer", () => {
+    expect(decideCiTrigger(comment("/crysk override"))).toEqual({
+      kind: "override",
+      actor: "maintainer",
+    });
+  });
+
+  test.each([
+    "/crysk review please",
+    "/crysk reviewing",
+    "/CRYSK review",
+    "/crysk  review",
+    "/crysk review --FULL",
+    "please /crysk review",
+    "/crysk override --force",
+    "/crysk recheck now",
+    "/crysk /pr-hero review",
+  ])("a near miss is ignored: %j", (body) => {
+    expect(decideCiTrigger(comment(body)).kind).toBe("ignore");
+    expect(parseReviewCommand(body)).toBeUndefined();
+  });
+
+  test.each([
+    "/crysk review please",
+    "/pr-hero review please",
+    "/crysk override --force",
+    "/pr-hero override --force",
+    "/crysk recheck now",
+    "/pr-hero recheck now",
+  ])("a near miss in either name is flagged, never run: %j", (body) => {
+    expect(decideCiTrigger(comment(body))).toEqual({
+      kind: "ignore",
+      reason: expect.any(String),
+      nearMiss: true,
+    });
+  });
+
+  test("the near-miss rejection names the /crysk commands", () => {
+    const decision = decideCiTrigger(comment("/crysk review please"));
+    expect((decision as { reason: string }).reason).toContain(
+      "`/crysk review`, `/crysk review --full` or `/crysk recheck`",
+    );
+    expect((decision as { reason: string }).reason).toContain(
+      "`/crysk override`",
+    );
+  });
+
+  // The retry hint tells the commenter what to type again: the spelling they used.
+  test.each(["/crysk override", "/pr-hero override"])(
+    "an unverifiable %s echoes the prefix the commenter typed",
+    (body) => {
+      const verdict = decideCiTrigger(
+        comment(body, {
+          commenterPermission: {
+            kind: "indeterminate",
+            detail: "HTTP 503",
+            status: 503,
+          },
+        }),
+      );
+      expect(verdict.kind).toBe("unverifiable");
+      expect((verdict as { reason: string }).reason).toContain(
+        `Comment \`${body}\` again to retry.`,
+      );
+    },
+  );
+
+  test("a /crysk review denied to a reader names /crysk review", () => {
+    const verdict = decideCiTrigger(
+      comment("/crysk review", {
+        commenterPermission: { kind: "resolved", permission: "read" },
+      }),
+    );
+    expect(verdict.kind).toBe("denied");
+    expect((verdict as { reason: string }).reason).toContain("`/crysk review`");
+  });
+});
+
 // T6 (odd/tasks/agent-first-ci.md, S8): `/pr-hero override` is the human escape
 // hatch. It spends nothing, so it never reaches the credential check, and it is
 // the only comment that records WHO acted (the actor), because the override must
@@ -209,7 +303,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
     );
     expect(verdict.kind).toBe("denied");
     expect(verdict).toMatchObject({
-      reason: expect.stringContaining("`/pr-hero override`"),
+      reason: expect.stringContaining("`/crysk override`"),
     });
   });
 
@@ -380,10 +474,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
   test("an override whose record cannot be written fails the job, never silently", () => {
     const run = runShell(
       commentEnv("/pr-hero override", {
-        PRHERO_OUTCOME_DIR: path.join(
-          os.tmpdir(),
-          "prhero-override-unwritable",
-        ),
+        CRYSK_OUTCOME_DIR: path.join(os.tmpdir(), "prhero-override-unwritable"),
       }),
       scriptedGh(ok("write"), overrideHead(HEAD_SHA, false)),
       () => false,
@@ -404,7 +495,7 @@ describe("decideCiTrigger — the override command (S8)", () => {
     expect(rerun.record).not.toHaveProperty("actor");
     expect(rerun.ghCalls.filter((args) => args[0] === "pr")).toEqual([]);
     expect(rerun.stdout).toContain(
-      "an override applies to the head at the time of the comment; comment `/pr-hero override` again",
+      "an override applies to the head at the time of the comment; comment `/crysk override` (or `/pr-hero override` on a workflow set up before the rename) again",
     );
 
     const first = outcomeRun(
@@ -590,7 +681,7 @@ describe("decideCiTrigger — the pull_request filter", () => {
       );
       expect(decision.kind).toBe("ignore");
       expect((decision as { reason: string }).reason).toContain(
-        "/pr-hero review",
+        "/crysk review",
       );
     },
   );
@@ -1034,14 +1125,14 @@ const overrideHead = (sha: string, crossRepository: boolean): GhResult =>
 
 // The notice a refused override prints, verbatim.
 const FORK_OVERRIDE_REFUSAL =
-  "`/pr-hero override` is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/pr-hero review` and merge it with your repository's own rules.";
+  "An override is refused on a pull request from a fork: its head can change after the comment, so the override would not be bound to the code you saw. Review the fork with `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) and merge it with your repository's own rules.";
 
 // The notice an override prints when the lookup could not say whether the pull request is
 // a fork. Distinct from the fork notice: a lookup that failed is not a proven fork.
 const UNKNOWN_FORK_OVERRIDE_REFUSAL =
-  "`/pr-hero override` could not confirm whether this pull request comes from a fork, so it was refused; comment `/pr-hero override` again.";
+  "The override could not confirm whether this pull request comes from a fork, so it was refused; comment `/crysk override` (or `/pr-hero override` on a workflow set up before the rename) again.";
 
-// Runs the shell with PRHERO_OUTCOME_DIR pointed at a fresh directory that does
+// Runs the shell with CRYSK_OUTCOME_DIR pointed at a fresh directory that does
 // not exist yet (the trigger must create it), then reads trigger.json back.
 function outcomeRun(
   env: Record<string, string>,
@@ -1050,7 +1141,7 @@ function outcomeRun(
   const root = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-record-"));
   try {
     const dir = path.join(root, "pr-hero-outcome");
-    const run = runShell({ ...env, PRHERO_OUTCOME_DIR: dir }, answer);
+    const run = runShell({ ...env, CRYSK_OUTCOME_DIR: dir }, answer);
     const file = path.join(dir, "trigger.json");
     const recordText = existsSync(file)
       ? readFileSync(file, "utf8")
@@ -1130,7 +1221,7 @@ describe("runCiTrigger — the shell", () => {
     const run = runShell(commentEnv("/pr-hero review please"));
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("false");
-    expect(run.stdout).toStartWith("::notice title=pr-hero::");
+    expect(run.stdout).toStartWith("::notice title=crysk::");
     // Before T2e this was no call at all. A near miss runs no permission lookup.
     expect(run.ghCalls).toEqual([reactionArgv("confused")]);
   });
@@ -1150,7 +1241,7 @@ describe("runCiTrigger — the shell", () => {
       );
       expect(run.exitCode).toBe(0);
       expect(run.outputs.run).toBe("false");
-      expect(run.stdout).toStartWith("::notice title=pr-hero::");
+      expect(run.stdout).toStartWith("::notice title=crysk::");
       // A definitive answer: one lookup, no retry, and denied before the
       // head is resolved. The second call is the denial's reaction (T2e, -1).
       expect(run.ghCalls.length).toBe(2);
@@ -1186,7 +1277,7 @@ describe("runCiTrigger — the shell", () => {
       // the cause itself: one line, the commenter and the failed lookup.
       expect(run.outputs.publish).toBe("true");
       expect(run.stdout).toStartWith(
-        "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+        "::error title=crysk::Crysk could not verify whether @maintainer",
       );
       expect(run.stdout.split("\n").filter((line) => line !== "")).toHaveLength(
         1,
@@ -1240,7 +1331,7 @@ describe("runCiTrigger — the shell", () => {
     expect(run.outputs.publish).toBe("true");
     // No outcome dir, so no record: the trigger names the cause itself.
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+      "::error title=crysk::Crysk could not verify whether @maintainer",
     );
     expect(run.stdout).toContain("spawn gh ENOENT");
     // The retry is the whole lookup: an unverifiable run asks for no head.
@@ -1253,7 +1344,7 @@ describe("runCiTrigger — the shell", () => {
       const run = runShell(
         commentEnv("/pr-hero review", {
           COMMENTER_LOGIN: "evil\n::warning::HOSTILE-LOGIN",
-          PRHERO_OUTCOME_DIR: path.join(dir, "outcome"),
+          CRYSK_OUTCOME_DIR: path.join(dir, "outcome"),
         }),
         () => ({
           exitCode: 1,
@@ -1279,7 +1370,7 @@ describe("runCiTrigger — the shell", () => {
     expect(run.outputs.run).toBe("false");
     expect(run.outputs.publish).toBe("true");
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::pr-hero has no credential for this review",
+      "::error title=crysk::Crysk has no credential for this review",
     );
     expect(run.summary).toBe("");
   });
@@ -1303,7 +1394,7 @@ describe("runCiTrigger — the shell", () => {
     );
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::Could not determine the pull request number",
+      "::error title=crysk::Could not determine the pull request number",
     );
     expect(run.stdout.split("\n").filter((line) => line !== "")).toHaveLength(
       1,
@@ -1314,7 +1405,7 @@ describe("runCiTrigger — the shell", () => {
     const run = runShell(baseEnv({ HAS_CLAUDE_TOKEN: "false" }));
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::pr-hero has no credential for this review",
+      "::error title=crysk::Crysk has no credential for this review",
     );
     expect(run.stdout).toContain("anthropic-api-key");
   });
@@ -1329,7 +1420,7 @@ describe("runCiTrigger — the shell", () => {
     );
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+      "::error title=crysk::Crysk could not verify whether @maintainer",
     );
     expect(run.stdout).toContain("gh: Server Error (HTTP 500)");
   });
@@ -1339,7 +1430,7 @@ describe("runCiTrigger — the shell", () => {
     try {
       const dir = path.join(root, "outcome");
       const run = runShell(
-        baseEnv({ HAS_CLAUDE_TOKEN: "false", PRHERO_OUTCOME_DIR: dir }),
+        baseEnv({ HAS_CLAUDE_TOKEN: "false", CRYSK_OUTCOME_DIR: dir }),
         undefined,
         undefined,
         failingFs,
@@ -1348,10 +1439,10 @@ describe("runCiTrigger — the shell", () => {
       const lines = run.stdout.split("\n").filter((line) => line !== "");
       expect(lines).toHaveLength(2);
       expect(lines[0]).toStartWith(
-        "::error title=pr-hero::pr-hero could not write",
+        "::error title=crysk::Crysk could not write",
       );
       expect(lines[1]).toStartWith(
-        "::error title=pr-hero::pr-hero has no credential for this review",
+        "::error title=crysk::Crysk has no credential for this review",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1412,7 +1503,7 @@ describe("runCiTrigger — the shell", () => {
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("true");
     expect(run.outputs.head_sha).toBe("unknown");
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
   });
 
   test("a head sha that is not a sha is never written to the outputs", () => {
@@ -1633,7 +1724,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       writeFileSync(path.join(dir, "setup.json"), "{}");
       // SB3: an older run's pending identity would let the cancel settle trust its pending.
       writeFileSync(path.join(dir, PENDING_AT_FILE), "2026-10-17T10:00:00Z\n");
-      runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      runShell({ ...baseEnv(), CRYSK_OUTCOME_DIR: dir });
       expect(existsSync(path.join(dir, PENDING_AT_FILE))).toBe(false);
       expect(existsSync(path.join(dir, "cli-started"))).toBe(false);
       expect(existsSync(path.join(dir, "setup.json"))).toBe(false);
@@ -1654,7 +1745,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
         path.join(dir, "cli.json"),
         '{"v":1,"outcome":"reviewed"}\n',
       );
-      runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      runShell({ ...baseEnv(), CRYSK_OUTCOME_DIR: dir });
       expect(existsSync(path.join(dir, "cli.json"))).toBe(false);
       expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
     } finally {
@@ -1670,7 +1761,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     try {
       const dir = path.join(root, "pr-hero-outcome");
       mkdirSync(path.join(dir, "trigger.json.tmp"), { recursive: true });
-      const run = runShell({ ...baseEnv(), PRHERO_OUTCOME_DIR: dir });
+      const run = runShell({ ...baseEnv(), CRYSK_OUTCOME_DIR: dir });
       expect(existsSync(path.join(dir, "trigger.json"))).toBe(true);
       expect(run.stdout).not.toContain("could not write its outcome record");
     } finally {
@@ -1697,7 +1788,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, "cli-started"), "");
       const run = runShell(
-        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        { ...baseEnv(), CRYSK_OUTCOME_DIR: dir },
         undefined,
         undefined,
         fsWhereRemovalFails((filePath) => filePath.endsWith("cli-started")),
@@ -1718,7 +1809,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, "setup.json"), "{}");
       const run = runShell(
-        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        { ...baseEnv(), CRYSK_OUTCOME_DIR: dir },
         undefined,
         undefined,
         fsWhereRemovalFails((filePath) => filePath.endsWith("setup.json")),
@@ -1742,7 +1833,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
         '{"v":1,"outcome":"reviewed"}\n',
       );
       const run = runShell(
-        { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        { ...baseEnv(), CRYSK_OUTCOME_DIR: dir },
         undefined,
         undefined,
         fsWhereRemovalFails((filePath) => filePath.endsWith("cli.json")),
@@ -1760,7 +1851,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       const dir = path.join(root, "outcome");
       let stdout = "";
       const exitCode = runCiTrigger({
-        env: { ...baseEnv(), PRHERO_OUTCOME_DIR: dir },
+        env: { ...baseEnv(), CRYSK_OUTCOME_DIR: dir },
         gh: () => ({ exitCode: 1, stdout: "", stderr: "unused" }),
         sleep: () => {},
         exists: () => false,
@@ -1792,7 +1883,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
           ? readdirSync(dir).filter((name) => name.endsWith(".tmp"))
           : [],
       ).toEqual([]);
-      expect(stdout).toContain("::error title=pr-hero::");
+      expect(stdout).toContain("::error title=crysk::");
       expect(stdout).toContain("outcome record");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1810,7 +1901,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       baseEnv({ HAS_CLAUDE_TOKEN: "false" }),
       undefined,
       1,
-      "pr-hero has no credential",
+      "Crysk has no credential",
     ],
     [
       "an unresolved PR",
@@ -1838,7 +1929,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       );
       try {
         const run = runShell(
-          { ...env, PRHERO_OUTCOME_DIR: path.join(root, "outcome") },
+          { ...env, CRYSK_OUTCOME_DIR: path.join(root, "outcome") },
           answer,
           () => false,
           failingFs,
@@ -1856,7 +1947,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
     },
   );
 
-  test("with no PRHERO_OUTCOME_DIR nothing is written and the outputs are unchanged", () => {
+  test("with no CRYSK_OUTCOME_DIR nothing is written and the outputs are unchanged", () => {
     const run = runShell(baseEnv());
     expect(run.outputs.run).toBe("true");
     expect(run.outputs.publish).toBe("true");
@@ -2031,15 +2122,20 @@ describe("the trigger looks for runner credentials where the engine does", () =>
 });
 
 describe("trigger.ts runs before `bun install`", () => {
-  test("it imports only runtime builtins", () => {
+  // `../brand` is the one non-builtin: it has zero imports of its own, so it
+  // resolves before `bun install` (the same exception publish.ts and outcome.ts make).
+  test("it imports only runtime builtins, plus the import-free ../brand", () => {
     const source = readFileSync(MODULE_PATH, "utf-8");
     const specifiers = [
       ...source.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)"/gms),
     ].map((match) => match[1]);
     expect(specifiers.length).toBeGreaterThan(0);
     for (const specifier of specifiers) {
-      expect(specifier).toMatch(/^(node:|bun$|bun:)/);
+      expect(specifier).toMatch(/^(node:|bun$|bun:|\.\.\/brand$)/);
     }
+    expect(
+      readFileSync(path.resolve(MODULE_PATH, "../../brand.ts"), "utf-8"),
+    ).not.toMatch(/^\s*import\b/m);
   });
 
   // The real entry point, spawned: proves the `import.meta.main` shell reads
@@ -2088,7 +2184,7 @@ describe("trigger.ts runs before `bun install`", () => {
     try {
       const run = spawnTrigger({
         ...baseEnv({ HAS_CLAUDE_TOKEN: "false" }),
-        PRHERO_OUTCOME_DIR: path.join(dir, "outcome"),
+        CRYSK_OUTCOME_DIR: path.join(dir, "outcome"),
       });
       expect(run.exitCode).toBe(1);
       expect(run.output).toContain("run=false\n");
@@ -2282,7 +2378,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("false");
     expect(run.stdout).toContain(
-      "an override applies to the head at the time of the comment; comment `/pr-hero override` again",
+      "an override applies to the head at the time of the comment; comment `/crysk override` (or `/pr-hero override` on a workflow set up before the rename) again",
     );
   });
 
@@ -2345,7 +2441,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
     );
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("false");
-    expect(run.stdout).toStartWith("::notice title=pr-hero::");
+    expect(run.stdout).toStartWith("::notice title=crysk::");
     expect(warningLines(run.stdout)).toHaveLength(1);
   });
 
@@ -2500,7 +2596,7 @@ describe("runCiTrigger — /pr-hero recheck", () => {
           ? overrideHead(head, false)
           : ok(`${head}\n`);
   const RECHECK_FORK_REFUSAL =
-    "/pr-hero recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
+    "A recheck cannot run on a fork pull request: the adjudicator needs this repository's checkout of the head";
 
   test("a writer's recheck reviews the head with adjudicate true and force", () => {
     const run = outcomeRun(commentEnv(RECHECK_COMMAND), recheckGh(OTHER_SHA));
@@ -2545,7 +2641,7 @@ describe("runCiTrigger — /pr-hero recheck", () => {
       scriptedGh(ok("write"), ok("not json")),
     );
     expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
-    expect(run.stdout).toContain("/pr-hero recheck could not confirm");
+    expect(run.stdout).toContain("The recheck could not confirm");
     expect(run.ghCalls).toContainEqual(reactionArgv("-1"));
   });
 });

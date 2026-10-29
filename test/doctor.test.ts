@@ -40,21 +40,23 @@ describe("doctor tri-state evaluation", () => {
       cwd: "/repo",
       home: "/home/user",
       exists: (p) => {
-        if (p === "/repo/.prhero/gotchas.md") return true;
+        if (p === "/repo/.crysk/gotchas.md") return true;
         if (p === "/repo/.codegraph") return true;
-        if (p === "/home/user/.prhero/setup.json") return true;
+        if (p === "/home/user/.crysk/setup.json") return true;
         if (p === "/home/user/.claude/mcp.json") return true;
-        if (p.includes(".claude/skills/")) return true;
+        // Every skill is installed, none under a pre-rename name.
+        if (p.includes(".claude/skills/") && !p.includes("/skills/pr-hero"))
+          return true;
         if (p === `/repo/${CI_WORKFLOW_RELATIVE_PATH}`) return true;
         return false;
       },
       readFile: (p) => {
-        if (p === "/repo/.prhero/gotchas.md")
+        if (p === "/repo/.crysk/gotchas.md")
           return "## Gotchas\nDo not mutate state.";
         if (p === "/home/user/.claude/mcp.json")
           return JSON.stringify({
             mcpServers: {
-              "pr-hero": {
+              crysk: {
                 command: self.command,
                 args: [...self.args, "mcp"],
               },
@@ -113,8 +115,8 @@ describe("doctor tri-state evaluation", () => {
         cwd: "/repo",
         home: "/home/user",
         exists: (p) =>
-          p === "/repo/.prhero/gotchas.md" ||
-          p === "/home/user/.prhero/setup.json",
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.crysk/setup.json",
         readFile: () => "## Gotchas\nContent",
         checkToolsOptions: {
           which: (bin) => (bin === "git" ? null : `/bin/${bin}`),
@@ -134,8 +136,8 @@ describe("doctor tri-state evaluation", () => {
         cwd: "/repo",
         home: "/home/user",
         exists: (p) =>
-          p === "/repo/.prhero/gotchas.md" ||
-          p === "/home/user/.prhero/setup.json",
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.crysk/setup.json",
         readFile: () => "## Gotchas\nContent",
         checkToolsOptions: {
           which: (bin) => (bin === "claude" ? null : `/bin/${bin}`),
@@ -154,8 +156,8 @@ describe("doctor tri-state evaluation", () => {
         cwd: "/repo",
         home: "/home/user",
         exists: (p) =>
-          p === "/repo/.prhero/gotchas.md" ||
-          p === "/home/user/.prhero/setup.json",
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.crysk/setup.json",
         readFile: () => "## Gotchas\nContent",
         checkToolsOptions: {
           which: () => "/bin/tool",
@@ -175,16 +177,16 @@ describe("doctor tri-state evaluation", () => {
         cwd: "/repo",
         home: "/home/user",
         exists: (p) => {
-          if (p === "/repo/.prhero/config.json") return true;
-          if (p === "/repo/.prhero/gotchas.md") return true;
-          if (p === "/home/user/.prhero/setup.json") return true;
+          if (p === "/repo/.crysk/config.json") return true;
+          if (p === "/repo/.crysk/gotchas.md") return true;
+          if (p === "/home/user/.crysk/setup.json") return true;
           return false;
         },
         readFile: (p) => {
-          if (p === "/repo/.prhero/config.json") {
+          if (p === "/repo/.crysk/config.json") {
             return JSON.stringify({ agents_dir: "/missing/old/path" });
           }
-          if (p === "/repo/.prhero/gotchas.md") return "## Gotchas\nContent";
+          if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
           return undefined;
         },
         checkToolsOptions: {
@@ -206,7 +208,7 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/home/user/.prhero/setup.json",
+        exists: (p) => p === "/home/user/.crysk/setup.json",
         readFile: () => "   ", // empty
         checkToolsOptions: {
           which: () => "/bin/tool",
@@ -231,10 +233,10 @@ describe("doctor tri-state evaluation", () => {
         cwd: "/repo",
         home: "/home/user",
         exists: (p) =>
-          p === "/repo/.prhero/gotchas.md" ||
-          p === "/home/user/.prhero/setup.json",
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.crysk/setup.json",
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md" ? GOTCHAS_TEMPLATE : undefined,
+          p === "/repo/.crysk/gotchas.md" ? GOTCHAS_TEMPLATE : undefined,
         checkToolsOptions: {
           which: () => "/bin/tool",
           exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
@@ -261,8 +263,8 @@ describe("doctor tri-state evaluation", () => {
         cwd: "/repo",
         home: "/home/user",
         exists: (p) =>
-          p === "/repo/.prhero/gotchas.md" ||
-          p === "/home/user/.prhero/setup.json",
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.crysk/setup.json",
         readFile: () => "## Gotchas\nContent",
         checkToolsOptions: {
           which: (bin) => (bin === "gh" ? null : `/bin/${bin}`),
@@ -283,8 +285,8 @@ describe("doctor tri-state evaluation", () => {
         cwd: "/repo",
         home: "/home/user",
         exists: (p) =>
-          p === "/repo/.prhero/gotchas.md" ||
-          p === "/home/user/.prhero/setup.json",
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.crysk/setup.json",
         readFile: () => "## Gotchas\nContent",
         checkToolsOptions: {
           which: () => "/bin/tool",
@@ -305,7 +307,7 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/repo/.prhero/gotchas.md", // setup.json missing
+        exists: (p) => p === "/repo/.crysk/gotchas.md", // setup.json missing
         readFile: () => "## Gotchas\nContent",
         checkToolsOptions: {
           which: () => "/bin/tool",
@@ -319,7 +321,7 @@ describe("doctor tri-state evaluation", () => {
       expect(report.exitCode).toBe(0);
       const setupCheck = report.checks.find((c) => c.name === "setup");
       expect(setupCheck?.severity).toBe("degraded");
-      expect(setupCheck?.hint).toContain("pr-hero init");
+      expect(setupCheck?.hint).toContain("crysk init");
     });
 
     test("skills not synced reports degraded with hint", async () => {
@@ -327,15 +329,15 @@ describe("doctor tri-state evaluation", () => {
         cwd: "/repo",
         home: "/home/user",
         exists: (p) => {
-          if (p === "/repo/.prhero/gotchas.md") return true;
+          if (p === "/repo/.crysk/gotchas.md") return true;
           if (p === "/repo/.codegraph") return true;
-          if (p === "/home/user/.prhero/setup.json") return true;
+          if (p === "/home/user/.crysk/setup.json") return true;
           if (p === "/home/user/.claude/mcp.json") return true;
           // Skills not synced
           return false;
         },
         readFile: (p) => {
-          if (p === "/repo/.prhero/gotchas.md") return "## Gotchas\nContent";
+          if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
           return bundledPromptBody(p);
         },
         checkToolsOptions: {
@@ -353,19 +355,72 @@ describe("doctor tri-state evaluation", () => {
       expect(skillsCheck?.hint).toBeDefined();
     });
 
+    test("a skill left under its pre-rename name is reported degraded with a hint", async () => {
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) =>
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/repo/.codegraph" ||
+          p === "/home/user/.crysk/setup.json" ||
+          p === "/home/user/.claude/mcp.json" ||
+          p === "/home/user/.claude/skills/pr-hero-triage",
+        readFile: (p) => {
+          if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
+          return bundledPromptBody(p);
+        },
+        checkToolsOptions: {
+          which: (bin) => (bin === "claude" ? "/bin/claude" : `/bin/${bin}`),
+          exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      const legacy = report.checks.find(
+        (c) => c.name === "skills-legacy:claude",
+      );
+      expect(legacy?.severity).toBe("degraded");
+      expect(legacy?.message).toContain(
+        "/home/user/.claude/skills/pr-hero-triage",
+      );
+      expect(legacy?.hint).toBeDefined();
+      // Only the dir that exists is named.
+      expect(legacy?.message).not.toContain("pr-hero-pr");
+    });
+
+    test("no legacy check when no pre-rename skill dir exists", async () => {
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) =>
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.claude/mcp.json",
+        readFile: (p) => bundledPromptBody(p),
+        checkToolsOptions: {
+          which: (bin) => (bin === "claude" ? "/bin/claude" : `/bin/${bin}`),
+          exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      expect(
+        report.checks.some((c) => c.name.startsWith("skills-legacy:")),
+      ).toBe(false);
+    });
+
     test("mcp server not registered reports degraded with hint", async () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
         exists: (p) => {
-          if (p === "/repo/.prhero/gotchas.md") return true;
+          if (p === "/repo/.crysk/gotchas.md") return true;
           if (p === "/repo/.codegraph") return true;
-          if (p === "/home/user/.prhero/setup.json") return true;
+          if (p === "/home/user/.crysk/setup.json") return true;
           // MCP not registered
           return false;
         },
         readFile: (p) => {
-          if (p === "/repo/.prhero/gotchas.md") return "## Gotchas\nContent";
+          if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
           return bundledPromptBody(p);
         },
         checkToolsOptions: {
@@ -380,6 +435,36 @@ describe("doctor tri-state evaluation", () => {
       expect(mcpCheck?.severity).toBe("degraded");
       expect(mcpCheck?.hint).toBeDefined();
     });
+
+    test("mcp registered under the pre-rename key reports degraded with a migrate hint", async () => {
+      const self = selfInvocation();
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) => p === "/home/user/.claude/mcp.json",
+        readFile: (p) =>
+          p === "/home/user/.claude/mcp.json"
+            ? JSON.stringify({
+                mcpServers: {
+                  "pr-hero": {
+                    command: self.command,
+                    args: [...self.args, "mcp"],
+                  },
+                },
+              })
+            : bundledPromptBody(p),
+        checkToolsOptions: {
+          which: (bin) => (bin === "claude" ? "/bin/claude" : `/bin/${bin}`),
+          exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      const mcpCheck = report.checks.find((c) => c.name === "mcp:claude");
+      expect(mcpCheck?.severity).toBe("degraded");
+      expect(mcpCheck?.message).toContain("pre-rename key");
+      expect(mcpCheck?.hint).toContain("setup");
+    });
   });
 
   describe("provider capability section (§11/D1-09)", () => {
@@ -387,9 +472,9 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/repo/.prhero/gotchas.md",
+        exists: (p) => p === "/repo/.crysk/gotchas.md",
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : bundledPromptBody(p),
         checkToolsOptions: {
@@ -439,9 +524,9 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/repo/.prhero/gotchas.md",
+        exists: (p) => p === "/repo/.crysk/gotchas.md",
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : bundledPromptBody(p),
         checkToolsOptions: {
@@ -507,9 +592,9 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/repo/.prhero/gotchas.md",
+        exists: (p) => p === "/repo/.crysk/gotchas.md",
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : bundledPromptBody(p),
         checkToolsOptions: {
@@ -537,9 +622,9 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/repo/.prhero/gotchas.md",
+        exists: (p) => p === "/repo/.crysk/gotchas.md",
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : bundledPromptBody(p),
         checkToolsOptions: {
@@ -567,9 +652,9 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/repo/.prhero/gotchas.md",
+        exists: (p) => p === "/repo/.crysk/gotchas.md",
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : bundledPromptBody(p),
         checkToolsOptions: {
@@ -602,9 +687,9 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/repo/.prhero/gotchas.md",
+        exists: (p) => p === "/repo/.crysk/gotchas.md",
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : bundledPromptBody(p),
         checkToolsOptions: {
@@ -622,7 +707,7 @@ describe("doctor tri-state evaluation", () => {
       const hint = report.checks.find((c) => c.name === "provider")?.hint ?? "";
       expect(hint).toContain("unverified");
       expect(hint).not.toContain("unaffected");
-      expect(hint).toContain("pr-hero upgrade --reconcile");
+      expect(hint).toContain("crysk upgrade --reconcile");
       expect(hint).not.toContain("alongside the project's node_modules");
     });
 
@@ -630,9 +715,9 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/repo/.prhero/gotchas.md",
+        exists: (p) => p === "/repo/.crysk/gotchas.md",
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : bundledPromptBody(p),
         checkToolsOptions: {
@@ -685,7 +770,7 @@ describe("doctor tri-state evaluation", () => {
     const base = {
       cwd: "/repo",
       home: "/home/user",
-      exists: (p: string) => p === "/repo/.prhero/gotchas.md",
+      exists: (p: string) => p === "/repo/.crysk/gotchas.md",
       readFile: () => "## Gotchas\nContent",
       checkToolsOptions: {
         which: (bin: string) => `/bin/${bin}`,
@@ -803,8 +888,7 @@ describe("doctor tri-state evaluation", () => {
       cwd: "/repo",
       home: "/home/user",
       exists: (p: string) =>
-        p === "/repo/.prhero/gotchas.md" ||
-        p === "/home/user/.prhero/setup.json",
+        p === "/repo/.crysk/gotchas.md" || p === "/home/user/.crysk/setup.json",
       checkToolsOptions: {
         which: (bin: string) => `/bin/${bin}`,
         exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
@@ -817,7 +901,7 @@ describe("doctor tri-state evaluation", () => {
         ...baseOptions,
         assets: compiledAssets(embedded),
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : "# a prompt body\n",
       });
@@ -832,7 +916,7 @@ describe("doctor tri-state evaluation", () => {
         ...baseOptions,
         assets: compiledAssets(embedded),
         readFile: (p) => {
-          if (p === "/repo/.prhero/gotchas.md") return "## Gotchas\nContent";
+          if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
           if (p === "/embedded/refuter-eeee.md") return undefined;
           return "# a prompt body\n";
         },
@@ -852,7 +936,7 @@ describe("doctor tri-state evaluation", () => {
         ...baseOptions,
         assets: compiledAssets(embedded),
         readFile: (p) => {
-          if (p === "/repo/.prhero/gotchas.md") return "## Gotchas\nContent";
+          if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
           if (p === "/embedded/parity-dddd.md") return "   \n";
           return "# a prompt body\n";
         },
@@ -869,7 +953,7 @@ describe("doctor tri-state evaluation", () => {
         ...baseOptions,
         assets: compiledAssets(incomplete),
         readFile: (p) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : "# a prompt body\n",
       });
@@ -897,9 +981,9 @@ describe("doctor tri-state evaluation", () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p: string) => p === "/repo/.prhero/gotchas.md",
+        exists: (p: string) => p === "/repo/.crysk/gotchas.md",
         readFile: (p: string) =>
-          p === "/repo/.prhero/gotchas.md"
+          p === "/repo/.crysk/gotchas.md"
             ? "## Gotchas\nContent"
             : bundledPromptBody(p),
         checkToolsOptions: {
@@ -1027,9 +1111,9 @@ describe("openCodeRoutingSdkCheck", () => {
         sdkVersion,
       });
       expect(item?.severity).toBe("blocking");
-      expect(item?.message).toContain("pr-hero upgrade --reconcile");
+      expect(item?.message).toContain("crysk upgrade --reconcile");
       expect(item?.message).toContain("@opencode-ai/sdk@1.18.25");
-      expect(item?.message).toContain("~/.prhero/node_modules");
+      expect(item?.message).toContain("~/.crysk/node_modules");
       expect(item?.message).not.toContain("undefined");
     }
   });
@@ -1042,6 +1126,6 @@ describe("openCodeRoutingSdkCheck", () => {
     expect(item?.severity).toBe("blocking");
     expect(item?.message).toContain("1.18.26");
     expect(item?.message).toContain("1.18.25");
-    expect(item?.message).toContain("pr-hero upgrade --reconcile");
+    expect(item?.message).toContain("crysk upgrade --reconcile");
   });
 });

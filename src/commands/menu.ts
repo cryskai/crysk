@@ -2,7 +2,6 @@ import os from "node:os";
 import { activityCommand } from "#commands/activity";
 import { doctorCommand } from "#commands/doctor";
 import { init } from "#commands/init";
-import { ledgerCommand } from "#commands/ledger";
 import { uninstallCommand } from "#commands/uninstall";
 import { upgradeCommand } from "#commands/upgrade";
 import { loadEffectiveConfig } from "#config/config";
@@ -66,9 +65,6 @@ export async function menuCommand(options: CliOptions): Promise<number> {
         }
         case "activity": {
           return await activityCommand(options);
-        }
-        case "ledger": {
-          return await ledgerCommand(options);
         }
         case "doctor": {
           return await doctorCommand(options);

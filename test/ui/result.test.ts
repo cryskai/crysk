@@ -8,8 +8,6 @@
 // Every assertion about a claim below is there to keep that from coming back.
 
 import { describe, expect, test } from "bun:test";
-import type { ComparisonResult } from "#compare/compare";
-import type { GreptileFinding } from "#compare/greptile";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import { planEstimateLine } from "#ui/plan";
 import { type ResultInput, renderResult } from "#ui/result";
@@ -63,23 +61,6 @@ const doc = (over: Partial<FindingsDocument> = {}): FindingsDocument => ({
   telemetry,
   findings: [finding()],
   debug: { refuted: [] },
-  ...over,
-});
-
-const greptile = (over: Partial<GreptileFinding> = {}): GreptileFinding => ({
-  index: 1,
-  path: "src/watch.ts",
-  startLine: 12,
-  endLine: 12,
-  title: "unbounded retry loop",
-  description: "the tick never gives up",
-  ...over,
-});
-
-const buckets = (over: Partial<ComparisonResult> = {}): ComparisonResult => ({
-  greptileOnly: [],
-  both: [],
-  prheroOnly: [],
   ...over,
 });
 
@@ -358,103 +339,24 @@ describe("renderResult findings", () => {
 });
 
 describe("renderResult comparison", () => {
-  test("local mode has no comparison row at all", () => {
-    expect(joined(renderResult(input()))).not.toContain("vs Greptile");
-  });
-
-  test("the three buckets, in the order the head-to-head reads them", () => {
+  // The Greptile head-to-head is retired: no input carries it any more, and
+  // the terminal block never names it.
+  test("no rendered line mentions Greptile, even on a PR-mode run", () => {
     const text = joined(
       renderResult(
         input({
-          comparison: {
-            greptileFound: true,
-            result: buckets({
-              greptileOnly: [greptile()],
-              prheroOnly: [
-                {
-                  id: "F001",
-                  path: "a.ts",
-                  line: 1,
-                  claim: "c",
-                  tier: "blocking",
-                },
-              ],
-            }),
+          worktree: { gitDirOwner: "/repo", worktreePath: "/wt/pr-6" },
+          links: {
+            webUrl: "https://github.com/o/r/pull/6",
+            headSha: "b".repeat(40),
+            pr: 6,
           },
+          artifacts: ["report.md", "findings.json", "post.json"],
         }),
       ),
     );
-    expect(text).toContain("vs Greptile  pr-hero 1 · both 0 · greptile 1");
-  });
-
-  test("a Greptile-only finding is NAMED, not counted — it is the measured miss", () => {
-    const text = joined(
-      renderResult(
-        input({
-          comparison: {
-            greptileFound: true,
-            result: buckets({ greptileOnly: [greptile()] }),
-          },
-        }),
-      ),
-    );
-    expect(text).toContain("↳ missed src/watch.ts:12 — unbounded retry loop");
-  });
-
-  test("a long miss list becomes a tail count pointing at comparison.md", () => {
-    const many = Array.from({ length: 8 }, (_, i) =>
-      greptile({ index: i, startLine: i, title: `miss ${i}` }),
-    );
-    const text = joined(
-      renderResult(
-        input({
-          comparison: {
-            greptileFound: true,
-            result: buckets({ greptileOnly: many }),
-          },
-        }),
-      ),
-    );
-    expect(text).toContain("miss 0");
-    expect(text).toContain("↳ and 3 more — see comparison.md");
-  });
-
-  test("a PR Greptile never commented on says so, so 0 is not read as a miss", () => {
-    const text = joined(
-      renderResult(
-        input({ comparison: { greptileFound: false, result: buckets() } }),
-      ),
-    );
-    expect(text).toContain("(no Greptile comment on this PR)");
-    // Nothing to pair against, so no pairings pointer either.
-    expect(text).not.toContain("pairings");
-  });
-
-  test("pairings are pointed at, never scored — the window over-matches", () => {
-    const text = joined(
-      renderResult(
-        input({
-          comparison: {
-            greptileFound: true,
-            result: buckets({
-              both: [
-                {
-                  greptile: greptile(),
-                  prhero: {
-                    id: "F001",
-                    path: "src/watch.ts",
-                    line: 12,
-                    claim: "c",
-                    tier: "blocking",
-                  },
-                },
-              ],
-            }),
-          },
-        }),
-      ),
-    );
-    expect(text).toContain("↳ pairings: comparison.md");
+    expect(text).not.toContain("Greptile");
+    expect(text).not.toContain("comparison.md");
   });
 });
 
@@ -462,19 +364,19 @@ describe("renderResult footer", () => {
   test("ONE run dir plus the basenames, never three absolute paths", () => {
     const text = joined(
       renderResult(
-        input({ artifacts: ["report.md", "findings.json", "comparison.md"] }),
+        input({ artifacts: ["report.md", "findings.json", "post.json"] }),
       ),
     );
     // Each basename once, and the directory prefix exactly once — the whole
     // point of the collapse (three absolute paths carried one bit each).
-    for (const name of ["report.md", "findings.json", "comparison.md"]) {
+    for (const name of ["report.md", "findings.json", "post.json"]) {
       expect(text.split(name).length - 1).toBe(1);
     }
     const hits = text.split("/tmp/pr-hero-runs/pr-6-17069c75-1").length - 1;
     expect(hits).toBe(1);
     // At 80 columns the value column wraps rather than overrunning the width.
     for (const line of renderResult(
-      input({ artifacts: ["report.md", "findings.json", "comparison.md"] }),
+      input({ artifacts: ["report.md", "findings.json", "post.json"] }),
     )) {
       expect(line.length).toBeLessThanOrEqual(80);
     }
@@ -638,6 +540,37 @@ describe("renderResult incomplete runs", () => {
     );
     expect(text).toContain("Completed: reliability. Did not complete: parity");
     expect(text).toContain("(failed)");
+  });
+
+  test("the notice quotes a failed agent's detail", () => {
+    const text = joined(
+      renderResult(
+        input({
+          doc: partial({
+            findings: [],
+            telemetry: {
+              ...partialTelemetry,
+              per_agent: {
+                reliability: {
+                  tokens_total: 60,
+                  duration_ms: 1000,
+                  status: "ok",
+                },
+                parity: {
+                  tokens_total: 0,
+                  duration_ms: 0,
+                  status: "failed",
+                  detail: "Anthropic API: Credit balance is too low (HTTP 400)",
+                },
+              } as Telemetry["per_agent"],
+            },
+          }),
+        }),
+      ),
+    );
+    expect(text.replace(/\s+/g, " ")).toContain(
+      "parity (failed — Anthropic API: Credit balance is too low (HTTP 400))",
+    );
   });
 
   test("the notice sits above the findings, not after them", () => {
@@ -907,13 +840,9 @@ describe("renderResult styling", () => {
     expect(renderResult(input()).join("\n")).not.toContain(ESC);
   });
 
-  test("styles on paints, including the findings and the miss list", () => {
+  test("styles on paints, including the findings", () => {
     expect(
       styled({
-        comparison: {
-          greptileFound: true,
-          result: buckets({ greptileOnly: [greptile()] }),
-        },
         worktree: { gitDirOwner: "/repo", worktreePath: "/wt/pr-6" },
         sessionFailed: true,
       }).join("\n"),
@@ -922,10 +851,6 @@ describe("renderResult styling", () => {
 
   test("painting changes the bytes around the text, never the text", () => {
     const over: Partial<ResultInput> = {
-      comparison: {
-        greptileFound: true,
-        result: buckets({ greptileOnly: [greptile()] }),
-      },
       worktree: { gitDirOwner: "/repo", worktreePath: "/wt/pr-6" },
     };
     expect(joined(styled(over))).toBe(joined(renderResult(input(over))));

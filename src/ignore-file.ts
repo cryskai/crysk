@@ -1,4 +1,4 @@
-// The `.prheroignore` dialect: gitignore syntax, translated to Bun.Glob and
+// The `.cryskignore` (legacy `.prheroignore`) dialect: gitignore syntax, translated to Bun.Glob and
 // matched with per-RULE last-match-wins. Pure and offline-testable — this
 // module never reads a file or shells out; callers hand it text.
 //
@@ -15,7 +15,11 @@
 // README documents as its deviation from git. See the pin in
 // test/ignore-file.test.ts.
 
-const FILE_NAME = ".prheroignore";
+import { IGNORE_FILE_NAME } from "./brand-paths";
+
+// The name an error carries when the caller does not say which file it parsed.
+// A caller that read the legacy .prheroignore passes that name instead.
+const FILE_NAME = IGNORE_FILE_NAME;
 
 export interface IgnoreRule {
   // The source line, after leading `!`/negation removal and trailing
@@ -38,8 +42,8 @@ export interface IgnoreRule {
 }
 
 // Thrown by parseIgnoreFile before any matching or spend happens. The file
-// name is fixed to ".prheroignore" because that is the only file this
-// dialect is ever asked to parse in this codebase; a caller that resolves a
+// name defaults to ".cryskignore" and a caller reading the legacy
+// ".prheroignore" passes that name; a caller that resolves a
 // different physical path (e.g. a base-ref blob) is expected to catch and
 // re-wrap with that context.
 export class IgnoreFileError extends Error {
@@ -84,6 +88,7 @@ export const BUILTIN_IGNORE_RULES: IgnoreRule[] = parseIgnoreFile(
 export function parseIgnoreFile(
   text: string,
   source: IgnoreRule["source"],
+  fileName: string = FILE_NAME,
 ): IgnoreRule[] {
   const rules: IgnoreRule[] = [];
   const rawLines = text.split("\n");
@@ -112,7 +117,7 @@ export function parseIgnoreFile(
 
     if (negated && working.length === 0) {
       throw new IgnoreFileError(
-        FILE_NAME,
+        fileName,
         lineNo,
         raw,
         "bare ! (undocumented by gitignore(5)): a negation marker needs a pattern to negate",
@@ -122,7 +127,7 @@ export function parseIgnoreFile(
 
     if (working === "/") {
       throw new IgnoreFileError(
-        FILE_NAME,
+        fileName,
         lineNo,
         raw,
         "bare / (undocumented by gitignore(5)): nothing to anchor",
@@ -131,12 +136,12 @@ export function parseIgnoreFile(
 
     if (hasTrailingUnescapedBackslash(working)) {
       throw new IgnoreFileError(
-        FILE_NAME,
+        fileName,
         lineNo,
         raw,
         "trailing unescaped backslash (deliberately narrower than gitignore(5), " +
           "which leaves this case undefined; Bun.Glob itself does not throw for " +
-          "one either — it silently matches nothing — so pr-hero throws instead " +
+          "one either — it silently matches nothing — so Crysk throws instead " +
           "of letting a misconfigured rule become a silent no-op)",
       );
     }
@@ -307,7 +312,7 @@ export function compileIgnoreRules(
   };
 }
 
-// `git ls-tree --full-tree <sha> -- .prheroignore`, parsed. Callers use this
+// `git ls-tree --full-tree <sha> -- <ignore file>`, parsed. Callers use this
 // to discriminate "absent at this ref" (normal, defaults apply) from
 // "present but not a plain file" (a hazard: a root SYMLINK commits as mode
 // `120000 blob <sha>`, and `cat-file blob` on it returns the link TARGET —

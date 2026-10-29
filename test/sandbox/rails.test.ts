@@ -48,12 +48,12 @@ describe("gh rail: the sandbox repo is the only target", () => {
 
   test("refuses any other repository, however it is spelled", () => {
     const refused: string[][] = [
-      ["pr", "list", "-R", "juanmaagd/pr-hero"],
-      ["pr", "list", "--repo=juanmaagd/pr-hero"],
+      ["pr", "list", "-R", "cryskai/crysk"],
+      ["pr", "list", "--repo=cryskai/crysk"],
       ["pr", "list"],
-      ["api", "repos/juanmaagd/pr-hero/pulls"],
-      ["repo", "view", "juanmaagd/pr-hero"],
-      ["repo", "clone", "juanmaagd/pr-hero", "/tmp/x"],
+      ["api", "repos/cryskai/crysk/pulls"],
+      ["repo", "view", "cryskai/crysk"],
+      ["repo", "clone", "cryskai/crysk", "/tmp/x"],
     ];
     for (const args of refused) {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
@@ -69,12 +69,7 @@ describe("gh rail: the sandbox repo is the only target", () => {
       ["api", sandboxApi("issues/1/comments"), "--field", "body=x"],
       ["api", sandboxApi("git/refs/heads/main"), "-X", "DELETE"],
       ["api", sandboxApi("git/refs/heads/dev"), "-X", "DELETE"],
-      [
-        "api",
-        "repos/juanmaagd/pr-hero/git/refs/heads/sandbox/x",
-        "-X",
-        "DELETE",
-      ],
+      ["api", "repos/cryskai/crysk/git/refs/heads/sandbox/x", "-X", "DELETE"],
     ];
     for (const args of refused) {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
@@ -99,8 +94,8 @@ describe("gh rail: the sandbox repo is the only target", () => {
 
   test("refuses a PR comment on any other repository, or with no repository named", () => {
     const refused: string[][] = [
-      ["pr", "comment", "7", "-R", "juanmaagd/pr-hero", "--body", "x"],
-      ["pr", "comment", "7", "--repo=juanmaagd/pr-hero", "--body", "x"],
+      ["pr", "comment", "7", "-R", "cryskai/crysk", "--body", "x"],
+      ["pr", "comment", "7", "--repo=cryskai/crysk", "--body", "x"],
       ["pr", "comment", "7", "--body", "x"],
       ["issue", "comment", "7", "-R", SANDBOX_REPO, "--body", "x"],
     ];
@@ -138,9 +133,9 @@ describe("gh rail: attached flags and repeated flags", () => {
 
   test("every -R or --repo occurrence must be the sandbox, because gh keeps the last one", () => {
     const refused: string[][] = [
-      ["pr", "list", "-R", SANDBOX_REPO, "-R", "juanmaagd/pr-hero"],
-      ["pr", "list", "-R", SANDBOX_REPO, "--repo=juanmaagd/pr-hero"],
-      ["pr", "list", "-Rjuanmaagd/pr-hero"],
+      ["pr", "list", "-R", SANDBOX_REPO, "-R", "cryskai/crysk"],
+      ["pr", "list", "-R", SANDBOX_REPO, "--repo=cryskai/crysk"],
+      ["pr", "list", "-Rcryskai/crysk"],
     ];
     for (const args of refused) {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
@@ -237,8 +232,8 @@ describe("gh rail: the routing variable is the only variable deleted", () => {
 
   test("refuses the routing variable's delete in any other repo, or with no repo, or with a widening flag", () => {
     const refused: string[][] = [
-      ["variable", "delete", ROUTING_VARIABLE, "--repo", "juanmaagd/pr-hero"],
-      ["variable", "delete", ROUTING_VARIABLE, "-R", "juanmaagd/pr-hero"],
+      ["variable", "delete", ROUTING_VARIABLE, "--repo", "cryskai/crysk"],
+      ["variable", "delete", ROUTING_VARIABLE, "-R", "cryskai/crysk"],
       ["variable", "delete", ROUTING_VARIABLE],
       [
         "variable",
@@ -281,7 +276,7 @@ describe("gh rail: run cancel", () => {
   test("refuses a cancel without the sandbox target, or aimed at another repo", () => {
     const refused: string[][] = [
       ["run", "cancel", "42"],
-      ["run", "cancel", "42", "-R", "juanmaagd/pr-hero"],
+      ["run", "cancel", "42", "-R", "cryskai/crysk"],
     ];
     for (const args of refused) {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
@@ -295,7 +290,7 @@ describe("gh rail: run view --log (SB3 hunter check)", () => {
       assertGhArgs(["run", "view", "42", "-R", SANDBOX_REPO, "--log"]),
     ).not.toThrow();
     expect(() =>
-      assertGhArgs(["run", "view", "42", "-R", "juanmaagd/pr-hero", "--log"]),
+      assertGhArgs(["run", "view", "42", "-R", "cryskai/crysk", "--log"]),
     ).toThrow(RailViolation);
   });
 });
@@ -310,7 +305,7 @@ describe("gh rail: run rerun (SB3)", () => {
   test("refuses a rerun without the sandbox target, or aimed at another repo", () => {
     const refused: string[][] = [
       ["run", "rerun", "42"],
-      ["run", "rerun", "42", "-R", "juanmaagd/pr-hero"],
+      ["run", "rerun", "42", "-R", "cryskai/crysk"],
     ];
     for (const args of refused) {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
@@ -362,7 +357,7 @@ describe("gh rail: one review-thread reply on a sandbox PR (T5b)", () => {
       ],
       [
         "api",
-        "repos/juanmaagd/pr-hero/pulls/7/comments",
+        "repos/cryskai/crysk/pulls/7/comments",
         "--method",
         "POST",
         "-f",

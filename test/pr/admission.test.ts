@@ -267,8 +267,8 @@ describe("publishCiSkip: the outcome record", () => {
     "%s is recorded as skipped for %s, with no head (the plan carries none)",
     async (status, skip) => {
       const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-record-"));
-      const saved = process.env.PRHERO_OUTCOME_DIR;
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      const saved = process.env.CRYSK_OUTCOME_DIR;
+      process.env.CRYSK_OUTCOME_DIR = dir;
       try {
         expect((await publish(status)).code).toBe(0);
         const written = readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
@@ -295,8 +295,8 @@ describe("publishCiSkip: the outcome record", () => {
 
     beforeEach(() => {
       dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-status-"));
-      saved = process.env.PRHERO_OUTCOME_DIR;
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      saved = process.env.CRYSK_OUTCOME_DIR;
+      process.env.CRYSK_OUTCOME_DIR = dir;
     });
 
     afterEach(() => {
@@ -460,6 +460,38 @@ describe("publishCiSkip: the outcome record", () => {
         ).toHaveLength(1);
       });
 
+      // One gate over two names: an override an older action posted only on pr-hero still
+      // stands over a newer-version crysk verdict that is older than it.
+      test("an override on the legacy pr-hero context alone stands over an older crysk verdict", async () => {
+        const calls: StatusCall[] = [];
+        await publishCiSkip(
+          gateInput("skipped-size", recordingStatus(calls), {
+            readHeadStatus: async () => [
+              { ...FAILURE_ROW, context: "crysk" },
+              OVERRIDE_ROW,
+            ],
+          }),
+        );
+        expect(calls).toEqual([]);
+      });
+
+      test("an override on crysk stands, in the new description", async () => {
+        const calls: StatusCall[] = [];
+        await publishCiSkip(
+          gateInput("skipped-size", recordingStatus(calls), {
+            readHeadStatus: async () => [
+              {
+                ...OVERRIDE_ROW,
+                context: "crysk",
+                description: "crysk: overridden by @alice",
+              },
+              FAILURE_ROW,
+            ],
+          }),
+        );
+        expect(calls).toEqual([]);
+      });
+
       test("a verdict newer than the override means it no longer stands: the write goes ahead", async () => {
         const calls: StatusCall[] = [];
         await publishCiSkip(
@@ -600,9 +632,47 @@ describe("publishCiSkip: the outcome record", () => {
           {
             sha: STATUS_HEAD,
             state: "failure",
-            description: `pr-hero: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+            description: `crysk: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
             targetUrl: `${REPO_WEB_URL}/pull/${PR}`,
           },
+        ]);
+      });
+
+      // The rename: a verdict is written on crysk and, for one version, on pr-hero. The carry reads
+      // either name as the gate and writes the new spelling.
+      test("a verdict on the crysk context, in the new description, is carried in the new description", async () => {
+        const { calls } = await skipWith(
+          [
+            row(
+              "failure",
+              "crysk: 2 blocking finding(s) — fix and push, or /pr-hero override",
+              T1,
+              "crysk",
+            ),
+          ],
+          "low-risk-delta",
+        );
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            `crysk: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+          ],
+        ]);
+      });
+
+      test("a legacy verdict only the pr-hero context carries, newer than a crysk green, is the one carried", async () => {
+        const { calls } = await skipWith(
+          [
+            row("success", "review posted", T1, "crysk"),
+            row("failure", BLOCKING_2, T2, "pr-hero"),
+          ],
+          "below-threshold",
+        );
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            `crysk: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+          ],
         ]);
       });
 
@@ -610,7 +680,7 @@ describe("publishCiSkip: the outcome record", () => {
       const PARTIAL_1_OF_4 =
         "pr-hero: review partial (1 of 4 hunters failed, set 938084) — /pr-hero review retries it";
       const PARTIAL_CARRIED =
-        "pr-hero: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /pr-hero review retries it";
+        "crysk: review partial (1 of 4 hunters failed, set 938084) carried from aaaaaaa — /pr-hero review retries it";
 
       // W3-PARTIAL S2: the repeat form is a review verdict, and it is a source for the carry: the skip
       // inherits today's carried text, because the carried form is generic and keeps its existing wording.
@@ -674,7 +744,7 @@ describe("publishCiSkip: the outcome record", () => {
             sha: STATUS_HEAD,
             state: "failure",
             description:
-              "pr-hero: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it",
+              "crysk: review partial (1 of 4 hunters failed) carried from aaaaaaa — /pr-hero review retries it",
             targetUrl: `${REPO_WEB_URL}/pull/${PR}`,
           },
         ]);
@@ -715,7 +785,7 @@ describe("publishCiSkip: the outcome record", () => {
         expect(calls.map((c) => [c.state, c.description])).toEqual([
           [
             "success",
-            `pr-hero: no review needed (prior findings below the re-review score floor); ${CARRIED_FROM}`,
+            `crysk: no review needed (prior findings below the re-review score floor); ${CARRIED_FROM}`,
           ],
         ]);
       });
@@ -730,7 +800,7 @@ describe("publishCiSkip: the outcome record", () => {
         expect(calls.map((c) => [c.state, c.description])).toEqual([
           [
             "failure",
-            `pr-hero: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+            `crysk: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
           ],
         ]);
       });
@@ -740,7 +810,7 @@ describe("publishCiSkip: the outcome record", () => {
           [row("success", "review posted", T1)],
           "stopped",
         );
-        const description = `pr-hero: no review needed (automatic reviews stopped by a maintainer); ${CARRIED_FROM}`;
+        const description = `crysk: no review needed (automatic reviews stopped by a maintainer); ${CARRIED_FROM}`;
         expect(calls.map((c) => [c.state, c.description])).toEqual([
           ["success", description],
         ]);
@@ -755,7 +825,7 @@ describe("publishCiSkip: the outcome record", () => {
         expect(calls.map((c) => [c.state, c.description])).toEqual([
           [
             "failure",
-            "pr-hero skipped the review (automatic reviews stopped by a maintainer) and found no earlier verdict — /pr-hero review reviews it",
+            "crysk skipped the review (automatic reviews stopped by a maintainer) and found no earlier verdict — /pr-hero review reviews it",
           ],
         ]);
       });
@@ -768,7 +838,7 @@ describe("publishCiSkip: the outcome record", () => {
         expect(calls.map((c) => [c.state, c.description])).toEqual([
           [
             "failure",
-            `pr-hero: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+            `crysk: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
           ],
         ]);
       });
@@ -786,7 +856,7 @@ describe("publishCiSkip: the outcome record", () => {
           "low-risk-delta",
         );
         expect(calls.map((c) => c.description)).toEqual([
-          `pr-hero: 3 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+          `crysk: 3 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
         ]);
       });
 
@@ -802,7 +872,7 @@ describe("publishCiSkip: the outcome record", () => {
         expect(calls.map((c) => [c.state, c.description])).toEqual([
           [
             "failure",
-            "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+            "crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
           ],
         ]);
       });
@@ -815,7 +885,7 @@ describe("publishCiSkip: the outcome record", () => {
         expect(calls.map((c) => [c.state, c.description])).toEqual([
           [
             "failure",
-            "pr-hero skipped the review (once_per_pr policy allows one automatic review) and found no earlier verdict — /pr-hero review reviews it",
+            "crysk skipped the review (once_per_pr policy allows one automatic review) and found no earlier verdict — /pr-hero review reviews it",
           ],
         ]);
       });
@@ -848,7 +918,7 @@ describe("publishCiSkip: the outcome record", () => {
           { priorBlocking: 3 },
         );
         expect(calls.map((c) => c.description)).toEqual([
-          "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+          "crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
         ]);
       });
 
@@ -865,7 +935,7 @@ describe("publishCiSkip: the outcome record", () => {
           { priorBlocking: 0 },
         );
         expect(calls.map((c) => c.description)).toEqual([
-          "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+          "crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
         ]);
       });
 
@@ -884,7 +954,7 @@ describe("publishCiSkip: the outcome record", () => {
         expect(calls.map((c) => [c.state, c.description])).toEqual([
           [
             "failure",
-            "pr-hero: review budget for this PR is used up — /pr-hero review reviews this head",
+            "crysk: review budget for this PR is used up — /pr-hero review reviews this head",
           ],
         ]);
       });
@@ -948,7 +1018,7 @@ describe("publishCiSkip: the outcome record", () => {
           targetUrl: undefined,
         }).description;
         const FAIL_CLOSED_LOW_RISK =
-          "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it";
+          "crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it";
 
         // `commits` is the PR's list, oldest first, the head last; `bySha` answers each commit's
         // status list (a missing sha reads as no rows, a null entry as a failed read).
@@ -993,7 +1063,7 @@ describe("publishCiSkip: the outcome record", () => {
           expect(calls.map((c) => [c.state, c.description])).toEqual([
             [
               "failure",
-              "pr-hero: 2 blocking finding(s) carried from eeeeeee — fix and push, or /pr-hero override",
+              "crysk: 2 blocking finding(s) carried from eeeeeee — fix and push, or /pr-hero override",
             ],
           ]);
         });
@@ -1008,7 +1078,7 @@ describe("publishCiSkip: the outcome record", () => {
           );
           expect(reads).toEqual([COMMIT_MID, COMMIT_OLD]);
           expect(calls.map((c) => c.description)).toEqual([
-            `pr-hero: no review needed (${LOW_RISK}); carried from ccccccc`,
+            `crysk: no review needed (${LOW_RISK}); carried from ccccccc`,
           ]);
         });
 
@@ -1062,7 +1132,7 @@ describe("publishCiSkip: the outcome record", () => {
           const { calls, reads } = await walk(commits, { [shaAt(2)]: GREEN });
           expect(reads).toHaveLength(20);
           expect(calls.map((c) => c.description)).toEqual([
-            `pr-hero: no review needed (${LOW_RISK}); carried from ${shaAt(2).slice(0, 7)}`,
+            `crysk: no review needed (${LOW_RISK}); carried from ${shaAt(2).slice(0, 7)}`,
           ]);
         });
 
@@ -1073,7 +1143,7 @@ describe("publishCiSkip: the outcome record", () => {
           });
           expect(reads).toEqual([COMMIT_OLD]);
           expect(calls.map((c) => c.description)).toEqual([
-            `pr-hero: no review needed (${LOW_RISK}); carried from ccccccc`,
+            `crysk: no review needed (${LOW_RISK}); carried from ccccccc`,
           ]);
         });
 
@@ -1082,7 +1152,7 @@ describe("publishCiSkip: the outcome record", () => {
             [COMMIT_MID]: [
               row(
                 "success",
-                `pr-hero: no review needed (${LOW_RISK}); carried from ccccccc`,
+                `crysk: no review needed (${LOW_RISK}); carried from ccccccc`,
                 T2,
               ),
             ],
@@ -1091,7 +1161,7 @@ describe("publishCiSkip: the outcome record", () => {
           expect(calls.map((c) => [c.state, c.description])).toEqual([
             [
               "success",
-              `pr-hero: no review needed (${LOW_RISK}); carried from eeeeeee`,
+              `crysk: no review needed (${LOW_RISK}); carried from eeeeeee`,
             ],
           ]);
         });
@@ -1104,7 +1174,7 @@ describe("publishCiSkip: the outcome record", () => {
             ],
           });
           expect(calls.map((c) => c.description)).toEqual([
-            "pr-hero: 2 blocking finding(s) carried from ccccccc — fix and push, or /pr-hero override",
+            "crysk: 2 blocking finding(s) carried from ccccccc — fix and push, or /pr-hero override",
           ]);
         });
 
@@ -1118,7 +1188,7 @@ describe("publishCiSkip: the outcome record", () => {
           expect(calls.map((c) => [c.state, c.description])).toEqual([
             [
               "success",
-              `pr-hero: no review needed (${LOW_RISK}); carried from ccccccc`,
+              `crysk: no review needed (${LOW_RISK}); carried from ccccccc`,
             ],
           ]);
         });
@@ -1131,7 +1201,7 @@ describe("publishCiSkip: the outcome record", () => {
           expect(calls.map((c) => [c.state, c.description])).toEqual([
             [
               "failure",
-              "pr-hero: 2 blocking finding(s) carried from ccccccc — fix and push, or /pr-hero override",
+              "crysk: 2 blocking finding(s) carried from ccccccc — fix and push, or /pr-hero override",
             ],
           ]);
         });
@@ -1151,7 +1221,7 @@ describe("publishCiSkip: the outcome record", () => {
           expect(calls.map((c) => [c.state, c.description])).toEqual([
             [
               "failure",
-              "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+              "crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
             ],
           ]);
         });
@@ -1173,7 +1243,7 @@ describe("publishCiSkip: the outcome record", () => {
           expect(reads).toHaveLength(20);
           expect(reads).not.toContain(shaAt(1));
           expect(calls.map((c) => c.description)).toEqual([
-            "pr-hero skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
+            "crysk skipped the review (delta touches only low-risk paths) and found no earlier verdict — /pr-hero review reviews it",
           ]);
         });
 
@@ -1190,7 +1260,7 @@ describe("publishCiSkip: the outcome record", () => {
             [COMMIT_OLD]: [row("success", posted, T1)],
           });
           expect(calls.map((c) => c.description)).toEqual([
-            `pr-hero: no review needed (${LOW_RISK}); carried from ccccccc`,
+            `crysk: no review needed (${LOW_RISK}); carried from ccccccc`,
           ]);
         });
 
@@ -1204,7 +1274,7 @@ describe("publishCiSkip: the outcome record", () => {
             [COMMIT_OLD]: [row("failure", blocking, T1)],
           });
           expect(calls.map((c) => c.description)).toEqual([
-            "pr-hero: 4 blocking finding(s) carried from ccccccc — fix and push, or /pr-hero override",
+            "crysk: 4 blocking finding(s) carried from ccccccc — fix and push, or /pr-hero override",
           ]);
         });
       });
@@ -1258,8 +1328,8 @@ describe("publishCiSkip: the outcome record", () => {
 
     beforeEach(() => {
       dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-post-"));
-      saved = process.env.PRHERO_OUTCOME_DIR;
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      saved = process.env.CRYSK_OUTCOME_DIR;
+      process.env.CRYSK_OUTCOME_DIR = dir;
     });
 
     afterEach(() => {
@@ -1312,7 +1382,7 @@ describe("publishCiSkip: the outcome record", () => {
     });
 
     test("with no outcome directory, a reposted notice writes nothing", async () => {
-      delete process.env.PRHERO_OUTCOME_DIR;
+      delete process.env.CRYSK_OUTCOME_DIR;
       const repost = (async () => ({
         commentId: 1,
         deletedIds: [],
@@ -1324,13 +1394,13 @@ describe("publishCiSkip: the outcome record", () => {
 
   test("the notice and the exit code are identical with and without the outcome directory", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-skip-same-"));
-    const saved = process.env.PRHERO_OUTCOME_DIR;
+    const saved = process.env.CRYSK_OUTCOME_DIR;
     try {
-      delete process.env.PRHERO_OUTCOME_DIR;
+      delete process.env.CRYSK_OUTCOME_DIR;
       const without = await publish("skipped-size");
       expect(existsSync(path.join(dir, CLI_RECORD_FILE))).toBe(false);
 
-      process.env.PRHERO_OUTCOME_DIR = dir;
+      process.env.CRYSK_OUTCOME_DIR = dir;
       const withDir = await publish("skipped-size");
       expect(withDir).toEqual(without);
       expect(without.stderr).toContain("pr-hero review skipped — fixture");
@@ -1469,9 +1539,9 @@ describe("fetchCommitStatuses with failClosed", () => {
 
 function restoreOutcomeDir(saved: string | undefined): void {
   if (saved === undefined) {
-    delete process.env.PRHERO_OUTCOME_DIR;
+    delete process.env.CRYSK_OUTCOME_DIR;
   } else {
-    process.env.PRHERO_OUTCOME_DIR = saved;
+    process.env.CRYSK_OUTCOME_DIR = saved;
   }
 }
 

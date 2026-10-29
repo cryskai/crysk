@@ -99,7 +99,7 @@ jobs:
       - name: Compile standalone binary
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          bun build --compile --target=${{ matrix.bun_target }} --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --define __PRHERO_VERSION__="\"${VERSION}\"" src/cli.ts --outfile pr-hero-${{ matrix.target }}
+          bun build --compile --target=${{ matrix.bun_target }} --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --define __PRHERO_VERSION__="\"${VERSION}\"" src/cli.ts --outfile crysk-${{ matrix.target }}
 
       # Runs THE ARTIFACT ABOUT TO BE UPLOADED, not a rebuild of it: a smoke
       # that compiles its own binary would prove nothing about this one. Placed
@@ -107,13 +107,22 @@ jobs:
       # bundled assets must never reach a release page. That is exactly what
       # v1.0.0 did, and this job was green when it happened.
       - name: Compiled-binary smoke
-        run: bun run scripts/compiled-smoke.ts ./pr-hero-${{ matrix.target }}
+        run: bun run scripts/compiled-smoke.ts ./crysk-${{ matrix.target }}
+
+      # For one version the release carries every binary under both names: an
+      # installed pr-hero's `pr-hero upgrade` downloads pr-hero-<target>. A
+      # copy of the binary smoked above, never a second compile, so the two
+      # assets are byte-identical.
+      - name: Copy binary to the legacy pr-hero asset name
+        run: cp crysk-${{ matrix.target }} pr-hero-${{ matrix.target }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pr-hero-${{ matrix.target }}
-          path: pr-hero-${{ matrix.target }}
+          name: binaries-${{ matrix.target }}
+          path: |
+            crysk-${{ matrix.target }}
+            pr-hero-${{ matrix.target }}
 
   publish-release:
     name: Publish GitHub Release & NPM
@@ -152,13 +161,14 @@ jobs:
       - name: Generate SHA256SUMS
         run: |
           cd release-binaries
-          sha256sum pr-hero-* > SHA256SUMS
+          sha256sum crysk-* pr-hero-* > SHA256SUMS
           cd ..
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            release-binaries/crysk-*
             release-binaries/pr-hero-*
             release-binaries/SHA256SUMS
           generate_release_notes: true

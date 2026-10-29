@@ -5,6 +5,7 @@ import { DEFAULT_MAX_VERIFICATION_STEPS } from "#review/preflight";
 import { DEFAULT_SIZE_GATE } from "#review/size-gate";
 import { listActiveRuns } from "#store/activity";
 import { DEFAULT_DAILY_CAP } from "#watch/preflight";
+import { resolveHomeDir, resolveRepoDir } from "../brand-paths";
 import { runDoctor } from "../doctor";
 import {
   getMenuOptions,
@@ -69,7 +70,7 @@ export function renderContextBox(
     const root = sanitizeText(context.root);
     lines.push(
       `Unconfigured Repository: ${name} (${root})`,
-      "Run 'Initialize repo' to scaffold .prhero/ configuration.",
+      "Run 'Initialize repo' to scaffold .crysk/ configuration.",
     );
   } else {
     const cwd = sanitizeText(context.cwd);
@@ -123,7 +124,7 @@ export function renderPersistentFooter(
   const lines = [dim(hints, styles)];
 
   if (selectedItem) {
-    lines.push(dim(`$ pr-hero ${selectedItem.cliHint}`, styles));
+    lines.push(dim(`$ crysk ${selectedItem.cliHint}`, styles));
   }
 
   return lines;
@@ -135,7 +136,7 @@ export async function gatherMenuStatus(
 ): Promise<MenuStatusInfo> {
   let upgradeAvailable = false;
   try {
-    const upgradeCache = path.join(home, ".prhero", "upgrade-check.json");
+    const upgradeCache = path.join(resolveHomeDir(home), "upgrade-check.json");
     if (existsSync(upgradeCache)) {
       const parsed = JSON.parse(readFileSync(upgradeCache, "utf-8"));
       upgradeAvailable = Boolean(
@@ -466,7 +467,7 @@ export async function runLifecycleSubmenu(deps: {
     {
       id: "upgrade",
       label: "Upgrade & sync",
-      desc: "Upgrade pr-hero and reconcile skills",
+      desc: "Upgrade crysk and reconcile skills",
       isTerminal: true,
     },
     {
@@ -639,7 +640,7 @@ export async function runWatcherSubmenu(deps: {
     {
       id: "config",
       label: "Configure limits & window",
-      desc: "Edit daily review cap and active time window (~/.prhero/watch.json)",
+      desc: "Edit daily review cap and active time window (~/.crysk/watch.json)",
     },
     {
       id: "install",
@@ -773,7 +774,7 @@ export async function runWatcherSubmenu(deps: {
         drawn = 0;
         await runLayerConfigCardEditor({
           layer: "watch",
-          title: `Watcher Daemon Configuration (${path.join(home, ".prhero", "watch.json")})`,
+          title: `Watcher Daemon Configuration (${path.join(resolveHomeDir(home), "watch.json")})`,
           createReader,
           io,
           styles,
@@ -835,11 +836,11 @@ export async function runLayerConfigCardEditor(deps: {
     let filePath: string | undefined;
     if (deps.layer === "team") {
       if (!repoRoot) return {};
-      filePath = path.join(repoRoot, ".prhero", "config.json");
+      filePath = path.join(resolveRepoDir(repoRoot), "config.json");
     } else if (deps.layer === "person") {
-      filePath = path.join(home, ".prhero", "config.json");
+      filePath = path.join(resolveHomeDir(home), "config.json");
     } else if (deps.layer === "watch") {
-      filePath = path.join(home, ".prhero", "watch.json");
+      filePath = path.join(resolveHomeDir(home), "watch.json");
     }
     if (filePath && existsSync(filePath)) {
       try {
@@ -1178,14 +1179,14 @@ export async function runConfigSubmenu(deps: {
       id: "team" as const,
       label: "Repository configuration",
       file: repoRoot
-        ? path.join(repoRoot, ".prhero", "config.json")
-        : ".prhero/config.json",
+        ? path.join(resolveRepoDir(repoRoot), "config.json")
+        : ".crysk/config.json",
       disabled: !inRepo,
     },
     {
       id: "person" as const,
       label: "Global configuration",
-      file: path.join(home, ".prhero", "config.json"),
+      file: path.join(resolveHomeDir(home), "config.json"),
       disabled: false,
     },
     {
@@ -1299,8 +1300,8 @@ export async function runConfigSubmenu(deps: {
 
       const title =
         selectedNext === "team"
-          ? `Repository Configuration (${path.join(repoRoot ?? ".", ".prhero", "config.json")})`
-          : `Global Configuration (${path.join(home, ".prhero", "config.json")})`;
+          ? `Repository Configuration (${path.join(resolveRepoDir(repoRoot ?? "."), "config.json")})`
+          : `Global Configuration (${path.join(resolveHomeDir(home), "config.json")})`;
 
       drawn = 0;
       await runLayerConfigCardEditor({

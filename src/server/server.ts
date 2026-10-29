@@ -8,7 +8,6 @@ import { unlinkSync } from "node:fs";
 import type { HopTrail } from "#review/findings";
 import type { CanonicalFindingRow, CanonicalRunRow } from "#store/preflight";
 import {
-  exportComparison,
   exportFindingsDocument,
   getFindingTriageByRunId,
   getRunById,
@@ -146,12 +145,6 @@ export function startProductStoreServer(
             );
           }
           return Response.json(doc);
-        }
-
-        case "get_run_comparison": {
-          const id = Number(match.params.id);
-          const comp = exportComparison(db, id);
-          return Response.json({ comparison: comp });
         }
 
         case "get_run_triage": {

@@ -1504,7 +1504,7 @@ describe("renderCorpusArtifact", () => {
 
   test("says these tiers sit below the reverts ones, and where reverts live", () => {
     expect(markdown).toContain("sits BELOW");
-    expect(markdown).toContain("`pr-hero reverts`");
+    expect(markdown).toContain("`crysk reverts`");
   });
 
   test("metadata carries repo, ref, window, scans, source and tier counts", () => {
@@ -1749,7 +1749,7 @@ describe("parseArgs corpus", () => {
   // preflight.ts) would be a real runtime cycle — the same reason
   // DEFAULT_REVERTS_SINCE is spelled out. These tests keep the pairs in step.
   test("the help text names corpus, every new flag, and the real defaults", () => {
-    expect(HELP_TEXT).toContain("pr-hero corpus");
+    expect(HELP_TEXT).toContain("crysk corpus");
     expect(HELP_TEXT).toContain("--fixes");
     expect(HELP_TEXT).toContain("--incidents");
     expect(HELP_TEXT).toContain("--issues");

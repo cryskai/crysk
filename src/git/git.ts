@@ -16,6 +16,7 @@ import type {
 } from "#review/preflight";
 import { dim, markerRowLines } from "#ui/primitives";
 import type { ResultLinks } from "#ui/result";
+import { IGNORE_FILE_NAME, LEGACY_IGNORE_FILE_NAME } from "../brand-paths";
 import { CliError } from "../errors";
 import {
   IgnoreFileError,
@@ -42,7 +43,7 @@ import {
 // computed after.
 //
 // "excluded file(s)", not "generated file(s)": the 9 built-in defaults are
-// generated content, but a `.prheroignore` user rule can drop anything —
+// generated content, but a ignore-file user rule can drop anything —
 // this line describes what happened to the diff, not why the operator chose
 // to.
 export function exclusionLines(
@@ -82,7 +83,7 @@ export async function git(
 }
 
 // ---------------------------------------------------------------------------
-// `.prheroignore` reads (ROADMAP prheroignore, Phase 3): local working tree
+// ignore-file reads (ROADMAP prheroignore, Phase 3): local working tree
 // and base-ref, mirroring the gotchas read's shape but never its fallback —
 // a lookup failure here must never silently fall back to defaults-only, and
 // a malformed file aborts the WHOLE review before any spend (same register
@@ -105,7 +106,7 @@ export type GitRunner = (
 //
 // NEVER falls back to the working tree on any failure branch: the entire
 // point of a base-ref read is that the PR author cannot choose which
-// `.prheroignore` governs their own review (design D1), and a fallback here
+// the ignore file governs their own review (design D1), and a fallback here
 // would silently reopen that hole the moment the lookup itself failed —
 // trading a loud, cheap abort for a quiet, expensive one.
 export async function readBaseRefIgnoreRules(
@@ -113,6 +114,23 @@ export async function readBaseRefIgnoreRules(
   repo: string,
   baseSha: string,
 ): Promise<IgnoreFileReadResult> {
+  // .cryskignore wins; the legacy .prheroignore is read only when the new name
+  // is ABSENT at this ref. A .cryskignore that is present but unusable aborts
+  // (inside the helper) instead of falling through to the old file.
+  for (const name of [IGNORE_FILE_NAME, LEGACY_IGNORE_FILE_NAME]) {
+    const read = await readBaseRefIgnoreFile(runGit, repo, baseSha, name);
+    if (read !== undefined) return read;
+  }
+  return { rules: [], found: false };
+}
+
+// One name's ls-tree + cat-file; undefined when it is absent at the ref.
+async function readBaseRefIgnoreFile(
+  runGit: GitRunner,
+  repo: string,
+  baseSha: string,
+  name: string,
+): Promise<IgnoreFileReadResult | undefined> {
   // `--full-tree` makes the pathspec repo-root-relative regardless of what
   // `repo` itself is cwd-ed to — see D2.
   const lsTree = await runGit(repo, [
@@ -120,16 +138,16 @@ export async function readBaseRefIgnoreRules(
     "--full-tree",
     baseSha,
     "--",
-    ".prheroignore",
+    name,
   ]);
   if (!lsTree.ok) {
     throw new CliError(
-      `.prheroignore lookup failed at ${baseSha}: git ls-tree exited ` +
+      `${name} lookup failed at ${baseSha}: git ls-tree exited ` +
         `non-zero — ${lsTree.stderr.trim()}`,
     );
   }
   const parsed = parseIgnoreLsTree(lsTree.stdout);
-  if (parsed.kind === "absent") return { rules: [], found: false };
+  if (parsed.kind === "absent") return undefined;
   if (parsed.kind === "reject") {
     // A root SYMLINK commits as mode 120000 with type `blob` (verified in a
     // scratch repo — see #5518): a type check alone would pass it through,
@@ -138,7 +156,7 @@ export async function readBaseRefIgnoreRules(
     // (100644/100755) catches it; 040000 (tree/submodule-as-directory) and
     // 160000 (gitlink) are rejected the same way.
     throw new CliError(
-      `.prheroignore at ${baseSha} has mode ${parsed.mode}, not a regular ` +
+      `${name} at ${baseSha} has mode ${parsed.mode}, not a regular ` +
         "file (100644/100755); refusing to read it as ignore rules",
     );
   }
@@ -147,23 +165,26 @@ export async function readBaseRefIgnoreRules(
   // git invocation.
   if (!isFullCommitId(parsed.sha)) {
     throw new CliError(
-      `.prheroignore blob sha from git ls-tree is not a 40-hex sha: ` +
+      `${name} blob sha from git ls-tree is not a 40-hex sha: ` +
         JSON.stringify(parsed.sha),
     );
   }
   const catFile = await runGit(repo, ["cat-file", "blob", parsed.sha]);
   if (!catFile.ok) {
     throw new CliError(
-      `.prheroignore blob read failed at ${baseSha}: git cat-file exited ` +
+      `${name} blob read failed at ${baseSha}: git cat-file exited ` +
         `non-zero — ${catFile.stderr.trim()}`,
     );
   }
   try {
-    return { rules: parseIgnoreFile(catFile.stdout, "user"), found: true };
+    return {
+      rules: parseIgnoreFile(catFile.stdout, "user", name),
+      found: true,
+    };
   } catch (error) {
     if (error instanceof IgnoreFileError) {
       throw new CliError(
-        reContextualizeIgnoreError(error, `${baseSha}:.prheroignore`),
+        reContextualizeIgnoreError(error, `${baseSha}:${name}`),
       );
     }
     throw error;

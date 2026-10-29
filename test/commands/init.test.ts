@@ -3,7 +3,7 @@ import path from "node:path";
 
 // `init` is not exported as a testable-in-isolation shell in the usual
 // sense — it reads the real `os.homedir()`, so driving it end-to-end would
-// make this suite depend on the machine's `~/.prhero/config.json`). Its
+// make this suite depend on the machine's `~/.crysk/config.json`). Its
 // DECISION lives in `initGotchasInstructions` and is tested exhaustively in
 // test/review/preflight.test.ts; what is left to guard here is the wiring —
 // that `init` routes through that helper instead of printing the block
@@ -18,7 +18,9 @@ describe("init — gotchas block wiring", () => {
       path.resolve(import.meta.dir, "../../src/commands/init.ts"),
     ).text();
 
-    expect(source).toContain("initGotchasInstructions(gotchasOutcome)");
+    expect(source).toContain(
+      "initGotchasInstructions(gotchasOutcome, dirName)",
+    );
     // Both arms of the decision are present, so the helper cannot be called
     // with a constant.
     expect(source).toContain("wrote.includes(gotchasPath)");

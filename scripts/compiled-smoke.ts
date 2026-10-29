@@ -93,7 +93,6 @@ const SWEPT_COMMANDS: readonly string[][] = [
   ["config"],
   ["activity"],
   ["usage"],
-  ["ledger"],
   ["watch", "status"],
   ["gc", "status"],
 ];

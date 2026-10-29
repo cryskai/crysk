@@ -1,6 +1,6 @@
 // PR mode's I/O (ROADMAP B1): gh, the fetch, the detached worktree, the
-// worktree's codegraph index, and the Greptile comparison files — every side
-// effect `pr-hero review --pr <n>` needs beyond what cli.ts already owns.
+// worktree's codegraph index — every side effect `pr-hero review --pr <n>`
+// needs beyond what cli.ts already owns.
 // Same contract as cli.ts: this is an I/O shell, and every decision it acts
 // on is a pure function in pr/preflight.ts / pr/inline.ts (or review/preflight.ts),
 // where most of the tests live.
@@ -30,19 +30,14 @@ import {
   parseAdmissionRecord,
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
+import { CI_FORCE_WORKFLOW_FILE } from "#ci/force-comment";
 import {
   canonicalAdmissionFindings,
   nextStateReviewCount,
   renderCiAdmissionBlock,
   tierCountsFromFindings,
 } from "#ci/review-admission";
-import {
-  type ComparisonResult,
-  compareFindings,
-  type PrHeroFindingRef,
-} from "#compare/compare";
-import { parseGreptileComment, pickGreptileComment } from "#compare/greptile";
-import { renderComparison } from "#compare/report";
+import type { PrHeroFindingRef } from "#compare/compare";
 import { THREAD_PAGE_SIZE } from "#corpus/preflight";
 import { git } from "#git/git";
 import { isFullCommitId } from "#git/refs";
@@ -58,7 +53,7 @@ import {
   renderStateBlock,
   stateBlockBudget,
 } from "#rereview/state";
-import type { Finding, FindingsDocument, RunStatus } from "#review/findings";
+import type { Finding, FindingsDocument } from "#review/findings";
 import {
   type PrCommentDelta,
   parseFindingCommentBadge,
@@ -71,6 +66,14 @@ import {
 import { GH_PR_VIEW_TIMEOUT_MS } from "#store/gc-preflight";
 import { log } from "#ui/primitives";
 import { parseMarkerHead } from "#watch/preflight";
+import {
+  isAdmissionCheckRunName,
+  LEGACY_ADMISSION_CHECK_RUN_NAME,
+  LEGACY_WORKFLOW_FILE_NAME,
+  matchMarkerPrefix,
+  statusContextForms,
+  WORKFLOW_FILE_NAME,
+} from "../brand";
 import { CliError } from "../errors";
 import {
   buildPostPlan,
@@ -83,7 +86,6 @@ import {
   resolvePostLine,
 } from "./inline";
 import {
-  buildComparisonJson,
   type CiMode,
   COMMIT_STATUS_TIMEOUT_MS,
   type CommitStatusFact,
@@ -126,8 +128,7 @@ async function gh(
     );
   }
   // cwd = operator root: gh resolves owner/repo from the checkout's remote,
-  // so the PR consulted always belongs to the repo passed as --repo — same
-  // reasoning as scripts/compare-pr.ts.
+  // so the PR consulted always belongs to the repo passed as --repo.
   //
   // stdin carries a field value when the caller passes `-F key=@-` (gh reads
   // `@-` from stdin; verified against `gh api --help`, 2026-08-10): a report
@@ -420,9 +421,20 @@ export async function ghRepoNameWithOwner(
 // In-flight / completed signal on the head SHA. Fail-loud here: the CLI
 // catches and warns, because a missing `repo:status` scope must not abort a
 // review that already cost hunter money. The context is the request's own
-// (T3 S7): the gate's `pr-hero` only from a `--ci` run's request, and
-// `pr-hero/local` from every other run, so the POST can never pick a context
+// (T3 S7): the gate's `crysk` only from a `--ci` run's request, and
+// `crysk/local` from every other run, so the POST can never pick a context
 // the caller did not choose.
+//
+// WHY two POSTs: for one version every status is also written on the legacy
+// `pr-hero` name (`pr-hero/local` for a local run). Users have `pr-hero` as a
+// required check in branch protection, and a head that stops getting it blocks
+// every PR until they add `crysk`. Both POSTs carry one state, one description
+// and one target. They start together, crysk first, so the cancellation settle
+// (which runs inside a signal handler racing a SIGKILL) spends one short
+// window, not two. A failed POST never skips the other: the required check may
+// be either name, so the call still throws if either failed, and the caller's
+// own handling (fail-soft or fail-loud) applies exactly as it did to one POST.
+// Resolves with the created_at of the crysk row, the context the CLI reads back.
 export async function postCommitStatus(
   operatorRoot: string,
   sha: string,
@@ -438,6 +450,37 @@ export async function postCommitStatus(
       `commit status: head sha is not a full 40-char id: ${sha.slice(0, 16)}`,
     );
   }
+  const results = await Promise.allSettled(
+    statusContextForms(status.context).map((context) =>
+      postCommitStatusOn(
+        operatorRoot,
+        sha,
+        { ...status, context },
+        spawnFn,
+        options,
+      ),
+    ),
+  );
+  for (const result of results) {
+    if (result.status === "rejected") throw result.reason;
+  }
+  const [crysk] = results;
+  return crysk?.status === "fulfilled" ? crysk.value : undefined;
+}
+
+// One POST of a status on one context, with the retry.
+async function postCommitStatusOn(
+  operatorRoot: string,
+  sha: string,
+  status: {
+    state: string;
+    context: string;
+    description: string;
+    targetUrl?: string;
+  },
+  spawnFn: typeof Bun.spawn | undefined,
+  options: { attempts?: number; timeoutMs?: number } | undefined,
+): Promise<string | undefined> {
   const args = [
     "api",
     "--method",
@@ -464,7 +507,7 @@ export async function postCommitStatus(
     lastStderr = result.stderr.trim();
   }
   throw new CliError(
-    `gh api (commit status ${status.state}) failed: ${lastStderr}`,
+    `gh api (commit status ${status.state} on ${status.context}) failed: ${lastStderr}`,
   );
 }
 
@@ -810,71 +853,6 @@ export async function initCodegraphIndex(
   return Math.round(performance.now() - started);
 }
 
-export interface ComparisonOutcome {
-  greptileFound: boolean;
-  greptileOnly: number;
-  both: number;
-  prheroOnly: number;
-  markdownPath: string;
-  jsonPath: string;
-  // The whole bucketing, not just its cardinalities. writeComparison already
-  // computes this to write comparison.md; discarding it left the terminal
-  // structurally unable to say anything but numbers, and `greptileOnly` is
-  // THE measured number — "a recall miss with a name, a file and a line"
-  // (compare/compare.ts). IN-MEMORY ONLY: comparison.json's bytes are unchanged, and
-  // must stay so — the ledger reads them back through StoredComparison.
-  result: ComparisonResult;
-}
-
-// The in-process replacement for scripts/compare-pr.ts, run against the
-// findings this review just produced. Throws on any gh failure — the CALLER
-// decides that a comparison failure must not fail the run, because the
-// review artifacts are already on disk and are the product.
-export async function writeComparison(input: {
-  operatorRoot: string;
-  pr: number;
-  headSha: string;
-  diffFromSha: string;
-  runDir: string;
-  generatedAt: string;
-  runStatus: RunStatus;
-  findings: PrHeroFindingRef[];
-}): Promise<ComparisonOutcome> {
-  const comments = await fetchPrComments(input.operatorRoot, input.pr);
-  const body = pickGreptileComment(comments);
-  const greptile = body === null ? [] : parseGreptileComment(body);
-  const result = compareFindings(input.findings, greptile);
-  const markdownPath = path.join(input.runDir, "comparison.md");
-  const jsonPath = path.join(input.runDir, "comparison.json");
-  await Bun.write(markdownPath, renderComparison(input.pr, result));
-  await Bun.write(
-    jsonPath,
-    `${JSON.stringify(
-      buildComparisonJson({
-        pr: input.pr,
-        headSha: input.headSha,
-        diffFromSha: input.diffFromSha,
-        runDir: input.runDir,
-        generatedAt: input.generatedAt,
-        runStatus: input.runStatus,
-        greptileFound: body !== null,
-        result,
-      }),
-      null,
-      2,
-    )}\n`,
-  );
-  return {
-    greptileFound: body !== null,
-    greptileOnly: result.greptileOnly.length,
-    both: result.both.length,
-    prheroOnly: result.prheroOnly.length,
-    markdownPath,
-    jsonPath,
-    result,
-  };
-}
-
 // Publishes the review as ONE marked PR comment: update the existing marked
 // comment when there is one, create it otherwise. Idempotency lives in the
 // marker contract (prCommentMarker as the body's first line, matched by
@@ -1058,7 +1036,7 @@ export async function repostMarkedPrComment(input: {
           c.id !== commentId &&
           c.user === author &&
           typeof c.body === "string" &&
-          c.body.startsWith(input.markerPrefix),
+          matchMarkerPrefix(c.body, input.markerPrefix) !== undefined,
       )
       .map((c) => c.id);
   } catch (error) {
@@ -1110,12 +1088,9 @@ function postedCommentAuthor(stdout: string): string | undefined {
   }
 }
 
-// Mirror of scripts/compare-pr.ts's fetch, kept shape-identical on purpose.
-// --paginate matters: a busy PR accumulates enough comments to push
-// Greptile's off page 1, and a missing comment looks identical to "Greptile
-// found nothing" — the exact failure mode that would silently flatter
-// pr-hero. API order is preserved verbatim (no sort, no reverse):
-// pickGreptileComment reads "newest" as LAST.
+// --paginate matters: a busy PR accumulates enough comments to push the
+// pr-hero marker comments off page 1, and a missing comment looks identical
+// to "nothing declared". API order is preserved verbatim (no sort, no reverse).
 //
 // Exported since B3: the watch guard reads the same comments to learn which
 // heads a pr-hero marker already declares (watch/watch.ts imports this one-way;
@@ -1491,7 +1466,6 @@ export async function ghCollaboratorPermission(
   return permission === "" ? null : permission;
 }
 
-const PR_HERO_WORKFLOW_FILE = "pr-hero.yml";
 const COMPLETED_WORKFLOW_CONCLUSIONS = new Set(["success", "failure"]);
 
 // Distinct head SHAs from completed pr-hero workflow runs on a branch.
@@ -1526,30 +1500,64 @@ export function parsePrHeroWorkflowRunHeads(stdout: string): Set<string> {
   return heads;
 }
 
+// The workflow file this run belongs to, from GITHUB_WORKFLOW_REF
+// (`owner/repo/.github/workflows/<file>@<ref>`), so a repo that renamed or kept
+// its file is asked about its own file. The legacy dispatch-only force workflow
+// is not the review workflow: its runs are not the review runs the gate counts,
+// so a run started from it falls through to the lookup by name.
+export function workflowFileFromRef(
+  ref: string | undefined,
+): string | undefined {
+  if (ref === undefined) return undefined;
+  const match = /\/\.github\/workflows\/([^/@]+\.ya?ml)@/.exec(ref);
+  const file = match?.[1];
+  if (file === undefined || file === CI_FORCE_WORKFLOW_FILE) return undefined;
+  return file;
+}
+
+// `gh run list --workflow <file>` for a file the repository does not have.
+function isWorkflowNotFound(stderr: string): boolean {
+  return /could not find any workflows named|workflow .* not found|HTTP 404/i.test(
+    stderr,
+  );
+}
+
 export async function ghPrHeroWorkflowRunHeads(
   operatorRoot: string,
   branch: string,
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<Set<string>> {
-  const result = await gh(
-    operatorRoot,
-    [
-      "run",
-      "list",
-      "--workflow",
-      PR_HERO_WORKFLOW_FILE,
-      "--branch",
-      branch,
-      "--json",
-      "headSha,conclusion",
-    ],
-    undefined,
-    options?.spawnFn,
-  );
-  if (!result.ok) {
-    throw new CliError(`gh run list failed: ${result.stderr.trim()}`);
+  // Inside the action the run knows its own workflow file. Anywhere else the
+  // new name is asked first and the pre-rename one only when the repository
+  // has no such workflow; any other failure keeps its error.
+  const derived = workflowFileFromRef(process.env.GITHUB_WORKFLOW_REF);
+  const candidates =
+    derived === undefined
+      ? [WORKFLOW_FILE_NAME, LEGACY_WORKFLOW_FILE_NAME]
+      : [derived];
+  let failure = "";
+  for (const [index, file] of candidates.entries()) {
+    const result = await gh(
+      operatorRoot,
+      [
+        "run",
+        "list",
+        "--workflow",
+        file,
+        "--branch",
+        branch,
+        "--json",
+        "headSha,conclusion",
+      ],
+      undefined,
+      options?.spawnFn,
+    );
+    if (result.ok) return parsePrHeroWorkflowRunHeads(result.stdout);
+    failure = result.stderr.trim();
+    const hasNext = index < candidates.length - 1;
+    if (!hasNext || !isWorkflowNotFound(result.stderr)) break;
   }
-  return parsePrHeroWorkflowRunHeads(result.stdout);
+  throw new CliError(`gh run list failed: ${failure}`);
 }
 
 async function ghGraphql(
@@ -2419,6 +2427,14 @@ export { ADMISSION_CHECK_RUN_NAME };
 
 const ADMISSION_CHECK_RUN_TIMEOUT_MS = 15_000;
 
+// The jq condition that matches the ledger's check runs under either name, so a
+// head first reviewed by an older release keeps its attempt count.
+function admissionCheckRunNameJq(): string {
+  return [ADMISSION_CHECK_RUN_NAME, LEGACY_ADMISSION_CHECK_RUN_NAME]
+    .map((name) => `.name == "${name}"`)
+    .join(" or ");
+}
+
 function admissionCheckRunConclusion(
   status: AdmissionAttemptStatus,
 ): "success" | "failure" | "neutral" | "cancelled" | "skipped" {
@@ -2458,7 +2474,9 @@ function admissionCheckRunStatus(
   return "completed";
 }
 
-function parseAdmissionCheckRunRow(line: string): AdmissionRecord | null {
+function parseAdmissionCheckRunRow(
+  line: string,
+): { id: number; record: AdmissionRecord } | null {
   if (line.trim() === "") return null;
   try {
     const row = JSON.parse(line) as {
@@ -2467,10 +2485,12 @@ function parseAdmissionCheckRunRow(line: string): AdmissionRecord | null {
       status?: string;
       output?: { text?: string | null };
     };
-    if (row.name !== ADMISSION_CHECK_RUN_NAME) return null;
+    if (row.name === undefined || !isAdmissionCheckRunName(row.name))
+      return null;
     const text = row.output?.text;
     if (typeof text !== "string") return null;
-    return parseAdmissionRecord(text);
+    const record = parseAdmissionRecord(text);
+    return record === null ? null : { id: row.id ?? 0, record };
   } catch {
     return null;
   }
@@ -2504,19 +2524,26 @@ export async function listAdmissionCheckRuns(
         `repos/{owner}/{repo}/commits/${ref}/check-runs${historyQuery}`,
         "--paginate",
         "--jq",
-        `.check_runs[] | select(.name == "${ADMISSION_CHECK_RUN_NAME}") | {id: .id, name: .name, status: .status, output: {text: .output.text}}`,
+        `.check_runs[] | select(${admissionCheckRunNameJq()}) | {id: .id, name: .name, status: .status, output: {text: .output.text}}`,
       ],
       undefined,
       options?.spawnFn,
       ADMISSION_CHECK_RUN_TIMEOUT_MS,
     );
     if (!result.ok) return [];
-    const records: AdmissionRecord[] = [];
+    const rows: { id: number; record: AdmissionRecord }[] = [];
     for (const line of result.stdout.split("\n")) {
-      const record = parseAdmissionCheckRunRow(line);
-      if (record !== null) records.push(record);
+      const row = parseAdmissionCheckRunRow(line);
+      if (row !== null) rows.push(row);
     }
-    return records;
+    if (options?.includeHistory === true || rows.length < 2) {
+      return rows.map((row) => row.record);
+    }
+    // filter=latest is per NAME, so a head admitted both before and after the
+    // rename returns one row under each name. The current state is the newest
+    // check run (ids only grow); returning both would count an extra attempt.
+    const newest = rows.reduce((a, b) => (b.id > a.id ? b : a));
+    return [newest.record];
   } catch {
     return [];
   }
@@ -2557,7 +2584,7 @@ async function findAdmissionCheckRunForAttempt(
     );
     if (!result.ok) return null;
     for (const line of result.stdout.split("\n")) {
-      const parsedRecord = parseAdmissionCheckRunRow(line);
+      const parsedRecord = parseAdmissionCheckRunRow(line)?.record ?? null;
       if (parsedRecord === null) continue;
       const row = JSON.parse(line) as {
         id?: number;
@@ -2620,7 +2647,7 @@ export async function upsertAdmissionCheckRun(
     "-f",
     `status=${checkStatus}`,
     "-f",
-    "output[title]=pr-hero CI admission",
+    "output[title]=crysk CI admission",
     "-f",
     `output[summary]=${input.record.status} (attempt ${input.record.attemptNumber})`,
     "-f",
@@ -2855,11 +2882,11 @@ export function missingRereviewBlockMessage(
   summaryId: number,
 ): string {
   return (
-    `PR #${pr} already carries a pr-hero summary (comment ${summaryId}), so ` +
+    `PR #${pr} already carries a Crysk summary (comment ${summaryId}), so ` +
     "this post is a re-review — but the run directory carries no `rereview` " +
     "block in its pipeline.json, so the summary would report the old " +
     'absence matcher\'s "N resolved" and write no state block. Re-run ' +
-    `\`pr-hero review --pr ${pr} --post\` instead.`
+    `\`crysk review --pr ${pr} --post\` instead.`
   );
 }
 
@@ -2869,11 +2896,11 @@ export function missingRereviewBlockMessage(
 export function vanishedPriorSummaryMessage(pr: number): string {
   return (
     "The run directory carries a `rereview` block in its pipeline.json, so " +
-    `this post is a re-review — but PR #${pr} no longer carries a pr-hero ` +
+    `this post is a re-review — but PR #${pr} no longer carries a Crysk ` +
     "summary comment for it to be a re-review OF. Its `live[]` rows, " +
     "`resolved_ids` and `R###` numbering all name review threads the PR has " +
     "no record of, so this would publish a brand new summary claiming a " +
-    `delta against a review that is not there. Re-run \`pr-hero review --pr ` +
+    `delta against a review that is not there. Re-run \`crysk review --pr ` +
     `${pr} --post\` instead.`
   );
 }
@@ -2886,13 +2913,13 @@ export function vanishedPriorSummaryMessage(pr: number): string {
 // defect as a guard that never fires.
 function vanishedPriorSummaryDegradedMessage(pr: number): string {
   return (
-    "warning: the pr-hero summary comment this re-review was computed " +
+    "warning: the Crysk summary comment this re-review was computed " +
     `against is gone from PR #${pr} — deleted, or never re-findable, while ` +
     "the review ran. Its `live[]` rows and `R###` ids name review threads " +
     "the PR has no record of, so this post drops the re-review framing: no " +
     "`Δ since` delta, no `Still live:` list and no state block. The findings " +
     "themselves are published, as the first review of what the PR carries " +
-    `now. Re-run \`pr-hero review --pr ${pr} --post\` if you want a full ` +
+    `now. Re-run \`crysk review --pr ${pr} --post\` if you want a full ` +
     "re-review against the PR's current state."
   );
 }
@@ -3322,7 +3349,7 @@ export async function postInlineFindings(input: {
     }
     if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
       process.stdout.write(
-        `::warning::pr-hero: the summary is ${patchBody.length} characters, over GitHub's ${GITHUB_ISSUE_COMMENT_MAX}-character comment limit even with every Outside Diff entry compacted; sending it as is\n`,
+        `::warning::crysk: the summary is ${patchBody.length} characters, over GitHub's ${GITHUB_ISSUE_COMMENT_MAX}-character comment limit even with every Outside Diff entry compacted; sending it as is\n`,
       );
     }
   }

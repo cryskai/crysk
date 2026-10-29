@@ -1,4 +1,4 @@
-// The gitignore dialect `.prheroignore` speaks: parse, translate to
+// The gitignore dialect `.cryskignore` speaks: parse, translate to
 // Bun.Glob-ready globs, and match with per-RULE last-match-wins. Pure,
 // offline-tested — nothing here reads a file or shells out.
 //
@@ -252,7 +252,7 @@ describe("parseIgnoreFile — loud rejection of invalid patterns", () => {
     const err = caught as IgnoreFileError;
     expect(err.line).toBe(3);
     expect(err.text).toBe("foo\\");
-    expect(err.message).toContain(".prheroignore");
+    expect(err.message).toContain(".cryskignore");
     expect(err.message).toContain("3");
     expect(err.message).toContain("foo\\");
   });
@@ -338,13 +338,13 @@ describe("parseIgnoreLsTree", () => {
 
   test("a regular-file mode is a blob, with its sha", () => {
     const sha = "a".repeat(40);
-    const stdout = `100644 blob ${sha}\t.prheroignore\n`;
+    const stdout = `100644 blob ${sha}\t.cryskignore\n`;
     expect(parseIgnoreLsTree(stdout)).toEqual({ kind: "blob", sha });
   });
 
   test("an executable-file mode is also a blob", () => {
     const sha = "b".repeat(40);
-    const stdout = `100755 blob ${sha}\t.prheroignore\n`;
+    const stdout = `100755 blob ${sha}\t.cryskignore\n`;
     expect(parseIgnoreLsTree(stdout)).toEqual({ kind: "blob", sha });
   });
 
@@ -352,7 +352,7 @@ describe("parseIgnoreLsTree", () => {
   // `cat-file blob` on it returns the link TARGET, not ignore patterns.
   test("a symlink mode is rejected, never treated as a blob", () => {
     const sha = "c".repeat(40);
-    const stdout = `120000 blob ${sha}\t.prheroignore\n`;
+    const stdout = `120000 blob ${sha}\t.cryskignore\n`;
     expect(parseIgnoreLsTree(stdout)).toEqual({
       kind: "reject",
       mode: "120000",
@@ -360,7 +360,7 @@ describe("parseIgnoreLsTree", () => {
   });
 
   test("a directory (submodule tree) mode is rejected", () => {
-    const stdout = `040000 tree ${"d".repeat(40)}\t.prheroignore\n`;
+    const stdout = `040000 tree ${"d".repeat(40)}\t.cryskignore\n`;
     expect(parseIgnoreLsTree(stdout)).toEqual({
       kind: "reject",
       mode: "040000",
@@ -368,7 +368,7 @@ describe("parseIgnoreLsTree", () => {
   });
 
   test("a gitlink (submodule commit) mode is rejected", () => {
-    const stdout = `160000 commit ${"e".repeat(40)}\t.prheroignore\n`;
+    const stdout = `160000 commit ${"e".repeat(40)}\t.cryskignore\n`;
     expect(parseIgnoreLsTree(stdout)).toEqual({
       kind: "reject",
       mode: "160000",

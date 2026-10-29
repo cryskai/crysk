@@ -34,6 +34,12 @@ import {
   type RootCauseSummary,
   rootCauseIdByFinding,
 } from "#review/root-cause";
+import {
+  BIN_NAME,
+  findMarker,
+  LEGACY_BIN_NAME,
+  matchMarkerPrefix,
+} from "../brand";
 
 export interface DiffStat {
   files: number;
@@ -202,14 +208,22 @@ export interface ReportMeta {
 interface AgentRow {
   key: string;
   status: string;
+  // Why a failed agent failed (PerAgentUsage.detail), when the run recorded it.
+  detail?: string;
 }
 
 function agentRows(doc: FindingsDocument): AgentRow[] {
   const perAgent = doc.telemetry.per_agent;
   if (!perAgent) return [];
   return Object.entries(perAgent).map(([key, value]) => {
-    const status = (value as { status?: unknown }).status;
-    return { key, status: typeof status === "string" ? status : "ran" };
+    const { status, detail } = value as { status?: unknown; detail?: unknown };
+    return {
+      key,
+      status: typeof status === "string" ? status : "ran",
+      ...(typeof detail === "string" && detail.trim() !== ""
+        ? { detail: detail.trim() }
+        : {}),
+    };
   });
 }
 
@@ -256,8 +270,49 @@ export function coverageSentence(
   if (lost.length === 0) {
     return `${done} The run record does not name which agents were lost.`;
   }
-  const missing = lost.map((r) => `${quote(r.key)} (${r.status})`).join(", ");
-  return `${done} Did not complete: ${missing}.`;
+  return `${done} Did not complete: ${lostAgents(lost, quote)}.`;
+}
+
+// "refuter (failed — Anthropic API: …)": the status verbatim, then the provider's words when
+// the run recorded them. `quote` wraps the detail too, so a markdown comment shows it as code
+// and a mention or a link in the provider's text stays inert.
+function lostAgents(
+  lost: readonly AgentRow[],
+  quote: (text: string) => string,
+): string {
+  return lost
+    .map(
+      (r) =>
+        `${quote(r.key)} (${r.status}${
+          r.detail === undefined ? "" : ` — ${quote(r.detail)}`
+        })`,
+    )
+    .join(", ");
+}
+
+// The workflow-command annotation for a review that did not finish everything: a partial run
+// (the coverage sentence, which names who was lost and why), or a complete one whose
+// summarizer or another non-gating step failed. Absent when every agent finished. One line:
+// the message is escaped the way a workflow command needs (%, CR, LF).
+export function incompleteReviewAnnotation(
+  doc: FindingsDocument,
+): string | undefined {
+  const lost = agentRows(doc).filter(
+    (r) => r.status === "failed" || r.status === "unsettled",
+  );
+  let message: string;
+  if (doc.run_status === "partial") {
+    message = `crysk: incomplete review. ${coverageSentence(doc, (key) => key)}`;
+  } else if (lost.length > 0) {
+    message = `crysk: the review is complete, but a step failed: ${lostAgents(lost, (text) => text)}.`;
+  } else {
+    return undefined;
+  }
+  const escaped = message
+    .replaceAll("%", "%25")
+    .replaceAll("\r", "%0D")
+    .replaceAll("\n", "%0A");
+  return `::warning title=crysk::${escaped}`;
 }
 
 // The one sentence behind every moved-head notice (GitHub #39,
@@ -617,7 +672,7 @@ function findingIndexLines(
 // ROADMAP B6 reshape, W2 (issues #16/#17): the index stays one-liners;
 // anchorable findings live on the review; un-anchorable (and 422-demoted)
 // findings render their full body in this summary's Comments Outside Diff
-// section — Greptile-shaped, never as standalone issue comments. `delta`
+// section, never as standalone issue comments. `delta`
 // may be absent — a caller with no prior-state knowledge (or a same-run
 // first post) still gets a valid comment, just without the delta line —
 // but the PARAMETER itself is REQUIRED, not optional (PR2 verification
@@ -724,7 +779,7 @@ export function renderPrComment(
   const out: string[] = [
     prCommentMarker(doc.head_sha, doc.run_status !== "partial"),
   ];
-  out.push("## pr-hero review");
+  out.push("## Crysk review");
   out.push("");
   // GitHub #39, and it goes FIRST — above the #42 incompleteness notice and
   // therefore above everything. The two notices qualify different things and
@@ -1003,7 +1058,7 @@ function cleanBillLine(
   if (!rereviewIsClean(rereview) && rereview !== undefined) {
     return `No new findings this delta. Live: ${liveBits(rereview).join(" · ")}.`;
   }
-  return "✅ pr-hero reviewed this PR and found nothing to report.";
+  return "✅ Crysk reviewed this PR and found nothing to report.";
 }
 
 function deltaLine(delta: PrCommentDelta): string {
@@ -1056,8 +1111,8 @@ export function renderRereviewClosedComment(input: {
   const lines = [
     `${PR_REREVIEW_CLOSED_MARKER_PREFIX}head=${input.headSha} -->`,
     complete
-      ? `### ✅ pr-hero re-review complete — ${sha}`
-      : `### ⚠️ pr-hero re-review finished with partial coverage — ${sha}`,
+      ? `### ✅ Crysk re-review complete — ${sha}`
+      : `### ⚠️ Crysk re-review finished with partial coverage — ${sha}`,
     "",
   ];
   if (!complete) {
@@ -1087,7 +1142,7 @@ export function renderRereviewClosedComment(input: {
   return `${lines.join("\n")}\n`;
 }
 
-// Greptile-shaped bucket (issues #16/#17): un-anchorable and 422-demoted
+// Outside-diff bucket (issues #16/#17): un-anchorable and 422-demoted
 // findings live HERE, inside the one summary, never as `POST .../issues/<n>/comments`.
 // Rendered only when N>0. Full per-finding body (header, blob-linked location,
 // claim, tier explanation, evidence, prompt-to-fix) — the same shape as
@@ -1293,10 +1348,10 @@ export interface RecoveredFindingBadge {
 export function parseFindingCommentBadge(
   body: string,
 ): RecoveredFindingBadge | null {
-  if (!body.includes(PR_FINDING_MARKER_PREFIX)) return null;
+  if (findMarker(body, PR_FINDING_MARKER_PREFIX) === undefined) return null;
   const lines = body.split("\n");
-  const markerIndex = lines.findIndex((line) =>
-    line.startsWith(PR_FINDING_MARKER_PREFIX),
+  const markerIndex = lines.findIndex(
+    (line) => matchMarkerPrefix(line, PR_FINDING_MARKER_PREFIX) !== undefined,
   );
   if (markerIndex === -1) return null;
   let i = markerIndex + 1;
@@ -1363,7 +1418,7 @@ export function renderIssueFindingComment(
     "",
     ...findingBodyLines(finding, headSha, webUrl, true),
     "",
-    "<sub>Posted as a standalone comment: pr-hero could not anchor this " +
+    "<sub>Posted as a standalone comment: Crysk could not anchor this " +
       "finding to a line in the current diff.</sub>",
   ];
   return `${out.join("\n").trimEnd()}\n`;
@@ -1648,8 +1703,8 @@ function notReported(doc: FindingsDocument): string[] {
 // PR comment's footer: absent engine info degrades to a name, never a lie.
 function engineLabel(doc: FindingsDocument): string {
   return doc.engine
-    ? `${doc.engine.name} ${doc.engine.version}`
-    : "pr-hero (version not recorded)";
+    ? `${doc.engine.name === LEGACY_BIN_NAME ? BIN_NAME : doc.engine.name} ${doc.engine.version}`
+    : "crysk (version not recorded)";
 }
 
 // The report's closing note by gate mode. Advisory is today's wording, byte for
@@ -1660,7 +1715,7 @@ function closing(doc: FindingsDocument, ciMode: CiMode): string[] {
     return [
       "---",
       "",
-      `Generated by ${engineLabel(doc)}. This report backs the pr-hero commit status, ` +
+      `Generated by ${engineLabel(doc)}. This report backs the crysk commit status, ` +
         "the required check in gate mode: every line above is a claim to verify. " +
         "A blocking finding sets that status to failure. Whether it blocks the merge " +
         "is up to branch protection.",
@@ -1679,7 +1734,7 @@ function closing(doc: FindingsDocument, ciMode: CiMode): string[] {
 // voice: no em dashes, the disclaimer joins with a colon.
 function commentDisclaimer(ciMode: CiMode): string {
   return ciMode === "gate"
-    ? "Assistant report backing the pr-hero commit status, the required check in gate mode: every line above is a claim to verify."
+    ? "Assistant report backing the crysk commit status, the required check in gate mode: every line above is a claim to verify."
     : "Assistant report, not a merge gate: every line above is a claim to verify.";
 }
 

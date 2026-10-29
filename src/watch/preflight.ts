@@ -18,6 +18,7 @@ import {
   type SizeGateConfig,
 } from "#review/size-gate";
 import type { SelfInvocation } from "../assets";
+import { MARKER_BRAND_PATTERN, matchMarkerPrefix } from "../brand";
 import { CliUsageError } from "../errors";
 import { type PrheroLayout, prheroLayout } from "../home-preflight";
 
@@ -529,8 +530,9 @@ export function parsePrFiles(raw: string): NumstatFile[] {
 // covers none, PR stays eligible. That is the fail-safe direction (more
 // review, never a truncated one), and it is what motivates fail-closed
 // (not fail-complete) as THIS reader's answer for a garbage token too.
-const MARKER_HEAD_RE =
-  /^<!-- pr-hero-report head=([0-9a-f]{40})( coverage=partial)? -->/;
+const MARKER_HEAD_RE = new RegExp(
+  `^<!-- ${MARKER_BRAND_PATTERN}-report head=([0-9a-f]{40})( coverage=partial)? -->`,
+);
 
 // NEVER throws: comment bodies are foreign text (bots, humans, pasted
 // reports), and a guard that crashes on someone else's comment takes the
@@ -562,7 +564,9 @@ export function parsePrCommentMarker(
   body: string,
 ): PrCommentMarkerFields | null {
   if (typeof body !== "string") return null;
-  if (!body.startsWith(PR_COMMENT_MARKER_PREFIX)) return null;
+  if (matchMarkerPrefix(body, PR_COMMENT_MARKER_PREFIX) === undefined) {
+    return null;
+  }
   const newlineAt = body.indexOf("\n");
   const firstLine = newlineAt === -1 ? body : body.slice(0, newlineAt);
   const match = MARKER_HEAD_RE.exec(firstLine);
@@ -627,7 +631,7 @@ export function markerCommentSeen(comments: { body: string }[]): boolean {
   return comments.some(
     (comment) =>
       typeof comment?.body === "string" &&
-      comment.body.startsWith(PR_COMMENT_MARKER_PREFIX),
+      matchMarkerPrefix(comment.body, PR_COMMENT_MARKER_PREFIX) !== undefined,
   );
 }
 
@@ -776,7 +780,8 @@ export interface TickRepoFacts {
   // push re-arms.
   onPush: boolean;
   prs: WatchPrCandidate[];
-  // Parsed comparison.json fields (pr + head_sha) — never dir names.
+  // Parsed findings.json fields (pr + head_sha) of PR reviews that did not
+  // fail their session — never dir names.
   localReviews: { pr: number; head: string }[];
   // Marker facts per PR: the declared heads AND whether any marker comment
   // exists at all (a legacy headless marker is seen but declares nothing).
@@ -946,7 +951,7 @@ export function pendingReviewsToSettle(
 // changes the head, every (pr, head) key is fresh by construction, and an
 // updated PR becomes eligible again — with auto-post the comment tracks the
 // live head. Under the DEFAULT (on_push: false) each PR is reviewed ONCE:
-// any prior review of the PR number — a local comparison.json at any head,
+// any prior review of the PR number — a local findings.json at any head,
 // or any pr-hero marker comment whatever it declares (a legacy headless
 // marker proves a review happened even though it covers no specific head) —
 // skips it as `reviewed-prior-head`, so a push never re-bills a review.
@@ -983,7 +988,7 @@ function candidateSkipReason(
   //       the very next tick — so the verdict is RECOMPUTED every tick from
   //       live gh counters and never persisted anywhere.
   //   (c) It does NOT arm the on_push "one review per PR" state. That state
-  //       is armed by a comparison.json or a marker comment, both of which
+  //       is armed by a findings.json or a marker comment, both of which
   //       only a review that actually ran produces. A skip is not a review;
   //       treating it as one would permanently retire the PR.
   if (repo.tooLarge.includes(candidate.pr)) return "too-large";
@@ -1164,7 +1169,7 @@ export function parseLockPid(raw: string): number | null {
 // The launchd agent (macOS). Rendering is pure string-out so a test can pin
 // the exact plist; loading it is the shell's job.
 
-export const WATCH_LAUNCHD_LABEL = "io.prhero.watch";
+export const WATCH_LAUNCHD_LABEL = "io.crysk.watch";
 
 export interface WatchPlistInput {
   // The engine's OWN invocation (assets.ts's selfInvocation()), never a fixed
@@ -1309,7 +1314,7 @@ export interface WatchStatusFacts {
 export function renderWatchStatus(facts: WatchStatusFacts): string[] {
   const row = (label: string, value: string): string =>
     `  ${label.padEnd(13)}${value}`;
-  const lines = ["pr-hero watch — status", ""];
+  const lines = ["crysk watch — status", ""];
   if (facts.configError !== null) {
     lines.push(
       row("config", `INVALID — ${facts.watchConfigPath}: ${facts.configError}`),
@@ -1318,14 +1323,14 @@ export function renderWatchStatus(facts: WatchStatusFacts): string[] {
     lines.push(
       row(
         "config",
-        `none (${facts.watchConfigPath}) — run "pr-hero watch add" inside a ` +
+        `none (${facts.watchConfigPath}) — run "crysk watch add" inside a ` +
           "repo to opt it in",
       ),
     );
   } else {
     lines.push(row("config", facts.watchConfigPath));
     if (facts.config.repos.length === 0) {
-      lines.push(row("", 'no repos watched — "pr-hero watch add" opts one in'));
+      lines.push(row("", 'no repos watched — "crysk watch add" opts one in'));
     }
     for (const repo of facts.config.repos) {
       lines.push(
@@ -1363,7 +1368,7 @@ export function renderWatchStatus(facts: WatchStatusFacts): string[] {
         ? facts.intervalSeconds === null
           ? `installed (${facts.plistPath}, interval unreadable)`
           : `installed — one tick every ${formatIntervalSeconds(facts.intervalSeconds)}`
-        : 'not installed — run "pr-hero watch install" to start ticking',
+        : 'not installed — run "crysk watch install" to start ticking',
     ),
   );
   lines.push(

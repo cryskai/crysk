@@ -1,9 +1,14 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -16,6 +21,8 @@ import {
   syncSkills,
 } from "./agent-env";
 import { type AssetMode, resolveEngineAssets, selfInvocation } from "./assets";
+import { BIN_NAME, LEGACY_BIN_NAME } from "./brand";
+import { LEGACY_HOME_DIR_NAME, resolveHomeDir } from "./brand-paths";
 import { loadGlobalConfigLayer } from "./config/config";
 import { runDoctor } from "./doctor";
 import { prheroLayout } from "./home-preflight";
@@ -25,7 +32,7 @@ import {
   SUPPORTED_OPENCODE_SDK_VERSION,
 } from "./transport-registry";
 
-export const PRHERO_GITHUB_REPO = "juanmaagd/pr-hero";
+export const PRHERO_GITHUB_REPO = "cryskai/crysk";
 
 export type InstallMethodKind = "standalone" | "package_manager" | "source";
 
@@ -47,23 +54,33 @@ export function detectInstallMethod(
 ): InstallMethod {
   const home = options.home ?? os.homedir();
   const execPath = options.execPath ?? process.execPath;
-  const version = options.version ?? "0.2.6";
+  const version = options.version ?? "0.3.0";
   const exists = options.exists ?? existsSync;
 
   const isSource =
     options.isDev !== undefined
       ? options.isDev
       : version === "dev" ||
-        (exists("./src/cli.ts") && !execPath.includes(".prhero/bin"));
+        (exists("./src/cli.ts") &&
+          !execPath.includes(".crysk/bin") &&
+          !execPath.includes(".prhero/bin"));
 
   if (isSource) {
     return { kind: "source" };
   }
 
-  const standaloneBinDir = path.join(home, ".prhero", "bin");
+  // Either home name: a binary installed before the rename lives under
+  // ~/.prhero/bin even when a ~/.crysk now exists beside it.
+  const standaloneBinDirs = [
+    path.join(resolveHomeDir(home, exists), "bin"),
+    path.join(home, LEGACY_HOME_DIR_NAME, "bin"),
+  ];
   if (
-    execPath.startsWith(standaloneBinDir) ||
-    path.resolve(execPath).startsWith(path.resolve(standaloneBinDir))
+    standaloneBinDirs.some(
+      (dir) =>
+        execPath.startsWith(dir) ||
+        path.resolve(execPath).startsWith(path.resolve(dir)),
+    )
   ) {
     return { kind: "standalone", binaryPath: execPath };
   }
@@ -89,12 +106,23 @@ export async function detectShadowInstalls(
       return found ? [found] : [];
     });
 
-  const allFound = await which("pr-hero");
-  const normalizedCurrent = path.resolve(options.currentBinary);
+  // Both names: a crysk upgrade is shadowed by an old pr-hero earlier on PATH
+  // just as surely as by another crysk.
+  const found = [
+    ...(await which(BIN_NAME)),
+    ...(await which(LEGACY_BIN_NAME)),
+  ].map((p) => path.resolve(p));
 
-  return allFound
-    .map((p) => path.resolve(p))
-    .filter((p) => p !== normalizedCurrent);
+  // The install's own pair (crysk and its pr-hero link, side by side) is one
+  // install, not two.
+  const currentDir = path.dirname(path.resolve(options.currentBinary));
+  const own = new Set([
+    path.resolve(options.currentBinary),
+    path.join(currentDir, BIN_NAME),
+    path.join(currentDir, LEGACY_BIN_NAME),
+  ]);
+
+  return [...new Set(found)].filter((p) => !own.has(p));
 }
 
 export interface UpgradeCheckCache {
@@ -174,9 +202,14 @@ export interface UpgradePlan {
   currentVersion: string;
   targetVersion: string;
   targetBinary?: string;
+  // The pr-hero name, kept beside targetBinary as a link for one version.
+  aliasBinary?: string;
   tempBinary?: string;
   bakBinary?: string;
   downloadUrl?: string;
+  // The same bytes under the pre-rename asset name, for a release made before
+  // the rename (it has no crysk-<target> asset).
+  legacyDownloadUrl?: string;
   checksumsUrl?: string;
   steps: string[];
   message?: string;
@@ -213,15 +246,18 @@ export async function planUpgrade(
       currentVersion,
       targetVersion,
       steps: ["reconcile"],
-      message: `pr-hero is already up to date (v${currentVersion}).`,
+      message: `Crysk is already up to date (v${currentVersion}).`,
     };
   }
 
   if (installMethod.kind === "standalone") {
-    const targetBinary = installMethod.binaryPath;
-    const binDir = path.dirname(targetBinary);
+    // Always installed as `crysk` beside whichever name is running: a legacy
+    // install (running as pr-hero) gains crysk, and pr-hero becomes its link.
+    const binDir = path.dirname(installMethod.binaryPath);
+    const targetBinary = path.join(binDir, BIN_NAME);
+    const aliasBinary = path.join(binDir, LEGACY_BIN_NAME);
     const rand = crypto.randomBytes(4).toString("hex");
-    const tempBinary = path.join(binDir, `pr-hero.tmp.${rand}`);
+    const tempBinary = path.join(binDir, `${BIN_NAME}.tmp.${rand}`);
     const bakBinary = `${targetBinary}.bak`;
 
     const osName =
@@ -231,23 +267,28 @@ export async function planUpgrade(
       rawArch === "arm64" || rawArch === "aarch64" ? "arm64" : "x64";
     const target = `${osName}-${archName}`;
 
-    const downloadUrl = `https://github.com/${PRHERO_GITHUB_REPO}/releases/download/v${targetVersion}/pr-hero-${target}`;
-    const checksumsUrl = `https://github.com/${PRHERO_GITHUB_REPO}/releases/download/v${targetVersion}/SHA256SUMS`;
+    const releaseBase = `https://github.com/${PRHERO_GITHUB_REPO}/releases/download/v${targetVersion}`;
+    const downloadUrl = `${releaseBase}/${BIN_NAME}-${target}`;
+    const legacyDownloadUrl = `${releaseBase}/${LEGACY_BIN_NAME}-${target}`;
+    const checksumsUrl = `${releaseBase}/SHA256SUMS`;
 
     return {
       action: "upgrade_standalone",
       currentVersion,
       targetVersion,
       targetBinary,
+      aliasBinary,
       tempBinary,
       bakBinary,
       downloadUrl,
+      legacyDownloadUrl,
       checksumsUrl,
       steps: [
-        `Download ${downloadUrl} to ${tempBinary}`,
+        `Download ${downloadUrl} (or ${legacyDownloadUrl} for a release made before the rename) to ${tempBinary}`,
         `Verify SHA256 against ${checksumsUrl}`,
         `Preserve previous binary as ${bakBinary}`,
         `Atomically replace ${targetBinary}`,
+        `Keep ${aliasBinary} working as a link to ${targetBinary}`,
         "Reconcile agent skills, MCP registrations, and SQLite migrations",
       ],
     };
@@ -258,10 +299,185 @@ export async function planUpgrade(
     currentVersion,
     targetVersion,
     steps: [
-      `Run ${installMethod.manager} install -g pr-hero@latest`,
+      `Run ${installMethod.manager} install -g crysk@latest`,
       "Reconcile agent skills, MCP registrations, and SQLite migrations",
     ],
   };
+}
+
+interface DownloadedBinary {
+  bytes: ArrayBuffer;
+  // The release asset the bytes came from: the name its SHA256SUMS line carries.
+  assetName: string;
+}
+
+// Downloads the binary a standalone plan names and verifies it against the
+// SHA256SUMS line of the asset actually fetched. crysk-<target> first; only a
+// 404 falls back to pr-hero-<target> (a release made before the rename). Any
+// other failure is a real failure, not a reason to try another name.
+export async function downloadReleaseBinary(
+  plan: UpgradePlan,
+  fetchFn: (url: string) => Promise<Response> = fetch,
+): Promise<DownloadedBinary> {
+  const { downloadUrl, legacyDownloadUrl, checksumsUrl } = plan;
+  if (!downloadUrl || !legacyDownloadUrl || !checksumsUrl) {
+    throw new Error("Incomplete standalone upgrade plan.");
+  }
+
+  let assetUrl = downloadUrl;
+  let resp = await fetchFn(assetUrl);
+  if (resp.status === 404) {
+    assetUrl = legacyDownloadUrl;
+    resp = await fetchFn(assetUrl);
+    if (resp.status === 404) {
+      throw new Error(
+        `Failed to download the ${BIN_NAME} binary: neither ${path.basename(downloadUrl)} nor ${path.basename(legacyDownloadUrl)} is on this release.`,
+      );
+    }
+  }
+  if (!resp.ok) {
+    throw new Error(`Failed to download ${BIN_NAME} binary from ${assetUrl}`);
+  }
+  const bytes = await resp.arrayBuffer();
+
+  const sumsResp = await fetchFn(checksumsUrl);
+  if (!sumsResp.ok) {
+    throw new Error(`Failed to download SHA256SUMS from ${checksumsUrl}`);
+  }
+  const assetName = path.basename(assetUrl);
+  const actualHash = crypto
+    .createHash("sha256")
+    .update(Buffer.from(bytes))
+    .digest("hex");
+  // sha256sum's own format: `<hash>  <name>`, `*` before the name in binary
+  // mode. Matched on the name exactly so one asset's line never vouches for
+  // another's bytes.
+  const verified = (await sumsResp.text()).split("\n").some((line) => {
+    const [hash, name] = line.trim().split(/\s+/);
+    return name?.replace(/^\*/, "") === assetName && hash === actualHash;
+  });
+  if (!verified) {
+    throw new Error(`SHA256 checksum verification failed for ${assetName}!`);
+  }
+  return { bytes, assetName };
+}
+
+// A binary that does not answer --help within the limit fails its smoke and is
+// killed: an upgrade must never hang on the binary it is about to install.
+const SMOKE_TIMEOUT_MS = 30_000;
+
+async function smokeBinary(
+  bin: string,
+  timeoutMs = SMOKE_TIMEOUT_MS,
+): Promise<boolean> {
+  try {
+    const proc = Bun.spawn([bin, "--help"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    });
+    const outcome = await Promise.race([proc.exited, timedOut]);
+    clearTimeout(timer);
+    if (outcome === "timeout") {
+      proc.kill("SIGKILL");
+      return false;
+    }
+    return outcome === 0;
+  } catch {
+    return false;
+  }
+}
+
+type InstallStandaloneResult =
+  | {
+      status: "installed";
+      alias: "symlink" | "copy" | "failed";
+      aliasError?: string;
+    }
+  | { status: "rolled_back" };
+
+// Smoke-tests the verified bytes where they were downloaded, and only then swaps
+// them in as the plan's crysk binary and points pr-hero at it. A failed or hung
+// smoke removes the download and touches nothing installed, so there is never a
+// moment when an unverified binary sits at the installed path.
+export async function installStandaloneBinary(
+  plan: UpgradePlan,
+  bytes: Uint8Array,
+  options: {
+    smoke?: (bin: string) => Promise<boolean>;
+    smokeTimeoutMs?: number;
+  } = {},
+): Promise<InstallStandaloneResult> {
+  const { targetBinary, aliasBinary, tempBinary, bakBinary } = plan;
+  if (!targetBinary || !aliasBinary || !tempBinary || !bakBinary) {
+    throw new Error("Incomplete standalone upgrade plan.");
+  }
+  const smoke =
+    options.smoke ??
+    ((bin: string) => smokeBinary(bin, options.smokeTimeoutMs));
+
+  // A .bak left by an interrupted upgrade is the last good binary when the
+  // target itself is gone: put it back first, so a failed smoke below still
+  // leaves a working install. Otherwise the .bak is stale.
+  if (!existsSync(targetBinary) && existsSync(bakBinary)) {
+    renameSync(bakBinary, targetBinary);
+  } else {
+    rmSync(bakBinary, { force: true });
+  }
+
+  await Bun.write(tempBinary, bytes);
+  chmodSync(tempBinary, 0o755);
+  if (!(await smoke(tempBinary))) {
+    rmSync(tempBinary, { force: true });
+    return { status: "rolled_back" };
+  }
+
+  const hadPrevious = existsSync(targetBinary);
+  if (hadPrevious) renameSync(targetBinary, bakBinary);
+  renameSync(tempBinary, targetBinary);
+  rmSync(bakBinary, { force: true });
+
+  // crysk is installed and verified; the alias is a convenience on top, so a
+  // failure there is reported, never thrown half-way through the upgrade.
+  try {
+    return { status: "installed", alias: linkAlias(targetBinary, aliasBinary) };
+  } catch (err) {
+    return {
+      status: "installed",
+      alias: "failed",
+      aliasError: (err as Error).message,
+    };
+  }
+}
+
+// pr-hero -> crysk, replacing whatever pr-hero was (the old binary, on a legacy
+// install). Built beside the alias and renamed over it, so the name never
+// stops resolving mid-swap. A relative link keeps the pair movable together. A
+// filesystem that refuses symlinks gets a copy instead; that copy goes stale on
+// the next upgrade unless this runs again, which it does on every upgrade.
+function linkAlias(target: string, alias: string): "symlink" | "copy" {
+  const staged = `${alias}.new.${process.pid}`;
+  rmSync(staged, { force: true });
+  try {
+    symlinkSync(path.basename(target), staged);
+    renameSync(staged, alias);
+    return "symlink";
+  } catch {
+    rmSync(staged, { force: true });
+    // The copy fallback can fail too (ENOSPC, a dir in the way): the staged file
+    // goes either way, so no retry leaves an orphan behind.
+    try {
+      copyFileSync(target, staged);
+      chmodSync(staged, 0o755);
+      renameSync(staged, alias);
+      return "copy";
+    } finally {
+      rmSync(staged, { force: true });
+    }
+  }
 }
 
 export interface OpenCodeSdkSpawnResult {
@@ -321,7 +537,7 @@ export function selectOpenCodeSdkInstaller(input: {
     ];
   }
   throw new Error(
-    "neither npm nor bun is on PATH. Run pr-hero upgrade --reconcile after installing npm or bun.",
+    "neither npm nor bun is on PATH. Run crysk upgrade --reconcile after installing npm or bun.",
   );
 }
 
@@ -365,7 +581,7 @@ async function withOpenCodeSdkInstallLock(
       if (holder !== null) {
         throw new Error(
           `OpenCode SDK install is already running (pid ${holder}). ` +
-            "Run pr-hero upgrade --reconcile after it finishes.",
+            "Run crysk upgrade --reconcile after it finishes.",
         );
       }
       await rm(lockPath, { force: true });
@@ -384,7 +600,7 @@ async function withOpenCodeSdkInstallLock(
   }
   throw new Error(
     "OpenCode SDK install is already running. " +
-      "Run pr-hero upgrade --reconcile after it finishes.",
+      "Run crysk upgrade --reconcile after it finishes.",
   );
 }
 
@@ -410,7 +626,7 @@ export function spawnOpenCodeSdkInstaller(
       child.kill();
       reject(
         new Error(
-          `OpenCode SDK install timed out after ${timeoutMs}ms. Run pr-hero upgrade --reconcile.`,
+          `OpenCode SDK install timed out after ${timeoutMs}ms. Run crysk upgrade --reconcile.`,
         ),
       );
     }, timeoutMs);
@@ -485,7 +701,7 @@ async function ensureOpenCodeSdkInstalled(options: {
     if (result.code !== 0) {
       throw new Error(
         `Failed to install @opencode-ai/sdk@${SUPPORTED_OPENCODE_SDK_VERSION} ` +
-          `(exit ${result.code}). Run pr-hero upgrade --reconcile.`,
+          `(exit ${result.code}). Run crysk upgrade --reconcile.`,
       );
     }
     const after = await readSdkVersion();
@@ -496,7 +712,7 @@ async function ensureOpenCodeSdkInstalled(options: {
           : "missing";
       throw new Error(
         `OpenCode SDK version "${observed}" after install; expected ` +
-          `"${SUPPORTED_OPENCODE_SDK_VERSION}". Run pr-hero upgrade --reconcile.`,
+          `"${SUPPORTED_OPENCODE_SDK_VERSION}". Run crysk upgrade --reconcile.`,
       );
     }
   });

@@ -16,7 +16,7 @@ import {
 
 describe("activity (active runs tracker & store activity monitor)", () => {
   const home = "/Users/testuser";
-  const activeRunsDir = path.join(home, ".prhero", "active_runs");
+  const activeRunsDir = path.join(home, ".crysk", "active_runs");
 
   describe("2.1 Active runs registry lifecycle & stale dead-PID pruning", () => {
     test("registers and unregisters active run file", async () => {
@@ -125,6 +125,13 @@ describe("activity (active runs tracker & store activity monitor)", () => {
         return "bun /usr/local/bin/pr-hero review --pr 56";
       });
       expect(isMatch).toBe(true);
+
+      // The standalone binary ships as crysk; its command line names neither
+      // pr-hero nor bun/node.
+      const crysk = await checkProcessIdentity(1003, async (_cmd) => {
+        return "/Users/me/.crysk/bin/crysk review --pr 56";
+      });
+      expect(crysk).toBe(true);
 
       const isMismatch = await checkProcessIdentity(1002, async (_cmd) => {
         return "/usr/libexec/postfix/master -w";

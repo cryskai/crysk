@@ -7,9 +7,25 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { detectAgentEnvironments } from "./agent-env";
+import {
+  allSkillDirNames,
+  detectAgentEnvironments,
+  removeMcpServerEntries,
+} from "./agent-env";
+import { BIN_NAME, LEGACY_BIN_NAME } from "./brand";
+import {
+  HOME_DIR_NAME,
+  LEGACY_HOME_DIR_NAME,
+  resolveRepoDir,
+} from "./brand-paths";
 import { prheroLayout } from "./home-preflight";
+import {
+  LEGACY_GC_LAUNCHD_LABEL,
+  LEGACY_WATCH_LAUNCHD_LABEL,
+} from "./legacy-launchd";
+import { GC_LAUNCHD_LABEL } from "./store/gc-preflight";
 import { detectInstallMethod, type InstallMethod } from "./updater";
+import { WATCH_LAUNCHD_LABEL } from "./watch/preflight";
 
 export type UninstallStepType =
   | "unload_launchd"
@@ -57,6 +73,9 @@ export interface PlanUninstallationOptions {
   exists?: (p: string) => boolean;
   readFile?: (p: string) => string | undefined;
 }
+
+// The PATH lines the installer wrote, under either home name.
+const RC_BIN_MARKERS = [".crysk/bin", ".prhero/bin"];
 
 export async function planUninstallation(
   options: PlanUninstallationOptions = {},
@@ -115,16 +134,17 @@ export async function planUninstallation(
   // 1. Launchd services (macOS only)
   if (platform === "darwin") {
     const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
+    // Both generations: an install set up before the rename still has the
+    // io.prhero.* agents, and one set up after has io.crysk.*.
     const services = [
-      {
-        label: "io.prhero.watch",
-        plist: path.join(launchAgentsDir, "io.prhero.watch.plist"),
-      },
-      {
-        label: "io.prhero.gc",
-        plist: path.join(launchAgentsDir, "io.prhero.gc.plist"),
-      },
-    ];
+      WATCH_LAUNCHD_LABEL,
+      GC_LAUNCHD_LABEL,
+      LEGACY_WATCH_LAUNCHD_LABEL,
+      LEGACY_GC_LAUNCHD_LABEL,
+    ].map((label) => ({
+      label,
+      plist: path.join(launchAgentsDir, `${label}.plist`),
+    }));
 
     for (const svc of services) {
       launchdServices.push(svc.label);
@@ -152,16 +172,11 @@ export async function planUninstallation(
       programSteps.push({
         type: "unregister_mcp",
         targetPath: env.mcpConfigFile,
-        desc: `Unregister pr-hero MCP server from ${env.displayName} (${env.mcpConfigFile})`,
+        desc: `Unregister crysk MCP server from ${env.displayName} (${env.mcpConfigFile})`,
       });
     }
     if (env.skillsDir) {
-      for (const skillName of [
-        "pr-hero-triage",
-        "pr-hero-ci-setup",
-        "pr-hero-pr",
-        "pr-hero",
-      ]) {
+      for (const skillName of allSkillDirNames()) {
         const skillPath = path.join(env.skillsDir, skillName);
         if (exists(skillPath)) {
           agentEnvCleanups.push(`${env.displayName} Skill: ${skillName}`);
@@ -186,12 +201,12 @@ export async function planUninstallation(
   for (const rcPath of rcCandidates) {
     if (exists(rcPath)) {
       const content = readFile(rcPath);
-      if (content?.includes(".prhero/bin")) {
+      if (content && RC_BIN_MARKERS.some((m) => content.includes(m))) {
         rcFilesCleaned.push(rcPath);
         programSteps.push({
           type: "clean_rc_file",
           targetPath: rcPath,
-          desc: `Remove .prhero/bin from PATH in ${rcPath}`,
+          desc: `Remove ${RC_BIN_MARKERS.filter((m) => content.includes(m)).join(" and ")} from PATH in ${rcPath}`,
         });
       }
     }
@@ -199,29 +214,39 @@ export async function planUninstallation(
 
   // 4. Standalone binary removal
   if (installMethod.kind === "standalone") {
-    binariesRemoved.push(installMethod.binaryPath);
-    programSteps.push({
-      type: "remove_file",
-      targetPath: installMethod.binaryPath,
-      desc: `Remove binary ${installMethod.binaryPath}`,
-    });
-    const bakFile = `${installMethod.binaryPath}.bak`;
-    if (exists(bakFile)) {
+    // Both names: the installer leaves crysk plus a pr-hero link, so removing
+    // only the one that is running would strand the other on PATH. The link
+    // goes first: the executor's exists() follows it, and a link whose target
+    // is already gone reads as absent.
+    const running = installMethod.binaryPath;
+    const binDir = path.dirname(running);
+    const named = [LEGACY_BIN_NAME, BIN_NAME].map((n) => path.join(binDir, n));
+    const binaries = named.includes(running) ? named : [...named, running];
+    for (const bin of binaries.filter((b) => b === running || exists(b))) {
+      binariesRemoved.push(bin);
       programSteps.push({
         type: "remove_file",
-        targetPath: bakFile,
-        desc: `Remove backup binary ${bakFile}`,
+        targetPath: bin,
+        desc: `Remove binary ${bin}`,
       });
+      const bakFile = `${bin}.bak`;
+      if (exists(bakFile)) {
+        programSteps.push({
+          type: "remove_file",
+          targetPath: bakFile,
+          desc: `Remove backup binary ${bakFile}`,
+        });
+      }
     }
   } else if (installMethod.kind === "package_manager") {
     warnings.push(
-      `pr-hero was installed via ${installMethod.manager}. Run '${installMethod.manager} uninstall -g pr-hero' to remove the global package.`,
+      `Crysk was installed via ${installMethod.manager}. Run '${installMethod.manager} uninstall -g crysk' to remove the global package ('${installMethod.manager} uninstall -g pr-hero' for one installed before the rename).`,
     );
   }
 
   // 5. Data steps (Purge)
   if (purge) {
-    const layout = prheroLayout(home);
+    const layout = prheroLayout(home, exists);
     const dataFiles = [
       layout.prheroDbPath,
       `${layout.prheroDbPath}-wal`,
@@ -252,6 +277,11 @@ export async function planUninstallation(
       layout.reposDir,
       path.join(layout.dir, "bin"),
       layout.dir,
+      // The home this run is NOT using, if it is still on disk (both exist
+      // after a half-finished migration): a purge leaves neither behind.
+      ...[HOME_DIR_NAME, LEGACY_HOME_DIR_NAME]
+        .map((name) => path.join(home, name))
+        .filter((dir) => dir !== layout.dir),
     ];
 
     for (const d of dataDirs) {
@@ -267,7 +297,7 @@ export async function planUninstallation(
 
   let inRepoPrheroDir: string | undefined;
   if (options.repoRoot) {
-    const repoPrhero = path.join(options.repoRoot, ".prhero");
+    const repoPrhero = resolveRepoDir(options.repoRoot, exists);
     if (exists(repoPrhero)) {
       inRepoPrheroDir = repoPrhero;
     }
@@ -391,7 +421,7 @@ export async function executeUninstallPlan(
             if (raw) {
               const lines = raw
                 .split("\n")
-                .filter((l) => !l.includes(".prhero/bin"));
+                .filter((l) => !RC_BIN_MARKERS.some((m) => l.includes(m)));
               await writeFile(step.targetPath, lines.join("\n"));
               executedSteps.push(step.desc);
             }
@@ -404,13 +434,7 @@ export async function executeUninstallPlan(
             if (raw) {
               try {
                 const config = JSON.parse(raw);
-                if (
-                  config &&
-                  typeof config === "object" &&
-                  !Array.isArray(config) &&
-                  config.mcpServers?.["pr-hero"]
-                ) {
-                  delete config.mcpServers["pr-hero"];
+                if (removeMcpServerEntries(config)) {
                   await writeFile(
                     step.targetPath,
                     `${JSON.stringify(config, null, 2)}\n`,
@@ -428,6 +452,8 @@ export async function executeUninstallPlan(
 
         case "remove_skills":
           if (step.targetPath && exists(step.targetPath)) {
+            // An uninstall the user asked for removes the whole dir, both names, as
+            // it always has; only the upgrade sync's legacy cleanup is digest-gated.
             if (options.rmdir) {
               options.rmdir(step.targetPath, { recursive: true });
             } else {

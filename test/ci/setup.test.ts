@@ -22,6 +22,7 @@ import path from "node:path";
 import {
   CI_WORKFLOW_RELATIVE_PATH,
   generateCiWorkflowTemplate,
+  LEGACY_CI_WORKFLOW_RELATIVE_PATH,
   materializeCiOpenCodeData,
   OWN_CI_WORKFLOW_OPTIONS,
   runCiSetup,
@@ -88,7 +89,16 @@ const own = () => generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
 const WRITER_ASSOCIATION = `contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)`;
 // T6 (S8): the group also admits `/pr-hero override` from the same associations, so
 // an override queues behind an in-flight review and lands last.
-const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero recheck') && ${WRITER_ASSOCIATION}) || (startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
+const GROUP_COMMANDS = [
+  "/crysk review",
+  "/crysk recheck",
+  "/crysk override",
+  "/pr-hero review",
+  "/pr-hero recheck",
+  "/pr-hero override",
+];
+// The new names come first; the legacy /pr-hero forms are still admitted for one version.
+const REVIEW_CONCURRENCY_GROUP = `\${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || ${GROUP_COMMANDS.map((c) => `(startsWith(github.event.comment.body, '${c}') && ${WRITER_ASSOCIATION})`).join(" || ")}) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}`;
 const PUSH_ONLY_CANCEL = `\${{ github.event_name == 'pull_request' }}`;
 
 describe("generateCiWorkflowTemplate (pure)", () => {
@@ -125,15 +135,16 @@ describe("generateCiWorkflowTemplate (pure)", () => {
   // so credential presence is the action's to detect, loudly, inside the
   // run. The `if` only routes events. Fork pull_request runs never receive
   // secrets, so they are skipped here; a maintainer's comment reviews them.
-  test("the review job skips fork pushes, starts only on a `/pr-hero review`, `/pr-hero recheck` or `/pr-hero override` comment, and never reads secrets", () => {
+  test("the review job skips fork pushes, starts only on a `/crysk` (or legacy `/pr-hero`) review, recheck or override comment, and never reads secrets", () => {
     const reviewIf = String(
       parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
     );
     expect(reviewIf).toBe(
       "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || " +
-        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) || " +
-        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero recheck')) || " +
-        "(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))",
+        GROUP_COMMANDS.map(
+          (c) =>
+            `(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '${c}'))`,
+        ).join(" || "),
     );
     expect(reviewIf).not.toContain("secrets.");
   });
@@ -169,6 +180,9 @@ describe("generateCiWorkflowTemplate (pure)", () => {
         ?.group ?? "",
     );
     expect(group).toContain(
+      `(startsWith(github.event.comment.body, '/crysk review') && ${WRITER_ASSOCIATION})`,
+    );
+    expect(group).toContain(
       `(startsWith(github.event.comment.body, '/pr-hero review') && ${WRITER_ASSOCIATION})`,
     );
     expect(String(parsed.jobs.review?.if ?? "")).not.toContain(
@@ -187,9 +201,11 @@ describe("generateCiWorkflowTemplate (pure)", () => {
           | undefined
       )?.group ?? "",
     );
-    expect(group).toContain(
-      `(startsWith(github.event.comment.body, '/pr-hero override') && ${WRITER_ASSOCIATION})`,
-    );
+    for (const command of ["/crysk override", "/pr-hero override"]) {
+      expect(group).toContain(
+        `(startsWith(github.event.comment.body, '${command}') && ${WRITER_ASSOCIATION})`,
+      );
+    }
   });
 
   test("the docs' workflow snippet carries the generator's exact concurrency group", () => {
@@ -212,13 +228,15 @@ describe("generateCiWorkflowTemplate (pure)", () => {
       docs.indexOf("## What the workflow does"),
     );
     const snippet = /```yaml\n([\s\S]*?)\n```/.exec(workflowSection)?.[1] ?? "";
-    expect(snippet).toContain("name: pr-hero Review");
+    expect(snippet).toContain("name: Crysk Review");
     const generatedIf = String(
       parseWorkflow(generateCiWorkflowTemplate()).jobs.review?.if ?? "",
     );
-    expect(generatedIf).toContain(
-      "startsWith(github.event.comment.body, '/pr-hero override')",
-    );
+    for (const command of ["/crysk override", "/pr-hero override"]) {
+      expect(generatedIf).toContain(
+        `startsWith(github.event.comment.body, '${command}')`,
+      );
+    }
     expect(String(parseWorkflow(snippet).jobs.review?.if ?? "")).toBe(
       generatedIf,
     );
@@ -296,7 +314,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     const asset = Bun.YAML.parse(
       await Bun.file(
         new URL(
-          "../../skills/pr-hero-ci-setup/assets/workflow.yml",
+          "../../skills/crysk-ci-setup/assets/workflow.yml",
           import.meta.url,
         ),
       ).text(),
@@ -327,7 +345,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
       jobs: { review: { steps: Array<Record<string, unknown>> } };
     };
     const usesValues = parsed.jobs.review.steps.map((step) => step.uses);
-    expect(usesValues).toContain("juanmaagd/pr-hero@v0");
+    expect(usesValues).toContain("cryskai/crysk@v0");
   });
 
   test("never embeds a secret value — references secrets by name only", () => {
@@ -354,7 +372,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
       jobs: { review: { steps: Array<Record<string, unknown>> } };
     };
     const step = parsed.jobs.review.steps.find(
-      (s) => s.uses === "juanmaagd/pr-hero@v0",
+      (s) => s.uses === "cryskai/crysk@v0",
     ) as { with?: Record<string, string> } | undefined;
     expect(step?.with?.["anthropic-api-key"]).toBe(
       `\${{ secrets.ANTHROPIC_API_KEY }}`,
@@ -419,19 +437,23 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     );
   });
 
-  // Threat matrix RED (5): vars must be quoted so an unset PRHERO_ROUTING
+  // Threat matrix RED (5): vars must be quoted so an unset CRYSK_ROUTING
   // becomes the empty string instead of breaking YAML. The auth secret is
   // referenced by name, never inlined.
-  test("quoted with.routing is vars.PRHERO_ROUTING and with.opencode-auth is secrets.OPENCODE_AUTH_JSON", () => {
+  test("quoted with.routing is vars.CRYSK_ROUTING with a vars.PRHERO_ROUTING fallback, and with.opencode-auth is secrets.OPENCODE_AUTH_JSON", () => {
     const template = generateCiWorkflowTemplate();
-    expect(template).toContain(`routing: "\${{ vars.PRHERO_ROUTING }}"`);
+    expect(template).toContain(
+      `routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
+    );
     const parsed = Bun.YAML.parse(template) as {
       jobs: { review: { steps: Array<Record<string, unknown>> } };
     };
-    const step = parsed.jobs.review.steps.find(
-      (s) => s.name === "Run pr-hero",
-    ) as { with?: Record<string, string> } | undefined;
-    expect(step?.with?.routing).toBe(`\${{ vars.PRHERO_ROUTING }}`);
+    const step = parsed.jobs.review.steps.find((s) => s.name === "Run Crysk") as
+      | { with?: Record<string, string> }
+      | undefined;
+    expect(step?.with?.routing).toBe(
+      `\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}`,
+    );
     expect(step?.with?.["opencode-auth"]).toBe(
       `\${{ secrets.OPENCODE_AUTH_JSON }}`,
     );
@@ -655,8 +677,8 @@ describe("this repo's own comment runs pin the pull request head", () => {
       const gate = runGate(own(), sameRepoPr, { stderr, times: 2 });
       expect(gate.exitCode).toBe(1);
       expect(gate.outputs).toEqual({});
-      expect(gate.stdout).toContain("::error title=pr-hero::");
-      expect(gate.stdout).toContain("/pr-hero review");
+      expect(gate.stdout).toContain("::error title=crysk::");
+      expect(gate.stdout).toContain("/crysk review");
       expect(gate.lookups).toBe(2);
       expect(gate.sleeps).toHaveLength(1);
       expect(gate.calls.some((call) => call.startsWith("pr view"))).toBe(false);
@@ -730,7 +752,7 @@ describe("this repo's own comment runs pin the pull request head", () => {
   });
 
   test("the scaffolded workflow resolves nothing and pins no ref", () => {
-    // A consumer repo runs juanmaagd/pr-hero@v0, so its checkout never
+    // A consumer repo runs cryskai/crysk@v0, so its checkout never
     // selects the engine and needs no pin.
     expect(stepOrder(scaffolded())).toEqual(["Checkout", "pr-hero"]);
     expect(checkoutOf(scaffolded())?.with?.ref).toBeUndefined();
@@ -761,10 +783,10 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
   }
 
   // Threat matrix RED (1): person-layer writes use prheroLayout(home), never
-  // the workspace checkout's .prhero/config.json (repo parser rejects routing).
+  // the workspace checkout's .crysk/config.json (repo parser rejects routing).
   test("writes routing at prheroLayout(home).reviewConfigPath and not the workspace", async () => {
     await withFixture(async ({ home, workspace }) => {
-      const workspaceConfig = path.join(workspace, ".prhero", "config.json");
+      const workspaceConfig = path.join(workspace, ".crysk", "config.json");
       await mkdir(path.dirname(workspaceConfig), { recursive: true });
       const workspaceBefore = `${JSON.stringify({ max_changed_lines: 50 })}\n`;
       await writeFile(workspaceConfig, workspaceBefore);
@@ -777,7 +799,7 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
       });
 
       const expected = prheroLayout(home).reviewConfigPath;
-      expect(expected).toBe(path.join(home, ".prhero", "config.json"));
+      expect(expected).toBe(path.join(home, ".crysk", "config.json"));
       expect(existsSync(expected)).toBe(true);
       const layer = parseGlobalConfig(await readFile(expected, "utf8"));
       expect(layer.routing?.default?.backend).toBe("opencode");
@@ -814,7 +836,7 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
   // Threat matrix RED (3): empty HOME fails loud; never fall back to cwd.
   test("empty HOME is non-zero and leaves cwd untouched", async () => {
     await withFixture(async ({ workspace }) => {
-      const workspaceConfig = path.join(workspace, ".prhero", "config.json");
+      const workspaceConfig = path.join(workspace, ".crysk", "config.json");
       await expect(
         materializeCiOpenCodeData({
           env: { HOME: "" },
@@ -824,7 +846,7 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
       ).rejects.toThrow(/HOME/);
 
       expect(existsSync(workspaceConfig)).toBe(false);
-      expect(existsSync(path.join(workspace, ".prhero"))).toBe(false);
+      expect(existsSync(path.join(workspace, ".crysk"))).toBe(false);
       expect(existsSync(path.join(workspace, ".local"))).toBe(false);
 
       const proc = Bun.spawn(
@@ -904,7 +926,7 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
           HOME: home,
           ROUTING_INPUT: "",
           OPENCODE_AUTH_INPUT: "",
-          PRHERO_OUTCOME_DIR: outDir,
+          CRYSK_OUTCOME_DIR: outDir,
           ...env,
         },
         stdout: "pipe",
@@ -1013,7 +1035,7 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
 });
 
 describe("ci init next steps (CLI)", () => {
-  test("say that /pr-hero review works once the workflow is on the default branch", () => {
+  test("say that /crysk review works once the workflow is on the default branch", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "prhero-ci-init-"));
     try {
       Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
@@ -1029,7 +1051,7 @@ describe("ci init next steps (CLI)", () => {
       const output = `${result.stdout}${result.stderr}`;
       expect(result.exitCode).toBe(0);
       expect(output).toContain("Next steps:");
-      expect(output).toContain("/pr-hero review");
+      expect(output).toContain("/crysk review");
       expect(output).toMatch(/default branch/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1049,8 +1071,8 @@ describe("ci init gotchas steps (CLI)", () => {
     try {
       Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
       if (gotchas !== undefined) {
-        await mkdir(path.join(dir, ".prhero"), { recursive: true });
-        await writeFile(path.join(dir, ".prhero", "gotchas.md"), gotchas);
+        await mkdir(path.join(dir, ".crysk"), { recursive: true });
+        await writeFile(path.join(dir, ".crysk", "gotchas.md"), gotchas);
       }
       const result = Bun.spawnSync(
         [
@@ -1070,13 +1092,13 @@ describe("ci init gotchas steps (CLI)", () => {
     }
   }
 
-  test("a repo without .prhero/gotchas.md is told to run init, write gotchas, and commit .prhero/ before opening the PR", async () => {
+  test("a repo without .crysk/gotchas.md is told to run init, write gotchas, and commit .crysk/ before opening the PR", async () => {
     const { output, code } = await runInit(undefined);
     expect(code).toBe(0);
-    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("npx -y crysk init");
     expect(output).toContain("human-attention-required");
-    expect(output).toContain("Commit .prhero/ to the default branch");
-    expect(output.indexOf("npx -y pr-hero init")).toBeLessThan(
+    expect(output).toContain("Commit .crysk/ to the default branch");
+    expect(output.indexOf("npx -y crysk init")).toBeLessThan(
       output.indexOf("Open a pull request"),
     );
   });
@@ -1085,26 +1107,26 @@ describe("ci init gotchas steps (CLI)", () => {
     const { output } = await runInit(
       "<!-- human-attention-required: delete -->\n# Repo gotchas\n",
     );
-    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("npx -y crysk init");
     expect(output).toContain("human-attention-required");
-    expect(output).toContain("Commit .prhero/ to the default branch");
+    expect(output).toContain("Commit .crysk/ to the default branch");
   });
 
   test("a scaffold whose marker line was deleted gets the same init steps", async () => {
     const { output } = await runInit(
       "# Repo gotchas\n\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n",
     );
-    expect(output).toContain("npx -y pr-hero init");
-    expect(output).toContain("Commit .prhero/ to the default branch");
+    expect(output).toContain("npx -y crysk init");
+    expect(output).toContain("Commit .crysk/ to the default branch");
   });
 
   test("real gotchas without the marker print no init steps, and still name the required check", async () => {
     const { output } = await runInit(
       "- auth: the token is refreshed by the proxy, not here\n",
     );
-    expect(output).not.toContain("npx -y pr-hero init");
+    expect(output).not.toContain("npx -y crysk init");
     expect(output).not.toContain("human-attention-required");
-    expect(output).toContain("require the `pr-hero` status check");
+    expect(output).toContain("require the `crysk` status check");
     expect(output).toContain("GitHub Free");
     // The steps stay numbered 1..n with no gap where the init steps were.
     const numbers = [...output.matchAll(/^ {2}(\d+)\. /gm)].map((m) =>
@@ -1113,10 +1135,10 @@ describe("ci init gotchas steps (CLI)", () => {
     expect(numbers).toEqual([1, 2, 3, 4, 5]);
   });
 
-  test("every repo is told to require the pr-hero status check, not the review job", async () => {
+  test("every repo is told to require the crysk status check, not the review job", async () => {
     const { output } = await runInit(undefined);
     expect(output).toContain(
-      "require the `pr-hero` status check (not the `review` job)",
+      "require the `crysk` status check (not the `review` job; the legacy `pr-hero` status is still posted for one version, so an existing rule on `pr-hero` keeps working)",
     );
   });
 });
@@ -1128,7 +1150,7 @@ describe("runCiSetup (impure edge)", () => {
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
-  test("creates .github/workflows/pr-hero.yml when absent", async () => {
+  test("creates .github/workflows/crysk.yml when absent", async () => {
     dir = await mkdtemp(path.join(tmpdir(), "pr-hero-ci-setup-"));
 
     const result = await runCiSetup({ cwd: dir });
@@ -1149,7 +1171,7 @@ describe("runCiSetup (impure edge)", () => {
     "pr-hero-force.yml",
   );
 
-  test("writes only pr-hero.yml, never a force workflow", async () => {
+  test("writes only the one workflow file, never a force workflow", async () => {
     dir = await mkdtemp(path.join(tmpdir(), "pr-hero-ci-setup-"));
 
     await runCiSetup({ cwd: dir });
@@ -1197,6 +1219,133 @@ describe("runCiSetup (impure edge)", () => {
     expect(result.status).toBe("overwritten");
     const written = await readFile(target, "utf8");
     expect(written).toBe(generateCiWorkflowTemplate());
+  });
+});
+
+// S10: a repo that already has the pre-rename pr-hero.yml keeps it; the code
+// never ends with both.
+describe("runCiSetup — which workflow file (impure edge)", () => {
+  let dir: string;
+  const WORKFLOWS = path.join(".github", "workflows");
+  const legacyFile = () => path.join(dir, WORKFLOWS, "pr-hero.yml");
+  const freshFile = () => path.join(dir, WORKFLOWS, "crysk.yml");
+
+  async function seed(...files: string[]): Promise<void> {
+    dir = await mkdtemp(path.join(tmpdir(), "crysk-ci-setup-"));
+    await mkdir(path.join(dir, WORKFLOWS), { recursive: true });
+    for (const f of files) {
+      await writeFile(path.join(dir, WORKFLOWS, f), `# ${f}, customized\n`);
+    }
+  }
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  test("--force on a pr-hero.yml repo rewrites that file and never creates crysk.yml", async () => {
+    await seed("pr-hero.yml");
+
+    const result = await runCiSetup({ cwd: dir, force: true });
+
+    expect(result).toEqual({ status: "overwritten", path: legacyFile() });
+    expect(await readFile(legacyFile(), "utf8")).toBe(
+      generateCiWorkflowTemplate(),
+    );
+    expect(existsSync(freshFile())).toBe(false);
+  });
+
+  test("without --force the refusal names the pr-hero.yml that exists, and leaves it alone", async () => {
+    await seed("pr-hero.yml");
+
+    const result = await runCiSetup({ cwd: dir });
+
+    expect(result).toEqual({
+      status: "skipped-existing",
+      path: legacyFile(),
+      hint: `${path.join(WORKFLOWS, "pr-hero.yml")} already exists; pass --force to overwrite it`,
+    });
+    expect(await readFile(legacyFile(), "utf8")).toBe(
+      "# pr-hero.yml, customized\n",
+    );
+    expect(existsSync(freshFile())).toBe(false);
+  });
+
+  test("a crysk.yml repo is acted on by name: the refusal names crysk.yml", async () => {
+    await seed("crysk.yml");
+
+    const result = await runCiSetup({ cwd: dir });
+
+    expect(result.status).toBe("skipped-existing");
+    if (result.status !== "skipped-existing") return;
+    expect(result.path).toBe(freshFile());
+    expect(result.hint).toContain("crysk.yml already exists");
+  });
+
+  test.each([false, true])(
+    "both files present (force: %p): nothing is written, the reason names both",
+    async (force) => {
+      await seed("crysk.yml", "pr-hero.yml");
+
+      const result = await runCiSetup({ cwd: dir, force });
+
+      expect(result.status).toBe("refused-duplicate");
+      if (result.status !== "refused-duplicate") return;
+      expect(result.hint).toContain("crysk.yml");
+      expect(result.hint).toContain("pr-hero.yml");
+      expect(result.hint).toContain("review every pull request twice");
+      expect(await readFile(freshFile(), "utf8")).toBe(
+        "# crysk.yml, customized\n",
+      );
+      expect(await readFile(legacyFile(), "utf8")).toBe(
+        "# pr-hero.yml, customized\n",
+      );
+    },
+  );
+});
+
+describe("checkCiConfiguration — either workflow file, never both", () => {
+  const root = "/repo";
+  const at = (file: string) => path.join(root, ".github", "workflows", file);
+
+  test("a pre-rename pr-hero.yml counts as configured and is named", () => {
+    const status = checkCiConfiguration({
+      cwd: root,
+      isCi: false,
+      exists: (p) => p === at("pr-hero.yml"),
+    });
+    expect(status.configured).toBe(true);
+    expect(status.message).toContain("pr-hero.yml");
+  });
+
+  test("crysk.yml counts as configured and is named", () => {
+    const status = checkCiConfiguration({
+      cwd: root,
+      isCi: false,
+      exists: (p) => p === at("crysk.yml"),
+    });
+    expect(status.configured).toBe(true);
+    expect(status.message).toContain("crysk.yml");
+  });
+
+  test("both present is not configured: the reason is the double review", () => {
+    const status = checkCiConfiguration({
+      cwd: root,
+      isCi: false,
+      exists: (p) => p === at("crysk.yml") || p === at("pr-hero.yml"),
+    });
+    expect(status.configured).toBe(false);
+    expect(status.message).toContain("crysk.yml");
+    expect(status.message).toContain("pr-hero.yml");
+    expect(status.message).toContain("review every pull request twice");
+  });
+
+  test("the setup hint scaffolds crysk.yml", () => {
+    const status = checkCiConfiguration({
+      cwd: root,
+      isCi: false,
+      exists: () => false,
+    });
+    expect(status.hint).toContain(".github/workflows/crysk.yml");
   });
 });
 
@@ -1337,6 +1486,36 @@ describe("doctor CI diagnostics (Pillar 3)", () => {
     expect(ciCheck?.hint).toMatch(/setup --ci|ci init/);
   });
 
+  test("local repo context: a repo on the pre-rename pr-hero.yml is healthy", async () => {
+    const report = await runDoctor({
+      cwd: "/repo",
+      repoRoot: "/repo",
+      home: "/home/user",
+      exists: (p) => p === path.join("/repo", LEGACY_CI_WORKFLOW_RELATIVE_PATH),
+      readFile: () => undefined,
+      checkToolsOptions: { ...installedTools, env: {} },
+    });
+    const ciCheck = report.checks.find((c) => c.name === "ci");
+    expect(ciCheck?.severity).toBe("healthy");
+    expect(ciCheck?.message).toContain("pr-hero.yml");
+  });
+
+  test("local repo context: both workflow files is degraded, naming the double review", async () => {
+    const report = await runDoctor({
+      cwd: "/repo",
+      repoRoot: "/repo",
+      home: "/home/user",
+      exists: (p) =>
+        p === path.join("/repo", CI_WORKFLOW_RELATIVE_PATH) ||
+        p === path.join("/repo", LEGACY_CI_WORKFLOW_RELATIVE_PATH),
+      readFile: () => undefined,
+      checkToolsOptions: { ...installedTools, env: {} },
+    });
+    const ciCheck = report.checks.find((c) => c.name === "ci");
+    expect(ciCheck?.severity).toBe("degraded");
+    expect(ciCheck?.message).toContain("review every pull request twice");
+  });
+
   test("generic non-GitHub CI (CI=true) is degraded, never blocking", async () => {
     // `CI=true` is the near-universal convention — GitLab, CircleCI, Jenkins,
     // Travis, Buildkite, and plenty of container builds all set it. The
@@ -1466,7 +1645,8 @@ describe("scaffold writes the gate mode explicitly (S4)", () => {
   function withBlock(template: string): string[] {
     const lines = template.split("\n");
     const uses = lines.findIndex(
-      (line) => line.trim().startsWith("uses:") && /pr-hero|\.\//.test(line),
+      (line) =>
+        line.trim().startsWith("uses:") && /crysk|pr-hero|\.\//.test(line),
     );
     expect(uses).toBeGreaterThan(-1);
     const start = lines.findIndex(
@@ -1499,29 +1679,34 @@ describe("scaffold writes the gate mode explicitly (S4)", () => {
   });
 });
 
-// `/pr-hero recheck` is accepted wherever `/pr-hero review` is: the job's `if:`
-// and the concurrency group, so the scaffolded workflow starts the same run.
-describe("the scaffolded workflow accepts /pr-hero recheck", () => {
-  test("the if and concurrency clauses mirror the review clauses", () => {
-    const template = generateCiWorkflowTemplate();
-    const recheck = "startsWith(github.event.comment.body, '/pr-hero recheck')";
-    const review = "startsWith(github.event.comment.body, '/pr-hero review')";
-    expect(template.split(review).length - 1).toBeGreaterThan(0);
-    expect(template.split(recheck).length - 1).toBe(
-      template.split(review).length - 1,
-    );
-  });
+// `/crysk recheck` is accepted wherever `/crysk review` is, in both names: the job's
+// `if:` and the concurrency group, so the scaffolded workflow starts the same run.
+describe("the scaffolded workflow accepts recheck beside review", () => {
+  test.each([
+    ["/crysk review", "/crysk recheck"],
+    ["/pr-hero review", "/pr-hero recheck"],
+  ])(
+    "the if and concurrency clauses for %s are mirrored for %s",
+    (review, recheck) => {
+      const template = generateCiWorkflowTemplate();
+      const count = (command: string) =>
+        template.split(`startsWith(github.event.comment.body, '${command}')`)
+          .length - 1;
+      expect(count(review)).toBeGreaterThan(0);
+      expect(count(recheck)).toBe(count(review));
+    },
+  );
 
-  test("the comments name /pr-hero recheck beside review and override", () => {
+  test("the comments name /crysk recheck beside review and override", () => {
     const template = generateCiWorkflowTemplate();
     expect(template).toContain(
-      "A comment that is exactly\n# `/pr-hero recheck` reviews the head",
+      "A comment that is exactly\n# `/crysk recheck` reviews the head",
     );
     expect(template).toContain(
-      "BEGINS with `/pr-hero review`,\n    # `/pr-hero recheck` or `/pr-hero override`",
+      "BEGINS with `/crysk review`,\n    # `/crysk recheck` or `/crysk override`",
     );
     expect(template).toContain(
-      "starts with\n    # /pr-hero review, /pr-hero recheck or /pr-hero override",
+      "starts with\n    # /crysk review, /crysk recheck or /crysk override",
     );
   });
 });

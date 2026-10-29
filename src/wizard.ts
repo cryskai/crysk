@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   GOTCHAS_PLACEHOLDER_MARKER,
-  INIT_GIT_REMINDER,
   initConfigTemplate,
+  initGitReminder,
   SETUP_GOTCHAS_FALLBACK,
 } from "#review/preflight";
 import {
@@ -14,6 +14,7 @@ import {
   syncSkills,
 } from "./agent-env";
 import { resolveEngineAssets, selfInvocation } from "./assets";
+import { REPO_DIR_NAME, resolveHomeDir, resolveRepoDir } from "./brand-paths";
 import type {
   ExactBindingCapabilityReport,
   RunnerBackend,
@@ -78,6 +79,9 @@ export interface WizardState {
   // "this run wrote at least one file into `.prhero/`" — i.e. what is now
   // untracked, which is what INIT_GIT_REMINDER is about.
   workspaceFilesWritten: boolean;
+  // The directory step 4 wrote into (.crysk, or a legacy .prhero updated in
+  // place), so the closing advice names a path that exists.
+  repoDirName?: string;
   // "this run wrote the PLACEHOLDER gotchas file" — the no-entries fallback
   // branch, the only one that emits GOTCHAS_PLACEHOLDER_MARKER. Writing
   // `gotchas.md` is not enough: with entries collected, the file written is
@@ -246,7 +250,7 @@ export function isMachineOnboarded(
       }
     });
 
-  const setupPath = path.join(home, ".prhero", "setup.json");
+  const setupPath = path.join(resolveHomeDir(home), "setup.json");
   if (!exists(setupPath)) return false;
 
   try {
@@ -526,7 +530,14 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           for (const outcome of sync.skills) {
             if (outcome.status !== "drift-kept") continue;
             process.stderr.write(
-              `pr-hero: ${outcome.skill} not updated for ${env.displayName}: ${outcome.reason ?? "local edits kept"}\n`,
+              `crysk: ${outcome.skill} not updated for ${env.displayName}: ${outcome.reason ?? "local edits kept"}\n`,
+            );
+          }
+          // An old-name copy kept for the user's edits stays on disk; say so.
+          for (const old of sync.legacy ?? []) {
+            if (old.status !== "kept") continue;
+            process.stderr.write(
+              `crysk: old ${old.skill} skill kept for ${env.displayName} (${old.reason}); delete it by hand when you no longer need it\n`,
             );
           }
         }
@@ -541,7 +552,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           if (!registration.registered) {
             mcpRegistered = false;
             process.stderr.write(
-              `pr-hero: MCP not registered for ${env.displayName}: ${registration.error ?? "unknown error"}\n`,
+              `crysk: MCP not registered for ${env.displayName}: ${registration.error ?? "unknown error"}\n`,
             );
           }
         }
@@ -557,7 +568,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       lines.push(bold("Step 3/5: Skills Sync & MCP Server Registration"));
       lines.push("");
       lines.push(
-        "  Syncing pr-hero skills (triage, ci-setup) and registering Model Context Protocol server...",
+        "  Syncing crysk skills (triage, ci-setup) and registering Model Context Protocol server...",
       );
       return lines;
     },
@@ -607,9 +618,9 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         });
       const exec = deps.exec ?? defaultExec;
 
-      const dotPrhero = path.join(cwd, ".prhero");
-      const configPath = path.join(dotPrhero, "config.json");
-      const gotchasPath = path.join(dotPrhero, "gotchas.md");
+      const repoDir = resolveRepoDir(cwd, exists);
+      const configPath = path.join(repoDir, "config.json");
+      const gotchasPath = path.join(repoDir, "gotchas.md");
 
       const isGit = await exec(["git", "rev-parse", "--is-inside-work-tree"], {
         cwd,
@@ -624,7 +635,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       let placeholderGotchasWritten = false;
 
       if (isRepo) {
-        // 1. Write .prhero/config.json if not present
+        // 1. Write <repo dir>/config.json if not present
         if (!exists(configPath)) {
           const configContent = initConfigTemplate({
             defaultBase: state.defaultBase || "main",
@@ -633,7 +644,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           workspaceFilesWritten = true;
         }
 
-        // 2. Write .prhero/gotchas.md if not present
+        // 2. Write <repo dir>/gotchas.md if not present
         if (!exists(gotchasPath)) {
           let gotchasContent: string;
           if (state.gotchas.entries && state.gotchas.entries.length > 0) {
@@ -652,8 +663,8 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         }
       }
 
-      // 3. Write ~/.prhero/setup.json (NEVER ~/.prhero/config.json)
-      const setupPath = path.join(home, ".prhero", "setup.json");
+      // 3. Write <home dir>/setup.json (NEVER <home dir>/config.json)
+      const setupPath = path.join(resolveHomeDir(home), "setup.json");
       const setupRecord = {
         onboarding_version: CURRENT_ONBOARDING_VERSION,
         completed_at: new Date().toISOString(),
@@ -663,13 +674,13 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       // 4. Handle commitChoice
       let workspaceCommitted = false;
       if (isRepo && state.commitChoice === "commit") {
-        await exec(["git", "add", ".prhero"], { cwd });
+        await exec(["git", "add", path.basename(repoDir)], { cwd });
         const commitRes = await exec(
           [
             "git",
             "commit",
             "-m",
-            "chore: initialize pr-hero review configuration",
+            "chore: initialize crysk review configuration",
           ],
           { cwd },
         );
@@ -681,12 +692,13 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           : deps.exists?.(gitignorePath)
             ? readFileSync(gitignorePath, "utf-8")
             : "";
-        const updated = `${existingGitignore ?? ""}\n.prhero/\n`;
+        const updated = `${existingGitignore ?? ""}\n${path.basename(repoDir)}/\n`;
         await writeFile(gitignorePath, updated);
       }
 
       return {
         workspaceFilesWritten,
+        repoDirName: path.basename(repoDir),
         placeholderGotchasWritten,
         setupStateWritten: true,
         workspaceCommitted,
@@ -700,7 +712,9 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       const bold = (s: string) => (opts.styles ? `\x1b[1m${s}\x1b[0m` : s);
       lines.push(bold("Step 4/5: Workspace Configuration & Gotchas"));
       lines.push("");
-      lines.push("  Scaffolding .prhero/config.json and .prhero/gotchas.md");
+      lines.push(
+        "  Scaffolding config.json and gotchas.md in .crysk/ (or the .prhero/ the repo already has)",
+      );
       return lines;
     },
   },
@@ -773,6 +787,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       // placeholder and that reviews would be refused. Both claims false.
       // `placeholderGotchasWritten` is set by the branch that writes the
       // marker and by nothing else.
+      const repoDirName = state.repoDirName ?? REPO_DIR_NAME;
       const needsGitStep =
         state.workspaceFilesWritten === true &&
         state.workspaceCommitted !== true &&
@@ -783,7 +798,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         lines.push("");
       }
       if (needsGitStep) {
-        lines.push(`  ${INIT_GIT_REMINDER}`);
+        lines.push(`  ${initGitReminder(repoDirName)}`);
         lines.push("");
       }
       if (needsGotchasStep) {
@@ -798,14 +813,14 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         // which is the same untestable-by-design trap this slice exists to
         // remove.
         lines.push(
-          "  Write REAL gotchas in .prhero/gotchas.md — the one just " +
-            "scaffolded is a placeholder, and pr-hero refuses to review " +
+          `  Write REAL gotchas in ${repoDirName}/gotchas.md — the one just ` +
+            "scaffolded is a placeholder, and Crysk refuses to review " +
             `while its \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line is there.`,
         );
         lines.push("");
       }
 
-      lines.push("  Run 'pr-hero review' to start multi-agent code reviews.");
+      lines.push("  Run 'crysk review' to start multi-agent code reviews.");
       return lines;
     },
   },

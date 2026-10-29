@@ -72,7 +72,7 @@ function resolveVersion(): string {
     // Ignore read errors
   }
 
-  return "0.2.6";
+  return "0.3.0";
 }
 
 export function resolveEngineAssets(): EngineAssets {
@@ -121,7 +121,7 @@ export function selfInvocation(): SelfInvocation {
 // may delete at any time. An MCP config or a launchd plist that records that path
 // breaks silently once it is gone, so registration refuses it and names the fix.
 export const NPX_REGISTRATION_REFUSED =
-  "pr-hero is running from npx's temporary cache; install pr-hero (npm i -g pr-hero) to register";
+  "Crysk is running from npx's temporary cache; install crysk (npm i -g crysk) to register";
 const NPX_CACHE_SEGMENT = /[\\/]_npx[\\/]/;
 export function isNpxCacheInvocation(invocation: SelfInvocation): boolean {
   return [invocation.command, ...invocation.args].some((part) =>

@@ -1966,7 +1966,7 @@ export function assertOpenCodeSdk(module: unknown): OpenCodeSdkLike {
   ) {
     throw new Error(
       "@opencode-ai/sdk/v2/client resolved but does not export createOpencodeClient(), " +
-        "which pr-hero needs to open a session. The installed package is not " +
+        "which Crysk needs to open a session. The installed package is not " +
         `the SDK this transport was built against (got ${describeModule(module)}).`,
     );
   }
@@ -2488,7 +2488,7 @@ export function createOpenCodeClient(
       } catch (error) {
         throw new Error(
           "the opencode backend needs @opencode-ai/sdk, which is an optional " +
-            "peer dependency of pr-hero. Install it alongside pr-hero to use " +
+            "peer dependency of Crysk. Install it alongside Crysk to use " +
             `this backend. (${(error as Error).message})`,
         );
       }
@@ -2644,7 +2644,7 @@ export function createOpenCodeClient(
         const created = await api.session.create(
           {
             directory: input.cwd,
-            title: "pr-hero review step",
+            title: "crysk review step",
           },
           requestOptions,
         );

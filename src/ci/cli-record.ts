@@ -1,5 +1,5 @@
 // The CLI's writer for cli.json (odd/tasks/agent-first-ci.md, T2c). In action mode
-// (PRHERO_OUTCOME_DIR set) it leaves the record the publisher reads. Without it,
+// (CRYSK_OUTCOME_DIR set) it leaves the record the publisher reads. Without it,
 // it does nothing and prints nothing, so local and watcher runs stay byte-identical.
 //
 // It never throws: the review's own result is not the record's to block. A write
@@ -27,7 +27,7 @@
 // failing (its description is "review posted" or "review complete", or in gate mode a blocking count or a partial review). So the status and
 // the record can differ. A posting that throws after a finished pipeline leaves the
 // status success and the record error, and the publisher reports that error. The
-// publisher posts its own status later under the same context ("pr-hero") when it
+// publisher posts its own status later under the same context ("crysk", and the legacy "pr-hero") when it
 // knows the head, and that later status is the one GitHub shows.
 // A failure after the pipeline returns and before delivery leaves no reviewed record,
 // including a throw in the pipeline closure's finally or in the workflow group close.
@@ -44,9 +44,11 @@ import {
   type CliErrorClass,
   type CliRecord,
   type HunterFailureRecord,
+  knownFailureCredential,
   knownTransportCause,
   PENDING_AT_FILE,
   parseCliRecord,
+  safeFailureDetail,
   safeModelName,
   safeProviderName,
   type UnsettledStatus,
@@ -57,7 +59,7 @@ export function writeCliRecord(
   record: CliRecord,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
-  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return;
   const written = inheritProgressHead(record, dir);
   try {
@@ -69,7 +71,7 @@ export function writeCliRecord(
     );
   } catch (error) {
     process.stderr.write(
-      `pr-hero: could not write the outcome record: ${errnoCode(error)}\n`,
+      `crysk: could not write the outcome record: ${errnoCode(error)}\n`,
     );
   }
 }
@@ -115,13 +117,15 @@ export function cliHeadField(headSha: string): { head_sha?: string } {
 // The per-hunter entries of a hunters-failed record. WHY each field is checked here and
 // not left to the reader: a value the reader would refuse makes the whole record
 // unreadable, and the publisher then reports no outcome at all. So a cause outside the
-// vocabulary, or a provider or model that is not a safe short string, is left out of its
-// entry, and the entry still says that its hunter failed.
+// vocabulary, or a provider, model or detail that is not a safe short string, is left out
+// of its entry, and the entry still says that its hunter failed.
 export function hunterFailureRecords(
   failures: readonly {
     readonly cause?: string;
     readonly provider?: string;
     readonly model?: string;
+    readonly detail?: string;
+    readonly credential?: string;
   }[],
 ): HunterFailureRecord[] {
   return failures.map((failure) => {
@@ -132,6 +136,10 @@ export function hunterFailureRecords(
     if (provider !== undefined) entry.provider = provider;
     const model = safeModelName(failure.model);
     if (model !== undefined) entry.model = model;
+    const detail = safeFailureDetail(failure.detail);
+    if (detail !== undefined) entry.detail = detail;
+    const credential = knownFailureCredential(failure.credential);
+    if (credential !== undefined) entry.credential = credential;
     return entry;
   });
 }
@@ -143,13 +151,13 @@ export function recordPendingCreatedAt(
   createdAt: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
-  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return;
   try {
     writeRecordAtomically(dir, PENDING_AT_FILE, `${createdAt}\n`, NODE_FS);
   } catch (error) {
     process.stderr.write(
-      `pr-hero: could not write the pending record: ${errnoCode(error)}\n`,
+      `crysk: could not write the pending record: ${errnoCode(error)}\n`,
     );
   }
 }
@@ -184,7 +192,7 @@ export function recordUnsettledStatus(
   env: Readonly<Record<string, string | undefined>> = process.env,
   overrideCutoffMs?: number | null,
 ): void {
-  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return;
   const head = cliHeadField(headSha);
   if (head.head_sha === undefined) return;
@@ -228,12 +236,12 @@ export function writeFatalCliRecord(
   cls: CliErrorClass,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): void {
-  const dir = env.PRHERO_OUTCOME_DIR ?? "";
+  const dir = env.CRYSK_OUTCOME_DIR ?? "";
   if (dir === "") return;
   const earlier = readEarlierRecord(dir);
   if (earlier !== undefined && earlier.outcome !== "reviewing") {
     process.stderr.write(
-      `pr-hero: kept the recorded ${earlier.outcome} outcome; a later step failed\n`,
+      `crysk: kept the recorded ${earlier.outcome} outcome; a later step failed\n`,
     );
     return;
   }

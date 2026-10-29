@@ -6,9 +6,10 @@
 
 import type { Tier } from "#review/findings";
 import type { ProductStoreClient } from "#server/client";
+import { currentMcpToolName } from "../brand";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
-export const MCP_SERVER_NAME = "pr-hero-store";
+const MCP_SERVER_NAME = "crysk-store";
 export const MCP_SERVER_VERSION = "1.0.0";
 
 export interface McpToolDefinition {
@@ -21,18 +22,18 @@ export interface McpToolDefinition {
   };
 }
 
-export const PRHERO_MCP_TOOLS: McpToolDefinition[] = [
+const MCP_TOOLS: McpToolDefinition[] = [
   {
-    name: "prhero_health",
+    name: "crysk_health",
     description:
-      "Check the health, schema version, and run count of the pr-hero canonical product store.",
+      "Check the health, schema version, and run count of the Crysk canonical product store.",
     inputSchema: {
       type: "object",
       properties: {},
     },
   },
   {
-    name: "prhero_list_runs",
+    name: "crysk_list_runs",
     description:
       "List review runs from the canonical store, optionally filtered by repository ID, PR number, and limit.",
     inputSchema: {
@@ -54,7 +55,7 @@ export const PRHERO_MCP_TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: "prhero_get_run",
+    name: "crysk_get_run",
     description:
       "Retrieve full telemetry, timing, summary score, and cost breakdown of a single review run.",
     inputSchema: {
@@ -69,7 +70,7 @@ export const PRHERO_MCP_TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: "prhero_get_findings",
+    name: "crysk_get_findings",
     description:
       "Retrieve the complete FindingsDocument of a run, including all findings, hop trails, and proof refs.",
     inputSchema: {
@@ -84,7 +85,7 @@ export const PRHERO_MCP_TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: "prhero_search_findings",
+    name: "crysk_search_findings",
     description:
       "Search findings across historical runs by file path, tier (blocking/advisory), repository, or specific run ID.",
     inputSchema: {
@@ -115,7 +116,7 @@ export const PRHERO_MCP_TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: "prhero_get_usage",
+    name: "crysk_get_usage",
     description:
       "Retrieve aggregated token usage, cost breakdown, and run counts (global or scoped to a repository).",
     inputSchema: {
@@ -134,22 +135,7 @@ export const PRHERO_MCP_TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: "prhero_get_comparison",
-    description:
-      "Retrieve head-to-head comparison rows and verdicts against Greptile for a review run.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        run_id: {
-          type: "number",
-          description: "Canonical run ID",
-        },
-      },
-      required: ["run_id"],
-    },
-  },
-  {
-    name: "prhero_get_triage",
+    name: "crysk_get_triage",
     description:
       "Retrieve recorded triage decisions (applied, dismissed, deferred, misclassified) for a review run.",
     inputSchema: {
@@ -250,13 +236,15 @@ export async function handleMcpToolCall(
   args: Record<string, unknown> = {},
 ): Promise<ToolCallResult> {
   try {
-    switch (name) {
-      case "prhero_health": {
+    // A pre-rename name reaches the same handler; the default branch still
+    // reports the name the caller sent.
+    switch (currentMcpToolName(name)) {
+      case "crysk_health": {
         const health = await client.health();
         return formatToolSuccess(health);
       }
 
-      case "prhero_list_runs": {
+      case "crysk_list_runs": {
         const repo_id =
           typeof args.repo_id === "string" && args.repo_id.trim() !== ""
             ? args.repo_id.trim()
@@ -267,7 +255,7 @@ export async function handleMcpToolCall(
         return formatToolSuccess(runs);
       }
 
-      case "prhero_get_run": {
+      case "crysk_get_run": {
         const run_id = parseRequiredInteger(args.run_id, "run_id");
         const run = await client.getRun(run_id);
         if (!run) {
@@ -276,7 +264,7 @@ export async function handleMcpToolCall(
         return formatToolSuccess(run);
       }
 
-      case "prhero_get_findings": {
+      case "crysk_get_findings": {
         const run_id = parseRequiredInteger(args.run_id, "run_id");
         const doc = await client.getFindingsDocument(run_id);
         if (!doc) {
@@ -287,7 +275,7 @@ export async function handleMcpToolCall(
         return formatToolSuccess(doc);
       }
 
-      case "prhero_search_findings": {
+      case "crysk_search_findings": {
         const repo_id =
           typeof args.repo_id === "string" && args.repo_id.trim() !== ""
             ? args.repo_id.trim()
@@ -313,7 +301,7 @@ export async function handleMcpToolCall(
         return formatToolSuccess(findings);
       }
 
-      case "prhero_get_usage": {
+      case "crysk_get_usage": {
         const repo_id =
           typeof args.repo_id === "string" && args.repo_id.trim() !== ""
             ? args.repo_id.trim()
@@ -324,16 +312,7 @@ export async function handleMcpToolCall(
         return formatToolSuccess(usage);
       }
 
-      case "prhero_get_comparison": {
-        const run_id = parseRequiredInteger(args.run_id, "run_id");
-        const comp = await client.getComparison(run_id);
-        if (!comp) {
-          return formatToolError(`Comparison for run #${run_id} not found`);
-        }
-        return formatToolSuccess(comp);
-      }
-
-      case "prhero_get_triage": {
+      case "crysk_get_triage": {
         const run_id = parseRequiredInteger(args.run_id, "run_id");
         const triage = await client.getTriage(run_id);
         return formatToolSuccess(triage);
@@ -394,7 +373,7 @@ export async function processMcpMessage(
         jsonrpc: "2.0",
         id,
         result: {
-          tools: PRHERO_MCP_TOOLS,
+          tools: MCP_TOOLS,
         },
       };
     }

@@ -3,7 +3,13 @@
 // is pinned by a fixture and the report can print each one. The S7 invariants
 // are not checks here: the runner applies them to every observation itself.
 
-import { RUN_STEP_NAME } from "./markers";
+import { canonicalStatusText } from "../../src/brand";
+import {
+  isRunArtifactName,
+  isRunStepName,
+  RUN_STEP_NAME,
+  runArtifactNames,
+} from "./markers";
 import {
   COMMENT_RUN_CLOCK_SKEW_MS,
   type CommentFact,
@@ -42,7 +48,7 @@ export type Check =
   // T2e: the triggering comment carries this reaction. A refused or near-miss comment
   // gets its reaction and no text reply, so the reaction is the only trace it leaves.
   | { kind: "reaction"; content: string }
-  // T2e: this run left no review evidence of its own: no `pr-hero-run-*` artifact on
+  // T2e: this run left no review evidence of its own: no `crysk-run-*` (or `pr-hero-run-*`) artifact on
   // this run, and no skip marker it posted after its trigger. A near miss runs nothing,
   // so it leaves neither. WHY not the review step: the composite `Run pr-hero` step has
   // no `if:` and always concludes, so a near miss's step reads success and its
@@ -133,10 +139,13 @@ export function describeCheck(check: Check): string {
   }
 }
 
-// The N the gate writes into its own description: `pr-hero: N blocking finding(s) …`
-// (blockingCommitStatusRequest). Undefined when the description carries no count.
+// The N the gate writes into its own description: `crysk: N blocking finding(s) …`
+// (blockingCommitStatusRequest). A run of an older ref writes `pr-hero: …`, so the lead is
+// read in its new spelling first. Undefined when the description carries no count.
 function gateBlockingCount(description: string): number | undefined {
-  const match = /^pr-hero: (\d+) blocking finding\(s\)/.exec(description);
+  const match = /^crysk: (\d+) blocking finding\(s\)/.exec(
+    canonicalStatusText(description),
+  );
   return match === null ? undefined : Number(match[1]);
 }
 
@@ -149,7 +158,7 @@ function headReports(obs: Observation): number {
 // The partial-review verdict's text, finished or carried. Spelled out here because the sandbox
 // harness does not import the engine.
 const PARTIAL_REVIEW =
-  /^pr-hero: review partial \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$|^pr-hero: review partial again \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\) — fix the failing route or \/pr-hero override$/;
+  /^crysk: review partial \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\)(?: carried from [0-9a-f]{7})? — \/pr-hero review retries it$|^crysk: review partial again \(\d+ of \d+ hunters failed(?:, set [0-9a-f]{6})?\) — fix the failing route or \/pr-hero override$/;
 
 // S3: this observation's head carries a blocking finding comment anchored at `path`. The
 // same blocking test the status-matches-findings check reads (the finding header's tier),
@@ -278,7 +287,9 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       if (status === undefined) return pass(false, "no status on the head");
       const prefixOk =
         check.descriptionStartsWith === undefined ||
-        status.description.startsWith(check.descriptionStartsWith);
+        canonicalStatusText(status.description).startsWith(
+          check.descriptionStartsWith,
+        );
       return pass(
         status.state === check.state && prefixOk,
         `got ${status.state}: ${status.description}`,
@@ -329,7 +340,7 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       // It counts nothing because nothing blocks, so it agrees with no visible blocking finding.
       if (
         status.state === "failure" &&
-        PARTIAL_REVIEW.test(status.description ?? "")
+        PARTIAL_REVIEW.test(canonicalStatusText(status.description ?? ""))
       ) {
         return verdict(
           true,
@@ -359,7 +370,7 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       );
     }
     case "step-succeeded": {
-      const step = obs.run?.steps.find((s) => s.name === RUN_STEP_NAME);
+      const step = obs.run?.steps.find((s) => isRunStepName(s.name));
       if (obs.run === undefined) return pass(false, "no run was found");
       return pass(
         step?.conclusion === "success",
@@ -372,9 +383,15 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       // by PR and head, and collect() fetches it by this run's id.
       const path = classifyPath(obs);
       if (path === "reviewed") {
-        const artifact = `pr-hero-run-${obs.prNumber}-${obs.headSha}`;
+        // The action uploads `crysk-run-…`; a run of a ref from before the
+        // rename uploaded `pr-hero-run-…`. Either proves this run reviewed.
+        const [artifact, legacyArtifact] = runArtifactNames(
+          obs.prNumber,
+          obs.headSha,
+        ) as [string, string];
         return pass(
-          obs.artifacts.includes(artifact),
+          obs.artifacts.includes(artifact) ||
+            obs.artifacts.includes(legacyArtifact),
           `no ${artifact} artifact on this run (artifacts: ${obs.artifacts.join(", ") || "none"})`,
         );
       }
@@ -418,10 +435,8 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
       // A missing run is not a pass: collect() reports no artifacts for it, so an
       // unread run would otherwise look like one that reviewed nothing.
       if (obs.run === undefined) return pass(false, "no run was found");
-      // Artifacts are read per run id, so a `pr-hero-run-` artifact here is this run's.
-      const uploaded = obs.artifacts.filter((a) =>
-        a.startsWith("pr-hero-run-"),
-      );
+      // Artifacts are read per run id, so a run artifact here is this run's.
+      const uploaded = obs.artifacts.filter((a) => isRunArtifactName(a));
       if (uploaded.length > 0) {
         return pass(false, `this run uploaded ${uploaded.join(", ")}`);
       }

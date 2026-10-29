@@ -815,6 +815,59 @@ describe("hunter fan-out", () => {
   });
 });
 
+// A step that failed with the provider's own explanation (StepResult.failureDetail) keeps it on
+// its per_agent row, redacted and capped, so the incomplete-review notice can say WHY.
+describe("a failed step's detail rides its per_agent row", () => {
+  const withDetail = (spec: StepSpec): StepResult => ({
+    ...failed(spec),
+    failureCause: "quota_exhausted",
+    failureDetail: "Anthropic API: Credit balance is too low (HTTP 400)",
+  });
+
+  test("a hunter that failed while the others finished", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, emptyDraft()),
+      "hunter-resilience": (spec) => withDetail(spec),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.skillOutput.run_status).toBe("partial");
+    expect(result.perAgent.resilience?.detail).toBe(
+      "Anthropic API: Credit balance is too low (HTTP 400)",
+    );
+    expect(result.perAgent.reliability?.detail).toBeUndefined();
+  });
+
+  test("the summarizer, though its failure leaves the run complete", async () => {
+    const input = await makeInput({
+      summarizer: { promptPath: BUNDLED_SUMMARIZER_PROMPT },
+    });
+    const runner = new FakeStepRunner({
+      ...HUNTERS_OK,
+      summarizer: (spec) => withDetail(spec),
+    });
+    const result = await runPipeline(input, { runner });
+    expect(result.skillOutput.run_status).toBe("complete");
+    expect(result.perAgent.summary?.detail).toBe(
+      "Anthropic API: Credit balance is too low (HTTP 400)",
+    );
+  });
+
+  test("a secret in the provider's words is redacted and the row stays one short line", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, emptyDraft()),
+      "hunter-resilience": (spec) => ({
+        ...failed(spec),
+        failureDetail: `Anthropic API: key sk-ant-api03-AbCdEf1234567890 rejected ${"x".repeat(300)}`,
+      }),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    const detail = result.perAgent.resilience?.detail ?? "";
+    expect(detail).not.toContain("sk-ant");
+    expect(detail).toContain("[REDACTED]");
+    expect(detail.length).toBeLessThanOrEqual(160);
+  });
+});
+
 describe("engine-owned summarizer", () => {
   test("a failing summarizer is cosmetic and leaves the run complete", async () => {
     const input = await makeInput({
@@ -2091,6 +2144,24 @@ describe("refuter", () => {
       expect(finding.tier).toBe("advisory");
     }
     expect(result.perAgent.refuter?.status).toBe("failed");
+  });
+
+  test("a failed refuter step keeps the provider's explanation on the refuter row", async () => {
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) =>
+        ok(spec, { findings: [inferentialBlocker("REL-1", 10)] }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: (spec) => ({
+        ...failed(spec),
+        failureCause: "quota_exhausted",
+        failureDetail: "Anthropic API: Credit balance is too low (HTTP 400)",
+      }),
+    });
+    const result = await runPipeline(await makeInput(), { runner });
+    expect(result.perAgent.refuter?.status).toBe("failed");
+    expect(result.perAgent.refuter?.detail).toBe(
+      "Anthropic API: Credit balance is too low (HTTP 400)",
+    );
   });
 
   // The fan-out's central claim (ROADMAP A2): a dead step now costs exactly one

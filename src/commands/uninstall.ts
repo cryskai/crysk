@@ -32,6 +32,6 @@ export async function uninstallCommand(options: CliOptions): Promise<number> {
     for (const err of res.errors) log(`warning: ${err}`);
   }
 
-  log("✓ pr-hero uninstallation complete.");
+  log("✓ crysk uninstallation complete.");
   return 0;
 }

@@ -8,16 +8,18 @@
 // --force (a safety property, not a nicety — see spec.md §4.1), and writes
 // the template.
 //
-// This module writes `.github/workflows/pr-hero.yml` into WHATEVER repo the
-// caller points it at (via `pr-hero setup --ci` / `pr-hero ci init`). Pillar
-// 3 Phase 5 (tasks.md 5.2) reuses this SAME function to produce this repo's
-// own canonical example workflow at the identical relative path, rather than
+// This module writes `.github/workflows/crysk.yml` into WHATEVER repo the
+// caller points it at (via `crysk setup --ci` / `crysk ci init`); a repo that
+// already has the pre-rename `pr-hero.yml` keeps that file, updated in place.
+// Pillar 3 Phase 5 (tasks.md 5.2) reuses this SAME function to produce this
+// repo's own canonical example workflow (which stays at `pr-hero.yml`: this
+// repo is the existing-repo case), rather than
 // hand-authoring a second copy that could silently drift from what every
 // caller of `setup --ci` actually gets — test/packaging.test.ts asserts the
 // committed file's bytes equal generateCiWorkflowTemplate()'s output exactly.
 //
 // That one file is the whole install. It reviews every push and answers a
-// `/pr-hero review` pull request comment, which used to need a second,
+// `/crysk review` pull request comment, which used to need a second,
 // dispatch-only `pr-hero-force.yml`. The action now owns everything the
 // workflow used to wire around it: credential detection, the comment's
 // parsing and the commenter's permission check, the pull request and head
@@ -38,18 +40,32 @@ import {
 import path from "node:path";
 import type { ErrorClass, SetupRecord } from "#ci/outcome";
 import type { ConfigPlan } from "#ci/review-levels";
-import { recordTempPath } from "#ci/trigger";
+import {
+  OVERRIDE_COMMAND,
+  RECHECK_COMMAND,
+  REVIEW_COMMAND,
+  recordTempPath,
+} from "#ci/trigger";
 import { parseLocalConfig, parseRoutingConfig } from "#review/preflight";
+import { commandForms } from "../brand";
+import {
+  duplicateWorkflowProblem,
+  LEGACY_WORKFLOW_RELATIVE_PATH,
+  resolveIgnoreFileName,
+  resolveRepoDir,
+  resolveWorkflowRelativePath,
+  WORKFLOW_RELATIVE_PATH,
+} from "../brand-paths";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import { parseIgnoreFile } from "../ignore-file";
 import { resolveOpenCodeAuthPath } from "../security/credential-broker";
 
-export const CI_WORKFLOW_RELATIVE_PATH = path.join(
-  ".github",
-  "workflows",
-  "pr-hero.yml",
-);
+// The file a repo with no workflow yet gets. A repo that already has the
+// pre-rename `pr-hero.yml` keeps it: use resolveWorkflowRelativePath to find the
+// file to act on, and LEGACY_CI_WORKFLOW_RELATIVE_PATH to name that one.
+export const CI_WORKFLOW_RELATIVE_PATH = WORKFLOW_RELATIVE_PATH;
+export const LEGACY_CI_WORKFLOW_RELATIVE_PATH = LEGACY_WORKFLOW_RELATIVE_PATH;
 
 // The action reference the generated workflow resolves. A consumer repo has
 // no copy of this action, so it must go through the published tag — that is
@@ -102,7 +118,7 @@ export interface CiWorkflowTemplateOptions {
   maxChangedLines?: string;
   // The files half of the size gate, emitted right after the lines input.
   maxChangedFiles?: string;
-  // THIS repo only: on a `/pr-hero review` comment, the workflow resolves
+  // THIS repo only: on a `/crysk review` comment, the workflow resolves
   // the pull request's head commit BEFORE checkout and checks out exactly
   // that commit, so `uses: ./` runs the engine under review. A comment run
   // starts on the default branch, and without the pin it runs THAT branch's
@@ -123,7 +139,7 @@ export interface CiWorkflowTemplateOptions {
   mode?: "gate" | "advisory";
 }
 
-export const DEFAULT_CI_ACTION_REF = "juanmaagd/pr-hero@v0";
+export const DEFAULT_CI_ACTION_REF = "cryskai/crysk@v0";
 
 // The options THIS repo generates its OWN workflow with. One exported source
 // of truth rather than three hand-copied literals: the byte-equality drift
@@ -224,7 +240,7 @@ export function generateCiWorkflowTemplate(
               *"HTTP 404"*) break ;;
             esac
             if [ "$attempt" = 2 ]; then
-              echo "::error title=pr-hero::could not verify the commenter's write access: the GitHub API call failed twice, so nothing was reviewed or overridden. Comment /pr-hero review, /pr-hero recheck or /pr-hero override again to retry"
+              echo "::error title=crysk::could not verify the commenter's write access: the GitHub API call failed twice, so nothing was reviewed or overridden. Comment /crysk review, /crysk recheck or /crysk override again to retry"
               exit 1
             fi
             sleep 2
@@ -232,14 +248,14 @@ export function generateCiWorkflowTemplate(
           case "$permission" in
             admin|write) ;;
             *)
-              echo "::notice title=pr-hero::only users with write access to this repository can run /pr-hero review, /pr-hero recheck or /pr-hero override"
+              echo "::notice title=crysk::only users with write access to this repository can run /crysk review, /crysk recheck or /crysk override"
               echo "proceed=false" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
           esac
           case "$PR" in
             ''|*[!0-9]*)
-              echo "::error title=pr-hero::pr must be a positive integer"
+              echo "::error title=crysk::pr must be a positive integer"
               exit 1
               ;;
           esac
@@ -249,7 +265,7 @@ export function generateCiWorkflowTemplate(
           head_repo=\${pr_head% *}
           sha=\${pr_head##* }
           if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
-            echo "::notice title=pr-hero::fork pull requests are not reviewed here: uses ./ would run the fork's own engine with this repository's secrets"
+            echo "::notice title=crysk::fork pull requests are not reviewed here: uses ./ would run the fork's own engine with this repository's secrets"
             echo "proceed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -258,7 +274,7 @@ export function generateCiWorkflowTemplate(
           # engine this pin exists to avoid, and any other value would be
           # resolved as a ref name.
           if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error title=pr-hero::could not resolve the pull request head commit"
+            echo "::error title=crysk::could not resolve the pull request head commit"
             exit 1
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
@@ -266,6 +282,29 @@ export function generateCiWorkflowTemplate(
 
 `
     : "";
+  // One clause per command and per name, new name first: an Actions expression
+  // has no regex, so the legacy /pr-hero forms are listed beside /crysk ones.
+  const commandBodies = [
+    REVIEW_COMMAND,
+    RECHECK_COMMAND,
+    OVERRIDE_COMMAND,
+  ].flatMap(commandForms);
+  const newNamesFirst = [
+    ...commandBodies.filter((c) => c.startsWith("/crysk")),
+    ...commandBodies.filter((c) => !c.startsWith("/crysk")),
+  ];
+  const ifCommentClauses = newNamesFirst
+    .map(
+      (c) =>
+        `(github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '${c}'))`,
+    )
+    .join(" ||\n      ");
+  const groupCommentClauses = newNamesFirst
+    .map(
+      (c) =>
+        `(startsWith(github.event.comment.body, '${c}') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))`,
+    )
+    .join(" || ");
   const proceedIf =
     "github.event_name != 'issue_comment' || steps.gate.outputs.proceed == 'true'";
   const checkoutGate = pinEngine ? `\n        if: ${proceedIf}` : "";
@@ -277,20 +316,21 @@ export function generateCiWorkflowTemplate(
           ref: \${{ steps.gate.outputs.sha }}`
     : "";
   const runStepGate = pinEngine ? `\n        if: ${proceedIf}` : "";
-  return `# Generated by \`pr-hero setup --ci\` (or \`pr-hero ci init\`).
+  return `# Generated by \`crysk setup --ci\` (or \`crysk ci init\`).
 # Customize freely — re-running setup will not overwrite this file again
 # unless you pass --force.
 #
 # This one file is the whole install. It reviews every push to a pull
-# request. A pull request comment that is exactly \`/pr-hero review\` runs the
-# review again with the skip gates bypassed, and \`/pr-hero review --full\`
+# request. A pull request comment that is exactly \`/crysk review\` runs the
+# review again with the skip gates bypassed, and \`/crysk review --full\`
 # also re-discovers the whole range. A comment that is exactly
-# \`/pr-hero override\` turns the gate green on that head with no review and
+# \`/crysk override\` turns the gate green on that head with no review and
 # no cost, and records who did it. A comment that is exactly
-# \`/pr-hero recheck\` reviews the head and asks the CI adjudicator to rule on
+# \`/crysk recheck\` reviews the head and asks the CI adjudicator to rule on
 # pending dismissals of blocking findings. The action parses the comment and
-# refuses a commenter without write access.
-name: pr-hero Review
+# refuses a commenter without write access. The older \`/pr-hero ...\` forms
+# of these commands still work for one version.
+name: Crysk Review
 
 on:
   pull_request:
@@ -301,7 +341,7 @@ on:
   issue_comment:
     types: [created]
 
-# pull-requests: write lets pr-hero post inline comments and a step summary.
+# pull-requests: write lets Crysk post inline comments and a step summary.
 # contents: read is enough for actions/checkout. issues: write lets it
 # resolve/reply on review threads (GitHub models PR conversations as issues).
 # checks: write persists the durable CI admission attempt ledger (WU-02).
@@ -323,19 +363,18 @@ jobs:
     # fix it, instead of a skipped job that reads as a clean review.
     #
     # Fork pull_request runs are skipped: GitHub gives them no secrets, so
-    # they could never authenticate. A maintainer comments \`/pr-hero review\`
+    # they could never authenticate. A maintainer comments \`/crysk review\`
     # instead, and that run (base-branch context, with secrets) reviews the
     # fork's head.
     #
-    # A comment starts the job only when it BEGINS with \`/pr-hero review\`,
-    # \`/pr-hero recheck\` or \`/pr-hero override\`. The action then requires an exact match after
-    # trimming, so a near-miss such as "/pr-hero review please" starts a job the
+    # A comment starts the job only when it BEGINS with \`/crysk review\`,
+    # \`/crysk recheck\` or \`/crysk override\` (or the older \`/pr-hero\` forms
+    # of the three). The action then requires an exact match after
+    # trimming, so a near-miss such as "/crysk review please" starts a job the
     # action ends without reviewing or overriding.
     if: >-
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero review')) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero recheck')) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/pr-hero override'))
+      ${ifCommentClauses}
     # Job-level and keyed on the pull request number. A workflow-level group
     # on \`github.head_ref || github.ref\` put every comment on every pull
     # request into ONE group, because head_ref is empty on issue_comment, so
@@ -350,7 +389,7 @@ jobs:
     #
     # GitHub keeps one PENDING run per group, and a newer run replaces it. So
     # a comment enters the pull request's group only when it starts with
-    # /pr-hero review, /pr-hero recheck or /pr-hero override, and GitHub associates its author
+    # /crysk review, /crysk recheck or /crysk override (or the older /pr-hero forms), and GitHub associates its author
     # with the repository as OWNER, MEMBER or COLLABORATOR; every other comment
     # gets its own group. Without that, anyone who can comment could replace a
     # maintainer's queued review with a run the action then refuses. The job
@@ -361,7 +400,7 @@ jobs:
     # near-miss or second real command, or a read-only member's or
     # collaborator's refused one) still replaces a comment run waiting
     # behind a running review, and \`--full\` followed by a plain
-    # \`/pr-hero review\` loses the \`--full\`; comment again to recover. A
+    # \`/crysk review\` loses the \`--full\`; comment again to recover. A
     # writer reported under another association runs unserialized, beside
     # any review already running.
     #
@@ -371,10 +410,10 @@ jobs:
     # other event gets a unique per-run group for the same reason, so a
     # skipped job can never cancel or replace a review.
     concurrency:
-      group: \${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (startsWith(github.event.comment.body, '/pr-hero review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero recheck') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) || (startsWith(github.event.comment.body, '/pr-hero override') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
+      group: \${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || ${groupCommentClauses}) && format('pr-hero-review-{0}', github.event.pull_request.number || github.event.issue.number) || format('pr-hero-noop-{0}', github.run_id) }}
       cancel-in-progress: \${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
-    # Backstop for a HUNG runner, not a second review budget. pr-hero already
+    # Backstop for a HUNG runner, not a second review budget. Crysk already
     # enforces its own 75-minute whole-pipeline ceiling, which closes
     # artifacts and reports before exiting; a CI bound at or below that would
     # kill the job first and throw away the salvage. Above it, this only ever
@@ -384,18 +423,18 @@ jobs:
 ${gateStep}      - name: Checkout${checkoutGate}
         uses: actions/checkout@v4
         with:${checkoutRef}
-          # fetch-depth: 0 is load-bearing, not cosmetic: pr-hero computes
+          # fetch-depth: 0 is load-bearing, not cosmetic: Crysk computes
           # the pull request's diff range and commit ancestry from full git
           # history. actions/checkout's default is a SHALLOW clone, which
           # cannot produce an accurate diff or blame — trimming this line
           # does not fail loudly, it makes reviews silently miss context.
           fetch-depth: 0
 
-      - name: Run pr-hero
+      - name: Run Crysk
         # The id keeps this step's outputs (\`status\`, \`run-dir\`, ...)
         # readable from any step you add below.
         # The action uploads the run directory as an artifact itself, so
-        # \`pr-hero triage reply --from\` has an input in CI (see action.yml).
+        # \`crysk triage reply --from\` has an input in CI (see action.yml).
         id: pr-hero${runStepGate}
         uses: ${actionRef}
         with:
@@ -415,11 +454,12 @@ ${gateStep}      - name: Checkout${checkoutGate}
           #     one here yields a secret that works for a day and then breaks
           #     reviews with no signal.
           #   OPENCODE_AUTH_JSON      — whole OpenCode auth.json store
-          #   vars.PRHERO_ROUTING     — person-layer routing JSON; quoted so an
-          #     unset var is the empty string rather than broken YAML
+          #   vars.CRYSK_ROUTING      — person-layer routing JSON; quoted so an
+          #     unset var is the empty string rather than broken YAML. The
+          #     older vars.PRHERO_ROUTING is read when this one is unset.
           anthropic-api-key: \${{ secrets.ANTHROPIC_API_KEY }}
           claude-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          routing: "\${{ vars.PRHERO_ROUTING }}"
+          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"
           opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}${sizeGateLine}${filesGateLine}${budgetLine}${modeLine}
 `;
 }
@@ -438,21 +478,31 @@ export interface RunCiSetupOptions {
 export type CiSetupResult =
   | { status: "created"; path: string }
   | { status: "overwritten"; path: string }
-  | { status: "skipped-existing"; path: string; hint: string };
+  | { status: "skipped-existing"; path: string; hint: string }
+  // Both workflow files exist: writing either would leave two workflows
+  // reviewing every pull request, so nothing is written, --force or not.
+  | { status: "refused-duplicate"; hint: string };
 
 export async function runCiSetup(
   options: RunCiSetupOptions = {},
 ): Promise<CiSetupResult> {
   const cwd = options.cwd ?? process.cwd();
   const exists = options.exists ?? existsSync;
-  const targetPath = path.join(cwd, CI_WORKFLOW_RELATIVE_PATH);
+  const duplicate = duplicateWorkflowProblem(cwd, exists);
+  if (duplicate !== undefined) {
+    return { status: "refused-duplicate", hint: duplicate };
+  }
+  // The file a repo already has is rewritten in place; only a repo with none
+  // gets the new name.
+  const relativePath = resolveWorkflowRelativePath(cwd, exists);
+  const targetPath = path.join(cwd, relativePath);
   const alreadyExisted = exists(targetPath);
 
   if (alreadyExisted && !options.force) {
     return {
       status: "skipped-existing",
       path: targetPath,
-      hint: `${CI_WORKFLOW_RELATIVE_PATH} already exists; pass --force to overwrite it`,
+      hint: `${relativePath} already exists; pass --force to overwrite it`,
     };
   }
 
@@ -488,7 +538,7 @@ export async function writeRepoReviewConfig(
   repoRoot: string,
   plan: ConfigPlan,
 ): Promise<RepoReviewConfigWrite> {
-  const file = path.join(repoRoot, ".prhero", "config.json");
+  const file = path.join(resolveRepoDir(repoRoot), "config.json");
   let current: Record<string, unknown> = {};
   if (existsSync(file)) {
     const raw = await readFile(file, "utf-8");
@@ -581,7 +631,7 @@ export async function appendIgnorePatterns(
   repoRoot: string,
   patterns: readonly string[],
 ): Promise<string> {
-  const file = path.join(repoRoot, ".prheroignore");
+  const file = path.join(repoRoot, resolveIgnoreFileName(repoRoot));
   const current = existsSync(file) ? await readFile(file, "utf-8") : "";
   const present = new Set(current.split("\n").map((line) => line.trim()));
   const added = patterns
@@ -666,7 +716,7 @@ export async function materializeCiOpenCodeData(
       );
     }
     try {
-      routingConfig = parseRoutingConfig(parsed, "~/.prhero/config.json");
+      routingConfig = parseRoutingConfig(parsed, "~/.crysk/config.json");
     } catch (error) {
       // parseRoutingConfig names the offending key in its message: that message
       // stays on stderr, and the record carries only the fixed detail.
@@ -762,9 +812,9 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
     return 0;
   } catch (error) {
     deps.stderr(
-      `pr-hero: failed to materialize OpenCode CI data: ${messageOf(error)}\n`,
+      `crysk: failed to materialize OpenCode CI data: ${messageOf(error)}\n`,
     );
-    const outcomeDir = deps.env.PRHERO_OUTCOME_DIR ?? "";
+    const outcomeDir = deps.env.CRYSK_OUTCOME_DIR ?? "";
     if (error instanceof SetupInputError && outcomeDir !== "") {
       try {
         await writeSetupRecord(outcomeDir, {
@@ -774,7 +824,7 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
         });
       } catch {
         deps.stderr(
-          "pr-hero: could not write its setup outcome record, so the publisher reports this as an install failure.\n",
+          "crysk: could not write its setup outcome record, so the publisher reports this as an install failure.\n",
         );
       }
     }

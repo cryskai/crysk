@@ -120,7 +120,7 @@ describe("ui-menu renderers", () => {
     test("renders key hints and CLI equivalent for selected item", () => {
       const lines = renderPersistentFooter(dummyItems[0], 80, false);
       expect(lines.join("\n")).toContain("j/k: move");
-      expect(lines.join("\n")).toContain("$ pr-hero review");
+      expect(lines.join("\n")).toContain("$ crysk review");
     });
 
     test("shows submenu hint when item is a submenu opener", () => {

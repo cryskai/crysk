@@ -440,7 +440,7 @@ function gateMessage(
   return (
     `${headline}${exclusion}. Cost scales with diff size and gets less ` +
     "predictable as it does (our 45-file bench tree billed $6.58-17.92, a " +
-    "~2.7x spread), so pr-hero skips past the limit rather than guess at " +
+    "~2.7x spread), so Crysk skips past the limit rather than guess at " +
     `the bill. Raise ${limitFlag}, or pass --force to review it anyway.`
   );
 }
