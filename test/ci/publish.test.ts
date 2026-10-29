@@ -3114,8 +3114,12 @@ describe("runPublish — the override (S8)", () => {
     const run = runPublishIn({
       record: overrideRecord(),
       status: [fail("gh: HTTP 500"), fail("gh: HTTP 500"), ok("")],
+      viewer: ok("github-actions"),
+      list: listing([502, "github-actions[bot]", "Bot", OLDER_MARKER]),
     });
     expect(run.exitCode).toBe(1);
+    // crysk is still red, so the earlier outcome comment that explains why stays.
+    expect(deletions(run.calls)).toEqual([]);
     const body = commentPost(run.calls)?.stdin ?? "";
     expect(body).toContain("The `pr-hero` status on that head is now success");
     expect(body).not.toContain(

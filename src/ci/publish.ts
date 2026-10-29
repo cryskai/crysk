@@ -1307,9 +1307,10 @@ function publishOverride(
       if (posted.ok) landed.push(context);
       else failure ??= posted;
     }
-    if (landed.length > 0) {
-      // WHY here, right after the success and before the audit comment: the head is green
-      // now, so an earlier run's outcome comment contradicts it. The audit comment does not
+    if (landed.includes(STATUS_CONTEXT)) {
+      // WHY here, right after the success and before the audit comment: the crysk gate is
+      // green now, so an earlier run's outcome comment contradicts it. When only the legacy
+      // pr-hero status landed, crysk is still red and that comment still explains why. The audit comment does not
       // gate this cleanup, and its warnings never change the exit code (as for a review).
       cleanupOlderOutcomes(deps, plan);
     }
