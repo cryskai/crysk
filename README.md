@@ -128,7 +128,7 @@ npx crysk doctor
 
 # Option C: From source / development (the bin runs on Node; on a machine with Bun
 # and no Node, run `bun bin/pr-hero.js` or use option A)
-git clone https://github.com/cryskai/crysk.git && cd pr-hero
+git clone https://github.com/cryskai/crysk.git && cd crysk
 bun install && bun link
 ```
 
