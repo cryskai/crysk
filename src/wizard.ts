@@ -14,7 +14,7 @@ import {
   syncSkills,
 } from "./agent-env";
 import { resolveEngineAssets, selfInvocation } from "./assets";
-import { resolveHomeDir, resolveRepoDir } from "./brand-paths";
+import { REPO_DIR_NAME, resolveHomeDir, resolveRepoDir } from "./brand-paths";
 import type {
   ExactBindingCapabilityReport,
   RunnerBackend,
@@ -79,6 +79,9 @@ export interface WizardState {
   // "this run wrote at least one file into `.prhero/`" — i.e. what is now
   // untracked, which is what INIT_GIT_REMINDER is about.
   workspaceFilesWritten: boolean;
+  // The directory step 4 wrote into (.crysk, or a legacy .prhero updated in
+  // place), so the closing advice names a path that exists.
+  repoDirName?: string;
   // "this run wrote the PLACEHOLDER gotchas file" — the no-entries fallback
   // branch, the only one that emits GOTCHAS_PLACEHOLDER_MARKER. Writing
   // `gotchas.md` is not enough: with entries collected, the file written is
@@ -608,7 +611,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         });
       const exec = deps.exec ?? defaultExec;
 
-      const repoDir = resolveRepoDir(cwd);
+      const repoDir = resolveRepoDir(cwd, exists);
       const configPath = path.join(repoDir, "config.json");
       const gotchasPath = path.join(repoDir, "gotchas.md");
 
@@ -688,6 +691,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
 
       return {
         workspaceFilesWritten,
+        repoDirName: path.basename(repoDir),
         placeholderGotchasWritten,
         setupStateWritten: true,
         workspaceCommitted,
@@ -701,7 +705,9 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       const bold = (s: string) => (opts.styles ? `\x1b[1m${s}\x1b[0m` : s);
       lines.push(bold("Step 4/5: Workspace Configuration & Gotchas"));
       lines.push("");
-      lines.push("  Scaffolding .crysk/config.json and .crysk/gotchas.md");
+      lines.push(
+        "  Scaffolding config.json and gotchas.md in .crysk/ (or the .prhero/ the repo already has)",
+      );
       return lines;
     },
   },
@@ -774,6 +780,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       // placeholder and that reviews would be refused. Both claims false.
       // `placeholderGotchasWritten` is set by the branch that writes the
       // marker and by nothing else.
+      const repoDirName = state.repoDirName ?? REPO_DIR_NAME;
       const needsGitStep =
         state.workspaceFilesWritten === true &&
         state.workspaceCommitted !== true &&
@@ -784,7 +791,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         lines.push("");
       }
       if (needsGitStep) {
-        lines.push(`  ${initGitReminder()}`);
+        lines.push(`  ${initGitReminder(repoDirName)}`);
         lines.push("");
       }
       if (needsGotchasStep) {
@@ -799,7 +806,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         // which is the same untestable-by-design trap this slice exists to
         // remove.
         lines.push(
-          "  Write REAL gotchas in .crysk/gotchas.md — the one just " +
+          `  Write REAL gotchas in ${repoDirName}/gotchas.md — the one just ` +
             "scaffolded is a placeholder, and pr-hero refuses to review " +
             `while its \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line is there.`,
         );

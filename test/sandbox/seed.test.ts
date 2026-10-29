@@ -109,7 +109,7 @@ describe("routing value", () => {
     for (const snapshot of ["big-pickle", "deepseek-v4.1-flash-free"]) {
       const routing = parseRoutingConfig(
         JSON.parse(routingValueFor(snapshot)),
-        "~/.prhero/config.json",
+        "~/.crysk/config.json",
       );
       for (const logical of [
         "sonnet",

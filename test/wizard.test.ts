@@ -799,6 +799,25 @@ describe("verification step — the ending matches what the run actually did", (
     expect(text).toContain("pr-hero review");
   });
 
+  // A repo still on the legacy .prhero/ is updated in place, so the closing
+  // advice must name .prhero/ — a .crysk/ that was never created is not
+  // something to edit or commit.
+  test("a legacy .prhero/ repo is told about .prhero/, never .crysk/", async () => {
+    const { lines, files } = await verificationLines({
+      isRepo: true,
+      files: {
+        "/repo/.prhero": "",
+        "/repo/.prhero/config.json": '{"default_base": "main"}\n',
+      },
+    });
+    const text = lines.join("\n");
+    expect(files["/repo/.prhero/gotchas.md"]).toBeDefined();
+    expect(files["/repo/.crysk/gotchas.md"]).toBeUndefined();
+    expect(text).toContain(".prhero/gotchas.md");
+    expect(text).toContain(initGitReminder(".prhero"));
+    expect(text).not.toContain(".crysk");
+  });
+
   test("outside a repo nothing was scaffolded, so there is nothing to commit", async () => {
     const { lines, files } = await verificationLines({ isRepo: false });
     const text = lines.join("\n");

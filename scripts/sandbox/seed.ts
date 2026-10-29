@@ -15,8 +15,8 @@ import {
 } from "../../fixtures/setup";
 
 export const WORKFLOW_PATH = ".github/workflows/pr-hero.yml";
-export const REPO_CONFIG_PATH = ".prhero/config.json";
-export const GOTCHAS_PATH = ".prhero/gotchas.md";
+export const REPO_CONFIG_PATH = ".crysk/config.json";
+export const GOTCHAS_PATH = ".crysk/gotchas.md";
 export const VOLUME_PATH = "src/volume.ts";
 
 // D3: the second planted bug, added by a later push of the rereview-fresh-finding
