@@ -12,6 +12,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -136,7 +137,9 @@ describe("sync removes the old-name dirs", () => {
     );
   });
 
-  test("an edited legacy file is kept and reported; the rest of the dir goes", async () => {
+  // All or nothing: deleting the untouched files of an edited legacy skill leaves a
+  // SKILL.md that points at files that are gone, beside the new copy (#423 F002).
+  test("an edited legacy dir is left whole and reported", async () => {
     const dir = installLegacy("pr-hero-ci-setup", [
       "SKILL.md",
       "assets/workflow.yml",
@@ -148,13 +151,28 @@ describe("sync removes the old-name dirs", () => {
     expect(readFileSync(path.join(dir, "SKILL.md"), "utf-8")).toBe(
       "my own notes\n",
     );
-    expect(existsSync(path.join(dir, "assets", "workflow.yml"))).toBe(false);
+    expect(existsSync(path.join(dir, "assets", "workflow.yml"))).toBe(true);
+    expect(existsSync(path.join(dir, "digest.json"))).toBe(true);
     const kept = result.legacy?.find((l) => l.skill === "pr-hero-ci-setup");
     expect(kept?.status).toBe("kept");
     expect(kept?.reason).toContain("SKILL.md");
-    // The new copy is installed regardless of the legacy leftover.
     expect(present("crysk-ci-setup")).toBe(true);
     expect(result.errors).toEqual([]);
+  });
+
+  // The digest is the only record that makes a leftover provably removable, so it
+  // stays while any recorded file is still on disk (#423 F001).
+  test("a recorded file that could not be removed keeps the digest", async () => {
+    const dir = installLegacy("pr-hero-pr", ["SKILL.md"]);
+    const result = await syncSkills(env, resolveEngineAssets(), {
+      unlink: (p: string) => {
+        if (p.endsWith("SKILL.md")) throw new Error("EACCES");
+        unlinkSync(p);
+      },
+    });
+    expect(existsSync(path.join(dir, "SKILL.md"))).toBe(true);
+    expect(existsSync(path.join(dir, "digest.json"))).toBe(true);
+    expect(result.errors.join("\n")).toContain("EACCES");
   });
 
   test("a legacy dir with no recorded digest is left alone and reported", async () => {

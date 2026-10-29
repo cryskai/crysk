@@ -67,6 +67,9 @@ export interface SyncSkillsOptions {
   readFile?: (path: string) => string | undefined;
   writeFile?: (path: string, content: string) => Promise<void> | void;
   exists?: (path: string) => boolean;
+  // The legacy cleanup's deletes, so a faked filesystem fakes them too.
+  unlink?: (path: string) => void;
+  rmdir?: (path: string) => void;
 }
 
 export type SkillSyncStatus =
@@ -277,6 +280,10 @@ interface SkillDirIo {
   readFile: (path: string) => string | undefined;
   unlink?: (path: string) => void;
   rmdir?: (path: string) => void;
+  // Delete nothing unless every recorded file still matches its digest. The legacy
+  // cleanup needs it: removing the untouched files of an edited skill leaves a
+  // SKILL.md that points at files that are gone.
+  allOrNothing?: boolean;
 }
 
 export interface RemoveSkillDirResult {
@@ -313,14 +320,37 @@ export function removeSkillDir(
   }
 
   let skillSkippedModified = false;
+  // A recorded file still on disk after this pass: unreadable, or its unlink failed.
+  let recordedLeft = false;
   const subdirs = new Set<string>();
+  if (io.allOrNothing && digest?.files) {
+    const touched = Object.entries(digest.files).filter(
+      ([logicalName, hash]) => {
+        const filePath = path.join(targetDir, logicalName);
+        if (!io.exists(filePath)) return false;
+        const content = io.readFile(filePath);
+        return content === undefined || sha256(content) !== hash;
+      },
+    );
+    if (touched.length > 0) {
+      return {
+        removed: [],
+        skippedModified: touched.map(([logicalName]) => logicalName),
+        errors: [],
+        dirRemoved: false,
+      };
+    }
+  }
   if (digest?.files) {
     for (const [logicalName, expectedHash] of Object.entries(digest.files)) {
       const filePath = path.join(targetDir, logicalName);
       if (!io.exists(filePath)) continue;
 
       const content = io.readFile(filePath);
-      if (content === undefined) continue;
+      if (content === undefined) {
+        recordedLeft = true;
+        continue;
+      }
 
       if (sha256(content) === expectedHash) {
         try {
@@ -334,6 +364,7 @@ export function removeSkillDir(
             subdirs.add(dir);
           }
         } catch (err) {
+          recordedLeft = true;
           errors.push(
             `Failed to remove ${filePath}: ${(err as Error).message}`,
           );
@@ -345,8 +376,9 @@ export function removeSkillDir(
     }
   }
 
-  // Remove digest if no files were skipped due to modification
-  if (!skillSkippedModified && io.exists(digestFile)) {
+  // The digest goes only once every recorded file is gone: it is the only record that
+  // makes a leftover provably removable on a later run.
+  if (!skillSkippedModified && !recordedLeft && io.exists(digestFile)) {
     try {
       unlink(digestFile);
       removed.push("digest.json");
@@ -585,7 +617,13 @@ export async function syncSkills(
     const legacyName = LEGACY_SKILL_NAMES[skill.role];
     const legacyDir = path.join(env.skillsDir, legacyName);
     if (!exists(legacyDir)) continue;
-    const res = removeSkillDir(legacyDir, { exists, readFile });
+    const res = removeSkillDir(legacyDir, {
+      exists,
+      readFile,
+      allOrNothing: true,
+      ...(options.unlink ? { unlink: options.unlink } : {}),
+      ...(options.rmdir ? { rmdir: options.rmdir } : {}),
+    });
     allErrors.push(...res.errors);
     legacy.push({
       skill: legacyName,
