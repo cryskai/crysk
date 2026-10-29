@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-29
+
 ### Changed
 - **Renamed to Crysk.** The product, its documentation, CLI output and bundled skills now use the name Crysk. The
   new names are written everywhere; every old name is still read for one version, so an install made under
@@ -38,8 +40,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     The action is named `Crysk`, uploads the run directory as `crysk-run-<pr>-<sha>`, and writes the admission
     ledger as the check run `crysk/ci-admission`; the old `pr-hero/ci-admission` rows are still read, so attempt
     counts survive the upgrade. The step id `pr-hero` and the `pr-hero-review-` concurrency group are unchanged.
-  - **Unchanged for now**: the GitHub repository and the action reference `juanmaagd/pr-hero@v0`, and the findings
-    envelope.
+  - **Repository**: the project moved to `cryskai/crysk`, and new workflows use `uses: cryskai/crysk@v0`.
+    `juanmaagd/pr-hero` is kept as a mirror with the same tags and releases, so `uses: juanmaagd/pr-hero@v0`, the
+    old install URL and `pr-hero upgrade` on an older binary keep working.
+  - **Unchanged**: the findings envelope (`name: "pr-hero"`), the `pr-hero.status/v1` schema id and the `[pr-hero]`
+    stderr tags.
+
+### Fixed
+- **A CI review whose every hunter fails names the provider error.** A spent API key, a rejected credential or a
+  rate limit is reported as `PRH-PROVIDER-LIMITED` or `PRH-CRED-REJECTED`, naming the secret, instead of the generic
+  `PRH-HUNTERS-FAILED`. Partial failures say which step failed and why.
+- **The override status says what it did**: `crysk: overridden by @<login> — no new review run`. The older
+  `— no review on this head` read as if the head had never been reviewed; both are still recognised.
+
+### Removed
+- **The Greptile head-to-head**: no Greptile fetch, no `comparison.md`, no "vs Greptile" section.
+- **`comparison.json`**, with the `ledger` command, the MCP tool `prhero_get_comparison`, the HTTP route
+  `/v1/runs/:id/comparison` and the bare `triage --pr --from` harvest. Triage verdicts live only in the
+  `finding_triage` table (`crysk triage reply`); the historical comparison rows stay readable.
 
 ## [0.2.6] - 2026-10-28
 
@@ -549,7 +567,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/juanmaagd/pr-hero/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/cryskai/crysk/compare/v0.2.6...v0.3.0
 [0.2.6]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...v0.2.6
 [0.2.5]: https://www.npmjs.com/package/pr-hero/v/0.2.5
 [0.2.4]: https://github.com/juanmaagd/pr-hero/compare/v0.2.3...v0.2.4
