@@ -64,7 +64,7 @@ if [ -z "${PRHERO_VERSION:-}" ]; then
   echo "Resolving latest release..."
   VERSION="$(curl -sSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/' || true)"
   if [ -z "${VERSION}" ]; then
-    VERSION="0.2.6"
+    VERSION="0.3.0"
   fi
 else
   VERSION="${PRHERO_VERSION#v}"

@@ -246,15 +246,37 @@ So the move keeps a repository at the old name. Each step is run by the maintain
 1. **Transfer and rename** `juanmaagd/pr-hero` to `cryskai/crysk` (Settings → Transfer, new name `crysk`).
    Issues, pull requests, stars, history, tags, releases, secrets and variables move with it. Check the
    repository's Actions secrets and variables afterwards.
-2. **Recreate `juanmaagd/pr-hero` at once** as a public mirror: `git push --mirror` of `main` and every tag,
+2. **Recreate `juanmaagd/pr-hero` at once** as a public mirror, with **Actions disabled** (`gh api -X PUT
+   repos/juanmaagd/pr-hero/actions/permissions -F enabled=false`; the mirror carries `release.yml`, which would
+   otherwise start a second release run on every tag pushed there). Then push `main` and every tag,
    so `uses: juanmaagd/pr-hero@v0` (and every `@v0.x.y`) keeps resolving and
    `https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh` keeps serving the installer.
    Creating it stops GitHub's web and git redirect to `cryskai/crysk`: point local clones at the new remote
    (`git remote set-url origin https://github.com/cryskai/crysk.git`).
-3. **Every release while the mirror lives also goes to the mirror:** push the release commit and both tags
-   (`vX.Y.Z` and the moved `v0`) there, and create the same GitHub Release with the same assets and
-   `SHA256SUMS`. A binary from before the move (`src/updater.ts` read `juanmaagd/pr-hero`) finds its upgrade
-   there; without the mirrored release, `pr-hero upgrade` on such a binary reports no new version.
+3. **Every final release while the mirror lives also goes to the mirror**, once `release.yml` has finished on
+   `cryskai/crysk` (CI force-moves `v0` and creates the release, so the mirror copies what CI produced). A
+   prerelease (`vX.Y.Z-rc.N`) is not mirrored: CI neither moves `v0` nor marks it latest, and pre-move binaries
+   must not be offered it. A binary from before the move (`src/updater.ts` read `juanmaagd/pr-hero`) finds its
+   upgrade on the mirror; without the mirrored release, `pr-hero upgrade` on such a binary reports no new
+   version. Run from the release checkout, with the mirror added as a remote
+   (`git remote add pr-hero-mirror https://github.com/juanmaagd/pr-hero.git`). The block runs in a subshell
+   with `set -e`, so the first failed command stops it before anything is published:
+   ```bash
+   ( set -euo pipefail
+   V=vX.Y.Z
+   case "$V" in *-*) echo "$V is a prerelease: do not mirror it"; exit 1;; esac
+   git fetch origin --tags --force                     # CI's v0 and $V tag objects
+   git push pr-hero-mirror origin/main:refs/heads/main
+   git push pr-hero-mirror "refs/tags/$V"
+   git push pr-hero-mirror refs/tags/v0 --force        # v0 already exists there, at the previous release
+   d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+   gh release download "$V" -R cryskai/crysk -D "$d/assets"
+   (cd "$d/assets" && shasum -a 256 -c SHA256SUMS)     # never publish a partial download
+   gh release view "$V" -R cryskai/crysk --json body -q .body > "$d/notes.md"
+   gh release create "$V" -R juanmaagd/pr-hero --verify-tag --latest --title "$V" \
+     --notes-file "$d/notes.md" "$d"/assets/* )
+   ```
+   Then run the mirror check in §5.
 4. Archive the mirror once the version that drops the legacy names ships; an archived repository keeps serving
    its tags.
 
@@ -358,7 +380,29 @@ Perform these sanity checks immediately following a release:
    - Confirm workflows referencing `cryskai/crysk@v0` or `cryskai/crysk@vX.Y.Z` resolve the new
      release. (Workflows still pinned to the frozen `@v1` continue resolving the last 1.x release, by
      design — they receive no further updates.)
-5. **Doctor Diagnostic**:
+5. **Mirror** (while `juanmaagd/pr-hero` lives; final releases only; read-only, after Step 4d.3): both tags on
+   the mirror point at the release commit, and the mirror's release is `Latest` and carries exactly the assets
+   of the `cryskai/crysk` release, byte for byte. Set `V` to the release tag; the block runs in a subshell and
+   stops at the first failure without closing your shell:
+   ```bash
+   ( set -euo pipefail
+   V=vX.Y.Z
+   COMMIT=$(git rev-parse --verify "$V^{commit}")      # fails here if the tag is missing or V is mistyped
+   d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+   for t in v0 "$V"; do                                # annotated tags: compare the commit they point at
+     got=$(git ls-remote https://github.com/juanmaagd/pr-hero.git "refs/tags/$t^{}" | cut -f1)
+     [ "$got" = "$COMMIT" ] || { echo "mirror $t is '${got:-missing}', expected $COMMIT"; exit 1; }
+   done
+   gh release list -R juanmaagd/pr-hero --limit 1 | grep -q "$V.*Latest" || { echo "mirror Latest is not $V"; exit 1; }
+   gh release download "$V" -R cryskai/crysk -D "$d/new"
+   gh release download "$V" -R juanmaagd/pr-hero -D "$d/mirror"
+   diff -r "$d/new" "$d/mirror"                        # same file names, same bytes
+   (cd "$d/mirror" && shasum -a 256 -c SHA256SUMS)
+   [ "$(ls "$d/mirror" | grep -cv '^SHA256SUMS$')" = "$(grep -c . "$d/mirror/SHA256SUMS")" ] \
+     || { echo "an asset has no SHA256SUMS line"; exit 1; }
+   echo "mirror OK" )
+   ```
+6. **Doctor Diagnostic**:
    - Run `crysk doctor` locally to verify runtime integrity and toolchain health.
 
 ---
