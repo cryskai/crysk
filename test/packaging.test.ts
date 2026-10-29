@@ -36,10 +36,10 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.bin["pr-hero"]).toBeDefined();
     expect(pkg.files).toBeDefined();
     expect(pkg.files).toContain("prompts");
-    expect(pkg.files).toContain("skills/pr-hero-triage");
-    expect(pkg.files).toContain("skills/pr-hero-ci-setup");
-    expect(pkg.files).toContain("skills/pr-hero-pr");
-    expect(pkg.files).toContain("skills/pr-hero");
+    expect(pkg.files).toContain("skills/crysk-loop");
+    expect(pkg.files).toContain("skills/crysk-ci-setup");
+    expect(pkg.files).toContain("skills/crysk-pr");
+    expect(pkg.files).toContain("skills/crysk");
     expect(pkg.files).toContain("dist");
     expect(pkg.files).not.toContain("docs");
     expect(pkg.files).not.toContain("scripts");
@@ -1299,7 +1299,7 @@ describe("Packaging & distribution configuration", () => {
         path.join(
           rootDir,
           "skills",
-          "pr-hero-ci-setup",
+          "crysk-ci-setup",
           "assets",
           "workflow-force.yml",
         ),
@@ -1307,11 +1307,11 @@ describe("Packaging & distribution configuration", () => {
     ).toBe(false);
   });
 
-  test("skills/pr-hero-ci-setup/assets/workflow.yml never drifts from generateCiWorkflowTemplate()", () => {
+  test("skills/crysk-ci-setup/assets/workflow.yml never drifts from generateCiWorkflowTemplate()", () => {
     const assetPath = path.join(
       rootDir,
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "assets",
       "workflow.yml",
     );
@@ -1324,13 +1324,13 @@ describe("Packaging & distribution configuration", () => {
     const skillPath = path.join(
       rootDir,
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "SKILL.md",
     );
     const refPath = path.join(
       rootDir,
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "references",
       "opencode-ci.md",
     );
@@ -1345,11 +1345,11 @@ describe("Packaging & distribution configuration", () => {
     expect(ref).toContain("Do **not** create `OPENAI_API_KEY`");
   });
 
-  test(".agents/skills/pr-hero-ci-setup/assets/workflow.yml matches the skills workflow asset", () => {
+  test(".agents/skills/crysk-ci-setup/assets/workflow.yml matches the skills workflow asset", () => {
     const skillsPath = path.join(
       rootDir,
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "assets",
       "workflow.yml",
     );
@@ -1357,7 +1357,7 @@ describe("Packaging & distribution configuration", () => {
       rootDir,
       ".agents",
       "skills",
-      "pr-hero-ci-setup",
+      "crysk-ci-setup",
       "assets",
       "workflow.yml",
     );
@@ -1446,7 +1446,7 @@ describe("/crysk recheck wiring", () => {
     `startsWith(github.event.comment.body, '${command}')`;
   const copies = [
     ".github/workflows/pr-hero.yml",
-    "skills/pr-hero-ci-setup/assets/workflow.yml",
+    "skills/crysk-ci-setup/assets/workflow.yml",
   ];
 
   test("action.yml passes TRIGGER_ADJUDICATE as --adjudicate", () => {

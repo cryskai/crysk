@@ -330,7 +330,7 @@ Usage:
                              terminal, offers to install it and run gh auth
                              login
   pr-hero skills install [--force]
-                             Install the pr-hero, pr-hero-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
+                             Install the crysk, crysk-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
   pr-hero ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
                              command
   pr-hero doctor [options]   Check system tools and environment readiness

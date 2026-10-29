@@ -44,7 +44,9 @@ describe("doctor tri-state evaluation", () => {
         if (p === "/repo/.codegraph") return true;
         if (p === "/home/user/.crysk/setup.json") return true;
         if (p === "/home/user/.claude/mcp.json") return true;
-        if (p.includes(".claude/skills/")) return true;
+        // Every skill is installed, none under a pre-rename name.
+        if (p.includes(".claude/skills/") && !p.includes("/skills/pr-hero"))
+          return true;
         if (p === `/repo/${CI_WORKFLOW_RELATIVE_PATH}`) return true;
         return false;
       },
@@ -351,6 +353,59 @@ describe("doctor tri-state evaluation", () => {
       );
       expect(skillsCheck?.severity).toBe("degraded");
       expect(skillsCheck?.hint).toBeDefined();
+    });
+
+    test("a skill left under its pre-rename name is reported degraded with a hint", async () => {
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) =>
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/repo/.codegraph" ||
+          p === "/home/user/.crysk/setup.json" ||
+          p === "/home/user/.claude/mcp.json" ||
+          p === "/home/user/.claude/skills/pr-hero-triage",
+        readFile: (p) => {
+          if (p === "/repo/.crysk/gotchas.md") return "## Gotchas\nContent";
+          return bundledPromptBody(p);
+        },
+        checkToolsOptions: {
+          which: (bin) => (bin === "claude" ? "/bin/claude" : `/bin/${bin}`),
+          exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      const legacy = report.checks.find(
+        (c) => c.name === "skills-legacy:claude",
+      );
+      expect(legacy?.severity).toBe("degraded");
+      expect(legacy?.message).toContain(
+        "/home/user/.claude/skills/pr-hero-triage",
+      );
+      expect(legacy?.hint).toBeDefined();
+      // Only the dir that exists is named.
+      expect(legacy?.message).not.toContain("pr-hero-pr");
+    });
+
+    test("no legacy check when no pre-rename skill dir exists", async () => {
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) =>
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.claude/mcp.json",
+        readFile: (p) => bundledPromptBody(p),
+        checkToolsOptions: {
+          which: (bin) => (bin === "claude" ? "/bin/claude" : `/bin/${bin}`),
+          exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      expect(
+        report.checks.some((c) => c.name.startsWith("skills-legacy:")),
+      ).toBe(false);
     });
 
     test("mcp server not registered reports degraded with hint", async () => {

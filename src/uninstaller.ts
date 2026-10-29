@@ -7,7 +7,11 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { detectAgentEnvironments } from "./agent-env";
+import {
+  allSkillDirNames,
+  detectAgentEnvironments,
+  removeSkillDir,
+} from "./agent-env";
 import {
   HOME_DIR_NAME,
   LEGACY_HOME_DIR_NAME,
@@ -171,12 +175,7 @@ export async function planUninstallation(
       });
     }
     if (env.skillsDir) {
-      for (const skillName of [
-        "pr-hero-triage",
-        "pr-hero-ci-setup",
-        "pr-hero-pr",
-        "pr-hero",
-      ]) {
+      for (const skillName of allSkillDirNames()) {
         const skillPath = path.join(env.skillsDir, skillName);
         if (exists(skillPath)) {
           agentEnvCleanups.push(`${env.displayName} Skill: ${skillName}`);
@@ -448,11 +447,24 @@ export async function executeUninstallPlan(
 
         case "remove_skills":
           if (step.targetPath && exists(step.targetPath)) {
-            if (options.rmdir) {
-              options.rmdir(step.targetPath, { recursive: true });
-            } else {
-              rmSync(step.targetPath, { recursive: true, force: true });
+            // Digest-gated, never recursive: a skill file the user edited
+            // survives an uninstall, with its dir.
+            const res = removeSkillDir(step.targetPath, {
+              exists,
+              readFile,
+              unlink,
+              rmdir: options.rmdir
+                ? (p) => options.rmdir?.(p, { recursive: false })
+                : undefined,
+            });
+            errors.push(...res.errors);
+            executedSteps.push(step.desc);
+            if (!res.dirRemoved) {
+              executedSteps.push(
+                `Kept ${step.targetPath}: edited files or files with no recorded digest remain`,
+              );
             }
+            break;
           }
           executedSteps.push(step.desc);
           break;

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -15,6 +16,7 @@ import {
   isNpxCacheInvocation,
   NPX_REGISTRATION_REFUSED,
 } from "./assets";
+import { LEGACY_SKILL_NAMES, SKILL_NAMES } from "./brand";
 
 export type AgentEnvId =
   | "claude"
@@ -80,10 +82,21 @@ export interface SkillSyncOutcome {
   reason?: string;
 }
 
+// What sync did with a pre-rename skill dir once its replacement was installed.
+export interface LegacySkillOutcome {
+  skill: string;
+  // removed: the dir is gone. kept: a file the user edited, or one sync never
+  // recorded, is still there, so the dir stays and the user is told.
+  status: "removed" | "kept";
+  reason?: string;
+}
+
 export interface SyncSkillsResult {
   synced: string[];
   // One outcome per bundled skill, in sync order, for this agent environment.
   skills: SkillSyncOutcome[];
+  // Present only when an old-name dir was found.
+  legacy?: LegacySkillOutcome[];
   upToDate?: boolean;
   driftDetected?: boolean;
   errors: string[];
@@ -231,6 +244,150 @@ export async function detectAgentEnvironments(
   return results;
 }
 
+type SkillRole = keyof typeof SKILL_NAMES;
+
+interface BundledSkill {
+  role: SkillRole;
+  name: string;
+  files: Record<string, string>;
+}
+
+// The skills this build ships, in sync order, named once for sync and inspect.
+// The triage skill is always shipped; the others only when their asset list is
+// filled, as an engine build without them must not install an empty dir.
+function bundledSkills(assets: EngineAssets): BundledSkill[] {
+  const byRole: Record<SkillRole, Record<string, string> | undefined> = {
+    triage: assets.triageSkillFiles,
+    ciSetup: assets.ciSetupSkillFiles,
+    pr: assets.prSkillFiles,
+    general: assets.generalSkillFiles,
+  };
+  const skills: BundledSkill[] = [];
+  for (const role of Object.keys(SKILL_NAMES) as SkillRole[]) {
+    const files = byRole[role];
+    if (!files) continue;
+    if (role !== "triage" && Object.keys(files).length === 0) continue;
+    skills.push({ role, name: SKILL_NAMES[role], files });
+  }
+  return skills;
+}
+
+interface SkillDirIo {
+  exists: (path: string) => boolean;
+  readFile: (path: string) => string | undefined;
+  unlink?: (path: string) => void;
+  rmdir?: (path: string) => void;
+}
+
+export interface RemoveSkillDirResult {
+  removed: string[];
+  skippedModified: string[];
+  errors: string[];
+  // False when anything is left in the dir: an edited file, or a copy with no
+  // recorded digest. Nothing here ever deletes a dir recursively.
+  dirRemoved: boolean;
+}
+
+// Removes the files a skill dir's digest.json recorded, but only those still
+// equal to their recorded hash; an edited file is skipped and keeps its dir.
+// The dir itself goes only if that left it empty (a non-recursive rmdir).
+export function removeSkillDir(
+  targetDir: string,
+  io: SkillDirIo,
+): RemoveSkillDirResult {
+  const unlink = io.unlink ?? unlinkSync;
+  const rmdir = io.rmdir ?? rmdirSync;
+  const digestFile = path.join(targetDir, "digest.json");
+  const removed: string[] = [];
+  const skippedModified: string[] = [];
+  const errors: string[] = [];
+
+  let digest: { files?: Record<string, string> } | undefined;
+  if (io.exists(digestFile)) {
+    try {
+      const raw = io.readFile(digestFile);
+      if (raw) digest = JSON.parse(raw);
+    } catch {
+      // Ignored
+    }
+  }
+
+  let skillSkippedModified = false;
+  const subdirs = new Set<string>();
+  if (digest?.files) {
+    for (const [logicalName, expectedHash] of Object.entries(digest.files)) {
+      const filePath = path.join(targetDir, logicalName);
+      if (!io.exists(filePath)) continue;
+
+      const content = io.readFile(filePath);
+      if (content === undefined) continue;
+
+      if (sha256(content) === expectedHash) {
+        try {
+          unlink(filePath);
+          removed.push(logicalName);
+          for (
+            let dir = path.dirname(filePath);
+            dir !== targetDir && dir.startsWith(targetDir);
+            dir = path.dirname(dir)
+          ) {
+            subdirs.add(dir);
+          }
+        } catch (err) {
+          errors.push(
+            `Failed to remove ${filePath}: ${(err as Error).message}`,
+          );
+        }
+      } else {
+        skippedModified.push(logicalName);
+        skillSkippedModified = true;
+      }
+    }
+  }
+
+  // Remove digest if no files were skipped due to modification
+  if (!skillSkippedModified && io.exists(digestFile)) {
+    try {
+      unlink(digestFile);
+      removed.push("digest.json");
+    } catch (err) {
+      errors.push(`Failed to remove ${digestFile}: ${(err as Error).message}`);
+    }
+  }
+
+  // Emptied subdirs (assets/, references/), deepest first, then the skill dir.
+  // A non-empty one throws and stays: that is the point of not recursing.
+  const dirs = [...subdirs].sort((a, b) => b.length - a.length);
+  for (const dir of dirs) {
+    try {
+      rmdir(dir);
+    } catch {
+      // Not empty: something the digest did not cover is in there.
+    }
+  }
+  let dirRemoved = false;
+  try {
+    rmdir(targetDir);
+    dirRemoved = true;
+  } catch {
+    // Not empty, or already gone.
+  }
+
+  return { removed, skippedModified, errors, dirRemoved };
+}
+
+// Every dir name a skill may sit under on disk: current names, then old ones.
+// The uninstaller plans from this too, so it cleans both generations.
+export function allSkillDirNames(): string[] {
+  return [...Object.values(SKILL_NAMES), ...Object.values(LEGACY_SKILL_NAMES)];
+}
+
+function legacyKeptReason(res: RemoveSkillDirResult): string {
+  return res.skippedModified.length > 0
+    ? `edited ${res.skippedModified.join(", ")} kept`
+    : "files with no recorded digest kept";
+}
+
 // Decision table for each bundled skill in an agent's skills dir. The disk and
 // the digest.json recorded by the last sync decide, file by file:
 //
@@ -279,34 +436,7 @@ export async function syncSkills(
       writeFileSync(p, c, "utf-8");
     });
 
-  const skillsToSync: Array<{ name: string; files: Record<string, string> }> = [
-    { name: "pr-hero-triage", files: assets.triageSkillFiles },
-  ];
-  if (
-    assets.ciSetupSkillFiles &&
-    Object.keys(assets.ciSetupSkillFiles).length > 0
-  ) {
-    skillsToSync.push({
-      name: "pr-hero-ci-setup",
-      files: assets.ciSetupSkillFiles,
-    });
-  }
-  if (assets.prSkillFiles && Object.keys(assets.prSkillFiles).length > 0) {
-    skillsToSync.push({
-      name: "pr-hero-pr",
-      files: assets.prSkillFiles,
-    });
-  }
-  if (
-    assets.generalSkillFiles &&
-    Object.keys(assets.generalSkillFiles).length > 0
-  ) {
-    skillsToSync.push({
-      name: "pr-hero",
-      files: assets.generalSkillFiles,
-    });
-  }
-
+  const skillsToSync = bundledSkills(assets);
   const allSynced: string[] = [];
   const allErrors: string[] = [];
   const outcomes: SkillSyncOutcome[] = [];
@@ -443,9 +573,31 @@ export async function syncSkills(
     allSynced.length === 0 &&
     outcomes.every((o) => o.status === "current");
 
+  // An old-name dir goes only once the skill of the same role stands under the
+  // new name; while the new copy is kept for the user's edits, the old one
+  // keeps serving. Removal is digest-gated, so an edited file survives.
+  const standing = new Set(
+    outcomes.filter((o) => o.status !== "drift-kept").map((o) => o.skill),
+  );
+  const legacy: LegacySkillOutcome[] = [];
+  for (const skill of skillsToSync) {
+    if (!standing.has(skill.name)) continue;
+    const legacyName = LEGACY_SKILL_NAMES[skill.role];
+    const legacyDir = path.join(env.skillsDir, legacyName);
+    if (!exists(legacyDir)) continue;
+    const res = removeSkillDir(legacyDir, { exists, readFile });
+    allErrors.push(...res.errors);
+    legacy.push({
+      skill: legacyName,
+      status: res.dirRemoved ? "removed" : "kept",
+      ...(res.dirRemoved ? {} : { reason: legacyKeptReason(res) }),
+    });
+  }
+
   return {
     synced: allSynced,
     skills: outcomes,
+    ...(legacy.length > 0 ? { legacy } : {}),
     ...(upToDate ? { upToDate: true } : {}),
     ...(driftDetected ? { driftDetected: true } : {}),
     errors: allErrors,
@@ -455,6 +607,9 @@ export async function syncSkills(
 // Reports whether the skills read as synced. A copy without a recorded digest is
 // not synced yet (the next sync records it), and a differing copy that is not
 // the untouched recorded one is drift: the same rule syncSkills applies.
+//
+// `legacy` names each pre-rename dir still on disk (sync keeps one the user
+// edited), so a leftover is visible; it never changes `synced`.
 export function inspectSkillsSync(
   env: AgentEnvDetection,
   assets: EngineAssets,
@@ -462,6 +617,23 @@ export function inspectSkillsSync(
     exists?: (p: string) => boolean;
     readFile?: (p: string) => string | undefined;
   } = {},
+): { synced: boolean; drift: boolean; legacy: string[] } {
+  const skillsDir = env.skillsDir;
+  if (!skillsDir) return { synced: false, drift: false, legacy: [] };
+  const exists = options.exists ?? existsSync;
+  const legacy = Object.values(LEGACY_SKILL_NAMES).filter((name) =>
+    exists(path.join(skillsDir, name)),
+  );
+  return { ...inspectBundledSkills(env, assets, options), legacy };
+}
+
+function inspectBundledSkills(
+  env: AgentEnvDetection,
+  assets: EngineAssets,
+  options: {
+    exists?: (p: string) => boolean;
+    readFile?: (p: string) => string | undefined;
+  },
 ): { synced: boolean; drift: boolean } {
   if (!env.skillsDir) return { synced: false, drift: false };
   const exists = options.exists ?? existsSync;
@@ -475,33 +647,7 @@ export function inspectSkillsSync(
       }
     });
 
-  const skillsToCheck: Array<{ name: string; files: Record<string, string> }> =
-    [{ name: "pr-hero-triage", files: assets.triageSkillFiles }];
-  if (
-    assets.ciSetupSkillFiles &&
-    Object.keys(assets.ciSetupSkillFiles).length > 0
-  ) {
-    skillsToCheck.push({
-      name: "pr-hero-ci-setup",
-      files: assets.ciSetupSkillFiles,
-    });
-  }
-  if (assets.prSkillFiles && Object.keys(assets.prSkillFiles).length > 0) {
-    skillsToCheck.push({
-      name: "pr-hero-pr",
-      files: assets.prSkillFiles,
-    });
-  }
-  if (
-    assets.generalSkillFiles &&
-    Object.keys(assets.generalSkillFiles).length > 0
-  ) {
-    skillsToCheck.push({
-      name: "pr-hero",
-      files: assets.generalSkillFiles,
-    });
-  }
-
+  const skillsToCheck = bundledSkills(assets);
   let everyDigestRecorded = true;
   for (const skill of skillsToCheck) {
     const targetDir = path.join(env.skillsDir, skill.name);
@@ -770,6 +916,7 @@ export interface RemoveSkillsOptions {
   exists?: (path: string) => boolean;
   readFile?: (path: string) => string | undefined;
   unlink?: (path: string) => void;
+  rmdir?: (path: string) => void;
 }
 
 export interface RemoveSkillsResult {
@@ -778,6 +925,7 @@ export interface RemoveSkillsResult {
   errors: string[];
 }
 
+// Removes every bundled skill under its current and its pre-rename name.
 export async function removeSkills(
   env: AgentEnvDetection,
   options: RemoveSkillsOptions = {},
@@ -791,81 +939,33 @@ export async function removeSkills(
   }
 
   const exists = options.exists ?? existsSync;
-  const readFile =
-    options.readFile ??
-    ((p: string) => {
-      try {
-        return readFileSync(p, "utf-8");
-      } catch {
-        return undefined;
-      }
-    });
-  const unlink = options.unlink ?? unlinkSync;
-
-  const skillNames = [
-    "pr-hero-triage",
-    "pr-hero-ci-setup",
-    "pr-hero-pr",
-    "pr-hero",
-  ];
-  const removed: string[] = [];
-  const skippedModified: string[] = [];
-  const errors: string[] = [];
-
-  for (const skillName of skillNames) {
-    const targetDir = path.join(env.skillsDir, skillName);
-    const digestFile = path.join(targetDir, "digest.json");
-
-    if (!exists(targetDir)) continue;
-
-    let digest: { files?: Record<string, string> } | undefined;
-    if (exists(digestFile)) {
-      try {
-        const raw = readFile(digestFile);
-        if (raw) digest = JSON.parse(raw);
-      } catch {
-        // Ignored
-      }
-    }
-
-    let skillSkippedModified = false;
-    if (digest?.files) {
-      for (const [logicalName, expectedHash] of Object.entries(digest.files)) {
-        const filePath = path.join(targetDir, logicalName);
-        if (!exists(filePath)) continue;
-
-        const content = readFile(filePath);
-        if (content === undefined) continue;
-
-        const fileHash = sha256(content);
-        if (fileHash === expectedHash) {
-          try {
-            unlink(filePath);
-            removed.push(logicalName);
-          } catch (err) {
-            errors.push(
-              `Failed to remove ${filePath}: ${(err as Error).message}`,
-            );
-          }
-        } else {
-          skippedModified.push(logicalName);
-          skillSkippedModified = true;
+  const io: SkillDirIo = {
+    exists,
+    readFile:
+      options.readFile ??
+      ((p: string) => {
+        try {
+          return readFileSync(p, "utf-8");
+        } catch {
+          return undefined;
         }
-      }
-    }
+      }),
+    unlink: options.unlink,
+    rmdir: options.rmdir,
+  };
 
-    // Remove digest if no files were skipped due to modification
-    if (!skillSkippedModified && exists(digestFile)) {
-      try {
-        unlink(digestFile);
-        removed.push("digest.json");
-      } catch (err) {
-        errors.push(
-          `Failed to remove ${digestFile}: ${(err as Error).message}`,
-        );
-      }
-    }
+  const result: RemoveSkillsResult = {
+    removed: [],
+    skippedModified: [],
+    errors: [],
+  };
+  for (const name of allSkillDirNames()) {
+    const targetDir = path.join(env.skillsDir, name);
+    if (!exists(targetDir)) continue;
+    const res = removeSkillDir(targetDir, io);
+    result.removed.push(...res.removed);
+    result.skippedModified.push(...res.skippedModified);
+    result.errors.push(...res.errors);
   }
-
-  return { removed, skippedModified, errors };
+  return result;
 }

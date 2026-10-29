@@ -1,5 +1,5 @@
 ---
-name: pr-hero-ci-setup
+name: crysk-ci-setup
 description: "Trigger: setup CI, add pr-hero to CI, GitHub Actions review, OpenCode, OPENCODE_AUTH_JSON, CRYSK_ROUTING, DeepSeek, admission policy, configure CI workflow, retrigger, force review, skipped review, /crysk review, /crysk override, pr-hero-force. Scaffolds the one workflow, secrets, routing, and admission config."
 license: Apache-2.0
 metadata:

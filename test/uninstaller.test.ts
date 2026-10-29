@@ -47,8 +47,12 @@ describe("uninstaller (lifecycle foundations)", () => {
       }
       expect(plan.rcFilesCleaned).toContain(path.join(home, ".zshrc"));
       expect(plan.binariesRemoved).toContain(standaloneBin);
-      // Every bundled skill is removed, the general pr-hero one included.
+      // Every bundled skill is removed under both its names, the general one included.
       for (const skillName of [
+        "crysk-loop",
+        "crysk-ci-setup",
+        "crysk-pr",
+        "crysk",
         "pr-hero-triage",
         "pr-hero-ci-setup",
         "pr-hero-pr",

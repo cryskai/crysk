@@ -1,6 +1,6 @@
 ---
-name: pr-hero-triage
-description: "Run the autonomous pr-hero PR review loop end-to-end (review -> judge -> fix/reply -> wait -> recheck until done): triage pr-hero findings posted as PR comments in their own thread with applied, dismissed, deferred, or misclassified plus reasoning, push verified fixes, and subscribe to re-reviews with `pr-hero status --pr <n> --wait --json` without stopping to ask the user. Trigger: pr-hero finding comments on a PR you authored, pr-hero-loop, closing the PR review loop, responding to automated code review, `<!-- crysk-finding` or legacy `<!-- pr-hero-finding` markers in a PR."
+name: crysk-loop
+description: "Run the autonomous pr-hero PR review loop end-to-end (review -> judge -> fix/reply -> wait -> recheck until done): triage pr-hero findings posted as PR comments in their own thread with applied, dismissed, deferred, or misclassified plus reasoning, push verified fixes, and subscribe to re-reviews with `pr-hero status --pr <n> --wait --json` without stopping to ask the user. Trigger: pr-hero finding comments on a PR you authored, crysk-loop, pr-hero-loop, closing the PR review loop, responding to automated code review, `<!-- crysk-finding` or legacy `<!-- pr-hero-finding` markers in a PR."
 license: Apache-2.0
 metadata:
   author: juanmaagd

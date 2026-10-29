@@ -313,7 +313,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     const asset = Bun.YAML.parse(
       await Bun.file(
         new URL(
-          "../../skills/pr-hero-ci-setup/assets/workflow.yml",
+          "../../skills/crysk-ci-setup/assets/workflow.yml",
           import.meta.url,
         ),
       ).text(),
