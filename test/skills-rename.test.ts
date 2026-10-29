@@ -289,21 +289,24 @@ describe("uninstall removes both name sets, never an edited file", () => {
     }
   });
 
-  test("keeps an edited file of a current or a legacy skill", async () => {
+  // An uninstall the user asked for removes both generations whole, as it always has.
+  test("removes current and legacy skill dirs whole, edited files included", async () => {
     await syncSkills(env, resolveEngineAssets());
     installAllLegacy();
-    const current = path.join(skillsDir, "crysk-pr", "SKILL.md");
-    const legacy = path.join(skillsDir, "pr-hero-pr", "SKILL.md");
-    writeFileSync(current, "edited current\n");
-    writeFileSync(legacy, "edited legacy\n");
+    writeFileSync(
+      path.join(skillsDir, "crysk-pr", "SKILL.md"),
+      "edited current\n",
+    );
+    writeFileSync(
+      path.join(skillsDir, "pr-hero-pr", "SKILL.md"),
+      "edited legacy\n",
+    );
 
     const { result } = await uninstall();
 
-    expect(readFileSync(current, "utf-8")).toBe("edited current\n");
-    expect(readFileSync(legacy, "utf-8")).toBe("edited legacy\n");
+    expect(present("crysk-pr")).toBe(false);
+    expect(present("pr-hero-pr")).toBe(false);
     expect(present("crysk-loop")).toBe(false);
-    // The operator is told a dir was kept in place.
-    expect(result.executedSteps.join("\n")).toContain("Kept");
     expect(result.ok).toBe(true);
   });
 });

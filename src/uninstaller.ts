@@ -7,11 +7,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  allSkillDirNames,
-  detectAgentEnvironments,
-  removeSkillDir,
-} from "./agent-env";
+import { allSkillDirNames, detectAgentEnvironments } from "./agent-env";
 import {
   HOME_DIR_NAME,
   LEGACY_HOME_DIR_NAME,
@@ -447,24 +443,13 @@ export async function executeUninstallPlan(
 
         case "remove_skills":
           if (step.targetPath && exists(step.targetPath)) {
-            // Digest-gated, never recursive: a skill file the user edited
-            // survives an uninstall, with its dir.
-            const res = removeSkillDir(step.targetPath, {
-              exists,
-              readFile,
-              unlink,
-              rmdir: options.rmdir
-                ? (p) => options.rmdir?.(p, { recursive: false })
-                : undefined,
-            });
-            errors.push(...res.errors);
-            executedSteps.push(step.desc);
-            if (!res.dirRemoved) {
-              executedSteps.push(
-                `Kept ${step.targetPath}: edited files or files with no recorded digest remain`,
-              );
+            // An uninstall the user asked for removes the whole dir, both names, as
+            // it always has; only the upgrade sync's legacy cleanup is digest-gated.
+            if (options.rmdir) {
+              options.rmdir(step.targetPath, { recursive: true });
+            } else {
+              rmSync(step.targetPath, { recursive: true, force: true });
             }
-            break;
           }
           executedSteps.push(step.desc);
           break;
