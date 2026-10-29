@@ -2226,6 +2226,52 @@ describe("parseCliRecord — the hunter_failures field", () => {
     ).toBeUndefined();
   });
 
+  test("round-trips a short detail, and still refuses a detail that is not a safe single line", () => {
+    const value = {
+      ...base,
+      hunter_failures: [
+        {
+          cause: "auth_invalid",
+          detail: "Anthropic API: Invalid API key (HTTP 401)",
+        },
+      ],
+    };
+    expect(parseCliRecord(text(value))).toEqual(value as CliRecord);
+    for (const bad of ["", "two\nlines", "bell\u0007", "x".repeat(161), 3]) {
+      expect(
+        parseCliRecord(text({ ...base, hunter_failures: [{ detail: bad }] })),
+      ).toBeUndefined();
+    }
+  });
+
+  test("round-trips the credential a hunter ran on, and refuses any other name", () => {
+    for (const credential of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]) {
+      const value = {
+        ...base,
+        hunter_failures: [{ cause: "auth_invalid", credential }],
+      };
+      expect(parseCliRecord(text(value))).toEqual(value as CliRecord);
+    }
+    for (const bad of ["GITHUB_TOKEN", "", "anthropic_api_key", 3]) {
+      expect(
+        parseCliRecord(
+          text({ ...base, hunter_failures: [{ credential: bad }] }),
+        ),
+      ).toBeUndefined();
+    }
+  });
+
+  test("a record with detail AND another unknown key is still refused", () => {
+    expect(
+      parseCliRecord(
+        text({
+          ...base,
+          hunter_failures: [{ detail: "Anthropic API: x", step: "x" }],
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
   test("the field belongs to hunters-failed only", () => {
     expect(
       parseCliRecord(

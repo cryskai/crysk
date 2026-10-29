@@ -131,11 +131,12 @@ function baseResult(
     sessionFailed?: boolean;
     skillOutput?: SkillOutput;
     gatePriors?: readonly GateRow[];
+    perAgent?: PipelineResult["perAgent"];
   } = {},
 ): PipelineResult {
   return {
     skillOutput: over.skillOutput ?? baseSkillOutput(),
-    perAgent: {},
+    perAgent: over.perAgent ?? {},
     usage: { ...zeroUsage(), cost_usd_est: 0.42 },
     sessionFailed: over.sessionFailed ?? false,
     unresolved: [],
@@ -503,6 +504,67 @@ describe("publishRunOutcome", () => {
     expect(report).toContain(
       "This is an assistant report, not a merge gate: every line above is a claim to verify",
     );
+  });
+
+  // An incomplete review is announced in the Actions UI with the failed agent's own words.
+  describe("the incomplete-review annotation", () => {
+    const failedRefuter = {
+      refuter: {
+        tokens_total: 0,
+        duration_ms: 0,
+        tokens_in: 0,
+        tokens_out: 0,
+        cost_usd_est: 0,
+        attempts: 1,
+        status: "failed",
+        detail: "Anthropic API: Credit balance is too low (HTTP 400)",
+      },
+    };
+    const partialResult = () =>
+      baseResult({
+        skillOutput: { ...baseSkillOutput(), run_status: "partial" },
+        perAgent: failedRefuter,
+      });
+
+    async function stdoutOf(run: () => Promise<unknown>): Promise<string> {
+      const chunks: string[] = [];
+      const spy = spyOn(process.stdout, "write").mockImplementation(((
+        chunk: string | Uint8Array,
+      ) => {
+        chunks.push(String(chunk));
+        return true;
+      }) as typeof process.stdout.write);
+      try {
+        await run();
+      } finally {
+        spy.mockRestore();
+      }
+      return chunks.join("");
+    }
+
+    test("under CI, a partial review prints a ::warning:: naming the failed agent and why", async () => {
+      const out = await stdoutOf(() =>
+        publishRunOutcome(baseInput({ result: partialResult(), isCi: true })),
+      );
+      expect(out).toContain("::warning title=pr-hero::");
+      expect(out).toContain(
+        "refuter (failed — Anthropic API: Credit balance is too low (HTTP 400))",
+      );
+    });
+
+    test("outside CI the result block carries it and no annotation is printed", async () => {
+      const out = await stdoutOf(() =>
+        publishRunOutcome(baseInput({ result: partialResult(), isCi: false })),
+      );
+      expect(out).not.toContain("::warning title=pr-hero::");
+    });
+
+    test("a complete review with every agent finished prints none", async () => {
+      const out = await stdoutOf(() =>
+        publishRunOutcome(baseInput({ isCi: true })),
+      );
+      expect(out).not.toContain("::warning title=pr-hero::");
+    });
   });
 
   // S4, step summary chain: publishRunOutcome -> publishCiReviewIfEligible ->

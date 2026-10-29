@@ -542,6 +542,37 @@ describe("renderResult incomplete runs", () => {
     expect(text).toContain("(failed)");
   });
 
+  test("the notice quotes a failed agent's detail", () => {
+    const text = joined(
+      renderResult(
+        input({
+          doc: partial({
+            findings: [],
+            telemetry: {
+              ...partialTelemetry,
+              per_agent: {
+                reliability: {
+                  tokens_total: 60,
+                  duration_ms: 1000,
+                  status: "ok",
+                },
+                parity: {
+                  tokens_total: 0,
+                  duration_ms: 0,
+                  status: "failed",
+                  detail: "Anthropic API: Credit balance is too low (HTTP 400)",
+                },
+              } as Telemetry["per_agent"],
+            },
+          }),
+        }),
+      ),
+    );
+    expect(text.replace(/\s+/g, " ")).toContain(
+      "parity (failed — Anthropic API: Credit balance is too low (HTTP 400))",
+    );
+  });
+
   test("the notice sits above the findings, not after them", () => {
     const text = joined(renderResult(input({ doc: partial() })));
     expect(text.indexOf("incomplete review")).toBeLessThan(

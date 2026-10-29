@@ -40,6 +40,49 @@ describe("redactDiagnostic (§6.3 redaction-before-persistence)", () => {
     expect(redactDiagnostic("token: abc123")).toBe("[REDACTED]");
   });
 
+  // The keyword pattern read "token is" in "OAuth access token is invalid" as a token
+  // assignment and printed "access [REDACTED] invalid", hiding the provider's sentence.
+  test("ordinary prose that follows the keyword is not a secret", () => {
+    for (const sentence of [
+      "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+      "The API key was rejected by the provider",
+      "your token has expired",
+      "password must not be empty",
+      "no api key provided",
+    ]) {
+      expect(redactDiagnostic(sentence)).toBe(sentence);
+    }
+  });
+
+  // A value that starts with an allowed prose word is still a value: only trailing
+  // sentence punctuation may be ignored, never digits or symbols (the verifier's probe).
+  test("a prose word glued to digits or symbols is still redacted", () => {
+    expect(redactDiagnostic("password is1234")).toBe("[REDACTED]");
+    expect(redactDiagnostic("password can8472")).toBe("[REDACTED]");
+    expect(redactDiagnostic("token no123!")).toBe("[REDACTED]");
+    expect(redactDiagnostic("token to123")).toBe("[REDACTED]");
+    expect(redactDiagnostic("your token has expired.")).toBe(
+      "your token has expired.",
+    );
+  });
+
+  test("a value after the keyword is still redacted, with or without a delimiter", () => {
+    expect(redactDiagnostic("invalid token abc123def456")).toBe(
+      "invalid [REDACTED]",
+    );
+    expect(redactDiagnostic("api key sk-ant-api03-AbCdEf123456")).toBe(
+      "api key [REDACTED]",
+    );
+    expect(redactDiagnostic("the password swordfish was wrong")).toBe(
+      "the [REDACTED] was wrong",
+    );
+    expect(redactDiagnostic("token: is")).toBe("[REDACTED]");
+    expect(redactDiagnostic("rejected api_key=is")).toBe("rejected [REDACTED]");
+    expect(redactDiagnostic("Authorization: Bearer abc.def")).toBe(
+      "Authorization: [REDACTED]",
+    );
+  });
+
   test("near-misses are preserved verbatim", () => {
     // sk- needs >= 8 following chars; this has 7.
     expect(redactDiagnostic("sk-1234567")).toBe("sk-1234567");

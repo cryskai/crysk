@@ -22,7 +22,10 @@
 // without widening trigger.ts; the drift test compares the two source texts.
 
 import { commandHint, MARKER_OPEN, matchMarkerPrefix } from "../brand";
-import type { TransportFailureCause } from "../execution/contracts";
+import type {
+  FailureCredential,
+  TransportFailureCause,
+} from "../execution/contracts";
 import type { CredentialProjectionFailureClass } from "../security/credential-broker";
 
 export type Owner = "config" | "provider" | "pr-hero" | "unclassified";
@@ -303,6 +306,12 @@ export interface HunterFailureRecord {
   // The route's provider and model, as short safe strings (see safeProviderName).
   provider?: string;
   model?: string;
+  // One short line saying why the hunter failed, in the provider's words (see
+  // safeFailureDetail). Present only when the transport knew it.
+  detail?: string;
+  // The secret the hunter ran on (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN), so a
+  // credential or quota failure can name which one to replace or top up.
+  credential?: FailureCredential;
 }
 
 // Every TransportFailureCause, as a runtime lookup the record reader can check a
@@ -351,6 +360,41 @@ export function safeProviderName(value: unknown): string | undefined {
 
 export function safeModelName(value: unknown): string | undefined {
   return typeof value === "string" && MODEL_NAME_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+// Every FailureCredential, as a runtime lookup (tied to the union by `satisfies`, like the
+// cause list above: this file cannot import the runtime list from execution/contracts).
+const FAILURE_CREDENTIAL_LOOKUP = {
+  ANTHROPIC_API_KEY: true,
+  ANTHROPIC_AUTH_TOKEN: true,
+  CLAUDE_CODE_OAUTH_TOKEN: true,
+} satisfies Record<FailureCredential, true>;
+
+export function knownFailureCredential(
+  value: unknown,
+): FailureCredential | undefined {
+  return typeof value === "string" &&
+    Object.hasOwn(FAILURE_CREDENTIAL_LOOKUP, value)
+    ? (value as FailureCredential)
+    : undefined;
+}
+
+// A failure detail, as the record may carry it. Unlike a provider or model name it is the
+// provider's own text, so the record accepts only one short line with no control
+// characters: it is later placed in a commit status, an annotation and a comment. The
+// writer (hunterFailureRecords) and the reader share this one check, and the cap matches
+// the engine's failure reason (stepFailureReason).
+const FAILURE_DETAIL_MAX = 160;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the point is to refuse control characters
+const FAILURE_DETAIL_PATTERN = /^[^\u0000-\u001f\u007f]+$/;
+
+export function safeFailureDetail(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.trim() === value &&
+    value.length <= FAILURE_DETAIL_MAX &&
+    FAILURE_DETAIL_PATTERN.test(value)
     ? value
     : undefined;
 }
@@ -620,10 +664,11 @@ function parseUnsettledStatus(value: unknown): UnsettledStatus | undefined {
   return { state, description };
 }
 
-// The per-hunter entries of a hunters-failed record. Each entry carries only the three
+// The per-hunter entries of a hunters-failed record. Each entry carries only the five
 // keys, and each value is checked: a cause against the transport vocabulary, a provider
-// and a model against their safe-string patterns. An empty list is refused, since the
-// writer never writes one.
+// and a model against their safe-string patterns, a detail as one short plain line, a
+// credential against the two secret names. An empty list is refused, since the writer
+// never writes one.
 function parseHunterFailures(
   value: unknown,
 ): HunterFailureRecord[] | undefined {
@@ -645,6 +690,14 @@ function parseHunterFailures(
         const model = safeModelName(field);
         if (model === undefined) return undefined;
         failure.model = model;
+      } else if (key === "detail") {
+        const detail = safeFailureDetail(field);
+        if (detail === undefined) return undefined;
+        failure.detail = detail;
+      } else if (key === "credential") {
+        const credential = knownFailureCredential(field);
+        if (credential === undefined) return undefined;
+        failure.credential = credential;
       } else {
         return undefined;
       }
@@ -1190,6 +1243,16 @@ function single(
   return { default: { why, fixes, annotationFix } };
 }
 
+const PROVIDER_LIMITED: CatalogVariant = {
+  why: "the provider has throttled this account or key, so an immediate retry would fail the same way",
+  fixes: [
+    "Wait, or raise the quota, then ask for a new review:",
+    REVIEW_AGAIN,
+    LEGACY_REVIEW_NOTE,
+  ],
+  annotationFix: `wait for the limit to reset or raise the quota, then comment ${commandHint("/crysk review", "")} on the PR`,
+};
+
 const CREDENTIAL_UNUSABLE_ENV: CatalogVariant = {
   why: CRED_STORE_WHY,
   fixes: ["Set the secret again:", "$ gh secret set {secret}"],
@@ -1298,18 +1361,53 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "config",
     what: "provider {provider} rejected the credential in {secret}",
-    variants: single(
-      "it is expired, revoked, or a short-lived /login session token",
-      [
-        "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
-        "Or, for OpenCode, re-export the auth store and re-set the secret:",
-        OPENCODE_STORE,
-        "Then ask for a new review:",
-        REVIEW_AGAIN,
-        LEGACY_REVIEW_NOTE,
-      ],
-      "replace the credential in {secret} with a new one, then run `gh secret set {secret}`",
-    ),
+    variants: {
+      // The rejected secret is a per-token credential (ANTHROPIC_API_KEY or
+      // ANTHROPIC_AUTH_TOKEN): the CLI prefers it to the OAuth token, so
+      // setting CLAUDE_CODE_OAUTH_TOKEN alone leaves the next run rejected the same way.
+      api_key: {
+        why: "the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN",
+        fixes: [
+          // Prose between the two commands keeps them in separate code blocks: they are
+          // alternatives, and one copied block would set the new key and then delete it.
+          "Create a new key in the Claude Console and set it:",
+          "$ gh secret set {secret}",
+          "Or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set):",
+          "$ gh secret delete {secret}",
+          "Then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "create a new key and run `gh secret set {secret}`, or delete the {secret} secret so the OAuth token is used (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while the key is set)",
+      },
+      oauth: {
+        why: "it is expired, revoked, or a short-lived /login session token",
+        fixes: [
+          "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+          "Then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
+      },
+      default: {
+        why: "it is expired, revoked, or a short-lived /login session token",
+        fixes: [
+          "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+          "Or, for an API key, create a new key in the Claude Console and set it:",
+          "$ gh secret set ANTHROPIC_API_KEY",
+          "Or, for OpenCode, re-export the auth store and re-set the secret:",
+          OPENCODE_STORE,
+          "Then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "replace the credential in {secret} with a new one, then run `gh secret set {secret}`",
+      },
+    },
   },
   "PRH-ROUTING-MISSING": {
     level: "error",
@@ -1574,15 +1672,49 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "provider",
     what: "rate limit or quota reached",
-    variants: single(
-      "the provider has throttled this account or key, so an immediate retry would fail the same way",
-      [
-        "Wait, or raise the quota, then ask for a new review:",
-        REVIEW_AGAIN,
-        LEGACY_REVIEW_NOTE,
-      ],
-      `wait for the limit to reset or raise the quota, then comment ${commandHint("/crysk review", "")} on the PR`,
-    ),
+    variants: {
+      default: PROVIDER_LIMITED,
+      // Every failed hunter hit the same limit and the provider said which one (an empty
+      // credit balance, say): the sentence quotes it, and the fix is the default's. The
+      // quote comes FIRST in this and the next two variants: the commit status clips the
+      // code plus the sentence at 140 characters, and the provider's words (with a reset
+      // time) must survive that. The explanation after them is for the comment.
+      every_hunter: {
+        ...PROVIDER_LIMITED,
+        what: "{detail} (rate limit or quota reached)",
+      },
+      // The credit balance or spend limit of the account behind ANTHROPIC_API_KEY (the CLI
+      // prefers that key over the subscription token, so it is the credential in use).
+      // Waiting does not help: the fix is to top up, or to stop using the key.
+      api_key: {
+        what: "{detail}: the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit",
+        why: "the provider refuses every request until the account has credit again, so a retry would fail the same way",
+        fixes: [
+          "Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN:",
+          "$ gh secret delete ANTHROPIC_API_KEY",
+          "Then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or delete the ANTHROPIC_API_KEY secret so the review uses CLAUDE_CODE_OAUTH_TOKEN",
+      },
+      // The Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached a usage window. The
+      // provider's own sentence carries the reset time, so the what quotes it.
+      subscription: {
+        what: "{detail}: the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached its usage limit",
+        why: "the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way",
+        fixes: [
+          "Re-run after the limit resets (the reset time is in the sentence above):",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+          "Or set ANTHROPIC_API_KEY to bill per token:",
+          "$ gh secret set ANTHROPIC_API_KEY",
+        ],
+        annotationFix:
+          "re-run after the limit resets, or set ANTHROPIC_API_KEY to bill per token",
+      },
+    },
   },
   "PRH-PROVIDER-UNAVAILABLE": {
     level: "error",
@@ -1626,12 +1758,30 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     // sees directly (the hunter set), so "Unclassified:" would blame an unknown
     // cause that does not exist. The owner stays unclassified for the table.
     lead: "Not reviewed:",
-    what: "Every review hunter failed in {step}: {detail}",
-    variants: single(
-      "no hunter returned a result, so there is no finding to report",
-      ["Re-run the failed jobs:", RERUN_FAILED, "If it repeats, report it."],
-      "re-run the failed jobs with `gh run rerun {runId} --failed`",
-    ),
+    what: "Every hunter failed in {step}: {detail}",
+    variants: {
+      default: {
+        why: "no hunter returned a result, so there is no finding to report",
+        fixes: [
+          "Re-run the failed jobs:",
+          RERUN_FAILED,
+          "If it repeats, report it.",
+        ],
+        annotationFix:
+          "re-run the failed jobs with `gh run rerun {runId} --failed`",
+      },
+      // Every hunter was refused for the size of the request: a re-run sends the same one.
+      context_window_exceeded: {
+        why: "the review input is too large for the model, so every hunter was refused and a re-run would send the same request",
+        fixes: [
+          "Lower `max-changed-lines` in the workflow's `with:` block (or `max_changed_lines` in the repo config), or exclude paths in `.prheroignore`, then ask for a new review:",
+          REVIEW_AGAIN,
+          LEGACY_REVIEW_NOTE,
+        ],
+        annotationFix:
+          "lower `max-changed-lines` (or `max_changed_lines` in the repo config) or exclude paths in `.prheroignore`",
+      },
+    },
   },
   "PRH-UNCLASSIFIED": {
     level: "error",
@@ -1693,7 +1843,42 @@ export function renderHunterCause(
   cause: TransportFailureCause,
   params: ErrorParams,
   ctx: OutcomeContext,
+  // What every failed hunter reported identically, when they agree: the provider's words
+  // and the secret they ran on. Only the causes whose sentence has room for them use them.
+  shared: {
+    readonly detail?: string;
+    readonly credential?: FailureCredential;
+  } = {},
 ): RenderedError | undefined {
+  // A rejected credential is rendered from its own code only when the secret and the
+  // provider are known, so the sentence names both and never a placeholder.
+  if (cause === "auth_invalid") {
+    if (shared.credential === undefined || isBlank(params.provider)) {
+      return undefined;
+    }
+    return renderCode(
+      "PRH-CRED-REJECTED",
+      { ...params, secret: shared.credential },
+      ctx,
+    );
+  }
+  // An empty balance or a spent quota. The provider's words say which limit it was, and the
+  // credential says whose: a credit balance on an API key is fixed by topping up, a
+  // subscription window by waiting for its reset. Without the words the default wording
+  // stands.
+  if (cause === "quota_exhausted") {
+    if (shared.detail === undefined) {
+      return renderCode("PRH-PROVIDER-LIMITED", params, ctx);
+    }
+    const quoted = { ...params, detail: shared.detail };
+    const variant =
+      shared.credential === "ANTHROPIC_API_KEY"
+        ? "api_key"
+        : shared.credential === "CLAUDE_CODE_OAUTH_TOKEN"
+          ? "subscription"
+          : "every_hunter";
+    return renderCode("PRH-PROVIDER-LIMITED", quoted, ctx, variant);
+  }
   // The provider's 404 names the model, so the every_hunter wording keeps it. Its fixes name
   // the provider, so the provider must be known; the model is optional (whatWithoutModel).
   if (cause === "model_unavailable") {
@@ -1772,6 +1957,17 @@ function paramVariant(
 ): string | undefined {
   if (code === "PRH-TOKEN-PERMISSION" && isBlank(params.scope)) {
     return "no-scope";
+  }
+  // The credential in the secret picks the fix: a rejected API key and a rejected OAuth
+  // token are replaced differently, and the CLI uses the key ahead of the token.
+  if (code === "PRH-CRED-REJECTED" && variant === undefined) {
+    if (
+      params.secret === "ANTHROPIC_API_KEY" ||
+      params.secret === "ANTHROPIC_AUTH_TOKEN"
+    ) {
+      return "api_key";
+    }
+    if (params.secret === "CLAUDE_CODE_OAUTH_TOKEN") return "oauth";
   }
   // A caller that names a variant keeps it, so the default wording stays
   // reachable with a detail present.

@@ -1875,6 +1875,12 @@ export class StepExecutionHarness implements StepRunner {
       ...(lastFailureCause === undefined
         ? {}
         : { failureCause: lastFailureCause }),
+      ...(lastOutcome?.failureDetail === undefined
+        ? {}
+        : { failureDetail: lastOutcome.failureDetail }),
+      ...(lastOutcome?.failureCredential === undefined
+        ? {}
+        : { failureCredential: lastOutcome.failureCredential }),
       stderrTail: lastOutcome?.stderrTail ?? "",
       resultText: lastOutcome?.finalText.slice(-8192) ?? "",
     };
@@ -2259,6 +2265,43 @@ export class StepExecutionHarness implements StepRunner {
       deadlineMs,
       harnessWatchdogMs,
       onData: async (outcome, settlement): Promise<AttemptDelivery> => {
+        // A failed attempt the transport already explained with a typed cause (the
+        // Claude CLI's error envelope) has no draft: its text is the provider's message,
+        // not the agent's answer. Parsing it would only add a parse_error beside the
+        // real cause in the attempt log. The cause decides the retry, exactly as it does
+        // for a draft that failed to parse.
+        if (
+          outcome.completion === "failed" &&
+          outcome.failureCause !== undefined
+        ) {
+          const resolution = resolveFailureCause({
+            outcome,
+            classifyFailure: transport.classifyFailure,
+            parseThrew: false,
+          });
+          const classification = legacyClassificationFromCause(resolution);
+          await this.guardedDataPlaneWrite(settlement, () =>
+            writeAttemptLog(
+              step,
+              attempt,
+              kind,
+              outcome,
+              classification,
+              resolution.kind === "cause"
+                ? resolution.cause
+                : "legacy_terminal",
+            ),
+          ).catch(() => {});
+          if (classification === "transient") {
+            await this.guardedDataPlaneWrite(settlement, () =>
+              Bun.file(step.outPath)
+                .unlink()
+                .then(() => {})
+                .catch(() => {}),
+            );
+          }
+          return { delivered: false, resolution };
+        }
         // Set only when `step.parse` itself threw: the catch below also
         // receives artifact-write failures, which are not the parser's verdict.
         let parseError: string | undefined;

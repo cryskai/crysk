@@ -12,6 +12,7 @@ import type {
   AuthEvent,
   DenialCode,
   ExecutableAllowlistEntry,
+  FailureCredential,
   ResolvedModelRoute,
   StepAdmissionGate,
   TransportFailureCause,
@@ -107,6 +108,11 @@ export interface StepResult {
   // resolved one (a transport cause, never a harness cause). Absent on success,
   // and on a failure with no transport cause. The CLI record names it per hunter.
   failureCause?: TransportFailureCause;
+  // The final failed attempt's one-line explanation (TransportOutcome.failureDetail),
+  // when the transport gave one. Absent on success.
+  failureDetail?: string;
+  // The secret the final failed attempt ran on (TransportOutcome.failureCredential).
+  failureCredential?: FailureCredential;
   stderrTail: string;
   resultText: string;
 }

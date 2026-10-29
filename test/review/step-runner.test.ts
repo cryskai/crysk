@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { stepFailureReason } from "#review/pipeline";
 import {
   buildStepArgv,
   ClaudeCodeRunner,
@@ -14,6 +15,7 @@ import {
   isTransientSessionFailure,
 } from "../../src/execution/failure-classification";
 import { FORMAT_RETRY_REMINDER } from "../../src/execution/step-artifacts";
+import { CLAUDE_ERROR_ROWS, claudeErrorEnvelope } from "./claude-error-rows";
 
 // ---------------------------------------------------------------------------
 // FakeSpawn: scripted {stdout, stderr, exitCode} per call, records argv/cwd
@@ -659,5 +661,69 @@ describe("ClaudeCodeRunner attempt admission", () => {
     expect(result.status).toBe("ok");
     expect(acquired).toEqual([1]);
     expect(released).toBe(1);
+  });
+});
+
+// The Claude CLI reports API and run-level errors in an `is_error` envelope (exit 0 or 1).
+// The step must fail with the typed cause and the CLI's words, and the cause alone decides
+// whether another attempt is spent: a transient cause retries, a terminal one does not,
+// and none of them spends a format retry on the error text.
+describe("ClaudeCodeRunner error map", () => {
+  test.each(CLAUDE_ERROR_ROWS)(
+    "$name -> $cause, $retried retried",
+    async (row) => {
+      const { spawnFn, calls } = makeFakeSpawn([
+        { stdout: claudeErrorEnvelope(row), exitCode: row.exitCode },
+      ]);
+      const seen: RetryInfo[] = [];
+      const spec = await makeSpec({ onRetry: (info) => seen.push(info) });
+      const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(spec);
+
+      expect(stepResult.status).toBe("failed");
+      expect(stepResult.failureCause).toBe(row.cause);
+      expect(stepResult.attempts).toBe(row.retried ? 2 : 1);
+      expect(calls).toHaveLength(row.retried ? 2 : 1);
+      expect(seen).toHaveLength(row.retried ? 1 : 0);
+      const detail = stepResult.failureDetail ?? "";
+      expect(detail).toContain(
+        row.message ?? row.subtype ?? row.terminalReason ?? "",
+      );
+      expect(stepResult.stderrTail).toContain(detail);
+      // The terminal's failed-step line reads this same tail, so it names the cause too.
+      expect(stepFailureReason(stepResult.stderrTail)).toBe(detail);
+    },
+  );
+
+  test("a normal success carries no failure detail", async () => {
+    const { spawnFn } = makeFakeSpawn([
+      { stdout: envelope(JSON.stringify(GOOD_DRAFT)) },
+    ]);
+    const stepResult = await new ClaudeCodeRunner({ spawnFn }).run(
+      await makeSpec(),
+    );
+    expect(stepResult.status).toBe("ok");
+    expect(stepResult.failureDetail).toBeUndefined();
+    expect(stepResult.failureCredential).toBeUndefined();
+  });
+
+  test("the credential of the child env rides the failed step", async () => {
+    const { spawnFn } = makeFakeSpawn([
+      {
+        stdout: claudeErrorEnvelope({
+          name: "401",
+          status: 401,
+          terminalReason: "api_error",
+          message: "Invalid API key",
+          exitCode: 0,
+          cause: "auth_invalid",
+          retried: false,
+        }),
+      },
+    ]);
+    const stepResult = await new ClaudeCodeRunner({
+      spawnFn,
+      childEnv: { ANTHROPIC_API_KEY: "k" },
+    }).run(await makeSpec());
+    expect(stepResult.failureCredential).toBe("ANTHROPIC_API_KEY");
   });
 });

@@ -625,6 +625,12 @@ The table shows the status and the job exit for each case:
 | Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `crysk: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
+A review where an agent (a hunter, the refuter or the summarizer) failed also prints a `::warning title=pr-hero::`
+annotation, and the posted review comment's incompleteness notice lists the agents that did not finish. Each
+failed agent is followed by the provider's own one-line reason when the Claude CLI reported one, for example
+`refuter (failed — Anthropic API: Credit balance is too low (HTTP 400))`. The commit status text above is a
+fixed, machine-read contract (the repeat check rebuilds it), so it carries the counts and the set key only.
+
 Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
 below keep their own status and exit, as they did before the gate.
 
@@ -1084,10 +1090,66 @@ gh secret set {secret}
 claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
 ```
 
+Or, for an API key, create a new key in the Claude Console and set it:
+
+```bash
+gh secret set ANTHROPIC_API_KEY
+```
+
 Or, for OpenCode, re-export the auth store and re-set the secret:
 
 ```bash
 gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+When every failed hunter reports the secret it ran on, the fix starts with the one for that secret.
+
+#### `api_key`
+
+**Why:** the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN
+
+The rejected secret is a per-token credential, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`. The CLI prefers it to the OAuth token (observed with CLI 2.1.312: with both present it prints that the key "takes precedence over your claude.ai login"), so setting the OAuth token alone changes nothing while the key is set.
+
+**Fix:**
+
+Create a new key in the Claude Console and set it:
+
+```bash
+gh secret set {secret}
+```
+
+Or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set):
+
+```bash
+gh secret delete {secret}
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+#### `oauth`
+
+**Why:** it is expired, revoked, or a short-lived /login session token
+
+The rejected secret is `CLAUDE_CODE_OAUTH_TOKEN`.
+
+**Fix:**
+
+```bash
+claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
 ```
 
 Then ask for a new review:
@@ -1446,6 +1508,58 @@ gh pr comment {pr} --body "/crysk review"
 
 On a workflow set up before the rename, comment `/pr-hero review` instead.
 
+When every failed hunter ran out of quota (the Claude CLI reports an empty Anthropic credit balance, a spend limit and a subscription usage window this way), the run renders this code with the provider's own words in the sentence, so the commit status says which limit it was. These causes are not retried: a retry within minutes cannot succeed. The variants below pick the fix from the secret the hunters ran on. The provider's words come first in the sentence of every variant that quotes them, so the 140-character commit status keeps them (the reset time of a usage limit included) and the explanation after them is what gets clipped.
+
+#### `every_hunter`
+
+**What:** {detail} (rate limit or quota reached)
+
+Every hunter of the run failed on the same limit, and all of them reported the same words from the provider, which fill `{detail}`. The secret they ran on is not known, so the fix is the default one. Hunters that reported different words, or none, render this code without the quote.
+
+#### `api_key`
+
+**What:** {detail}: the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit
+
+**Why:** the provider refuses every request until the account has credit again, so a retry would fail the same way
+
+**Fix:**
+
+Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN:
+
+```bash
+gh secret delete ANTHROPIC_API_KEY
+```
+
+Then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+#### `subscription`
+
+**What:** {detail}: the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached its usage limit
+
+**Why:** the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way
+
+**Fix:**
+
+Re-run after the limit resets (the reset time is in the sentence above):
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
+
+Or set ANTHROPIC_API_KEY to bill per token:
+
+```bash
+gh secret set ANTHROPIC_API_KEY
+```
+
 ### PRH-PROVIDER-UNAVAILABLE
 
 **Owner:** provider
@@ -1502,9 +1616,11 @@ gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body
 
 **Owner:** unclassified
 
-**What:** Every review hunter failed in {step}: {detail}
+**What:** Every hunter failed in {step}: {detail}
 
 **Why:** no hunter returned a result, so there is no finding to report
+
+When every failed hunter reports the same one-line reason from the provider (a transient overload, say: `Anthropic API: Overloaded (HTTP 529)`), it replaces the generic reason after the colon, cut to fit the 140-character status description. A shared `quota_exhausted` cause renders `PRH-PROVIDER-LIMITED` instead, with the same words. A shared `auth_invalid` cause renders `PRH-CRED-REJECTED` when the record names the secret the hunters ran on and the provider; without them it keeps this code.
 
 When every failed hunter shares a `model_unavailable` cause with its provider known, the run renders `PRH-MODEL-UNAVAILABLE` instead; when every failed hunter shares a `missing_provider_record` cause with its provider and model known, it renders `PRH-CRED-UNUSABLE`. Any other cause, a missing provider or model, a mix of causes, a hunter with no cause, or a `runtime_unavailable` cause keeps this code.
 
@@ -1517,6 +1633,22 @@ gh run rerun {runId} --failed
 ```
 
 If it repeats, report it.
+
+#### `context_window_exceeded`
+
+**Why:** the review input is too large for the model, so every hunter was refused and a re-run would send the same request
+
+Every failed hunter shares the `context_window_exceeded` cause (the Claude CLI reports a prompt that is too long, or a request over the size limit, this way).
+
+**Fix:**
+
+Lower `max-changed-lines` in the workflow's `with:` block (or `max_changed_lines` in the repo config), or exclude paths in `.prheroignore`, then ask for a new review:
+
+```bash
+gh pr comment {pr} --body "/crysk review"
+```
+
+On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 ### PRH-UNCLASSIFIED
 

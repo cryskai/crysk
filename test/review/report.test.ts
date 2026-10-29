@@ -11,6 +11,7 @@ import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import {
   estimateCost,
   formatElapsed,
+  incompleteReviewAnnotation,
   parseFindingCommentBadge,
   type ReportMeta,
   type RereviewLiveRow,
@@ -825,6 +826,106 @@ describe("renderPrComment", () => {
       "Completed: `reliability`, `refuter`. Did not complete: " +
         "`resilience` (failed).",
     );
+  });
+
+  test("a failed agent's detail is quoted beside its status", () => {
+    const body = renderPrComment(
+      doc({
+        run_status: "partial",
+        telemetry: {
+          ...TELEMETRY,
+          per_agent: {
+            reliability: { tokens_total: 60, duration_ms: 1000, status: "ok" },
+            refuter: {
+              tokens_total: 0,
+              duration_ms: 0,
+              status: "failed",
+              detail: "Anthropic API: Credit balance is too low (HTTP 400)",
+            },
+          } as Telemetry["per_agent"],
+        },
+      }),
+      undefined,
+      undefined,
+      [],
+      undefined,
+    );
+    expect(body).toContain(
+      "Completed: `reliability`. Did not complete: `refuter` (failed — " +
+        "`Anthropic API: Credit balance is too low (HTTP 400)`).",
+    );
+  });
+
+  describe("incompleteReviewAnnotation", () => {
+    const failedRow = (detail?: string) => ({
+      tokens_total: 0,
+      duration_ms: 0,
+      status: "failed",
+      ...(detail === undefined ? {} : { detail }),
+    });
+    const withAgents = (
+      per_agent: Record<string, unknown>,
+      run_status: "partial" | "complete",
+    ) =>
+      doc({
+        run_status,
+        telemetry: { ...TELEMETRY, per_agent } as Telemetry,
+      });
+
+    test("a partial review names the lost agents with their detail", () => {
+      const annotation = incompleteReviewAnnotation(
+        withAgents(
+          {
+            reliability: { tokens_total: 60, duration_ms: 1, status: "ok" },
+            refuter: failedRow(
+              "Anthropic API: Credit balance is too low (HTTP 400)",
+            ),
+          },
+          "partial",
+        ),
+      );
+      expect(annotation).toStartWith("::warning title=pr-hero::");
+      expect(annotation).toContain("incomplete");
+      expect(annotation).toContain(
+        "refuter (failed — Anthropic API: Credit balance is too low (HTTP 400))",
+      );
+      expect(annotation).not.toContain("\n");
+    });
+
+    test("a failed summarizer on a complete run is still announced, with its detail", () => {
+      const annotation = incompleteReviewAnnotation(
+        withAgents(
+          {
+            reliability: { tokens_total: 60, duration_ms: 1, status: "ok" },
+            summary: failedRow("Anthropic API: Invalid API key (HTTP 401)"),
+          },
+          "complete",
+        ),
+      );
+      expect(annotation).toStartWith("::warning title=pr-hero::");
+      expect(annotation).toContain(
+        "summary (failed — Anthropic API: Invalid API key (HTTP 401))",
+      );
+    });
+
+    test("a clean run has no annotation", () => {
+      expect(
+        incompleteReviewAnnotation(
+          withAgents(
+            { reliability: { tokens_total: 60, duration_ms: 1, status: "ok" } },
+            "complete",
+          ),
+        ),
+      ).toBeUndefined();
+    });
+
+    test("the message is escaped as one workflow-command line", () => {
+      const annotation = incompleteReviewAnnotation(
+        withAgents({ refuter: failedRow("100% sure\nsecond line") }, "partial"),
+      );
+      expect(annotation).toContain("100%25 sure%0Asecond line");
+      expect(annotation?.includes("\n")).toBe(false);
+    });
   });
 
   // Every path that can produce a partial run with nothing to name: the

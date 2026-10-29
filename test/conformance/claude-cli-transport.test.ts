@@ -12,6 +12,10 @@ import {
 } from "../../src/execution/usage-normalized";
 import type { ClaudeCodeCliTransportOptions } from "../../src/transports/claude-code-cli";
 import { ClaudeCodeCliTransport } from "../../src/transports/claude-code-cli";
+import {
+  CLAUDE_ERROR_ROWS,
+  claudeErrorEnvelope,
+} from "../review/claude-error-rows";
 
 const PID = 424242;
 
@@ -1622,4 +1626,260 @@ describe("ClaudeCodeCliTransport spawn failure (#314)", () => {
     };
     expect(transport.classifyFailure(outcome)).toBeUndefined();
   });
+});
+
+// Every error the Claude CLI reports in json mode (odd/tasks/claude-error-map.md, S3):
+// the CLI prints an `is_error` envelope and exits 0 or 1, and the message in `result` is
+// the CLI's, not the agent's answer. It must never reach the draft parser, and the typed
+// cause must come from the table, whatever the exit code.
+describe("ClaudeCodeCliTransport error map", () => {
+  async function run(
+    stdoutBody: string,
+    exitCode: number,
+    env: Record<string, string> = {},
+  ) {
+    const fake = makeFakeProc({ stdoutBody, exitCode });
+    const transport = new ClaudeCodeCliTransport({
+      ...okPromptFns,
+      spawnFn: (() => fake.proc) as unknown as typeof Bun.spawn,
+      getPgid: (pid) => pid,
+      killFn: () => {},
+    });
+    const base = makeRequest();
+    return transport.execute(
+      { ...base, isolation: { ...base.isolation, env } },
+      { signal: new AbortController().signal },
+    );
+  }
+
+  test.each(CLAUDE_ERROR_ROWS)(
+    "$name -> $cause (exit $exitCode)",
+    async (row) => {
+      const outcome = await run(claudeErrorEnvelope(row), row.exitCode);
+      expect(outcome.completion).toBe("failed");
+      expect(outcome.failureCause).toBe(row.cause);
+      expect(outcome.terminalProof?.exitCode).toBe(row.exitCode);
+      // The CLI's words are a diagnostic, never the agent's answer.
+      expect(outcome.finalText).toBe("");
+      const detail = outcome.failureDetail ?? "";
+      expect(detail.length).toBeGreaterThan(0);
+      expect(detail.length).toBeLessThanOrEqual(160);
+      expect(detail).toContain(
+        row.message ?? row.subtype ?? row.terminalReason ?? "",
+      );
+      if (row.status !== undefined) {
+        expect(detail).toEndWith(` (HTTP ${row.status})`);
+      }
+      expect(outcome.stderrTail).toContain(detail);
+    },
+  );
+
+  test("the detail is one short line with no control characters", async () => {
+    const outcome = await run(
+      claudeErrorEnvelope({
+        name: "long",
+        status: 401,
+        terminalReason: "api_error",
+        message: `bad\n\u0007key ${"x".repeat(400)}`,
+        exitCode: 0,
+        cause: "auth_invalid",
+        retried: false,
+      }),
+      0,
+    );
+    const detail = outcome.failureDetail ?? "";
+    expect(detail).toStartWith("Anthropic API: bad key ");
+    expect(detail.length).toBeLessThanOrEqual(160);
+    expect(
+      Array.from(detail).some((char) => {
+        const code = char.charCodeAt(0);
+        return code < 0x20 || code === 0x7f;
+      }),
+    ).toBe(false);
+  });
+
+  test("a status wins over the message: a 500 that says overloaded is still a server error", async () => {
+    const outcome = await run(
+      claudeErrorEnvelope({
+        name: "500 overloaded text",
+        status: 500,
+        terminalReason: "api_error",
+        message: "overloaded_error",
+        exitCode: 0,
+        cause: "network_transient",
+        retried: true,
+      }),
+      0,
+    );
+    expect(outcome.failureCause).toBe("network_transient");
+  });
+
+  test("a plain success is unchanged", async () => {
+    const ok = await run(
+      JSON.stringify({
+        is_error: false,
+        terminal_reason: "completed",
+        result: "all good",
+      }),
+      0,
+    );
+    expect(ok.completion).toBe("success");
+    expect(ok.failureCause).toBeUndefined();
+    expect(ok.failureDetail).toBeUndefined();
+    expect(ok.finalText).toBe("all good");
+  });
+
+  // An is_error the table does not name must not fall back to a draft parse and a format
+  // retry, which would hide the cause. It fails terminally and quotes the CLI's words.
+  test.each([
+    ["terminal_reason", "blocking_limit"],
+    ["terminal_reason", "stop_hook_prevented"],
+    ["terminal_reason", "hook_stopped"],
+    ["subtype", "error_max_budget_usd"],
+    ["subtype", "error_max_structured_output_retries"],
+    ["terminal_reason", "image_error"],
+    ["terminal_reason", "rapid_refill_breaker"],
+    ["terminal_reason", "tool_deferred"],
+    ["terminal_reason", "some_reason_a_later_cli_adds"],
+  ] as const)(
+    "an unnamed %s %s fails terminally with the CLI's words",
+    async (field, tag) => {
+      const outcome = await run(
+        JSON.stringify({
+          type: "result",
+          is_error: true,
+          ...(field === "subtype"
+            ? { subtype: tag }
+            : { subtype: "success", terminal_reason: tag }),
+          result: "partial answer\nwith a second line",
+          usage: { input_tokens: 0, output_tokens: 0 },
+        }),
+        1,
+      );
+      expect(outcome.completion).toBe("failed");
+      expect(outcome.failureCause).toBe("provider_configuration_invalid");
+      expect(outcome.failureDetail).toBe(
+        `Claude CLI: partial answer with a second line (${tag})`,
+      );
+      expect(outcome.finalText).toBe("");
+      expect(outcome.stderrTail).toContain(outcome.failureDetail ?? "");
+    },
+  );
+
+  test("an unnamed error with a status and no message quotes both", async () => {
+    const outcome = await run(
+      JSON.stringify({
+        is_error: true,
+        terminal_reason: "blocking_limit",
+        api_error_status: 302,
+      }),
+      0,
+    );
+    expect(outcome.failureCause).toBe("provider_configuration_invalid");
+    expect(outcome.failureDetail).toBe(
+      "Claude CLI: no message (blocking_limit, HTTP 302)",
+    );
+  });
+
+  test("a long or multi-line tag is cut and flattened like the message, and the detail stays within 160", async () => {
+    const outcome = await run(
+      JSON.stringify({
+        is_error: true,
+        terminal_reason: `reason\nwith a break ${"r".repeat(300)}`,
+        result: "boom",
+      }),
+      1,
+    );
+    expect(outcome.failureCause).toBe("provider_configuration_invalid");
+    const detail = outcome.failureDetail ?? "";
+    expect(detail.length).toBeLessThanOrEqual(160);
+    expect(detail).toStartWith("Claude CLI: boom (reason with a break rrr");
+    expect(detail).toEndWith("…)");
+    expect(
+      Array.from(detail).some((char) => {
+        const code = char.charCodeAt(0);
+        return code < 0x20 || code === 0x7f;
+      }),
+    ).toBe(false);
+  });
+
+  test("an unnamed error with neither reason nor subtype is still failed, and the detail stays short", async () => {
+    const outcome = await run(
+      JSON.stringify({ is_error: true, result: "x".repeat(400) }),
+      0,
+    );
+    expect(outcome.completion).toBe("failed");
+    expect(outcome.failureCause).toBe("provider_configuration_invalid");
+    const detail = outcome.failureDetail ?? "";
+    expect(detail).toStartWith("Claude CLI: xxx");
+    expect(detail).toEndWith("… (unknown)");
+    expect(detail.length).toBeLessThanOrEqual(160);
+  });
+
+  test("the max_turns row is kept: is_error with max_turns stays output_limit_exceeded", async () => {
+    const outcome = await run(
+      JSON.stringify({
+        is_error: true,
+        subtype: "error_max_turns",
+        terminal_reason: "max_turns",
+      }),
+      1,
+    );
+    expect(outcome.failureCause).toBe("output_limit_exceeded");
+  });
+
+  test("a non-JSON failure keeps no typed cause, so the witness patterns still decide", async () => {
+    const outcome = await run("Not logged in · Please run /login", 1);
+    expect(outcome.completion).toBe("failed");
+    expect(outcome.failureCause).toBeUndefined();
+    expect(
+      new ClaudeCodeCliTransport({ ...okPromptFns }).classifyFailure(outcome),
+    ).toBe("auth_invalid");
+  });
+
+  // S4: the credential the child ran on is the one CI must name. ANTHROPIC_API_KEY wins
+  // over CLAUDE_CODE_OAUTH_TOKEN in the CLI.
+  test.each([
+    [{ ANTHROPIC_API_KEY: "k" }, "ANTHROPIC_API_KEY"],
+    [{ CLAUDE_CODE_OAUTH_TOKEN: "t" }, "CLAUDE_CODE_OAUTH_TOKEN"],
+    [
+      { ANTHROPIC_API_KEY: "k", CLAUDE_CODE_OAUTH_TOKEN: "t" },
+      "ANTHROPIC_API_KEY",
+    ],
+    [
+      { ANTHROPIC_API_KEY: "  ", CLAUDE_CODE_OAUTH_TOKEN: "t" },
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    ],
+    [
+      { ANTHROPIC_AUTH_TOKEN: "b", CLAUDE_CODE_OAUTH_TOKEN: "t" },
+      "ANTHROPIC_AUTH_TOKEN",
+    ],
+    [
+      { ANTHROPIC_API_KEY: "k", ANTHROPIC_AUTH_TOKEN: "b" },
+      "ANTHROPIC_API_KEY",
+    ],
+    [
+      { ANTHROPIC_AUTH_TOKEN: " ", CLAUDE_CODE_OAUTH_TOKEN: "t" },
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    ],
+    [{}, undefined],
+  ] as const)(
+    "the child env %j names the credential %s",
+    async (env, expected) => {
+      const outcome = await run(
+        claudeErrorEnvelope({
+          name: "401",
+          status: 401,
+          terminalReason: "api_error",
+          message: "Invalid API key",
+          exitCode: 0,
+          cause: "auth_invalid",
+          retried: false,
+        }),
+        0,
+        env,
+      );
+      expect(outcome.failureCredential).toBe(expected);
+    },
+  );
 });

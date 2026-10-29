@@ -54,6 +54,7 @@ import {
   type DiffStat,
   envelopeModel,
   type estimateCost,
+  incompleteReviewAnnotation,
 } from "#review/report";
 import { buildTelemetry, writeRunFindings, writeRunReport } from "#review/run";
 import { log, styleEnabled } from "#ui/primitives";
@@ -306,6 +307,13 @@ export async function publishRunOutcome(
     styles: styleEnabled(),
   })) {
     log(line);
+  }
+  // An incomplete review, or a step that failed on a complete one, is announced where the
+  // Actions UI lists it, with the provider's words for each failed agent. Only under CI: a
+  // local run already prints the same sentence in the result block above.
+  if (input.isCi) {
+    const annotation = incompleteReviewAnnotation(doc);
+    if (annotation !== undefined) process.stdout.write(`${annotation}\n`);
   }
   // 16 — CI headless publishing (ROADMAP Pillar 3). `posted?.delta`
   // reuses postInlineFindings' own re-review delta — no separate
