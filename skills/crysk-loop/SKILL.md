@@ -397,11 +397,12 @@ you triage:
 ```bash
 # The artifact is crysk-run-<pr>-<head-sha>; a run of an action release from before the rename
 # uploaded pr-hero-run-<pr>-<head-sha>. Try the new name first, then the old one.
+# Each line printed is "<run-id> <artifact-name>": download with the name on the same line.
 for NAME in crysk-run-<pr>-<head-sha> pr-hero-run-<pr>-<head-sha>; do
   gh api "repos/{owner}/{repo}/actions/artifacts?name=$NAME" \
-    --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[].workflow_run.id'
+    --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | reverse | .[] | "\(.workflow_run.id) \(.name)"'
 done
-gh run download <run-id> -n "$NAME" -D "crysk-run-<run-id>"
+gh run download <run-id> -n <artifact-name> -D "crysk-run-<run-id>"
 ```
 
 Look the run up by artifact name, not with `gh run list --branch`: a `/crysk review` or

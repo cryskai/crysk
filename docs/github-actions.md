@@ -819,6 +819,7 @@ action uploads it as an artifact in its last step.
 gh run list --workflow "Crysk Review" --branch <head-branch> --limit 5
 # A `/crysk review` comment run is listed under the default branch instead
 gh run list --workflow "Crysk Review" --event issue_comment --limit 5
+# A workflow set up before the rename is still named "pr-hero Review": use that name for it
 
 # Download the artifact into ./crysk-run/
 gh run download <run-id> \
@@ -1117,7 +1118,8 @@ gh pr comment {pr} --body "/crysk review"
 ```
 
 On a workflow set up before the rename, comment `/pr-hero review` instead. Its workflow is still named
-`pr-hero Review` and its artifact `pr-hero-run-<pr-number>-<head-sha>`.
+`pr-hero Review`. The artifact name comes from the action, so a run of this release uploads
+`crysk-run-<pr-number>-<head-sha>` and a run of an older action release `pr-hero-run-<pr-number>-<head-sha>`.
 
 When every failed hunter reports the secret it ran on, the fix starts with the one for that secret.
 
