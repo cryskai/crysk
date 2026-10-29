@@ -190,7 +190,7 @@ function sizeLimitsText(maxLines: number, maxFiles: number): string {
 function buildSizeSkipComment(data: SkipSizeSummary): string {
   const lines = [
     SKIP_SIZE_COMMENT_MARKER,
-    "## crysk review skipped",
+    "## Crysk review skipped",
     "",
     `⚠️ This diff changes ${data.changedLines} line(s) across ` +
       `${data.changedFiles} file(s), exceeding the configured size gate ` +
@@ -208,7 +208,7 @@ function buildSizeSkipComment(data: SkipSizeSummary): string {
 function buildBudgetSkipComment(data: SkipBudgetSummary): string {
   const lines = [
     SKIP_BUDGET_COMMENT_MARKER,
-    "## crysk review skipped",
+    "## Crysk review skipped",
     "",
     `⚠️ The estimated review cost (${usd(data.estimatedCostUsd)}) exceeds ` +
       `the configured CI budget ceiling (${usd(data.budgetUsd)}).`,
@@ -643,7 +643,7 @@ function buildCoverageSkipComment(
   const stopped = reason === "stopped";
   const lines = [
     SKIP_COVERAGE_COMMENT_MARKER,
-    "## crysk review skipped",
+    "## Crysk review skipped",
     "",
     stopped
       ? "⏸️ A maintainer stopped automatic reviews on this pull request."
@@ -667,7 +667,7 @@ function buildCoverageSkipComment(
 function buildManualRequiredComment(data: ManualRequiredSummary): string {
   const lines = [
     MANUAL_REQUIRED_COMMENT_MARKER,
-    "## crysk review requires manual override",
+    "## Crysk review requires manual override",
     "",
     "🛑 Automatic review did not run on this push.",
     "",

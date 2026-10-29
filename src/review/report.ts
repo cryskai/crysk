@@ -779,7 +779,7 @@ export function renderPrComment(
   const out: string[] = [
     prCommentMarker(doc.head_sha, doc.run_status !== "partial"),
   ];
-  out.push("## crysk review");
+  out.push("## Crysk review");
   out.push("");
   // GitHub #39, and it goes FIRST — above the #42 incompleteness notice and
   // therefore above everything. The two notices qualify different things and

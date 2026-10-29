@@ -56,6 +56,14 @@ function homeMigrationSteps(input: MigrationInput): string[] {
   const oldDir = path.join(home, LEGACY_HOME_DIR_NAME);
   const steps = [`mv ~/${LEGACY_HOME_DIR_NAME} ~/${HOME_DIR_NAME}`];
 
+  // A review worktree under repos/ is registered by absolute path in the
+  // repository it came from; after the move git still points at the old path.
+  if (exists(path.join(oldDir, "repos"))) {
+    steps.push(
+      `in each repository whose \`git worktree list\` shows a path under ~/${LEGACY_HOME_DIR_NAME}/repos, run \`git worktree repair\` with that worktree's new path under ~/${HOME_DIR_NAME}/repos (or \`git worktree prune\` to drop it)`,
+    );
+  }
+
   const rcWithOldPath = RC_FILES.map((parts) => path.join(home, ...parts))
     .filter((p) => exists(p))
     .filter((p) => (readFile(p) ?? "").includes(`${LEGACY_HOME_DIR_NAME}/bin`));

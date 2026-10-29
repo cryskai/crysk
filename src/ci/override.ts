@@ -109,7 +109,7 @@ export function overrideStandsOverRun(
 }
 
 // The login an override was written by: the text after the prefix up to the first space. The
-// publisher writes `crysk: overridden by @<login> — no review on this head` (an older action
+// publisher writes `crysk: overridden by @<login> — no new review run` (an older action
 // wrote `pr-hero: …`, which reads the same), and a GitHub login has no space, so this is the
 // login exactly. Null when the description is not an override or names no one.
 export function overrideActorOf(description: string): string | null {
