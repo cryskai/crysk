@@ -1,7 +1,4 @@
-import crypto from "node:crypto";
-import { chmodSync, existsSync, renameSync, unlinkSync } from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import { engineIdentity } from "#git/identity";
 import type { CliOptions } from "#review/preflight";
 import { log } from "#ui/primitives";
@@ -9,6 +6,8 @@ import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import {
   detectInstallMethod,
+  downloadReleaseBinary,
+  installStandaloneBinary,
   PRHERO_GITHUB_REPO,
   planUpgrade,
   readUpgradeCache,
@@ -142,97 +141,38 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
   }
 
   if (plan.action === "upgrade_standalone") {
-    const downloadUrl = plan.downloadUrl;
-    const checksumsUrl = plan.checksumsUrl;
-    const tempBinary = plan.tempBinary;
     const targetBinary = plan.targetBinary;
-    const bakBinary = plan.bakBinary;
-
-    if (
-      !downloadUrl ||
-      !checksumsUrl ||
-      !tempBinary ||
-      !targetBinary ||
-      !bakBinary
-    ) {
+    if (!plan.downloadUrl || !targetBinary) {
       throw new CliError("Incomplete standalone upgrade plan.");
     }
 
-    log(`Downloading ${downloadUrl}...`);
-    const binResp = await fetch(downloadUrl);
-    if (!binResp.ok) {
-      throw new CliError(
-        `Failed to download pr-hero binary from ${downloadUrl}`,
-      );
-    }
-    const binBuffer = await binResp.arrayBuffer();
-
-    log("Verifying SHA256 checksums...");
-    const sumsResp = await fetch(checksumsUrl);
-    if (!sumsResp.ok) {
-      throw new CliError(`Failed to download SHA256SUMS from ${checksumsUrl}`);
-    }
-    const sumsText = await sumsResp.text();
-
-    const actualHash = crypto
-      .createHash("sha256")
-      .update(Buffer.from(binBuffer))
-      .digest("hex");
-    const targetFileName = path.basename(downloadUrl);
-    const expectedLine = sumsText
-      .split("\n")
-      .find((l) => l.includes(targetFileName));
-    if (!expectedLine?.startsWith(actualHash)) {
-      throw new CliError(
-        `SHA256 checksum verification failed for ${targetFileName}!`,
-      );
-    }
-
-    await Bun.write(tempBinary, binBuffer);
-    chmodSync(tempBinary, 0o755);
-
-    if (!existsSync(targetBinary) && existsSync(bakBinary)) {
-      renameSync(bakBinary, targetBinary);
-    } else if (existsSync(bakBinary)) {
-      try {
-        unlinkSync(bakBinary);
-      } catch {
-        // ignore
-      }
-    }
-
-    if (existsSync(targetBinary)) {
-      renameSync(targetBinary, bakBinary);
-    }
-    renameSync(tempBinary, targetBinary);
-
-    // Smoke test that the upgraded binary can execute before removing backup
-    let smokeOk = false;
+    log(`Downloading ${plan.downloadUrl}...`);
+    let downloaded: Awaited<ReturnType<typeof downloadReleaseBinary>>;
     try {
-      const smokeProc = Bun.spawn([targetBinary, "--help"], {
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-      const smokeExit = await smokeProc.exited;
-      smokeOk = smokeExit === 0;
-    } catch {
-      smokeOk = false;
+      downloaded = await downloadReleaseBinary(plan);
+    } catch (error) {
+      throw new CliError(
+        error instanceof Error ? error.message : String(error),
+      );
     }
+    log(`Verified SHA256 of ${downloaded.assetName}.`);
 
-    if (!smokeOk) {
+    const installed = await installStandaloneBinary(
+      plan,
+      Buffer.from(downloaded.bytes),
+    );
+    if (installed.status === "rolled_back") {
       log(
         "warning: upgraded binary failed to execute. Restoring previous version...",
       );
-      if (existsSync(bakBinary)) {
-        renameSync(bakBinary, targetBinary);
-      }
       throw new CliError(
         "Upgrade failed during binary validation and was rolled back.",
       );
     }
-
-    if (existsSync(bakBinary)) {
-      unlinkSync(bakBinary);
+    if (installed.alias === "copy") {
+      log(
+        `note: could not symlink ${plan.aliasBinary}; wrote a copy instead. 'upgrade' refreshes it.`,
+      );
     }
 
     log("Running reconciliation via upgraded binary...");

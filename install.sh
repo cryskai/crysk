@@ -25,7 +25,10 @@ else
 fi
 
 INSTALL_DIR="${HOME}/${HOME_NAME}/bin"
-BIN_PATH="${INSTALL_DIR}/pr-hero"
+# The binary is `crysk`; `pr-hero` stays beside it as a link for one version, so
+# every PATH line, alias and CI script written for the old name keeps working.
+BIN_PATH="${INSTALL_DIR}/crysk"
+ALIAS_PATH="${INSTALL_DIR}/pr-hero"
 
 echo "=== Installing pr-hero ==="
 
@@ -75,26 +78,40 @@ mkdir -p "${INSTALL_DIR}"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-BINARY_URL="https://github.com/${REPO}/releases/download/v${VERSION}/pr-hero-${TARGET}"
-CHECKSUMS_URL="https://github.com/${REPO}/releases/download/v${VERSION}/SHA256SUMS"
+RELEASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
+CHECKSUMS_URL="${RELEASE_URL}/SHA256SUMS"
 
-echo "Downloading pr-hero binary from ${BINARY_URL}..."
-if curl -sSL --fail "${BINARY_URL}" -o "${TMP_DIR}/pr-hero"; then
+# crysk-<target> first. Only a 404 (curl --fail exits 22) means the release
+# predates the rename and carries just pr-hero-<target>: any other failure is a
+# real one and must not quietly pick a different asset.
+ASSET="crysk-${TARGET}"
+echo "Downloading crysk binary from ${RELEASE_URL}/${ASSET}..."
+DOWNLOAD_RC=0
+curl -sSL --fail "${RELEASE_URL}/${ASSET}" -o "${TMP_DIR}/crysk" || DOWNLOAD_RC=$?
+if [ "${DOWNLOAD_RC}" -eq 22 ]; then
+  ASSET="pr-hero-${TARGET}"
+  echo "No crysk asset on v${VERSION} (a release made before the rename); using ${ASSET}..."
+  DOWNLOAD_RC=0
+  curl -sSL --fail "${RELEASE_URL}/${ASSET}" -o "${TMP_DIR}/crysk" || DOWNLOAD_RC=$?
+fi
+
+if [ "${DOWNLOAD_RC}" -eq 0 ]; then
   # Download and verify checksum
   if ! curl -sSL --fail "${CHECKSUMS_URL}" -o "${TMP_DIR}/SHA256SUMS"; then
     echo "Failed to download SHA256SUMS from ${CHECKSUMS_URL}" >&2
     exit 1
   fi
 
-  echo "Verifying SHA256 checksum..."
+  # The line of the asset actually downloaded, renamed to the file it was saved as.
+  echo "Verifying SHA256 checksum of ${ASSET}..."
   cd "${TMP_DIR}"
   if command -v sha256sum >/dev/null 2>&1; then
-    grep "pr-hero-${TARGET}" SHA256SUMS | sed "s/pr-hero-${TARGET}/pr-hero/" | sha256sum -c - || {
+    grep -E "[ *]${ASSET}\$" SHA256SUMS | sed "s/${ASSET}/crysk/" | sha256sum -c - || {
       echo "SHA256 checksum verification failed!" >&2
       exit 1
     }
   elif command -v shasum >/dev/null 2>&1; then
-    grep "pr-hero-${TARGET}" SHA256SUMS | sed "s/pr-hero-${TARGET}/pr-hero/" | shasum -a 256 -c - || {
+    grep -E "[ *]${ASSET}\$" SHA256SUMS | sed "s/${ASSET}/crysk/" | shasum -a 256 -c - || {
       echo "SHA256 checksum verification failed!" >&2
       exit 1
     }
@@ -104,8 +121,8 @@ if curl -sSL --fail "${BINARY_URL}" -o "${TMP_DIR}/pr-hero"; then
   fi
   cd - >/dev/null
 
-  chmod +x "${TMP_DIR}/pr-hero"
-  mv "${TMP_DIR}/pr-hero" "${BIN_PATH}"
+  chmod +x "${TMP_DIR}/crysk"
+  mv "${TMP_DIR}/crysk" "${BIN_PATH}"
 else
   echo "Release binary not yet available; checking for local / dev installation fallback..." >&2
   # Fallback for local testing or dev
@@ -114,12 +131,21 @@ else
     bun build --compile src/cli.ts --outfile "${BIN_PATH}"
     chmod +x "${BIN_PATH}"
   else
-    echo "Failed to download pr-hero binary." >&2
+    echo "Failed to download crysk binary." >&2
     exit 1
   fi
 fi
 
-echo "Installed pr-hero to ${BIN_PATH}"
+# pr-hero -> crysk, replacing whatever pr-hero was (the old binary, on a legacy
+# install). A filesystem that refuses symlinks gets a copy; re-running the
+# installer or `upgrade` refreshes it.
+if ! ln -sf "crysk" "${ALIAS_PATH}" 2>/dev/null; then
+  rm -f "${ALIAS_PATH}"
+  cp "${BIN_PATH}" "${ALIAS_PATH}"
+  chmod +x "${ALIAS_PATH}"
+fi
+
+echo "Installed crysk to ${BIN_PATH} (pr-hero keeps working: ${ALIAS_PATH})"
 
 # 4. PATH Configuration (Idempotent)
 setup_shell_path() {
@@ -149,7 +175,7 @@ fi
 echo ""
 echo "=== pr-hero installation complete! ==="
 echo ""
-echo "The binary is at ${BIN_PATH}."
+echo "The binary is at ${BIN_PATH}, and ${ALIAS_PATH} still answers for one version."
 echo ""
 # The rc-file edits above only take effect in shells started AFTER them, so the
 # very next command in THIS shell is 'pr-hero: command not found'. Telling the

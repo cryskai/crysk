@@ -1,9 +1,14 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -16,6 +21,7 @@ import {
   syncSkills,
 } from "./agent-env";
 import { type AssetMode, resolveEngineAssets, selfInvocation } from "./assets";
+import { BIN_NAME, LEGACY_BIN_NAME } from "./brand";
 import { LEGACY_HOME_DIR_NAME, resolveHomeDir } from "./brand-paths";
 import { loadGlobalConfigLayer } from "./config/config";
 import { runDoctor } from "./doctor";
@@ -100,12 +106,23 @@ export async function detectShadowInstalls(
       return found ? [found] : [];
     });
 
-  const allFound = await which("pr-hero");
-  const normalizedCurrent = path.resolve(options.currentBinary);
+  // Both names: a crysk upgrade is shadowed by an old pr-hero earlier on PATH
+  // just as surely as by another crysk.
+  const found = [
+    ...(await which(BIN_NAME)),
+    ...(await which(LEGACY_BIN_NAME)),
+  ].map((p) => path.resolve(p));
 
-  return allFound
-    .map((p) => path.resolve(p))
-    .filter((p) => p !== normalizedCurrent);
+  // The install's own pair (crysk and its pr-hero link, side by side) is one
+  // install, not two.
+  const currentDir = path.dirname(path.resolve(options.currentBinary));
+  const own = new Set([
+    path.resolve(options.currentBinary),
+    path.join(currentDir, BIN_NAME),
+    path.join(currentDir, LEGACY_BIN_NAME),
+  ]);
+
+  return [...new Set(found)].filter((p) => !own.has(p));
 }
 
 export interface UpgradeCheckCache {
@@ -185,9 +202,14 @@ export interface UpgradePlan {
   currentVersion: string;
   targetVersion: string;
   targetBinary?: string;
+  // The pr-hero name, kept beside targetBinary as a link for one version.
+  aliasBinary?: string;
   tempBinary?: string;
   bakBinary?: string;
   downloadUrl?: string;
+  // The same bytes under the pre-rename asset name, for a release made before
+  // the rename (it has no crysk-<target> asset).
+  legacyDownloadUrl?: string;
   checksumsUrl?: string;
   steps: string[];
   message?: string;
@@ -229,10 +251,13 @@ export async function planUpgrade(
   }
 
   if (installMethod.kind === "standalone") {
-    const targetBinary = installMethod.binaryPath;
-    const binDir = path.dirname(targetBinary);
+    // Always installed as `crysk` beside whichever name is running: a legacy
+    // install (running as pr-hero) gains crysk, and pr-hero becomes its link.
+    const binDir = path.dirname(installMethod.binaryPath);
+    const targetBinary = path.join(binDir, BIN_NAME);
+    const aliasBinary = path.join(binDir, LEGACY_BIN_NAME);
     const rand = crypto.randomBytes(4).toString("hex");
-    const tempBinary = path.join(binDir, `pr-hero.tmp.${rand}`);
+    const tempBinary = path.join(binDir, `${BIN_NAME}.tmp.${rand}`);
     const bakBinary = `${targetBinary}.bak`;
 
     const osName =
@@ -242,23 +267,28 @@ export async function planUpgrade(
       rawArch === "arm64" || rawArch === "aarch64" ? "arm64" : "x64";
     const target = `${osName}-${archName}`;
 
-    const downloadUrl = `https://github.com/${PRHERO_GITHUB_REPO}/releases/download/v${targetVersion}/pr-hero-${target}`;
-    const checksumsUrl = `https://github.com/${PRHERO_GITHUB_REPO}/releases/download/v${targetVersion}/SHA256SUMS`;
+    const releaseBase = `https://github.com/${PRHERO_GITHUB_REPO}/releases/download/v${targetVersion}`;
+    const downloadUrl = `${releaseBase}/${BIN_NAME}-${target}`;
+    const legacyDownloadUrl = `${releaseBase}/${LEGACY_BIN_NAME}-${target}`;
+    const checksumsUrl = `${releaseBase}/SHA256SUMS`;
 
     return {
       action: "upgrade_standalone",
       currentVersion,
       targetVersion,
       targetBinary,
+      aliasBinary,
       tempBinary,
       bakBinary,
       downloadUrl,
+      legacyDownloadUrl,
       checksumsUrl,
       steps: [
-        `Download ${downloadUrl} to ${tempBinary}`,
+        `Download ${downloadUrl} (or ${legacyDownloadUrl} for a release made before the rename) to ${tempBinary}`,
         `Verify SHA256 against ${checksumsUrl}`,
         `Preserve previous binary as ${bakBinary}`,
         `Atomically replace ${targetBinary}`,
+        `Keep ${aliasBinary} working as a link to ${targetBinary}`,
         "Reconcile agent skills, MCP registrations, and SQLite migrations",
       ],
     };
@@ -273,6 +303,139 @@ export async function planUpgrade(
       "Reconcile agent skills, MCP registrations, and SQLite migrations",
     ],
   };
+}
+
+interface DownloadedBinary {
+  bytes: ArrayBuffer;
+  // The release asset the bytes came from: the name its SHA256SUMS line carries.
+  assetName: string;
+}
+
+// Downloads the binary a standalone plan names and verifies it against the
+// SHA256SUMS line of the asset actually fetched. crysk-<target> first; only a
+// 404 falls back to pr-hero-<target> (a release made before the rename). Any
+// other failure is a real failure, not a reason to try another name.
+export async function downloadReleaseBinary(
+  plan: UpgradePlan,
+  fetchFn: (url: string) => Promise<Response> = fetch,
+): Promise<DownloadedBinary> {
+  const { downloadUrl, legacyDownloadUrl, checksumsUrl } = plan;
+  if (!downloadUrl || !legacyDownloadUrl || !checksumsUrl) {
+    throw new Error("Incomplete standalone upgrade plan.");
+  }
+
+  let assetUrl = downloadUrl;
+  let resp = await fetchFn(assetUrl);
+  if (resp.status === 404) {
+    assetUrl = legacyDownloadUrl;
+    resp = await fetchFn(assetUrl);
+    if (resp.status === 404) {
+      throw new Error(
+        `Failed to download the ${BIN_NAME} binary: neither ${path.basename(downloadUrl)} nor ${path.basename(legacyDownloadUrl)} is on this release.`,
+      );
+    }
+  }
+  if (!resp.ok) {
+    throw new Error(`Failed to download ${BIN_NAME} binary from ${assetUrl}`);
+  }
+  const bytes = await resp.arrayBuffer();
+
+  const sumsResp = await fetchFn(checksumsUrl);
+  if (!sumsResp.ok) {
+    throw new Error(`Failed to download SHA256SUMS from ${checksumsUrl}`);
+  }
+  const assetName = path.basename(assetUrl);
+  const actualHash = crypto
+    .createHash("sha256")
+    .update(Buffer.from(bytes))
+    .digest("hex");
+  // sha256sum's own format: `<hash>  <name>`, `*` before the name in binary
+  // mode. Matched on the name exactly so one asset's line never vouches for
+  // another's bytes.
+  const verified = (await sumsResp.text()).split("\n").some((line) => {
+    const [hash, name] = line.trim().split(/\s+/);
+    return name?.replace(/^\*/, "") === assetName && hash === actualHash;
+  });
+  if (!verified) {
+    throw new Error(`SHA256 checksum verification failed for ${assetName}!`);
+  }
+  return { bytes, assetName };
+}
+
+async function smokeBinary(bin: string): Promise<boolean> {
+  try {
+    const proc = Bun.spawn([bin, "--help"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    return (await proc.exited) === 0;
+  } catch {
+    return false;
+  }
+}
+
+type InstallStandaloneResult =
+  | { status: "installed"; alias: "symlink" | "copy" }
+  | { status: "rolled_back" };
+
+// Writes the verified bytes as the plan's crysk binary, smoke-tests it, then
+// points pr-hero at it. A failed smoke restores the previous crysk (or removes
+// the one that never existed before) and leaves pr-hero untouched, so the
+// install that was working is still working.
+export async function installStandaloneBinary(
+  plan: UpgradePlan,
+  bytes: Uint8Array,
+  options: { smoke?: (bin: string) => Promise<boolean> } = {},
+): Promise<InstallStandaloneResult> {
+  const { targetBinary, aliasBinary, tempBinary, bakBinary } = plan;
+  if (!targetBinary || !aliasBinary || !tempBinary || !bakBinary) {
+    throw new Error("Incomplete standalone upgrade plan.");
+  }
+  const smoke = options.smoke ?? smokeBinary;
+
+  await Bun.write(tempBinary, bytes);
+  chmodSync(tempBinary, 0o755);
+
+  // A .bak left by an interrupted upgrade is the last good binary when the
+  // target itself is gone; otherwise it is stale.
+  if (!existsSync(targetBinary) && existsSync(bakBinary)) {
+    renameSync(bakBinary, targetBinary);
+  } else {
+    rmSync(bakBinary, { force: true });
+  }
+  const hadPrevious = existsSync(targetBinary);
+  if (hadPrevious) renameSync(targetBinary, bakBinary);
+  renameSync(tempBinary, targetBinary);
+
+  if (!(await smoke(targetBinary))) {
+    if (hadPrevious) renameSync(bakBinary, targetBinary);
+    else rmSync(targetBinary, { force: true });
+    return { status: "rolled_back" };
+  }
+  rmSync(bakBinary, { force: true });
+
+  return { status: "installed", alias: linkAlias(targetBinary, aliasBinary) };
+}
+
+// pr-hero -> crysk, replacing whatever pr-hero was (the old binary, on a legacy
+// install). Built beside the alias and renamed over it, so the name never
+// stops resolving mid-swap. A relative link keeps the pair movable together. A
+// filesystem that refuses symlinks gets a copy instead; that copy goes stale on
+// the next upgrade unless this runs again, which it does on every upgrade.
+function linkAlias(target: string, alias: string): "symlink" | "copy" {
+  const staged = `${alias}.new.${process.pid}`;
+  rmSync(staged, { force: true });
+  try {
+    symlinkSync(path.basename(target), staged);
+    renameSync(staged, alias);
+    return "symlink";
+  } catch {
+    rmSync(staged, { force: true });
+    copyFileSync(target, staged);
+    chmodSync(staged, 0o755);
+    renameSync(staged, alias);
+    return "copy";
+  }
 }
 
 export interface OpenCodeSdkSpawnResult {

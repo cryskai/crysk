@@ -80,6 +80,55 @@ describe("uninstaller (lifecycle foundations)", () => {
       }
     });
 
+    // (g) The installer leaves crysk plus a pr-hero link; removing only the
+    // name that happens to be running would strand the other one on PATH.
+    test("removes both crysk and pr-hero, plus their backups, whichever one is running", async () => {
+      const dir = path.join(home, ".crysk", "bin");
+      const present = new Set([
+        path.join(dir, "crysk"),
+        path.join(dir, "pr-hero"),
+        path.join(dir, "crysk.bak"),
+      ]);
+      for (const running of ["crysk", "pr-hero"]) {
+        const plan = await planUninstallation({
+          home,
+          platform: "linux",
+          installMethod: {
+            kind: "standalone",
+            binaryPath: path.join(dir, running),
+          },
+          exists: (p) => present.has(p),
+        });
+        expect([...plan.binariesRemoved].sort()).toEqual([
+          path.join(dir, "crysk"),
+          path.join(dir, "pr-hero"),
+        ]);
+        const removed = plan.programSteps
+          .filter((s) => s.type === "remove_file")
+          .map((s) => s.targetPath);
+        expect(removed).toContain(path.join(dir, "crysk.bak"));
+        // The link goes before the file it points at: the executor skips a
+        // dangling link because existsSync follows it.
+        expect(removed.indexOf(path.join(dir, "pr-hero"))).toBeLessThan(
+          removed.indexOf(path.join(dir, "crysk")),
+        );
+      }
+    });
+
+    test("a sibling name that is not on disk is not planned", async () => {
+      const dir = path.join(home, ".prhero", "bin");
+      const plan = await planUninstallation({
+        home,
+        platform: "linux",
+        installMethod: {
+          kind: "standalone",
+          binaryPath: path.join(dir, "pr-hero"),
+        },
+        exists: () => false,
+      });
+      expect(plan.binariesRemoved).toEqual([path.join(dir, "pr-hero")]);
+    });
+
     test("generates full data purge plan when purge is true and no runs active", async () => {
       const plan = await planUninstallation({
         home,

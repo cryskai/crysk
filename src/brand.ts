@@ -211,3 +211,12 @@ export function currentMcpToolName(name: string): string {
     ? MCP_TOOL_PREFIX + name.slice(LEGACY_MCP_TOOL_PREFIX.length)
     : name;
 }
+
+// The standalone binary, as installed in <home>/bin and as a release asset
+// prefix (`<name>-<target>`). The release carries both assets for one version,
+// install.sh and `upgrade` install the first and keep the second as a link, so
+// a shell alias, a CI script or an old binary's `pr-hero upgrade` keeps
+// resolving. The version that drops the legacy name deletes LEGACY_BIN_NAME and
+// the fallbacks that read it.
+export const BIN_NAME = "crysk";
+export const LEGACY_BIN_NAME = "pr-hero";

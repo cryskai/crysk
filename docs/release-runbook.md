@@ -117,8 +117,8 @@ env CI=true GITHUB_ACTIONS=true HOME="$(mktemp -d)" bun test
 # Compile and smoke the binary exactly as release.yml does (use your own target)
 bun build --compile --target=bun-darwin-arm64 --minify --no-compile-autoload-dotenv \
   --no-compile-autoload-bunfig --define __PRHERO_VERSION__='"X.Y.Z"' src/cli.ts \
-  --outfile /tmp/pr-hero-darwin-arm64
-bun run scripts/compiled-smoke.ts /tmp/pr-hero-darwin-arm64
+  --outfile /tmp/crysk-darwin-arm64
+bun run scripts/compiled-smoke.ts /tmp/crysk-darwin-arm64
 ```
 
 ### Step 2: Update Changelog
@@ -272,7 +272,7 @@ flowchart TD
      failed leg leaves a pushed tag with no release: see §6, Scenario D.
    - Compiles standalone executables using `bun build --compile --minify` with embedded version definitions.
    - **Runs the compiled binary** (`scripts/compiled-smoke.ts`) before uploading it. v1.0.0 shipped a binary whose `review` failed for every user because this step did not exist.
-   - Uploads binary artifacts (`pr-hero-darwin-arm64`, `pr-hero-darwin-x64`, `pr-hero-linux-x64`, `pr-hero-linux-arm64`).
+   - Uploads each binary under both names for one version: `crysk-<target>` and a byte-identical `pr-hero-<target>` copy made after the smoke (targets `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`). The old name is what an installed `pr-hero upgrade` downloads.
 2. **`publish-release`**:
    - Gathers all compiled binaries and computes cryptographic `SHA256SUMS`.
    - Creates a GitHub Release via `softprops/action-gh-release@v2` containing all binaries and checksums,

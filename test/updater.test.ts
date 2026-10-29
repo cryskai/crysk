@@ -113,13 +113,16 @@ describe("updater (lifecycle foundations)", () => {
       });
 
       expect(plan.action).toBe("upgrade_standalone");
-      expect(plan.targetBinary).toBe(standaloneBin);
+      // The binary is installed as `crysk` beside the one that is running
+      // (updater-binaries.test.ts covers the pr-hero alias).
+      const crysk = path.join(path.dirname(standaloneBin), "crysk");
+      expect(plan.targetBinary).toBe(crysk);
       expect(plan.tempBinary).toMatch(/\.tmp\.[a-z0-9]+$/);
       expect(path.dirname(plan.tempBinary || "")).toBe(
         path.dirname(standaloneBin),
       );
-      expect(plan.bakBinary).toBe(`${standaloneBin}.bak`);
-      expect(plan.downloadUrl).toContain("v1.1.0/pr-hero-darwin-arm64");
+      expect(plan.bakBinary).toBe(`${crysk}.bak`);
+      expect(plan.downloadUrl).toContain("v1.1.0/crysk-darwin-arm64");
       expect(plan.checksumsUrl).toContain("v1.1.0/SHA256SUMS");
     });
 
