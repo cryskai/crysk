@@ -36,11 +36,12 @@ and for a repo `git mv .prhero .crysk` (plain `mv` plus a `.gitignore` edit if t
 `routing` is a **person-layer-only** key. Put it in a repo file and the parser refuses it by name:
 
 ```
-.crysk/config.json: routing is a per-person key — put it in ~/.crysk/config.json (~/.prhero/config.json on an install from before the rename)
+.crysk/config.json: routing is a per-person key — put it in your person config (~/.crysk/config.json, or ~/.prhero/config.json on an install set up before the rename; do not create ~/.crysk while ~/.prhero is in use)
 ```
 
-The reverse also throws (a repo-only key in the global file gets ` is a per-repo key — put it in
-<repo>/.crysk/config.json`). Run `pr-hero config` to see, per key, which of the two files actually
+The reverse also throws (a repo-only key in the global file gets ` is a per-repo key — put it in the
+repo config (<repo>/.crysk/config.json, or <repo>/.prhero/config.json in a repo set up before the
+rename)`). Run `pr-hero config` to see, per key, which of the two files actually
 spoke.
 
 **`--config <file>` replaces the repo layer only.** There is no flag that repoints the global one —
