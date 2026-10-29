@@ -56,6 +56,7 @@ import {
 } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import { evaluateSizeGateAggregate, sizeGateConfig } from "#review/size-gate";
+import { resolveRepoDir } from "../src/brand-paths";
 
 const CASES_PATH = path.join(
   import.meta.dir,
@@ -151,7 +152,8 @@ if (mode === "plan") {
   // triggers, so an assumed default-on summarizer would over-price all 56 runs
   // by a full agent seat — and a pricing pass whose whole job is to replace
   // folklore with a number must not import folklore of its own.
-  const configPath = path.join(repo, ".prhero", "config.json");
+  // .crysk/ since the rename, .prhero/ in a repo set up before it (same rule as the engine).
+  const configPath = path.join(resolveRepoDir(repo), "config.json");
   const config = (await Bun.file(configPath).exists())
     ? parseLocalConfig(await Bun.file(configPath).text())
     : EMPTY_LOCAL_CONFIG;
