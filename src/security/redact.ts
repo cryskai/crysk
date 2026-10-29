@@ -64,9 +64,7 @@ export function redactDiagnostic(text: string): string {
       /^\s+$/.test(separator) &&
       // Only trailing sentence punctuation is ignored: `is1234` or `no123!` is a value
       // that happens to start with a prose word, and stays redacted.
-      PROSE_AFTER_KEYWORD.has(
-        word.toLowerCase().replace(/[.,;:!?)\]"']+$/, ""),
-      )
+      PROSE_AFTER_KEYWORD.has(word.toLowerCase().replace(/[.,;:!?)\]"']+$/, ""))
         ? match
         : REDACTED,
   );
