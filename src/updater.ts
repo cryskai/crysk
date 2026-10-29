@@ -419,6 +419,15 @@ export async function installStandaloneBinary(
     options.smoke ??
     ((bin: string) => smokeBinary(bin, options.smokeTimeoutMs));
 
+  // A .bak left by an interrupted upgrade is the last good binary when the
+  // target itself is gone: put it back first, so a failed smoke below still
+  // leaves a working install. Otherwise the .bak is stale.
+  if (!existsSync(targetBinary) && existsSync(bakBinary)) {
+    renameSync(bakBinary, targetBinary);
+  } else {
+    rmSync(bakBinary, { force: true });
+  }
+
   await Bun.write(tempBinary, bytes);
   chmodSync(tempBinary, 0o755);
   if (!(await smoke(tempBinary))) {
@@ -426,13 +435,6 @@ export async function installStandaloneBinary(
     return { status: "rolled_back" };
   }
 
-  // A .bak left by an interrupted upgrade is the last good binary when the
-  // target itself is gone; otherwise it is stale.
-  if (!existsSync(targetBinary) && existsSync(bakBinary)) {
-    renameSync(bakBinary, targetBinary);
-  } else {
-    rmSync(bakBinary, { force: true });
-  }
   const hadPrevious = existsSync(targetBinary);
   if (hadPrevious) renameSync(targetBinary, bakBinary);
   renameSync(tempBinary, targetBinary);
@@ -465,10 +467,16 @@ function linkAlias(target: string, alias: string): "symlink" | "copy" {
     return "symlink";
   } catch {
     rmSync(staged, { force: true });
-    copyFileSync(target, staged);
-    chmodSync(staged, 0o755);
-    renameSync(staged, alias);
-    return "copy";
+    // The copy fallback can fail too (ENOSPC, a dir in the way): the staged file
+    // goes either way, so no retry leaves an orphan behind.
+    try {
+      copyFileSync(target, staged);
+      chmodSync(staged, 0o755);
+      renameSync(staged, alias);
+      return "copy";
+    } finally {
+      rmSync(staged, { force: true });
+    }
   }
 }
 

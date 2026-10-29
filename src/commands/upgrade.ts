@@ -162,11 +162,8 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
       Buffer.from(downloaded.bytes),
     );
     if (installed.status === "rolled_back") {
-      log(
-        "warning: upgraded binary failed to execute. Restoring previous version...",
-      );
       throw new CliError(
-        "Upgrade failed during binary validation and was rolled back.",
+        "Upgrade stopped: the downloaded binary did not answer --help (it failed, or hung past 30s). Nothing installed was changed.",
       );
     }
     if (installed.alias === "copy") {
@@ -174,8 +171,12 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
         `note: could not symlink ${plan.aliasBinary}; wrote a copy instead. 'upgrade' refreshes it.`,
       );
     } else if (installed.alias === "failed") {
+      // A re-run would find crysk up to date and never reach the alias, so the
+      // fix is the alias itself; the run still exits non-zero (below). Plain
+      // `ln -sf` is not suggested: with a directory at that path it links inside
+      // it, exits 0 and leaves pr-hero unresolved.
       log(
-        `warning: crysk is upgraded, but ${plan.aliasBinary} could not be updated (${installed.aliasError ?? "unknown error"}); run 'crysk upgrade' again or use 'crysk'.`,
+        `warning: crysk is upgraded, but ${plan.aliasBinary} could not be updated (${installed.aliasError ?? "unknown error"}). Use 'crysk', or move whatever is at ${plan.aliasBinary} out of the way and link it again: ln -s crysk ${plan.aliasBinary}`,
       );
     }
 
@@ -197,6 +198,8 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
       );
       return exitCode;
     }
+    // A missing pr-hero alias is a failed upgrade for any script that calls it.
+    if (installed.alias === "failed") return 1;
 
     log(`✓ Successfully upgraded pr-hero to v${latestVersion}!`);
     return 0;

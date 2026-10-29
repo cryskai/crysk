@@ -10,6 +10,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -205,6 +206,25 @@ describe("installStandaloneBinary", () => {
     expect(result.status).toBe("installed");
     expect(result.status === "installed" && result.alias).toBe("failed");
     expect(run("crysk")).toBe("new");
+    // A failed copy fallback leaves no staged file behind (#425 round 2).
+    expect(readdirSync(binDir).filter((n) => n.includes(".new."))).toEqual([]);
+  });
+
+  // An interrupted earlier upgrade can leave only crysk.bak: it is the last good
+  // binary, and a failed smoke must not leave the install with none (#425 round 2).
+  test("a failed smoke still restores a crysk.bak left by an interrupted upgrade", async () => {
+    const crysk = path.join(binDir, "crysk");
+    writeFileSync(`${crysk}.bak`, script("last-good"), { mode: 0o755 });
+    const p = await plan("crysk");
+    const result = await installStandaloneBinary(
+      p,
+      Buffer.from(script("new")),
+      {
+        smoke: async () => false,
+      },
+    );
+    expect(result.status).toBe("rolled_back");
+    expect(run("crysk")).toBe("last-good");
   });
 
   test("a binary that fails its smoke is rolled back: the old crysk is restored, pr-hero untouched", async () => {
