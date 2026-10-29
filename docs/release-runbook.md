@@ -358,7 +358,13 @@ Perform these sanity checks immediately following a release:
    - Confirm workflows referencing `cryskai/crysk@v0` or `cryskai/crysk@vX.Y.Z` resolve the new
      release. (Workflows still pinned to the frozen `@v1` continue resolving the last 1.x release, by
      design — they receive no further updates.)
-5. **Doctor Diagnostic**:
+5. **Mirror** (while `juanmaagd/pr-hero` lives, Step 4d.3): the mirror's `v0` and `vX.Y.Z` tags equal
+   `cryskai/crysk`'s, and the mirror's latest release is `vX.Y.Z` with the same `SHA256SUMS`:
+   ```bash
+   for r in cryskai/crysk juanmaagd/pr-hero; do gh api repos/$r/git/ref/tags/v0 -q .object.sha; done
+   gh release list -R juanmaagd/pr-hero --limit 1
+   ```
+6. **Doctor Diagnostic**:
    - Run `crysk doctor` locally to verify runtime integrity and toolchain health.
 
 ---
