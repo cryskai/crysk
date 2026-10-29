@@ -137,6 +137,11 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
     log(
       `Please run: ${method.kind === "package_manager" ? method.manager : "npm"} install -g crysk@latest`,
     );
+    // The crysk package also links the pr-hero bin, which a global install of
+    // the old package still owns, so that install fails until it is removed.
+    log(
+      `If the global package is still the old pr-hero one, remove it first: ${method.kind === "package_manager" ? method.manager : "npm"} uninstall -g pr-hero`,
+    );
     return 0;
   }
 

@@ -126,6 +126,13 @@ describe("activity (active runs tracker & store activity monitor)", () => {
       });
       expect(isMatch).toBe(true);
 
+      // The standalone binary ships as crysk; its command line names neither
+      // pr-hero nor bun/node.
+      const crysk = await checkProcessIdentity(1003, async (_cmd) => {
+        return "/Users/me/.crysk/bin/crysk review --pr 56";
+      });
+      expect(crysk).toBe(true);
+
       const isMismatch = await checkProcessIdentity(1002, async (_cmd) => {
         return "/usr/libexec/postfix/master -w";
       });

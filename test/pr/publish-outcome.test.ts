@@ -556,6 +556,7 @@ describe("publishRunOutcome", () => {
       const out = await stdoutOf(() =>
         publishRunOutcome(baseInput({ result: partialResult(), isCi: false })),
       );
+      expect(out).not.toContain("::warning title=crysk::");
       expect(out).not.toContain("::warning title=pr-hero::");
     });
 
@@ -563,6 +564,7 @@ describe("publishRunOutcome", () => {
       const out = await stdoutOf(() =>
         publishRunOutcome(baseInput({ isCi: true })),
       );
+      expect(out).not.toContain("::warning title=crysk::");
       expect(out).not.toContain("::warning title=pr-hero::");
     });
   });

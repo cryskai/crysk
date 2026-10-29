@@ -240,7 +240,7 @@ export async function planUninstallation(
     }
   } else if (installMethod.kind === "package_manager") {
     warnings.push(
-      `Crysk was installed via ${installMethod.manager}. Run '${installMethod.manager} uninstall -g crysk' to remove the global package.`,
+      `Crysk was installed via ${installMethod.manager}. Run '${installMethod.manager} uninstall -g crysk' to remove the global package ('${installMethod.manager} uninstall -g pr-hero' for one installed before the rename).`,
     );
   }
 

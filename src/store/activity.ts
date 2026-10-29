@@ -182,6 +182,7 @@ export async function checkProcessIdentity(
     const trimmed = cmdline.trim();
     if (!trimmed) return false;
     return (
+      trimmed.includes("crysk") ||
       trimmed.includes("pr-hero") ||
       trimmed.includes("src/cli.ts") ||
       (trimmed.includes("bun") && trimmed.includes("review")) ||

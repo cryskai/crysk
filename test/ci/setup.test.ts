@@ -1123,7 +1123,7 @@ describe("ci init gotchas steps (CLI)", () => {
     const { output } = await runInit(
       "- auth: the token is refreshed by the proxy, not here\n",
     );
-    expect(output).not.toContain("npx -y pr-hero init");
+    expect(output).not.toContain("npx -y crysk init");
     expect(output).not.toContain("human-attention-required");
     expect(output).toContain("require the `crysk` status check");
     expect(output).toContain("GitHub Free");
@@ -1137,7 +1137,7 @@ describe("ci init gotchas steps (CLI)", () => {
   test("every repo is told to require the crysk status check, not the review job", async () => {
     const { output } = await runInit(undefined);
     expect(output).toContain(
-      "require the `crysk` status check (not the `review` job; `crysk` is still posted for one version, so an existing rule keeps working)",
+      "require the `crysk` status check (not the `review` job; the legacy `pr-hero` status is still posted for one version, so an existing rule on `pr-hero` keeps working)",
     );
   });
 });

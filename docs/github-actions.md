@@ -625,7 +625,7 @@ The table shows the status and the job exit for each case:
 | Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `crysk: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
-A review where an agent (a hunter, the refuter or the summarizer) failed also prints a `::warning title=pr-hero::`
+A review where an agent (a hunter, the refuter or the summarizer) failed also prints a `::warning title=crysk::`
 annotation, and the posted review comment's incompleteness notice lists the agents that did not finish. Each
 failed agent is followed by the provider's own one-line reason when the Claude CLI reported one, for example
 `refuter (failed — Anthropic API: Credit balance is too low (HTTP 400))`. The commit status text above is a
@@ -984,7 +984,7 @@ An OpenCode route also needs the routing variable:
 gh variable set CRYSK_ROUTING --body '<routing-object-json>'
 ```
 
-A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.G.
+A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
 
 Dependabot PRs read Dependabot secrets, so set this one too:
 
@@ -1174,7 +1174,7 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"
 ```
 
-A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.G.
+A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
 
 ### PRH-ROUTING-INVALID
 
@@ -1192,7 +1192,7 @@ Edit the JSON, then set it again:
 gh variable set CRYSK_ROUTING --body "$(jq -c . routing.json)"
 ```
 
-A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.G.
+A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
 
 ### PRH-ROUTE-UNRESOLVABLE
 
