@@ -17,7 +17,7 @@ inputs:
     description: 'Claude Code OAuth token. Omit if anthropic-api-key is supplied.'
     required: false
   routing:
-    description: 'Person-layer routing JSON (the config.routing object). Unset or empty leaves Claude-default CI. Written to $HOME/.prhero/config.json, never the repo file.'
+    description: 'Person-layer routing JSON (the config.routing object). Unset or empty leaves Claude-default CI. Written to $HOME/.crysk/config.json (or $HOME/.prhero when that is the one that exists), never the repo file.'
     required: false
     default: ''
   opencode-auth:
@@ -339,7 +339,7 @@ runs:
     # ONLY supported way to answer a posted finding, and `--from` REQUIRES a
     # completed run directory on disk (findings.json maps F00N onto the
     # posted `<!-- pr-hero-finding` marker). In CI that directory lives at
-    # `~/.prhero/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` on an
+    # `~/.crysk/repos/<host>/<owner>/<repo>/runs/pr-<n>-<sha>-1` on an
     # EPHEMERAL runner and dies with the job — so a PR reviewed in Actions
     # used to carry findings that literally could not be answered. It lives
     # in the action, not in the calling workflow, so every consumer gets it
@@ -385,7 +385,7 @@ runs:
         name: pr-hero-run-${{ steps.trigger.outputs.pr }}-${{ steps.trigger.outputs.head_sha }}
         path: ${{ steps.run-pr-hero.outputs.run_dir }}
         # upload-artifact excludes hidden files by default since v4.4, and
-        # this directory lives under a hidden `~/.prhero` ancestor. Paired
+        # this directory lives under a hidden `~/.crysk` ancestor. Paired
         # with `if-no-files-found: warn` below, an exclusion here would
         # produce an EMPTY artifact plus a warning nobody reads.
         include-hidden-files: true

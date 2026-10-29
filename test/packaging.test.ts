@@ -143,7 +143,9 @@ describe("Packaging & distribution configuration", () => {
     expect(content).toContain("darwin");
     expect(content).toContain("linux");
     expect(content).toContain("SHA256SUMS");
-    expect(content).toContain(".prhero/bin");
+    expect(content).toContain(".crysk");
+    expect(content).toContain(".prhero");
+    expect(content).toContain("HOME_NAME");
   });
 
   test("release workflow exists and defines matrix and artifacts", () => {

@@ -8,8 +8,19 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { detectAgentEnvironments } from "./agent-env";
+import {
+  HOME_DIR_NAME,
+  LEGACY_HOME_DIR_NAME,
+  resolveRepoDir,
+} from "./brand-paths";
 import { prheroLayout } from "./home-preflight";
+import {
+  LEGACY_GC_LAUNCHD_LABEL,
+  LEGACY_WATCH_LAUNCHD_LABEL,
+} from "./legacy-launchd";
+import { GC_LAUNCHD_LABEL } from "./store/gc-preflight";
 import { detectInstallMethod, type InstallMethod } from "./updater";
+import { WATCH_LAUNCHD_LABEL } from "./watch/preflight";
 
 export type UninstallStepType =
   | "unload_launchd"
@@ -57,6 +68,9 @@ export interface PlanUninstallationOptions {
   exists?: (p: string) => boolean;
   readFile?: (p: string) => string | undefined;
 }
+
+// The PATH lines the installer wrote, under either home name.
+const RC_BIN_MARKERS = [".crysk/bin", ".prhero/bin"];
 
 export async function planUninstallation(
   options: PlanUninstallationOptions = {},
@@ -115,16 +129,17 @@ export async function planUninstallation(
   // 1. Launchd services (macOS only)
   if (platform === "darwin") {
     const launchAgentsDir = path.join(home, "Library", "LaunchAgents");
+    // Both generations: an install set up before the rename still has the
+    // io.prhero.* agents, and one set up after has io.crysk.*.
     const services = [
-      {
-        label: "io.prhero.watch",
-        plist: path.join(launchAgentsDir, "io.prhero.watch.plist"),
-      },
-      {
-        label: "io.prhero.gc",
-        plist: path.join(launchAgentsDir, "io.prhero.gc.plist"),
-      },
-    ];
+      WATCH_LAUNCHD_LABEL,
+      GC_LAUNCHD_LABEL,
+      LEGACY_WATCH_LAUNCHD_LABEL,
+      LEGACY_GC_LAUNCHD_LABEL,
+    ].map((label) => ({
+      label,
+      plist: path.join(launchAgentsDir, `${label}.plist`),
+    }));
 
     for (const svc of services) {
       launchdServices.push(svc.label);
@@ -186,12 +201,12 @@ export async function planUninstallation(
   for (const rcPath of rcCandidates) {
     if (exists(rcPath)) {
       const content = readFile(rcPath);
-      if (content?.includes(".prhero/bin")) {
+      if (content && RC_BIN_MARKERS.some((m) => content.includes(m))) {
         rcFilesCleaned.push(rcPath);
         programSteps.push({
           type: "clean_rc_file",
           targetPath: rcPath,
-          desc: `Remove .prhero/bin from PATH in ${rcPath}`,
+          desc: `Remove ${RC_BIN_MARKERS.filter((m) => content.includes(m)).join(" and ")} from PATH in ${rcPath}`,
         });
       }
     }
@@ -221,7 +236,7 @@ export async function planUninstallation(
 
   // 5. Data steps (Purge)
   if (purge) {
-    const layout = prheroLayout(home);
+    const layout = prheroLayout(home, exists);
     const dataFiles = [
       layout.prheroDbPath,
       `${layout.prheroDbPath}-wal`,
@@ -252,6 +267,11 @@ export async function planUninstallation(
       layout.reposDir,
       path.join(layout.dir, "bin"),
       layout.dir,
+      // The home this run is NOT using, if it is still on disk (both exist
+      // after a half-finished migration): a purge leaves neither behind.
+      ...[HOME_DIR_NAME, LEGACY_HOME_DIR_NAME]
+        .map((name) => path.join(home, name))
+        .filter((dir) => dir !== layout.dir),
     ];
 
     for (const d of dataDirs) {
@@ -267,7 +287,7 @@ export async function planUninstallation(
 
   let inRepoPrheroDir: string | undefined;
   if (options.repoRoot) {
-    const repoPrhero = path.join(options.repoRoot, ".prhero");
+    const repoPrhero = resolveRepoDir(options.repoRoot, exists);
     if (exists(repoPrhero)) {
       inRepoPrheroDir = repoPrhero;
     }
@@ -391,7 +411,7 @@ export async function executeUninstallPlan(
             if (raw) {
               const lines = raw
                 .split("\n")
-                .filter((l) => !l.includes(".prhero/bin"));
+                .filter((l) => !RC_BIN_MARKERS.some((m) => l.includes(m)));
               await writeFile(step.targetPath, lines.join("\n"));
               executedSteps.push(step.desc);
             }

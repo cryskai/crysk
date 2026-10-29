@@ -46,6 +46,7 @@ import {
 } from "#ci/trigger";
 import { parseLocalConfig, parseRoutingConfig } from "#review/preflight";
 import { commandForms } from "../brand";
+import { resolveIgnoreFileName, resolveRepoDir } from "../brand-paths";
 import { CliError } from "../errors";
 import { prheroLayout } from "../home-preflight";
 import { parseIgnoreFile } from "../ignore-file";
@@ -518,7 +519,7 @@ export async function writeRepoReviewConfig(
   repoRoot: string,
   plan: ConfigPlan,
 ): Promise<RepoReviewConfigWrite> {
-  const file = path.join(repoRoot, ".prhero", "config.json");
+  const file = path.join(resolveRepoDir(repoRoot), "config.json");
   let current: Record<string, unknown> = {};
   if (existsSync(file)) {
     const raw = await readFile(file, "utf-8");
@@ -611,7 +612,7 @@ export async function appendIgnorePatterns(
   repoRoot: string,
   patterns: readonly string[],
 ): Promise<string> {
-  const file = path.join(repoRoot, ".prheroignore");
+  const file = path.join(repoRoot, resolveIgnoreFileName(repoRoot));
   const current = existsSync(file) ? await readFile(file, "utf-8") : "";
   const present = new Set(current.split("\n").map((line) => line.trim()));
   const added = patterns
@@ -696,7 +697,7 @@ export async function materializeCiOpenCodeData(
       );
     }
     try {
-      routingConfig = parseRoutingConfig(parsed, "~/.prhero/config.json");
+      routingConfig = parseRoutingConfig(parsed, "~/.crysk/config.json");
     } catch (error) {
       // parseRoutingConfig names the offending key in its message: that message
       // stays on stderr, and the record carries only the fixed detail.

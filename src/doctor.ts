@@ -26,6 +26,12 @@ import {
   resolveEngineAssets,
   selfInvocation,
 } from "./assets";
+import { REPO_DIR_NAME, resolveHomeDir, resolveRepoDir } from "./brand-paths";
+import {
+  gitIsTracked,
+  type IsTracked,
+  migrationChecks,
+} from "./doctor-migration";
 import type { ExactBindingCapabilityReport } from "./execution/contracts";
 import {
   type CheckSystemToolsOptions,
@@ -54,6 +60,10 @@ export interface DoctorReport {
 }
 
 export interface RunDoctorOptions {
+  // Whether git tracks <repoDir>/<rel>: picks `git mv` over `mv` in the
+  // migration hint. Injectable so tests need no repository.
+  isTracked?: IsTracked;
+  platform?: string;
   cwd?: string;
   repoRoot?: string;
   home?: string;
@@ -203,6 +213,11 @@ export async function runDoctor(
     });
 
   const repoDir = options.repoRoot ?? options.cwd;
+  // The directory the engine actually reads (.crysk/, or a legacy .prhero/), so
+  // every message names a file that exists.
+  const repoDirName = repoDir
+    ? path.basename(resolveRepoDir(repoDir, exists))
+    : REPO_DIR_NAME;
 
   const checks: DoctorCheckItem[] = [];
 
@@ -306,9 +321,12 @@ export async function runDoctor(
 
   // 2. Config layer / agents_dir check
   const repoConfigPath = repoDir
-    ? path.join(repoDir, ".prhero", "config.json")
+    ? path.join(resolveRepoDir(repoDir, exists), "config.json")
     : undefined;
-  const globalConfigPath = path.join(home, ".prhero", "config.json");
+  const globalConfigPath = path.join(
+    resolveHomeDir(home, exists),
+    "config.json",
+  );
 
   let parsedAgentsDir: string | undefined;
   if (repoConfigPath && exists(repoConfigPath)) {
@@ -349,7 +367,7 @@ export async function runDoctor(
         name: "agents_dir",
         severity: "blocking",
         message: `Configured agents_dir not found: ${parsedAgentsDir}`,
-        hint: `Delete "agents_dir" from .prhero/config.json to fall through to the bundled default prompt set.`,
+        hint: `Delete "agents_dir" from ${repoDirName}/config.json to fall through to the bundled default prompt set.`,
       });
     } else {
       checks.push({
@@ -405,7 +423,7 @@ export async function runDoctor(
         message: `Bundled prompt set is incomplete: cannot read ${unreadable.join(", ")}`,
         hint:
           "This build cannot review anything. Reinstall the engine with " +
-          "'pr-hero upgrade', or set \"agents_dir\" in .prhero/config.json to " +
+          "'pr-hero upgrade', or set \"agents_dir\" in .crysk/config.json to " +
           "a checked-out prompt set.",
       });
     } else {
@@ -421,7 +439,7 @@ export async function runDoctor(
 
   // 3. Gotchas check (only when repo root is supplied or discovered)
   if (repoDir) {
-    const gotchasPath = resolveGotchasPath(undefined, repoDir);
+    const gotchasPath = resolveGotchasPath(undefined, repoDir, exists);
     const gotchasContent = exists(gotchasPath)
       ? readFile(gotchasPath)
       : undefined;
@@ -434,8 +452,7 @@ export async function runDoctor(
       checks.push({
         name: "gotchas",
         severity: "blocking",
-        message:
-          "Repository gotchas file (.prhero/gotchas.md) is still the untouched scaffold",
+        message: `Repository gotchas file (${repoDirName}/gotchas.md) is still the untouched scaffold`,
         hint:
           `Replace the placeholder lines with real repository invariants, and delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` ` +
           "marker line at the top if it is still there — pr-hero refuses to review the scaffold.",
@@ -444,34 +461,33 @@ export async function runDoctor(
       checks.push({
         name: "gotchas",
         severity: "blocking",
-        message:
-          "Repository gotchas file (.prhero/gotchas.md) is empty or missing",
-        hint: "Create and populate .prhero/gotchas.md with repository-specific invariants and failure traps.",
+        message: `Repository gotchas file (${repoDirName}/gotchas.md) is empty or missing`,
+        hint: `Create and populate ${repoDirName}/gotchas.md with repository-specific invariants and failure traps.`,
       });
     } else {
       checks.push({
         name: "gotchas",
         severity: "healthy",
-        message: "Repository gotchas present (.prhero/gotchas.md)",
+        message: `Repository gotchas present (${repoDirName}/gotchas.md)`,
       });
     }
   }
 
-  // 4. Setup state check (~/.prhero/setup.json)
-  const setupJsonPath = path.join(home, ".prhero", "setup.json");
+  // 4. Setup state check (<home dir>/setup.json)
+  const setupJsonPath = path.join(resolveHomeDir(home, exists), "setup.json");
+  const homeDirName = path.basename(path.dirname(setupJsonPath));
   if (!exists(setupJsonPath)) {
     checks.push({
       name: "setup",
       severity: "degraded",
-      message:
-        "Global setup state not initialized (~/.prhero/setup.json absent)",
+      message: `Global setup state not initialized (~/${homeDirName}/setup.json absent)`,
       hint: "Run 'pr-hero init' or complete onboarding to initialize.",
     });
   } else {
     checks.push({
       name: "setup",
       severity: "healthy",
-      message: "Global setup state verified (~/.prhero/setup.json)",
+      message: `Global setup state verified (~/${homeDirName}/setup.json)`,
     });
   }
 
@@ -481,6 +497,21 @@ export async function runDoctor(
     exists,
     which: options.checkToolsOptions?.which,
   });
+
+  // The rename's migration hints need to know what is installed on this
+  // machine (binary on PATH, launchd agents, MCP registrations), so they run
+  // after the environment scan.
+  checks.push(
+    ...migrationChecks({
+      home,
+      repoDir,
+      exists,
+      readFile,
+      envs,
+      platform: options.platform ?? process.platform,
+      isTracked: options.isTracked ?? gitIsTracked,
+    }),
+  );
 
   const self = selfInvocation();
   const mcpReg = {

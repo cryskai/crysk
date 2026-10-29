@@ -138,4 +138,4 @@ The Action installs OpenCode CLI **1.18.30** in its **own** step when `opencode-
 
 ## After setting DATA
 
-Open a **same-repo** PR (fork pushes skip). Confirm the review job materializes person-layer `$HOME/.prhero/config.json` and 0600 auth, and that spend notices show metered when the OpenCode file is present.
+Open a **same-repo** PR (fork pushes skip). Confirm the review job materializes person-layer `$HOME/.crysk/config.json` and 0600 auth, and that spend notices show metered when the OpenCode file is present.

@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { resolveHomeDir } from "../../src/brand-paths";
 import type {
   Clock,
   Gh,
@@ -181,9 +182,11 @@ export const realWorkspace: Workspace = {
   },
 };
 
-// The run lock's file: ~/.prhero/sandbox.lock, unless a test points it elsewhere.
-export function defaultLockPath(): string {
-  return path.join(homedir(), ".prhero", "sandbox.lock");
+// The run lock's file: sandbox.lock in the home the CLI itself resolves
+// (~/.crysk, or ~/.prhero while that is the one in use), unless a test points
+// it elsewhere.
+export function defaultLockPath(home: string = homedir()): string {
+  return path.join(resolveHomeDir(home), "sandbox.lock");
 }
 
 // The file operations the run lock makes. The real ones are node's. A test passes an

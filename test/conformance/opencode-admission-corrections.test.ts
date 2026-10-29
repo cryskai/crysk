@@ -151,7 +151,7 @@ describe("observed SDK absence is not a version mismatch", () => {
         "pr-hero upgrade --reconcile",
       );
       expect((caught as Error).message).toContain("@opencode-ai/sdk@1.18.25");
-      expect((caught as Error).message).toContain("~/.prhero/node_modules");
+      expect((caught as Error).message).toContain("~/.crysk/node_modules");
       expect((caught as Error).message).not.toContain("/$bunfs");
       expect((caught as Error).message).not.toContain("undefined");
     });

@@ -28,6 +28,7 @@ import {
 } from "#triage/triage";
 import { type EngineAssets, resolveEngineAssets } from "../assets";
 import { type BrandEnvValue, readBrandEnv } from "../brand";
+import { REPO_DIR_NAME } from "../brand-paths";
 // CliError/CliUsageError and the git/ref pure helpers used to be DEFINED here
 // and imported by value into git.ts — the bottom layer depending on a
 // review-domain module. They live in ../errors and ../git/refs; this file
@@ -313,7 +314,7 @@ Usage:
   pr-hero [options]          Open interactive terminal user interface (TTY)
   pr-hero menu [options]     Open interactive terminal user interface
   pr-hero review [options]   Review a branch (zero flags inside a configured repo)
-  pr-hero init [options]     Scaffold <repo>/.prhero/ (config.json + gotchas.md)
+  pr-hero init [options]     Scaffold <repo>/.crysk/ (config.json + gotchas.md)
   pr-hero setup [options]    Run interactive onboarding wizard
   pr-hero setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
                              Scaffold .github/workflows/pr-hero.yml instead
@@ -324,7 +325,7 @@ Usage:
                              --ci-mode gate|advisory, --billing
                              subscription|api, --budget-usd (api only),
                              --max-changed-lines (default 4000).
-                             Writes the level to .prhero/config.json and
+                             Writes the level to .crysk/config.json and
                              prints a summary. Then checks gh and, in a
                              terminal, offers to install it and run gh auth
                              login
@@ -386,7 +387,7 @@ Usage:
                              and/or --incidents. All output is CANDIDATES
                              for human confirmation. git log + gh api only:
                              no review, no scoring, $0
-  pr-hero watch --once       Run ONE watcher tick over ~/.prhero/watch.json:
+  pr-hero watch --once       Run ONE watcher tick over ~/.crysk/watch.json:
                              pick the next unreviewed open PR across the
                              configured repos and review it. launchd (or cron)
                              is the scheduler; this never daemonizes
@@ -404,7 +405,7 @@ Usage:
                              "watch --once" every --interval minutes
   pr-hero watch uninstall    Unload and remove that launchd agent
   pr-hero gc [--dry-run] [--repo <dir>]
-                             Collect review worktrees under ~/.prhero/repos
+                             Collect review worktrees under ~/.crysk/repos
                              that are merged/closed or idle >72h. --dry-run
                              prints the table and removes nothing. --repo
                              scopes to one origin; default is the whole home
@@ -421,8 +422,8 @@ Usage:
                              PR, auto-ingests into it. --all shows every
                              origin instead of just this one. Read-only, $0
   pr-hero config [options]   Print every config key's effective value and the
-                             LAYER it came from — global (~/.prhero/config.json),
-                             repo (<repo>/.prhero/config.json), capped (the
+                             LAYER it came from — global (~/.crysk/config.json),
+                             repo (<repo>/.crysk/config.json), capped (the
                              global ceiling narrowed the repo's value away) or
                              default (neither file spoke). Names both file
                              paths whether or not they exist. Resolves through
@@ -451,7 +452,7 @@ Options:
                       agents_dir (relative paths resolve against the config
                       file), then PRHERO_AGENTS_DIR
   --out <dir>         Run directory; must live OUTSIDE the reviewed repo
-                      (default: ~/.prhero/repos/<origin>/runs/<sha>-<n>).
+                      (default: ~/.crysk/repos/<origin>/runs/<sha>-<n>).
                       For reverts and corpus: the file to write instead of
                       stdout
   --since <git-date>  reverts and corpus only: how far back to scan the
@@ -498,9 +499,9 @@ Options:
                       deferred. Not required — deferred is a tag plus
                       reasoning; the coding agent decides whether an issue
                       exists
-  --gotchas <file>    Repo gotchas file (default: <repo>/.prhero/gotchas.md);
+  --gotchas <file>    Repo gotchas file (default: <repo>/.crysk/gotchas.md);
                       supply it from outside to review a tree you cannot dirty
-  --config <file>     Local config (default: <repo>/.prhero/config.json) with
+  --config <file>     Local config (default: <repo>/.crysk/config.json) with
                       agents_dir, default_base, parity_trigger_paths and
                       suspicion_priors, optional summary settings, and
                       optional max_verification_steps (re-review verify cap;
@@ -552,7 +553,7 @@ Options:
                       Size gate: skip the review when the diff has more than
                       n effective changed lines (insertions + deletions,
                       generated files like lockfiles and minified bundles
-                      excluded, plus anything a repo's own .prheroignore
+                      excluded, plus anything a repo's own .cryskignore
                       names). Default ${DEFAULT_SIZE_GATE.maxChangedLines}; 0 disables the limit.
                       With watch add: record the threshold for the repo
   --max-changed-files <n>
@@ -1639,7 +1640,7 @@ export function agentFilePath(
 // The config seat as ONE object rather than three loose optionals. A value,
 // the layer that spoke it, and the directory that value is relative TO are a
 // single fact: split apart, a caller can hand over the GLOBAL file's
-// `agents_dir` with the REPO's `.prhero/` as its base, which resolves a
+// `agents_dir` with the REPO's `.crysk/` as its base, which resolves a
 // relative path against a directory the value never lived in and then labels
 // the result `repo`. Grouped, that mistake does not type-check — which is the
 // only mitigation available, because the two are both `string` and tsc cannot
@@ -1657,7 +1658,7 @@ export interface AgentsDirConfigSeat {
 // WHY `agents_dir` belongs in the config at all: requiring a flag that points
 // into a SIBLING repository is the single thing that stopped this from being a
 // one-word command inside the repo being reviewed. Recorded once in
-// .prhero/config.json, `pr-hero review` needs no arguments.
+// .crysk/config.json, `pr-hero review` needs no arguments.
 //
 // The relative case resolves against the CONFIG FILE's directory, not cwd: the
 // config is the thing that names the path, so the path travels with it. A
@@ -1724,8 +1725,8 @@ export function resolveAgentsDirSetting(input: {
 // The seat, assembled from the merge's own source record. THIS is the one
 // place that record is load-bearing at RUNTIME rather than for display
 // (judgment ledger JD-14): a relative `"agents_dir": "./prompts"` in the
-// global file must resolve under `~/.prhero/`, while the same string in the
-// repo file resolves under `<repo>/.prhero/`. They are two different prompt
+// global file must resolve under `~/.crysk/`, while the same string in the
+// repo file resolves under `<repo>/.crysk/`. They are two different prompt
 // sets — one the operator's, one the team's — and resolving the global value
 // against the repo's directory picks a set nobody configured, or throws
 // "agents dir does not exist" naming a path that appears in neither file.
@@ -1901,7 +1902,7 @@ export function assertOutsideRepo(runDir: string, repoRoot: string): void {
 // repoId rides along with the run dir so the caller's fail-soft metrics
 // ingest (W4 / #23) can reuse the SAME resolveRepoHome call below instead of
 // paying for a second gitOriginUrl lookup. --out still skips resolveRepoHome
-// itself (an explicit dir needs no ~/.prhero/repos/<id> registry, and must
+// itself (an explicit dir needs no ~/.crysk/repos/<id> registry, and must
 // never gain the side effect of creating one just to learn an id — W4 Phase
 // 6 remediation, GitHub #23 option D) — but it now tries origin via
 // tryOriginRepoId (persist:false semantics) so a --out run on a checkout
@@ -2281,10 +2282,10 @@ const GLOBAL_CONFIG_KEYS = new Set<string>(
 // The two file labels every rejection is templated over. A shared validator
 // that hardcodes one file name sends the operator to edit the wrong file the
 // moment the other file is the malformed one.
-const REPO_CONFIG_LABEL = ".prhero/config.json";
-const GLOBAL_CONFIG_LABEL = "~/.prhero/config.json";
+const REPO_CONFIG_LABEL = ".crysk/config.json";
+const GLOBAL_CONFIG_LABEL = "~/.crysk/config.json";
 
-// `.prhero/config.json` is optional and every setting inside it is optional —
+// `.crysk/config.json` is optional and every setting inside it is optional —
 // an absent config is a legal, complete configuration (parity simply never
 // fires, while summary activation is resolved by resolveSummary). What is NOT
 // tolerated is a malformed one: a typo'd key silently
@@ -2306,14 +2307,15 @@ const GLOBAL_CONFIG_LABEL = "~/.prhero/config.json";
 // classed routing parser for symmetry only: `routing` is not a repo key, so the file is
 // rejected as a per-person key before any routing value is parsed. The person layer's
 // errors carry no class (see parseGlobalConfig).
-export function parseLocalConfig(raw: string): ConfigLayer {
+// `label` is the file name an error should show: a repo still on the legacy
+// `.prhero/` passes `.prhero/config.json`, so the message names the file that
+// was actually read.
+export function parseLocalConfig(
+  raw: string,
+  label: string = REPO_CONFIG_LABEL,
+): ConfigLayer {
   return withUsageClass({ kind: "config-parse", source: "repo-config" }, () =>
-    parseConfigLayer(
-      raw,
-      REPO_CONFIG_LABEL,
-      LOCAL_CONFIG_KEYS,
-      parseRoutingConfig,
-    ),
+    parseConfigLayer(raw, label, LOCAL_CONFIG_KEYS, parseRoutingConfig, true),
   );
 }
 
@@ -2326,12 +2328,16 @@ export function parseLocalConfig(raw: string): ConfigLayer {
 // Its routing object is parsed without the routing class. That class renders
 // PRH-ROUTING-INVALID, whose text names CRYSK_ROUTING and `gh variable set`: the
 // fix for the CI routing input, not for this personal file. The message is the same.
-export function parseGlobalConfig(raw: string): ConfigLayer {
+export function parseGlobalConfig(
+  raw: string,
+  label: string = GLOBAL_CONFIG_LABEL,
+): ConfigLayer {
   return parseConfigLayer(
     raw,
-    GLOBAL_CONFIG_LABEL,
+    label,
     GLOBAL_CONFIG_KEYS,
     parseRoutingValue,
+    false,
   );
 }
 
@@ -2361,6 +2367,7 @@ function parseConfigLayer(
   file: string,
   admitted: ReadonlySet<string>,
   parseRouting: typeof parseRoutingConfig,
+  isRepoFile: boolean,
 ): ConfigLayer {
   let parsed: unknown;
   try {
@@ -2382,15 +2389,19 @@ function parseConfigLayer(
     // key name across three rejections sends two operators out of three
     // looking for the wrong line in their config.
     if (!admitted.has(key)) {
-      if (file === REPO_CONFIG_LABEL) {
+      if (isRepoFile) {
         throw new CliUsageError(
-          `${file}: ${key} is a per-person key — put it in ` +
-            "~/.prhero/config.json",
+          // Both homes are named: the resolver picks ~/.crysk as soon as it exists, so
+          // telling a pre-rename install to create it would hide its ~/.prhero data.
+          `${file}: ${key} is a per-person key — put it in your person config ` +
+            "(~/.crysk/config.json, or ~/.prhero/config.json on an install set up " +
+            "before the rename; do not create ~/.crysk while ~/.prhero is in use)",
         );
       }
       throw new CliUsageError(
-        `${file}: ${key} is a per-repo key — put it in ` +
-          "<repo>/.prhero/config.json",
+        `${file}: ${key} is a per-repo key — put it in the repo config ` +
+          "(<repo>/.crysk/config.json, or <repo>/.prhero/config.json in a repo set " +
+          "up before the rename)",
       );
     }
   }
@@ -3240,7 +3251,7 @@ function optionalString(
 export interface InitTemplateInput {
   agentsDir?: string | undefined;
   defaultBase: string;
-  // What `~/.prhero/config.json` ALREADY says, or undefined when the operator
+  // What `~/.crysk/config.json` ALREADY says, or undefined when the operator
   // has no global file. C5 O-9: a scaffold that re-states what the global
   // layer already supplies ships the exact duplication C5 exists to delete —
   // §0.5 measured three byte-identical 212-byte configs on one machine.
@@ -3333,14 +3344,19 @@ export function initConfigTemplate(input: InitTemplateInput): string {
   )}\n`;
 }
 
-// WHY init says this out loud: an untracked file under .prhero/ dirties the
+// WHY init says this out loud: an untracked file under .crysk/ dirties the
 // working tree, and the clean-tree gate in cli.ts then refuses to run at all.
 // A first-time user who scaffolds and immediately hits "the working tree is
 // dirty" has no way to connect the two.
-export const INIT_GIT_REMINDER =
-  "Now either commit .prhero/ or add it to .gitignore. Every review step " +
-  "reads the checkout directly, so pr-hero refuses to run on a dirty tree — " +
-  "and an untracked .prhero/ is exactly that.";
+// `dirName` is the directory the command actually wrote into (an existing
+// legacy .prhero/ is updated in place), so the advice names a real path.
+export function initGitReminder(dirName: string = REPO_DIR_NAME): string {
+  return (
+    `Now either commit ${dirName}/ or add it to .gitignore. Every review step ` +
+    "reads the checkout directly, so pr-hero refuses to run on a dirty tree — " +
+    `and an untracked ${dirName}/ is exactly that.`
+  );
+}
 
 // The token every scaffolded gotchas file carries, and the primary signal
 // that distinguishes "nobody has written this yet" from a real file (the
@@ -3452,6 +3468,7 @@ export function gotchasUnusableReason(
 // kept arm that forgot to pass the bytes.
 export function initGotchasInstructions(
   outcome: { written: true } | { written: false; contents: string },
+  dirName: string = REPO_DIR_NAME,
 ): string[] {
   if (outcome.written) {
     // Safe ONLY on this arm: the file is GOTCHAS_TEMPLATE, so it really does
@@ -3463,7 +3480,7 @@ export function initGotchasInstructions(
     // placeholders. The marker is what makes the old sentence true, so the
     // instruction has to name the marker.
     return [
-      "Then edit .prhero/gotchas.md — two steps, both required:",
+      `Then edit ${dirName}/gotchas.md — two steps, both required:`,
       "  1. replace the <subsystem> lines with facts about this repo",
       `  2. delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line at the top`,
       "",
@@ -3481,7 +3498,7 @@ export function initGotchasInstructions(
     // `<subsystem>` lines at all. Naming them would be this same defect one
     // layer down.
     return [
-      "The .prhero/gotchas.md already on disk is still a scaffold: it carries " +
+      `The ${dirName}/gotchas.md already on disk is still a scaffold: it carries ` +
         `the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line or nothing but the ` +
         "scaffold's own lines, and pr-hero refuses to review it.",
       "",
@@ -3493,7 +3510,7 @@ export function initGotchasInstructions(
     // No marker in an empty file, so nothing to delete — saying otherwise
     // would send the reader looking for a line that is not there.
     return [
-      "The .prhero/gotchas.md already on disk is empty, and pr-hero refuses " +
+      `The ${dirName}/gotchas.md already on disk is empty, and pr-hero refuses ` +
         "to review without gotchas: an empty file makes the whole review a " +
         "zero-cost no-op that LOOKS like a clean result.",
       "",
@@ -3505,7 +3522,7 @@ export function initGotchasInstructions(
   // non-empty and marker-free; it does not prove the contents are good, so
   // this line reports the gate and claims nothing beyond it.
   return [
-    "The .prhero/gotchas.md already on disk passes the gotchas gate and will " +
+    `The ${dirName}/gotchas.md already on disk passes the gotchas gate and will ` +
       "be used as-is.",
   ];
 }

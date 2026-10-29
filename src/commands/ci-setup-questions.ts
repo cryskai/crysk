@@ -157,7 +157,7 @@ export async function askChoices(
       value: "keep",
       label: "Keep current settings",
       description:
-        "The re-review keys in .prhero/config.json match no preset; leave them as they are.",
+        "The re-review keys in .crysk/config.json match no preset; leave them as they are.",
     });
   }
   const level = await prompter.choose<ReviewLevel | "keep">(
@@ -328,7 +328,7 @@ async function askAdvanced(
 
   say();
   say(
-    "Exclusions: files the review never reads (generated code, lockfiles, fixtures). They go in .prheroignore, one pattern per line, gitignore syntax.",
+    "Exclusions: files the review never reads (generated code, lockfiles, fixtures). They go in .cryskignore, one pattern per line, gitignore syntax.",
   );
   for (;;) {
     const patterns = commaList(

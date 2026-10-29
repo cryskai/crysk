@@ -10,6 +10,7 @@ import {
   unsetConfigValue,
 } from "#ui/config-edit";
 import { log, styleEnabled, terminalWidth } from "#ui/primitives";
+import { resolveRepoDir } from "../brand-paths";
 import { CliError } from "../errors";
 
 // `pr-hero config` (C5 O-12 / D10 / §3.10) — read-only, $0, and deliberately
@@ -83,7 +84,7 @@ export async function configCommand(options: CliOptions): Promise<number> {
     sources: loaded.sources,
     repoConfigPath: repoRoot
       ? loaded.repoConfigPath
-      : path.join(process.cwd(), ".prhero", "config.json"),
+      : path.join(resolveRepoDir(process.cwd()), "config.json"),
     // Not carried on EffectiveConfig: the review path has no use for it (an
     // absent repo file is simply an absent layer), and widening a type six
     // callers share to serve one renderer is how shared shapes rot.

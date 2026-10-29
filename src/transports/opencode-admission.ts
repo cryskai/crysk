@@ -34,7 +34,8 @@ export class OpenCodeSdkUnavailableError extends Error {
 // SUPPORTED_OPENCODE_SDK_VERSION so the two pins cannot drift.
 export function openCodeSdkUnavailableMessage(): string {
   return (
-    "@opencode-ai/sdk@1.18.25 is not installed under ~/.prhero/node_modules. " +
+    "@opencode-ai/sdk@1.18.25 is not installed under ~/.crysk/node_modules " +
+    "(~/.prhero/node_modules on an install not yet migrated). " +
     "Run pr-hero upgrade --reconcile to install it."
   );
 }
@@ -50,7 +51,7 @@ export function openCodeSdkUnavailableMessage(): string {
 // interpolates the failed specifier and the caught error's own name+message
 // on purpose: they are the only place the real cause still lives once this
 // throws. It names no install location: the specifier already carries the
-// real one, and ~/.prhero/node_modules is only where a COMPILED binary looks.
+// real one, and ~/.crysk/node_modules (or a legacy ~/.prhero) is only where a COMPILED binary looks.
 // The version is a literal for the same reason as the sentence above, and
 // its transport test locks it to SUPPORTED_OPENCODE_SDK_VERSION the same way.
 export function openCodeSdkLoadFailedMessage(

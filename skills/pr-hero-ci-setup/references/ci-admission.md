@@ -1,11 +1,11 @@
 # CI review admission — setup reference
 
-Read this when configuring `.prhero/config.json` during CI setup. Full operator docs:
+Read this when configuring `.crysk/config.json` during CI setup. Full operator docs:
 `docs/github-actions.md` (section **CI review admission**).
 
 ## Where config lives
 
-- **Repository** `.prhero/config.json` on the default branch — authoritative.
+- **Repository** `.crysk/config.json` on the default branch — authoritative.
 - NOT in the PR branch worktree. Authors cannot change admission to suppress their own PR.
 - Verify with `pr-hero config` after editing.
 
@@ -77,7 +77,7 @@ Skipped and manual-required posts include admission metadata in the step summary
 ## Rollout (recommended)
 
 1. Ship workflow + secrets first.
-2. Add `.prhero/config.json` with `"ci_admission_observe_only": true`.
+2. Add `.crysk/config.json` with `"ci_admission_observe_only": true`.
 3. Open a test PR; read `::notice::` lines for would-be skip/manual decisions.
 4. Set `ci_admission_observe_only` to `false` when behavior matches intent.
 

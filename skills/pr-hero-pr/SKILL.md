@@ -50,7 +50,7 @@ Load this skill whenever the user asks to open, create, submit, or update a pull
 
 ## Step 3: Auto-Subscribe to `pr-hero` & Enter the Triage Loop (No Human Friction)
 
-Check whether the repository uses `pr-hero` (e.g., `.github/workflows/pr-hero.yml` or `.prhero/` exists in the repo, or `pr-hero` status checks run on PRs). If not, report the PR URL and stop.
+Check whether the repository uses `pr-hero` (e.g., `.github/workflows/pr-hero.yml` or `.crysk/` exists in the repo, or `pr-hero` status checks run on PRs). If not, report the PR URL and stop.
 
 When `pr-hero` is active on the repository, **never stop right after `gh pr create`**. Immediately continue in the same turn:
 

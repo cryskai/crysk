@@ -36,8 +36,15 @@ describe("uninstaller (lifecycle foundations)", () => {
       expect(plan.platform).toBe("darwin");
       expect(plan.programSteps).toBeDefined();
       expect(plan.dataSteps).toHaveLength(0); // No purge requested
-      expect(plan.launchdServices).toContain("io.prhero.watch");
-      expect(plan.launchdServices).toContain("io.prhero.gc");
+      // Both generations of agent are removed.
+      for (const label of [
+        "io.crysk.watch",
+        "io.crysk.gc",
+        "io.prhero.watch",
+        "io.prhero.gc",
+      ]) {
+        expect(plan.launchdServices).toContain(label);
+      }
       expect(plan.rcFilesCleaned).toContain(path.join(home, ".zshrc"));
       expect(plan.binariesRemoved).toContain(standaloneBin);
       // Every bundled skill is removed, the general pr-hero one included.
@@ -53,6 +60,22 @@ describe("uninstaller (lifecycle foundations)", () => {
       }
     });
 
+    test("cleans both .crysk/bin and .prhero/bin PATH lines from an rc file", async () => {
+      for (const line of [
+        "export PATH=$HOME/.crysk/bin:$PATH\n",
+        "export PATH=$HOME/.prhero/bin:$PATH\n",
+      ]) {
+        const plan = await planUninstallation({
+          home,
+          platform: "linux",
+          installMethod: { kind: "source" },
+          exists: (p) => p.includes(".zshrc"),
+          readFile: () => line,
+        });
+        expect(plan.rcFilesCleaned).toEqual([path.join(home, ".zshrc")]);
+      }
+    });
+
     test("generates full data purge plan when purge is true and no runs active", async () => {
       const plan = await planUninstallation({
         home,
@@ -61,15 +84,40 @@ describe("uninstaller (lifecycle foundations)", () => {
         installMethod: { kind: "standalone", binaryPath: standaloneBin },
         detectActiveRuns: async () => [],
         isWatchLockHeld: async () => false,
+        // Both homes present: the new one is resolved and the old one is
+        // removed too.
         exists: () => true,
       });
 
       expect(plan.dataSteps.length).toBeGreaterThan(0);
       const dataPaths = plan.dataSteps.map((s) => s.targetPath);
-      expect(dataPaths).toContain(path.join(home, ".prhero", "prhero.db"));
-      expect(dataPaths).toContain(path.join(home, ".prhero", "watch.json"));
-      expect(dataPaths).toContain(path.join(home, ".prhero", "config.json"));
-      expect(dataPaths).toContain(path.join(home, ".prhero", "setup.json"));
+      expect(dataPaths).toContain(path.join(home, ".crysk", "prhero.db"));
+      expect(dataPaths).toContain(path.join(home, ".crysk", "watch.json"));
+      expect(dataPaths).toContain(path.join(home, ".crysk", "config.json"));
+      expect(dataPaths).toContain(path.join(home, ".crysk", "setup.json"));
+      expect(dataPaths).toContain(path.join(home, ".prhero"));
+    });
+
+    test("a legacy-only home is purged exactly as before", async () => {
+      const present = new Set([
+        path.join(home, ".prhero"),
+        path.join(home, ".prhero", "prhero.db"),
+        path.join(home, ".prhero", "config.json"),
+      ]);
+      const plan = await planUninstallation({
+        home,
+        platform: "linux",
+        purge: true,
+        installMethod: { kind: "source" },
+        detectActiveRuns: async () => [],
+        isWatchLockHeld: async () => false,
+        exists: (p) => present.has(p),
+      });
+      expect(plan.dataSteps.map((s) => s.targetPath)).toEqual([
+        path.join(home, ".prhero", "prhero.db"),
+        path.join(home, ".prhero", "config.json"),
+        path.join(home, ".prhero"),
+      ]);
     });
 
     test("refuses purge when active runs or watch.lock are detected", async () => {

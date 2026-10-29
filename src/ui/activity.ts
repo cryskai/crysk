@@ -147,7 +147,10 @@ export function renderActivityScreen(
 
   // 3. Recent Completed Reviews
   content.push(
-    bold("Recent Completed Reviews (last 10, from ~/.prhero/prhero.db):", st),
+    bold(
+      "Recent Completed Reviews (last 10, from prhero.db in the pr-hero home):",
+      st,
+    ),
   );
   content.push(...renderRunHistory(data.history, options));
   content.push("");

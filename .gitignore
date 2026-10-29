@@ -2,6 +2,7 @@
 node_modules/
 fixtures/.build/
 .prhero/
+.crysk/
 # per-checkout code index and browser-tool snapshots: never committed
 .codegraph/
 .playwright-mcp/

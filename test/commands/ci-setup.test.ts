@@ -211,7 +211,7 @@ describe("setup --ci review choices (CLI)", () => {
       { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
     );
     const wf = path.join(dir, ".github", "workflows", "pr-hero.yml");
-    const cfg = path.join(dir, ".prhero", "config.json");
+    const cfg = path.join(dir, ".crysk", "config.json");
     return {
       code: result.exitCode,
       output: `${result.stdout}${result.stderr}`,
@@ -283,7 +283,7 @@ describe("setup --ci review choices (CLI)", () => {
   test("an existing config keeps its other keys", async () => {
     const r = await runSetup(["--level", "minimal"], async (dir) => {
       await Bun.write(
-        path.join(dir, ".prhero", "config.json"),
+        path.join(dir, ".crysk", "config.json"),
         JSON.stringify({ post: true }),
       );
     });
@@ -302,7 +302,7 @@ describe("setup --ci review choices (CLI)", () => {
 
   test("an invalid existing config is refused before the workflow is written", async () => {
     const r = await runSetup([], async (dir) => {
-      await Bun.write(path.join(dir, ".prhero", "config.json"), "{ nope");
+      await Bun.write(path.join(dir, ".crysk", "config.json"), "{ nope");
     });
     try {
       expect(r.code).not.toBe(0);
@@ -328,7 +328,7 @@ describe("setup --ci review choices (CLI)", () => {
         "old\n",
       );
       await Bun.write(
-        path.join(dir, ".prhero", "config.json"),
+        path.join(dir, ".crysk", "config.json"),
         JSON.stringify(tuned),
       );
     });
@@ -379,7 +379,7 @@ describe("setup --ci review choices (CLI)", () => {
   test("--level alone changes the level keys, reports them, and keeps the line threshold", async () => {
     const r = await runSetup(["--level", "minimal"], async (dir) => {
       await Bun.write(
-        path.join(dir, ".prhero", "config.json"),
+        path.join(dir, ".crysk", "config.json"),
         JSON.stringify({ ci_max_attempts: 5, max_changed_lines: 9000 }),
       );
     });
@@ -397,7 +397,7 @@ describe("setup --ci review choices (CLI)", () => {
 
   test("a non-object config is refused with a CLI error, not a stack trace, before the workflow is written", async () => {
     const r = await runSetup([], async (dir) => {
-      await Bun.write(path.join(dir, ".prhero", "config.json"), "[]");
+      await Bun.write(path.join(dir, ".crysk", "config.json"), "[]");
     });
     try {
       expect(r.code).not.toBe(0);
@@ -497,7 +497,7 @@ describe("ciSetupCommand at a terminal", () => {
       expect(workflow).toContain("budget-usd: 3\n");
       expect(
         JSON.parse(
-          await Bun.file(path.join(dir, ".prhero", "config.json")).text(),
+          await Bun.file(path.join(dir, ".crysk", "config.json")).text(),
         ),
       ).toMatchObject({
         ci_review_policy: "manual_only",
@@ -509,12 +509,12 @@ describe("ciSetupCommand at a terminal", () => {
   });
 });
 
-describe("ciSetupCommand with a broken .prheroignore", () => {
+describe("ciSetupCommand with a broken .cryskignore", () => {
   test("a new pattern over a broken file stops before anything is written", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-ignore-"));
     try {
       Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
-      await Bun.write(path.join(dir, ".prheroignore"), "!\n");
+      await Bun.write(path.join(dir, ".cryskignore"), "!\n");
       const answers = [
         "balanced",
         "gate",
@@ -555,7 +555,7 @@ describe("ciSetupCommand with a broken .prheroignore", () => {
         ).exists(),
       ).toBe(false);
       expect(
-        await Bun.file(path.join(dir, ".prhero", "config.json")).exists(),
+        await Bun.file(path.join(dir, ".crysk", "config.json")).exists(),
       ).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });

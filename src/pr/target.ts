@@ -78,7 +78,7 @@ export interface ResolvedPrRunOptions {
 // Step 1's first half: the operator root, the PR number, `home`, and the
 // config load — identical to loadRunConfig's own callers, plus reviewPr()'s
 // own isCi/options-yes fold-in (ROADMAP Pillar 3). Returns BEFORE the
-// `.prheroignore` read: `readLocalIgnoreRules(operatorRoot)` needs
+// `.cryskignore` read: `readLocalIgnoreRules(operatorRoot)` needs
 // `operatorRoot` and `isCi` from here, but stays an inline statement in
 // reviewPr() itself (see this module's header).
 export async function resolvePrRunOptions(
@@ -103,7 +103,7 @@ export async function resolvePrRunOptions(
   // the repo registry.
   const home = os.homedir();
   // `operatorRoot`, NEVER worktreePath — the worktree does not even exist
-  // yet at this point, and a `.prhero/config.json` committed by the PR author
+  // yet at this point, and a `.crysk/config.json` committed by the PR author
   // must stay unread (O-8). Same loader as local mode, so the two modes
   // cannot drift on precedence.
   const { loaded, config, summary, scout, post } = await loadRunConfig({
@@ -340,11 +340,11 @@ export function renderPrDryRunPlan(params: {
   // Under CI, `localIgnore` is intentionally undefined (see reviewPr()'s own
   // comment on that read) — the base-ref read needs a fetch a dry run does
   // not perform — so this estimate applies only the 9 BUILT-IN default
-  // exclusions, never a repo's user-defined `.prheroignore` rules. Said out
+  // exclusions, never a repo's user-defined `.cryskignore` rules. Said out
   // loud rather than discovered: a CI dry run that quietly ignored
-  // `.prheroignore` would look like the SAME bug Addition 1 exists to fix.
+  // `.cryskignore` would look like the SAME bug Addition 1 exists to fix.
   const sizeGateNote = params.isCi
-    ? `${baseSizeGateNote} User-defined \`.prheroignore\` rules are not ` +
+    ? `${baseSizeGateNote} User-defined \`.cryskignore\` rules are not ` +
       "applied to this estimate under --ci; only the built-in defaults " +
       "are (the base ref is not fetched until a real run)."
     : baseSizeGateNote;

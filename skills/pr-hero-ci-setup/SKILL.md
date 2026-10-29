@@ -34,8 +34,8 @@ Load when the user asks to:
 - **Minimum action version:** this workflow listens to comments, and only an action release that ships the comment handling checks the command and the commenter's write access. An older action reviews on ANY comment starting with `/crysk review`, from anyone who can comment. Never pair this workflow with an older action; a pinned tag or sha must be at or after that release.
 - **Older heads (this repo):** a comment run loads the PR head's own `action.yml`, so on a head from before the comment handling it reviews without reading the comment (no force, no `--full`); merge or rebase the PR onto a base that has it first.
 - **Trust (this repo):** a comment run runs the PR head's code, including its `bun install`, with the workflow's secrets, so write access is checked twice: by the workflow's pre-checkout step (fail closed, before any head code runs) and again by the head's `action.yml`.
-- **Admission config is repo-level:** Write `.prhero/config.json` on the default branch. That file **rejects** `routing`. Person-layer only (`$HOME/.prhero/config.json` on the runner, from `vars.CRYSK_ROUTING`).
-- **`.prheroignore` is read from the base ref, not the PR branch, in CI.**
+- **Admission config is repo-level:** Write `.crysk/config.json` on the default branch. That file **rejects** `routing`. Person-layer only (`$HOME/.crysk/config.json` on the runner, from `vars.CRYSK_ROUTING`).
+- **`.cryskignore` is read from the base ref, not the PR branch, in CI.**
 - **OpenCode is DATA:** quoted `routing: "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"` + `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`. Unset both = Claude CI. Never a per-provider Action input. Never echo the auth blob.
 - **OpenCode procedure:** when OpenCode or mixed backends are in scope, follow `references/opencode-ci.md` before setting GitHub DATA (strip personal OAuth, `modelSnapshot`, logical vs role).
 
@@ -52,7 +52,7 @@ Load when the user asks to:
 | Mixed OpenCode providers in one run | Out of scope (#195). One OpenCode provider per run. Mixed `claude-code` + one OpenCode provider is legal. |
 | OpenCode CLI pin | Action installs **1.18.30** iff `opencode-auth != ''` OR routing contains `opencode`. Never `latest`. |
 | Fork PRs | Their pushes skip (no secrets). A user with write access comments `/crysk review`, and that run (base context, with secrets) reviews the fork head. Review `if` never reads `secrets`; the action checks credentials (Anthropic **or** Claude OAuth **or** `OPENCODE_AUTH_JSON`). |
-| Spend gates | Defaults: `budget-usd: 10.00` on metered routes (Anthropic key **or** OpenCode auth file), `max-changed-lines: 4000` and `max-changed-files: 50` on metered routes only; a Claude subscription route has no size limit unless the workflow or `.prhero/config.json` sets one. Claude-only OAuth stays unlimited-subscription unless OpenCode auth is also present. |
+| Spend gates | Defaults: `budget-usd: 10.00` on metered routes (Anthropic key **or** OpenCode auth file), `max-changed-lines: 4000` and `max-changed-files: 50` on metered routes only; a Claude subscription route has no size limit unless the workflow or `.crysk/config.json` sets one. Claude-only OAuth stays unlimited-subscription unless OpenCode auth is also present. |
 | Existing workflow | `setup --ci` skips; ask before `--force` |
 | First-time admission | Recommend `ci_admission_observe_only: true` — `references/ci-admission.md` |
 | User wants max CI spend | Lower `ci_max_attempts` and/or raise `ci_rereview_min_score` |
@@ -66,7 +66,7 @@ Load when the user asks to:
 | `PRH-MODEL-UNAVAILABLE` (lead "Provider <name>:") | Every hunter's route names a model the provider does not serve. Fix the model id in `CRYSK_ROUTING` (check `opencode models`). |
 | `PRH-CRED-UNUSABLE` ("The route <provider>/<model> has no usable credential record") | `OPENCODE_AUTH_JSON` has no record for that provider. Add it to the blob, or route that model elsewhere. |
 | Blocking findings answered `dismissed`, gate still red | `gh pr comment <n> --body "/crysk recheck"`: the CI adjudicator rules on each dismissal (at most 5 per run). On `upheld`, comment `/crysk review`: that next review stops counting it. `deferred` / `misclassified` never clear the gate. |
-| Gate error: `PRH-GOTCHAS-MISSING` ("`.prhero/gotchas.md` is missing or still the scaffold") | Run `npx -y pr-hero init`, write real gotchas, delete the `human-attention-required` marker line, commit `.prhero/` to the default branch, then comment `/crysk review`. |
+| Gate error: `PRH-GOTCHAS-MISSING` ("`.crysk/gotchas.md` is missing or still the scaffold") | Run `npx -y pr-hero init`, write real gotchas, delete the `human-attention-required` marker line, commit `.crysk/` to the default branch, then comment `/crysk review`. |
 | Gate error: `PRH-HUNTERS-FAILED` (every hunter failed) | Check the route and credential first (the `PRH-CRED-UNUSABLE` and `PRH-MODEL-UNAVAILABLE` rows). Free OpenCode models fail intermittently: comment `/crysk review` to retry. |
 | A `/crysk review` comment did nothing | The workflow is not on the default branch yet, the comment is not exact, the author lacks write access, or the workflow predates the comment trigger (re-scaffold with `--force`). |
 
@@ -89,9 +89,9 @@ Before step 4, ask the human these questions in their language. Use the native q
    - observe only (`ci_admission_observe_only`): log what the rules would skip, but review every push; good for one PR cycle;
    - trusted actors (`ci_trusted_actors`): extra GitHub logins whose pr-hero markers count;
    - changed-files limit (`max_changed_files`): a PR touching more files is skipped; unset = none on a subscription, 50 on an API key;
-   - exclusions: patterns in `.prheroignore` (gitignore syntax) the review never reads.
+   - exclusions: patterns in `.cryskignore` (gitignore syntax) the review never reads.
 
-**On a re-run** (`.prhero/config.json` already has re-review keys, or the workflow already exists), first show the human the current values (`npx -y pr-hero config`) and offer **Keep current settings** for the level and for the line threshold. When they keep them, omit `--level` / `--max-changed-lines`: passing a flag overwrites that group, including a tuned `max_verification_steps`.
+**On a re-run** (`.crysk/config.json` already has re-review keys, or the workflow already exists), first show the human the current values (`npx -y pr-hero config`) and offer **Keep current settings** for the level and for the line threshold. When they keep them, omit `--level` / `--max-changed-lines`: passing a flag overwrites that group, including a tuned `max_verification_steps`.
 
 Then pass the answers to the scaffold as flags, never as hand-written YAML:
 
@@ -99,17 +99,17 @@ Then pass the answers to the scaffold as flags, never as hand-written YAML:
 npx -y pr-hero setup --ci --level <minimal|balanced|thorough|manual> --ci-mode <gate|advisory> --billing <subscription|api> --max-changed-lines <n> [--budget-usd <n>]
 ```
 
-It writes the workflow, merges the level's keys into `.prhero/config.json` (keeping other keys), and prints a summary of every setting. **Never run it without these flags**: with none it applies balanced and gate, and its summary says nobody chose them. Write any advanced answers into `.prhero/config.json` (and `.prheroignore`) afterwards. The summary `setup --ci` printed predates those edits, so when there were any, show the human the effective settings from `npx -y pr-hero config` instead. Otherwise show the printed summary, including any `Changed` and `Kept existing` lines: on a re-run (for example `--force` to refresh an old workflow) only the groups a flag names are overwritten, and keys nobody chose stay as the file had them; the workflow keeps its old `mode` and `budget-usd` unless `--ci-mode` or `--billing` / `--budget-usd` is passed. In a terminal, every question defaults to the repository's current value. Details: `references/ci-admission.md`.
+It writes the workflow, merges the level's keys into `.crysk/config.json` (keeping other keys), and prints a summary of every setting. **Never run it without these flags**: with none it applies balanced and gate, and its summary says nobody chose them. Write any advanced answers into `.crysk/config.json` (and `.cryskignore`) afterwards. The summary `setup --ci` printed predates those edits, so when there were any, show the human the effective settings from `npx -y pr-hero config` instead. Otherwise show the printed summary, including any `Changed` and `Kept existing` lines: on a re-run (for example `--force` to refresh an old workflow) only the groups a flag names are overwritten, and keys nobody chose stay as the file had them; the workflow keeps its old `mode` and `budget-usd` unless `--ci-mode` or `--billing` / `--budget-usd` is passed. In a terminal, every question defaults to the repository's current value. Details: `references/ci-admission.md`.
 
 ## Execution Steps
 
 1. **Inspect repo:** `git rev-parse --is-inside-work-tree`, `git remote get-url origin`, `gh auth status`.
 2. **Credential path:** Claude-only → skip OpenCode. OpenCode or mix → **read `references/opencode-ci.md`** and execute it (metadata inspect, CI-only blob, secret, routing with `modelSnapshot`).
 3. **Claude secret (if used):** `gh secret set CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (secure input, never print).
-4. **Workflow:** run the interview above, then `npx -y pr-hero setup --ci` with its flags. It writes `.github/workflows/pr-hero.yml` and the level keys in `.prhero/config.json`. Confirm `checks: write` and `actions: read`, both `pull_request` and `issue_comment` triggers, quoted `routing` / `opencode-auth`. `--force` if an old template lacks them (an old `credentials` job or a missing `issue_comment` trigger means it predates the single workflow).
-5. **Gotchas (required before the first review):** if `.prhero/` is missing on the default branch, run `npx -y pr-hero init` in the clone. The agent writes the gotchas from the repository it has in context, not from the template: the deliberate oddity that looks like a bug, the invariant enforced outside the diff, the ownership rule a newcomer would break. Each line is injected verbatim into every hunter's prompt. Delete the `human-attention-required` marker line (pr-hero refuses to review while it is there), then commit `.prhero/` to the default branch. Without it the run fails `PRH-GOTCHAS-MISSING`.
+4. **Workflow:** run the interview above, then `npx -y pr-hero setup --ci` with its flags. It writes `.github/workflows/pr-hero.yml` and the level keys in `.crysk/config.json`. Confirm `checks: write` and `actions: read`, both `pull_request` and `issue_comment` triggers, quoted `routing` / `opencode-auth`. `--force` if an old template lacks them (an old `credentials` job or a missing `issue_comment` trigger means it predates the single workflow).
+5. **Gotchas (required before the first review):** if `.crysk/` is missing on the default branch, run `npx -y pr-hero init` in the clone. The agent writes the gotchas from the repository it has in context, not from the template: the deliberate oddity that looks like a bug, the invariant enforced outside the diff, the ownership rule a newcomer would break. Each line is injected verbatim into every hunter's prompt. Delete the `human-attention-required` marker line (pr-hero refuses to review while it is there), then commit `.crysk/` to the default branch. Without it the run fails `PRH-GOTCHAS-MISSING`.
 6. **Require the check:** in branch protection, require the `crysk` status check (the gate), not the `review` job. The legacy `pr-hero` status is still posted for one version, so a repository that already requires it keeps working; move the rule to `crysk`. A private repository on GitHub Free cannot require status checks (HTTP 403): report that the gate is advisory there. With `gh`, and only after asking the human: read the current protection first (`gh api repos/<o>/<r>/branches/<default>/protection`), because the PUT replaces all of it; then `gh api -X PUT repos/<o>/<r>/branches/<default>/protection` with `required_status_checks` contexts `["crysk"]`.
-7. **Advanced settings:** write the answers from interview question 5 into `.prhero/config.json` (and `.prheroignore`); commit both to the default branch. **No `routing` key.** `npx -y pr-hero config` to verify.
+7. **Advanced settings:** write the answers from interview question 5 into `.crysk/config.json` (and `.cryskignore`); commit both to the default branch. **No `routing` key.** `npx -y pr-hero config` to verify.
 8. **Verify:** `npx -y pr-hero doctor`. `git status`. Confirm no openai `type:"api"` blob, no echoed auth, `modelSnapshot` matches `opencode models` when OpenCode is on.
 9. **Deploy:** Offer commit. Open a **same-repo** test PR (forks skip).
 
@@ -119,16 +119,16 @@ Report:
 - Secret status (set or manual link). Names only: which of `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `OPENCODE_AUTH_JSON` exist. Never values.
 - OpenCode (if in scope): `OPENCODE_AUTH_JSON` set; blob providers **names + type only**; whether the blob was stripped to one CI provider; `CRYSK_ROUTING` JSON (no credentials); `modelSnapshot` vs `opencode models`.
 - Workflow path (`pr-hero.yml`) and whether `checks: write`, `actions: read`, the `issue_comment` trigger, and quoted `routing` / `opencode-auth` are present.
-- The review settings summary `setup --ci` printed (level, gate, budget, advanced settings), and which ones the human chose. Confirm repo `.prhero/config.json` has no `routing` key.
+- The review settings summary `setup --ci` printed (level, gate, budget, advanced settings), and which ones the human chose. Confirm repo `.crysk/config.json` has no `routing` key.
 - `npx -y pr-hero doctor` / `npx -y pr-hero config` outcome.
-- Whether `.prhero/` exists on the default branch with real gotchas (no `human-attention-required` marker line).
+- Whether `.crysk/` exists on the default branch with real gotchas (no `human-attention-required` marker line).
 - Whether `crysk` is a required check (or only the legacy `pr-hero`, which should move to `crysk`), or that the repository cannot require one (private repository on GitHub Free).
 - Next steps: merge the workflow to the default branch (the comment trigger needs it there), open a same-repo test PR, when to turn off observe-only. If CI skipped, the override is `gh pr comment <n> --body "/crysk review"`.
 
 ## References
 
 - `assets/workflow.yml` — the one review workflow (`pull_request` + `issue_comment` for `/crysk review`).
-- `assets/admission-config.example.json` — starter `.prhero/config.json`.
+- `assets/admission-config.example.json` — starter `.crysk/config.json`.
 - `references/ci-admission.md` — admission keys, modes, rollout, ledger.
 - `references/opencode-ci.md` — OpenCode secret/variable procedure, routing, pin, openai vs deepseek.
 - `docs/github-actions.md` — full CI integration docs.

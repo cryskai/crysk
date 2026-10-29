@@ -1462,7 +1462,7 @@ describe("renderWatchPlist", () => {
       args: ["/Users/x/Desktop/pr-hero/src/cli.ts"],
     },
     intervalSeconds: 900,
-    logPath: "/Users/x/.prhero/launchd.log",
+    logPath: "/Users/x/.crysk/launchd.log",
     pathEnv: "/opt/homebrew/bin:/usr/bin:/bin",
   };
 
@@ -1491,7 +1491,7 @@ describe("renderWatchPlist", () => {
     const stderrKey = plist.indexOf("<key>StandardErrorPath</key>");
     expect(stdoutKey).toBeGreaterThan(-1);
     expect(stderrKey).toBeGreaterThan(-1);
-    expect(plist).toContain("<string>/Users/x/.prhero/launchd.log</string>");
+    expect(plist).toContain("<string>/Users/x/.crysk/launchd.log</string>");
   });
 
   test("XML-hostile characters in paths are escaped", () => {
@@ -1562,19 +1562,19 @@ describe("prheroHomePaths", () => {
   test("every watcher path hangs off one home", () => {
     const paths = prheroHomePaths("/Users/x");
     expect(paths).toEqual({
-      dir: "/Users/x/.prhero",
-      nodeModulesDir: "/Users/x/.prhero/node_modules",
-      reposDir: "/Users/x/.prhero/repos",
-      watchConfigPath: "/Users/x/.prhero/watch.json",
-      reviewConfigPath: "/Users/x/.prhero/config.json",
-      logPath: "/Users/x/.prhero/watch.log",
-      lockPath: "/Users/x/.prhero/watch.lock",
-      launchdLogPath: "/Users/x/.prhero/launchd.log",
-      metricsDbPath: "/Users/x/.prhero/metrics.db",
-      prheroDbPath: "/Users/x/.prhero/prhero.db",
-      storeSocketPath: "/Users/x/.prhero/store.sock",
-      upgradeCheckPath: "/Users/x/.prhero/upgrade-check.json",
-      bucketKeyPath: "/Users/x/.prhero/bucket-key",
+      dir: "/Users/x/.crysk",
+      nodeModulesDir: "/Users/x/.crysk/node_modules",
+      reposDir: "/Users/x/.crysk/repos",
+      watchConfigPath: "/Users/x/.crysk/watch.json",
+      reviewConfigPath: "/Users/x/.crysk/config.json",
+      logPath: "/Users/x/.crysk/watch.log",
+      lockPath: "/Users/x/.crysk/watch.lock",
+      launchdLogPath: "/Users/x/.crysk/launchd.log",
+      metricsDbPath: "/Users/x/.crysk/metrics.db",
+      prheroDbPath: "/Users/x/.crysk/prhero.db",
+      storeSocketPath: "/Users/x/.crysk/store.sock",
+      upgradeCheckPath: "/Users/x/.crysk/upgrade-check.json",
+      bucketKeyPath: "/Users/x/.crysk/bucket-key",
       plistPath: `/Users/x/Library/LaunchAgents/${WATCH_LAUNCHD_LABEL}.plist`,
     });
   });
@@ -1972,7 +1972,7 @@ describe("watch status pure pieces", () => {
 
 describe("renderWatchStatus", () => {
   const BASE = {
-    watchConfigPath: "/Users/x/.prhero/watch.json",
+    watchConfigPath: "/Users/x/.crysk/watch.json",
     config: {
       repos: [
         {
@@ -1988,7 +1988,7 @@ describe("renderWatchStatus", () => {
     },
     configError: null,
     launchedToday: 2,
-    plistPath: "/Users/x/Library/LaunchAgents/io.prhero.watch.plist",
+    plistPath: "/Users/x/Library/LaunchAgents/io.crysk.watch.plist",
     installed: true,
     intervalSeconds: 900,
     lockPid: null,
@@ -1998,7 +1998,7 @@ describe("renderWatchStatus", () => {
 
   test("the full healthy picture", () => {
     const text = renderWatchStatus(BASE).join("\n");
-    expect(text).toContain("/Users/x/.prhero/watch.json");
+    expect(text).toContain("/Users/x/.crysk/watch.json");
     expect(text).toContain("~/Desktop/musive-s3 post=true on_push=false");
     expect(text).toContain("2 of 5 launches used");
     expect(text).toContain("09:00-19:00");
@@ -2019,7 +2019,7 @@ describe("renderWatchStatus", () => {
     expect(Object.keys(facts)).toContain("watchConfigPath");
     expect(Object.keys(facts)).not.toContain("configPath");
     expect(renderWatchStatus(facts)).toContain(
-      `  ${"config".padEnd(13)}/Users/x/.prhero/watch.json`,
+      `  ${"config".padEnd(13)}/Users/x/.crysk/watch.json`,
     );
   });
 
@@ -2029,7 +2029,7 @@ describe("renderWatchStatus", () => {
       config: null,
       launchedToday: 1,
     }).join("\n");
-    expect(text).toContain("none (/Users/x/.prhero/watch.json)");
+    expect(text).toContain("none (/Users/x/.crysk/watch.json)");
     expect(text).toContain("watch add");
     expect(text).toContain("1 launched");
   });

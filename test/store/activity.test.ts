@@ -16,7 +16,7 @@ import {
 
 describe("activity (active runs tracker & store activity monitor)", () => {
   const home = "/Users/testuser";
-  const activeRunsDir = path.join(home, ".prhero", "active_runs");
+  const activeRunsDir = path.join(home, ".crysk", "active_runs");
 
   describe("2.1 Active runs registry lifecycle & stale dead-PID pruning", () => {
     test("registers and unregisters active run file", async () => {
