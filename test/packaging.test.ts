@@ -50,6 +50,18 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.scripts.build).toBeDefined();
   });
 
+  // The rename ships `crysk` as the command and keeps `pr-hero` answering for
+  // one version. Both must be the SAME file: a second launcher would be a
+  // second place for the Bun-discovery logic to drift.
+  test("package.json exposes crysk and pr-hero as one launcher file", () => {
+    const pkg = JSON.parse(
+      readFileSync(path.join(rootDir, "package.json"), "utf-8"),
+    );
+    expect(pkg.bin.crysk).toBe("./bin/pr-hero.js");
+    expect(pkg.bin["pr-hero"]).toBe(pkg.bin.crysk);
+    expect(Object.keys(pkg.bin).sort()).toEqual(["crysk", "pr-hero"]);
+  });
+
   // release.yml only compares the tag against package.json, so this is what
   // keeps the exported constant from drifting on the next bump.
   test("ENGINE_VERSION matches package.json version", () => {
@@ -229,7 +241,7 @@ describe("Packaging & distribution configuration", () => {
     // a regex rather than a literal because the workflow's `${{ ... }}` reads
     // to a linter as a template placeholder in the wrong kind of quotes.
     expect(release).toMatch(
-      /bun run scripts\/compiled-smoke\.ts \.\/pr-hero-\$\{\{ matrix\.target \}\}/,
+      /bun run scripts\/compiled-smoke\.ts \.\/crysk-\$\{\{ matrix\.target \}\}/,
     );
 
     // Ordering is load-bearing, not cosmetic. A binary that cannot resolve its
@@ -300,6 +312,65 @@ describe("Packaging & distribution configuration", () => {
         ok: wantsArm === runnerIsArm,
       }).toEqual({ target: leg.target, os: leg.os, ok: true });
     }
+  });
+
+  // Dual-named assets for one version: an installed pr-hero running
+  // `pr-hero upgrade` downloads `pr-hero-<target>`, a new one downloads
+  // `crysk-<target>`. Both must exist on the release, be byte-identical (the
+  // second is a copy of the SMOKED binary, never a rebuild), and be listed in
+  // the one SHA256SUMS both updaters parse.
+  test("release builds crysk-<target> and a pr-hero-<target> copy, uploads and checksums both", () => {
+    const release = Bun.YAML.parse(
+      readFileSync(path.join(rootDir, ".github", "workflows", "release.yml"), {
+        encoding: "utf-8",
+      }),
+    ) as {
+      jobs: Record<string, { steps: Record<string, unknown>[] }>;
+    };
+    const build = release.jobs["build-binaries"]?.steps ?? [];
+    const publish = release.jobs["publish-release"]?.steps ?? [];
+    // The Actions expression, assembled so the literal `${{` does not read to
+    // the linter as a template placeholder in the wrong kind of quotes.
+    const expr = ["$", "{{ matrix.target }}"].join("");
+    const named = (steps: Record<string, unknown>[], needle: string) =>
+      steps.find((s) => String(s.name ?? "").includes(needle));
+
+    const compile = String(named(build, "Compile standalone")?.run ?? "");
+    expect(compile).toContain(`--outfile crysk-${expr}`);
+    // One bun build only: the legacy name is a copy, not a second compile.
+    expect(compile.match(/bun build --compile/g)?.length).toBe(1);
+
+    const buildNames = build.map((s) => String(s.name ?? ""));
+    const copy = named(build, "legacy");
+    expect(String(copy?.run ?? "")).toMatch(
+      /cp crysk-\$\{\{ matrix\.target \}\} pr-hero-\$\{\{ matrix\.target \}\}/,
+    );
+    // The copy is taken from the binary that was smoked, and before upload.
+    expect(buildNames.indexOf(String(copy?.name))).toBeGreaterThan(
+      buildNames.findIndex((n) => n.includes("Compiled-binary smoke")),
+    );
+    expect(buildNames.indexOf(String(copy?.name))).toBeLessThan(
+      buildNames.findIndex((n) => n.includes("Upload binary artifact")),
+    );
+
+    const uploadPath = String(
+      (named(build, "Upload binary artifact")?.with as { path?: string })?.path,
+    );
+    expect(uploadPath).toContain(`crysk-${expr}`);
+    expect(uploadPath).toContain(`pr-hero-${expr}`);
+
+    const sums = String(named(publish, "Generate SHA256SUMS")?.run ?? "");
+    expect(sums).toContain("crysk-*");
+    expect(sums).toContain("pr-hero-*");
+    expect(sums).toContain("> SHA256SUMS");
+
+    const files = String(
+      (named(publish, "Create GitHub Release")?.with as { files?: string })
+        ?.files,
+    );
+    expect(files).toContain("release-binaries/crysk-*");
+    expect(files).toContain("release-binaries/pr-hero-*");
+    expect(files).toContain("release-binaries/SHA256SUMS");
   });
 
   // The other half of "nothing ships". The smoke stops a BROKEN binary from

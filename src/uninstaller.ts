@@ -12,6 +12,7 @@ import {
   detectAgentEnvironments,
   removeMcpServerEntries,
 } from "./agent-env";
+import { BIN_NAME, LEGACY_BIN_NAME } from "./brand";
 import {
   HOME_DIR_NAME,
   LEGACY_HOME_DIR_NAME,
@@ -213,19 +214,29 @@ export async function planUninstallation(
 
   // 4. Standalone binary removal
   if (installMethod.kind === "standalone") {
-    binariesRemoved.push(installMethod.binaryPath);
-    programSteps.push({
-      type: "remove_file",
-      targetPath: installMethod.binaryPath,
-      desc: `Remove binary ${installMethod.binaryPath}`,
-    });
-    const bakFile = `${installMethod.binaryPath}.bak`;
-    if (exists(bakFile)) {
+    // Both names: the installer leaves crysk plus a pr-hero link, so removing
+    // only the one that is running would strand the other on PATH. The link
+    // goes first: the executor's exists() follows it, and a link whose target
+    // is already gone reads as absent.
+    const running = installMethod.binaryPath;
+    const binDir = path.dirname(running);
+    const named = [LEGACY_BIN_NAME, BIN_NAME].map((n) => path.join(binDir, n));
+    const binaries = named.includes(running) ? named : [...named, running];
+    for (const bin of binaries.filter((b) => b === running || exists(b))) {
+      binariesRemoved.push(bin);
       programSteps.push({
         type: "remove_file",
-        targetPath: bakFile,
-        desc: `Remove backup binary ${bakFile}`,
+        targetPath: bin,
+        desc: `Remove binary ${bin}`,
       });
+      const bakFile = `${bin}.bak`;
+      if (exists(bakFile)) {
+        programSteps.push({
+          type: "remove_file",
+          targetPath: bakFile,
+          desc: `Remove backup binary ${bakFile}`,
+        });
+      }
     }
   } else if (installMethod.kind === "package_manager") {
     warnings.push(

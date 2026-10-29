@@ -930,9 +930,7 @@ export function inspectMcpRegistration(
   }
 }
 
-// Deletes this server's entry under both its keys (and `extraKey`, a name a
-// caller was asked to remove), so an unregister or an uninstall leaves nothing
-// of either generation. True when something was removed.
+// Deletes the one entry a caller named (another server's). True when it was there.
 function removeOneMcpServer(config: unknown, key: string): boolean {
   const servers = asRecord(asRecord(config)?.mcpServers);
   if (!servers || !(key in servers)) return false;
@@ -940,6 +938,8 @@ function removeOneMcpServer(config: unknown, key: string): boolean {
   return true;
 }
 
+// Deletes this product's entry under both its keys, so an unregister or an
+// uninstall leaves nothing of either generation. True when something was removed.
 export function removeMcpServerEntries(config: unknown): boolean {
   const servers = asRecord(asRecord(config)?.mcpServers);
   if (!servers) return false;
