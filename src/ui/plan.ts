@@ -591,7 +591,7 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
   const width = ctx.width ?? terminalWidth();
   const lines = [
     ...box(
-      "pr-hero · review",
+      "crysk · review",
       [
         `${ctx.baseRef.ref}..${ctx.options.head}`,
         `${shortPath(ctx.repoRoot)} · ${ctx.diffStat.files} files  ` +
@@ -907,7 +907,7 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
   const width = ctx.width ?? terminalWidth();
   const lines = [
     ...box(
-      `pr-hero · PR #${ctx.target.number}`,
+      `crysk · PR #${ctx.target.number}`,
       [
         ctx.target.title,
         `${ctx.target.state} · base ${ctx.target.baseRefName} · ` +

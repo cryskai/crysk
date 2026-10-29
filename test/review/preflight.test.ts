@@ -2668,7 +2668,7 @@ describe("skills install (non-interactive skill sync)", () => {
   });
 
   test("skills without a subcommand, or with another one, is a usage error", () => {
-    const text = "pr-hero skills needs a subcommand: install";
+    const text = "crysk skills needs a subcommand: install";
     expect(() => parseArgs(["skills"])).toThrow(CliUsageError);
     expect(() => parseArgs(["skills"])).toThrow(text);
     expect(() => parseArgs(["skills", "remove"])).toThrow(CliUsageError);
@@ -2676,7 +2676,7 @@ describe("skills install (non-interactive skill sync)", () => {
   });
 
   test("help lists skills install next to setup", () => {
-    expect(HELP_TEXT).toContain("pr-hero skills install");
+    expect(HELP_TEXT).toContain("crysk skills install");
     expect(HELP_TEXT).toContain(
       "Install the crysk, crysk-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)",
     );

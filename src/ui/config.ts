@@ -387,7 +387,7 @@ export function renderConfig(input: ConfigViewInput): string[] {
   const rows = configRows(input.effective, input.sources);
   const keyWidth = labelColumnWidth(rows.map((r) => r.key));
   const fileWidth = labelColumnWidth(["global"]);
-  const lines: string[] = [bold("pr-hero config", styles), ""];
+  const lines: string[] = [bold("crysk config", styles), ""];
 
   for (const [label, filePath, present] of [
     ["repo", input.repoConfigPath, input.repoPresent],

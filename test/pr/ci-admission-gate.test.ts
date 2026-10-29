@@ -926,11 +926,10 @@ describe("yieldToInFlightReview", () => {
   // this run looked. Well inside the 90-minute in-flight TTL.
   const PENDING_AT = "2026-10-02T14:11:13Z";
   const NOW_MS = Date.parse("2026-10-02T14:12:00Z");
-  const YIELD_REASON =
-    "another pr-hero review is already in flight on this head";
-  const SKIP_LINE = "skip: a pr-hero review is already in-flight on this head";
+  const YIELD_REASON = "another crysk review is already in flight on this head";
+  const SKIP_LINE = "skip: a crysk review is already in-flight on this head";
   const WARNING_LINE =
-    "warning: a pr-hero review is already in-flight on this head; continuing";
+    "warning: a crysk review is already in-flight on this head; continuing";
   const LEDGER_CHECK_RUN_ID = 11;
 
   function commitStatus(
@@ -1078,7 +1077,7 @@ describe("yieldToInFlightReview", () => {
     expect(checkRunCalls(calls)).toEqual([]);
   });
 
-  test("a head whose latest pr-hero status is not pending proceeds silently and settles nothing", async () => {
+  test("a head whose latest crysk status is not pending proceeds silently and settles nothing", async () => {
     const calls: string[][] = [];
     const spawnFn = makeFakeGh(
       [commitStatus("success"), CHECK_RUN_PATCH],

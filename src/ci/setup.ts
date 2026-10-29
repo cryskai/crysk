@@ -793,7 +793,7 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
     return 0;
   } catch (error) {
     deps.stderr(
-      `pr-hero: failed to materialize OpenCode CI data: ${messageOf(error)}\n`,
+      `crysk: failed to materialize OpenCode CI data: ${messageOf(error)}\n`,
     );
     const outcomeDir = deps.env.CRYSK_OUTCOME_DIR ?? "";
     if (error instanceof SetupInputError && outcomeDir !== "") {
@@ -805,7 +805,7 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
         });
       } catch {
         deps.stderr(
-          "pr-hero: could not write its setup outcome record, so the publisher reports this as an install failure.\n",
+          "crysk: could not write its setup outcome record, so the publisher reports this as an install failure.\n",
         );
       }
     }

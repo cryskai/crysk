@@ -183,7 +183,7 @@ export function getMenuOptions(
   items.push({
     id: "quit",
     label: "Quit",
-    desc: "Exit pr-hero TUI",
+    desc: "Exit crysk TUI",
     cliHint: "exit",
     action: "quit",
   });

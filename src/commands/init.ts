@@ -80,7 +80,7 @@ export async function init(options: CliOptions): Promise<number> {
     wrote.push(file);
   }
 
-  log(`pr-hero init — ${dir}`);
+  log(`crysk init — ${dir}`);
   log();
   for (const file of wrote) log(`  wrote  ${file}`);
   for (const file of kept) log(`  kept   ${file} (already exists, untouched)`);

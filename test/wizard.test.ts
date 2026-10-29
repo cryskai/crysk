@@ -229,7 +229,7 @@ describe("Wizard state machine & steps", () => {
         "git",
         "commit",
         "-m",
-        "chore: initialize pr-hero review configuration",
+        "chore: initialize crysk review configuration",
       ]);
     });
 
@@ -752,7 +752,7 @@ describe("verification step — the ending matches what the run actually did", (
     // Ordering is the whole point: advice that arrives after the instruction
     // it qualifies is advice the reader has already acted against.
     const { lines } = await verificationLines({ isRepo: true });
-    const reviewLine = lines.findIndex((l) => l.includes("pr-hero review"));
+    const reviewLine = lines.findIndex((l) => l.includes("crysk review"));
     const reminderLine = lines.findIndex((l) =>
       l.includes(initGitReminder().slice(0, 40)),
     );
@@ -796,7 +796,7 @@ describe("verification step — the ending matches what the run actually did", (
 
     expect(text).not.toContain(initGitReminder());
     expect(text).not.toContain(GOTCHAS_PLACEHOLDER_MARKER);
-    expect(text).toContain("pr-hero review");
+    expect(text).toContain("crysk review");
   });
 
   // A repo still on the legacy .prhero/ is updated in place, so the closing

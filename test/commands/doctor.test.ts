@@ -210,7 +210,7 @@ describe("runDoctorCommand — OpenCode routing needs a resolvable SDK", () => {
       expect(report.exitCode).toBe(1);
       const sdk = report.checks.find((c) => c.name === "opencode-sdk");
       expect(sdk?.severity).toBe("blocking");
-      expect(sdk?.message).toContain("pr-hero upgrade --reconcile");
+      expect(sdk?.message).toContain("crysk upgrade --reconcile");
       expect(sdk?.message).toContain("@opencode-ai/sdk@1.18.25");
       const probe = report.checks.find((c) => c.name === "provider");
       expect(probe?.severity).toBe("degraded");

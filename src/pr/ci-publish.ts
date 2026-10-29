@@ -69,7 +69,7 @@ export async function publishCiReviewIfEligible(input: {
   log(
     formatWorkflowCommand(
       "notice",
-      `pr-hero review complete — ${ciPlan.outputs.findings_count} ` +
+      `crysk review complete — ${ciPlan.outputs.findings_count} ` +
         `finding(s) (${ciPlan.outputs.blocking_count} blocking)`,
     ),
   );

@@ -493,7 +493,7 @@ describe("publishRunOutcome", () => {
     await publishRunOutcome(baseInput({ isCi: true, ciMode: "gate" }));
     const report = readFileSync(path.join(runDir, "report.md"), "utf8");
     expect(report).toContain(
-      "This report backs the pr-hero commit status, the required check in gate mode",
+      "This report backs the crysk commit status, the required check in gate mode",
     );
     expect(report).not.toContain("not a merge gate");
   });
@@ -546,7 +546,7 @@ describe("publishRunOutcome", () => {
       const out = await stdoutOf(() =>
         publishRunOutcome(baseInput({ result: partialResult(), isCi: true })),
       );
-      expect(out).toContain("::warning title=pr-hero::");
+      expect(out).toContain("::warning title=crysk::");
       expect(out).toContain(
         "refuter (failed — Anthropic API: Credit balance is too low (HTTP 400))",
       );
@@ -574,7 +574,7 @@ describe("publishRunOutcome", () => {
     process.env.GITHUB_STEP_SUMMARY = summaryPath;
     await publishRunOutcome(baseInput({ isCi: true, ciMode: "gate" }));
     expect(readFileSync(summaryPath, "utf8")).toContain(
-      "Assistant report backing the pr-hero commit status, the required check in gate mode.</sub>",
+      "Assistant report backing the crysk commit status, the required check in gate mode.</sub>",
     );
   });
 
@@ -772,7 +772,7 @@ describe("publishRunOutcome", () => {
       );
       expect(readCli()).toEqual(REVIEWED);
       expect(chunks).toEqual([
-        "pr-hero: kept the recorded reviewed outcome; a later step failed\n",
+        "crysk: kept the recorded reviewed outcome; a later step failed\n",
       ]);
     });
 

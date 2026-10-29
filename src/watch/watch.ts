@@ -192,7 +192,7 @@ async function watchOnce(dryRun: boolean): Promise<number> {
     throw new CliError(
       `no watch config at ${paths.watchConfigPath} — the watcher reviews (and ` +
         "spends money on) exactly the repos listed there, so it refuses to " +
-        "guess. Opt a repo in with `pr-hero watch add` (run inside the " +
+        "guess. Opt a repo in with `crysk watch add` (run inside the " +
         "repo, or with --repo <path>).",
     );
   }
@@ -873,7 +873,7 @@ async function runTick(
     paths.logPath,
     outcomeLine(localIsoTimestamp(new Date()), repoBase, outcome),
   );
-  await notify("pr-hero", outcomeNotificationText(outcome));
+  await notify("crysk", outcomeNotificationText(outcome));
   await appendLog(
     paths.logPath,
     logLine(
@@ -959,7 +959,7 @@ function printDryRun(
     for (const line of row(label, value, { styles, width })) log(line);
   };
   for (const line of box(
-    "pr-hero · watch",
+    "crysk · watch",
     [
       "dry run — nothing spawned, logged, or locked",
       `${config.repos.length} repo(s) · ${launchedToday}/${config.dailyCap} ` +
@@ -1030,7 +1030,7 @@ async function watchInstall(intervalMin: number): Promise<number> {
   if (process.platform !== "darwin") {
     throw new CliError(
       "watch install renders a macOS launchd agent. On other systems run " +
-        "`pr-hero watch --once` from cron — the lockfile covers overlap.",
+        "`crysk watch --once` from cron — the lockfile covers overlap.",
     );
   }
   // Checked before any write, so a refused install leaves nothing on disk.
@@ -1078,7 +1078,7 @@ async function watchInstall(intervalMin: number): Promise<number> {
     log();
     log(
       `NOTE: no ${paths.watchConfigPath} yet — ticks will fail until a repo is ` +
-        "opted in. Run `pr-hero watch add` inside the repo to watch.",
+        "opted in. Run `crysk watch add` inside the repo to watch.",
     );
   }
   return 0;
@@ -1161,7 +1161,7 @@ async function watchAdd(options: CliOptions): Promise<number> {
   if (!existsSync(paths.plistPath)) {
     log();
     log(
-      "NOTE: launchd agent not installed — run `pr-hero watch install` to " +
+      "NOTE: launchd agent not installed — run `crysk watch install` to " +
         "start ticking (this is the moment automatic spending starts).",
     );
   }

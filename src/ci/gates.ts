@@ -190,13 +190,13 @@ function sizeLimitsText(maxLines: number, maxFiles: number): string {
 function buildSizeSkipComment(data: SkipSizeSummary): string {
   const lines = [
     SKIP_SIZE_COMMENT_MARKER,
-    "## pr-hero review skipped",
+    "## crysk review skipped",
     "",
     `⚠️ This diff changes ${data.changedLines} line(s) across ` +
       `${data.changedFiles} file(s), exceeding the configured size gate ` +
       `(${sizeLimitsText(data.maxChangedLines, data.maxChangedFiles)}).`,
     "",
-    "pr-hero did not run to avoid reviewing an unbounded diff. Split the " +
+    "Crysk did not run to avoid reviewing an unbounded diff. Split the " +
       "PR or raise `max-changed-lines` / `max-changed-files` to change the " +
       "limit for later pushes.",
     "",
@@ -208,12 +208,12 @@ function buildSizeSkipComment(data: SkipSizeSummary): string {
 function buildBudgetSkipComment(data: SkipBudgetSummary): string {
   const lines = [
     SKIP_BUDGET_COMMENT_MARKER,
-    "## pr-hero review skipped",
+    "## crysk review skipped",
     "",
     `⚠️ The estimated review cost (${usd(data.estimatedCostUsd)}) exceeds ` +
       `the configured CI budget ceiling (${usd(data.budgetUsd)}).`,
     "",
-    "pr-hero did not run to stay within the configured `--budget-usd` " +
+    "Crysk did not run to stay within the configured `--budget-usd` " +
       "ceiling.",
     "",
     ciForceReviewHintLine(data.prNumber),
@@ -542,7 +542,7 @@ export function sizeGateUnlimitedNoticeMessage(
     .map((k) => (k === "lines" ? "changed-lines" : "changed-files"))
     .join(" or ");
   return (
-    `pr-hero size gate: no ${what} limit on a Claude subscription route — ` +
+    `crysk size gate: no ${what} limit on a Claude subscription route — ` +
     "a run draws on quota, not a per-token invoice, so large PRs are " +
     "reviewed instead of skipped. Set `max-changed-lines` / " +
     "`max-changed-files` to impose a limit."
@@ -643,7 +643,7 @@ function buildCoverageSkipComment(
   const stopped = reason === "stopped";
   const lines = [
     SKIP_COVERAGE_COMMENT_MARKER,
-    "## pr-hero review skipped",
+    "## crysk review skipped",
     "",
     stopped
       ? "⏸️ A maintainer stopped automatic reviews on this pull request."
@@ -656,7 +656,7 @@ function buildCoverageSkipComment(
       : `Prior score: ${data.priorScore} (re-review needs ≥ ${data.minScore}). ` +
         `Attempts on this PR: ${data.reviewCount}/${data.maxAttempts}.`,
     "",
-    "The existing review comment still describes the last head pr-hero " +
+    "The existing review comment still describes the last head Crysk " +
       "reviewed.",
     "",
     ciForceReviewHintLine(data.prNumber),
@@ -667,7 +667,7 @@ function buildCoverageSkipComment(
 function buildManualRequiredComment(data: ManualRequiredSummary): string {
   const lines = [
     MANUAL_REQUIRED_COMMENT_MARKER,
-    "## pr-hero review requires manual override",
+    "## crysk review requires manual override",
     "",
     "🛑 Automatic review did not run on this push.",
     "",
@@ -675,7 +675,7 @@ function buildManualRequiredComment(data: ManualRequiredSummary): string {
     "",
     `Attempts on this PR: ${data.reviewCount}/${data.maxAttempts}.`,
     "",
-    "The existing review comment still describes the last head pr-hero " +
+    "The existing review comment still describes the last head Crysk " +
       "reviewed.",
     "",
     ciForceReviewHintLine(data.prNumber),

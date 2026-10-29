@@ -785,7 +785,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
           dryRun: false,
           spawnFn,
         }),
-      ).rejects.toThrow(/no longer carries a pr-hero summary comment/);
+      ).rejects.toThrow(/no longer carries a Crysk summary comment/);
       // Refused BEFORE any write. Refusing after posting the very comment the
       // refusal is about would be worse than not refusing at all.
       expect(calls.filter((c) => c.argv.includes("--method"))).toHaveLength(0);
@@ -931,7 +931,7 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
           dryRun: true,
           spawnFn,
         }),
-      ).rejects.toThrow(/no longer carries a pr-hero summary comment/);
+      ).rejects.toThrow(/no longer carries a Crysk summary comment/);
       expect(calls.filter((c) => c.argv.includes("--method"))).toHaveLength(0);
     } finally {
       await cleanup();

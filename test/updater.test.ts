@@ -327,7 +327,7 @@ describe("selectOpenCodeSdkInstaller", () => {
         bunPath: null,
         layoutDir: "/Users/x/.prhero",
       }),
-    ).toThrow(/pr-hero upgrade --reconcile/);
+    ).toThrow(/crysk upgrade --reconcile/);
   });
 });
 
@@ -345,7 +345,7 @@ describe("spawnOpenCodeSdkInstaller", () => {
     expect(error).toBeInstanceOf(Error);
     if (!(error instanceof Error)) return;
     expect(error.message).toContain("timed out after 40ms");
-    expect(error.message).toContain("pr-hero upgrade --reconcile");
+    expect(error.message).toContain("crysk upgrade --reconcile");
     expect(error.message).not.toContain("/bin/sleep");
   });
 });
@@ -480,7 +480,7 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
       expect(result.ok).toBe(false);
       const text = result.errors.join("\n");
       expect(text).toContain("neither npm nor bun is on PATH");
-      expect(text).toContain("pr-hero upgrade --reconcile");
+      expect(text).toContain("crysk upgrade --reconcile");
     } finally {
       await fixture.cleanup();
     }

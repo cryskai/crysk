@@ -225,7 +225,7 @@ function routeModelSnapshot(
     // choice is about meaning, and a fifth class would have no consumer.
     throw new UnmappedRouteError(
       redactDiagnostic(
-        `Model alias "${reverseAlias}" is routed to backend "${mapping.backend}" over the "${gateway}" gateway by the ${mappingLabel}, which supplies no "modelSnapshot". Only the Claude CLI reached over the "direct" gateway resolves a bare alias; every other gateway forwards the model identity verbatim to an endpoint that never registered pr-hero's aliases, so this route has no provider model id to send. Add an explicit "modelSnapshot" naming the provider's model id to that ${mappingLabel}, or set its "gateway" to "direct" if the Claude CLI really is resolving this alias.`,
+        `Model alias "${reverseAlias}" is routed to backend "${mapping.backend}" over the "${gateway}" gateway by the ${mappingLabel}, which supplies no "modelSnapshot". Only the Claude CLI reached over the "direct" gateway resolves a bare alias; every other gateway forwards the model identity verbatim to an endpoint that never registered Crysk's aliases, so this route has no provider model id to send. Add an explicit "modelSnapshot" naming the provider's model id to that ${mappingLabel}, or set its "gateway" to "direct" if the Claude CLI really is resolving this alias.`,
       ),
     );
   }

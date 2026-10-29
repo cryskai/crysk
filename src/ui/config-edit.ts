@@ -810,7 +810,7 @@ export async function runConfigEditor(
   );
   io.line();
   io.line(
-    "Use 'pr-hero config set <key> <value> [--person|--team|--watch]' to modify configuration.",
+    "Use 'crysk config set <key> <value> [--person|--team|--watch]' to modify configuration.",
   );
   return 0;
 }

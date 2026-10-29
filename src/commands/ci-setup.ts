@@ -55,7 +55,7 @@ export interface GhPreflightDeps {
 }
 
 const GH_WHY =
-  "pr-hero's CI loop needs it on this machine: to add the repository secret (gh secret set), and after a pull request opens, to wait for its review (pr-hero status) and answer the findings (pr-hero triage reply).";
+  "Crysk's CI loop needs it on this machine: to add the repository secret (gh secret set), and after a pull request opens, to wait for its review (crysk status) and answer the findings (crysk triage reply).";
 
 // Never blocks and never changes the exit code: the workflow file does not
 // need gh, and a user may add the secret in GitHub's web UI instead.
@@ -341,10 +341,10 @@ export async function ciSetupCommand(
     : undefined;
   if (gotchas === undefined || gotchasUnusableReason(gotchas) !== undefined) {
     log(
-      `${next()} Run \`npx -y pr-hero init\` in a clone of the repository (it creates ${repoDirName}/gotchas.md; the config.json written above is kept as it is)`,
+      `${next()} Run \`npx -y crysk init\` in a clone of the repository (it creates ${repoDirName}/gotchas.md; the config.json written above is kept as it is)`,
     );
     log(
-      `${next()} Replace the placeholder lines in ${repoDirName}/gotchas.md with real facts about this repository, and delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line if it is there: pr-hero refuses to review the scaffold`,
+      `${next()} Replace the placeholder lines in ${repoDirName}/gotchas.md with real facts about this repository, and delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line if it is there: Crysk refuses to review the scaffold`,
     );
     log(
       `${next()} Commit ${repoDirName}/ to the default branch (comment-triggered runs read the base branch)`,
@@ -353,7 +353,7 @@ export async function ciSetupCommand(
   // The check to require is `pr-hero` (the commit status, the gate), not the
   // `review` job, which stays green even when it finds blocking issues.
   log(
-    `${next()} In branch protection, require the \`crysk\` status check (not the \`review\` job; \`pr-hero\` is still posted for one version, so an existing rule keeps working); a private repository on GitHub Free cannot require status checks`,
+    `${next()} In branch protection, require the \`crysk\` status check (not the \`review\` job; \`crysk\` is still posted for one version, so an existing rule keeps working); a private repository on GitHub Free cannot require status checks`,
   );
   log(`${next()} Open a pull request to trigger the workflow`);
   // GitHub reads a comment-triggered workflow from the DEFAULT branch, so a

@@ -344,7 +344,7 @@ export async function evaluateCiAdmissionGate(input: {
         isCi,
         stepSummaryFlag: options.stepSummary,
         plan,
-        noticeMessage: `pr-hero review skipped — ${skipReason}`,
+        noticeMessage: `crysk review skipped — ${skipReason}`,
         ciMode: input.ciMode,
         headSha,
         spawnFn,
@@ -384,7 +384,7 @@ export async function evaluateCiAdmissionGate(input: {
         isCi,
         stepSummaryFlag: options.stepSummary,
         plan,
-        noticeMessage: `pr-hero review requires manual override — ${manualReason}`,
+        noticeMessage: `crysk review requires manual override — ${manualReason}`,
         ciMode: input.ciMode,
         headSha,
         spawnFn,
@@ -461,18 +461,18 @@ export async function yieldToInFlightReview(input: {
   // cancel the review the comment just asked for and then refuse to
   // start the replacement.
   if (options.yes && !options.force) {
-    log("skip: a pr-hero review is already in-flight on this head");
+    log("skip: a crysk review is already in-flight on this head");
     await settleCiAdmissionLedger(
       ciAdmissionLedger,
       "yielded",
-      "another pr-hero review is already in flight on this head",
+      "another crysk review is already in flight on this head",
       { spawnFn },
     );
     writeCliRecord({ v: 1, outcome: "yielded" });
     return 0;
   }
   log(
-    "warning: a pr-hero review is already in-flight on this head; " +
+    "warning: a crysk review is already in-flight on this head; " +
       "continuing",
   );
   return undefined;

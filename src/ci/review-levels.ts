@@ -289,7 +289,7 @@ export function renderChoicesSummary(
           `  policy           ${c.ci_review_policy}, at most ${c.ci_max_attempts} automatic pass${c.ci_max_attempts === 1 ? "" : "es"} per PR${c.ci_rereview_min_score === undefined ? "" : `, score floor ${c.ci_rereview_min_score}`}`,
           `  verification     up to ${c.max_verification_steps} prior findings checked per re-review`,
         ]),
-    `  gate             ${choices.mode === "gate" ? "gate: blocking findings turn the pr-hero check red" : "advisory: the pr-hero check stays green"}`,
+    `  gate             ${choices.mode === "gate" ? "gate: blocking findings turn the crysk check red" : "advisory: the crysk check stays green"}`,
     `  budget           ${
       budget === undefined
         ? choices.billing === "subscription"
@@ -304,7 +304,7 @@ export function renderChoicesSummary(
     `  trusted actors   ${a.ci_trusted_actors && a.ci_trusted_actors.length > 0 ? a.ci_trusted_actors.join(", ") : "none beyond the workflow actor"}`,
     `  size limit       ${"max_changed_lines" in kept ? `${JSON.stringify(kept.max_changed_lines)} changed lines (kept)` : choices.maxChangedLines === 0 ? "no changed-lines limit (0)" : `${choices.maxChangedLines} changed lines`}, ${a.max_changed_files === undefined ? "files resolved from how the review is paid" : `${a.max_changed_files} files`}`,
     `  exclusions       ${a.ignorePatterns && a.ignorePatterns.length > 0 ? `${a.ignorePatterns.join(", ")} (.cryskignore)` : "none added (.cryskignore)"}`,
-    "Change them later in the repo config (.crysk/config.json, or .prhero/config.json in a repo set up before the rename) and .github/workflows/pr-hero.yml (`npx -y pr-hero config` shows the effective values).",
+    "Change them later in the repo config (.crysk/config.json, or .prhero/config.json in a repo set up before the rename) and .github/workflows/pr-hero.yml (`npx -y crysk config` shows the effective values).",
   ];
   return lines;
 }

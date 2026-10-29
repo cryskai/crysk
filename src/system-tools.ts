@@ -337,6 +337,6 @@ export function checkCiConfiguration(
   return {
     configured: false,
     message: "No CI workflow configured",
-    hint: "Run 'pr-hero setup --ci' (or 'pr-hero ci init') to scaffold .github/workflows/pr-hero.yml",
+    hint: "Run 'crysk setup --ci' (or 'crysk ci init') to scaffold .github/workflows/pr-hero.yml",
   };
 }

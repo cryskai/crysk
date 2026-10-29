@@ -53,7 +53,7 @@ export async function skillsInstallCommand(
     if (res.driftDetected && !options.force) {
       failed = true;
       log(
-        `local edits found in ${env.displayName}'s pr-hero skills; rerun with --force to overwrite them`,
+        `local edits found in ${env.displayName}'s crysk skills; rerun with --force to overwrite them`,
       );
       continue;
     }

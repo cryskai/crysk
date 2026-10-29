@@ -124,7 +124,7 @@ export function renderPersistentFooter(
   const lines = [dim(hints, styles)];
 
   if (selectedItem) {
-    lines.push(dim(`$ pr-hero ${selectedItem.cliHint}`, styles));
+    lines.push(dim(`$ crysk ${selectedItem.cliHint}`, styles));
   }
 
   return lines;
@@ -467,7 +467,7 @@ export async function runLifecycleSubmenu(deps: {
     {
       id: "upgrade",
       label: "Upgrade & sync",
-      desc: "Upgrade pr-hero and reconcile skills",
+      desc: "Upgrade crysk and reconcile skills",
       isTerminal: true,
     },
     {

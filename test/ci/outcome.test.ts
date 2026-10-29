@@ -335,7 +335,7 @@ function ownerIn(entry: CatalogEntry, ctx: OutcomeContext): Owner {
 const OWNER_WORD: Record<Owner, string> = {
   config: "your configuration",
   provider: "provider",
-  "pr-hero": "pr-hero",
+  "pr-hero": "Crysk",
   unclassified: "unclassified",
 };
 
@@ -723,7 +723,7 @@ describe("renderCode and renderError: the annotation", () => {
           entry.lead ?? ownerLead(owner, entry.providerName ?? FULL.provider);
         expect(
           rendered.annotation.startsWith(
-            `::${level} title=pr-hero ${code}::${lead} `,
+            `::${level} title=crysk ${code}::${lead} `,
           ),
           `${code} ${ctx}: ${rendered.annotation}`,
         ).toBe(true);
@@ -744,7 +744,7 @@ describe("renderCode and renderError: the annotation", () => {
       "action",
     );
     expect(rendered.annotation).toBe(
-      "::error title=pr-hero PRH-CRED-MISSING::Your configuration: No credential for the <backend> route reached the action. Why: pr-hero cannot authenticate, so it cannot review this PR. Fix: set a Claude credential: `claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN`. Docs: " +
+      "::error title=crysk PRH-CRED-MISSING::Your configuration: No credential for the <backend> route reached the action. Why: Crysk cannot authenticate, so it cannot review this PR. Fix: set a Claude credential: `claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN`. Docs: " +
         `${DOCS_URL_PREFIX}prh-cred-missing`,
     );
   });
@@ -786,7 +786,7 @@ describe("renderCode and renderError: the annotation", () => {
           // The product name is always lowercase `pr-hero`, so a what that starts
           // with it is the one exception to the rule.
           const startsWithProductName = (text: string): boolean =>
-            /^[^:]+: pr-hero/.test(text);
+            /^[^:]+: crysk/.test(text);
           const first = message.match(/^[^:]+: (.)/)?.[1];
           expect(
             startsWithProductName(message) || capitalized(first),
@@ -803,7 +803,7 @@ describe("renderCode and renderError: the annotation", () => {
     }
   });
 
-  test("a what that starts with the product name keeps the lowercase pr-hero, never Pr-hero", () => {
+  test("a what that starts with the product name reads Crysk, never Pr-hero", () => {
     const codes: ErrorCode[] = [
       "PRH-PR-UNRESOLVED",
       "PRH-STATUS-WRITE-FAILED",
@@ -820,9 +820,7 @@ describe("renderCode and renderError: the annotation", () => {
         const line = contentLine(rendered.summary);
         for (const text of [message, line]) {
           const sentence = text.slice(text.indexOf(": ") + 2);
-          expect(sentence.startsWith("pr-hero"), `${label}: ${text}`).toBe(
-            true,
-          );
+          expect(sentence.startsWith("Crysk"), `${label}: ${text}`).toBe(true);
           expect(text, `${label}: ${text}`).not.toContain("Pr-hero");
         }
       }
@@ -867,7 +865,7 @@ describe("renderCode and renderError: the annotation", () => {
     const rendered = renderCode("PRH-CANCELLED", { pr: 7 }, "action");
     expect(
       rendered.annotation.startsWith(
-        "::notice title=pr-hero PRH-CANCELLED::Not reviewed: The review was cancelled or superseded by a newer push.",
+        "::notice title=crysk PRH-CANCELLED::Not reviewed: The review was cancelled or superseded by a newer push.",
       ),
       rendered.annotation,
     ).toBe(true);
@@ -887,7 +885,7 @@ describe("renderCode and renderError: the annotation", () => {
     expect(hunters.owner).toBe("unclassified");
     expect(
       hunters.annotation.startsWith(
-        "::error title=pr-hero PRH-HUNTERS-FAILED::Not reviewed: ",
+        "::error title=crysk PRH-HUNTERS-FAILED::Not reviewed: ",
       ),
     ).toBe(true);
   });
@@ -902,7 +900,7 @@ describe("renderCode and renderError: the annotation", () => {
     expect(permission.owner).toBe("config");
     expect(
       permission.annotation.startsWith(
-        "::error title=pr-hero PRH-STATUS-WRITE-FAILED::Your configuration: ",
+        "::error title=crysk PRH-STATUS-WRITE-FAILED::Your configuration: ",
       ),
     ).toBe(true);
     expect(permission.annotation).toContain(
@@ -917,7 +915,7 @@ describe("renderCode and renderError: the annotation", () => {
     expect(server.owner).toBe("provider");
     expect(
       server.annotation.startsWith(
-        "::error title=pr-hero PRH-STATUS-WRITE-FAILED::Provider GitHub: ",
+        "::error title=crysk PRH-STATUS-WRITE-FAILED::Provider GitHub: ",
       ),
     ).toBe(true);
   });
@@ -943,7 +941,7 @@ describe("renderCode and renderError: the annotation", () => {
       );
       expect(
         rendered.annotation.startsWith(
-          `::error title=pr-hero PRH-GITHUB-UNAVAILABLE::Provider GitHub: The GitHub API failed (HTTP ${status}). Why: the failure happened on GitHub's side, and a retry may succeed. Fix: re-run the workflow once GitHub is serving requests again. Docs: `,
+          `::error title=crysk PRH-GITHUB-UNAVAILABLE::Provider GitHub: The GitHub API failed (HTTP ${status}). Why: the failure happened on GitHub's side, and a retry may succeed. Fix: re-run the workflow once GitHub is serving requests again. Docs: `,
         ),
         rendered.annotation,
       ).toBe(true);
@@ -972,7 +970,7 @@ describe("renderCode and renderError: the annotation", () => {
     ).annotation;
     expect(
       notFound.startsWith(
-        "::error title=pr-hero PRH-UNCLASSIFIED::Unclassified: GitHub returned 404 at this step, and pr-hero cannot tell whose fix it is. Why: ",
+        "::error title=crysk PRH-UNCLASSIFIED::Unclassified: GitHub returned 404 at this step, and Crysk cannot tell whose fix it is. Why: ",
       ),
       notFound,
     ).toBe(true);
@@ -987,7 +985,7 @@ describe("renderCode and renderError: the annotation", () => {
     );
     expect(
       rendered.annotation.startsWith(
-        "::error title=pr-hero PRH-CRED-REJECTED::Your configuration: Provider openai rejected the credential in SECRET_NAME. Why: it is expired, revoked, or a short-lived /login session token. Fix: ",
+        "::error title=crysk PRH-CRED-REJECTED::Your configuration: Provider openai rejected the credential in SECRET_NAME. Why: it is expired, revoked, or a short-lived /login session token. Fix: ",
       ),
       rendered.annotation,
     ).toBe(true);
@@ -997,12 +995,10 @@ describe("renderCode and renderError: the annotation", () => {
     expect(
       renderCode("PRH-PROVIDER-LIMITED", { provider: "openai" }, "action")
         .annotation,
-    ).toContain(
-      "::error title=pr-hero PRH-PROVIDER-LIMITED::Provider openai: ",
-    );
+    ).toContain("::error title=crysk PRH-PROVIDER-LIMITED::Provider openai: ");
     expect(
       renderCode("PRH-PROVIDER-LIMITED", {}, "action").annotation,
-    ).toContain("::error title=pr-hero PRH-PROVIDER-LIMITED::Provider: ");
+    ).toContain("::error title=crysk PRH-PROVIDER-LIMITED::Provider: ");
   });
 
   test("a provider-owned code names the provider once: the lead carries it, the what does not repeat it", () => {
@@ -1022,7 +1018,7 @@ describe("renderCode and renderError: the annotation", () => {
     const action = renderError(issue, { detail: "the OpenCode SDK" }, "action");
     expect(
       action.annotation.startsWith(
-        "::error title=pr-hero PRH-RUNTIME-UNAVAILABLE::pr-hero defect: ",
+        "::error title=crysk PRH-RUNTIME-UNAVAILABLE::Crysk defect: ",
       ),
     ).toBe(true);
     expect(action.annotation).toContain(
@@ -1034,10 +1030,10 @@ describe("renderCode and renderError: the annotation", () => {
     const local = renderError(issue, { detail: "the OpenCode SDK" }, "local");
     expect(
       local.annotation.startsWith(
-        "::error title=pr-hero PRH-RUNTIME-UNAVAILABLE::Your configuration: ",
+        "::error title=crysk PRH-RUNTIME-UNAVAILABLE::Your configuration: ",
       ),
     ).toBe(true);
-    expect(local.summary.join("\n")).toContain("pr-hero upgrade --reconcile");
+    expect(local.summary.join("\n")).toContain("crysk upgrade --reconcile");
   });
 
   test("a credential failure class picks its own fix", () => {
@@ -1174,11 +1170,11 @@ describe("renderCode and renderError: the annotation", () => {
       ],
       [
         renderCode("PRH-CONFIG-INVALID", FULL, "action").annotation,
-        "fix `.crysk/config.json` (DETAIL), then check it with `pr-hero review --pr 42 --dry-run`",
+        "fix `.crysk/config.json` (DETAIL), then check it with `crysk review --pr 42 --dry-run`",
       ],
       [
         renderCode("PRH-PROMPTSET-INVALID", FULL, "action").annotation,
-        "fix the agent file or `agents_dir` (DETAIL), then check it with `pr-hero review --pr 42 --dry-run`",
+        "fix the agent file or `agents_dir` (DETAIL), then check it with `crysk review --pr 42 --dry-run`",
       ],
       [
         renderCode(
@@ -1203,7 +1199,7 @@ describe("renderCode and renderError: the annotation", () => {
     ).annotation;
     expect(fixOf(scopeless)).toBe(
       "check that the workflow passes `github-token: $" +
-        "{{ secrets.GITHUB_TOKEN }}` and keeps the `permissions:` block that `pr-hero ci init` scaffolds",
+        "{{ secrets.GITHUB_TOKEN }}` and keeps the `permissions:` block that `crysk ci init` scaffolds",
     );
   });
 
@@ -1265,14 +1261,14 @@ describe("renderCode and renderError: the annotation", () => {
     );
   });
 
-  test("an install failure says pr-hero cannot tell which external cause it was", () => {
+  test("an install failure says Crysk cannot tell which external cause it was", () => {
     const rendered = renderError(
       { kind: "install", step: "install bun" },
       {},
       "action",
     );
     expect(rendered.summary.join("\n")).toContain(
-      "Why: a download or install step failed, and pr-hero cannot tell which external cause it was",
+      "Why: a download or install step failed, and Crysk cannot tell which external cause it was",
     );
   });
 
@@ -1444,7 +1440,7 @@ describe("ownerLead", () => {
     expect(ownerLead("provider", "openai")).toBe("Provider openai:");
     expect(ownerLead("provider")).toBe("Provider:");
     expect(ownerLead("provider", "")).toBe("Provider:");
-    expect(ownerLead("pr-hero")).toBe("pr-hero defect:");
+    expect(ownerLead("pr-hero")).toBe("Crysk defect:");
     expect(ownerLead("unclassified")).toBe("Unclassified:");
   });
 });
@@ -2290,12 +2286,12 @@ describe("parseCliRecord — the hunter_failures field", () => {
 // creates .crysk/gotchas.md, or the user writes the file by hand in the wrong
 // place or never writes it at all.
 describe("PRH-GOTCHAS-MISSING fix names the init command", () => {
-  test("the fix starts by running `npx -y pr-hero init`, then the existing steps", () => {
+  test("the fix starts by running `npx -y crysk init`, then the existing steps", () => {
     const [[fix]] = fixListsOf(
       entryOf("PRH-GOTCHAS-MISSING").variants.default.fixes,
     );
     expect(fix).toBe(
-      "Run `npx -y pr-hero init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
+      "Run `npx -y crysk init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
     );
   });
 });
@@ -2308,7 +2304,7 @@ describe("PRH-HUNTERS-FAILED lead", () => {
     const rendered = renderCode("PRH-HUNTERS-FAILED", FULL, "action");
     expect(
       rendered.annotation.startsWith(
-        "::error title=pr-hero PRH-HUNTERS-FAILED::Not reviewed: ",
+        "::error title=crysk PRH-HUNTERS-FAILED::Not reviewed: ",
       ),
     ).toBe(true);
     expect(rendered.annotation.includes("Unclassified:")).toBe(false);

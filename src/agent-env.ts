@@ -111,7 +111,7 @@ export interface SyncSkillsResult {
 }
 
 const NO_DIGEST_DRIFT_REASON =
-  "local copy differs and has no recorded digest; not overwritten — run `pr-hero upgrade` to replace it with the bundled copy";
+  "local copy differs and has no recorded digest; not overwritten — run `crysk upgrade` to replace it with the bundled copy";
 
 export interface RegisterMcpOptions {
   readFile?: (path: string) => string | undefined;

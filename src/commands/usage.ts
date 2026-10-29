@@ -83,8 +83,8 @@ export async function usageCommand(options: CliOptions): Promise<number> {
   // every read-only report command: a human note on stderr, stdout left clean, exit 0.
   if (runRows.length === 0) {
     log(
-      `no usage rows found in ${layout.prheroDbPath} — run \`pr-hero review\` or ` +
-        "`pr-hero review --pr <n>` first",
+      `no usage rows found in ${layout.prheroDbPath} — run \`crysk review\` or ` +
+        "`crysk review --pr <n>` first",
     );
     return 0;
   }

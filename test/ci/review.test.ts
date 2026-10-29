@@ -446,7 +446,7 @@ describe("planCiSizeSkip", () => {
       ciMode: "gate",
     });
     expect(plan?.summaryMarkdown).toContain(
-      "Assistant report backing the pr-hero commit status, the required check in gate mode.</sub>",
+      "Assistant report backing the crysk commit status, the required check in gate mode.</sub>",
     );
     expect(plan?.summaryMarkdown).not.toContain("not a merge gate");
   });

@@ -191,9 +191,9 @@ export function renderGcStatus(facts: GcStatusFacts): string[] {
     ? facts.intervalSeconds === null
       ? `installed (${facts.plistPath}, interval unreadable)`
       : `installed — one tick every ${formatGcInterval(facts.intervalSeconds)}`
-    : 'not installed — run "pr-hero gc install" to start sweeping';
+    : 'not installed — run "crysk gc install" to start sweeping';
   return [
-    "pr-hero gc — status",
+    "crysk gc — status",
     "",
     row("launchd", launchd),
     row("plist", facts.plistPath),

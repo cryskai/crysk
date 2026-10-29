@@ -879,7 +879,7 @@ export function formatCiAdmissionObserveNotice(input: {
       ? ""
       : ` · risk=${input.deltaRisk.class}`;
   return (
-    `pr-hero admission (observe-only): ${would} — ${detail} ` +
+    `crysk admission (observe-only): ${would} — ${detail} ` +
     `(current \`${currentHead.slice(0, 8)}\`, reviewed ` +
     `${reviewedHead === null ? "none" : `\`${reviewedHead.slice(0, 8)}\``}, ` +
     `attempts ${verdict.reviewCount}/${verdict.maxAttempts}, ` +

@@ -144,7 +144,7 @@ export async function askChoices(
   const cfg = current.config;
 
   say();
-  say("How should pr-hero re-review a pull request after new pushes?");
+  say("How should Crysk re-review a pull request after new pushes?");
   const matching = presetMatching(cfg);
   const levelOptions: PromptOption<ReviewLevel | "keep">[] =
     REVIEW_LEVEL_ORDER.map((value) => ({
@@ -294,7 +294,7 @@ async function askAdvanced(
 
   say();
   say(
-    "Trusted actors: extra GitHub logins (bots, other automation) whose pr-hero markers count, besides the workflow's own actor.",
+    "Trusted actors: extra GitHub logins (bots, other automation) whose crysk markers count, besides the workflow's own actor.",
   );
   const currentActors = Array.isArray(cfg.ci_trusted_actors)
     ? (cfg.ci_trusted_actors as string[]).join(", ")

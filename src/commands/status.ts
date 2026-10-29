@@ -157,7 +157,7 @@ export async function runStatusCommand(input: {
     }
     if (elapsedMs + pollIntervalMs > maxWaitMs) {
       throw new CliError(
-        `Timed out after ${maxWaitMs} ms waiting for pr-hero status on PR #${pr} to settle.`,
+        `Timed out after ${maxWaitMs} ms waiting for crysk status on PR #${pr} to settle.`,
       );
     }
     await sleep(pollIntervalMs);

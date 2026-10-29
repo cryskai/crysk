@@ -83,7 +83,7 @@ describe("migrate:home", () => {
         }),
         "migrate:home",
       )?.hint ?? "";
-    expect(hint).toContain("pr-hero watch install");
+    expect(hint).toContain("crysk watch install");
     expect(hint).not.toContain("gc install");
     expect(hint).not.toContain("setup");
     expect(hint).not.toContain("PATH");
@@ -110,7 +110,7 @@ describe("migrate:home", () => {
       files: { ...LEGACY_HOME, "/home/user/.crysk": "" },
     });
     const c = byName(checks, "migrate:home");
-    expect(c?.message).toContain("holds no pr-hero state");
+    expect(c?.message).toContain("holds no Crysk state");
     expect(c?.message).toContain("~/.prhero is still the one in use");
     expect(c?.hint).toContain("remove it");
     expect(c?.hint).toContain("mv ~/.prhero ~/.crysk");

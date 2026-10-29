@@ -655,7 +655,7 @@ async function overrideStandsOnHead(input: {
     log(
       formatWorkflowCommand(
         "warning",
-        `pr-hero: could not read the statuses of ${input.headSha.slice(0, 7)}, so an override on it cannot be checked; the skip's status is written as planned`,
+        `crysk: could not read the statuses of ${input.headSha.slice(0, 7)}, so an override on it cannot be checked; the skip's status is written as planned`,
       ),
     );
     return false;
@@ -800,7 +800,7 @@ export async function publishCiSkip(input: {
       : false;
   if (headOverridden && input.headSha !== undefined) {
     log(
-      `pr-hero: the override on ${input.headSha.slice(0, 7)} stands; no status is written over it`,
+      `crysk: the override on ${input.headSha.slice(0, 7)} stands; no status is written over it`,
     );
   }
   if (decision !== null && input.headSha !== undefined && !headOverridden) {

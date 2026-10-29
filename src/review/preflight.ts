@@ -308,15 +308,15 @@ export interface ParsedCli {
   options: CliOptions;
 }
 
-export const HELP_TEXT = `pr-hero — multi-agent review of a real repo + branch
+export const HELP_TEXT = `crysk — multi-agent review of a real repo + branch
 
 Usage:
-  pr-hero [options]          Open interactive terminal user interface (TTY)
-  pr-hero menu [options]     Open interactive terminal user interface
-  pr-hero review [options]   Review a branch (zero flags inside a configured repo)
-  pr-hero init [options]     Scaffold <repo>/.crysk/ (config.json + gotchas.md)
-  pr-hero setup [options]    Run interactive onboarding wizard
-  pr-hero setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
+  crysk [options]          Open interactive terminal user interface (TTY)
+  crysk menu [options]     Open interactive terminal user interface
+  crysk review [options]   Review a branch (zero flags inside a configured repo)
+  crysk init [options]     Scaffold <repo>/.crysk/ (config.json + gotchas.md)
+  crysk setup [options]    Run interactive onboarding wizard
+  crysk setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
                              Scaffold .github/workflows/pr-hero.yml instead
                              of the wizard. Refuses to overwrite an existing
                              workflow unless --force is passed. Asks how CI
@@ -329,19 +329,19 @@ Usage:
                              prints a summary. Then checks gh and, in a
                              terminal, offers to install it and run gh auth
                              login
-  pr-hero skills install [--force]
+  crysk skills install [--force]
                              Install the crysk, crysk-pr, triage and CI-setup skills into every detected coding agent (no TTY, no MCP)
-  pr-hero ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
+  crysk ci init [--force]  Same scaffolding and flags as "setup --ci", as its own
                              command
-  pr-hero doctor [options]   Check system tools and environment readiness
-  pr-hero activity [options] View currently running reviews and recent store history
-  pr-hero activity --kill <pid> [--yes]
+  crysk doctor [options]   Check system tools and environment readiness
+  crysk activity [options] View currently running reviews and recent store history
+  crysk activity --kill <pid> [--yes]
                              Safely terminate a running review (checks process identity)
-  pr-hero upgrade [options]  Upgrade pr-hero to latest version & sync agent assets
-  pr-hero uninstall [opts]   Remove pr-hero daemons, MCP registrations & skills
-  pr-hero mcp [options]      Start the read-only Model Context Protocol (MCP)
+  crysk upgrade [options]  Upgrade crysk to latest version & sync agent assets
+  crysk uninstall [opts]   Remove crysk daemons, MCP registrations & skills
+  crysk mcp [options]      Start the read-only Model Context Protocol (MCP)
                              server over stdio for AI coding assistants. Read-only, $0
-  pr-hero post --pr <n> --from <run-dir> [--dry-run]
+  crysk post --pr <n> --from <run-dir> [--dry-run]
                              Publish a PREVIOUSLY RUN review's findings.json
                              to PR <n>, reading it (and diff.patch) off disk
                              instead of running a fresh review — the same
@@ -350,7 +350,7 @@ Usage:
                              and posts nothing (the only way to preview a
                              plan, since --pr --dry-run returns before any
                              findings exist)
-  pr-hero triage reply --pr <n> --from <run-dir> --finding <id> --tag <tag>
+  crysk triage reply --pr <n> --from <run-dir> --finding <id> --tag <tag>
                    --body-file <path> [--verdict <v>] [--issue <n>] [--dry-run]
                              Post one triage reply. The driver resolves the
                              parent from the posted <!-- crysk-finding
@@ -358,8 +358,8 @@ Usage:
                              badge, posts, and resolves the inline review
                              thread. --body-file is reasoning prose only.
                              --dry-run prints the parent and posts nothing
-  pr-hero status --pr <n> [--wait] [--json]
-                             Read the PR's pr-hero gate, posted findings and
+  crysk status --pr <n> [--wait] [--json]
+                             Read the PR's crysk gate, posted findings and
                              next action, through gh only and read-only. With
                              --wait, poll until an in-flight or newly-triggered
                              review settles before printing. With
@@ -368,12 +368,12 @@ Usage:
                              stderr. Exits 1 with no stdout when any read
                              fails. Skills drive review -> reply -> fix -> wait
                              from its next_action
-  pr-hero reverts [options]  Mine the repo's default branch for PRs that were
+  crysk reverts [options]  Mine the repo's default branch for PRs that were
                              later reverted or hotfixed, and write them as
                              markdown CANDIDATES for human confirmation. Runs
                              git log + gh api only: no review, no scoring, no
                              labelling of what the defect was, $0
-  pr-hero corpus [options]   Widen the known-bad corpus beyond reverts with
+  crysk corpus [options]   Widen the known-bad corpus beyond reverts with
                              five candidate sources, gated by their flags:
                              --fixes (fix-shaped merged PRs, blame-resolved
                              to their likely introducer), --incidents
@@ -387,41 +387,41 @@ Usage:
                              and/or --incidents. All output is CANDIDATES
                              for human confirmation. git log + gh api only:
                              no review, no scoring, $0
-  pr-hero watch --once       Run ONE watcher tick over ~/.crysk/watch.json:
+  crysk watch --once       Run ONE watcher tick over ~/.crysk/watch.json:
                              pick the next unreviewed open PR across the
                              configured repos and review it. launchd (or cron)
                              is the scheduler; this never daemonizes
-  pr-hero watch add          Opt the current repo (or --repo) into the watch
+  crysk watch add          Opt the current repo (or --repo) into the watch
                              config; --post makes its reviews publish to the
                              PR, --on-push re-reviews on every push,
                              --max-changed-lines/--max-changed-files set the
                              repo's size gate.
                              Idempotent — re-adding updates the flags
-  pr-hero watch remove       Remove the current repo (or --repo) from the
+  crysk watch remove       Remove the current repo (or --repo) from the
                              watch config (idempotent)
-  pr-hero watch status       Read-only: config summary, today's launch count
+  crysk watch status       Read-only: config summary, today's launch count
                              vs the cap, launchd state, lock, last activity
-  pr-hero watch install      Install the macOS launchd agent that runs
+  crysk watch install      Install the macOS launchd agent that runs
                              "watch --once" every --interval minutes
-  pr-hero watch uninstall    Unload and remove that launchd agent
-  pr-hero gc [--dry-run] [--repo <dir>]
+  crysk watch uninstall    Unload and remove that launchd agent
+  crysk gc [--dry-run] [--repo <dir>]
                              Collect review worktrees under ~/.crysk/repos
                              that are merged/closed or idle >72h. --dry-run
                              prints the table and removes nothing. --repo
                              scopes to one origin; default is the whole home
-  pr-hero gc install         Install the macOS launchd agent that runs
-                             "pr-hero gc" every --interval minutes (default
+  crysk gc install         Install the macOS launchd agent that runs
+                             "crysk gc" every --interval minutes (default
                              ${DEFAULT_GC_INTERVAL_MIN} = 6h). No reviews,
                              no watch.json — the $0 sweeper so trees do not
                              wait for a review or the watcher
-  pr-hero gc uninstall       Unload and remove that launchd agent
-  pr-hero gc status          Read-only: whether the GC agent is installed
-  pr-hero usage [--all]      Print the observability store's per-run rows
+  crysk gc uninstall       Unload and remove that launchd agent
+  crysk gc status          Read-only: whether the GC agent is installed
+  crysk usage [--all]      Print the observability store's per-run rows
                              (cost, tokens, findings) for the current
                              checkout's origin — every review, local and
                              PR, auto-ingests into it. --all shows every
                              origin instead of just this one. Read-only, $0
-  pr-hero config [options]   Print every config key's effective value and the
+  crysk config [options]   Print every config key's effective value and the
                              LAYER it came from — global (~/.crysk/config.json),
                              repo (<repo>/.crysk/config.json), capped (the
                              global ceiling narrowed the repo's value away) or
@@ -561,7 +561,7 @@ Options:
                       Default ${DEFAULT_SIZE_GATE.maxChangedFiles}; 0 disables the limit
   --ci-mode <gate|advisory>
                       With review --ci only. gate (the default): the
-                      pr-hero commit status is failure on blocking findings
+                      crysk commit status is failure on blocking findings
                       and on a size or budget skip, and error on a crash.
                       advisory: the status stays success whatever the
                       findings, as before
@@ -587,7 +587,7 @@ Every run costs real money. --dry-run costs nothing and answers most
 questions; use it first.
 
 The size gate is a COST gate, not a quality gate: past its limits a diff bills
-several times more with a much wider spread, so pr-hero skips it unattended
+several times more with a much wider spread, so Crysk skips it unattended
 rather than guess at the bill. An interactive run asks first. It says nothing
 about how well a large diff reviews.`;
 
@@ -920,7 +920,7 @@ export function parseArgs(argv: string[]): ParsedCli {
     // `skills` has exactly one subcommand, `install`; any other word in that
     // slot is a usage error, not a generic unexpected argument.
     if (command === "skills" && options.skills === undefined) {
-      throw new CliUsageError("pr-hero skills needs a subcommand: install");
+      throw new CliUsageError("crysk skills needs a subcommand: install");
     }
     if (
       command === "triage" &&
@@ -977,12 +977,10 @@ export function parseArgs(argv: string[]): ParsedCli {
     command = arg === "update" ? "upgrade" : arg;
   }
   if (command === undefined) {
-    throw new CliUsageError(
-      'no command given (did you mean "pr-hero review"?)',
-    );
+    throw new CliUsageError('no command given (did you mean "crysk review"?)');
   }
   if (command === "skills" && options.skills === undefined) {
-    throw new CliUsageError("pr-hero skills needs a subcommand: install");
+    throw new CliUsageError("crysk skills needs a subcommand: install");
   }
   // --pr derives the whole range from the PR record — head from GitHub, base
   // from the merge commit's parent or the base branch — so a hand-picked
@@ -1163,7 +1161,7 @@ export function parseArgs(argv: string[]): ParsedCli {
   // silently act on the wrong run or the wrong PR.
   if (command === "triage" && options.triage !== "reply") {
     throw new CliUsageError(
-      "triage needs a subcommand: use `pr-hero triage reply` (the bare " +
+      "triage needs a subcommand: use `crysk triage reply` (the bare " +
         "`triage --pr --from` verb was removed with comparison.json)",
     );
   }
@@ -3353,7 +3351,7 @@ export function initConfigTemplate(input: InitTemplateInput): string {
 export function initGitReminder(dirName: string = REPO_DIR_NAME): string {
   return (
     `Now either commit ${dirName}/ or add it to .gitignore. Every review step ` +
-    "reads the checkout directly, so pr-hero refuses to run on a dirty tree — " +
+    "reads the checkout directly, so Crysk refuses to run on a dirty tree — " +
     `and an untracked ${dirName}/ is exactly that.`
   );
 }
@@ -3379,7 +3377,7 @@ export function initGitReminder(dirName: string = REPO_DIR_NAME): string {
 // every hunter as if it were real.
 export const GOTCHAS_PLACEHOLDER_MARKER = "human-attention-required";
 
-export const GOTCHAS_TEMPLATE = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: delete THIS line once the gotchas below are real — pr-hero refuses to review while it is here. -->
+export const GOTCHAS_TEMPLATE = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: delete THIS line once the gotchas below are real — Crysk refuses to review while it is here. -->
 # Repo gotchas
 
 Facts a reviewer cannot infer from the diff alone. Each line is injected
@@ -3393,7 +3391,7 @@ verbatim into every hunter's system prompt, so keep them short and true.
 // `pr-hero setup`'s fallback scaffold (wizard.ts writes it when onboarding
 // collected zero invariants). It lives here, beside GOTCHAS_TEMPLATE, so the
 // gate below can recognise both scaffolds from one place.
-export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero invariants defined during onboarding -->\n\n# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Replace this with your project's real failure modes, then delete the marker line at the top — pr-hero refuses to review while it is there.)\n`;
+export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero invariants defined during onboarding -->\n\n# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Replace this with your project's real failure modes, then delete the marker line at the top — Crysk refuses to review while it is there.)\n`;
 
 // Every non-blank line the two scaffolds write, minus the marker line. A file
 // made ONLY of these lines is a scaffold nobody filled in, whether its marker
@@ -3484,7 +3482,7 @@ export function initGotchasInstructions(
       "  1. replace the <subsystem> lines with facts about this repo",
       `  2. delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line at the top`,
       "",
-      "pr-hero refuses to review while that marker is present. It is not " +
+      "Crysk refuses to review while that marker is present. It is not " +
         "pedantry: the file above is non-empty, so without the marker a " +
         "review would bill in full for hunters primed with placeholder text " +
         "and report a clean-LOOKING result.",
@@ -3500,7 +3498,7 @@ export function initGotchasInstructions(
     return [
       `The ${dirName}/gotchas.md already on disk is still a scaffold: it carries ` +
         `the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line or nothing but the ` +
-        "scaffold's own lines, and pr-hero refuses to review it.",
+        "scaffold's own lines, and Crysk refuses to review it.",
       "",
       "Write facts about THIS repo into it, and delete the marker line if it " +
         "is still there.",
@@ -3510,7 +3508,7 @@ export function initGotchasInstructions(
     // No marker in an empty file, so nothing to delete — saying otherwise
     // would send the reader looking for a line that is not there.
     return [
-      `The ${dirName}/gotchas.md already on disk is empty, and pr-hero refuses ` +
+      `The ${dirName}/gotchas.md already on disk is empty, and Crysk refuses ` +
         "to review without gotchas: an empty file makes the whole review a " +
         "zero-cost no-op that LOOKS like a clean result.",
       "",
@@ -3547,7 +3545,7 @@ export function gotchasErrorMessage(
       ...why,
       "",
       `It still carries the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line, or`,
-      "nothing but the lines `pr-hero init` and `pr-hero setup` scaffold.",
+      "nothing but the lines `crysk init` and `crysk setup` scaffold.",
       "Reviewing with it would spend real money feeding every hunter",
       "placeholder text, and return a clean-LOOKING result.",
       "",
@@ -3570,6 +3568,6 @@ export function gotchasErrorMessage(
     // pr-hero still rejects. Saying the last step out loud is not politeness;
     // without it this message hands you the next error.
     `Then replace the <subsystem> lines and delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\``,
-    "marker line — pr-hero refuses to review while that line is present.",
+    "marker line — Crysk refuses to review while that line is present.",
   ].join("\n");
 }

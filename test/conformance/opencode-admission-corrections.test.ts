@@ -147,9 +147,7 @@ describe("observed SDK absence is not a version mismatch", () => {
       expect((caught as Error).message).not.toContain(
         "Unsupported observed OpenCode pair",
       );
-      expect((caught as Error).message).toContain(
-        "pr-hero upgrade --reconcile",
-      );
+      expect((caught as Error).message).toContain("crysk upgrade --reconcile");
       expect((caught as Error).message).toContain("@opencode-ai/sdk@1.18.25");
       expect((caught as Error).message).toContain("~/.crysk/node_modules");
       expect((caught as Error).message).not.toContain("/$bunfs");

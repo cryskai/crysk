@@ -329,7 +329,7 @@ async function gcInstall(intervalMin: number): Promise<number> {
   if (process.platform !== "darwin") {
     throw new CliError(
       "gc install renders a macOS launchd agent. On other systems run " +
-        "`pr-hero gc` from cron.",
+        "`crysk gc` from cron.",
     );
   }
   // selfInvocation(), not a hand-built runtime + src/cli.ts pair: the pair

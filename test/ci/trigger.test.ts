@@ -1221,7 +1221,7 @@ describe("runCiTrigger — the shell", () => {
     const run = runShell(commentEnv("/pr-hero review please"));
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("false");
-    expect(run.stdout).toStartWith("::notice title=pr-hero::");
+    expect(run.stdout).toStartWith("::notice title=crysk::");
     // Before T2e this was no call at all. A near miss runs no permission lookup.
     expect(run.ghCalls).toEqual([reactionArgv("confused")]);
   });
@@ -1241,7 +1241,7 @@ describe("runCiTrigger — the shell", () => {
       );
       expect(run.exitCode).toBe(0);
       expect(run.outputs.run).toBe("false");
-      expect(run.stdout).toStartWith("::notice title=pr-hero::");
+      expect(run.stdout).toStartWith("::notice title=crysk::");
       // A definitive answer: one lookup, no retry, and denied before the
       // head is resolved. The second call is the denial's reaction (T2e, -1).
       expect(run.ghCalls.length).toBe(2);
@@ -1277,7 +1277,7 @@ describe("runCiTrigger — the shell", () => {
       // the cause itself: one line, the commenter and the failed lookup.
       expect(run.outputs.publish).toBe("true");
       expect(run.stdout).toStartWith(
-        "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+        "::error title=crysk::Crysk could not verify whether @maintainer",
       );
       expect(run.stdout.split("\n").filter((line) => line !== "")).toHaveLength(
         1,
@@ -1331,7 +1331,7 @@ describe("runCiTrigger — the shell", () => {
     expect(run.outputs.publish).toBe("true");
     // No outcome dir, so no record: the trigger names the cause itself.
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+      "::error title=crysk::Crysk could not verify whether @maintainer",
     );
     expect(run.stdout).toContain("spawn gh ENOENT");
     // The retry is the whole lookup: an unverifiable run asks for no head.
@@ -1370,7 +1370,7 @@ describe("runCiTrigger — the shell", () => {
     expect(run.outputs.run).toBe("false");
     expect(run.outputs.publish).toBe("true");
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::pr-hero has no credential for this review",
+      "::error title=crysk::Crysk has no credential for this review",
     );
     expect(run.summary).toBe("");
   });
@@ -1394,7 +1394,7 @@ describe("runCiTrigger — the shell", () => {
     );
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::Could not determine the pull request number",
+      "::error title=crysk::Could not determine the pull request number",
     );
     expect(run.stdout.split("\n").filter((line) => line !== "")).toHaveLength(
       1,
@@ -1405,7 +1405,7 @@ describe("runCiTrigger — the shell", () => {
     const run = runShell(baseEnv({ HAS_CLAUDE_TOKEN: "false" }));
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::pr-hero has no credential for this review",
+      "::error title=crysk::Crysk has no credential for this review",
     );
     expect(run.stdout).toContain("anthropic-api-key");
   });
@@ -1420,7 +1420,7 @@ describe("runCiTrigger — the shell", () => {
     );
     expect(run.exitCode).toBe(1);
     expect(run.stdout).toStartWith(
-      "::error title=pr-hero::pr-hero could not verify whether @maintainer",
+      "::error title=crysk::Crysk could not verify whether @maintainer",
     );
     expect(run.stdout).toContain("gh: Server Error (HTTP 500)");
   });
@@ -1439,10 +1439,10 @@ describe("runCiTrigger — the shell", () => {
       const lines = run.stdout.split("\n").filter((line) => line !== "");
       expect(lines).toHaveLength(2);
       expect(lines[0]).toStartWith(
-        "::error title=pr-hero::pr-hero could not write",
+        "::error title=crysk::Crysk could not write",
       );
       expect(lines[1]).toStartWith(
-        "::error title=pr-hero::pr-hero has no credential for this review",
+        "::error title=crysk::Crysk has no credential for this review",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1503,7 +1503,7 @@ describe("runCiTrigger — the shell", () => {
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("true");
     expect(run.outputs.head_sha).toBe("unknown");
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
   });
 
   test("a head sha that is not a sha is never written to the outputs", () => {
@@ -1883,7 +1883,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
           ? readdirSync(dir).filter((name) => name.endsWith(".tmp"))
           : [],
       ).toEqual([]);
-      expect(stdout).toContain("::error title=pr-hero::");
+      expect(stdout).toContain("::error title=crysk::");
       expect(stdout).toContain("outcome record");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1901,7 +1901,7 @@ describe("runCiTrigger — the outcome record and the publish output (T2b)", () 
       baseEnv({ HAS_CLAUDE_TOKEN: "false" }),
       undefined,
       1,
-      "pr-hero has no credential",
+      "Crysk has no credential",
     ],
     [
       "an unresolved PR",
@@ -2441,7 +2441,7 @@ describe("the reaction on the triggering comment (T2e)", () => {
     );
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("false");
-    expect(run.stdout).toStartWith("::notice title=pr-hero::");
+    expect(run.stdout).toStartWith("::notice title=crysk::");
     expect(warningLines(run.stdout)).toHaveLength(1);
   });
 

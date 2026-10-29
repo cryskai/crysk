@@ -551,7 +551,7 @@ export function decideCancelSettle(input: {
   if (latest?.state !== "pending") {
     return {
       settle: false,
-      reason: "the head's pr-hero status is not pending",
+      reason: "the head's crysk status is not pending",
     };
   }
   if (
@@ -613,7 +613,7 @@ function workflowCommand(
     .replaceAll("%", "%25")
     .replaceAll("\r", "%0D")
     .replaceAll("\n", "%0A");
-  return `::${command} title=pr-hero::${escaped}\n`;
+  return `::${command} title=crysk::${escaped}\n`;
 }
 
 // The status write, on BOTH names of its context: the new one, then the legacy `pr-hero` one
@@ -856,7 +856,7 @@ function deleteComments(
       deps.stdout(
         workflowCommand(
           "warning",
-          `pr-hero could not delete an older outcome comment (${id}) on #${pr}.`,
+          `Crysk could not delete an older outcome comment (${id}) on #${pr}.`,
         ),
       );
     }
@@ -924,7 +924,7 @@ function deleteOlderOutcomes(
     deps.stdout(
       workflowCommand(
         "warning",
-        `pr-hero could not list the older outcome comments on #${pr}; they were left in place.`,
+        `Crysk could not list the older outcome comments on #${pr}; they were left in place.`,
       ),
     );
     return;
@@ -979,7 +979,7 @@ function cleanupOlderOutcomes(
     deps.stdout(
       workflowCommand(
         "notice",
-        `pr-hero could not clean up its older outcome comments on #${plan.pr}; they were left in place.`,
+        `Crysk could not clean up its older outcome comments on #${plan.pr}; they were left in place.`,
       ),
     );
     return;
@@ -1207,7 +1207,7 @@ function overrideStandsBeforeRepost(
     deps.stdout(
       workflowCommand(
         "warning",
-        `pr-hero: could not read the statuses of ${sha.slice(0, 7)}, so an override on it cannot be checked; the review's status is reposted as planned`,
+        `crysk: could not read the statuses of ${sha.slice(0, 7)}, so an override on it cannot be checked; the review's status is reposted as planned`,
       ),
     );
     return false;
@@ -1246,8 +1246,8 @@ function overrideCommentBody(
     return [
       marker,
       "",
-      `pr-hero's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. ` +
-        "The `pr-hero` status on that head is now success, with no review of this head. " +
+      `Crysk's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. ` +
+        "The `crysk` status on that head is now success, with no review of this head. " +
         `A new push or a later ${commandHint(REVIEW_COMMAND)} on this head replaces it.`,
     ].join("\n");
   }
@@ -1258,7 +1258,7 @@ function overrideCommentBody(
   return [
     marker,
     "",
-    `@${plan.actor} asked to override pr-hero's gate at ${when}, but no commit status could be set${where}, so the gate is unchanged. Comment ${commandHint(OVERRIDE_COMMAND)} again to retry.`,
+    `@${plan.actor} asked to override Crysk's gate at ${when}, but no commit status could be set${where}, so the gate is unchanged. Comment ${commandHint(OVERRIDE_COMMAND)} again to retry.`,
   ].join("\n");
 }
 
@@ -1299,8 +1299,8 @@ function publishOverride(
     workflowCommand(
       "notice",
       statusSet
-        ? `pr-hero gate overridden by @${plan.actor} on head ${plan.headSha}.`
-        : `pr-hero override by @${plan.actor} set no commit status.`,
+        ? `crysk gate overridden by @${plan.actor} on head ${plan.headSha}.`
+        : `crysk override by @${plan.actor} set no commit status.`,
     ),
   );
   const at = (deps.now ?? (() => new Date()))();
@@ -1314,7 +1314,7 @@ function publishOverride(
     deps.stdout(
       workflowCommand(
         "error",
-        `pr-hero could not post its override comment on #${plan.pr} (${comment.detail}).`,
+        `Crysk could not post its override comment on #${plan.pr} (${comment.detail}).`,
       ),
     );
     return 1;
@@ -1361,7 +1361,7 @@ export function runPublish(deps: PublishDeps): number {
     deps.stdout(
       workflowCommand(
         "error",
-        "pr-hero's outcome record belongs to another run or attempt, so nothing was posted.",
+        "Crysk's outcome record belongs to another run or attempt, so nothing was posted.",
       ),
     );
     return 1;
@@ -1371,7 +1371,7 @@ export function runPublish(deps: PublishDeps): number {
     deps.stdout(
       workflowCommand(
         "warning",
-        "pr-hero could not read its setup outcome record, so this failure is reported as an install failure.",
+        "Crysk could not read its setup outcome record, so this failure is reported as an install failure.",
       ),
     );
   }
@@ -1420,7 +1420,7 @@ export function runPublish(deps: PublishDeps): number {
         deps.stdout(
           workflowCommand(
             "notice",
-            "pr-hero: an override on this head stands, so the review's status is not reposted over it.",
+            "crysk: an override on this head stands, so the review's status is not reposted over it.",
           ),
         );
       } else {
@@ -1471,7 +1471,7 @@ export function runPublish(deps: PublishDeps): number {
     deps.stdout(
       workflowCommand(
         "error",
-        `pr-hero could not post its outcome comment on #${plan.pr} (${comment.detail}).`,
+        `Crysk could not post its outcome comment on #${plan.pr} (${comment.detail}).`,
       ),
     );
     return 1;
@@ -1504,7 +1504,7 @@ export function runCancelSettle(deps: PublishDeps): number {
       deps.stdout(
         workflowCommand(
           "warning",
-          "could not read the head's status after the cancel; the pr-hero status may stay pending",
+          "could not read the head's status after the cancel; the crysk status may stay pending",
         ),
       );
       return 0;
@@ -1553,14 +1553,14 @@ export function runCancelSettle(deps: PublishDeps): number {
     deps.stdout(
       workflowCommand(
         "notice",
-        "the review was cancelled; the pr-hero status is now PRH-CANCELLED",
+        "the review was cancelled; the crysk status is now PRH-CANCELLED",
       ),
     );
   } else {
     deps.stdout(
       workflowCommand(
         "warning",
-        "could not settle the cancelled review's pr-hero status; it may stay pending",
+        "could not settle the cancelled review's crysk status; it may stay pending",
       ),
     );
   }

@@ -1314,7 +1314,7 @@ export interface WatchStatusFacts {
 export function renderWatchStatus(facts: WatchStatusFacts): string[] {
   const row = (label: string, value: string): string =>
     `  ${label.padEnd(13)}${value}`;
-  const lines = ["pr-hero watch — status", ""];
+  const lines = ["crysk watch — status", ""];
   if (facts.configError !== null) {
     lines.push(
       row("config", `INVALID — ${facts.watchConfigPath}: ${facts.configError}`),
@@ -1323,14 +1323,14 @@ export function renderWatchStatus(facts: WatchStatusFacts): string[] {
     lines.push(
       row(
         "config",
-        `none (${facts.watchConfigPath}) — run "pr-hero watch add" inside a ` +
+        `none (${facts.watchConfigPath}) — run "crysk watch add" inside a ` +
           "repo to opt it in",
       ),
     );
   } else {
     lines.push(row("config", facts.watchConfigPath));
     if (facts.config.repos.length === 0) {
-      lines.push(row("", 'no repos watched — "pr-hero watch add" opts one in'));
+      lines.push(row("", 'no repos watched — "crysk watch add" opts one in'));
     }
     for (const repo of facts.config.repos) {
       lines.push(
@@ -1368,7 +1368,7 @@ export function renderWatchStatus(facts: WatchStatusFacts): string[] {
         ? facts.intervalSeconds === null
           ? `installed (${facts.plistPath}, interval unreadable)`
           : `installed — one tick every ${formatIntervalSeconds(facts.intervalSeconds)}`
-        : 'not installed — run "pr-hero watch install" to start ticking',
+        : 'not installed — run "crysk watch install" to start ticking',
     ),
   );
   lines.push(

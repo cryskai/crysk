@@ -23,7 +23,7 @@ const REPO = path.resolve(import.meta.dir, "..", "..");
 const REAL_LAUNCHER = path.join(REPO, "bin", "pr-hero.js");
 const NODE = Bun.which("node") ?? "node";
 const NOT_FOUND_MESSAGE =
-  "pr-hero: Bun was not found. pr-hero runs on Bun (>= 1.3): install it from https://bun.sh, or install pr-hero with npm i -g pr-hero.\n";
+  "crysk: Bun was not found. Crysk runs on Bun (>= 1.3): install it from https://bun.sh, or install Crysk with npm i -g crysk.\n";
 
 let tmp = "";
 let pkg = "";
@@ -249,7 +249,7 @@ test.skipIf(process.platform === "win32")(
     expect(err).toContain("PATH");
     expect(err).toContain("npm i -g bun");
     expect(err).toContain("https://bun.sh");
-    expect(err).toContain("reinstall pr-hero");
+    expect(err).toContain("reinstall crysk");
   },
 );
 

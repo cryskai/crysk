@@ -35,11 +35,11 @@ function launchOnBun() {
   if (bun === null) {
     if (tried.length === 0) {
       process.stderr.write(
-        "pr-hero: Bun was not found. pr-hero runs on Bun (>= 1.3): install it from https://bun.sh, or install pr-hero with npm i -g pr-hero.\n",
+        "crysk: Bun was not found. Crysk runs on Bun (>= 1.3): install it from https://bun.sh, or install Crysk with npm i -g crysk.\n",
       );
     } else {
       process.stderr.write(
-        `pr-hero: no working Bun. Tried ${tried.join(" and ")}; neither ran \`bun --version\`. Fix: npm i -g bun, install Bun from https://bun.sh, or reinstall pr-hero.\n`,
+        `crysk: no working Bun. Tried ${tried.join(" and ")}; neither ran \`bun --version\`. Fix: npm i -g bun, install Bun from https://bun.sh, or reinstall crysk.\n`,
       );
     }
     process.exit(127);
@@ -71,7 +71,7 @@ function launchOnBun() {
 
   child.on("error", (err) => {
     process.stderr.write(
-      `pr-hero: could not start Bun (${err.code ?? err.message})\n`,
+      `crysk: could not start Bun (${err.code ?? err.message})\n`,
     );
     process.exit(127);
   });

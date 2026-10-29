@@ -172,7 +172,7 @@ export async function planUninstallation(
       programSteps.push({
         type: "unregister_mcp",
         targetPath: env.mcpConfigFile,
-        desc: `Unregister pr-hero MCP server from ${env.displayName} (${env.mcpConfigFile})`,
+        desc: `Unregister crysk MCP server from ${env.displayName} (${env.mcpConfigFile})`,
       });
     }
     if (env.skillsDir) {
@@ -240,7 +240,7 @@ export async function planUninstallation(
     }
   } else if (installMethod.kind === "package_manager") {
     warnings.push(
-      `pr-hero was installed via ${installMethod.manager}. Run '${installMethod.manager} uninstall -g pr-hero' to remove the global package.`,
+      `Crysk was installed via ${installMethod.manager}. Run '${installMethod.manager} uninstall -g crysk' to remove the global package.`,
     );
   }
 

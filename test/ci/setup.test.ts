@@ -1094,10 +1094,10 @@ describe("ci init gotchas steps (CLI)", () => {
   test("a repo without .crysk/gotchas.md is told to run init, write gotchas, and commit .crysk/ before opening the PR", async () => {
     const { output, code } = await runInit(undefined);
     expect(code).toBe(0);
-    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("npx -y crysk init");
     expect(output).toContain("human-attention-required");
     expect(output).toContain("Commit .crysk/ to the default branch");
-    expect(output.indexOf("npx -y pr-hero init")).toBeLessThan(
+    expect(output.indexOf("npx -y crysk init")).toBeLessThan(
       output.indexOf("Open a pull request"),
     );
   });
@@ -1106,7 +1106,7 @@ describe("ci init gotchas steps (CLI)", () => {
     const { output } = await runInit(
       "<!-- human-attention-required: delete -->\n# Repo gotchas\n",
     );
-    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("npx -y crysk init");
     expect(output).toContain("human-attention-required");
     expect(output).toContain("Commit .crysk/ to the default branch");
   });
@@ -1115,7 +1115,7 @@ describe("ci init gotchas steps (CLI)", () => {
     const { output } = await runInit(
       "# Repo gotchas\n\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n",
     );
-    expect(output).toContain("npx -y pr-hero init");
+    expect(output).toContain("npx -y crysk init");
     expect(output).toContain("Commit .crysk/ to the default branch");
   });
 
@@ -1137,7 +1137,7 @@ describe("ci init gotchas steps (CLI)", () => {
   test("every repo is told to require the crysk status check, not the review job", async () => {
     const { output } = await runInit(undefined);
     expect(output).toContain(
-      "require the `crysk` status check (not the `review` job; `pr-hero` is still posted for one version, so an existing rule keeps working)",
+      "require the `crysk` status check (not the `review` job; `crysk` is still posted for one version, so an existing rule keeps working)",
     );
   });
 });
