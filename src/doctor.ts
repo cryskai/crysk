@@ -120,7 +120,7 @@ export const PROVIDER_HINTS: Record<string, string> = {
 // produces ZERO capability reports, Claude-backed steps included. Degraded
 // here means "unverified", not "verified fine".
 const OPENCODE_SDK_UNAVAILABLE_HINT =
-  "Run pr-hero upgrade --reconcile to install @opencode-ai/sdk where this binary can resolve it, or route the affected steps through Claude instead. The probe stops at the first OpenCode step, so this run verified no capabilities for ANY route in the plan — Claude-backed steps are unverified here, not confirmed healthy.";
+  "Run crysk upgrade --reconcile to install @opencode-ai/sdk where this binary can resolve it, or route the affected steps through Claude instead. The probe stops at the first OpenCode step, so this run verified no capabilities for ANY route in the plan — Claude-backed steps are unverified here, not confirmed healthy.";
 
 function pushCapabilityProbeFailure(
   checks: DoctorCheckItem[],
@@ -177,7 +177,7 @@ export function openCodeRoutingSdkCheck(input: {
     message:
       `Unsupported OpenCode SDK version "${version}". ` +
       `Expected exact version "${SUPPORTED_OPENCODE_SDK_VERSION}". ` +
-      "Run pr-hero upgrade --reconcile.",
+      "Run crysk upgrade --reconcile.",
   };
 }
 
@@ -423,7 +423,7 @@ export async function runDoctor(
         message: `Bundled prompt set is incomplete: cannot read ${unreadable.join(", ")}`,
         hint:
           "This build cannot review anything. Reinstall the engine with " +
-          "'pr-hero upgrade', or set \"agents_dir\" in .crysk/config.json to " +
+          "'crysk upgrade', or set \"agents_dir\" in .crysk/config.json to " +
           "a checked-out prompt set.",
       });
     } else {
@@ -455,7 +455,7 @@ export async function runDoctor(
         message: `Repository gotchas file (${repoDirName}/gotchas.md) is still the untouched scaffold`,
         hint:
           `Replace the placeholder lines with real repository invariants, and delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` ` +
-          "marker line at the top if it is still there — pr-hero refuses to review the scaffold.",
+          "marker line at the top if it is still there — Crysk refuses to review the scaffold.",
       });
     } else if (unusable !== undefined) {
       checks.push({
@@ -481,7 +481,7 @@ export async function runDoctor(
       name: "setup",
       severity: "degraded",
       message: `Global setup state not initialized (~/${homeDirName}/setup.json absent)`,
-      hint: "Run 'pr-hero init' or complete onboarding to initialize.",
+      hint: "Run 'crysk init' or complete onboarding to initialize.",
     });
   } else {
     checks.push({
@@ -525,7 +525,7 @@ export async function runDoctor(
       severity: "degraded",
       message:
         "No AI agent coding environments detected (Claude Code, Cursor, Windsurf, Codex, Antigravity, OpenCode)",
-      hint: "Install or configure an AI agent environment to use pr-hero triage skills and MCP server.",
+      hint: "Install or configure an AI agent environment to use crysk triage skills and MCP server.",
     });
   } else {
     for (const env of envs) {
@@ -535,21 +535,21 @@ export async function runDoctor(
           checks.push({
             name: `skills:${env.id}`,
             severity: "healthy",
-            message: `pr-hero skills (triage, ci-setup) synced for ${env.displayName} (${env.skillsDir})`,
+            message: `crysk skills (triage, ci-setup) synced for ${env.displayName} (${env.skillsDir})`,
           });
         } else if (syncStatus.drift) {
           checks.push({
             name: `skills:${env.id}`,
             severity: "degraded",
             message: `Local modifications detected in skills for ${env.displayName}`,
-            hint: "Run 'pr-hero setup' or sync skills with force.",
+            hint: "Run 'crysk setup' or sync skills with force.",
           });
         } else {
           checks.push({
             name: `skills:${env.id}`,
             severity: "degraded",
-            message: `pr-hero skills not synced to ${env.displayName}`,
-            hint: "Run 'pr-hero setup' or 'pr-hero init' to sync skills.",
+            message: `crysk skills not synced to ${env.displayName}`,
+            hint: "Run 'crysk setup' or 'crysk init' to sync skills.",
           });
         }
         // Sync removes the old-name copies it can prove untouched; one left
@@ -562,7 +562,7 @@ export async function runDoctor(
             name: `skills-legacy:${env.id}`,
             severity: "degraded",
             message: `Skills installed under their old names remain for ${env.displayName}: ${dirs}`,
-            hint: "Run 'pr-hero setup' to remove the unedited ones, then delete the rest by hand once you have copied any edits you want to keep.",
+            hint: "Run 'crysk setup' to remove the unedited ones, then delete the rest by hand once you have copied any edits you want to keep.",
           });
         }
       }
@@ -582,22 +582,22 @@ export async function runDoctor(
           checks.push({
             name: `mcp:${env.id}`,
             severity: "healthy",
-            message: `pr-hero MCP server registered for ${env.displayName} (${env.mcpConfigFile})`,
+            message: `crysk MCP server registered for ${env.displayName} (${env.mcpConfigFile})`,
           });
         } else if (mcp === "legacy") {
           // It still works; only the key predates the rename.
           checks.push({
             name: `mcp:${env.id}`,
             severity: "degraded",
-            message: `pr-hero MCP server for ${env.displayName} is registered under its pre-rename key`,
-            hint: "Run 'pr-hero setup' to migrate the registration.",
+            message: `crysk MCP server for ${env.displayName} is registered under its pre-rename key`,
+            hint: "Run 'crysk setup' to migrate the registration.",
           });
         } else {
           checks.push({
             name: `mcp:${env.id}`,
             severity: "degraded",
-            message: `pr-hero MCP server not registered for ${env.displayName}`,
-            hint: "Run 'pr-hero setup' to register the MCP server.",
+            message: `crysk MCP server not registered for ${env.displayName}`,
+            hint: "Run 'crysk setup' to register the MCP server.",
           });
         }
       }
@@ -683,7 +683,7 @@ export function renderDoctorReport(
   const bold = (s: string) => (styles ? `\x1b[1m${s}\x1b[0m` : s);
   const dim = (s: string) => (styles ? `\x1b[2m${s}\x1b[0m` : s);
 
-  lines.push(bold("pr-hero doctor"));
+  lines.push(bold("crysk doctor"));
   lines.push("");
 
   for (const check of report.checks) {

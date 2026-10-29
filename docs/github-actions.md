@@ -1,6 +1,6 @@
 # GitHub Actions Integration
 
-pr-hero reviews every pull request automatically: a multi-agent hunt with adversarial refutation runs
+Crysk reviews every pull request automatically: a multi-agent hunt with adversarial refutation runs
 inside a GitHub Actions job, posts findings as PR comments, and writes a step summary. Its commit status
 (`crysk`; `pr-hero` is still posted for one version) is a gate by default: blocking findings turn it red, so
 require `crysk` in branch protection to block a merge on them. `mode: advisory` keeps it green. See [Gate mode](#gate-mode-the-status-is-the-check).
@@ -11,11 +11,11 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. Pick one — never both blank. Leave OpenCode unset:
    that is today's Claude CI.
 2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
-   to `.github/workflows/pr-hero.yml`, or run `npx -y pr-hero setup --ci` (or `pr-hero ci init`) in a clone of
-   your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need pr-hero
+   to `.github/workflows/pr-hero.yml`, or run `npx -y crysk setup --ci` (or `crysk ci init`) in a clone of
+   your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need Crysk
    installed locally: the file is the whole install. The command also checks the GitHub CLI: if `gh` is
-   missing or logged out, it prints why the CI loop needs it (`gh secret set`, `pr-hero status`,
-   `pr-hero triage reply`) and how to fix it, and in a terminal it offers to install it (macOS with
+   missing or logged out, it prints why the CI loop needs it (`gh secret set`, `crysk status`,
+   `crysk triage reply`) and how to fix it, and in a terminal it offers to install it (macOS with
    Homebrew) and to run `gh auth login`; the workflow is written either way. It reviews every push to a pull request, answers a
    `/crysk review` comment (see [Re-review on demand](#re-review-on-demand)), and answers a
    `/crysk override` comment (see [Overriding a red gate](#overriding-a-red-gate)). Do **not** copy this
@@ -25,7 +25,7 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    `test/packaging.test.ts` asserts each file against its own generator options; it does **not** assert
    the two are byte-identical. The template wires quoted `routing` / `opencode-auth` inputs; empty
    values are absent, so Claude-only repos keep those lines.
-3. **Write the repository gotchas.** Run `npx -y pr-hero init` in a clone of your repo: it creates
+3. **Write the repository gotchas.** Run `npx -y crysk init` in a clone of your repo: it creates
    `.crysk/config.json` and `.crysk/gotchas.md`. Replace the placeholder lines in `gotchas.md` with real
    facts about your repository (a deliberate oddity that looks like a bug, an invariant enforced outside
    the diff, an ownership rule a newcomer would break), then delete the `human-attention-required` marker
@@ -36,10 +36,10 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
 5. **Require the check.** In branch protection, require the `crysk` status check (the gate); `pr-hero` is still posted for one version, so a repository that already requires it keeps working while you switch. Do not require the
    `review` job, which stays green even when it finds blocking issues. A private repository on GitHub Free
    cannot require status checks (GitHub returns HTTP 403), so there the gate is advisory in practice.
-6. **Open a pull request** from a branch in this repository (not a fork). pr-hero comments inline, posts
+6. **Open a pull request** from a branch in this repository (not a fork). Crysk comments inline, posts
    a summary review, and writes a `$GITHUB_STEP_SUMMARY` block within a few minutes. If no credential
    secret is set, the run fails red and its step summary lists the commands that set one.
-7. **Verify readiness any time** with `pr-hero doctor` — it checks for the required secrets when run
+7. **Verify readiness any time** with `crysk doctor` — it checks for the required secrets when run
    inside Actions, and for the workflow file's presence locally.
 
 To review with OpenCode instead of (or mixed with) Claude, add `OPENCODE_AUTH_JSON` and
@@ -96,7 +96,7 @@ jobs:
           opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
 ```
 
-`pr-hero setup --ci` generates this file, with comments explaining each piece — see
+`crysk setup --ci` generates this file, with comments explaining each piece — see
 `generateCiWorkflowTemplate` in `src/ci/setup.ts`. It refuses to overwrite a customized workflow already
 at that path unless you pass `--force`, and it never touches a `pr-hero-force.yml` scaffolded by an
 older version (that file keeps working; you can delete it once this one is on your default branch).
@@ -104,7 +104,7 @@ older version (that file keeps working; you can delete it once this one is on yo
 **Upgrading from the `/pr-hero` commands.** The commands are now `/crysk review`, `/crysk review --full`,
 `/crysk recheck`, `/crysk override` and `/crysk stop`. The action still accepts the `/pr-hero …` spellings
 for one version. A workflow file scaffolded earlier only starts a run on `/pr-hero …` comments, so a
-`/crysk …` comment does nothing there: re-run `pr-hero ci init --force` (or copy the `if:` and `group:`
+`/crysk …` comment does nothing there: re-run `crysk ci init --force` (or copy the `if:` and `group:`
 lines above) to accept both. The routing variable is likewise renamed: the new workflow reads
 `CRYSK_ROUTING` first and falls back to `PRHERO_ROUTING`, so an existing variable keeps working.
 
@@ -144,12 +144,12 @@ empty string, not broken YAML.
 
 **A run that cannot start the review still says so on the pull request.** When there is no
 model credential, the pull request number or head cannot be resolved, the commenter's permission
-cannot be verified, or an install step fails before pr-hero starts, pr-hero posts one `pr-hero`
+cannot be verified, or an install step fails before Crysk starts, Crysk posts one `crysk`
 commit status (`error`) and one comment on the pull request. A review that starts and then fails also
 does, when the CLI reports an error or every review hunter fails; if the CLI takes the review's lock and then
-stops before it reports an outcome, pr-hero posts the comment, and its `error` status on the head that lock is on, when that head's `pr-hero` status is still `pending` or cannot be read. A review cancelled mid-review sets `error` `PRH-CANCELLED: not reviewed — /pr-hero review reviews this head` on its head, so a cancelled gate never stays pending. The `pending` status names its run: in Actions it links to that run's attempt, so the status's link opens the Actions run, and a cancel settles only the pending that names its own run. A `pending` from an older pr-hero, with no run link, is matched by its creation time instead. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
+stops before it reports an outcome, Crysk posts the comment, and its `error` status on the head that lock is on, when that head's `crysk` status is still `pending` or cannot be read. A review cancelled mid-review sets `error` `PRH-CANCELLED: not reviewed — /pr-hero review reviews this head` on its head, so a cancelled gate never stays pending. The `pending` status names its run: in Actions it links to that run's attempt, so the status's link opens the Actions run, and a cancel settles only the pending that names its own run. A `pending` from an older pr-hero, with no run link, is matched by its creation time instead. Without a readable record of the lock, pr-hero posts the comment alone, with no status. A settled status (`success`, `error` or `failure`) stays as the CLI left it. The comment gives the error code, whose fix it is (your configuration, a provider, pr-hero,
 or unclassified) and the command that fixes it.
-A newer comment replaces the older one from the same author. pr-hero removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/crysk review`
+A newer comment replaces the older one from the same author. Crysk removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/crysk review`
 comment posts no comment: the trigger reacts to it instead ([Reactions on a command](#reactions-on-a-command)). A review that ran keeps its own status. A size or budget skip sets a `failure`
 status in gate mode and none in advisory (see [Gate mode](#gate-mode-the-status-is-the-check)).
 
@@ -165,7 +165,7 @@ A commenter whose permission cannot be verified gets no reaction: its run is red
 
 ### Why `fetch-depth: 0`
 
-`actions/checkout`'s default is a **shallow** clone. pr-hero computes the pull request's diff range and
+`actions/checkout`'s default is a **shallow** clone. Crysk computes the pull request's diff range and
 commit ancestry from full git history — a shallow clone does not fail loudly here, it makes the review
 silently miss context (wrong merge-base, incomplete blame). This is load-bearing, not cosmetic: never
 trim it.
@@ -210,7 +210,7 @@ follows the same rule: it never echoes, logs, or truncates a secret value anywhe
 *Best for pay-as-you-go per-token billing on an Anthropic Console account.*
 
 1. Go to [Anthropic Console Keys](https://console.anthropic.com/settings/keys).
-2. Click **Create Key**, assign a name (e.g. `pr-hero-ci`), and copy the `sk-ant-...` key.
+2. Click **Create Key**, assign a name (e.g. `crysk-ci`), and copy the `sk-ant-...` key.
 
 #### Setting the secret in GitHub
 
@@ -236,7 +236,7 @@ secret), not a new Action input.
 
 1. **Repository variable** `CRYSK_ROUTING` — the routing object only (`default` / `mappings` /
    `disabled`), same shape as person-layer `config.routing`. Do not wrap it in `{"routing": ...}`
-   and do not put credentials inside it (the variable is public). OpenCode does not resolve pr-hero
+   and do not put credentials inside it (the variable is public). OpenCode does not resolve Crysk
    aliases (`sonnet` / `opus` / `haiku`): set `modelSnapshot` to an id `opencode models` lists. Routing
    maps **logical model**, not hunter vs refuter. By default the hunters declare `sonnet`, the refuter
    declares `opus`, and the summarizer runs on `haiku`, so a mapping moves only the steps whose alias it
@@ -358,7 +358,7 @@ once and then fails the run red, asking for the comment again: it never reviews 
 refuses silently.
 No `pull_request_target` is involved. If you wire `pull_request_target` yourself, the action reviews
 fork heads there too: that event runs in the base repository's context, with its secrets, so choosing
-it is choosing base-context reviews of forks. pr-hero reads the head as text and never runs its code.
+it is choosing base-context reviews of forks. Crysk reads the head as text and never runs its code.
 
 The job `if` never reads `secrets` (GitHub does not allow it there). Credential presence is checked
 inside the action instead: a same-repo pull request with none of the three credential secrets fails
@@ -421,14 +421,14 @@ because OpenCode auth is present — OpenCode API-token billing is beside Claude
 
 **A `budget-usd` of `0` or below does not mean "spend nothing" — it disables the ceiling.** This
 matches the sibling size-gate knobs' documented convention (`<= 0` disables the limit). Reading it the
-other way ("always skip") would make pr-hero silently stop reviewing every PR while the job still shows
+other way ("always skip") would make Crysk silently stop reviewing every PR while the job still shows
 green. Because a disabled ceiling is otherwise indistinguishable from a passing one, a disabled budget
 emits a `::warning::` workflow annotation on every run — check your job logs if you did not mean to
 disable it.
 
 ## CI review admission
 
-On every `synchronize` push, pr-hero decides whether another review is worth the spend **before**
+On every `synchronize` push, Crysk decides whether another review is worth the spend **before**
 fetching the worktree or spawning agents. The decision is deterministic, logged in the job summary,
 and backed by a durable attempt ledger stored in GitHub Check Runs (`checks: write` permission).
 
@@ -511,7 +511,7 @@ A local agent (Claude Code) posts the same comment:
 gh pr comment <number> --body "/crysk review"
 ```
 
-It must not run `pr-hero review --pr <n> --force` when the goal is a CI review.
+It must not run `crysk review --pr <n> --force` when the goal is a CI review.
 
 The comment run passes `--force`. That bypasses the size gate, admission, and the budget ceiling for
 that run only. It does not reset the durable ledger. An empty effective diff (everything excluded)
@@ -542,7 +542,7 @@ gh workflow run pr-hero-force.yml -f pr=<number>              # force
 gh workflow run pr-hero-force.yml -f pr=<number> -f full=true # force and re-discover
 ```
 
-Re-scaffold with `pr-hero ci init --force` to switch to the comment trigger. It rewrites
+Re-scaffold with `crysk ci init --force` to switch to the comment trigger. It rewrites
 `pr-hero.yml` only and leaves `pr-hero-force.yml` in place; delete that file yourself once the new
 `pr-hero.yml` is on the default branch.
 
@@ -574,7 +574,7 @@ the published `juanmaagd/pr-hero@v0`, where the checkout does not select the eng
 ### Check Runs ledger
 
 Admission attempts are persisted as Check Runs named `pr-hero/ci-admission` on the reviewed commit.
-The workflow needs **`checks: write`** (listed under [Token permissions](#token-permissions)) so pr-hero can
+The workflow needs **`checks: write`** (listed under [Token permissions](#token-permissions)) so Crysk can
 reserve attempts before provider spend and record outcomes. PR comments remain presentation only; the
 Check Run ledger is authoritative.
 
@@ -595,7 +595,7 @@ short policy hash.
 The `crysk` commit status is the check you require in branch protection. For one version every status is
 also written on the legacy `pr-hero` context, with the same state, description and link, so a repository that
 requires `pr-hero` is not blocked while it adds `crysk`; then `pr-hero` is dropped. Readers (the admission
-gate, `pr-hero status`, the override check) treat the two as one gate and take the newest row across both,
+gate, `crysk status`, the override check) treat the two as one gate and take the newest row across both,
 so an override posted by an older action only on `pr-hero` still wins. Descriptions are written `crysk: …`
 and read in both spellings. The job's exit code does not
 carry the review's findings: a finished review exits `0` even when it finds blocking-tier issues. Findings
@@ -607,7 +607,7 @@ The action's `mode` input picks what the status says. It defaults to `gate`:
   skip also sets `failure`, so an unreviewed head cannot read as a clean one. A clean review, or one with
   only advisory findings, sets `success`.
 - **`advisory`**: the status is `success` for every finished review, whatever it finds. This is the
-  posture pr-hero had before the gate. Skipped reviews post no status, as before.
+  posture Crysk had before the gate. Skipped reviews post no status, as before.
 
 Either way, a crash, a failed session and a missing findings count set `error`, which is a red check too.
 The table shows the status and the job exit for each case:
@@ -625,7 +625,7 @@ The table shows the status and the job exit for each case:
 | Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `crysk: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
-A review where an agent (a hunter, the refuter or the summarizer) failed also prints a `::warning title=pr-hero::`
+A review where an agent (a hunter, the refuter or the summarizer) failed also prints a `::warning title=crysk::`
 annotation, and the posted review comment's incompleteness notice lists the agents that did not finish. Each
 failed agent is followed by the provider's own one-line reason when the Claude CLI reported one, for example
 `refuter (failed — Anthropic API: Credit balance is too low (HTTP 400))`. The commit status text above is a
@@ -636,7 +636,7 @@ below keep their own status and exit, as they did before the gate.
 
 **A skipped head inherits the verdict of the last reviewed commit of its pull request.** When the admission gate
 skips a new head as a low-risk or below-threshold delta, or once per PR, the head takes the newest review verdict from
-this pull request's own commit statuses: a `pr-hero` success or failure that a finished review wrote, or a verdict
+this pull request's own commit statuses: a `crysk` success or failure that a finished review wrote, or a verdict
 carried from this pull request. The gate walks the pull request's commits newest-first from the head, skips each commit
 that carries no verdict, and stops at the first one that does, within the last 20 commits before the head. A skip's
 failure, a fail-closed, budget or manual-only failure, an error, a pending status, and an override are not verdicts, so
@@ -649,7 +649,7 @@ was never reviewed, so carrying it would turn a new head green with no review be
 reviewed head, a failed read, a head missing from the pull request's commits, or no verdict within the last 20 commits),
 the head is `failure` and says so: a trivial push must not pass the gate without a verdict behind it. A manual
 re-review required is always `failure`, because its code was never reviewed, and carrying a green verdict over it would
-let an unreviewed push pass the gate. A head whose newest `pr-hero` status is an override keeps it: a re-run of the gate
+let an unreviewed push pass the gate. A head whose newest `crysk` status is an override keeps it: a re-run of the gate
 on that head writes no skip status over the override, when the head's statuses can be read. When they cannot, the skip's
 status is written as planned and the run logs a warning, because a head that reads as nothing decided is the original
 bug; that write can replace an override the run could not see. Advisory mode writes no status on a skipped head, as before.
@@ -660,7 +660,7 @@ been cleared (subject to the known gap at the end of this paragraph). A finding 
 decide, when a triage reply deferred it, or when a triage reply dismissed it. A dismissal the adjudicator
 upheld counts too, until the next review of the same head: an upheld verdict takes effect in two steps, the recheck posts the ruling and the following same-head `/crysk review` stops counting the finding. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, or when every file it
 names was deleted. A dismissed, deferred or misclassified finding is re-verified when a push touches its code, and leaves the count when verified gone. Triage replies (`applied`, `dismissed`,
-`deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator checks them only when someone comments `/crysk recheck` (see [Rechecking a dismissal](#rechecking-a-dismissal)). The `pr-hero` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. **State block.** From the second review on, the summary carries a `crysk-state` block: the merged live set of the pull request's open findings. It holds every surviving earlier finding and this run's findings, so a blocking finding first raised by a re-review still counts on the next review, including a same-head `/crysk review` that runs no hunters. A finding that a re-review verified gone leaves the block. Each row keeps its `R###` id. The block's `hw` field is the highest id ever assigned on the pull request, so a retired id is never reused. When the summary would exceed GitHub's comment size limit, the cap drops prior advisory findings first (unconfirmed, then carried), never a blocking finding, and the summary states how many finding identities it dropped from the block. Known gap: the first review writes no state block, so an outside-diff finding of the first review is not persisted. Its inline findings are recovered from their markers on the second review.
+`deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator checks them only when someone comments `/crysk recheck` (see [Rechecking a dismissal](#rechecking-a-dismissal)). The `crysk` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. **State block.** From the second review on, the summary carries a `crysk-state` block: the merged live set of the pull request's open findings. It holds every surviving earlier finding and this run's findings, so a blocking finding first raised by a re-review still counts on the next review, including a same-head `/crysk review` that runs no hunters. A finding that a re-review verified gone leaves the block. Each row keeps its `R###` id. The block's `hw` field is the highest id ever assigned on the pull request, so a retired id is never reused. When the summary would exceed GitHub's comment size limit, the cap drops prior advisory findings first (unconfirmed, then carried), never a blocking finding, and the summary states how many finding identities it dropped from the block. Known gap: the first review writes no state block, so an outside-diff finding of the first review is not persisted. Its inline findings are recovered from their markers on the second review.
 
 
 **Unlocking a gate.** A `failure` for blocking findings clears in one of two ways. A fix pushed to a new head
@@ -690,11 +690,11 @@ so the comment is refused with a notice and a 👎 reaction.
 
 **Overriding a red gate.** Comment exactly `/crysk override` on the pull request. The same rule as
 `/crysk review` applies: a user with write or admin access may do it, and the pull request's author may too
-when they have that access. Anyone else is refused with a notice and a 👎 reaction on the comment, and nothing is posted. The override turns the `pr-hero` status on the head it names
-into `success`, with the description `pr-hero: overridden by @<login> — no review on this head`. It runs no
+when they have that access. Anyone else is refused with a notice and a 👎 reaction on the comment, and nothing is posted. The override turns the `crysk` status on the head it names
+into `success`, with the description `crysk: overridden by @<login> — no review on this head`. It runs no
 review and spends nothing, and it needs no credential, so a repository without one can still unlock its gate.
 
-Every override is recorded. The status names who acted, and a pr-hero comment on the pull request names who,
+Every override is recorded. The status names who acted, and a Crysk comment on the pull request names who,
 on which head, and when (UTC). It starts with `<!-- crysk-override`, and no later cleanup removes it, so the
 history of overrides stays on the pull request. The override also removes earlier outcome comments from the pull request, as a completed review does, and keeps every override record.
 
@@ -705,7 +705,7 @@ override.
 
 **An override stands against a review that was already running when it was posted; a review started after it replaces it.**
 The rule holds for every verdict write (`success` or `failure`) of the review, including the publisher step's repost of a
-status the CLI could not write. Each verdict write checks the head's newest `pr-hero` status first. When that status is an
+status the CLI could not write. Each verdict write checks the head's newest `crysk` status first. When that status is an
 override created after the review started, allowing 5 seconds of clock skew between the runner and GitHub, the write is
 skipped and the run logs one line that the override stands. When the review's own pending status did not land, the allowance
 is zero, because nothing else on the head shows when the review started. When the head's statuses cannot be read, the review's verdict is written and a warning is logged, since the override cannot be checked. A status row that does not parse is ignored and the valid rows decide, so a fresh override beside a malformed row still stands; only a failed read (GitHub's answer is an error or the lookup times out) counts as unreadable. The review's findings and comments are unchanged.
@@ -734,8 +734,8 @@ posts no status, so the head stays `pending` until a `/crysk review` comment for
 status again. The pending status, written when a review starts, is best-effort in both modes.
 
 **Local runs and the watcher post on `crysk/local`.** Only an explicit `--ci` run writes the `crysk`
-status (and its legacy `pr-hero` twin), which is the required check. A `pr-hero review --pr` you run locally, and each review that
-`pr-hero watch` starts, post advisory statuses on `crysk/local` (and `pr-hero/local`) instead, so they cannot overwrite a red gate
+status (and its legacy `pr-hero` twin), which is the required check. A `crysk review --pr` you run locally, and each review that
+`crysk watch` starts, post advisory statuses on `crysk/local` (and `pr-hero/local`) instead, so they cannot overwrite a red gate
 on the same head. Only the `--ci` flag makes a run post to the gate; `CI=1` in your shell does not. The watcher yields
 to a review in flight on either context, and it settles only its own leftover pending, on `crysk/local`. A `--ci`
 run stands down only for a pending on `crysk` (or `pr-hero`), because only it writes those contexts, so a local pending never
@@ -794,7 +794,7 @@ failure.
 Answering a posted finding goes through the driver:
 
 ```bash
-pr-hero triage reply --pr <n> --from <run-dir> --finding F001 \
+crysk triage reply --pr <n> --from <run-dir> --finding F001 \
   --tag applied --body-file reasoning.md
 ```
 
@@ -818,7 +818,7 @@ gh run download <run-id> \
   -D pr-hero-run
 
 # Then triage against it
-pr-hero triage reply --pr <n> --from pr-hero-run --finding F001 \
+crysk triage reply --pr <n> --from pr-hero-run --finding F001 \
   --tag applied --body-file reasoning.md
 ```
 
@@ -859,9 +859,9 @@ Three properties of the action's upload step are load-bearing:
 > `always()` still earns its place for a review that ran but could not post, and for a later step in the
 > job failing.
 
-## Reading a PR with `pr-hero status`
+## Reading a PR with `crysk status`
 
-`pr-hero status --pr <n> [--json]` reads one PR's state through `gh`. It is read-only and writes nothing to
+`crysk status --pr <n> [--json]` reads one PR's state through `gh`. It is read-only and writes nothing to
 GitHub, so a skill can drive review, reply, fix and wait from it instead of reading comments by hand. Without
 `--json` it prints a few lines on stderr. With `--json` it prints one object on stdout, and nothing else:
 
@@ -870,7 +870,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
   "schema": "pr-hero.status/v1",
   "pr": 12,
   "head": "<40-hex headRefOid>",
-  "gate": { "state": "failure", "description": "pr-hero: 1 blocking finding(s) — fix and push, or /pr-hero override", "target_url": "<run url>", "created_at": "<ISO time>", "pending_in_flight": false, "override": { "active": false, "by": null } },
+  "gate": { "state": "failure", "description": "crysk: 1 blocking finding(s) — fix and push, or /pr-hero override", "target_url": "<run url>", "created_at": "<ISO time>", "pending_in_flight": false, "override": { "active": false, "by": null } },
   "report": { "head": "<40-hex>", "complete": true, "reviews": 2, "outcome_code": null },
   "findings": [
     { "id": "R001", "path": "src/a.ts", "line": 10, "head": "<40-hex>", "comment_id": 41, "channel": "inline",
@@ -884,7 +884,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 }
 ```
 
-- `gate` is pr-hero's own commit status on the head. `state: "none"` means no `pr-hero` status is on it.
+- `gate` is Crysk's own commit status on the head. `state: "none"` means no `crysk` status is on it.
 - `findings` covers every posted `<!-- crysk-finding` comment, on every head. `channel` is `inline` for a review
   thread and `outside` for a top-level comment. `triage` is the newest triage reply in its thread only.
 - A finding joins its state-block row the way the engine binds a prior to its comment: the comment's anchor must land
@@ -906,13 +906,13 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | `next_action` | When |
 | --- | --- |
 | `wait` | The gate is pending and in flight (less than 90 minutes old). |
-| `review` | No `pr-hero` status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`pr-hero: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
+| `review` | No `crysk` (or `pr-hero`) status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`crysk: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
 | `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. |
 | `triage` | The gate is red and a live blocking finding on this head has no triage reply at the head it was posted on. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
 | `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. |
 | `recheck` | The gate is red and a live blocking inline finding is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. Comment `/crysk recheck`; the CI adjudicator rules on it. |
 | `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/crysk review`, and that review no longer counts them. |
-| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or an outside-diff finding, which has no thread to rule on). A skipped review (size or budget) also lands here. The gate is red over a partial review's repeat form (`pr-hero: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. |
+| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or an outside-diff finding, which has no thread to rule on). A skipped review (size or budget) also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. |
 
 The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list, or a
 gate status it cannot read exits 1 with nothing on stdout, so a partial answer never looks like a clean PR.
@@ -934,7 +934,7 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 
 ## Error codes
 
-When the action stops with an error, the annotation and the job summary start with the owner, then say what is wrong, why, and the command that fixes it. The owner tells you whose fix it is: **Your configuration:** means a secret, a variable, a workflow permission or a repository file needs a change; **Provider `<name>`:** means the provider rejected, limited or failed the request; **pr-hero defect:** means pr-hero itself failed, and the fix reports it with the run URL; **Unclassified:** means pr-hero could not attribute the failure and says so instead of guessing. **Not reviewed:** is a notice for a run that a newer push superseded, not an error.
+When the action stops with an error, the annotation and the job summary start with the owner, then say what is wrong, why, and the command that fixes it. The owner tells you whose fix it is: **Your configuration:** means a secret, a variable, a workflow permission or a repository file needs a change; **Provider `<name>`:** means the provider rejected, limited or failed the request; **Crysk defect:** means Crysk itself failed, and the fix reports it with the run URL; **Unclassified:** means Crysk could not attribute the failure and says so instead of guessing. **Not reviewed:** is a notice for a run that a newer push superseded, not an error.
 
 ### PRH-CRED-MISSING
 
@@ -942,7 +942,7 @@ When the action stops with an error, the annotation and the job summary start wi
 
 **What:** No credential for the {backend} route reached the action
 
-**Why:** pr-hero cannot authenticate, so it cannot review this PR
+**Why:** Crysk cannot authenticate, so it cannot review this PR
 
 **Fix**, on a Claude route:
 
@@ -954,7 +954,7 @@ gh secret set ANTHROPIC_API_KEY
 opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 ```
 
-If the secret is already set, check that the workflow passes it to the action under `with:`, for example `claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` or `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`: a secret the workflow does not pass never reaches pr-hero.
+If the secret is already set, check that the workflow passes it to the action under `with:`, for example `claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` or `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`: a secret the workflow does not pass never reaches Crysk.
 
 Dependabot PRs read Dependabot secrets, so set this one too:
 
@@ -976,7 +976,7 @@ Set the OpenCode credential for the route you use:
 opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 ```
 
-If the secret is already set, check that the workflow passes it to the action under `with:`, for example `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`: a secret the workflow does not pass never reaches pr-hero.
+If the secret is already set, check that the workflow passes it to the action under `with:`, for example `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`: a secret the workflow does not pass never reaches Crysk.
 
 An OpenCode route also needs the routing variable:
 
@@ -984,7 +984,7 @@ An OpenCode route also needs the routing variable:
 gh variable set CRYSK_ROUTING --body '<routing-object-json>'
 ```
 
-A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `pr-hero ci init --force` so the workflow also reads CRYSK_ROUTING.
+A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
 
 Dependabot PRs read Dependabot secrets, so set this one too:
 
@@ -1174,7 +1174,7 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"
 ```
 
-A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `pr-hero ci init --force` so the workflow also reads CRYSK_ROUTING.
+A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
 
 ### PRH-ROUTING-INVALID
 
@@ -1182,7 +1182,7 @@ A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, 
 
 **What:** The routing variable is invalid: {detail}
 
-**Why:** pr-hero cannot tell which backend and model each agent should use
+**Why:** Crysk cannot tell which backend and model each agent should use
 
 **Fix:**
 
@@ -1192,7 +1192,7 @@ Edit the JSON, then set it again:
 gh variable set CRYSK_ROUTING --body "$(jq -c . routing.json)"
 ```
 
-A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `pr-hero ci init --force` so the workflow also reads CRYSK_ROUTING.
+A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
 
 ### PRH-ROUTE-UNRESOLVABLE
 
@@ -1263,7 +1263,7 @@ The `provider_configuration_invalid` cause shares this code. Its lead stays `You
 Fix the file or `agents_dir`, then check for free:
 
 ```bash
-pr-hero review --pr {pr} --dry-run
+crysk review --pr {pr} --dry-run
 ```
 
 ### PRH-GOTCHAS-MISSING
@@ -1276,7 +1276,7 @@ pr-hero review --pr {pr} --dry-run
 
 **Fix:**
 
-Run `npx -y pr-hero init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).
+Run `npx -y crysk init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).
 
 ### PRH-CONFIG-INVALID
 
@@ -1284,14 +1284,14 @@ Run `npx -y pr-hero init` in a clone of the repository (it creates .crysk/config
 
 **What:** .crysk/config.json is invalid: {detail}
 
-**Why:** pr-hero refuses to guess repository settings
+**Why:** Crysk refuses to guess repository settings
 
 **Fix:**
 
 Fix the file, then check it:
 
 ```bash
-pr-hero review --pr {pr} --dry-run
+crysk review --pr {pr} --dry-run
 ```
 
 ### PRH-TOKEN-PERMISSION
@@ -1300,30 +1300,30 @@ pr-hero review --pr {pr} --dry-run
 
 **What:** The workflow token lacks `{scope}: write`
 
-**Why:** pr-hero cannot post its result on the PR
+**Why:** Crysk cannot post its result on the PR
 
 **Fix:**
 
 Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:
 
 ```bash
-pr-hero ci init --force
+crysk ci init --force
 ```
 
 #### `no-scope`
 
-When the scope is not known, pr-hero names the refusal and not a scope it cannot know.
+When the scope is not known, Crysk names the refusal and not a scope it cannot know.
 
 **What:** GitHub refused the workflow token (HTTP 403) during {step}
 
-**Why:** pr-hero cannot post its result on the PR
+**Why:** Crysk cannot post its result on the PR
 
 **Fix:**
 
-Check that the workflow passes `github-token: ${{ secrets.GITHUB_TOKEN }}` on the action step, and keeps the `permissions:` block that `pr-hero ci init` scaffolds:
+Check that the workflow passes `github-token: ${{ secrets.GITHUB_TOKEN }}` on the action step, and keeps the `permissions:` block that `crysk ci init` scaffolds:
 
 ```bash
-pr-hero ci init --force
+crysk ci init --force
 ```
 
 ### PRH-GITHUB-TOKEN-INVALID
@@ -1376,7 +1376,7 @@ gh run rerun {runId}
 
 **Owner:** your configuration
 
-**What:** pr-hero could not determine the pull request number or head
+**What:** Crysk could not determine the pull request number or head
 
 **Why:** nothing can be posted on a PR it cannot identify
 
@@ -1386,9 +1386,9 @@ Run from a pull_request or issue_comment event, or pass the `pr-number` input.
 
 #### `malformed-input`
 
-The `pr-number` input was given but is not a positive integer. pr-hero names the input and never echoes its value.
+The `pr-number` input was given but is not a positive integer. Crysk names the input and never echoes its value.
 
-**What:** pr-hero could not determine the pull request number or head ({detail})
+**What:** Crysk could not determine the pull request number or head ({detail})
 
 **Why:** nothing can be posted on a PR it cannot identify
 
@@ -1400,7 +1400,7 @@ Pass a positive integer as the `pr-number` input.
 
 **Owner:** unclassified
 
-**What:** pr-hero could not write its commit status ({detail})
+**What:** Crysk could not write its commit status ({detail})
 
 **Why:** the required check has no result for this head without it
 
@@ -1425,7 +1425,7 @@ If it repeats, report it.
 Add `statuses: write` to the job's `permissions:`, or re-scaffold the workflow:
 
 ```bash
-pr-hero ci init --force
+crysk ci init --force
 ```
 
 #### `server`
@@ -1444,13 +1444,13 @@ gh run rerun {runId}
 
 ### PRH-RUNTIME-UNAVAILABLE
 
-**Owner:** pr-hero in the action, your configuration locally
+**Owner:** Crysk in the action, your configuration locally
 
-**What:** a runtime pr-hero depends on is unusable: {detail}
+**What:** a runtime Crysk depends on is unusable: {detail}
 
 #### `action`
 
-**Why:** the action installs this runtime itself, so this is a pr-hero defect
+**Why:** the action installs this runtime itself, so this is a Crysk defect
 
 **Fix:**
 
@@ -1466,10 +1466,10 @@ gh issue create -R juanmaagd/pr-hero --title "PRH-RUNTIME-UNAVAILABLE" --body "{
 
 **Fix:**
 
-Reconcile the pr-hero install:
+Reconcile the crysk install:
 
 ```bash
-pr-hero upgrade --reconcile
+crysk upgrade --reconcile
 ```
 
 ### PRH-INSTALL-FAILED
@@ -1478,7 +1478,7 @@ pr-hero upgrade --reconcile
 
 **What:** The {step} step failed
 
-**Why:** a download or install step failed, and pr-hero cannot tell which external cause it was
+**Why:** a download or install step failed, and Crysk cannot tell which external cause it was
 
 **Fix:**
 
@@ -1598,11 +1598,11 @@ If it repeats, report it.
 
 ### PRH-ENGINE-DEFECT
 
-**Owner:** pr-hero
+**Owner:** Crysk
 
-**What:** pr-hero hit an internal error ({detail}) in {step}
+**What:** Crysk hit an internal error ({detail}) in {step}
 
-**Why:** this is a defect in pr-hero, not in your configuration
+**Why:** this is a defect in Crysk, not in your configuration
 
 **Fix:**
 
@@ -1654,7 +1654,7 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 **Owner:** unclassified
 
-**What:** pr-hero stopped at {step} and could not tell why
+**What:** Crysk stopped at {step} and could not tell why
 
 **Why:** rather than guess, it reports this honestly
 
@@ -1674,9 +1674,9 @@ gh run view {runId} --log-failed
 
 #### `github`
 
-**What:** GitHub returned {detail} at {step}, and pr-hero cannot tell whose fix it is
+**What:** GitHub returned {detail} at {step}, and Crysk cannot tell whose fix it is
 
-**Why:** pr-hero does not map this GitHub status to an owner, so it does not guess
+**Why:** Crysk does not map this GitHub status to an owner, so it does not guess
 
 **Fix:**
 
@@ -1714,7 +1714,7 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 ## Troubleshooting
 
-- **`pr-hero doctor`** locally reports whether `.github/workflows/pr-hero.yml` exists; inside Actions it
+- **`crysk doctor`** locally reports whether `.github/workflows/pr-hero.yml` exists; inside Actions it
   reports whether the required secrets (or OpenCode auth file) are present (never their values).
 - **The review was skipped** (size, budget, or admission) — comment `/crysk review` on the pull
   request. `gh run rerun` on `pr-hero.yml` re-evaluates the gates and skips again. On a workflow
@@ -1723,7 +1723,7 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
   default branch, so it works only once that file (with its `issue_comment` trigger) is merged there.
   The comment must be exactly `/crysk review` or `/crysk review --full`, and its author needs
   write access to the repository. An older `pr-hero.yml` has no comment trigger at all: re-scaffold
-  with `pr-hero ci init --force`.
+  with `crysk ci init --force`.
 - **The run is red and names a missing credential** — none of `ANTHROPIC_API_KEY`,
   `CLAUDE_CODE_OAUTH_TOKEN`, or `OPENCODE_AUTH_JSON` is set. The step summary lists the `gh secret set`
   commands; adding a secret does not re-run past workflows, so re-run that run afterwards.

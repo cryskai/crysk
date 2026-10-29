@@ -1,6 +1,6 @@
 # CI sandbox
 
-`juanmaagd/pr-hero-sandbox` is a public scratch repository where the pr-hero review
+`juanmaagd/pr-hero-sandbox` is a public scratch repository where the Crysk review
 action runs for real on GitHub's runners, against planted-bug pull requests. It exists so
 the pipeline and the Action can be run realistically, including their failure paths,
 without opening a PR on the product repo for every test. The goal is realistic runs
@@ -8,6 +8,9 @@ that are cheap. The repo is public, so Actions minutes are free.
 
 Code: `scripts/sandbox/` (runner, scenarios, rails). Tests: `test/sandbox/`, offline,
 under fakes. Run them with `bun test test/sandbox`.
+
+The scenarios comment the legacy `/pr-hero …` spelling, which every workflow accepts (one set up before the
+rename answers only that one); `/crysk …` starts the same runs.
 
 ## Commands
 
@@ -47,7 +50,7 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
 - A phase waits up to 2700 s (45 minutes) for its run: `DEFAULT_TIMEOUT_MS` in
   `scripts/sandbox/runs.ts`. A live free-model review once took 24m36s, and at the old
   25-minute ceiling it was cancelled just before it finished.
-- One invocation runs at a time on this machine. It takes `sandbox.lock` in the pr-hero home (`~/.crysk`, or `~/.prhero` on an install from before the rename) exclusively
+- One invocation runs at a time on this machine. It takes `sandbox.lock` in the Crysk home (`~/.crysk`, or `~/.prhero` on an install from before the rename) exclusively
   and records its pid there. A second invocation is refused while the lock's process is alive;
   a lock whose process is gone is taken over. A lock that names no pid is refused, and is
   removed by hand once no run is in progress. The lock is released on exit, failure, or signal.
@@ -93,9 +96,9 @@ one observation of the PR. S7 invariants are checked on every observation.
 | `override` | A red gate on a reviewed head is unlocked by `/pr-hero override` (S8): the status turns `success` with the actor's name, and an audit comment is posted on that head, with no review and no cost. | Phase 1 (`normal` variant): path `reviewed`; the run's review step succeeded; the status matches the blocking findings; a report; no outcome comment. Phase 2 (`/pr-hero override`): the comment run completed; the head's status is `success` with a description that starts `crysk: overridden by @`; the run posted an `<!-- crysk-override` comment on that head, after its trigger. | $0 (phase 1 on the claude route; phase 2 reaches no model) |
 | `size-skip` | In gate mode, a diff over the size gate sets a red head, and `/pr-hero review` reviews that same head. | Phase 1 (`size-skip` variant, `max-changed-lines: 1`): path `skipped:size`; status `failure` with a description that starts `crysk skipped the review`; no report. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own evidence; path `reviewed`. | $0 (phase 1 reaches no model; phase 2 on the claude route) |
 | `recheck-dismissal` | A false dismissal does not turn the gate green: `/pr-hero recheck` has the CI adjudicator rule on the dismissal, and the finding still counts (T5b, D5). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings. Phase 2 (a `dismissed` reply on the first blocking finding's thread, then `/pr-hero recheck`): the comment run completed; its review step succeeded; the head's status is still `failure`; this run posted a CI adjudication reply (`<!-- crysk-adjudication`) whose verdict is `rejected` or `inconclusive`. | $0 (claude route, subscription quota) |
-| `cancel` | A review run cancelled mid-review leaves the `pr-hero` status settled, not pending (SB3). | Phase 1 (normal): the run is cancelled while the head's `pr-hero` status is pending; the run concluded `cancelled`; the status is not pending. | Up to one cancelled review (cost not measured) |
+| `cancel` | A review run cancelled mid-review leaves the `crysk` status settled, not pending (SB3). | Phase 1 (normal): the run is cancelled while the head's `crysk` status is pending; the run concluded `cancelled`; the status is not pending. | Up to one cancelled review (cost not measured) |
 | `stale-tmp` | A run directory left with stale `trigger.json.tmp` and `setup.json.tmp` by a killed earlier run does not break the next run (SB3). | Phase 1 (`stale-tmp` variant): path `reviewed`; the run's review step succeeded; no outcome comment. The variant adds one step before the action step that writes both fixed-name files into `$RUNNER_TEMP/pr-hero-outcome`, where the product's records go. The product's own writes use unique temp names, so the stale files must not change the outcome. | $0 (claude route, subscription quota) |
-| `rerun-after-push` | `gh run rerun` of the first run, after a second push, settles the old head and leaves the newer head's `pr-hero` status as it was (SB3). | Phase 1 (normal): path `reviewed` or `hunters-failed`; a precondition. Phase 2 (push adding `src/mute.ts`): the pull_request run completed. Phase 3 (`rerun-first`): the first run's next attempt completed (the wait reads the run's `run_attempt`, not its status, since the run reads `completed` until the rerun starts); the run's event is `pull_request`; the status of the first head (the one the rerun reviewed) is settled, not pending; the newer head's status is the same before the rerun and after it. | $0 (claude route, subscription quota) |
+| `rerun-after-push` | `gh run rerun` of the first run, after a second push, settles the old head and leaves the newer head's `crysk` status as it was (SB3). | Phase 1 (normal): path `reviewed` or `hunters-failed`; a precondition. Phase 2 (push adding `src/mute.ts`): the pull_request run completed. Phase 3 (`rerun-first`): the first run's next attempt completed (the wait reads the run's `run_attempt`, not its status, since the run reads `completed` until the rerun starts); the run's event is `pull_request`; the status of the first head (the one the rerun reviewed) is settled, not pending; the newer head's status is the same before the rerun and after it. | $0 (claude route, subscription quota) |
 
 **Planted site and hunters.** `review-free` reads two facts the other scenarios do not. The planted-site
 check reads the finding markers on the head (`path=<p> line=<n>`, the anchor the product posts). The

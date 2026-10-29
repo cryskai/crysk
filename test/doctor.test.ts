@@ -321,7 +321,7 @@ describe("doctor tri-state evaluation", () => {
       expect(report.exitCode).toBe(0);
       const setupCheck = report.checks.find((c) => c.name === "setup");
       expect(setupCheck?.severity).toBe("degraded");
-      expect(setupCheck?.hint).toContain("pr-hero init");
+      expect(setupCheck?.hint).toContain("crysk init");
     });
 
     test("skills not synced reports degraded with hint", async () => {
@@ -707,7 +707,7 @@ describe("doctor tri-state evaluation", () => {
       const hint = report.checks.find((c) => c.name === "provider")?.hint ?? "";
       expect(hint).toContain("unverified");
       expect(hint).not.toContain("unaffected");
-      expect(hint).toContain("pr-hero upgrade --reconcile");
+      expect(hint).toContain("crysk upgrade --reconcile");
       expect(hint).not.toContain("alongside the project's node_modules");
     });
 
@@ -1111,7 +1111,7 @@ describe("openCodeRoutingSdkCheck", () => {
         sdkVersion,
       });
       expect(item?.severity).toBe("blocking");
-      expect(item?.message).toContain("pr-hero upgrade --reconcile");
+      expect(item?.message).toContain("crysk upgrade --reconcile");
       expect(item?.message).toContain("@opencode-ai/sdk@1.18.25");
       expect(item?.message).toContain("~/.crysk/node_modules");
       expect(item?.message).not.toContain("undefined");
@@ -1126,6 +1126,6 @@ describe("openCodeRoutingSdkCheck", () => {
     expect(item?.severity).toBe("blocking");
     expect(item?.message).toContain("1.18.26");
     expect(item?.message).toContain("1.18.25");
-    expect(item?.message).toContain("pr-hero upgrade --reconcile");
+    expect(item?.message).toContain("crysk upgrade --reconcile");
   });
 });

@@ -622,7 +622,7 @@ describe("parseArgs reverts", () => {
   // pr/reverts-preflight.ts (which imports CliUsageError from review/preflight.ts)
   // would be a real runtime cycle. This test is what keeps the two in step.
   test("the help text quotes the real default window", () => {
-    expect(HELP_TEXT).toContain("pr-hero reverts");
+    expect(HELP_TEXT).toContain("crysk reverts");
     expect(HELP_TEXT).toContain("--since <git-date>");
     expect(HELP_TEXT).toContain(`Default: ${DEFAULT_REVERTS_SINCE}`);
   });

@@ -554,27 +554,27 @@ function decideNext(
     if (gate.pending_in_flight) {
       return {
         next_action: "wait",
-        reason: `A pr-hero review is in flight on this head (pending since ${gate.created_at}); wait for it to finish.`,
+        reason: `A crysk review is in flight on this head (pending since ${gate.created_at}); wait for it to finish.`,
       };
     }
     // A pending past the in-flight window is not held by any run. The watcher's own rule
     // lets the next tick start a review then, so the skill starts one too.
     return {
       next_action: "review",
-      reason: `The pending pr-hero status on this head is older than the ${IN_FLIGHT_WINDOW_MINUTES}-minute in-flight window and no run holds it; start a review.`,
+      reason: `The pending crysk status on this head is older than the ${IN_FLIGHT_WINDOW_MINUTES}-minute in-flight window and no run holds it; start a review.`,
     };
   }
   if (gate.state === "none") {
     return {
       next_action: "review",
       reason:
-        "No pr-hero gate status is on this head, so no review has run here yet; start one.",
+        "No crysk gate status is on this head, so no review has run here yet; start one.",
     };
   }
   if (gate.state === "error") {
     return {
       next_action: "review",
-      reason: `The last pr-hero review on this head did not finish (${gate.description ?? "no description"}); start a review.`,
+      reason: `The last crysk review on this head did not finish (${gate.description ?? "no description"}); start a review.`,
     };
   }
   if (gate.state === "success") {
@@ -779,7 +779,7 @@ export function renderPrStatusLines(status: PrStatusJson): string[] {
       ? status.gate.state
       : `${status.gate.state} (${status.gate.description})`;
   return [
-    `pr-hero status: PR #${status.pr} at ${status.head.slice(0, 7)}`,
+    `crysk status: PR #${status.pr} at ${status.head.slice(0, 7)}`,
     `gate: ${gate}`,
     `findings: ${status.findings.length} posted, ${status.unresolved_blocking} unresolved blocking`,
     `next: ${status.next_action} — ${status.reason}`,

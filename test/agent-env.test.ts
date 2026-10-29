@@ -501,7 +501,7 @@ describe("Agent environment detector and sync", () => {
     }
 
     const noDigestReason =
-      "local copy differs and has no recorded digest; not overwritten — run `pr-hero upgrade` to replace it with the bundled copy";
+      "local copy differs and has no recorded digest; not overwritten — run `crysk upgrade` to replace it with the bundled copy";
 
     test("no digest + identical bytes: records the digest, writes no skill file, reports current", async () => {
       const disk = fakeDisk({
@@ -641,7 +641,7 @@ describe("Agent environment detector and sync", () => {
       ]);
     });
 
-    test("installs the general pr-hero skill beside the triage skill", async () => {
+    test("installs the general crysk skill beside the triage skill", async () => {
       const disk = fakeDisk({});
       const withGeneral = {
         ...assets,

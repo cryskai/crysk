@@ -452,7 +452,7 @@ const CLASS_NOTE: Record<RevertConfidence, string> = {
 
 export function renderRevertsArtifact(artifact: RevertsArtifact): string {
   const out: string[] = [];
-  out.push("# pr-hero — revert/hotfix candidates");
+  out.push("# crysk — revert/hotfix candidates");
   out.push("");
   out.push(`- repository: \`${artifact.repoSlug}\``);
   out.push(`- ref: \`${artifact.ref}\``);

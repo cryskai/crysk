@@ -246,7 +246,7 @@ export async function planUpgrade(
       currentVersion,
       targetVersion,
       steps: ["reconcile"],
-      message: `pr-hero is already up to date (v${currentVersion}).`,
+      message: `Crysk is already up to date (v${currentVersion}).`,
     };
   }
 
@@ -299,7 +299,7 @@ export async function planUpgrade(
     currentVersion,
     targetVersion,
     steps: [
-      `Run ${installMethod.manager} install -g pr-hero@latest`,
+      `Run ${installMethod.manager} install -g crysk@latest`,
       "Reconcile agent skills, MCP registrations, and SQLite migrations",
     ],
   };
@@ -537,7 +537,7 @@ export function selectOpenCodeSdkInstaller(input: {
     ];
   }
   throw new Error(
-    "neither npm nor bun is on PATH. Run pr-hero upgrade --reconcile after installing npm or bun.",
+    "neither npm nor bun is on PATH. Run crysk upgrade --reconcile after installing npm or bun.",
   );
 }
 
@@ -581,7 +581,7 @@ async function withOpenCodeSdkInstallLock(
       if (holder !== null) {
         throw new Error(
           `OpenCode SDK install is already running (pid ${holder}). ` +
-            "Run pr-hero upgrade --reconcile after it finishes.",
+            "Run crysk upgrade --reconcile after it finishes.",
         );
       }
       await rm(lockPath, { force: true });
@@ -600,7 +600,7 @@ async function withOpenCodeSdkInstallLock(
   }
   throw new Error(
     "OpenCode SDK install is already running. " +
-      "Run pr-hero upgrade --reconcile after it finishes.",
+      "Run crysk upgrade --reconcile after it finishes.",
   );
 }
 
@@ -626,7 +626,7 @@ export function spawnOpenCodeSdkInstaller(
       child.kill();
       reject(
         new Error(
-          `OpenCode SDK install timed out after ${timeoutMs}ms. Run pr-hero upgrade --reconcile.`,
+          `OpenCode SDK install timed out after ${timeoutMs}ms. Run crysk upgrade --reconcile.`,
         ),
       );
     }, timeoutMs);
@@ -701,7 +701,7 @@ async function ensureOpenCodeSdkInstalled(options: {
     if (result.code !== 0) {
       throw new Error(
         `Failed to install @opencode-ai/sdk@${SUPPORTED_OPENCODE_SDK_VERSION} ` +
-          `(exit ${result.code}). Run pr-hero upgrade --reconcile.`,
+          `(exit ${result.code}). Run crysk upgrade --reconcile.`,
       );
     }
     const after = await readSdkVersion();
@@ -712,7 +712,7 @@ async function ensureOpenCodeSdkInstalled(options: {
           : "missing";
       throw new Error(
         `OpenCode SDK version "${observed}" after install; expected ` +
-          `"${SUPPORTED_OPENCODE_SDK_VERSION}". Run pr-hero upgrade --reconcile.`,
+          `"${SUPPORTED_OPENCODE_SDK_VERSION}". Run crysk upgrade --reconcile.`,
       );
     }
   });

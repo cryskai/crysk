@@ -428,7 +428,7 @@ export function legacyMigrationHint(input: {
 }): string[] {
   return [
     `legacy worktree still at ${input.legacyWorktree}`,
-    `pr-hero now keeps review trees under ${input.newWorktree}`,
+    `Crysk now keeps review trees under ${input.newWorktree}`,
     "remove the leftover with:",
     `  git -C ${input.operatorRoot} worktree remove --force ${input.legacyWorktree}`,
   ];
@@ -436,7 +436,7 @@ export function legacyMigrationHint(input: {
 
 export function missingOriginMessage(repoRoot: string): string {
   return (
-    `no git remote named origin in ${repoRoot} — pr-hero keys worktrees ` +
+    `no git remote named origin in ${repoRoot} — Crysk keys worktrees ` +
     "and run artifacts by the origin URL, so a checkout without origin " +
     "cannot use the global home. Add origin, or pass --out for this run."
   );

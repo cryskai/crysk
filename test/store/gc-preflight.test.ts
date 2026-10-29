@@ -269,7 +269,7 @@ describe("renderGcStatus", () => {
       installed: false,
       intervalSeconds: null,
     }).join("\n");
-    expect(text).toContain('not installed — run "pr-hero gc install"');
+    expect(text).toContain('not installed — run "crysk gc install"');
     expect(text).not.toContain("watch install");
   });
 

@@ -141,7 +141,7 @@ export function parseIgnoreFile(
         raw,
         "trailing unescaped backslash (deliberately narrower than gitignore(5), " +
           "which leaves this case undefined; Bun.Glob itself does not throw for " +
-          "one either — it silently matches nothing — so pr-hero throws instead " +
+          "one either — it silently matches nothing — so Crysk throws instead " +
           "of letting a misconfigured rule become a silent no-op)",
       );
     }

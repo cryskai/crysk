@@ -2587,7 +2587,7 @@ export async function upsertAdmissionCheckRun(
     "-f",
     `status=${checkStatus}`,
     "-f",
-    "output[title]=pr-hero CI admission",
+    "output[title]=crysk CI admission",
     "-f",
     `output[summary]=${input.record.status} (attempt ${input.record.attemptNumber})`,
     "-f",
@@ -2822,11 +2822,11 @@ export function missingRereviewBlockMessage(
   summaryId: number,
 ): string {
   return (
-    `PR #${pr} already carries a pr-hero summary (comment ${summaryId}), so ` +
+    `PR #${pr} already carries a Crysk summary (comment ${summaryId}), so ` +
     "this post is a re-review — but the run directory carries no `rereview` " +
     "block in its pipeline.json, so the summary would report the old " +
     'absence matcher\'s "N resolved" and write no state block. Re-run ' +
-    `\`pr-hero review --pr ${pr} --post\` instead.`
+    `\`crysk review --pr ${pr} --post\` instead.`
   );
 }
 
@@ -2836,11 +2836,11 @@ export function missingRereviewBlockMessage(
 export function vanishedPriorSummaryMessage(pr: number): string {
   return (
     "The run directory carries a `rereview` block in its pipeline.json, so " +
-    `this post is a re-review — but PR #${pr} no longer carries a pr-hero ` +
+    `this post is a re-review — but PR #${pr} no longer carries a Crysk ` +
     "summary comment for it to be a re-review OF. Its `live[]` rows, " +
     "`resolved_ids` and `R###` numbering all name review threads the PR has " +
     "no record of, so this would publish a brand new summary claiming a " +
-    `delta against a review that is not there. Re-run \`pr-hero review --pr ` +
+    `delta against a review that is not there. Re-run \`crysk review --pr ` +
     `${pr} --post\` instead.`
   );
 }
@@ -2853,13 +2853,13 @@ export function vanishedPriorSummaryMessage(pr: number): string {
 // defect as a guard that never fires.
 function vanishedPriorSummaryDegradedMessage(pr: number): string {
   return (
-    "warning: the pr-hero summary comment this re-review was computed " +
+    "warning: the Crysk summary comment this re-review was computed " +
     `against is gone from PR #${pr} — deleted, or never re-findable, while ` +
     "the review ran. Its `live[]` rows and `R###` ids name review threads " +
     "the PR has no record of, so this post drops the re-review framing: no " +
     "`Δ since` delta, no `Still live:` list and no state block. The findings " +
     "themselves are published, as the first review of what the PR carries " +
-    `now. Re-run \`pr-hero review --pr ${pr} --post\` if you want a full ` +
+    `now. Re-run \`crysk review --pr ${pr} --post\` if you want a full ` +
     "re-review against the PR's current state."
   );
 }
@@ -3289,7 +3289,7 @@ export async function postInlineFindings(input: {
     }
     if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
       process.stdout.write(
-        `::warning::pr-hero: the summary is ${patchBody.length} characters, over GitHub's ${GITHUB_ISSUE_COMMENT_MAX}-character comment limit even with every Outside Diff entry compacted; sending it as is\n`,
+        `::warning::crysk: the summary is ${patchBody.length} characters, over GitHub's ${GITHUB_ISSUE_COMMENT_MAX}-character comment limit even with every Outside Diff entry compacted; sending it as is\n`,
       );
     }
   }

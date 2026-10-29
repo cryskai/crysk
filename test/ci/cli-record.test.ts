@@ -157,7 +157,7 @@ describe("writeCliRecord", () => {
     expect(thrown).toBeUndefined();
     expect(chunks).toHaveLength(1);
     expect(chunks[0]).toBe(
-      "pr-hero: could not write the outcome record: ENOTDIR\n",
+      "crysk: could not write the outcome record: ENOTDIR\n",
     );
     expect(chunks.join("")).not.toContain(dir);
   });
@@ -192,7 +192,7 @@ describe("writeFatalCliRecord", () => {
     );
     expect(parseCliRecord(onDisk())).toEqual(reviewed);
     expect(chunks).toEqual([
-      "pr-hero: kept the recorded reviewed outcome; a later step failed\n",
+      "crysk: kept the recorded reviewed outcome; a later step failed\n",
     ]);
   });
 
@@ -225,7 +225,7 @@ describe("writeFatalCliRecord", () => {
       );
       expect(parseCliRecord(onDisk())).toEqual(record);
       expect(chunks).toEqual([
-        `pr-hero: kept the recorded ${outcome} outcome; a later step failed\n`,
+        `crysk: kept the recorded ${outcome} outcome; a later step failed\n`,
       ]);
     },
   );
@@ -266,7 +266,7 @@ describe("writeFatalCliRecord", () => {
     const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
     expect(parseCliRecord(onDisk())).toEqual(posting);
     expect(chunks).toEqual([
-      "pr-hero: kept the recorded error outcome; a later step failed\n",
+      "crysk: kept the recorded error outcome; a later step failed\n",
     ]);
   });
 
@@ -308,7 +308,7 @@ describe("writeFatalCliRecord", () => {
     }
     expect(thrown).toBeUndefined();
     expect(chunks).toEqual([
-      "pr-hero: could not write the outcome record: ENOTDIR\n",
+      "crysk: could not write the outcome record: ENOTDIR\n",
     ]);
   });
 });

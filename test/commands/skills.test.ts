@@ -87,7 +87,7 @@ describe("skillsInstallCommand", () => {
     expect(code).toBe(1);
     expect(files.get(SKILL_FILE)).toBe("my local edits\n");
     expect(lines).toContain(
-      "local edits found in Claude Code's pr-hero skills; rerun with --force to overwrite them",
+      "local edits found in Claude Code's crysk skills; rerun with --force to overwrite them",
     );
   });
 

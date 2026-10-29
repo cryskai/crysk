@@ -76,7 +76,7 @@ describe("ghPreflight", () => {
     const output = lines.join("\n");
     expect(output).toContain("GitHub CLI (gh) is not installed");
     expect(output).toContain("gh secret set");
-    expect(output).toContain("pr-hero status");
+    expect(output).toContain("crysk status");
     expect(output).toContain("brew install gh");
     expect(output).toContain("gh auth login");
     expect(asked).toEqual([]);

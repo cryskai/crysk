@@ -283,7 +283,7 @@ describe("decidePublication — the pure table", () => {
       if (plan.kind !== "remote") return;
       expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
       expect(plan.rendered.annotation).toStartWith(
-        "::error title=pr-hero PRH-HUNTERS-FAILED::",
+        "::error title=crysk PRH-HUNTERS-FAILED::",
       );
       expect(plan.rendered.annotation).toContain(
         "each hunter's session ended without a result",
@@ -956,7 +956,7 @@ describe("decidePublication — the pure table", () => {
       if (plan.kind !== "remote") return;
       expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
       expect(plan.rendered.annotation).toContain(
-        "pr-hero stopped at the review and could not tell why",
+        "Crysk stopped at the review and could not tell why",
       );
       expect(plan.status?.description).toStartWith("PRH-UNCLASSIFIED: ");
     });
@@ -1013,7 +1013,7 @@ describe("decidePublication — the pure table", () => {
       expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
       expect(plan.rendered.owner).toBe("unclassified");
       expect(plan.rendered.annotation).toContain(
-        "pr-hero stopped at the review before it reported an outcome and could not tell why",
+        "Crysk stopped at the review before it reported an outcome and could not tell why",
       );
       expect(plan.headSha).toBe(REVIEWED_HEAD);
       expect(plan.status?.state).toBe("error");
@@ -1059,7 +1059,7 @@ describe("decidePublication — the pure table", () => {
       expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
       expect(plan.rendered.owner).toBe("unclassified");
       expect(plan.rendered.annotation).toContain(
-        "pr-hero stopped at the review before it reported an outcome and could not tell why",
+        "Crysk stopped at the review before it reported an outcome and could not tell why",
       );
       expect(plan.headSha).toBeUndefined();
       expect(plan.status).toBeUndefined();
@@ -1113,7 +1113,7 @@ describe("decidePublication — the pure table", () => {
     if (plan.kind !== "remote") return;
     expect(plan.rendered.code).toBe("PRH-INSTALL-FAILED");
     expect(plan.rendered.annotation).toStartWith(
-      "::error title=pr-hero PRH-INSTALL-FAILED::",
+      "::error title=crysk PRH-INSTALL-FAILED::",
     );
     expect(plan.rendered.annotation).toContain("An install step failed");
     expect(plan.rendered.annotation).toContain("gh run rerun 4242 --failed");
@@ -1160,7 +1160,7 @@ describe("decidePublication — the pure table", () => {
     expect(plan.rendered.code).toBe("PRH-PR-UNRESOLVED");
     expect(plan.rendered.owner).toBe("config");
     expect(plan.rendered.annotation).toContain(
-      "pr-hero could not determine the pull request number or head",
+      "Crysk could not determine the pull request number or head",
     );
   });
 
@@ -1639,7 +1639,7 @@ describe("runPublish — the shell", () => {
     });
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain(
-      "::error title=pr-hero PRH-ROUTE-UNRESOLVABLE::",
+      "::error title=crysk PRH-ROUTE-UNRESOLVABLE::",
     );
     expect(run.summary).toContain("### PRH-ROUTE-UNRESOLVABLE");
     const [status] = statusCalls(run.calls);
@@ -1681,7 +1681,7 @@ describe("runPublish — the shell", () => {
     });
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
-    expect(run.stdout).toContain("::error title=pr-hero PRH-HUNTERS-FAILED::");
+    expect(run.stdout).toContain("::error title=crysk PRH-HUNTERS-FAILED::");
     expect(commentPost(run.calls)?.stdin).toContain(
       `head=${SHA} run=4242 attempt=1 -->`,
     );
@@ -1713,9 +1713,9 @@ describe("runPublish — the shell", () => {
       list: listing(),
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+    expect(run.stdout).toContain("::error title=crysk PRH-UNCLASSIFIED::");
     expect(run.stdout).toContain(
-      "pr-hero stopped at the review before it reported an outcome",
+      "Crysk stopped at the review before it reported an outcome",
     );
     expect(run.summary).toContain("### PRH-UNCLASSIFIED");
     expect(statusReadEndpoints(run.calls)).toEqual([]);
@@ -2044,7 +2044,7 @@ describe("runPublish — the shell", () => {
         cliRecord,
       });
       expect(run.exitCode).toBe(0);
-      expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+      expect(run.stdout).toContain("::error title=crysk PRH-UNCLASSIFIED::");
       // CHANGED (F001 and F002 on #330): an unreadable cli.json is the same as a
       // missing one, and a missing one has no progress record, so the publisher
       // cannot tell whose lock a head holds. It posts the comment alone: no status
@@ -2059,7 +2059,7 @@ describe("runPublish — the shell", () => {
   test("an install failure writes the annotation and the summary, then posts", () => {
     const run = runPublishIn({ record: record() });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::error title=pr-hero PRH-INSTALL-FAILED::");
+    expect(run.stdout).toContain("::error title=crysk PRH-INSTALL-FAILED::");
     expect(run.summary).toContain("### PRH-INSTALL-FAILED");
   });
 
@@ -2302,7 +2302,7 @@ describe("runPublish — the shell", () => {
       list: fail("gh: Server Error (HTTP 502)"),
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
   });
 
   test("no PR writes when the PR is missing: annotation and summary only", () => {
@@ -2358,7 +2358,7 @@ describe("runPublish — the shell", () => {
       create: fail("gh: Forbidden (HTTP 403)"),
     });
     expect(run.exitCode).toBe(1);
-    expect(run.stdout).toContain("::error title=pr-hero::");
+    expect(run.stdout).toContain("::error title=crysk::");
     expect(run.stdout).toContain("outcome comment");
     expect(deletions(run.calls)).toEqual([]);
   });
@@ -2379,7 +2379,7 @@ describe("runPublish — the shell", () => {
     const run = runPublishIn({ record: "{ not json" });
     expect(run.exitCode).toBe(1);
     expect(run.calls).toEqual([]);
-    expect(run.stdout).toContain("::error title=pr-hero PRH-UNCLASSIFIED::");
+    expect(run.stdout).toContain("::error title=crysk PRH-UNCLASSIFIED::");
     expect(run.summary).toContain("### PRH-UNCLASSIFIED");
   });
 
@@ -2413,7 +2413,7 @@ describe("runPublish — the shell", () => {
         detail: "the routing input is not valid JSON",
       },
     });
-    expect(run.stdout).toContain("::error title=pr-hero PRH-ROUTING-INVALID::");
+    expect(run.stdout).toContain("::error title=crysk PRH-ROUTING-INVALID::");
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(
@@ -2424,8 +2424,8 @@ describe("runPublish — the shell", () => {
 
   test("an unreadable setup record falls back to the install failure, with a warning", () => {
     const run = runPublishIn({ record: record(), setup: "{ not json" });
-    expect(run.stdout).toContain("::warning title=pr-hero::");
-    expect(run.stdout).toContain("::error title=pr-hero PRH-INSTALL-FAILED::");
+    expect(run.stdout).toContain("::warning title=crysk::");
+    expect(run.stdout).toContain("::error title=crysk PRH-INSTALL-FAILED::");
   });
 
   test("a setup record outside the two classes the setup step writes is refused the same way", () => {
@@ -2437,7 +2437,7 @@ describe("runPublish — the shell", () => {
         detail: "x",
       },
     });
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
     expect(run.stdout).toContain("PRH-INSTALL-FAILED");
     expect(run.stdout).not.toContain("PRH-CRED-MISSING");
   });
@@ -2617,7 +2617,7 @@ describe("runPublish — cleanup once the CLI started", () => {
     });
     expect(run.exitCode).toBe(0);
     expect(deletions(run.calls)).toEqual([]);
-    expect(run.stdout.match(/::notice title=pr-hero::/g)).toHaveLength(1);
+    expect(run.stdout.match(/::notice title=crysk::/g)).toHaveLength(1);
     expect(run.stdout).toContain(
       "could not clean up its older outcome comments",
     );
@@ -2640,7 +2640,7 @@ describe("runPublish — cleanup once the CLI started", () => {
       remove: fail("gh: Server Error (HTTP 500)"),
     });
     expect(deletions(run.calls)).toHaveLength(2);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
     expect(run.stdout).not.toContain("::error");
     expect(run.exitCode).toBe(0);
   });
@@ -2976,7 +2976,7 @@ describe("runPublish — the override (S8)", () => {
     expect(body).toContain(
       "A new push or a later `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) on this head replaces it",
     );
-    expect(run.stdout).toContain("::notice title=pr-hero::");
+    expect(run.stdout).toContain("::notice title=crysk::");
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
   });
 
@@ -3113,7 +3113,7 @@ describe("runPublish — the override (S8)", () => {
     expect(deletions(run.calls)).toEqual([
       "repos/acme/widgets/issues/comments/502",
     ]);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
     expect(run.stdout).toContain("could not delete an older outcome comment");
     expect(run.exitCode).toBe(0);
   });
@@ -3177,7 +3177,7 @@ describe("publish.ts runs before `bun install`", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout.toString()).not.toContain("::error");
-      expect(result.stdout.toString()).toContain("::notice title=pr-hero::");
+      expect(result.stdout.toString()).toContain("::notice title=crysk::");
       expect(existsSync(path.join(dir, "summary"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -3516,7 +3516,7 @@ describe("decideCancelSettle — the pure table (SB3)", () => {
         }),
       ).toEqual({
         settle: false,
-        reason: "the head's pr-hero status is not pending",
+        reason: "the head's crysk status is not pending",
       });
     }
   });
@@ -3719,7 +3719,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
     expect(post?.args).toContain(
       "target_url=https://github.com/acme/widgets/actions/runs/4242",
     );
-    expect(run.stdout).toContain("the pr-hero status is now PRH-CANCELLED");
+    expect(run.stdout).toContain("the crysk status is now PRH-CANCELLED");
   });
 
   // A half-landed pair: this run's pending on pr-hero stayed behind a later crysk verdict.
@@ -3779,7 +3779,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
     expect(run.exitCode).toBe(0);
     expect(statusCalls(run.calls)).toHaveLength(0);
     expect(run.stdout).toContain(
-      "cancel: nothing to settle (the head's pr-hero status is not pending)",
+      "cancel: nothing to settle (the head's crysk status is not pending)",
     );
   });
 
@@ -3807,7 +3807,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
     });
     expect(run.exitCode).toBe(0);
     expect(statusCalls(run.calls)).toHaveLength(0);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
     expect(run.stdout).toContain(
       "could not read the head's status after the cancel",
     );
@@ -3820,7 +3820,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
       post: fail("gh: HTTP 500"),
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::warning title=pr-hero::");
+    expect(run.stdout).toContain("::warning title=crysk::");
   });
 });
 
@@ -3868,7 +3868,7 @@ describe("runCancelSettle — the run URL and one retry of the status read", () 
     });
     expect(run.exitCode).toBe(0);
     expect(statusCalls(run.calls)).toHaveLength(2);
-    expect(run.stdout).toContain("the pr-hero status is now PRH-CANCELLED");
+    expect(run.stdout).toContain("the crysk status is now PRH-CANCELLED");
   });
 
   test("another run's pending with this run's created_at is not settled", () => {

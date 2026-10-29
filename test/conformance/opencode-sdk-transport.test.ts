@@ -2038,7 +2038,7 @@ describe("OpenCode bounded version admission policy (OA1b)", () => {
     expect(unavailable).toContain(
       `@opencode-ai/sdk@${SUPPORTED_OPENCODE_SDK_VERSION}`,
     );
-    expect(unavailable).toContain("pr-hero upgrade --reconcile");
+    expect(unavailable).toContain("crysk upgrade --reconcile");
     expect(unavailable).toContain("~/.crysk/node_modules");
     expect(unavailable).not.toContain("/$bunfs");
     expect(unavailable).not.toContain("undefined");

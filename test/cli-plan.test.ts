@@ -192,7 +192,7 @@ describe("renderPlan", () => {
   test("card, agent grid, both endpoints and the decision block, in order", () => {
     const lines = renderPlan(planContext(), false);
     const text = joined(lines);
-    expect(lines[0]).toContain("╭─ pr-hero · review");
+    expect(lines[0]).toContain("╭─ crysk · review");
     expect(text).toContain("main..HEAD");
     expect(text).toContain("4 files  +90 −30");
     // Every spec agent, with the refuter's fixed trigger phrasing.
@@ -377,7 +377,7 @@ describe("renderPrPlan", () => {
       false,
     );
     const text = joined(lines);
-    expect(lines[0]).toContain("╭─ pr-hero · PR #6");
+    expect(lines[0]).toContain("╭─ crysk · PR #6");
     expect(text).toContain("terminal surface: print the findings");
     expect(text).toContain("OPEN · base main");
     expect(text).toContain("main → 1111111111  (PR base tip)");

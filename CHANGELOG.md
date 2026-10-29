@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Renamed to Crysk.** The product, its documentation, CLI output and bundled skills now use the name Crysk. The
+  new names are written everywhere; every old name is still read for one version, so an install made under
+  `pr-hero` keeps working:
+  - **Package and binary**: the npm package is `crysk` and the binary is `crysk`; `pr-hero` stays as an alias.
+    Release binaries are uploaded under both names. The last `pr-hero` npm release is the same build, and
+    `pr-hero` is then deprecated in favour of `crysk`.
+  - **Skills**: `crysk`, `crysk-pr`, `crysk-ci-setup` and `crysk-loop` replace `pr-hero`, `pr-hero-pr`,
+    `pr-hero-ci-setup` and `pr-hero-triage`. Setup and upgrade remove the old directories when they are unedited.
+  - **MCP**: tools are `crysk_*` under the server key `crysk`; the old `prhero_*` tool names are still answered
+    and the `pr-hero` registration is rewritten on sync.
+  - **PR comments**: markers are `<!-- crysk-…` (the `<!-- pr-hero-…` ones are still read) and the commands are
+    `/crysk review`, `/crysk review --full`, `/crysk recheck`, `/crysk override` and `/crysk stop`; `/pr-hero …` is
+    still accepted. A workflow file scaffolded before this release only answers `/pr-hero …`: re-run
+    `crysk ci init --force` to accept both.
+  - **Commit status**: the gate is the `crysk` context, and `pr-hero` is posted beside it for one version so a
+    branch protection rule that requires `pr-hero` keeps working (the same for `crysk/local` and `pr-hero/local`).
+    Descriptions start `crysk:`; older ones are still read.
+  - **Environment**: `CRYSK_*` variables win, then `PRHERO_*`; the workflow reads `vars.CRYSK_ROUTING`, then
+    `vars.PRHERO_ROUTING`.
+  - **Files and directories**: `~/.crysk`, `<repo>/.crysk/` and `.cryskignore`. `~/.prhero`, `.prhero/` and
+    `.prheroignore` are still read when the new name does not exist; nothing is moved for you and `crysk doctor`
+    prints the migration. The launchd labels are `io.crysk.watch` and `io.crysk.gc`; installing replaces the old
+    `io.prhero.*` ones.
+  - **Unchanged for now**: the GitHub repository and the action reference `juanmaagd/pr-hero@v0`, the workflow file
+    `.github/workflows/pr-hero.yml` and its name `pr-hero Review`, the `pr-hero-run-<pr>-<sha>` artifact, and the
+    findings envelope.
+
 ## [0.2.6] - 2026-10-28
 
 0.2.5 reached npm but was never tagged on GitHub, so it has no GitHub Release and the `v0` Action tag stayed on

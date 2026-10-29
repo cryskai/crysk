@@ -164,7 +164,7 @@ describe("renderChoicesSummary", () => {
     );
     expect(text).toContain("observe only     yes");
     expect(text).toContain("gen/**");
-    expect(text).toContain("npx -y pr-hero config");
+    expect(text).toContain("npx -y crysk config");
   });
 
   test("an API key with no ceiling is not described as a subscription", () => {

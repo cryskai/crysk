@@ -1688,7 +1688,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
     // Loud. An operator who expected a delta must be able to read WHY off the
     // log rather than suspect the re-review silently broke.
     expect(logged).toContain(
-      "the pr-hero summary comment this re-review was computed against is gone",
+      "the Crysk summary comment this re-review was computed against is gone",
     );
     expect(logged).toContain("drops the re-review framing");
     expect(logged).toContain("review --pr 42 --post");
@@ -1708,7 +1708,7 @@ describe("postInlineIfEligible — a vanished prior summary degrades, never refu
         ...postInput,
         refuseOnVanishedPriorSummary: true,
       }),
-    ).rejects.toThrow(/no longer carries a pr-hero summary comment/);
+    ).rejects.toThrow(/no longer carries a Crysk summary comment/);
     // Refused before any write, exactly as `post --from` always has.
     expect(calls.filter((c) => c.argv.includes("--method"))).toHaveLength(0);
   });
@@ -2071,7 +2071,7 @@ describe("postInlineFindings — re-review closing comment", () => {
     expect(body.startsWith(`<!-- crysk-rereview-closed head=${HEAD} -->`)).toBe(
       true,
     );
-    expect(body).toContain("pr-hero re-review complete");
+    expect(body).toContain("Crysk re-review complete");
     expect(body).toContain(`\`${HEAD.slice(0, 8)}\``);
     expect(body).toContain("No findings in this pass.");
     expect(body).toContain(`Δ since \`${OLD_HEAD.slice(0, 8)}\``);
@@ -2125,7 +2125,7 @@ describe("postInlineFindings — re-review closing comment", () => {
     // partial pass must never read as a green "complete".
     const heading = body.split("\n")[1] ?? "";
     expect(heading).toContain(
-      "### ⚠️ pr-hero re-review finished with partial coverage",
+      "### ⚠️ Crysk re-review finished with partial coverage",
     );
     expect(heading).not.toContain("✅");
     expect(body).not.toContain("No findings in this pass.");

@@ -476,7 +476,7 @@ export async function launchProjectedOpenCodeServer(
   // never launched and the projection does not outlive this call.
   if (serversShuttingDown()) {
     await projection.destroy();
-    throw new Error("opencode server launch refused: pr-hero is shutting down");
+    throw new Error("opencode server launch refused: Crysk is shutting down");
   }
 
   // Registered for the signal path (spawned-process.ts closeAllServers)

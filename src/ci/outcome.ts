@@ -1057,7 +1057,7 @@ export function ownerLead(owner: Owner, provider?: string): string {
       return name ? `Provider ${name}:` : "Provider:";
     }
     case "pr-hero":
-      return "pr-hero defect:";
+      return "Crysk defect:";
     case "unclassified":
       return "Unclassified:";
     default:
@@ -1088,8 +1088,8 @@ const CREDENTIAL_PHRASE: Record<
   string
 > = {
   unsupported_kind:
-    "this credential kind is not supported by this pr-hero version",
-  projection_layout_invalid: "the credential layout pr-hero built is invalid",
+    "this credential kind is not supported by this Crysk version",
+  projection_layout_invalid: "the credential layout Crysk built is invalid",
   source_read_failed: "the credential store could not be read",
   malformed_payload: "the auth store is not a JSON object",
   // Raised for a Claude keychain record and for an OpenAI OAuth record alike.
@@ -1134,7 +1134,7 @@ const TRANSPORT_PHRASE: Record<
   output_limit_exceeded: "the output exceeded its limit",
   context_window_exceeded: "the input exceeded the model's context window",
   runtime_unavailable: "the agent runtime was unavailable",
-  legacy_terminal: "the run ended in a state pr-hero no longer produces",
+  legacy_terminal: "the run ended in a state Crysk no longer produces",
 };
 
 const DOCS_BASE =
@@ -1210,7 +1210,7 @@ const CLAUDE_CREDENTIAL_FIXES = [
   "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
   "$ gh secret set ANTHROPIC_API_KEY",
   "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${CLAUDE_TOKEN_INPUT}\` or \`${ANTHROPIC_API_KEY_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
+  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${CLAUDE_TOKEN_INPUT}\` or \`${ANTHROPIC_API_KEY_INPUT}\`: a secret the workflow does not pass never reaches Crysk.`,
   "Dependabot PRs read Dependabot secrets, so set this one too:",
   "$ gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN",
   "Then re-run the workflow:",
@@ -1220,11 +1220,11 @@ const CLAUDE_CREDENTIAL_FIXES = [
 // vars.PRHERO_ROUTING to the action, so a fix that names CRYSK_ROUTING alone
 // would send its owner to set a variable nothing reads.
 const LEGACY_ROUTING_NOTE =
-  "A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `pr-hero ci init --force` so the workflow also reads CRYSK_ROUTING.";
+  "A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.";
 const OPENCODE_CREDENTIAL_FIXES = [
   "Set the OpenCode credential for the route you use:",
   "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${OPENCODE_AUTH_INPUT}\`: a secret the workflow does not pass never reaches pr-hero.`,
+  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${OPENCODE_AUTH_INPUT}\`: a secret the workflow does not pass never reaches Crysk.`,
   "An OpenCode route also needs the routing variable:",
   "$ gh variable set CRYSK_ROUTING --body '<routing-object-json>'",
   LEGACY_ROUTING_NOTE,
@@ -1273,9 +1273,8 @@ const ROUTE_UNMAPPED: CatalogVariant = {
 
 const RUNTIME_LOCAL: CatalogVariant = {
   why: "a required tool is missing from your environment",
-  fixes: ["Reconcile the pr-hero install:", "$ pr-hero upgrade --reconcile"],
-  annotationFix:
-    "reconcile the pr-hero install with `pr-hero upgrade --reconcile`",
+  fixes: ["Reconcile the crysk install:", "$ crysk upgrade --reconcile"],
+  annotationFix: "reconcile the crysk install with `crysk upgrade --reconcile`",
 };
 
 const GITHUB_SERVER: CatalogVariant = {
@@ -1294,7 +1293,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     owner: "config",
     what: "No credential for the {backend} route reached the action",
     variants: single(
-      "pr-hero cannot authenticate, so it cannot review this PR",
+      "Crysk cannot authenticate, so it cannot review this PR",
       (params) =>
         isOpencodeRoute(params)
           ? OPENCODE_CREDENTIAL_FIXES
@@ -1427,7 +1426,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     owner: "config",
     what: "The routing variable is invalid: {detail}",
     variants: single(
-      "pr-hero cannot tell which backend and model each agent should use",
+      "Crysk cannot tell which backend and model each agent should use",
       [
         "Edit the JSON, then set it again:",
         '$ gh variable set CRYSK_ROUTING --body "$(jq -c . routing.json)"',
@@ -1497,9 +1496,9 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "an agent file or PRHERO_EXTRA_HUNTERS entry cannot be loaded",
       [
         "Fix the file or `agents_dir`, then check for free:",
-        "$ pr-hero review --pr {pr} --dry-run",
+        "$ crysk review --pr {pr} --dry-run",
       ],
-      "fix the agent file or `agents_dir` ({detail}), then check it with `pr-hero review --pr {pr} --dry-run`",
+      "fix the agent file or `agents_dir` ({detail}), then check it with `crysk review --pr {pr} --dry-run`",
     ),
   },
   "PRH-GOTCHAS-MISSING": {
@@ -1509,7 +1508,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "reviews need real repository facts to be accurate",
       [
-        "Run `npx -y pr-hero init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
+        "Run `npx -y crysk init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
       ],
       "write real facts into .crysk/gotchas.md, remove the scaffold marker line if present, and commit it to the base branch",
     ),
@@ -1519,9 +1518,9 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     owner: "config",
     what: ".crysk/config.json is invalid: {detail}",
     variants: single(
-      "pr-hero refuses to guess repository settings",
-      ["Fix the file, then check it:", "$ pr-hero review --pr {pr} --dry-run"],
-      "fix `.crysk/config.json` ({detail}), then check it with `pr-hero review --pr {pr} --dry-run`",
+      "Crysk refuses to guess repository settings",
+      ["Fix the file, then check it:", "$ crysk review --pr {pr} --dry-run"],
+      "fix `.crysk/config.json` ({detail}), then check it with `crysk review --pr {pr} --dry-run`",
     ),
   },
   "PRH-TOKEN-PERMISSION": {
@@ -1530,10 +1529,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "The workflow token lacks `{scope}: write`",
     variants: {
       ...single(
-        "pr-hero cannot post its result on the PR",
+        "Crysk cannot post its result on the PR",
         [
           "Add `{scope}: write` to the job's `permissions:`, or re-scaffold the workflow:",
-          "$ pr-hero ci init --force",
+          "$ crysk ci init --force",
         ],
         "add `{scope}: write` under the job's `permissions:` in the workflow",
       ),
@@ -1541,12 +1540,12 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       // renderCode picks it for every caller when the scope is blank.
       "no-scope": {
         what: "GitHub refused the workflow token (HTTP 403) during {step}",
-        why: "pr-hero cannot post its result on the PR",
+        why: "Crysk cannot post its result on the PR",
         fixes: [
-          `Check that the workflow passes \`${GITHUB_TOKEN_INPUT}\` on the action step, and keeps the \`permissions:\` block that \`pr-hero ci init\` scaffolds:`,
-          "$ pr-hero ci init --force",
+          `Check that the workflow passes \`${GITHUB_TOKEN_INPUT}\` on the action step, and keeps the \`permissions:\` block that \`crysk ci init\` scaffolds:`,
+          "$ crysk ci init --force",
         ],
-        annotationFix: `check that the workflow passes \`${GITHUB_TOKEN_INPUT}\` and keeps the \`permissions:\` block that \`pr-hero ci init\` scaffolds`,
+        annotationFix: `check that the workflow passes \`${GITHUB_TOKEN_INPUT}\` and keeps the \`permissions:\` block that \`crysk ci init\` scaffolds`,
       },
     },
   },
@@ -1583,7 +1582,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-PR-UNRESOLVED": {
     level: "error",
     owner: "config",
-    what: "pr-hero could not determine the pull request number or head",
+    what: "Crysk could not determine the pull request number or head",
     variants: {
       ...single(
         "nothing can be posted on a PR it cannot identify",
@@ -1595,7 +1594,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       // The pr-number input was given but is not a positive integer. The record's
       // detail names the input, so the fix tells the reader to correct it.
       "malformed-input": {
-        what: "pr-hero could not determine the pull request number or head ({detail})",
+        what: "Crysk could not determine the pull request number or head ({detail})",
         why: "nothing can be posted on a PR it cannot identify",
         fixes: ["Pass a positive integer as the `pr-number` input."],
         annotationFix: "pass a positive integer as the `pr-number` input",
@@ -1606,7 +1605,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     level: "error",
     owner: "unclassified",
     providerName: "GitHub",
-    what: "pr-hero could not write its commit status ({detail})",
+    what: "Crysk could not write its commit status ({detail})",
     variants: {
       default: {
         why: "the required check has no result for this head without it",
@@ -1622,7 +1621,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         why: "the required check has no result for this head without it",
         fixes: [
           "Add `statuses: write` to the job's `permissions:`, or re-scaffold the workflow:",
-          "$ pr-hero ci init --force",
+          "$ crysk ci init --force",
         ],
         annotationFix:
           "add `statuses: write` under the job's `permissions:` in the workflow",
@@ -1639,10 +1638,10 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-RUNTIME-UNAVAILABLE": {
     level: "error",
     owner: { action: "pr-hero", local: "config" },
-    what: "a runtime pr-hero depends on is unusable: {detail}",
+    what: "a runtime Crysk depends on is unusable: {detail}",
     variants: {
       action: {
-        why: "the action installs this runtime itself, so this is a pr-hero defect",
+        why: "the action installs this runtime itself, so this is a Crysk defect",
         fixes: [
           "Report it with this run:",
           '$ gh issue create -R juanmaagd/pr-hero --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"',
@@ -1659,7 +1658,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     what: "The {step} step failed",
     whatWithoutStep: "An install step failed",
     variants: single(
-      "a download or install step failed, and pr-hero cannot tell which external cause it was",
+      "a download or install step failed, and Crysk cannot tell which external cause it was",
       [
         "Re-run only the failed jobs:",
         RERUN_FAILED,
@@ -1744,9 +1743,9 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-ENGINE-DEFECT": {
     level: "error",
     owner: "pr-hero",
-    what: "pr-hero hit an internal error ({detail}) in {step}",
+    what: "Crysk hit an internal error ({detail}) in {step}",
     variants: single(
-      "this is a defect in pr-hero, not in your configuration",
+      "this is a defect in Crysk, not in your configuration",
       ["Report it, with this run:", `$ ${ENGINE_DEFECT_ISSUE}`],
       "report it at juanmaagd/pr-hero with this run's URL",
     ),
@@ -1786,7 +1785,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-UNCLASSIFIED": {
     level: "error",
     owner: "unclassified",
-    what: "pr-hero stopped at {step} and could not tell why",
+    what: "Crysk stopped at {step} and could not tell why",
     variants: {
       default: {
         why: "rather than guess, it reports this honestly",
@@ -1794,8 +1793,8 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         annotationFix: UNCLASSIFIED_FIX,
       },
       github: {
-        what: "GitHub returned {detail} at {step}, and pr-hero cannot tell whose fix it is",
-        why: "pr-hero does not map this GitHub status to an owner, so it does not guess",
+        what: "GitHub returned {detail} at {step}, and Crysk cannot tell whose fix it is",
+        why: "Crysk does not map this GitHub status to an owner, so it does not guess",
         fixes: UNCLASSIFIED_FIXES,
         annotationFix: UNCLASSIFIED_FIX,
       },
@@ -1923,7 +1922,7 @@ export function renderCode(
     code,
     owner,
     what: sentence,
-    annotation: `::${entry.level} title=pr-hero ${code}::${escapeCommandData(message)}`,
+    annotation: `::${entry.level} title=crysk ${code}::${escapeCommandData(message)}`,
     summary: summaryLines(code, entry, lead, what, picked, params, link),
   };
 }
@@ -1940,7 +1939,7 @@ function whatOf(entry: CatalogEntry, params: ErrorParams): string {
 // the text are left as they are.
 function capitalized(text: string): string {
   // WHY: the product name is always lowercase `pr-hero`; upper-casing it reads as "Pr-hero".
-  if (text.startsWith("pr-hero")) return text;
+  if (text.startsWith("crysk")) return text;
   const first = text.slice(0, 1);
   return first.toUpperCase() + text.slice(first.length);
 }

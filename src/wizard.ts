@@ -530,14 +530,14 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           for (const outcome of sync.skills) {
             if (outcome.status !== "drift-kept") continue;
             process.stderr.write(
-              `pr-hero: ${outcome.skill} not updated for ${env.displayName}: ${outcome.reason ?? "local edits kept"}\n`,
+              `crysk: ${outcome.skill} not updated for ${env.displayName}: ${outcome.reason ?? "local edits kept"}\n`,
             );
           }
           // An old-name copy kept for the user's edits stays on disk; say so.
           for (const old of sync.legacy ?? []) {
             if (old.status !== "kept") continue;
             process.stderr.write(
-              `pr-hero: old ${old.skill} skill kept for ${env.displayName} (${old.reason}); delete it by hand when you no longer need it\n`,
+              `crysk: old ${old.skill} skill kept for ${env.displayName} (${old.reason}); delete it by hand when you no longer need it\n`,
             );
           }
         }
@@ -552,7 +552,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           if (!registration.registered) {
             mcpRegistered = false;
             process.stderr.write(
-              `pr-hero: MCP not registered for ${env.displayName}: ${registration.error ?? "unknown error"}\n`,
+              `crysk: MCP not registered for ${env.displayName}: ${registration.error ?? "unknown error"}\n`,
             );
           }
         }
@@ -568,7 +568,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       lines.push(bold("Step 3/5: Skills Sync & MCP Server Registration"));
       lines.push("");
       lines.push(
-        "  Syncing pr-hero skills (triage, ci-setup) and registering Model Context Protocol server...",
+        "  Syncing crysk skills (triage, ci-setup) and registering Model Context Protocol server...",
       );
       return lines;
     },
@@ -680,7 +680,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
             "git",
             "commit",
             "-m",
-            "chore: initialize pr-hero review configuration",
+            "chore: initialize crysk review configuration",
           ],
           { cwd },
         );
@@ -814,13 +814,13 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         // remove.
         lines.push(
           `  Write REAL gotchas in ${repoDirName}/gotchas.md — the one just ` +
-            "scaffolded is a placeholder, and pr-hero refuses to review " +
+            "scaffolded is a placeholder, and Crysk refuses to review " +
             `while its \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line is there.`,
         );
         lines.push("");
       }
 
-      lines.push("  Run 'pr-hero review' to start multi-agent code reviews.");
+      lines.push("  Run 'crysk review' to start multi-agent code reviews.");
       return lines;
     },
   },

@@ -36,7 +36,7 @@ export function openCodeSdkUnavailableMessage(): string {
   return (
     "@opencode-ai/sdk@1.18.25 is not installed under ~/.crysk/node_modules " +
     "(~/.prhero/node_modules on an install not yet migrated). " +
-    "Run pr-hero upgrade --reconcile to install it."
+    "Run crysk upgrade --reconcile to install it."
   );
 }
 

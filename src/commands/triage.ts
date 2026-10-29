@@ -50,7 +50,7 @@ import { prheroLayout } from "../home-preflight";
 export async function triageCommand(options: CliOptions): Promise<number> {
   if (options.triage !== "reply") {
     throw new CliUsageError(
-      "triage needs a subcommand: use `pr-hero triage reply` (the bare " +
+      "triage needs a subcommand: use `crysk triage reply` (the bare " +
         "`triage --pr --from` verb was removed with comparison.json)",
     );
   }
@@ -129,7 +129,7 @@ export async function runTriageReplyCommand(input: {
   if (!existsSync(findingsPath)) {
     throw new CliUsageError(
       `${runDir} is missing findings.json — point --from at a completed ` +
-        'PR-mode run directory ("pr-hero review --pr <n>" writes it)',
+        'PR-mode run directory ("crysk review --pr <n>" writes it)',
     );
   }
   const doc = validateFindingsDocument(
@@ -163,7 +163,7 @@ export async function runTriageReplyCommand(input: {
   if (!existsSync(diffPath)) {
     throw new CliUsageError(
       `${runDir} is missing diff.patch — point --from at a completed ` +
-        'PR-mode run directory ("pr-hero review --pr <n>" writes it)',
+        'PR-mode run directory ("crysk review --pr <n>" writes it)',
     );
   }
   const diffPatch = await Bun.file(diffPath).text();
@@ -332,7 +332,7 @@ export async function runTriageReplyCommand(input: {
     if (error instanceof CliError) {
       throw new CliError(
         `resolve failed after the reply was on GitHub (${error.message}). ` +
-          "Re-run the same `pr-hero triage reply` command to retry resolve " +
+          "Re-run the same `crysk triage reply` command to retry resolve " +
           "only — same-head skip will not double-post.",
       );
     }

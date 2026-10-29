@@ -91,12 +91,12 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
   }
 
   if (options.check) {
-    log(`pr-hero version: v${currentVersion}`);
+    log(`crysk version: v${currentVersion}`);
     log(`latest release:  v${latestVersion} (${releaseUrl})`);
     if (currentVersion === latestVersion) {
-      log("✓ pr-hero is up to date.");
+      log("✓ Crysk is up to date.");
     } else {
-      log(`Update available! Run 'pr-hero upgrade' to update.`);
+      log(`Update available! Run 'crysk upgrade' to update.`);
     }
     return 0;
   }
@@ -117,7 +117,7 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
   }
 
   if (plan.action === "up_to_date") {
-    log(`✓ pr-hero is already up to date (v${currentVersion}).`);
+    log(`✓ Crysk is already up to date (v${currentVersion}).`);
     log("Running asset reconciliation to keep skills & MCP in sync...");
     await reconcileUpgrade({ home });
     log("✓ Synced skills & MCP registrations.");
@@ -133,9 +133,14 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
   }
 
   if (plan.action === "upgrade_package_manager") {
-    log("pr-hero is installed via global package manager.");
+    log("Crysk is installed via global package manager.");
     log(
-      `Please run: ${method.kind === "package_manager" ? method.manager : "npm"} install -g pr-hero@latest`,
+      `Please run: ${method.kind === "package_manager" ? method.manager : "npm"} install -g crysk@latest`,
+    );
+    // The crysk package also links the pr-hero bin, which a global install of
+    // the old package still owns, so that install fails until it is removed.
+    log(
+      `If the global package is still the old pr-hero one, remove it first: ${method.kind === "package_manager" ? method.manager : "npm"} uninstall -g pr-hero`,
     );
     return 0;
   }
@@ -194,14 +199,14 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
 
     if (exitCode !== 0) {
       log(
-        "warning: reconciliation reported errors. Run 'pr-hero upgrade --reconcile' to retry.",
+        "warning: reconciliation reported errors. Run 'crysk upgrade --reconcile' to retry.",
       );
       return exitCode;
     }
     // A missing pr-hero alias is a failed upgrade for any script that calls it.
     if (installed.alias === "failed") return 1;
 
-    log(`✓ Successfully upgraded pr-hero to v${latestVersion}!`);
+    log(`✓ Successfully upgraded Crysk to v${latestVersion}!`);
     return 0;
   }
 

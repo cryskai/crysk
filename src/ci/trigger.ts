@@ -318,7 +318,7 @@ function commenterVerdict(
     return {
       kind: "unverifiable",
       reason:
-        `pr-hero could not verify whether ${who} has write access to ` +
+        `Crysk could not verify whether ${who} has write access to ` +
         `${input.repository}, because the GitHub API call failed ` +
         `(${permission.detail}), so ${outcome}. Comment ` +
         `\`${command.text}\` again to retry.`,
@@ -367,7 +367,7 @@ function overrideDecision(input: CiTriggerInput): CiTriggerDecision {
     return {
       kind: "denied",
       reason:
-        "pr-hero did not override the gate: an override applies to the head at " +
+        "Crysk did not override the gate: an override applies to the head at " +
         `the time of the comment; comment ${commandHint(OVERRIDE_COMMAND)} again.`,
     };
   }
@@ -492,7 +492,7 @@ function workflowCommand(
   command: "notice" | "warning" | "error",
   message: string,
 ): string {
-  return `::${command} title=pr-hero::${escapeCommandData(message)}\n`;
+  return `::${command} title=crysk::${escapeCommandData(message)}\n`;
 }
 
 export interface CiTriggerOutputs {
@@ -743,7 +743,7 @@ function writeRecord(
     deps.stdout(
       workflowCommand(
         "error",
-        "pr-hero could not write its outcome record, so this run's result may not reach the pull request.",
+        "Crysk could not write its outcome record, so this run's result may not reach the pull request.",
       ),
     );
     return "failed";
@@ -772,7 +772,7 @@ function printCauseUnlessRecorded(
 // The cause of a run with no credential. It names the decision's own input
 // list, so the text cannot drift from the check that produced it.
 function noCredentialCause(inputs: readonly string[]): string {
-  return `pr-hero has no credential for this review: pass one of the ${inputs.join(", ")} inputs.`;
+  return `Crysk has no credential for this review: pass one of the ${inputs.join(", ")} inputs.`;
 }
 
 // The lookup's class: only when gh printed an HTTP status. A 403 is a rate

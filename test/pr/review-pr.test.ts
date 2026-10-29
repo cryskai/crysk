@@ -392,7 +392,7 @@ describe("postAdjudicationReplies", () => {
     expect(
       lines.some((line) =>
         line.includes(
-          "::warning::pr-hero: could not post the CI adjudication for R001:",
+          "::warning::crysk: could not post the CI adjudication for R001:",
         ),
       ),
     ).toBe(true);
@@ -449,7 +449,7 @@ describe("postAdjudicationReplies", () => {
   }
 
   const UNLANDED_WARNING =
-    "::warning::pr-hero: the CI adjudication for R001 was not recorded under github-actions[bot]; the finding still counts toward the gate";
+    "::warning::crysk: the CI adjudication for R001 was not recorded under github-actions[bot]; the finding still counts toward the gate";
 
   test("a failed adjudication posts nothing and prints the pending notice", async () => {
     const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
@@ -471,7 +471,7 @@ describe("postAdjudicationReplies", () => {
     );
     expect(calls).toHaveLength(0);
     expect(out).toContain(
-      "::notice::pr-hero: the CI adjudicator could not rule on R001; it stays pending for the next /crysk recheck",
+      "::notice::crysk: the CI adjudicator could not rule on R001; it stays pending for the next /crysk recheck",
     );
   });
 

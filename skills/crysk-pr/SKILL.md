@@ -1,6 +1,6 @@
 ---
 name: crysk-pr
-description: "Open or update a GitHub pull request with a structured title and reviewer-focused description, then automatically subscribe to the pr-hero review via `pr-hero status --pr <n> --wait --json` and hand off to `crysk-loop` if findings are reported. Trigger: open a PR, create a PR, gh pr create, submit PR, push branch and open PR, ship PR, crear PR, abrir PR."
+description: "Open or update a GitHub pull request with a structured title and reviewer-focused description, then automatically subscribe to the Crysk review via `crysk status --pr <n> --wait --json` and hand off to `crysk-loop` if findings are reported. Trigger: open a PR, create a PR, gh pr create, submit PR, push branch and open PR, ship PR, crear PR, abrir PR."
 license: Apache-2.0
 metadata:
   author: juanmaagd
@@ -48,15 +48,15 @@ Load this skill whenever the user asks to open, create, submit, or update a pull
    - Run `gh pr create --base <base> --title "<title>" --body-file <file>` (or `gh pr view --json number,url` if a PR for the current branch is already open and you just pushed new commits).
    - Capture the pull request number `<n>`.
 
-## Step 3: Auto-Subscribe to `pr-hero` & Enter the Triage Loop (No Human Friction)
+## Step 3: Auto-Subscribe to `crysk` & Enter the Triage Loop (No Human Friction)
 
-Check whether the repository uses `pr-hero` (e.g., `.github/workflows/pr-hero.yml` or `.crysk/` exists in the repo, or `pr-hero` status checks run on PRs). If not, report the PR URL and stop.
+Check whether the repository uses Crysk (e.g., `.github/workflows/pr-hero.yml` or `.crysk/` (`.prhero/` before the rename) exists in the repo, or `crysk` (`pr-hero` before the rename) status checks run on PRs). If not, report the PR URL and stop.
 
-When `pr-hero` is active on the repository, **never stop right after `gh pr create`**. Immediately continue in the same turn:
+When `crysk` is active on the repository, **never stop right after `gh pr create`**. Immediately continue in the same turn:
 
 1. **Subscribe to the initial review from second zero:**
    ```bash
-   npx -y pr-hero status --pr <n> --wait --json
+   npx -y crysk status --pr <n> --wait --json
    ```
    `--wait` holds automatically during the 3-minute startup grace window while `gate.state` is `"none"` (waiting for GitHub Actions to pick up the new PR), continues polling every 15s while `gate.state` is `"pending"`, and returns as soon as the review settles.
 

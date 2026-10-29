@@ -81,7 +81,7 @@ export async function runPostCommand(input: {
   if (!existsSync(findingsPath) || !existsSync(diffPath)) {
     throw new CliUsageError(
       `${runDir} is missing findings.json or diff.patch — point --from at ` +
-        'a completed run directory ("pr-hero review --pr <n>" writes both)',
+        'a completed run directory ("crysk review --pr <n>" writes both)',
     );
   }
   const doc = validateFindingsDocument(
@@ -149,7 +149,7 @@ export async function runPostCommand(input: {
       throw new CliError(
         `${pipelinePath} has an unreadable re-review block (${read.problem}) — ` +
           "publishing it would report the old absence matcher's counts and " +
-          `write no state block. Re-run \`pr-hero review --pr ${prNumber} --post\`.`,
+          `write no state block. Re-run \`crysk review --pr ${prNumber} --post\`.`,
       );
     }
     if (read.kind === "ok") rereview = read.rereview;
@@ -179,7 +179,7 @@ export async function runPostCommand(input: {
         `finding(s) (${verifiedGoneIds.join(", ")}), and their prior records ` +
         "are not in the run directory — `live[]` retires a verified-gone " +
         "entry — so `post --from` cannot bind them to their review threads " +
-        `to collapse them. Re-run \`pr-hero review --pr ${prNumber} --post\`, ` +
+        `to collapse them. Re-run \`crysk review --pr ${prNumber} --post\`, ` +
         "which holds the priors from the run that checked them.",
     );
   }

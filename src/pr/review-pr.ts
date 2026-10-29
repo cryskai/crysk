@@ -212,7 +212,7 @@ export async function postAdjudicationReplies(input: {
     // No ruling exists: post nothing, so the dismissal stays pending for a later recheck.
     if (entry.failed === true) {
       process.stdout.write(
-        `::notice::pr-hero: the CI adjudicator could not rule on ${entry.priorId}; it stays pending for the next ${commandHint(RECHECK_COMMAND, "")}\n`,
+        `::notice::crysk: the CI adjudicator could not rule on ${entry.priorId}; it stays pending for the next ${commandHint(RECHECK_COMMAND, "")}\n`,
       );
       continue;
     }
@@ -239,7 +239,7 @@ export async function postAdjudicationReplies(input: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       process.stdout.write(
-        `::warning::pr-hero: could not post the CI adjudication for ${entry.priorId}: ${message}\n`,
+        `::warning::crysk: could not post the CI adjudication for ${entry.priorId}: ${message}\n`,
       );
     }
     // Only an upheld verdict can clear the finding on the next review, so only its
@@ -255,7 +255,7 @@ export async function postAdjudicationReplies(input: {
           }).catch(() => undefined);
     if (author !== CI_ADJUDICATOR_LOGIN) {
       process.stdout.write(
-        `::warning::pr-hero: the CI adjudication for ${entry.priorId} was not recorded under ${CI_ADJUDICATOR_LOGIN}; the finding still counts toward the gate\n`,
+        `::warning::crysk: the CI adjudication for ${entry.priorId} was not recorded under ${CI_ADJUDICATOR_LOGIN}; the finding still counts toward the gate\n`,
       );
     }
   }
@@ -554,7 +554,7 @@ export async function reviewPr(
           stepSummaryFlag: options.stepSummary,
           plan: sizePlan,
           noticeMessage:
-            "pr-hero review skipped — diff exceeds the configured size gate",
+            "crysk review skipped — diff exceeds the configured size gate",
           ciMode,
           headSha,
         });
@@ -719,7 +719,7 @@ export async function reviewPr(
       // job log — the `::error::` annotation naming the cause included —
       // into a group nothing ever closes.
       let started = 0;
-      await withCiWorkflowGroup(isCi, "pr-hero review", log, async () => {
+      await withCiWorkflowGroup(isCi, "crysk review", log, async () => {
         log(reviewingLine(hunterCount, summary, options));
         // runnerAuthority resolved before confirm with the exact-binding gate.
         if (runnerAuthority.error !== undefined) {

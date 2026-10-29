@@ -34,6 +34,6 @@ export function ciForceReviewHintLine(prNumber: number): string {
     `on GitHub Actions anyway (${commandHint(CI_REVIEW_FULL_COMMENT)} re-discovers the ` +
     "whole range). On a workflow scaffolded before comment triggers, run " +
     `\`${ciForceReviewDispatch(prNumber)}\` instead, or re-scaffold with ` +
-    "`pr-hero ci init --force`."
+    "`crysk ci init --force`."
   );
 }

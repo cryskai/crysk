@@ -30,7 +30,7 @@ INSTALL_DIR="${HOME}/${HOME_NAME}/bin"
 BIN_PATH="${INSTALL_DIR}/crysk"
 ALIAS_PATH="${INSTALL_DIR}/pr-hero"
 
-echo "=== Installing pr-hero ==="
+echo "=== Installing crysk ==="
 
 # 1. Detect OS and Architecture
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -189,7 +189,7 @@ if [ -f "${HOME}/.config/fish/config.fish" ]; then
 fi
 
 echo ""
-echo "=== pr-hero installation complete! ==="
+echo "=== crysk installation complete! ==="
 echo ""
 echo "The binary is at ${BIN_PATH}, and ${ALIAS_PATH} still answers for one version."
 echo ""
@@ -210,5 +210,5 @@ echo ""
 echo "New shells pick it up from the shell config this installer just edited."
 echo ""
 echo "Then:"
-echo "  pr-hero doctor    # what is installed, what is missing, what blocks a review"
-echo "  pr-hero setup     # skills + MCP registration; also scaffolds .crysk/ in a git repo (an existing .prhero/ is updated in place)"
+echo "  crysk doctor      # what is installed, what is missing, what blocks a review"
+echo "  crysk setup       # skills + MCP registration; also scaffolds .crysk/ in a git repo (an existing .prhero/ is updated in place)"

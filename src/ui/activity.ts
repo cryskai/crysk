@@ -148,7 +148,7 @@ export function renderActivityScreen(
   // 3. Recent Completed Reviews
   content.push(
     bold(
-      "Recent Completed Reviews (last 10, from prhero.db in the pr-hero home):",
+      "Recent Completed Reviews (last 10, from prhero.db in the Crysk home):",
       st,
     ),
   );
@@ -163,7 +163,7 @@ export function renderActivityScreen(
       : "";
   content.push(dim(`j/k: move${killHint} • r: refresh • q/esc: back`, st));
   if (selectedPid !== undefined) {
-    content.push(dim(`$ pr-hero activity --kill ${selectedPid}`, st));
+    content.push(dim(`$ crysk activity --kill ${selectedPid}`, st));
   }
 
   return box("Active Reviews & Activity", content, {

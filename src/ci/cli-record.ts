@@ -71,7 +71,7 @@ export function writeCliRecord(
     );
   } catch (error) {
     process.stderr.write(
-      `pr-hero: could not write the outcome record: ${errnoCode(error)}\n`,
+      `crysk: could not write the outcome record: ${errnoCode(error)}\n`,
     );
   }
 }
@@ -157,7 +157,7 @@ export function recordPendingCreatedAt(
     writeRecordAtomically(dir, PENDING_AT_FILE, `${createdAt}\n`, NODE_FS);
   } catch (error) {
     process.stderr.write(
-      `pr-hero: could not write the pending record: ${errnoCode(error)}\n`,
+      `crysk: could not write the pending record: ${errnoCode(error)}\n`,
     );
   }
 }
@@ -241,7 +241,7 @@ export function writeFatalCliRecord(
   const earlier = readEarlierRecord(dir);
   if (earlier !== undefined && earlier.outcome !== "reviewing") {
     process.stderr.write(
-      `pr-hero: kept the recorded ${earlier.outcome} outcome; a later step failed\n`,
+      `crysk: kept the recorded ${earlier.outcome} outcome; a later step failed\n`,
     );
     return;
   }

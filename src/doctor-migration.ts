@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import type { AgentEnvDetection } from "./agent-env";
+import { BIN_NAME } from "./brand";
 import {
   HOME_DIR_NAME,
   homeHasState,
@@ -72,7 +73,7 @@ function homeMigrationSteps(input: MigrationInput): string[] {
 
   // After the move the binary is at its new path; use it by that path so the
   // agents and registrations below record the new location.
-  const run = standalone ? `~/${HOME_DIR_NAME}/bin/pr-hero` : "pr-hero";
+  const run = standalone ? `~/${HOME_DIR_NAME}/bin/pr-hero` : BIN_NAME;
   if (input.platform === "darwin") {
     const agentsDir = path.join(home, "Library", "LaunchAgents");
     const installed = (current: string, legacy: string) =>
@@ -113,14 +114,14 @@ export function migrationChecks(input: MigrationInput): DoctorCheckItem[] {
       out.push({
         name: "migrate:home",
         severity: "degraded",
-        message: `~/${LEGACY_HOME_DIR_NAME} is ignored because ~/${HOME_DIR_NAME} holds pr-hero state`,
+        message: `~/${LEGACY_HOME_DIR_NAME} is ignored because ~/${HOME_DIR_NAME} holds Crysk state`,
         hint: `Merge anything you still need into ~/${HOME_DIR_NAME}, then delete ~/${LEGACY_HOME_DIR_NAME}.`,
       });
     } else if (exists(newHome)) {
       out.push({
         name: "migrate:home",
         severity: "degraded",
-        message: `~/${HOME_DIR_NAME} exists but holds no pr-hero state, so ~/${LEGACY_HOME_DIR_NAME} is still the one in use`,
+        message: `~/${HOME_DIR_NAME} exists but holds no Crysk state, so ~/${LEGACY_HOME_DIR_NAME} is still the one in use`,
         hint: `Check ~/${HOME_DIR_NAME} and remove it, then: ${numbered(homeMigrationSteps(input))}. Until then, do not put files in ~/${HOME_DIR_NAME}.`,
       });
     } else {

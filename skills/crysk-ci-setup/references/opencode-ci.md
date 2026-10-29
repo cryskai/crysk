@@ -77,7 +77,7 @@ A mapping moves only the steps whose logical model it names: a `sonnet` mapping 
 | Only a `sonnet` mapping to OpenCode | OpenCode | Claude CLI (needs a Claude secret) |
 | `sonnet` and `opus` mappings to OpenCode | OpenCode | OpenCode |
 
-OpenCode does not resolve pr-hero aliases. Any `opencode` route for `sonnet`/`opus`/`haiku` **must** set `modelSnapshot` to the provider model id. Confirm with `opencode models` (optionally `opencode models <provider>`). Do not guess `deepseek-chat` if the CLI lists `deepseek-v4-flash` / `deepseek-v4-pro`.
+OpenCode does not resolve Crysk aliases. Any `opencode` route for `sonnet`/`opus`/`haiku` **must** set `modelSnapshot` to the provider model id. Confirm with `opencode models` (optionally `opencode models <provider>`). Do not guess `deepseek-chat` if the CLI lists `deepseek-v4-flash` / `deepseek-v4-pro`.
 
 `gateway`: `"configured"` for OpenCode; `"direct"` for Claude CLI.
 
@@ -124,7 +124,7 @@ routing: "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"
 opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
 ```
 
-Quotes around the routing var are load-bearing (unset → empty string). Re-scaffold with `pr-hero setup --ci --force` if an old template lacks them.
+Quotes around the routing var are load-bearing (unset → empty string). Re-scaffold with `crysk setup --ci --force` if an old template lacks them.
 
 The Action installs OpenCode CLI **1.18.30** in its **own** step when `opencode-auth` is non-empty **or** routing contains `opencode`. Never `latest`. Claude-only (both OpenCode inputs empty / no `opencode` in routing) skips that install.
 

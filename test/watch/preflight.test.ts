@@ -2062,7 +2062,7 @@ describe("renderWatchStatus", () => {
         installed: false,
         intervalSeconds: null,
       }).join("\n"),
-    ).toContain('not installed — run "pr-hero watch install"');
+    ).toContain('not installed — run "crysk watch install"');
     expect(
       renderWatchStatus({ ...BASE, intervalSeconds: null }).join("\n"),
     ).toContain("interval unreadable");

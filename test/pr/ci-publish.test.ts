@@ -129,7 +129,7 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
       }),
     );
     const summary = await readFile(summaryPath, "utf8");
-    expect(summary).toContain(`### 🔍 pr-hero Review — PR #${PR}`);
+    expect(summary).toContain(`### 🔍 Crysk Review — PR #${PR}`);
     expect(summary).toContain("| Findings | 2 (1 blocking · 1 advisory) |");
     expect(summary).toContain("| Model | sonnet |");
     const outputs = await readFile(outputPath, "utf8");
@@ -220,7 +220,7 @@ describe("publishCiReviewIfEligible — a real eligible run", () => {
     );
     const summary = await readFile(summaryPath, "utf8");
     expect(summary.startsWith("## Earlier step\n")).toBe(true);
-    expect(summary).toContain(`### 🔍 pr-hero Review — PR #${PR}`);
+    expect(summary).toContain(`### 🔍 Crysk Review — PR #${PR}`);
   });
 
   test.each([
