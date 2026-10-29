@@ -251,10 +251,23 @@ So the move keeps a repository at the old name. Each step is run by the maintain
    `https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh` keeps serving the installer.
    Creating it stops GitHub's web and git redirect to `cryskai/crysk`: point local clones at the new remote
    (`git remote set-url origin https://github.com/cryskai/crysk.git`).
-3. **Every release while the mirror lives also goes to the mirror:** push the release commit and both tags
-   (`vX.Y.Z` and the moved `v0`) there, and create the same GitHub Release with the same assets and
-   `SHA256SUMS`. A binary from before the move (`src/updater.ts` read `juanmaagd/pr-hero`) finds its upgrade
-   there; without the mirrored release, `pr-hero upgrade` on such a binary reports no new version.
+3. **Every release while the mirror lives also goes to the mirror**, once `release.yml` has finished on
+   `cryskai/crysk` (CI force-moves `v0` and creates the release, so the mirror copies what CI produced). A binary
+   from before the move (`src/updater.ts` read `juanmaagd/pr-hero`) finds its upgrade there; without the
+   mirrored release, `pr-hero upgrade` on such a binary reports no new version. Run from the release checkout,
+   with the mirror added as a remote (`git remote add pr-hero-mirror https://github.com/juanmaagd/pr-hero.git`):
+   ```bash
+   git fetch origin --tags --force                     # CI's v0 and vX.Y.Z tag objects
+   git push pr-hero-mirror origin/main:refs/heads/main
+   git push pr-hero-mirror refs/tags/vX.Y.Z
+   git push pr-hero-mirror refs/tags/v0 --force        # v0 already exists there, at the previous release
+   d=$(mktemp -d)
+   gh release download vX.Y.Z -R cryskai/crysk -D "$d"
+   gh release view vX.Y.Z -R cryskai/crysk --json body -q .body > "$d.notes"
+   gh release create vX.Y.Z -R juanmaagd/pr-hero --verify-tag --latest --title vX.Y.Z --notes-file "$d.notes" "$d"/*
+   rm -rf "$d" "$d.notes"
+   ```
+   Then run the mirror check in §5.
 4. Archive the mirror once the version that drops the legacy names ships; an archived repository keeps serving
    its tags.
 
@@ -358,21 +371,24 @@ Perform these sanity checks immediately following a release:
    - Confirm workflows referencing `cryskai/crysk@v0` or `cryskai/crysk@vX.Y.Z` resolve the new
      release. (Workflows still pinned to the frozen `@v1` continue resolving the last 1.x release, by
      design — they receive no further updates.)
-5. **Mirror** (while `juanmaagd/pr-hero` lives, Step 4d.3): the mirror's `v0` and `vX.Y.Z` point at the same
-   commits as `cryskai/crysk`'s, and the mirror's latest release is `vX.Y.Z` with the same `SHA256SUMS`. Both
-   tags are annotated, so compare the commits they point at (`^{}`), not the tag objects:
+5. **Mirror** (while `juanmaagd/pr-hero` lives; read-only, after Step 4d.3): both tags on the mirror point at
+   the release commit, and the mirror's release is `Latest` with every asset of the `cryskai/crysk` release, each
+   matching its `SHA256SUMS` line. Set `V` to the release tag; the block runs in a subshell and stops at the first
+   failure without closing your shell:
    ```bash
-   for r in cryskai/crysk juanmaagd/pr-hero; do
-     git ls-remote "https://github.com/$r.git" 'refs/tags/v0^{}' 'refs/tags/vX.Y.Z^{}'
-   done                                   # the two blocks must be identical
-   gh release list -R juanmaagd/pr-hero --limit 1          # vX.Y.Z, Latest
-   d=$(mktemp -d)
-   gh release download vX.Y.Z -R cryskai/crysk -p SHA256SUMS -D "$d/new"
-   gh release download vX.Y.Z -R juanmaagd/pr-hero -p SHA256SUMS -D "$d/mirror"
-   cmp "$d/new/SHA256SUMS" "$d/mirror/SHA256SUMS" && echo "mirror assets match"
+   ( V=vX.Y.Z; COMMIT=$(git rev-parse "$V^{commit}")
+   d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+   for t in v0 "$V"; do                                # annotated tags: compare the commit they point at
+     got=$(git ls-remote https://github.com/juanmaagd/pr-hero.git "refs/tags/$t^{}" | cut -f1)
+     [ "$got" = "$COMMIT" ] || { echo "mirror $t is '${got:-missing}', expected $COMMIT"; exit 1; }
+   done
+   gh release list -R juanmaagd/pr-hero --limit 1 | grep -q "$V.*Latest" || { echo "mirror Latest is not $V"; exit 1; }
+   new=$(gh release view "$V" -R cryskai/crysk --json assets -q '[.assets[].name]|sort|join(" ")')
+   old=$(gh release view "$V" -R juanmaagd/pr-hero --json assets -q '[.assets[].name]|sort|join(" ")')
+   [ "$new" = "$old" ] || { echo "asset lists differ: $new vs $old"; exit 1; }
+   gh release download "$V" -R juanmaagd/pr-hero -D "$d"
+   (cd "$d" && shasum -a 256 -c SHA256SUMS) && echo "mirror OK" )
    ```
-   Push the mirror's tags from `cryskai/crysk` after CI moved `v0` (`git fetch origin --tags --force`, then
-   push those refs), so both repositories carry the same tag objects.
 6. **Doctor Diagnostic**:
    - Run `crysk doctor` locally to verify runtime integrity and toolchain health.
 
