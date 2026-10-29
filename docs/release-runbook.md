@@ -253,30 +253,18 @@ So the move keeps a repository at the old name. Each step is run by the maintain
    `https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh` keeps serving the installer.
    Creating it stops GitHub's web and git redirect to `cryskai/crysk`: point local clones at the new remote
    (`git remote set-url origin https://github.com/cryskai/crysk.git`).
-3. **Every final release while the mirror lives also goes to the mirror**, once `release.yml` has finished on
-   `cryskai/crysk` (CI force-moves `v0` and creates the release, so the mirror copies what CI produced). A
-   prerelease (`vX.Y.Z-rc.N`) is not mirrored: CI neither moves `v0` nor marks it latest, and pre-move binaries
-   must not be offered it. A binary from before the move (`src/updater.ts` read `juanmaagd/pr-hero`) finds its
-   upgrade on the mirror; without the mirrored release, `pr-hero upgrade` on such a binary reports no new
-   version. Run from the release checkout, with the mirror added as a remote
-   (`git remote add pr-hero-mirror https://github.com/juanmaagd/pr-hero.git`). The block runs in a subshell
-   with `set -e`, so the first failed command stops it before anything is published:
-   ```bash
-   ( set -euo pipefail
-   V=vX.Y.Z
-   case "$V" in *-*) echo "$V is a prerelease: do not mirror it"; exit 1;; esac
-   git fetch origin --tags --force                     # CI's v0 and $V tag objects
-   git push pr-hero-mirror origin/main:refs/heads/main
-   git push pr-hero-mirror "refs/tags/$V"
-   git push pr-hero-mirror refs/tags/v0 --force        # v0 already exists there, at the previous release
-   d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
-   gh release download "$V" -R cryskai/crysk -D "$d/assets"
-   (cd "$d/assets" && shasum -a 256 -c SHA256SUMS)     # never publish a partial download
-   gh release view "$V" -R cryskai/crysk --json body -q .body > "$d/notes.md"
-   gh release create "$V" -R juanmaagd/pr-hero --verify-tag --latest --title "$V" \
-     --notes-file "$d/notes.md" "$d"/assets/* )
-   ```
-   Then run the mirror check in §5.
+3. **Every final release while the mirror lives also goes to the mirror.** `release.yml`'s `mirror-legacy` job
+   does it after `publish-release`, by running `scripts/mirror-release.sh vX.Y.Z`. The script pushes the release
+   commit to the mirror's `main`, pushes `vX.Y.Z` and force-pushes the moved `v0`, copies the GitHub Release with
+   the same assets and `SHA256SUMS` (checked before publishing), and then verifies the result. A binary from
+   before the move (`src/updater.ts` read `juanmaagd/pr-hero`) finds its upgrade there; without the mirrored
+   release, `pr-hero upgrade` on such a binary reports no new version. Prereleases are not mirrored.
+   - The job needs the repository secret `LEGACY_MIRROR_TOKEN`: a fine-grained personal access token of the
+     mirror's owner, with **Contents: Read and write** on `juanmaagd/pr-hero` only. Without it the job ends with
+     a warning and mirrors nothing.
+   - **By hand** (no token, or a failed job): from an up-to-date checkout of `cryskai/crysk`, with `gh` logged in
+     as an account that can write the mirror, run `scripts/mirror-release.sh vX.Y.Z`. The script is idempotent:
+     a re-run verifies what is already there and changes nothing.
 4. Archive the mirror once the version that drops the legacy names ships; an archived repository keeps serving
    its tags.
 
@@ -380,7 +368,8 @@ Perform these sanity checks immediately following a release:
    - Confirm workflows referencing `cryskai/crysk@v0` or `cryskai/crysk@vX.Y.Z` resolve the new
      release. (Workflows still pinned to the frozen `@v1` continue resolving the last 1.x release, by
      design — they receive no further updates.)
-5. **Mirror** (while `juanmaagd/pr-hero` lives; final releases only; read-only, after Step 4d.3): both tags on
+5. **Mirror** (while `juanmaagd/pr-hero` lives; final releases only; read-only, after Step 4d.3; the
+   `mirror-legacy` job's last step runs the same check, so this repeats it by hand): both tags on
    the mirror point at the release commit, and the mirror's release is `Latest` and carries exactly the assets
    of the `cryskai/crysk` release, byte for byte. Set `V` to the release tag; the block runs in a subshell and
    stops at the first failure without closing your shell:

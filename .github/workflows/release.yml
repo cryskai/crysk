@@ -203,3 +203,35 @@ jobs:
         run: |
           npm publish --provenance --access public
 
+
+  # Every final release also goes to juanmaagd/pr-hero, the mirror that keeps
+  # pre-move installs working: binaries from before the repository move upgrade
+  # from its latest release, the old install URL serves its main, and
+  # `uses: juanmaagd/pr-hero@v0` resolves its tags (runbook Step 4d). Without
+  # this job those installs silently stop upgrading. Prereleases are not
+  # mirrored. Writing another account's repository needs LEGACY_MIRROR_TOKEN
+  # (a fine-grained token with contents:write on juanmaagd/pr-hero only); when
+  # it is missing the job warns and the runbook's manual run applies.
+  mirror-legacy:
+    name: Mirror the release to juanmaagd/pr-hero
+    needs: publish-release
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mirror release, tags and main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIRROR_TOKEN: ${{ secrets.LEGACY_MIRROR_TOKEN }}
+        run: |
+          if [ -z "${MIRROR_TOKEN}" ]; then
+            echo "::warning title=crysk::LEGACY_MIRROR_TOKEN is not set: mirror ${GITHUB_REF_NAME} to juanmaagd/pr-hero by hand (scripts/mirror-release.sh ${GITHUB_REF_NAME}, runbook Step 4d)."
+            exit 0
+          fi
+          bash scripts/mirror-release.sh "${GITHUB_REF_NAME}"
