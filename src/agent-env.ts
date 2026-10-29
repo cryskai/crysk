@@ -289,6 +289,9 @@ interface SkillDirIo {
 export interface RemoveSkillDirResult {
   removed: string[];
   skippedModified: string[];
+  // Recorded files still on disk because they could not be read or unlinked. Their
+  // digest is kept, so a later run can retry them.
+  failed: string[];
   errors: string[];
   // False when anything is left in the dir: an edited file, or a copy with no
   // recorded digest. Nothing here ever deletes a dir recursively.
@@ -320,22 +323,24 @@ export function removeSkillDir(
   }
 
   let skillSkippedModified = false;
-  // A recorded file still on disk after this pass: unreadable, or its unlink failed.
-  let recordedLeft = false;
+  // Recorded files still on disk after this pass: unreadable, or their unlink failed.
+  const failed: string[] = [];
   const subdirs = new Set<string>();
   if (io.allOrNothing && digest?.files) {
-    const touched = Object.entries(digest.files).filter(
-      ([logicalName, hash]) => {
-        const filePath = path.join(targetDir, logicalName);
-        if (!io.exists(filePath)) return false;
-        const content = io.readFile(filePath);
-        return content === undefined || sha256(content) !== hash;
-      },
-    );
-    if (touched.length > 0) {
+    const edited: string[] = [];
+    const unreadable: string[] = [];
+    for (const [logicalName, hash] of Object.entries(digest.files)) {
+      const filePath = path.join(targetDir, logicalName);
+      if (!io.exists(filePath)) continue;
+      const content = io.readFile(filePath);
+      if (content === undefined) unreadable.push(logicalName);
+      else if (sha256(content) !== hash) edited.push(logicalName);
+    }
+    if (edited.length > 0 || unreadable.length > 0) {
       return {
         removed: [],
-        skippedModified: touched.map(([logicalName]) => logicalName),
+        skippedModified: edited,
+        failed: unreadable,
         errors: [],
         dirRemoved: false,
       };
@@ -348,7 +353,7 @@ export function removeSkillDir(
 
       const content = io.readFile(filePath);
       if (content === undefined) {
-        recordedLeft = true;
+        failed.push(logicalName);
         continue;
       }
 
@@ -364,7 +369,7 @@ export function removeSkillDir(
             subdirs.add(dir);
           }
         } catch (err) {
-          recordedLeft = true;
+          failed.push(logicalName);
           errors.push(
             `Failed to remove ${filePath}: ${(err as Error).message}`,
           );
@@ -378,7 +383,7 @@ export function removeSkillDir(
 
   // The digest goes only once every recorded file is gone: it is the only record that
   // makes a leftover provably removable on a later run.
-  if (!skillSkippedModified && !recordedLeft && io.exists(digestFile)) {
+  if (!skillSkippedModified && failed.length === 0 && io.exists(digestFile)) {
     try {
       unlink(digestFile);
       removed.push("digest.json");
@@ -405,7 +410,7 @@ export function removeSkillDir(
     // Not empty, or already gone.
   }
 
-  return { removed, skippedModified, errors, dirRemoved };
+  return { removed, skippedModified, failed, errors, dirRemoved };
 }
 
 // Every dir name a skill may sit under on disk: current names, then old ones.
@@ -415,8 +420,17 @@ export function allSkillDirNames(): string[] {
 }
 
 function legacyKeptReason(res: RemoveSkillDirResult): string {
-  return res.skippedModified.length > 0
-    ? `edited ${res.skippedModified.join(", ")} kept`
+  const parts: string[] = [];
+  if (res.skippedModified.length > 0) {
+    parts.push(`edited ${res.skippedModified.join(", ")} kept`);
+  }
+  if (res.failed.length > 0) {
+    parts.push(
+      `${res.failed.join(", ")} could not be read or removed (digest kept for a retry)`,
+    );
+  }
+  return parts.length > 0
+    ? parts.join("; ")
     : "files with no recorded digest kept";
 }
 
