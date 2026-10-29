@@ -47,7 +47,7 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
 - A phase waits up to 2700 s (45 minutes) for its run: `DEFAULT_TIMEOUT_MS` in
   `scripts/sandbox/runs.ts`. A live free-model review once took 24m36s, and at the old
   25-minute ceiling it was cancelled just before it finished.
-- One invocation runs at a time on this machine. It takes `~/.crysk/sandbox.lock` exclusively
+- One invocation runs at a time on this machine. It takes `sandbox.lock` in the pr-hero home (`~/.crysk`, or `~/.prhero` on an install from before the rename) exclusively
   and records its pid there. A second invocation is refused while the lock's process is alive;
   a lock whose process is gone is taken over. A lock that names no pid is refused, and is
   removed by hand once no run is in progress. The lock is released on exit, failure, or signal.

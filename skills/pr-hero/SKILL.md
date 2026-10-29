@@ -29,7 +29,7 @@ If pr-hero is not on `PATH`, run every command as `npx -y pr-hero <command>` (No
 
 ## Mental Model
 
-- **Two config files, owned by different people.** `~/.crysk/config.json` is the person's (never committed); `<repo>/.crysk/config.json` is the team's (committed). `~/.crysk/watch.json` holds the watcher.
+- **Two config files, owned by different people.** `~/.crysk/config.json` is the person's (never committed; `~/.prhero/config.json` on an install from before the rename — never create `~/.crysk` by hand while `~/.prhero` is in use, the CLI would switch homes); `<repo>/.crysk/config.json` is the team's (committed). `~/.crysk/watch.json` holds the watcher.
 - **The one rule:** the repo file beats the global one, **except on capped keys** (`max_*`, and the on/off switches `summary.enabled`, `scout`, `post`): there the team can only ask for *less*, so a committed file never enlarges a person's bill.
 - **Some keys live in exactly one layer** and the parser refuses the other by name: `routing` is person-only; `default_base`, `parity_trigger_paths`, `suspicion_priors` are repo-only. `--config <file>` replaces the repo layer only.
 - **Flags always win**, and may exceed a cap (`--base`, `--agents`, `--model`, `--summary`/`--no-summary`, `--force`).
@@ -49,7 +49,7 @@ If pr-hero is not on `PATH`, run every command as `npx -y pr-hero <command>` (No
 
 **Custom model / backend** — [Routing](https://github.com/juanmaagd/pr-hero/blob/main/docs/configuration.md#routing)
 1. Ask: which logical names to move (`sonnet` hunters, `opus` refuter, `haiku` summarizer, or a `default` for all), which backend (`claude-code`, `opencode`, …), which provider and exact model id, and whether metered spend is acceptable.
-2. Write `routing.mappings` (or `routing.default`) in `~/.crysk/config.json`. An alias (`sonnet`/`opus`/`haiku`) routed anywhere except `claude-code` over `gateway: "direct"` **requires** `modelSnapshot` — see [modelFamily / modelSnapshot](https://github.com/juanmaagd/pr-hero/blob/main/docs/configuration.md#modelfamily--modelsnapshot).
+2. Write `routing.mappings` (or `routing.default`) in `~/.crysk/config.json` (or `~/.prhero/config.json` if that is the home in use). An alias (`sonnet`/`opus`/`haiku`) routed anywhere except `claude-code` over `gateway: "direct"` **requires** `modelSnapshot` — see [modelFamily / modelSnapshot](https://github.com/juanmaagd/pr-hero/blob/main/docs/configuration.md#modelfamily--modelsnapshot).
 3. Traps: two mappings matching the same name is an error, not first-wins; all OpenCode mappings in one run must use **one** provider; `disabled: true` / `allowSpend: false` refuse loudly instead of falling back.
 4. Verify: `pr-hero config`, `pr-hero doctor`, then a **local** `pr-hero review --dry-run` (PR-mode dry-run returns before route admission, so it can look clean on a route that will be refused).
 
@@ -57,7 +57,7 @@ If pr-hero is not on `PATH`, run every command as `npx -y pr-hero <command>` (No
 
 **Credentials / billing** — [Credentials](https://github.com/juanmaagd/pr-hero/blob/main/docs/configuration.md#credentials): on macOS a `claude-code` route runs on the Keychain subscription and strips ambient `ANTHROPIC_API_KEY`; elsewhere an ambient key makes it metered. For OpenCode, only an `openai` entry of `type: "oauth"` is a subscription; every other provider is a metered API token unless its catalog prices the model at $0.
 
-**Caps, size gate, exclusions** — [config.json keys](https://github.com/juanmaagd/pr-hero/blob/main/README.md#configjson-keys), [size gate](https://github.com/juanmaagd/pr-hero/blob/main/README.md#the-size-gate--a-cost-gate-not-a-quality-gate), [.cryskignore](https://github.com/juanmaagd/pr-hero/blob/main/README.md#prheroignore--repo-defined-exclusions): `max_changed_lines`/`max_changed_files` skip oversized diffs (a cost gate, not a quality one); `max_concurrent_steps` keeps the fan-out under a provider's rate limit; `max_verification_steps` (default `8`, `0` pauses) caps how many prior open findings a re-review spawns verifier steps for. Only the repo-root `.cryskignore` is read, and matching is case-sensitive.
+**Caps, size gate, exclusions** — [config.json keys](https://github.com/juanmaagd/pr-hero/blob/main/README.md#configjson-keys), [size gate](https://github.com/juanmaagd/pr-hero/blob/main/README.md#the-size-gate--a-cost-gate-not-a-quality-gate), [.cryskignore](https://github.com/juanmaagd/pr-hero/blob/main/README.md#cryskignore--repo-defined-exclusions): `max_changed_lines`/`max_changed_files` skip oversized diffs (a cost gate, not a quality one); `max_concurrent_steps` keeps the fan-out under a provider's rate limit; `max_verification_steps` (default `8`, `0` pauses) caps how many prior open findings a re-review spawns verifier steps for. Only the repo-root `.cryskignore` is read, and matching is case-sensitive.
 
 **gotchas.md** — [gotchas.md](https://github.com/juanmaagd/pr-hero/blob/main/README.md#gotchasmd): required and must be real. Read the code and write the actual traps, then delete the `human-attention-required` marker line, or `review` and `doctor` refuse it.
 

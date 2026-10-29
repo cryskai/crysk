@@ -140,6 +140,8 @@ curl -fsSL https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh |
 
 # 2. Put it on THIS shell's PATH. The installer edited your rc file, and an rc
 #    file only reaches shells started after it — the one you are in is not one.
+#    (The installer prints the exact line. It is ~/.crysk/bin, or ~/.prhero/bin
+#    on a machine that already had a ~/.prhero from before the rename.)
 export PATH="$HOME/.crysk/bin:$PATH"     # fish: set -gx PATH $HOME/.crysk/bin $PATH
 
 # 3. What is installed, what is missing, what blocks a review.
@@ -203,7 +205,7 @@ Four things go wrong when an agent runs the sequence above:
 
 1. **Step 2 is not optional, and not deferrable.** If each of your commands runs in its own
    shell, an `export PATH=...` in one does not reach the next. Either prepend the export to
-   every pr-hero invocation, or call the binary by absolute path: `~/.crysk/bin/pr-hero`.
+   every pr-hero invocation, or call the binary by absolute path: `~/.crysk/bin/pr-hero` (`~/.prhero/bin/pr-hero` on an install from before the rename).
 2. **Step 5 is yours.** `pr-hero setup` scaffolds `.crysk/` and neither commits nor
    ignores it, so the next `pr-hero review` fails the clean-tree gate — on files `setup`
    itself created. Commit them or add `.crysk/` to `.gitignore` before reviewing.
@@ -224,7 +226,7 @@ There are two config files, and the difference between them is *who they belong 
 
 | File | Whose | Committed? |
 | --- | --- | --- |
-| `~/.crysk/config.json` | **yours**, across every repo on this machine | no — it is your machine |
+| `~/.crysk/config.json` (or `~/.prhero/config.json` on an install from before the rename) | **yours**, across every repo on this machine | no — it is your machine |
 | `<repo>/.crysk/config.json` | **the team's** | yes, normally — it is shared through git |
 
 `pr-hero init` creates the repo file and `gotchas.md`, and never overwrites existing ones —
@@ -235,8 +237,13 @@ mode's clean-tree gate.
 
 **Renamed from pr-hero.** The directories used to be `~/.prhero/` and `<repo>/.prhero/`, and the ignore file
 `.prheroignore`. Those are still read, for one version, when the new name does not exist. Nothing is moved for
-you: `pr-hero doctor` prints the exact command (`mv ~/.prhero ~/.crysk`, `git mv .prhero .crysk`,
-`git mv .prheroignore .cryskignore`). If both names exist, the `.crysk` one wins and the old one is ignored.
+you: `pr-hero doctor` prints the full procedure for your machine. For the home that is the `mv ~/.prhero ~/.crysk`
+plus whatever still points at the old path (the `.prhero/bin` PATH line, the launchd agents, the MCP registration),
+and for a repo `git mv .prhero .crysk` (plain `mv` plus a `.gitignore` edit if the directory is not tracked) and
+`git mv .prheroignore .cryskignore`. A new-named directory only wins while it holds pr-hero's own files
+(`~/.crysk` needs a `config.json`, `prhero.db`, `repos/` and the like; `<repo>/.crysk` needs `config.json` or
+`gotchas.md`), so an empty `~/.crysk` never hides a `~/.prhero` in use. Do not create `~/.crysk` by hand while
+`~/.prhero` is in use. When both hold files, the `.crysk` one wins and the old one is ignored.
 
 **Run `pr-hero config` to see which layer decided what.** It lists every key with its value, the
 layer it came from, and both file paths whether or not they exist. It never edits anything.
