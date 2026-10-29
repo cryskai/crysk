@@ -625,6 +625,12 @@ The table shows the status and the job exit for each case:
 | Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `crysk: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
+A review where an agent (a hunter, the refuter or the summarizer) failed also prints a `::warning title=pr-hero::`
+annotation, and the posted review comment's incompleteness notice lists the agents that did not finish. Each
+failed agent is followed by the provider's own one-line reason when the Claude CLI reported one, for example
+`refuter (failed — Anthropic API: Credit balance is too low (HTTP 400))`. The commit status text above is a
+fixed, machine-read contract (the repeat check rebuilds it), so it carries the counts and the set key only.
+
 Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
 below keep their own status and exit, as they did before the gate.
 

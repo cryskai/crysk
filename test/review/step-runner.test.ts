@@ -690,9 +690,7 @@ describe("ClaudeCodeRunner error map", () => {
       );
       expect(stepResult.stderrTail).toContain(detail);
       // The terminal's failed-step line reads this same tail, so it names the cause too.
-      expect(stepFailureReason(stepResult.stderrTail)).toMatch(
-        /^(Anthropic API|Claude CLI): /,
-      );
+      expect(stepFailureReason(stepResult.stderrTail)).toBe(detail);
     },
   );
 

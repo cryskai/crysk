@@ -203,14 +203,22 @@ export interface ReportMeta {
 interface AgentRow {
   key: string;
   status: string;
+  // Why a failed agent failed (PerAgentUsage.detail), when the run recorded it.
+  detail?: string;
 }
 
 function agentRows(doc: FindingsDocument): AgentRow[] {
   const perAgent = doc.telemetry.per_agent;
   if (!perAgent) return [];
   return Object.entries(perAgent).map(([key, value]) => {
-    const status = (value as { status?: unknown }).status;
-    return { key, status: typeof status === "string" ? status : "ran" };
+    const { status, detail } = value as { status?: unknown; detail?: unknown };
+    return {
+      key,
+      status: typeof status === "string" ? status : "ran",
+      ...(typeof detail === "string" && detail.trim() !== ""
+        ? { detail: detail.trim() }
+        : {}),
+    };
   });
 }
 
@@ -257,8 +265,49 @@ export function coverageSentence(
   if (lost.length === 0) {
     return `${done} The run record does not name which agents were lost.`;
   }
-  const missing = lost.map((r) => `${quote(r.key)} (${r.status})`).join(", ");
-  return `${done} Did not complete: ${missing}.`;
+  return `${done} Did not complete: ${lostAgents(lost, quote)}.`;
+}
+
+// "refuter (failed — Anthropic API: …)": the status verbatim, then the provider's words when
+// the run recorded them. `quote` wraps the detail too, so a markdown comment shows it as code
+// and a mention or a link in the provider's text stays inert.
+function lostAgents(
+  lost: readonly AgentRow[],
+  quote: (text: string) => string,
+): string {
+  return lost
+    .map(
+      (r) =>
+        `${quote(r.key)} (${r.status}${
+          r.detail === undefined ? "" : ` — ${quote(r.detail)}`
+        })`,
+    )
+    .join(", ");
+}
+
+// The workflow-command annotation for a review that did not finish everything: a partial run
+// (the coverage sentence, which names who was lost and why), or a complete one whose
+// summarizer or another non-gating step failed. Absent when every agent finished. One line:
+// the message is escaped the way a workflow command needs (%, CR, LF).
+export function incompleteReviewAnnotation(
+  doc: FindingsDocument,
+): string | undefined {
+  const lost = agentRows(doc).filter(
+    (r) => r.status === "failed" || r.status === "unsettled",
+  );
+  let message: string;
+  if (doc.run_status === "partial") {
+    message = `pr-hero: incomplete review. ${coverageSentence(doc, (key) => key)}`;
+  } else if (lost.length > 0) {
+    message = `pr-hero: the review is complete, but a step failed: ${lostAgents(lost, (text) => text)}.`;
+  } else {
+    return undefined;
+  }
+  const escaped = message
+    .replaceAll("%", "%25")
+    .replaceAll("\r", "%0D")
+    .replaceAll("\n", "%0A");
+  return `::warning title=pr-hero::${escaped}`;
 }
 
 // The one sentence behind every moved-head notice (GitHub #39,

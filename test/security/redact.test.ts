@@ -40,6 +40,37 @@ describe("redactDiagnostic (§6.3 redaction-before-persistence)", () => {
     expect(redactDiagnostic("token: abc123")).toBe("[REDACTED]");
   });
 
+  // The keyword pattern read "token is" in "OAuth access token is invalid" as a token
+  // assignment and printed "access [REDACTED] invalid", hiding the provider's sentence.
+  test("ordinary prose that follows the keyword is not a secret", () => {
+    for (const sentence of [
+      "Failed to authenticate. API Error: 401 OAuth access token is invalid.",
+      "The API key was rejected by the provider",
+      "your token has expired",
+      "password must not be empty",
+      "no api key provided",
+    ]) {
+      expect(redactDiagnostic(sentence)).toBe(sentence);
+    }
+  });
+
+  test("a value after the keyword is still redacted, with or without a delimiter", () => {
+    expect(redactDiagnostic("invalid token abc123def456")).toBe(
+      "invalid [REDACTED]",
+    );
+    expect(redactDiagnostic("api key sk-ant-api03-AbCdEf123456")).toBe(
+      "api key [REDACTED]",
+    );
+    expect(redactDiagnostic("the password swordfish was wrong")).toBe(
+      "the [REDACTED] was wrong",
+    );
+    expect(redactDiagnostic("token: is")).toBe("[REDACTED]");
+    expect(redactDiagnostic("rejected api_key=is")).toBe("rejected [REDACTED]");
+    expect(redactDiagnostic("Authorization: Bearer abc.def")).toBe(
+      "Authorization: [REDACTED]",
+    );
+  });
+
   test("near-misses are preserved verbatim", () => {
     // sk- needs >= 8 following chars; this has 7.
     expect(redactDiagnostic("sk-1234567")).toBe("sk-1234567");
