@@ -1362,20 +1362,21 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     owner: "config",
     what: "provider {provider} rejected the credential in {secret}",
     variants: {
-      // The rejected secret is the per-token key: the CLI prefers it to the OAuth token, so
+      // The rejected secret is a per-token credential (ANTHROPIC_API_KEY or
+      // ANTHROPIC_AUTH_TOKEN): the CLI prefers it to the OAuth token, so
       // setting CLAUDE_CODE_OAUTH_TOKEN alone leaves the next run rejected the same way.
       api_key: {
         why: "the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN",
         fixes: [
-          "Create a new key in the Claude Console and set it, or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN. Setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while ANTHROPIC_API_KEY is set:",
-          "$ gh secret set ANTHROPIC_API_KEY",
-          "$ gh secret delete ANTHROPIC_API_KEY",
+          "Create a new key in the Claude Console and set it, or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN. Setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set:",
+          "$ gh secret set {secret}",
+          "$ gh secret delete {secret}",
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "create a new key and run `gh secret set ANTHROPIC_API_KEY`, or delete the ANTHROPIC_API_KEY secret so the OAuth token is used (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while the key is set)",
+          "create a new key and run `gh secret set {secret}`, or delete the {secret} secret so the OAuth token is used (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while the key is set)",
       },
       oauth: {
         why: "it is expired, revoked, or a short-lived /login session token",
@@ -1957,7 +1958,12 @@ function paramVariant(
   // The credential in the secret picks the fix: a rejected API key and a rejected OAuth
   // token are replaced differently, and the CLI uses the key ahead of the token.
   if (code === "PRH-CRED-REJECTED" && variant === undefined) {
-    if (params.secret === "ANTHROPIC_API_KEY") return "api_key";
+    if (
+      params.secret === "ANTHROPIC_API_KEY" ||
+      params.secret === "ANTHROPIC_AUTH_TOKEN"
+    ) {
+      return "api_key";
+    }
     if (params.secret === "CLAUDE_CODE_OAUTH_TOKEN") return "oauth";
   }
   // A caller that names a variant keeps it, so the default wording stays

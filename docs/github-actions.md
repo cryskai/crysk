@@ -1116,18 +1116,18 @@ When every failed hunter reports the secret it ran on, the fix starts with the o
 
 **Why:** the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN
 
-The rejected secret is `ANTHROPIC_API_KEY`. The CLI prefers it to the OAuth token (observed with CLI 2.1.312: with both present it prints that the key "takes precedence over your claude.ai login"), so setting the OAuth token alone changes nothing while the key is set.
+The rejected secret is a per-token credential, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`. The CLI prefers it to the OAuth token (observed with CLI 2.1.312: with both present it prints that the key "takes precedence over your claude.ai login"), so setting the OAuth token alone changes nothing while the key is set.
 
 **Fix:**
 
-Create a new key in the Claude Console and set it, or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN. Setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while ANTHROPIC_API_KEY is set:
+Create a new key in the Claude Console and set it, or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN. Setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set:
 
 ```bash
-gh secret set ANTHROPIC_API_KEY
+gh secret set {secret}
 ```
 
 ```bash
-gh secret delete ANTHROPIC_API_KEY
+gh secret delete {secret}
 ```
 
 Then ask for a new review:

@@ -643,10 +643,15 @@ describe("decidePublication — the pure table", () => {
           expect(p.rendered.annotation).toContain("claude setup-token");
         });
 
-        test("ANTHROPIC_AUTH_TOKEN keeps the general list", () => {
+        // Per-token credentials win over the OAuth token in the CLI, so a rejected
+        // ANTHROPIC_AUTH_TOKEN is fixed like a rejected key, never by setup-token.
+        test("ANTHROPIC_AUTH_TOKEN gets the per-token fix, naming that secret", () => {
           const p = rejected("ANTHROPIC_AUTH_TOKEN");
+          const summary = p.rendered.summary.join("\n");
           expect(p.rendered.annotation).toContain("ANTHROPIC_AUTH_TOKEN");
-          expect(p.rendered.summary.join("\n")).toContain("claude setup-token");
+          expect(summary).toContain("gh secret delete ANTHROPIC_AUTH_TOKEN");
+          expect(summary).not.toContain("claude setup-token");
+          expect(summary).not.toContain("ANTHROPIC_API_KEY");
         });
       });
 
