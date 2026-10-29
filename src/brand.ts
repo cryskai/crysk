@@ -193,3 +193,15 @@ export const LEGACY_SKILL_NAMES = {
   pr: "pr-hero-pr",
   general: "pr-hero",
 } as const satisfies Record<keyof typeof SKILL_NAMES, string>;
+
+// MCP tool names. The server advertises only the current prefix; a call under
+// the legacy one is mapped onto it, so an agent prompt or skill written before
+// the rename keeps working.
+const MCP_TOOL_PREFIX = "crysk_";
+const LEGACY_MCP_TOOL_PREFIX = "prhero_";
+
+export function currentMcpToolName(name: string): string {
+  return name.startsWith(LEGACY_MCP_TOOL_PREFIX)
+    ? MCP_TOOL_PREFIX + name.slice(LEGACY_MCP_TOOL_PREFIX.length)
+    : name;
+}

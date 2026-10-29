@@ -7,9 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   MCP_PROTOCOL_VERSION,
-  MCP_SERVER_NAME,
   MCP_SERVER_VERSION,
-  PRHERO_MCP_TOOLS,
   processMcpMessage,
   type ToolCallResult,
 } from "#mcp/preflight";
@@ -92,7 +90,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
           tools: {},
         },
         serverInfo: {
-          name: MCP_SERVER_NAME,
+          name: "crysk-store",
           version: MCP_SERVER_VERSION,
         },
       },
@@ -126,15 +124,74 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
     expect(response?.id).toBe(3);
     const result = (response as { result: { tools: unknown[] } })?.result;
     expect(result.tools.length).toBe(7);
-    expect(PRHERO_MCP_TOOLS.map((t) => t.name)).toEqual([
-      "prhero_health",
-      "prhero_list_runs",
-      "prhero_get_run",
-      "prhero_get_findings",
-      "prhero_search_findings",
-      "prhero_get_usage",
-      "prhero_get_triage",
+    // The wire answer, not the constant: this is what an agent sees.
+    expect((result.tools as { name: string }[]).map((t) => t.name)).toEqual([
+      "crysk_health",
+      "crysk_list_runs",
+      "crysk_get_run",
+      "crysk_get_findings",
+      "crysk_search_findings",
+      "crysk_get_usage",
+      "crysk_get_triage",
     ]);
+  });
+
+  test("tools/call still answers the pre-rename prhero_* names with the same result", async () => {
+    // One canned answer per client method, so a crysk_* name and its prhero_*
+    // alias can be compared on the real dispatch, args included.
+    const client = {
+      health: async () => ({ ok: true }),
+      listRuns: async (a: unknown) => ({ listRuns: a }),
+      getRun: async (id: number) => ({ id }),
+      getFindingsDocument: async (id: number) => ({ doc: id }),
+      searchFindings: async (a: unknown) => ({ searchFindings: a }),
+      getUsage: async (a: unknown) => ({ getUsage: a }),
+      getTriage: async (id: number) => ({ triage: id }),
+    } as unknown as ProductStoreClient;
+    const args: Record<string, Record<string, unknown>> = {
+      health: {},
+      list_runs: { repo_id: "r", pr: 3, limit: 2 },
+      get_run: { run_id: 4 },
+      get_findings: { run_id: 4 },
+      search_findings: { repo_id: "r", tier: "blocking" },
+      get_usage: { repo_id: "r" },
+      get_triage: { run_id: 4 },
+    };
+    for (const [suffix, arguments_] of Object.entries(args)) {
+      const call = (name: string) =>
+        processMcpMessage(client, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name, arguments: arguments_ },
+        });
+      const current = await call(`crysk_${suffix}`);
+      expect(getToolResult(current).isError).toBeUndefined();
+      expect(await call(`prhero_${suffix}`)).toEqual(current);
+    }
+  });
+
+  test("tools/list advertises only the crysk_* names, never the aliases", async () => {
+    const response = await processMcpMessage({} as ProductStoreClient, {
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/list",
+    });
+    const names = (
+      response as { result: { tools: { name: string }[] } }
+    ).result.tools.map((t) => t.name);
+    expect(names.every((n) => n.startsWith("crysk_"))).toBe(true);
+  });
+
+  test("an unknown prhero_* name is still an unknown tool", async () => {
+    const response = await processMcpMessage({} as ProductStoreClient, {
+      jsonrpc: "2.0",
+      id: 6,
+      method: "tools/call",
+      params: { name: "prhero_nope" },
+    });
+    expect(getToolResult(response).isError).toBe(true);
+    expect(JSON.stringify(response)).toContain("Unknown tool: prhero_nope");
   });
 
   test("executes tool calls against a live ProductStoreClient", async () => {
@@ -155,7 +212,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 10,
         method: "tools/call",
         params: {
-          name: "prhero_health",
+          name: "crysk_health",
         },
       });
       const healthData = JSON.parse(
@@ -190,7 +247,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 11,
         method: "tools/call",
         params: {
-          name: "prhero_list_runs",
+          name: "crysk_list_runs",
           arguments: { repo_id: "github.com/juanmaagd/pr-hero" },
         },
       });
@@ -206,7 +263,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 12,
         method: "tools/call",
         params: {
-          name: "prhero_get_run",
+          name: "crysk_get_run",
           arguments: { run_id: runId },
         },
       });
@@ -221,7 +278,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 13,
         method: "tools/call",
         params: {
-          name: "prhero_get_findings",
+          name: "crysk_get_findings",
           arguments: { run_id: runId },
         },
       });
@@ -237,7 +294,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 14,
         method: "tools/call",
         params: {
-          name: "prhero_search_findings",
+          name: "crysk_search_findings",
           arguments: { tier: "blocking" },
         },
       });
@@ -253,7 +310,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 15,
         method: "tools/call",
         params: {
-          name: "prhero_get_usage",
+          name: "crysk_get_usage",
           arguments: { all: true },
         },
       });
@@ -268,7 +325,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 16,
         method: "tools/call",
         params: {
-          name: "prhero_get_triage",
+          name: "crysk_get_triage",
           arguments: { run_id: runId },
         },
       });
@@ -284,7 +341,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 17,
         method: "tools/call",
         params: {
-          name: "prhero_unknown_tool",
+          name: "crysk_unknown_tool",
         },
       });
       expect(getToolResult(unknownRes).isError).toBe(true);
@@ -353,7 +410,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 20,
         method: "tools/call",
         params: {
-          name: "prhero_search_findings",
+          name: "crysk_search_findings",
           arguments: { run_id: runId, tier: "blocking" },
         },
       });
@@ -369,7 +426,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 21,
         method: "tools/call",
         params: {
-          name: "prhero_get_run",
+          name: "crysk_get_run",
           arguments: { run_id: String(runId) },
         },
       });
@@ -384,7 +441,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 22,
         method: "tools/call",
         params: {
-          name: "prhero_get_run",
+          name: "crysk_get_run",
           arguments: {},
         },
       });
@@ -399,7 +456,7 @@ describe("Read-Only MCP Server Protocol & Tools", () => {
         id: 23,
         method: "tools/call",
         params: {
-          name: "prhero_search_findings",
+          name: "crysk_search_findings",
           arguments: { run_id: "not-a-number" },
         },
       });
