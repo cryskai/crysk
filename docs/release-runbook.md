@@ -311,7 +311,7 @@ Perform these sanity checks immediately following a release:
    - Test standalone installer download in a temporary environment:
      ```bash
      PRHERO_VERSION="vX.Y.Z" curl -fsSL https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh | bash
-     ~/.crysk/bin/pr-hero --version
+     ~/.crysk/bin/pr-hero --version   # ~/.prhero/bin/pr-hero on a machine that already had ~/.prhero
      ```
 4. **GitHub Action Reference**:
    - Confirm workflows referencing `juanmaagd/pr-hero@v0` or `juanmaagd/pr-hero@vX.Y.Z` resolve the new

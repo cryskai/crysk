@@ -2,7 +2,29 @@
 set -euo pipefail
 
 REPO="juanmaagd/pr-hero"
-INSTALL_DIR="${HOME}/.prhero/bin"
+
+# Which home to install into. Mirrors resolveHomeDir (src/brand-paths.ts):
+# ~/.crysk when it holds pr-hero state, else ~/.prhero when that exists, else
+# ~/.crysk (a fresh install). The CLI resolves its home the same way, so the
+# binary, the PATH line and the CLI's own files all end up under one directory.
+home_has_state() {
+  for marker in prhero.db metrics.db config.json setup.json watch.json repos; do
+    if [ -e "$1/${marker}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ -d "${HOME}/.crysk" ] && home_has_state "${HOME}/.crysk"; then
+  HOME_NAME=".crysk"
+elif [ -d "${HOME}/.prhero" ]; then
+  HOME_NAME=".prhero"
+else
+  HOME_NAME=".crysk"
+fi
+
+INSTALL_DIR="${HOME}/${HOME_NAME}/bin"
 BIN_PATH="${INSTALL_DIR}/pr-hero"
 
 echo "=== Installing pr-hero ==="
@@ -102,9 +124,9 @@ echo "Installed pr-hero to ${BIN_PATH}"
 # 4. PATH Configuration (Idempotent)
 setup_shell_path() {
   local rc_file="$1"
-  local line='export PATH="${HOME}/.prhero/bin:${PATH}"'
+  local line="export PATH=\"\${HOME}/${HOME_NAME}/bin:\${PATH}\""
   if [ -f "${rc_file}" ]; then
-    if ! grep -q ".prhero/bin" "${rc_file}"; then
+    if ! grep -qF "${HOME_NAME}/bin" "${rc_file}"; then
       echo "" >> "${rc_file}"
       echo "# pr-hero binary path" >> "${rc_file}"
       echo "${line}" >> "${rc_file}"
@@ -118,8 +140,8 @@ setup_shell_path "${HOME}/.bashrc"
 setup_shell_path "${HOME}/.bash_profile"
 
 if [ -f "${HOME}/.config/fish/config.fish" ]; then
-  if ! grep -q ".prhero/bin" "${HOME}/.config/fish/config.fish"; then
-    echo 'set -gx PATH $HOME/.prhero/bin $PATH' >> "${HOME}/.config/fish/config.fish"
+  if ! grep -qF "${HOME_NAME}/bin" "${HOME}/.config/fish/config.fish"; then
+    echo "set -gx PATH \$HOME/${HOME_NAME}/bin \$PATH" >> "${HOME}/.config/fish/config.fish"
     echo "Added ${INSTALL_DIR} to fish config"
   fi
 fi
@@ -136,10 +158,10 @@ echo "This shell does not have ${INSTALL_DIR} on PATH yet. Add it here and now:"
 echo ""
 case "${SHELL:-}" in
   *fish)
-    echo '  set -gx PATH $HOME/.prhero/bin $PATH'
+    echo "  set -gx PATH \$HOME/${HOME_NAME}/bin \$PATH"
     ;;
   *)
-    echo '  export PATH="$HOME/.prhero/bin:$PATH"'
+    echo "  export PATH=\"\$HOME/${HOME_NAME}/bin:\$PATH\""
     ;;
 esac
 echo ""
@@ -147,4 +169,4 @@ echo "New shells pick it up from the shell config this installer just edited."
 echo ""
 echo "Then:"
 echo "  pr-hero doctor    # what is installed, what is missing, what blocks a review"
-echo "  pr-hero setup     # skills + MCP registration; also scaffolds .prhero/ in a git repo"
+echo "  pr-hero setup     # skills + MCP registration; also scaffolds .crysk/ in a git repo (an existing .prhero/ is updated in place)"
