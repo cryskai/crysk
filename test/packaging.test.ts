@@ -1509,6 +1509,50 @@ describe("Packaging & distribution configuration", () => {
 // `/crysk recheck` reaches the CI adjudicator through action.yml's review args
 // and the workflow copies, which must all accept the command (and its legacy
 // `/pr-hero` spelling).
+// Every final release also goes to the juanmaagd/pr-hero mirror, which pre-move
+// binaries, the old install URL and `uses: juanmaagd/pr-hero@v0` still read
+// (runbook Step 4d). Skipping it makes those installs stop upgrading silently.
+describe("the legacy mirror release job", () => {
+  const rootDir = path.resolve(__dirname, "..");
+  const release = Bun.YAML.parse(
+    readFileSync(
+      path.join(rootDir, ".github", "workflows", "release.yml"),
+      "utf-8",
+    ),
+  ) as {
+    jobs: Record<
+      string,
+      { needs?: string; if?: string; steps?: { run?: string }[] }
+    >;
+  };
+  const job = release.jobs["mirror-legacy"];
+
+  test("runs after the release is published, never for a prerelease, through the script", () => {
+    expect(job?.needs).toBe("publish-release");
+    expect(job?.if).toContain("!contains(github.ref_name, '-')");
+    const run = (job?.steps ?? []).map((step) => step.run ?? "").join("\n");
+    expect(run).toContain(
+      'bash scripts/mirror-release.sh "${GITHUB_REF_NAME}"',
+    );
+    expect(run).toContain("LEGACY_MIRROR_TOKEN is not set");
+  });
+
+  test("the script mirrors final tags only, before touching any repository", () => {
+    const result = Bun.spawnSync(
+      [
+        "bash",
+        path.join(rootDir, "scripts", "mirror-release.sh"),
+        "v0.4.0-rc.1",
+      ],
+      { cwd: rootDir, env: { ...process.env, PATH: process.env.PATH ?? "" } },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toContain(
+      "is not a final release tag: not mirrored",
+    );
+  });
+});
+
 describe("/crysk recheck wiring", () => {
   const rootDir = path.resolve(__dirname, "..");
   const clause = (command: string) =>
