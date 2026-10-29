@@ -3,7 +3,7 @@
 // sibling-path hint. All offline.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { CliUsageError } from "../src/errors";
@@ -89,10 +89,17 @@ describe("prheroLayout home resolution", () => {
     expect(prheroLayout(home).dir).toBe(path.join(home, ".crysk"));
   });
 
-  test("when both exist, ~/.crysk wins", () => {
+  test("when both exist and ~/.crysk holds state, ~/.crysk wins", () => {
     mkdirSync(path.join(home, ".prhero"));
     mkdirSync(path.join(home, ".crysk"));
+    writeFileSync(path.join(home, ".crysk", "config.json"), "{}");
     expect(prheroLayout(home).dir).toBe(path.join(home, ".crysk"));
+  });
+
+  test("an empty ~/.crysk does not hide a ~/.prhero in use", () => {
+    mkdirSync(path.join(home, ".prhero"));
+    mkdirSync(path.join(home, ".crysk"));
+    expect(prheroLayout(home).dir).toBe(path.join(home, ".prhero"));
   });
 });
 
