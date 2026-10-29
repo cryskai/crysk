@@ -12,7 +12,7 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    that is today's Claude CI.
 2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
    to `.github/workflows/crysk.yml`, or run `npx -y crysk setup --ci` (or `crysk ci init`) in a clone of
-   your repo, which writes the same template (`uses: juanmaagd/pr-hero@v0`). You do not need Crysk
+   your repo, which writes the same template (`uses: cryskai/crysk@v0`). You do not need Crysk
    installed locally: the file is the whole install. The command also checks the GitHub CLI: if `gh` is
    missing or logged out, it prints why the CI loop needs it (`gh secret set`, `crysk status`,
    `crysk triage reply`) and how to fix it, and in a terminal it offers to install it (macOS with
@@ -87,7 +87,7 @@ jobs:
           fetch-depth: 0 # see "Why fetch-depth: 0" below
       - name: Run Crysk
         id: pr-hero
-        uses: juanmaagd/pr-hero@v0
+        uses: cryskai/crysk@v0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -312,7 +312,7 @@ install and still starts.
 |---|---|
 | Non-openai API token (tested: **deepseek** `type: "api"`) | Executable metered path. Presence of the auth file applies the default spend ceiling — this is an invoice route, not an unlimited subscription. |
 | `openai` with `type: "api"` | **Refused.** The engine maps openai to ChatGPT OAuth; a pay-as-you-go API key is not remapped. Do not put an openai API key in `OPENCODE_AUTH_JSON` and expect it to run. |
-| Mixed OpenCode providers in one run | Out of scope ([#195](https://github.com/juanmaagd/pr-hero/issues/195)). One OpenCode provider per run. |
+| Mixed OpenCode providers in one run | Out of scope ([#195](https://github.com/cryskai/crysk/issues/195)). One OpenCode provider per run. |
 | `claude-code` + one OpenCode provider | Already works. Mix Claude credentials with one OpenCode `auth.json` entry and routing that names both backends. |
 
 ### Edges
@@ -379,9 +379,9 @@ In this repository only, a comment run checks out the pull request's head and ru
 it with this repository's secrets. See [Re-review on demand](#re-review-on-demand).
 
 ### Action version pinning
-The default workflow targets the floating major tag `uses: juanmaagd/pr-hero@v0`, which moves to every new 0.x release. While the major version is 0, a minor release may include breaking changes to the Action contract (see the pre-1.0 semantics in `docs/release-runbook.md`), so `@v0` is not a compatibility guarantee: read `CHANGELOG.md` before a new 0.x minor lands, or pin an exact tag or SHA. If your organization enforces strict immutable SHA pinning, you can pin the full commit SHA directly:
+The default workflow targets the floating major tag `uses: cryskai/crysk@v0`, which moves to every new 0.x release. While the major version is 0, a minor release may include breaking changes to the Action contract (see the pre-1.0 semantics in `docs/release-runbook.md`), so `@v0` is not a compatibility guarantee: read `CHANGELOG.md` before a new 0.x minor lands, or pin an exact tag or SHA. If your organization enforces strict immutable SHA pinning, you can pin the full commit SHA directly:
 ```yaml
-- uses: juanmaagd/pr-hero@aff0324cd8c6a0c5fbf97ddbf3e6d234c9c612e4 # v0.1.0
+- uses: cryskai/crysk@aff0324cd8c6a0c5fbf97ddbf3e6d234c9c612e4 # v0.1.0
 ```
 
 `@v1` still exists and is frozen at the last 1.x release (versions were renumbered to 0.x because the
@@ -555,7 +555,7 @@ In this repository, a comment run reviews with the pull request's own engine: `p
 generated with `OWN_CI_WORKFLOW_OPTIONS`, so on a comment a first step resolves the PR head commit and
 checkout pins that commit before `uses: ./`. A comment run starts on the default branch, so without the
 pin it would run the default branch's engine instead of the one under review. Consumer workflows run
-the published `juanmaagd/pr-hero@v0`, where the checkout does not select the engine.
+the published `cryskai/crysk@v0`, where the checkout does not select the engine.
 
 - **When it takes effect.** GitHub reads a comment-triggered workflow from the default branch, so the
   comment trigger works only once the workflow (`crysk.yml`, or `pr-hero.yml` in a repository set up before
@@ -1468,7 +1468,7 @@ gh run rerun {runId}
 Report it with this run:
 
 ```bash
-gh issue create -R juanmaagd/pr-hero --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"
+gh issue create -R cryskai/crysk --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"
 ```
 
 #### `local`
@@ -1620,7 +1620,7 @@ If it repeats, report it.
 Report it, with this run:
 
 ```bash
-gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"
+gh issue create -R cryskai/crysk --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"
 ```
 
 ### PRH-HUNTERS-FAILED

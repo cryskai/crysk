@@ -345,7 +345,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
       jobs: { review: { steps: Array<Record<string, unknown>> } };
     };
     const usesValues = parsed.jobs.review.steps.map((step) => step.uses);
-    expect(usesValues).toContain("juanmaagd/pr-hero@v0");
+    expect(usesValues).toContain("cryskai/crysk@v0");
   });
 
   test("never embeds a secret value — references secrets by name only", () => {
@@ -372,7 +372,7 @@ describe("generateCiWorkflowTemplate (pure)", () => {
       jobs: { review: { steps: Array<Record<string, unknown>> } };
     };
     const step = parsed.jobs.review.steps.find(
-      (s) => s.uses === "juanmaagd/pr-hero@v0",
+      (s) => s.uses === "cryskai/crysk@v0",
     ) as { with?: Record<string, string> } | undefined;
     expect(step?.with?.["anthropic-api-key"]).toBe(
       `\${{ secrets.ANTHROPIC_API_KEY }}`,
@@ -752,7 +752,7 @@ describe("this repo's own comment runs pin the pull request head", () => {
   });
 
   test("the scaffolded workflow resolves nothing and pins no ref", () => {
-    // A consumer repo runs juanmaagd/pr-hero@v0, so its checkout never
+    // A consumer repo runs cryskai/crysk@v0, so its checkout never
     // selects the engine and needs no pin.
     expect(stepOrder(scaffolded())).toEqual(["Checkout", "pr-hero"]);
     expect(checkoutOf(scaffolded())?.with?.ref).toBeUndefined();
@@ -1645,7 +1645,7 @@ describe("scaffold writes the gate mode explicitly (S4)", () => {
   function withBlock(template: string): string[] {
     const lines = template.split("\n");
     const uses = lines.findIndex(
-      (line) => line.trim().startsWith("uses:") && /pr-hero|\.\//.test(line),
+      (line) => line.trim().startsWith("uses:") && /crysk|pr-hero|\.\//.test(line),
     );
     expect(uses).toBeGreaterThan(-1);
     const start = lines.findIndex(

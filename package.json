@@ -5,11 +5,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/juanmaagd/pr-hero.git"
+    "url": "git+https://github.com/cryskai/crysk.git"
   },
-  "homepage": "https://github.com/juanmaagd/pr-hero#readme",
+  "homepage": "https://github.com/cryskai/crysk#readme",
   "bugs": {
-    "url": "https://github.com/juanmaagd/pr-hero/issues"
+    "url": "https://github.com/cryskai/crysk/issues"
   },
   "type": "module",
   "main": "dist/index.js",

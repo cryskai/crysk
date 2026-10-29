@@ -50,8 +50,8 @@ afterEach(async () => {
 describe("workflow", () => {
   test("is the product renderer's output pinned to the ref, with budget-usd 0", () => {
     const wf = workflowFor(REF);
-    expect(actionRefFor(REF)).toBe("juanmaagd/pr-hero@v0.3.0");
-    expect(wf).toContain("uses: juanmaagd/pr-hero@v0.3.0");
+    expect(actionRefFor(REF)).toBe("cryskai/crysk@v0.3.0");
+    expect(wf).toContain("uses: cryskai/crysk@v0.3.0");
     expect(wf).not.toContain("uses: ./");
     expect(wf).toContain("budget-usd: 0");
     // forceEngineFromPr is the `./`-only path; a published tag must not get it.

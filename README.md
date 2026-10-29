@@ -17,7 +17,7 @@ green.
 > old name wrote is still read for one version: `/pr-hero …` comments, `PRHERO_*` variables, `<!-- pr-hero-…`
 > markers, the `pr-hero` status check, `~/.prhero`, `.prhero/` and `.prheroignore`. A workflow file scaffolded
 > before the rename only answers `/pr-hero …`: re-run `crysk ci init --force` for it to accept `/crysk …` too.
-> The GitHub repository and the action (`uses: juanmaagd/pr-hero@v0`) keep their names for now.
+> The repository moved to `cryskai/crysk` and new workflows use `uses: cryskai/crysk@v0`. `juanmaagd/pr-hero` stays as a mirror with the same tags and releases, so a workflow that still says `uses: juanmaagd/pr-hero@v0` keeps working.
 
 ## Two ways to use it
 
@@ -35,10 +35,10 @@ runner, which installs its own runtime. `npx -y crysk setup --ci` checks `gh` fo
 missing or logged out, it says why it is needed and prints the commands, and in a terminal it offers
 to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks the setup.
 
-1. **Install the skills** into your coding agent from [skills.sh](https://skills.sh/juanmaagd/pr-hero):
+1. **Install the skills** into your coding agent from [skills.sh](https://skills.sh/cryskai/crysk):
 
    ```bash
-   npx skills add juanmaagd/pr-hero
+   npx skills add cryskai/crysk
    ```
 
    `crysk-ci-setup` sets up the workflow, `crysk-pr` opens a PR and waits for its review, and
@@ -114,7 +114,7 @@ Crysk from: that single step is what moves a run from quota to invoice.
 
 ```bash
 # Option A: Standalone binary (macOS / Linux, bundles its own Bun — still needs claude and git)
-curl -fsSL https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cryskai/crysk/main/install.sh | bash
 
 # Option B: Global npm install (brings Bun 1.3.14 as an optional dependency, or uses
 # the Bun >= 1.3 on PATH when npm skips optional dependencies)
@@ -128,7 +128,7 @@ npx crysk doctor
 
 # Option C: From source / development (the bin runs on Node; on a machine with Bun
 # and no Node, run `bun bin/pr-hero.js` or use option A)
-git clone https://github.com/juanmaagd/pr-hero.git && cd pr-hero
+git clone https://github.com/cryskai/crysk.git && cd crysk
 bun install && bun link
 ```
 
@@ -143,7 +143,7 @@ each one breaks the step after it.
 
 ```bash
 # 1. Install (option A shown; B and C put crysk on PATH themselves)
-curl -fsSL https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cryskai/crysk/main/install.sh | bash
 
 # 2. Put it on THIS shell's PATH. The installer edited your rc file, and an rc
 #    file only reaches shells started after it — the one you are in is not one.
@@ -178,12 +178,12 @@ the repo scaffold; skip it and you scaffold the repo yourself with `crysk init`.
 directory. A skill copy that differs from the bundled one and has no recorded digest is kept as it is and reported as drift, never overwritten, so your local edits survive; `crysk setup` prints each kept skill, and `crysk upgrade` replaces it.
 
 **Skills without Crysk.** The public skills are also on
-[skills.sh](https://skills.sh/juanmaagd/pr-hero), installable into any agent with the
+[skills.sh](https://skills.sh/cryskai/crysk), installable into any agent with the
 [skills CLI](https://github.com/vercel-labs/skills):
 
 ```bash
-npx skills add juanmaagd/pr-hero                            # pick interactively
-npx skills add juanmaagd/pr-hero --skill crysk              # or crysk-pr, crysk-loop, crysk-ci-setup
+npx skills add cryskai/crysk                            # pick interactively
+npx skills add cryskai/crysk --skill crysk              # or crysk-pr, crysk-loop, crysk-ci-setup
 ```
 
 **On step 6.** `gotchas.md` is injected verbatim into every hunter's system prompt, and

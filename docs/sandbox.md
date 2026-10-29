@@ -22,7 +22,7 @@ bun scripts/sandbox.ts list                             # open sandbox/ PRs, the
 bun scripts/sandbox.ts clean                            # close open sandbox/ PRs, delete their branches
 ```
 
-- `<ref>` is a tag or branch of `juanmaagd/pr-hero`, pinned into the sandbox workflow.
+- `<ref>` is a tag or branch of `cryskai/crysk`, pinned into the sandbox workflow.
   Letters, digits, `.`, `_`, `/`, `-`.
 - `init` creates the public repo if it is absent, seeds `main` with the fixture's correct
   sources, the product's scaffolded workflow, the repo config and the gotchas, and sets the
@@ -165,7 +165,7 @@ The runner can reach one repository, and nothing else.
   the pinned workflow.
 
 Faults enter only through the sandbox workflow's own inputs and steps, never through
-product code. The workflow is the product's scaffold, with `uses: juanmaagd/pr-hero@<ref>`.
+product code. The workflow is the product's scaffold, with `uses: cryskai/crysk@<ref>`.
 The `advisory` variant replaces the scaffold's `mode: gate` line, and `size-skip` adds
 `max-changed-lines: 1` after `opencode-auth`. Each refuses unless its anchor line appears exactly
 once, so a scaffold change fails the run loudly instead of testing a different workflow.

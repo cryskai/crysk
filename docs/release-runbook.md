@@ -1,6 +1,6 @@
 # Release Runbook
 
-This document is the operational runbook for releasing new versions of Crysk (npm package `crysk`, GitHub repository `juanmaagd/pr-hero`; the package was called `pr-hero` before the rename, see Step 4c). It covers the repository branching model, versioning rules, step-by-step release instructions, CI/CD pipeline automation, post-release verification, and rollback procedures.
+This document is the operational runbook for releasing new versions of Crysk (npm package `crysk`, GitHub repository `cryskai/crysk`; the package was called `pr-hero` before the rename, see Step 4c). It covers the repository branching model, versioning rules, step-by-step release instructions, CI/CD pipeline automation, post-release verification, and rollback procedures.
 
 ---
 
@@ -60,7 +60,7 @@ Two distinct tag types are used:
    - Floating tags pointing to the latest release within a major version line. The current floating
      tag is `v0` while the project is pre-1.0 (0.x minor bumps may still break the CLI/config/Action
      contract — see the pre-1.0 semantics note below).
-   - Consumed by GitHub Actions users referencing the composite action (e.g., `uses: juanmaagd/pr-hero@v0`).
+   - Consumed by GitHub Actions users referencing the composite action (e.g., `uses: cryskai/crysk@v0`).
    - Moved/force-updated on every release within that major version line.
    - `v1` is a **frozen legacy tag**: it stopped moving at the last 1.x release (1.1.0) when versions
      were renumbered to 0.x, and must never be moved again. It is kept only so pre-existing workflows
@@ -129,8 +129,8 @@ Open `CHANGELOG.md` and prepare the release section:
 2. Add a fresh, empty `## [Unreleased]` section above it.
 3. Update the link references at the bottom of `CHANGELOG.md`:
    ```markdown
-   [Unreleased]: https://github.com/juanmaagd/pr-hero/compare/vX.Y.Z...HEAD
-   [X.Y.Z]: https://github.com/juanmaagd/pr-hero/releases/tag/vX.Y.Z
+   [Unreleased]: https://github.com/cryskai/crysk/compare/vX.Y.Z...HEAD
+   [X.Y.Z]: https://github.com/cryskai/crysk/releases/tag/vX.Y.Z
    ```
 
 ### Step 3: Bump Version Numbers
@@ -234,8 +234,29 @@ section describes the sequence; each command is run by the maintainer, never by 
    further `pr-hero` version is published after this one.
 
 `pr-hero` stays on the registry (an unpublish would break the pinned installs it is meant to carry forward). The GitHub
-Release uploads each binary under both names for one version (§4), and `juanmaagd/pr-hero@v0` keeps resolving
-because the repository is not moved.
+Release uploads each binary under both names for one version (§4). The repository moved to `cryskai/crysk`;
+`juanmaagd/pr-hero` is a mirror kept for workflows and binaries that still name it (Step 4d).
+
+### Step 4d: The repository move (`juanmaagd/pr-hero` → `cryskai/crysk`), one time
+
+GitHub does not guarantee that `uses:` follows a renamed or transferred repository ("GitHub will not redirect
+calls to an action hosted by a renamed repository", [Renaming a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository)).
+So the move keeps a repository at the old name. Each step is run by the maintainer, never by CI or an agent:
+
+1. **Transfer and rename** `juanmaagd/pr-hero` to `cryskai/crysk` (Settings → Transfer, new name `crysk`).
+   Issues, pull requests, stars, history, tags, releases, secrets and variables move with it. Check the
+   repository's Actions secrets and variables afterwards.
+2. **Recreate `juanmaagd/pr-hero` at once** as a public mirror: `git push --mirror` of `main` and every tag,
+   so `uses: juanmaagd/pr-hero@v0` (and every `@v0.x.y`) keeps resolving and
+   `https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh` keeps serving the installer.
+   Creating it stops GitHub's web and git redirect to `cryskai/crysk`: point local clones at the new remote
+   (`git remote set-url origin https://github.com/cryskai/crysk.git`).
+3. **Every release while the mirror lives also goes to the mirror:** push the release commit and both tags
+   (`vX.Y.Z` and the moved `v0`) there, and create the same GitHub Release with the same assets and
+   `SHA256SUMS`. A binary from before the move (`src/updater.ts` read `juanmaagd/pr-hero`) finds its upgrade
+   there; without the mirrored release, `pr-hero upgrade` on such a binary reports no new version.
+4. Archive the mirror once the version that drops the legacy names ships; an archived repository keeps serving
+   its tags.
 
 ### Step 5: Push to Remote
 
@@ -313,7 +334,7 @@ flowchart TD
 Perform these sanity checks immediately following a release:
 
 1. **GitHub Release Verification**:
-   - Visit `https://github.com/juanmaagd/pr-hero/releases/tag/vX.Y.Z`.
+   - Visit `https://github.com/cryskai/crysk/releases/tag/vX.Y.Z`.
    - Confirm all 4 platform binaries and `SHA256SUMS` are attached as release assets, and that the release
      is the one GitHub marks `Latest` (after the renumbering it must not be `1.1.0`):
      ```bash
@@ -330,11 +351,11 @@ Perform these sanity checks immediately following a release:
 3. **Installer Script Test**:
    - Test standalone installer download in a temporary environment:
      ```bash
-     PRHERO_VERSION="vX.Y.Z" curl -fsSL https://raw.githubusercontent.com/juanmaagd/pr-hero/main/install.sh | bash
+     PRHERO_VERSION="vX.Y.Z" curl -fsSL https://raw.githubusercontent.com/cryskai/crysk/main/install.sh | bash
      ~/.crysk/bin/crysk --version   # ~/.prhero/bin/pr-hero on a machine that already had ~/.prhero
      ```
 4. **GitHub Action Reference**:
-   - Confirm workflows referencing `juanmaagd/pr-hero@v0` or `juanmaagd/pr-hero@vX.Y.Z` resolve the new
+   - Confirm workflows referencing `cryskai/crysk@v0` or `cryskai/crysk@vX.Y.Z` resolve the new
      release. (Workflows still pinned to the frozen `@v1` continue resolving the last 1.x release, by
      design — they receive no further updates.)
 5. **Doctor Diagnostic**:

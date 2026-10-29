@@ -275,7 +275,7 @@ describe("smoke: the planted-bug PR", () => {
       "--",
       WORKFLOW_PATH,
     ]);
-    expect(workflowFor("v0.2.0")).toContain("uses: juanmaagd/pr-hero@v0.2.0");
+    expect(workflowFor("v0.2.0")).toContain("uses: cryskai/crysk@v0.2.0");
   });
 });
 

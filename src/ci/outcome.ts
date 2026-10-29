@@ -1138,10 +1138,10 @@ const TRANSPORT_PHRASE: Record<
 };
 
 const DOCS_BASE =
-  "https://github.com/juanmaagd/pr-hero/blob/v0/docs/github-actions.md#";
+  "https://github.com/cryskai/crysk/blob/v0/docs/github-actions.md#";
 
 const ENGINE_DEFECT_ISSUE =
-  'gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"';
+  'gh issue create -R cryskai/crysk --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"';
 const RERUN_FAILED = "$ gh run rerun {runId} --failed";
 const REVIEW_AGAIN = '$ gh pr comment {pr} --body "/crysk review"';
 // A workflow set up before the rename filters only `/pr-hero`, and the
@@ -1644,9 +1644,9 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         why: "the action installs this runtime itself, so this is a Crysk defect",
         fixes: [
           "Report it with this run:",
-          '$ gh issue create -R juanmaagd/pr-hero --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"',
+          '$ gh issue create -R cryskai/crysk --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"',
         ],
-        annotationFix: "report it at juanmaagd/pr-hero with this run's URL",
+        annotationFix: "report it at cryskai/crysk with this run's URL",
       },
       local: RUNTIME_LOCAL,
       default: RUNTIME_LOCAL,
@@ -1747,7 +1747,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     variants: single(
       "this is a defect in Crysk, not in your configuration",
       ["Report it, with this run:", `$ ${ENGINE_DEFECT_ISSUE}`],
-      "report it at juanmaagd/pr-hero with this run's URL",
+      "report it at cryskai/crysk with this run's URL",
     ),
   },
   "PRH-HUNTERS-FAILED": {

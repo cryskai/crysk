@@ -233,7 +233,7 @@ describe("init: main", () => {
   });
 
   test("refuses a clone whose origin is not the sandbox", async () => {
-    const w = world({ remoteUrl: "https://github.com/juanmaagd/pr-hero.git" });
+    const w = world({ remoteUrl: "https://github.com/cryskai/crysk.git" });
     const h = harness(scriptFor(w));
     await expect(runInit(h.deps, REF)).rejects.toThrow(RailViolation);
     expect(h.gitCalls.some((c) => c.args[0] === "push")).toBe(false);
@@ -244,7 +244,7 @@ describe("init: main", () => {
   // must be refused before anything is pushed.
   test("refuses a clone whose push URL is not the sandbox, even when its fetch URL is", async () => {
     const w = world({
-      pushUrl: "https://github.com/juanmaagd/pr-hero.git",
+      pushUrl: "https://github.com/cryskai/crysk.git",
     });
     const h = harness(scriptFor(w));
     await expect(runInit(h.deps, REF)).rejects.toThrow(RailViolation);

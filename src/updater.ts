@@ -32,7 +32,7 @@ import {
   SUPPORTED_OPENCODE_SDK_VERSION,
 } from "./transport-registry";
 
-export const PRHERO_GITHUB_REPO = "juanmaagd/pr-hero";
+export const PRHERO_GITHUB_REPO = "cryskai/crysk";
 
 export type InstallMethodKind = "standalone" | "package_manager" | "source";
 
