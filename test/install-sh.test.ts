@@ -27,14 +27,22 @@ const SCRIPT = path.join(import.meta.dir, "../install.sh");
 // serves bytes that do not match the sums. Both are verified by the script's
 // real sha256 step.
 const FAKE_CURL = `#!/bin/sh
-out=""; url=""
+out=""; url=""; fmt=""; fail=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift 2 ;;
+    -w) fmt="$2"; shift 2 ;;
+    --fail) fail=1; shift ;;
     -*) shift ;;
     *) url="$1"; shift ;;
   esac
 done
+# An HTTP error: with -w the status is printed and curl exits 0 (no --fail),
+# with --fail it exits 22, as the real curl does.
+http_error() {
+  if [ -n "$fmt" ]; then printf '%s' "$1"; exit 0; fi
+  exit 22
+}
 name="$(basename "$url")"
 case "$name" in
   SHA256SUMS)
@@ -47,12 +55,14 @@ case "$name" in
     done > "$out"
     ;;
   *)
-    if [ "$name" != "\${name#crysk-}" ] && [ "\${FAKE_RELEASE:-}" = legacy ]; then exit 22; fi
+    if [ "$name" != "\${name#crysk-}" ] && [ "\${FAKE_RELEASE:-}" = legacy ]; then http_error 404; fi
+    if [ "$name" != "\${name#crysk-}" ] && [ "\${FAKE_RELEASE:-}" = crysk-500 ]; then http_error 500; fi
     if [ "\${FAKE_RELEASE:-}" = tampered ]; then
       printf '#!/bin/sh\\necho tampered\\n' > "$out"
     else
       printf '#!/bin/sh\\necho fake-%s\\n' "$name" > "$out"
     fi
+    if [ -n "$fmt" ]; then printf '200'; fi
     ;;
 esac
 `;
@@ -176,6 +186,15 @@ describe("install.sh installs crysk and keeps pr-hero answering", () => {
     expect(r.code).toBe(0);
     expect(out("crysk")).toMatch(/^fake-pr-hero-/);
     expect(out("pr-hero")).toBe(out("crysk"));
+  });
+
+  // Only a 404 means "a release from before the rename": any other HTTP error is a
+  // real failure and must not quietly pick the other asset (the T6c verifier).
+  test("a server error on the crysk asset fails the install instead of falling back", () => {
+    const r = install({ FAKE_RELEASE: "crysk-500" });
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain("HTTP 500");
+    expect(existsSync(path.join(bin(), "crysk"))).toBe(false);
   });
 
   test("re-running over a legacy regular-file pr-hero replaces it with the link", () => {

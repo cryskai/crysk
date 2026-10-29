@@ -81,18 +81,28 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 RELEASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
 CHECKSUMS_URL="${RELEASE_URL}/SHA256SUMS"
 
-# crysk-<target> first. Only a 404 (curl --fail exits 22) means the release
-# predates the rename and carries just pr-hero-<target>: any other failure is a
-# real one and must not quietly pick a different asset.
+# crysk-<target> first. Only a 404 means the release predates the rename and
+# carries just pr-hero-<target>: any other HTTP error or a network failure is a
+# real one and must not quietly pick a different asset. `curl --fail` exits 22
+# for every status from 400 up, so the status is read with -w instead.
+fetch_asset() {
+  HTTP_CODE="$(curl -sSL -w '%{http_code}' "${RELEASE_URL}/$1" -o "${TMP_DIR}/crysk")" || return 1
+  [ "${HTTP_CODE}" = "200" ]
+}
 ASSET="crysk-${TARGET}"
 echo "Downloading crysk binary from ${RELEASE_URL}/${ASSET}..."
 DOWNLOAD_RC=0
-curl -sSL --fail "${RELEASE_URL}/${ASSET}" -o "${TMP_DIR}/crysk" || DOWNLOAD_RC=$?
-if [ "${DOWNLOAD_RC}" -eq 22 ]; then
+HTTP_CODE=""
+fetch_asset "${ASSET}" || DOWNLOAD_RC=1
+if [ "${DOWNLOAD_RC}" -ne 0 ] && [ "${HTTP_CODE}" = "404" ]; then
   ASSET="pr-hero-${TARGET}"
   echo "No crysk asset on v${VERSION} (a release made before the rename); using ${ASSET}..."
   DOWNLOAD_RC=0
-  curl -sSL --fail "${RELEASE_URL}/${ASSET}" -o "${TMP_DIR}/crysk" || DOWNLOAD_RC=$?
+  fetch_asset "${ASSET}" || DOWNLOAD_RC=1
+fi
+if [ "${DOWNLOAD_RC}" -ne 0 ] && [ -n "${HTTP_CODE}" ] && [ "${HTTP_CODE}" != "404" ]; then
+  echo "Error: downloading ${ASSET} failed with HTTP ${HTTP_CODE}." >&2
+  exit 1
 fi
 
 if [ "${DOWNLOAD_RC}" -eq 0 ]; then
@@ -139,10 +149,16 @@ fi
 # pr-hero -> crysk, replacing whatever pr-hero was (the old binary, on a legacy
 # install). A filesystem that refuses symlinks gets a copy; re-running the
 # installer or `upgrade` refreshes it.
-if ! ln -sf "crysk" "${ALIAS_PATH}" 2>/dev/null; then
-  rm -f "${ALIAS_PATH}"
-  cp "${BIN_PATH}" "${ALIAS_PATH}"
-  chmod +x "${ALIAS_PATH}"
+# The link is built beside the alias and renamed over it, so pr-hero never stops
+# resolving while it is replaced.
+ALIAS_TMP="${ALIAS_PATH}.new.$$"
+if ln -s "crysk" "${ALIAS_TMP}" 2>/dev/null && mv -f "${ALIAS_TMP}" "${ALIAS_PATH}"; then
+  :
+else
+  rm -f "${ALIAS_TMP}"
+  cp "${BIN_PATH}" "${ALIAS_TMP}"
+  chmod +x "${ALIAS_TMP}"
+  mv -f "${ALIAS_TMP}" "${ALIAS_PATH}"
 fi
 
 echo "Installed crysk to ${BIN_PATH} (pr-hero keeps working: ${ALIAS_PATH})"
