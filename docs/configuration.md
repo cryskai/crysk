@@ -57,7 +57,7 @@ environment variable, which then gets parsed and written to `$HOME/.crysk/config
 runner (a fresh runner has no `~/.prhero`) — the same global layer described above, never the repo file. Full wiring (secrets, the
 `opencode-auth` input, pinned OpenCode CLI version, budget ceilings) is in
 [`docs/github-actions.md`](github-actions.md#opencode-in-ci); scaffolding it is
-[`skills/pr-hero-ci-setup/SKILL.md`](../skills/pr-hero-ci-setup/SKILL.md).
+[`skills/crysk-ci-setup/SKILL.md`](../skills/crysk-ci-setup/SKILL.md).
 
 ## Routing
 
