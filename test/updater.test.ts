@@ -25,8 +25,8 @@ describe("updater (lifecycle foundations)", () => {
   const layout = prheroLayout(home);
   const standaloneBin = path.join(home, ".prhero", "bin", "pr-hero");
 
-  test("1.4 Canonical repo constant is pinned to juanmaagd/pr-hero", () => {
-    expect(PRHERO_GITHUB_REPO).toBe("juanmaagd/pr-hero");
+  test("1.4 Canonical repo constant is pinned to cryskai/crysk", () => {
+    expect(PRHERO_GITHUB_REPO).toBe("cryskai/crysk");
   });
 
   describe("1.1 Install method detection and shadow-installs", () => {
@@ -144,7 +144,7 @@ describe("updater (lifecycle foundations)", () => {
         current_version: "1.0.0",
         latest_version: "1.1.0",
         reconciled_version: "1.0.0",
-        release_url: "https://github.com/juanmaagd/pr-hero/releases/tag/v1.1.0",
+        release_url: "https://github.com/cryskai/crysk/releases/tag/v1.1.0",
       };
 
       const storage: Record<string, string> = {};

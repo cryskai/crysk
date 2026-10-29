@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="juanmaagd/pr-hero"
+REPO="cryskai/crysk"
 
 # Which home to install into. Mirrors resolveHomeDir (src/brand-paths.ts):
 # ~/.crysk when it holds pr-hero state, else ~/.prhero when that exists, else

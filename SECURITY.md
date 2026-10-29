@@ -11,7 +11,7 @@
 
 We take the security of `pr-hero` seriously. If you discover a vulnerability, please report it privately to our team:
 
-1. Go to the [Security Advisories](https://github.com/juanmaagd/pr-hero/security/advisories/new) tab of this repository.
+1. Go to the [Security Advisories](https://github.com/cryskai/crysk/security/advisories/new) tab of this repository.
 2. Click **Report a vulnerability** to submit a private report.
 
 Please **do not** open public GitHub issues or discussions for security vulnerabilities.

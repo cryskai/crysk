@@ -139,7 +139,7 @@ export interface CiWorkflowTemplateOptions {
   mode?: "gate" | "advisory";
 }
 
-export const DEFAULT_CI_ACTION_REF = "juanmaagd/pr-hero@v0";
+export const DEFAULT_CI_ACTION_REF = "cryskai/crysk@v0";
 
 // The options THIS repo generates its OWN workflow with. One exported source
 // of truth rather than three hand-copied literals: the byte-equality drift

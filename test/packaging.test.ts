@@ -1447,14 +1447,14 @@ describe("Packaging & distribution configuration", () => {
   // action being changed in the PR that changes it.
   test("the default action ref targets the published tag for consumer repos", () => {
     expect(generateCiWorkflowTemplate()).toContain(
-      "uses: juanmaagd/pr-hero@v0",
+      "uses: cryskai/crysk@v0",
     );
   });
 
   test("this repo's own workflow runs the local action, not an unpublished tag", () => {
     const own = generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS);
     expect(own).toContain("uses: ./");
-    expect(own).not.toContain("juanmaagd/pr-hero@v0");
+    expect(own).not.toContain("cryskai/crysk@v0");
   });
 
   // The byte-equality drift tests above already fail if these lines change, but

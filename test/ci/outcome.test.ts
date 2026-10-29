@@ -39,7 +39,7 @@ const OUTCOME_SRC = path.join(REPO_ROOT, "src/ci/outcome.ts");
 const TRIGGER_SRC = path.join(REPO_ROOT, "src/ci/trigger.ts");
 const DOCS = path.join(REPO_ROOT, "docs/github-actions.md");
 const DOCS_URL_PREFIX =
-  "https://github.com/juanmaagd/pr-hero/blob/v0/docs/github-actions.md#";
+  "https://github.com/cryskai/crysk/blob/v0/docs/github-actions.md#";
 const CONTEXTS: OutcomeContext[] = ["action", "local"];
 
 // Exhaustive expectations. Typing them as Record over the real unions makes
@@ -298,7 +298,7 @@ const REALISTIC: ErrorParams = {
   scope: "statuses",
   pr: 42,
   runId: "123456",
-  runUrl: "https://github.com/juanmaagd/pr-hero/actions/runs/123456",
+  runUrl: "https://github.com/cryskai/crysk/actions/runs/123456",
   detail: "HTTP 503",
 };
 
@@ -1025,7 +1025,7 @@ describe("renderCode and renderError: the annotation", () => {
       "the action installs this runtime itself",
     );
     expect(action.summary.join("\n")).toContain(
-      'gh issue create -R juanmaagd/pr-hero --title "PRH-RUNTIME-UNAVAILABLE" --body "<run-url>"',
+      'gh issue create -R cryskai/crysk --title "PRH-RUNTIME-UNAVAILABLE" --body "<run-url>"',
     );
     const local = renderError(issue, { detail: "the OpenCode SDK" }, "local");
     expect(
@@ -1257,7 +1257,7 @@ describe("renderCode and renderError: the annotation", () => {
     const command =
       rendered.summary.find((line) => line.startsWith("gh issue create")) ?? "";
     expect(command).toBe(
-      'gh issue create -R juanmaagd/pr-hero --title "PRH-ENGINE-DEFECT x rm -rf  idy" --body "<run-url>"',
+      'gh issue create -R cryskai/crysk --title "PRH-ENGINE-DEFECT x rm -rf  idy" --body "<run-url>"',
     );
   });
 

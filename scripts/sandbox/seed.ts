@@ -109,7 +109,7 @@ export const REPO_DESCRIPTION =
 
 export const PLANTED_COMMIT_MESSAGE = "refactor: simplify volume scaling";
 
-const ACTION_REPO = "juanmaagd/pr-hero";
+const ACTION_REPO = "cryskai/crysk";
 const REF_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
 
 export function validateRef(ref: string): void {

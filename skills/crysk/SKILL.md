@@ -23,7 +23,7 @@ Route away: GitHub Actions, CI secrets, `CRYSK_ROUTING`, `/crysk review` comment
 This skill holds the mental model and the traps, not the reference. Before acting, read the live state, and for detail follow the linked section — do not answer from memory:
 - `crysk config` — every key, its effective value, and **which layer decided it**. Read-only, $0.
 - `crysk --help` — the installed version's real commands and flags.
-- The docs on GitHub (they are not shipped in the npm package): [README](https://github.com/juanmaagd/pr-hero/blob/main/README.md), [configuration.md](https://github.com/juanmaagd/pr-hero/blob/main/docs/configuration.md).
+- The docs on GitHub (they are not shipped in the npm package): [README](https://github.com/cryskai/crysk/blob/main/README.md), [configuration.md](https://github.com/cryskai/crysk/blob/main/docs/configuration.md).
 
 If Crysk is not on `PATH`, run every command as `npx -y crysk <command>` (Node is enough). An install from before the rename (the package used to be `pr-hero`) still answers to `pr-hero`; either command is the same program.
 
@@ -47,23 +47,23 @@ If Crysk is not on `PATH`, run every command as `npx -y crysk <command>` (Node i
 
 ## Recipes
 
-**Custom model / backend** — [Routing](https://github.com/juanmaagd/pr-hero/blob/main/docs/configuration.md#routing)
+**Custom model / backend** — [Routing](https://github.com/cryskai/crysk/blob/main/docs/configuration.md#routing)
 1. Ask: which logical names to move (`sonnet` hunters, `opus` refuter, `haiku` summarizer, or a `default` for all), which backend (`claude-code`, `opencode`, …), which provider and exact model id, and whether metered spend is acceptable.
-2. Write `routing.mappings` (or `routing.default`) in `~/.crysk/config.json` (or `~/.prhero/config.json` if that is the home in use). An alias (`sonnet`/`opus`/`haiku`) routed anywhere except `claude-code` over `gateway: "direct"` **requires** `modelSnapshot` — see [modelFamily / modelSnapshot](https://github.com/juanmaagd/pr-hero/blob/main/docs/configuration.md#modelfamily--modelsnapshot).
+2. Write `routing.mappings` (or `routing.default`) in `~/.crysk/config.json` (or `~/.prhero/config.json` if that is the home in use). An alias (`sonnet`/`opus`/`haiku`) routed anywhere except `claude-code` over `gateway: "direct"` **requires** `modelSnapshot` — see [modelFamily / modelSnapshot](https://github.com/cryskai/crysk/blob/main/docs/configuration.md#modelfamily--modelsnapshot).
 3. Traps: two mappings matching the same name is an error, not first-wins; all OpenCode mappings in one run must use **one** provider; `disabled: true` / `allowSpend: false` refuse loudly instead of falling back.
 4. Verify: `crysk config`, `crysk doctor`, then a **local** `crysk review --dry-run` (PR-mode dry-run returns before route admission, so it can look clean on a route that will be refused).
 
-**Effort** — [Effort](https://github.com/juanmaagd/pr-hero/blob/main/docs/configuration.md#effort): set by the `effort:` frontmatter of a prompt in a custom `agents_dir` (`low|medium|high|xhigh|max`), never by a flag or env var. Defaults: hunters `xhigh`, refuter `high`. It applies to `claude-code` only; OpenCode records it as not applied.
+**Effort** — [Effort](https://github.com/cryskai/crysk/blob/main/docs/configuration.md#effort): set by the `effort:` frontmatter of a prompt in a custom `agents_dir` (`low|medium|high|xhigh|max`), never by a flag or env var. Defaults: hunters `xhigh`, refuter `high`. It applies to `claude-code` only; OpenCode records it as not applied.
 
-**Credentials / billing** — [Credentials](https://github.com/juanmaagd/pr-hero/blob/main/docs/configuration.md#credentials): on macOS a `claude-code` route runs on the Keychain subscription and strips ambient `ANTHROPIC_API_KEY`; elsewhere an ambient key makes it metered. For OpenCode, only an `openai` entry of `type: "oauth"` is a subscription; every other provider is a metered API token unless its catalog prices the model at $0.
+**Credentials / billing** — [Credentials](https://github.com/cryskai/crysk/blob/main/docs/configuration.md#credentials): on macOS a `claude-code` route runs on the Keychain subscription and strips ambient `ANTHROPIC_API_KEY`; elsewhere an ambient key makes it metered. For OpenCode, only an `openai` entry of `type: "oauth"` is a subscription; every other provider is a metered API token unless its catalog prices the model at $0.
 
-**Caps, size gate, exclusions** — [config.json keys](https://github.com/juanmaagd/pr-hero/blob/main/README.md#configjson-keys), [size gate](https://github.com/juanmaagd/pr-hero/blob/main/README.md#the-size-gate--a-cost-gate-not-a-quality-gate), [.cryskignore](https://github.com/juanmaagd/pr-hero/blob/main/README.md#cryskignore--repo-defined-exclusions): `max_changed_lines`/`max_changed_files` skip oversized diffs (a cost gate, not a quality one); `max_concurrent_steps` keeps the fan-out under a provider's rate limit; `max_verification_steps` (default `8`, `0` pauses) caps how many prior open findings a re-review spawns verifier steps for. Only the repo-root `.cryskignore` is read, and matching is case-sensitive.
+**Caps, size gate, exclusions** — [config.json keys](https://github.com/cryskai/crysk/blob/main/README.md#configjson-keys), [size gate](https://github.com/cryskai/crysk/blob/main/README.md#the-size-gate--a-cost-gate-not-a-quality-gate), [.cryskignore](https://github.com/cryskai/crysk/blob/main/README.md#cryskignore--repo-defined-exclusions): `max_changed_lines`/`max_changed_files` skip oversized diffs (a cost gate, not a quality one); `max_concurrent_steps` keeps the fan-out under a provider's rate limit; `max_verification_steps` (default `8`, `0` pauses) caps how many prior open findings a re-review spawns verifier steps for. Only the repo-root `.cryskignore` is read, and matching is case-sensitive.
 
-**gotchas.md** — [gotchas.md](https://github.com/juanmaagd/pr-hero/blob/main/README.md#gotchasmd): required and must be real. Read the code and write the actual traps, then delete the `human-attention-required` marker line, or `review` and `doctor` refuse it.
+**gotchas.md** — [gotchas.md](https://github.com/cryskai/crysk/blob/main/README.md#gotchasmd): required and must be real. Read the code and write the actual traps, then delete the `human-attention-required` marker line, or `review` and `doctor` refuse it.
 
-**Running a review** — [Commands](https://github.com/juanmaagd/pr-hero/blob/main/README.md#commands): `.crysk/` must be committed or gitignored (clean-tree gate). Expect roughly $2–5 and ~10 minutes per typical PR; the printed band ignores billing mode. Artifacts land in `~/.crysk/repos/<origin>/runs/<run>/`. To check or wait on a PR's CI review state deterministically ($0, via `gh`), run `pr-hero status --pr <n> [--wait] [--json]`.
+**Running a review** — [Commands](https://github.com/cryskai/crysk/blob/main/README.md#commands): `.crysk/` must be committed or gitignored (clean-tree gate). Expect roughly $2–5 and ~10 minutes per typical PR; the printed band ignores billing mode. Artifacts land in `~/.crysk/repos/<origin>/runs/<run>/`. To check or wait on a PR's CI review state deterministically ($0, via `gh`), run `pr-hero status --pr <n> [--wait] [--json]`.
 
-**Watcher / GC** — [crysk watch](https://github.com/juanmaagd/pr-hero/blob/main/README.md#watching-prs-automatically--crysk-watch): `watch add [--post]`, preview with `watch --once --dry-run`, and only then `watch install`. `daily_cap` and `window` live in `~/.crysk/watch.json`. GC is separate: `crysk gc install`.
+**Watcher / GC** — [crysk watch](https://github.com/cryskai/crysk/blob/main/README.md#watching-prs-automatically--crysk-watch): `watch add [--post]`, preview with `watch --once --dry-run`, and only then `watch install`. `daily_cap` and `window` live in `~/.crysk/watch.json`. GC is separate: `crysk gc install`.
 
 ## Output Contract
 

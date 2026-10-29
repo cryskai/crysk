@@ -23,7 +23,7 @@ export const USAGE = `usage: bun scripts/sandbox.ts <command> [options]
   clean                   close open sandbox/ PRs and delete their branches
 
 scenarios: ${scenarioNames().join(", ")}
-<ref> is a tag or branch of juanmaagd/pr-hero, pinned into the sandbox workflow.
+<ref> is a tag or branch of cryskai/crysk, pinned into the sandbox workflow.
 --route claude runs reviews on the subscription token (CLAUDE_CODE_OAUTH_TOKEN); opencode:<modelSnapshot> runs them on one OpenCode model.
 Only ${SANDBOX_REPO} is ever touched.`;
 
