@@ -82,7 +82,12 @@ mirror_git push -q "$MIRROR_URL" "refs/tags/$V"
 mirror_git push -q --force "$MIRROR_URL" "refs/tags/$MAJOR" # exists there at the previous release
 
 if mirror_gh release view "$V" -R "$MIRROR" >/dev/null 2>&1; then
-  echo "== release: $V already on $MIRROR, verifying it"
+  # A create that died halfway leaves a draft or a release missing assets: a
+  # re-run completes it (same-named assets replaced from the checked source,
+  # published, marked latest) instead of only verifying it.
+  echo "== release: $V already on $MIRROR, completing and verifying it"
+  mirror_gh release upload "$V" -R "$MIRROR" --clobber "$d"/source/*
+  mirror_gh release edit "$V" -R "$MIRROR" --draft=false --latest >/dev/null
 else
   echo "== release: creating $V on $MIRROR"
   mirror_gh release create "$V" -R "$MIRROR" --verify-tag --latest --title "$V" \
