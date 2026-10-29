@@ -26,16 +26,12 @@ import {
   resolveEngineAssets,
   selfInvocation,
 } from "./assets";
+import { REPO_DIR_NAME, resolveHomeDir, resolveRepoDir } from "./brand-paths";
 import {
-  HOME_DIR_NAME,
-  IGNORE_FILE_NAME,
-  LEGACY_HOME_DIR_NAME,
-  LEGACY_IGNORE_FILE_NAME,
-  LEGACY_REPO_DIR_NAME,
-  REPO_DIR_NAME,
-  resolveHomeDir,
-  resolveRepoDir,
-} from "./brand-paths";
+  gitIsTracked,
+  type IsTracked,
+  migrationChecks,
+} from "./doctor-migration";
 import type { ExactBindingCapabilityReport } from "./execution/contracts";
 import {
   type CheckSystemToolsOptions,
@@ -64,6 +60,10 @@ export interface DoctorReport {
 }
 
 export interface RunDoctorOptions {
+  // Whether git tracks <repoDir>/<rel>: picks `git mv` over `mv` in the
+  // migration hint. Injectable so tests need no repository.
+  isTracked?: IsTracked;
+  platform?: string;
   cwd?: string;
   repoRoot?: string;
   home?: string;
@@ -179,72 +179,6 @@ export function openCodeRoutingSdkCheck(input: {
       `Expected exact version "${SUPPORTED_OPENCODE_SDK_VERSION}". ` +
       "Run pr-hero upgrade --reconcile.",
   };
-}
-
-// The pr-hero → Crysk rename never moves a user's files. While an old path is
-// still the one being read, say so and print the exact command; when both
-// exist, the new one wins and the old one is silently dead weight, so say that.
-function migrationChecks(input: {
-  home: string;
-  repoDir: string | undefined;
-  exists: (p: string) => boolean;
-}): DoctorCheckItem[] {
-  const { home, repoDir, exists } = input;
-  const out: DoctorCheckItem[] = [];
-  const pair = (
-    name: string,
-    parent: string,
-    fresh: string,
-    legacy: string,
-    label: (n: string) => string,
-    move: string,
-  ) => {
-    const hasNew = exists(path.join(parent, fresh));
-    const hasOld = exists(path.join(parent, legacy));
-    if (!hasOld) return;
-    out.push(
-      hasNew
-        ? {
-            name,
-            severity: "degraded",
-            message: `${label(legacy)} is ignored because ${label(fresh)} exists`,
-            hint: `Merge anything you still need into ${label(fresh)}, then delete ${label(legacy)}.`,
-          }
-        : {
-            name,
-            severity: "degraded",
-            message: `${label(legacy)} is the legacy name; still read for now, but ${label(fresh)} is the current one`,
-            hint: move,
-          },
-    );
-  };
-  pair(
-    "migrate:home",
-    home,
-    HOME_DIR_NAME,
-    LEGACY_HOME_DIR_NAME,
-    (n) => `~/${n}`,
-    `Run: mv ~/${LEGACY_HOME_DIR_NAME} ~/${HOME_DIR_NAME}`,
-  );
-  if (repoDir !== undefined) {
-    pair(
-      "migrate:repo",
-      repoDir,
-      REPO_DIR_NAME,
-      LEGACY_REPO_DIR_NAME,
-      (n) => `${n}/`,
-      `Run: git mv ${LEGACY_REPO_DIR_NAME} ${REPO_DIR_NAME}`,
-    );
-    pair(
-      "migrate:ignore",
-      repoDir,
-      IGNORE_FILE_NAME,
-      LEGACY_IGNORE_FILE_NAME,
-      (n) => n,
-      `Run: git mv ${LEGACY_IGNORE_FILE_NAME} ${IGNORE_FILE_NAME}`,
-    );
-  }
-  return out;
 }
 
 export function evaluateDoctorReport(checks: DoctorCheckItem[]): DoctorReport {
@@ -557,14 +491,27 @@ export async function runDoctor(
     });
   }
 
-  checks.push(...migrationChecks({ home, repoDir, exists }));
-
   // 5. Agent Environments (S3)
   const envs = await detectAgentEnvironments({
     home,
     exists,
     which: options.checkToolsOptions?.which,
   });
+
+  // The rename's migration hints need to know what is installed on this
+  // machine (binary on PATH, launchd agents, MCP registrations), so they run
+  // after the environment scan.
+  checks.push(
+    ...migrationChecks({
+      home,
+      repoDir,
+      exists,
+      readFile,
+      envs,
+      platform: options.platform ?? process.platform,
+      isTracked: options.isTracked ?? gitIsTracked,
+    }),
+  );
 
   const self = selfInvocation();
   const mcpReg = {
