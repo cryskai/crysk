@@ -54,6 +54,18 @@ describe("redactDiagnostic (§6.3 redaction-before-persistence)", () => {
     }
   });
 
+  // A value that starts with an allowed prose word is still a value: only trailing
+  // sentence punctuation may be ignored, never digits or symbols (the verifier's probe).
+  test("a prose word glued to digits or symbols is still redacted", () => {
+    expect(redactDiagnostic("password is1234")).toBe("[REDACTED]");
+    expect(redactDiagnostic("password can8472")).toBe("[REDACTED]");
+    expect(redactDiagnostic("token no123!")).toBe("[REDACTED]");
+    expect(redactDiagnostic("token to123")).toBe("[REDACTED]");
+    expect(redactDiagnostic("your token has expired.")).toBe(
+      "your token has expired.",
+    );
+  });
+
   test("a value after the keyword is still redacted, with or without a delimiter", () => {
     expect(redactDiagnostic("invalid token abc123def456")).toBe(
       "invalid [REDACTED]",
