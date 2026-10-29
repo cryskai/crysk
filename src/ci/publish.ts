@@ -1273,22 +1273,37 @@ function publishOverride(
   let statusSet = false;
   let exitCode = 0;
   if (plan.headSha !== undefined) {
-    const status = postStatus(deps, plan.repository, plan.headSha, {
-      state: "success",
-      context: STATUS_CONTEXT,
-      description: overrideDescription(plan.actor),
-      targetUrl: plan.runUrl,
-    });
-    if (status.ok) {
-      statusSet = true;
+    // Each context is written on its own (postStatus would fold the pair into one answer):
+    // when one lands and the other fails, the head IS overridden on the one that landed, and
+    // the permanent audit comment must say so (#434 F001). The failed half is still reported.
+    let failure: { ok: false; httpStatus: number | undefined } | undefined;
+    for (const context of statusContextForms(STATUS_CONTEXT)) {
+      const posted = postStatusOn(
+        deps,
+        plan.repository,
+        plan.headSha,
+        {
+          state: "success",
+          context: STATUS_CONTEXT,
+          description: overrideDescription(plan.actor),
+          targetUrl: plan.runUrl,
+        },
+        context,
+        2,
+      );
+      if (posted.ok) statusSet = true;
+      else failure ??= posted;
+    }
+    if (statusSet) {
       // WHY here, right after the success and before the audit comment: the head is green
       // now, so an earlier run's outcome comment contradicts it. The audit comment does not
       // gate this cleanup, and its warnings never change the exit code (as for a review).
       cleanupOlderOutcomes(deps, plan);
-    } else {
+    }
+    if (failure !== undefined) {
       reportStatusWriteFailure(
         deps,
-        status.httpStatus,
+        failure.httpStatus,
         plan.runId,
         plan.runUrl,
       );

@@ -705,6 +705,7 @@ describe("decidePublication — the pure table", () => {
         const all = texts(p);
         expect(all).toContain("Prompt is too long");
         expect(all).toContain("max-changed-lines");
+        expect(all).toContain(".cryskignore");
         expect(all).toContain(".prheroignore");
         expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
       });
@@ -3089,6 +3090,21 @@ describe("runPublish — the override (S8)", () => {
     expect(run.exitCode).toBe(1);
     expect(deletions(run.calls)).toEqual([]);
     expect(run.calls.some((call) => call.args.includes("graphql"))).toBe(false);
+  });
+
+  // #434 F001: the crysk gate landed and only the legacy pr-hero write failed. The head IS
+  // overridden, so the permanent audit comment must say so; the failed half is still reported.
+  test("an override whose crysk status lands but whose legacy pr-hero write fails records the override and still exits 1", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      status: [ok(""), fail("gh: HTTP 500"), fail("gh: HTTP 500")],
+    });
+    expect(run.exitCode).toBe(1);
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body).toContain("@maintainer");
+    expect(body).not.toContain("no commit status could be set");
+    expect(run.stdout).toContain("crysk gate overridden by @maintainer");
+    expect(run.stdout).not.toContain("set no commit status");
   });
 
   test("an override with no head sets no status, so it cleans up nothing", () => {

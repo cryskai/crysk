@@ -1185,6 +1185,8 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"
 ```
 
+On a machine set up before the rename the config is ~/.prhero/config.json: use that path in the command.
+
 A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
 
 ### PRH-ROUTING-INVALID
@@ -1653,7 +1655,7 @@ Every failed hunter shares the `context_window_exceeded` cause (the Claude CLI r
 
 **Fix:**
 
-Lower `max-changed-lines` in the workflow's `with:` block (or `max_changed_lines` in the repo config), or exclude paths in `.prheroignore`, then ask for a new review:
+Lower `max-changed-lines` in the workflow's `with:` block (or `max_changed_lines` in the repo config), or exclude paths in `.cryskignore` (`.prheroignore` in a repo set up before the rename), then ask for a new review:
 
 ```bash
 gh pr comment {pr} --body "/crysk review"
