@@ -82,12 +82,25 @@ mirror_git push -q "$MIRROR_URL" "refs/tags/$V"
 mirror_git push -q --force "$MIRROR_URL" "refs/tags/$MAJOR" # exists there at the previous release
 
 if mirror_gh release view "$V" -R "$MIRROR" >/dev/null 2>&1; then
-  # A create that died halfway leaves a draft or a release missing assets: a
-  # re-run completes it (same-named assets replaced from the checked source,
-  # published, marked latest) instead of only verifying it.
-  echo "== release: $V already on $MIRROR, completing and verifying it"
-  mirror_gh release upload "$V" -R "$MIRROR" --clobber "$d"/source/*
-  mirror_gh release edit "$V" -R "$MIRROR" --draft=false --latest >/dev/null
+  # A create that died halfway leaves a draft or a release missing assets. A
+  # re-run repairs only what differs from the checked source: a complete,
+  # published, latest release is left untouched (never a delete-and-upload on
+  # the release pre-move binaries are reading).
+  echo "== release: $V already on $MIRROR, checking it"
+  mirror_gh release download "$V" -R "$MIRROR" -D "$d/existing" >/dev/null 2>&1 || true
+  for f in "$d"/source/*; do
+    n=$(basename "$f")
+    if ! cmp -s "$f" "$d/existing/$n"; then
+      echo "   repairing asset $n"
+      mirror_gh release upload "$V" -R "$MIRROR" --clobber "$f"
+    fi
+  done
+  state=$(mirror_gh release view "$V" -R "$MIRROR" --json isDraft -q .isDraft)
+  current=$(mirror_gh release view -R "$MIRROR" --json tagName -q .tagName 2>/dev/null || true)
+  if [ "$state" = "true" ] || [ "$current" != "$V" ]; then
+    echo "   publishing $V as latest"
+    mirror_gh release edit "$V" -R "$MIRROR" --draft=false --latest >/dev/null
+  fi
 else
   echo "== release: creating $V on $MIRROR"
   mirror_gh release create "$V" -R "$MIRROR" --verify-tag --latest --title "$V" \
