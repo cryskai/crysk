@@ -1237,18 +1237,31 @@ function overrideDescription(actor: string): string {
 // an override the status never received would be a false record.
 function overrideCommentBody(
   plan: Extract<Publication, { kind: "override" }>,
-  statusSet: boolean,
+  landed: readonly string[],
   at: Date,
 ): string {
   const when = `${at.toISOString().slice(0, 16).replace("T", " ")} UTC`;
   const marker = `${MARKER_OPEN}override head=${plan.headSha ?? "unknown"} run=${plan.runId} attempt=${plan.runAttempt} -->`;
-  if (statusSet && plan.headSha !== undefined) {
+  if (landed.length > 0 && plan.headSha !== undefined) {
+    // Name exactly the contexts that were written: a branch protection that requires the
+    // other one is still blocked, and this comment is never cleaned up (#435 F001).
+    const names = landed.map((context) => `\`${context}\``).join(" and ");
+    const missed = statusContextForms(STATUS_CONTEXT).filter(
+      (context) => !landed.includes(context),
+    );
+    const missedNote =
+      missed.length === 0
+        ? ""
+        : ` The ${missed.map((context) => `\`${context}\``).join(" and ")} status could not be written, so a rule that requires it is still blocked: comment ${commandHint(OVERRIDE_COMMAND)} again to retry.`;
     return [
       marker,
       "",
-      `Crysk's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. ` +
-        "The `crysk` status on that head is now success, with no review of this head. " +
-        `A new push or a later ${commandHint(REVIEW_COMMAND)} on this head replaces it.`,
+      (landed.includes(STATUS_CONTEXT)
+        ? `Crysk's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. `
+        : `@${plan.actor}'s override of Crysk's gate on head \`${plan.headSha}\` at ${when} landed only in part. `) +
+        `The ${names} status${landed.length > 1 ? "es" : ""} on that head ${landed.length > 1 ? "are" : "is"} now success, with no review of this head.` +
+        missedNote +
+        ` A new push or a later ${commandHint(REVIEW_COMMAND)} on this head replaces it.`,
     ].join("\n");
   }
   const where =
@@ -1270,7 +1283,7 @@ function publishOverride(
   deps: PublishDeps,
   plan: Extract<Publication, { kind: "override" }>,
 ): number {
-  let statusSet = false;
+  const landed: string[] = [];
   let exitCode = 0;
   if (plan.headSha !== undefined) {
     // Each context is written on its own (postStatus would fold the pair into one answer):
@@ -1291,10 +1304,10 @@ function publishOverride(
         context,
         2,
       );
-      if (posted.ok) statusSet = true;
+      if (posted.ok) landed.push(context);
       else failure ??= posted;
     }
-    if (statusSet) {
+    if (landed.length > 0) {
       // WHY here, right after the success and before the audit comment: the head is green
       // now, so an earlier run's outcome comment contradicts it. The audit comment does not
       // gate this cleanup, and its warnings never change the exit code (as for a review).
@@ -1313,9 +1326,11 @@ function publishOverride(
   deps.stdout(
     workflowCommand(
       "notice",
-      statusSet
+      landed.includes(STATUS_CONTEXT)
         ? `crysk gate overridden by @${plan.actor} on head ${plan.headSha}.`
-        : `crysk override by @${plan.actor} set no commit status.`,
+        : landed.length > 0
+          ? `crysk override by @${plan.actor} set only the ${landed.join(", ")} status on head ${plan.headSha}.`
+          : `crysk override by @${plan.actor} set no commit status.`,
     ),
   );
   const at = (deps.now ?? (() => new Date()))();
@@ -1323,7 +1338,7 @@ function publishOverride(
     deps,
     plan.repository,
     plan.pr,
-    overrideCommentBody(plan, statusSet, at),
+    overrideCommentBody(plan, landed, at),
   );
   if (!comment.ok) {
     deps.stdout(

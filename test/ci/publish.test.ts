@@ -3101,10 +3101,30 @@ describe("runPublish — the override (S8)", () => {
     });
     expect(run.exitCode).toBe(1);
     const body = commentPost(run.calls)?.stdin ?? "";
-    expect(body).toContain("@maintainer");
+    expect(body).toContain("The `crysk` status on that head is now success");
+    expect(body).toContain("The `pr-hero` status could not be written");
     expect(body).not.toContain("no commit status could be set");
     expect(run.stdout).toContain("crysk gate overridden by @maintainer");
     expect(run.stdout).not.toContain("set no commit status");
+  });
+
+  // #435 F001: the crysk write failed and only the legacy pr-hero landed. The comment names
+  // what was written and what was not; it never says the crysk status is success.
+  test("an override whose crysk write fails and whose pr-hero lands names only pr-hero, and says crysk is still blocked", () => {
+    const run = runPublishIn({
+      record: overrideRecord(),
+      status: [fail("gh: HTTP 500"), fail("gh: HTTP 500"), ok("")],
+    });
+    expect(run.exitCode).toBe(1);
+    const body = commentPost(run.calls)?.stdin ?? "";
+    expect(body).toContain("The `pr-hero` status on that head is now success");
+    expect(body).not.toContain(
+      "The `crysk` status on that head is now success",
+    );
+    expect(body).not.toContain("Crysk's gate was overridden");
+    expect(body).toContain("The `crysk` status could not be written");
+    expect(run.stdout).not.toContain("crysk gate overridden");
+    expect(run.stdout).toContain("set only the pr-hero status");
   });
 
   test("an override with no head sets no status, so it cleans up nothing", () => {
