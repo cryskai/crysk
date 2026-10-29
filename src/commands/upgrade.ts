@@ -173,6 +173,10 @@ export async function upgradeCommand(options: CliOptions): Promise<number> {
       log(
         `note: could not symlink ${plan.aliasBinary}; wrote a copy instead. 'upgrade' refreshes it.`,
       );
+    } else if (installed.alias === "failed") {
+      log(
+        `warning: crysk is upgraded, but ${plan.aliasBinary} could not be updated (${installed.aliasError ?? "unknown error"}); run 'crysk upgrade' again or use 'crysk'.`,
+      );
     }
 
     log("Running reconciliation via upgraded binary...");

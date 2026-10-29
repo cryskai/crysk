@@ -362,39 +362,69 @@ export async function downloadReleaseBinary(
   return { bytes, assetName };
 }
 
-async function smokeBinary(bin: string): Promise<boolean> {
+// A binary that does not answer --help within the limit fails its smoke and is
+// killed: an upgrade must never hang on the binary it is about to install.
+const SMOKE_TIMEOUT_MS = 30_000;
+
+async function smokeBinary(
+  bin: string,
+  timeoutMs = SMOKE_TIMEOUT_MS,
+): Promise<boolean> {
   try {
     const proc = Bun.spawn([bin, "--help"], {
       stdout: "ignore",
       stderr: "ignore",
     });
-    return (await proc.exited) === 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    });
+    const outcome = await Promise.race([proc.exited, timedOut]);
+    clearTimeout(timer);
+    if (outcome === "timeout") {
+      proc.kill("SIGKILL");
+      return false;
+    }
+    return outcome === 0;
   } catch {
     return false;
   }
 }
 
 type InstallStandaloneResult =
-  | { status: "installed"; alias: "symlink" | "copy" }
+  | {
+      status: "installed";
+      alias: "symlink" | "copy" | "failed";
+      aliasError?: string;
+    }
   | { status: "rolled_back" };
 
-// Writes the verified bytes as the plan's crysk binary, smoke-tests it, then
-// points pr-hero at it. A failed smoke restores the previous crysk (or removes
-// the one that never existed before) and leaves pr-hero untouched, so the
-// install that was working is still working.
+// Smoke-tests the verified bytes where they were downloaded, and only then swaps
+// them in as the plan's crysk binary and points pr-hero at it. A failed or hung
+// smoke removes the download and touches nothing installed, so there is never a
+// moment when an unverified binary sits at the installed path.
 export async function installStandaloneBinary(
   plan: UpgradePlan,
   bytes: Uint8Array,
-  options: { smoke?: (bin: string) => Promise<boolean> } = {},
+  options: {
+    smoke?: (bin: string) => Promise<boolean>;
+    smokeTimeoutMs?: number;
+  } = {},
 ): Promise<InstallStandaloneResult> {
   const { targetBinary, aliasBinary, tempBinary, bakBinary } = plan;
   if (!targetBinary || !aliasBinary || !tempBinary || !bakBinary) {
     throw new Error("Incomplete standalone upgrade plan.");
   }
-  const smoke = options.smoke ?? smokeBinary;
+  const smoke =
+    options.smoke ??
+    ((bin: string) => smokeBinary(bin, options.smokeTimeoutMs));
 
   await Bun.write(tempBinary, bytes);
   chmodSync(tempBinary, 0o755);
+  if (!(await smoke(tempBinary))) {
+    rmSync(tempBinary, { force: true });
+    return { status: "rolled_back" };
+  }
 
   // A .bak left by an interrupted upgrade is the last good binary when the
   // target itself is gone; otherwise it is stale.
@@ -406,15 +436,19 @@ export async function installStandaloneBinary(
   const hadPrevious = existsSync(targetBinary);
   if (hadPrevious) renameSync(targetBinary, bakBinary);
   renameSync(tempBinary, targetBinary);
-
-  if (!(await smoke(targetBinary))) {
-    if (hadPrevious) renameSync(bakBinary, targetBinary);
-    else rmSync(targetBinary, { force: true });
-    return { status: "rolled_back" };
-  }
   rmSync(bakBinary, { force: true });
 
-  return { status: "installed", alias: linkAlias(targetBinary, aliasBinary) };
+  // crysk is installed and verified; the alias is a convenience on top, so a
+  // failure there is reported, never thrown half-way through the upgrade.
+  try {
+    return { status: "installed", alias: linkAlias(targetBinary, aliasBinary) };
+  } catch (err) {
+    return {
+      status: "installed",
+      alias: "failed",
+      aliasError: (err as Error).message,
+    };
+  }
 }
 
 // pr-hero -> crysk, replacing whatever pr-hero was (the old binary, on a legacy

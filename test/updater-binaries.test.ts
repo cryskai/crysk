@@ -13,6 +13,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -166,11 +167,44 @@ describe("installStandaloneBinary", () => {
   test("an install that already has crysk and the pr-hero link upgrades in place", async () => {
     const crysk = path.join(binDir, "crysk");
     writeFileSync(crysk, script("old"), { mode: 0o755 });
+    // The state the installer leaves: crysk plus a pr-hero link to it.
+    symlinkSync("crysk", path.join(binDir, "pr-hero"));
     const p = await plan("crysk");
     await installStandaloneBinary(p, Buffer.from(script("new")));
-    // Re-link so the first install state matches what the installer leaves.
     expect(run("crysk")).toBe("new");
+    expect(lstatSync(path.join(binDir, "pr-hero")).isSymbolicLink()).toBe(true);
     expect(run("pr-hero")).toBe("new");
+  });
+
+  // The smoke runs on the downloaded file before it replaces anything, with a time
+  // limit: a binary that hangs on --help never ends up installed (#425 review).
+  test("a binary that hangs on its smoke is never installed, and the old one keeps running", async () => {
+    const crysk = path.join(binDir, "crysk");
+    writeFileSync(crysk, script("old"), { mode: 0o755 });
+    const p = await plan("crysk");
+    const started = Date.now();
+    const result = await installStandaloneBinary(
+      p,
+      Buffer.from("#!/bin/sh\nsleep 30\n"),
+      { smokeTimeoutMs: 300 },
+    );
+    expect(result.status).toBe("rolled_back");
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(run("crysk")).toBe("old");
+    expect(existsSync(`${crysk}.bak`)).toBe(false);
+    expect(existsSync(p.tempBinary ?? "")).toBe(false);
+  });
+
+  // The alias is the last step; if it fails, crysk is installed and working and
+  // the failure is reported, never thrown half-way (#425 review).
+  test("a failed pr-hero alias leaves crysk installed and reports it", async () => {
+    const p = await plan("crysk");
+    // A directory at the alias path cannot be replaced by a link or a copy.
+    mkdirSync(path.join(binDir, "pr-hero", "busy"), { recursive: true });
+    const result = await installStandaloneBinary(p, Buffer.from(script("new")));
+    expect(result.status).toBe("installed");
+    expect(result.status === "installed" && result.alias).toBe("failed");
+    expect(run("crysk")).toBe("new");
   });
 
   test("a binary that fails its smoke is rolled back: the old crysk is restored, pr-hero untouched", async () => {
