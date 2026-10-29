@@ -358,12 +358,21 @@ Perform these sanity checks immediately following a release:
    - Confirm workflows referencing `cryskai/crysk@v0` or `cryskai/crysk@vX.Y.Z` resolve the new
      release. (Workflows still pinned to the frozen `@v1` continue resolving the last 1.x release, by
      design — they receive no further updates.)
-5. **Mirror** (while `juanmaagd/pr-hero` lives, Step 4d.3): the mirror's `v0` and `vX.Y.Z` tags equal
-   `cryskai/crysk`'s, and the mirror's latest release is `vX.Y.Z` with the same `SHA256SUMS`:
+5. **Mirror** (while `juanmaagd/pr-hero` lives, Step 4d.3): the mirror's `v0` and `vX.Y.Z` point at the same
+   commits as `cryskai/crysk`'s, and the mirror's latest release is `vX.Y.Z` with the same `SHA256SUMS`. Both
+   tags are annotated, so compare the commits they point at (`^{}`), not the tag objects:
    ```bash
-   for r in cryskai/crysk juanmaagd/pr-hero; do gh api repos/$r/git/ref/tags/v0 -q .object.sha; done
-   gh release list -R juanmaagd/pr-hero --limit 1
+   for r in cryskai/crysk juanmaagd/pr-hero; do
+     git ls-remote "https://github.com/$r.git" 'refs/tags/v0^{}' 'refs/tags/vX.Y.Z^{}'
+   done                                   # the two blocks must be identical
+   gh release list -R juanmaagd/pr-hero --limit 1          # vX.Y.Z, Latest
+   d=$(mktemp -d)
+   gh release download vX.Y.Z -R cryskai/crysk -p SHA256SUMS -D "$d/new"
+   gh release download vX.Y.Z -R juanmaagd/pr-hero -p SHA256SUMS -D "$d/mirror"
+   cmp "$d/new/SHA256SUMS" "$d/mirror/SHA256SUMS" && echo "mirror assets match"
    ```
+   Push the mirror's tags from `cryskai/crysk` after CI moved `v0` (`git fetch origin --tags --force`, then
+   push those refs), so both repositories carry the same tag objects.
 6. **Doctor Diagnostic**:
    - Run `crysk doctor` locally to verify runtime integrity and toolchain health.
 
