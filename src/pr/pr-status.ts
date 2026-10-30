@@ -252,6 +252,15 @@ function gateStateOf(state: string): PrGateState {
 // The summary is the newest comment carrying the report marker (findMarkedCommentId picks
 // the newest). Its head and completeness come from the marker; its reviews count and its
 // live rows come from the state block that the summary carries.
+// The live blocking findings at input.head, each with its newest triage reply and CI ruling, read exactly as
+// buildPrStatus reads them. The admission gate reads them for the reviewed head (pr/answered-findings.ts).
+export function liveBlockingFindings(input: PrStatusInput): PrStatusFinding[] {
+  const summary = readSummary(input.issueComments);
+  return readFindings(input, summary.rows)
+    .filter((a) => a.finding.blocking && a.finding.live_on_head)
+    .map((a) => a.finding);
+}
+
 function readSummary(comments: PrStatusComment[]): {
   head: string | null;
   complete: boolean | null;
@@ -527,9 +536,15 @@ function gateBlockingCount(gate: PrStatusGate): number | null {
 }
 
 // The gate descriptions that name no review of this head: the automatic budget is used up, or the
-// policy is manual (src/pr/admission.ts). Their text is the gate's own, so no count is read.
+// policy is manual. A gate stopped writing them on 2026-10-30 (budget-exhausted-carry S2: both carry the
+// last verdict now), so only a head statused before that still carries one. Their text is the gate's own,
+// so no count is read.
 const REVIEW_TRIGGER_GATE =
   /^crysk: review (budget for this PR is used up|needs a manual trigger)/;
+
+// The green a skip writes over answered findings no review verified (admission.ts unverifiedFixesDescription).
+const UNVERIFIED_FIXES_GATE =
+  /^crysk: \d+ answered finding\(s\), fixes unverified \(/;
 
 // A blocking finding whose newest reply is a dismissal the CI adjudicator upheld on this head.
 function upheldDismissal(a: AnalyzedFinding): boolean {
@@ -606,6 +621,16 @@ function decideNext(
         reason: `The gate is green, but ${owed.length} finding(s) on this head have no reply yet; triage them.`,
       };
     }
+    // budget-exhausted-carry S6: a green no review verified. Nothing is owed, and the reason says why
+    // it is green, so the skill reports the fixes as unverified rather than reviewed.
+    if (
+      UNVERIFIED_FIXES_GATE.test(canonicalStatusText(gate.description ?? ""))
+    ) {
+      return {
+        next_action: "done",
+        reason: `The gate is green on answered findings no review verified (${gate.description}); the PR is ready to merge, or comment ${commandHint(REVIEW_COMMAND, "")} for another review.`,
+      };
+    }
     return {
       next_action: "done",
       reason:
@@ -651,10 +676,16 @@ function decideNext(
     (a) => a.finding.triage?.tag === "applied",
   );
   if (applied.length > 0) {
+    // budget-exhausted-carry S3: a carried red means a review rule skipped this head, so no review will
+    // verify the push. The gate reads the replies on that push instead.
+    const carried = canonicalStatusText(gate.description ?? "").includes(
+      "carried from ",
+    );
     return {
       next_action: "fix",
-      reason:
-        "A live blocking finding is tagged applied; push the fix, and the next review verifies it.",
+      reason: carried
+        ? "A live blocking finding is tagged applied, and no automatic review is left on this PR; push the fix, and the gate reads the replies on that push (every blocking finding answered turns it green, marked unverified)."
+        : "A live blocking finding is tagged applied; push the fix, and the next review verifies it.",
     };
   }
   // A dismissal leaves the count only on a CI ruling of "upheld" (src/triage/adjudication.ts). A

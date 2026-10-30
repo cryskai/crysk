@@ -57,6 +57,11 @@ import {
   settleCiGateSkip,
 } from "#pr/admission";
 import {
+  type AnsweredFindings,
+  answeredBlockingFindings,
+  triageReplyAuthors,
+} from "#pr/answered-findings";
+import {
   CommentsTruncatedError,
   fetchCommitStatuses,
   fetchPrComments,
@@ -174,6 +179,16 @@ export async function evaluateCiAdmissionGate(input: {
       extra: config.ci_trusted_actors,
     });
     const allComments = [...reviewComments, ...issueComments];
+    const readAnswered = answeredReader({
+      operatorRoot,
+      prNumber,
+      reviewedHead: authorityFailOpen ? null : summaryHead,
+      issueComments,
+      reviewComments,
+      trustedActors,
+      spawnFn,
+      sleepFn: input.sleepFn ?? Bun.sleep,
+    });
     const postedFindings =
       summaryHead === null
         ? null
@@ -352,6 +367,7 @@ export async function evaluateCiAdmissionGate(input: {
           reason: admissionVerdict.reason,
           reviewedHead: summaryHead,
           priorBlocking: admissionVerdict.prior.blocking,
+          readAnswered,
         },
       });
       return { ciPolicy, ciPolicyHash, ledgerRecords, exitCode };
@@ -370,7 +386,8 @@ export async function evaluateCiAdmissionGate(input: {
         blockingCount: admissionVerdict.prior.blocking,
         advisoryCount: admissionVerdict.prior.advisory,
       });
-      // S4: manual-required is a failure in gate mode: its code was never reviewed.
+      // S2: manual-required carries the last verdict like every other skip (publishCiSkip,
+      // admissionSkipDecision); a carried red with every blocking finding answered turns green, unverified.
       const plan = planCiReviewManualRequired({
         prNumber,
         verdict: admissionVerdict,
@@ -384,7 +401,7 @@ export async function evaluateCiAdmissionGate(input: {
         isCi,
         stepSummaryFlag: options.stepSummary,
         plan,
-        noticeMessage: `crysk review requires manual override — ${manualReason}`,
+        noticeMessage: `crysk automatic reviews are done for this PR — ${manualReason}`,
         ciMode: input.ciMode,
         headSha,
         spawnFn,
@@ -392,6 +409,7 @@ export async function evaluateCiAdmissionGate(input: {
           reason: admissionVerdict.reason,
           reviewedHead: summaryHead,
           priorBlocking: admissionVerdict.prior.blocking,
+          readAnswered,
         },
       });
       return { ciPolicy, ciPolicyHash, ledgerRecords, exitCode };
@@ -639,6 +657,59 @@ async function stoppedByMaintainer(
     }
   }
   return false;
+}
+
+// budget-exhausted-carry S3, S4: the reader publishCiSkip calls when a skip carries a blocking red. Each
+// triage reply's author is looked up once, with the stop lookup's bounds; a lookup that did not read is null,
+// which answeredBlockingFindings fails closed on. A truncated comment read (authorityFailOpen) or no reviewed
+// head reads nothing: the red stays.
+function answeredReader(input: {
+  operatorRoot: string;
+  prNumber: number;
+  reviewedHead: string | null;
+  issueComments: readonly { id: number; user: string; body: string }[];
+  reviewComments: readonly {
+    id: number;
+    user: string;
+    body: string;
+    in_reply_to_id: number | null;
+    path?: string;
+    line?: number | null;
+  }[];
+  trustedActors: ReadonlySet<string> | undefined;
+  spawnFn: typeof Bun.spawn | undefined;
+  sleepFn: (ms: number) => Promise<void>;
+}): () => Promise<AnsweredFindings | null> {
+  return async () => {
+    const reviewedHead = input.reviewedHead;
+    if (reviewedHead === null) return null;
+    const writers = new Map<string, boolean | null>();
+    for (const login of triageReplyAuthors([
+      ...input.reviewComments,
+      ...input.issueComments,
+    ])) {
+      const permission = await stopAuthorPermission(
+        input.operatorRoot,
+        login,
+        input.spawnFn,
+        input.sleepFn,
+      );
+      writers.set(
+        login,
+        permission === null
+          ? null
+          : permission === "admin" || permission === "write",
+      );
+    }
+    return answeredBlockingFindings({
+      pr: input.prNumber,
+      reviewedHead,
+      issueComments: input.issueComments,
+      reviewComments: input.reviewComments,
+      trustedActors: input.trustedActors,
+      writers,
+    });
+  };
 }
 
 // Same bounds as the trigger's commenter lookup (lookupCommenterPermission):

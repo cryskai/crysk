@@ -2151,3 +2151,58 @@ describe("buildPrStatus: the gate over two names", () => {
     expect(status.next_action).toBe("review");
   });
 });
+
+// budget-exhausted-carry S6, S8: what crysk status says once a review rule skipped the head.
+describe("buildPrStatus: a head a review rule skipped", () => {
+  test("an unverified green is done, and its reason says no review verified it", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "success",
+            "crysk: 2 answered finding(s), fixes unverified (review budget for this PR is used up); carried from 1111111",
+          ),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+    expect(status.reason).toContain("no review verified");
+  });
+
+  test("an ordinary green keeps its reason", () => {
+    const status = buildPrStatus(
+      input({ statuses: [gate("success", "review posted")] }),
+    );
+    expect(status.next_action).toBe("done");
+    expect(status.reason).not.toContain("no review verified");
+  });
+
+  test.each([
+    [
+      "a carried red",
+      `crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override`,
+      "no automatic review is left",
+    ],
+    [
+      "a red a review wrote",
+      BLOCKING_DESCRIPTION(1),
+      "the next review verifies it",
+    ],
+  ])(
+    "%s with an applied finding asks for a push, and says who verifies it",
+    (_name, description, phrase) => {
+      const posted = findingBody({ head: CURRENT, claim: CLAIM });
+      const status = buildPrStatus(
+        input({
+          statuses: [gate("failure", description)],
+          reviewComments: [
+            { id: 1, body: posted, in_reply_to_id: null },
+            triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+          ],
+        }),
+      );
+      expect(status.next_action).toBe("fix");
+      expect(status.reason).toContain(phrase);
+    },
+  );
+});

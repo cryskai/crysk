@@ -588,13 +588,20 @@ describe("publishCiSkip: the outcome record", () => {
 
       function admissionInput(
         reason: AdmissionStatusInput["reason"],
-        over: { reviewedHead?: string | null; priorBlocking?: number } = {},
+        over: {
+          reviewedHead?: string | null;
+          priorBlocking?: number;
+          readAnswered?: AdmissionStatusInput["readAnswered"];
+        } = {},
       ): AdmissionStatusInput {
         return {
           reason,
           reviewedHead:
             over.reviewedHead === undefined ? REVIEWED_HEAD : over.reviewedHead,
           priorBlocking: over.priorBlocking ?? 0,
+          ...(over.readAnswered === undefined
+            ? {}
+            : { readAnswered: over.readAnswered }),
         };
       }
 
@@ -606,12 +613,14 @@ describe("publishCiSkip: the outcome record", () => {
           priorBlocking?: number;
           ciMode?: "gate" | "advisory";
           isCi?: boolean;
+          readAnswered?: AdmissionStatusInput["readAnswered"];
+          plan?: "skipped-coverage" | "manual-required";
         } = {},
       ): Promise<{ calls: StatusCall[]; reads: string[] }> {
         const calls: StatusCall[] = [];
         const { read, reads } = readerWith(rows);
         await publishCiSkip(
-          gateInput("skipped-coverage", recordingStatus(calls), {
+          gateInput(over.plan ?? "skipped-coverage", recordingStatus(calls), {
             ciMode: over.ciMode ?? "gate",
             isCi: over.isCi ?? true,
             admission: admissionInput(reason, over),
@@ -939,40 +948,174 @@ describe("publishCiSkip: the outcome record", () => {
         ]);
       });
 
-      test("an exhausted budget is a failure naming the budget, never a carried green", async () => {
-        const calls: StatusCall[] = [];
-        const { read, reads } = readerWith([
-          row("success", "review posted", T1),
-        ]);
-        await publishCiSkip(
-          gateInput("manual-required", recordingStatus(calls), {
-            admission: admissionInput("max-attempts-exhausted"),
-            readStatuses: read,
-          }),
+      // budget-exhausted-carry S2: an exhausted budget and a manual-only policy are review rules like the
+      // others, so they carry the last verdict instead of writing a fixed failure.
+      test("an exhausted budget carries a green: the budget is respected and no human is needed", async () => {
+        const { calls, reads } = await skipWith(
+          [row("success", "review posted", T1)],
+          "max-attempts-exhausted",
+          { plan: "manual-required" },
         );
-        expect(reads).toEqual([]);
+        expect(reads).toEqual([REVIEWED_HEAD]);
         expect(calls.map((c) => [c.state, c.description])).toEqual([
           [
-            "failure",
-            "crysk: review budget for this PR is used up — /pr-hero review reviews this head",
+            "success",
+            `crysk: no review needed (review budget for this PR is used up); ${CARRIED_FROM}`,
           ],
         ]);
       });
 
-      test("a manual-only policy is a failure that names the manual trigger", async () => {
-        const calls: StatusCall[] = [];
-        const { read } = readerWith([]);
-        await publishCiSkip(
-          gateInput("manual-required", recordingStatus(calls), {
-            admission: admissionInput("manual-only-policy"),
-            readStatuses: read,
-          }),
+      test("a manual-only policy carries a red with its count", async () => {
+        const { calls } = await skipWith(
+          [row("failure", BLOCKING_2, T1)],
+          "manual-only-policy",
+          { plan: "manual-required" },
         );
-        expect(calls.map((c) => c.state)).toEqual(["failure"]);
-        expect(calls[0]?.description).toContain("manual_only");
-        expect(calls[0]?.description).toContain(
-          "/pr-hero review reviews this head",
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            `crysk: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+          ],
+        ]);
+      });
+
+      test("an exhausted budget with no earlier verdict fails closed, naming the budget", async () => {
+        const { calls } = await skipWith([], "max-attempts-exhausted", {
+          plan: "manual-required",
+        });
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          [
+            "failure",
+            "crysk skipped the review (review budget for this PR is used up) and found no earlier verdict — /pr-hero review reviews it",
+          ],
+        ]);
+      });
+
+      // S3, S6: every blocking finding answered turns a carried red green, and the green says it is
+      // unverified and which rule skipped the review.
+      describe("answered findings unlock a carried red, unverified", () => {
+        const answered = (blocking: number, open: number) => {
+          const asked: number[] = [];
+          return {
+            asked,
+            read: async () => {
+              asked.push(1);
+              return { blocking, open };
+            },
+          };
+        };
+
+        test.each([
+          ["max-attempts-exhausted", "review budget for this PR is used up"],
+          ["stopped", "automatic reviews stopped by a maintainer"],
+          ["once-per-pr", "once_per_pr policy allows one automatic review"],
+        ] as const)(
+          "under %s: every blocking finding answered turns the red green, marked unverified",
+          async (reason, label) => {
+            const { read } = answered(2, 0);
+            const { calls } = await skipWith(
+              [row("failure", BLOCKING_2, T1)],
+              reason,
+              { readAnswered: read },
+            );
+            expect(calls.map((c) => [c.state, c.description])).toEqual([
+              [
+                "success",
+                `crysk: 2 answered finding(s), fixes unverified (${label}); ${CARRIED_FROM}`,
+              ],
+            ]);
+          },
         );
+
+        test("one open finding keeps the red", async () => {
+          const { calls } = await skipWith(
+            [row("failure", BLOCKING_2, T1)],
+            "max-attempts-exhausted",
+            { readAnswered: answered(2, 1).read },
+          );
+          expect(calls.map((c) => [c.state, c.description])).toEqual([
+            [
+              "failure",
+              `crysk: 2 blocking finding(s) ${CARRIED_FROM} — fix and push, or /pr-hero override`,
+            ],
+          ]);
+        });
+
+        test("fewer blocking findings seen than the red counts keeps the red (S5)", async () => {
+          const { calls } = await skipWith(
+            [row("failure", BLOCKING_2, T1)],
+            "max-attempts-exhausted",
+            { readAnswered: answered(1, 0).read },
+          );
+          expect(calls.map((c) => c.state)).toEqual(["failure"]);
+        });
+
+        test("a read that fails closed (null) or throws keeps the red (S5)", async () => {
+          const nullRead = await skipWith(
+            [row("failure", BLOCKING_2, T1)],
+            "max-attempts-exhausted",
+            { readAnswered: async () => null },
+          );
+          const throwingRead = await skipWith(
+            [row("failure", BLOCKING_2, T1)],
+            "max-attempts-exhausted",
+            {
+              readAnswered: async () => {
+                throw new Error("gh failed");
+              },
+            },
+          );
+          expect(nullRead.calls.map((c) => c.state)).toEqual(["failure"]);
+          expect(throwingRead.calls.map((c) => c.state)).toEqual(["failure"]);
+        });
+
+        test("a carried green never reads the answered findings", async () => {
+          const { read, asked } = answered(2, 0);
+          await skipWith(
+            [row("success", "review posted", T1)],
+            "max-attempts-exhausted",
+            { readAnswered: read },
+          );
+          expect(asked).toEqual([]);
+        });
+
+        test("a carried partial red stays red: answered findings never cover hunters that failed", async () => {
+          const { read, asked } = answered(2, 0);
+          const { calls } = await skipWith(
+            [
+              row(
+                "failure",
+                "crysk: review partial (1 of 4 hunters failed) — /pr-hero review retries it",
+                T1,
+              ),
+            ],
+            "max-attempts-exhausted",
+            { readAnswered: read },
+          );
+          expect(asked).toEqual([]);
+          expect(calls.map((c) => c.description)).toEqual([
+            `crysk: review partial (1 of 4 hunters failed) ${CARRIED_FROM} — /pr-hero review retries it`,
+          ]);
+        });
+
+        test("a carried unverified green is a verdict, and chaining keeps it unverified", async () => {
+          const { calls } = await skipWith(
+            [
+              row(
+                "success",
+                "crysk: 2 answered finding(s), fixes unverified (review budget for this PR is used up); carried from bbbbbbb",
+                T1,
+              ),
+            ],
+            "stopped",
+          );
+          expect(calls.map((c) => [c.state, c.description])).toEqual([
+            [
+              "success",
+              `crysk: 2 answered finding(s), fixes unverified (automatic reviews stopped by a maintainer); ${CARRIED_FROM}`,
+            ],
+          ]);
+        });
       });
 
       test("a same-head skip writes nothing: its status already exists", async () => {
