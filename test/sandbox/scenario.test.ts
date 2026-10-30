@@ -1539,6 +1539,12 @@ describe("phaseReadsLog: every list a phase asserts counts (S1)", () => {
     ).toBe(true);
   });
 
+  test("a no-hunter-failed check in ifNoPriorBlocking reads the log", () => {
+    expect(
+      phaseReadsLog({ ...base, ifNoPriorBlocking: [NO_HUNTER_FAILED] }),
+    ).toBe(true);
+  });
+
   test("a no-hunter-failed check in ifOwnBlockingAt reads the log", () => {
     expect(
       phaseReadsLog({
@@ -1555,6 +1561,7 @@ describe("phaseReadsLog: every list a phase asserts counts (S1)", () => {
         checks: [{ kind: "status", state: "failure" }],
         afterPriorOutcome: [{ kind: "no-outcome" }],
         afterPriorBlocking: [{ kind: "status", state: "failure" }],
+        ifNoPriorBlocking: [{ kind: "status", state: "success" }],
         ifOwnBlockingAt: {
           path: "src/a.ts",
           checks: [
@@ -1564,5 +1571,178 @@ describe("phaseReadsLog: every list a phase asserts counts (S1)", () => {
       }),
     ).toBe(false);
     expect(phaseReadsLog(base)).toBe(false);
+  });
+});
+
+// budget-exhausted-carry: a budget of one review, then a push that answers every blocking
+// finding (or defers it) and meets the exhausted budget. The fake carries the verdict with
+// the product's own texts and notice, and its budgetCarry knob is the mutation each check
+// must catch.
+describe("budget scenarios: the push after the budget carries the verdict (budget-exhausted-carry)", () => {
+  const replies = (world: FakeGithub) =>
+    [...world.inline.values()]
+      .flat()
+      .filter((c) => c.body.startsWith("<!-- crysk-triage "));
+  const passed = (logs: readonly string[], name: string, label: RegExp) =>
+    logs.some((l) => new RegExp(`PASS {2}${name}: ${label.source}`).test(l));
+
+  test("budget-answered exits 0: every blocking finding answered applied, at its own head, then a push that adds the mute file", async () => {
+    const world = new FakeGithub({ ref: REF, blockingFindings: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["budget-answered"], OPTIONS)).toBe(0);
+    // The branch's config is the budget of one, committed with the first push.
+    expect(
+      h.gitCalls.some(
+        (c) => c.args[0] === "add" && c.args.includes(".crysk/config.json"),
+      ),
+    ).toBe(true);
+    const [reply] = replies(world);
+    const firstHead = world.events.find((e) => e.startsWith("push "))?.slice(5);
+    expect(reply?.body.split("\n", 1)[0]).toBe(
+      `<!-- crysk-triage tag=applied head=${firstHead} actor=agent -->`,
+    );
+    // The reply landed before the second push, so the gate could read it.
+    const pushes = world.events.filter((e) => e.startsWith("push "));
+    expect(pushes).toHaveLength(2);
+    expect(h.gitCalls.some((c) => c.args.includes("src/mute.ts"))).toBe(true);
+    expect(
+      passed(
+        h.logs,
+        "budget-answered",
+        /\[2\] status is success, description starts with crysk: , description contains answered finding\(s\), fixes unverified \(review budget for this PR is used up\)/,
+      ),
+    ).toBe(true);
+    expect(
+      passed(
+        h.logs,
+        "budget-answered",
+        /\[2\] the end-of-budget comment says no more automatic reviews will run/,
+      ),
+    ).toBe(true);
+    expect(
+      passed(h.logs, "budget-answered", /\[2\] no report on the head/),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /not asserted: budget-answered \[2\] status is success, description contains no review needed .*\(phase 1 posted a blocking finding\)/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("budget-answered exits 1 when the gate ignores the answers and carries the red", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      blockingFindings: true,
+      budgetCarry: "answers-ignored",
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["budget-answered"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        /FAIL {2}budget-answered: \[2\] status is success, description starts with crysk: , description contains answered finding/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("budget-answered exits 1 when no end-of-budget comment is posted", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      blockingFindings: true,
+      budgetCarry: "no-notice",
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["budget-answered"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        /FAIL {2}budget-answered: \[2\] the end-of-budget comment says no more automatic reviews will run/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("budget-answered with a clean first review: nothing to answer, the carried green names the budget", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["budget-answered"], OPTIONS)).toBe(0);
+    expect(replies(world)).toHaveLength(0);
+    expect(
+      h.logs.some((l) =>
+        /no blocking finding on [0-9a-f]{7} to answer/.test(l),
+      ),
+    ).toBe(true);
+    expect(
+      passed(
+        h.logs,
+        "budget-answered",
+        /\[2\] status is success, description contains no review needed \(review budget for this PR is used up\)/,
+      ),
+    ).toBe(true);
+    expect(
+      h.logs.some((l) =>
+        /not asserted: budget-answered \[2\] status is success, description starts with crysk: .*\(phase 1 posted no blocking finding to carry\)/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("budget-unanswered exits 0: a deferral (with its required verdict) keeps the red with the carried count", async () => {
+    const world = new FakeGithub({ ref: REF, blockingFindings: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["budget-unanswered"], OPTIONS)).toBe(0);
+    const [reply] = replies(world);
+    expect(reply?.body.split("\n", 1)[0]).toMatch(
+      /^<!-- crysk-triage tag=deferred head=[0-9a-f]{40} actor=agent verdict=upheld -->$/,
+    );
+    expect(
+      passed(
+        h.logs,
+        "budget-unanswered",
+        /\[2\] status is failure, description contains blocking finding\(s\) carried from/,
+      ),
+    ).toBe(true);
+  });
+
+  test("budget-unanswered exits 1 when any reply unlocks the gate", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      blockingFindings: true,
+      budgetCarry: "any-answer-unlocks",
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["budget-unanswered"], OPTIONS)).toBe(1);
+    expect(
+      h.logs.some((l) =>
+        /FAIL {2}budget-unanswered: \[2\] status is failure, description contains blocking finding\(s\) carried from/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  test("budget-unanswered with a clean first review: the carried green names the budget", async () => {
+    const world = new FakeGithub({ ref: REF });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["budget-unanswered"], OPTIONS)).toBe(0);
+    expect(
+      passed(
+        h.logs,
+        "budget-unanswered",
+        /\[2\] status is success, description contains no review needed/,
+      ),
+    ).toBe(true);
+  });
+
+  test("every gh call the budget scenarios make passes the rails", async () => {
+    const world = new FakeGithub({ ref: REF, blockingFindings: true });
+    const h = world.harness();
+    await runScenarios(h.deps, ["budget-answered"], OPTIONS);
+    for (const call of h.ghCalls)
+      expect(() => assertGhArgs(call)).not.toThrow();
   });
 });

@@ -8,15 +8,23 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { planCiReviewManualRequired } from "#ci/gates";
+import { resolveCiReviewPolicy } from "#ci/review-admission";
 import { GOTCHAS, VOLUME_BUGGY } from "../../fixtures/setup";
 import {
   OUTCOME_MARKER_PREFIX,
   OVERRIDE_MARKER_PREFIX,
+  SKIP_MARKERS,
   STATUS_CONTEXT,
 } from "../../scripts/sandbox/markers";
+import {
+  classifyComment,
+  END_OF_BUDGET_SENTENCE,
+} from "../../scripts/sandbox/observe";
 import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import {
   actionRefFor,
+  BUDGET_ONE_CONFIG_JSON,
   GOTCHAS_PATH,
   OPENCODE_AUTH_VALUE,
   PLANTED_SITE,
@@ -86,6 +94,16 @@ describe("repo config", () => {
     const layer = parseLocalConfig(REPO_CONFIG_JSON);
     expect(layer.ci_review_policy).toBe("every_push");
     expect(layer.ci_max_attempts).toBe(100);
+  });
+
+  test("the budget scenarios' config loads through the real parser, with a budget of one", () => {
+    const layer = parseLocalConfig(BUDGET_ONE_CONFIG_JSON);
+    expect(layer.ci_review_policy).toBe("every_push");
+    expect(layer.ci_max_attempts).toBe(1);
+    // Admission resolves it to one automatic review on every push.
+    const policy = resolveCiReviewPolicy(layer);
+    expect(policy.mode).toBe("every_push");
+    expect(policy.maxAttempts).toBe(1);
   });
 
   test("routing is person-layer only, so the repo file must not carry it", () => {
@@ -236,6 +254,33 @@ describe("markers pinned against the product's publisher", () => {
       true,
     );
     expect(publication.status?.context).toBe(STATUS_CONTEXT);
+  });
+});
+
+describe("the end-of-budget sentence pinned against the product's notice (S10)", () => {
+  test("planCiReviewManualRequired's comment opens with the marker and states END_OF_BUDGET_SENTENCE", () => {
+    const plan = planCiReviewManualRequired({
+      prNumber: 7,
+      ciMode: "gate",
+      verdict: {
+        action: "manual-required",
+        reason: "max-attempts-exhausted",
+        prior: { blocking: 1, advisory: 0, score: 3, source: "none" },
+        reviewCount: 1,
+        maxAttempts: 1,
+        minScore: 4,
+      },
+    });
+    expect(plan.comment.split("\n", 1)[0]).toBe(
+      SKIP_MARKERS["manual-required"],
+    );
+    expect(plan.comment).toContain(END_OF_BUDGET_SENTENCE);
+    expect(classifyComment(plan.comment, "issue")).toEqual({
+      source: "issue",
+      kind: "skip",
+      skip: "manual-required",
+      endOfBudget: true,
+    });
   });
 });
 

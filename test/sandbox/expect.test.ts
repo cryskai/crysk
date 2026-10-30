@@ -5,20 +5,29 @@
 
 import { describe, expect, test } from "bun:test";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
+import { ciReviewSkipLabel } from "#ci/review-admission";
+import {
+  carriedBlockingDescription,
+  carriedSuccessDescription,
+  unverifiedFixesDescription,
+} from "#pr/admission";
 import {
   blockingFindingAt,
+  type Check,
   evaluateCheck,
   evaluateChecks,
   ownBlockingGate,
   ownBlockingSkipReason,
   ownBlockingUndecided,
 } from "../../scripts/sandbox/expect";
-import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
+import { RUN_STEP_NAME, SKIP_MARKERS } from "../../scripts/sandbox/markers";
 import {
+  type CommentFact,
   classifyComment,
+  END_OF_BUDGET_SENTENCE,
   type Observation,
 } from "../../scripts/sandbox/observe";
-import { SCENARIOS } from "../../scripts/sandbox/scenarios";
+import { findScenario, SCENARIOS } from "../../scripts/sandbox/scenarios";
 
 const OLD = "a".repeat(40);
 const NEW = "c".repeat(40);
@@ -254,6 +263,30 @@ describe("evaluateChecks: labels say what was asserted", () => {
 // The scenario data itself: each phase's declared checks against a recorded
 // pass and a recorded fail. A phase with no fail fixture here is a bug in this
 // table, so the table is asserted to cover every phase of every scenario.
+// budget-exhausted-carry: the label and the notice the gate writes once the budget is used up.
+const BUDGET_LABEL = ciReviewSkipLabel("max-attempts-exhausted");
+const END_OF_BUDGET_NOTICE: CommentFact = {
+  source: "issue",
+  kind: "skip",
+  skip: "manual-required",
+  endOfBudget: true,
+};
+
+// A push after the budget is used up, as collect() reads it: the new head has no report of
+// its own, the first head's report and the notice stay on the PR, and the status is the
+// carried one.
+function budgetPush(
+  description: string,
+  state: string,
+  notice: CommentFact = END_OF_BUDGET_NOTICE,
+): Observation {
+  return obs({
+    status: { state, description },
+    comments: [{ source: "issue", kind: "report", head: OLD }, notice],
+    artifacts: [],
+  });
+}
+
 const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
   "no-credential/0": {
     pass: obs({
@@ -792,6 +825,36 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
         conclusion: null,
         steps: [],
       },
+    }),
+  },
+  // budget-exhausted-carry: the first review, under a budget of one, with every hunter run.
+  "budget-answered/0": {
+    pass: obs({ hunterFailures: [] }),
+    // A hunter died: the partial review's red is not what the next phase describes.
+    fail: obs({ hunterFailures: ["reliability"] }),
+  },
+  // The push after the budget: no review, the end-of-budget comment, and a green.
+  "budget-answered/1": {
+    pass: budgetPush(carriedSuccessDescription(BUDGET_LABEL, OLD), "success"),
+    // The push was reviewed again: the budget was not respected.
+    fail: obs({
+      comments: [
+        { source: "issue", kind: "report", head: NEW },
+        { source: "issue", kind: "report", head: OLD },
+      ],
+    }),
+  },
+  "budget-unanswered/0": {
+    pass: obs({ hunterFailures: [] }),
+    fail: obs({ hunterFailures: ["reliability"] }),
+  },
+  "budget-unanswered/1": {
+    pass: budgetPush(carriedBlockingDescription(1, OLD), "failure"),
+    // The pre-S10 notice: the manual-required marker without the end-of-budget sentence.
+    fail: budgetPush(carriedBlockingDescription(1, OLD), "failure", {
+      source: "issue",
+      kind: "skip",
+      skip: "manual-required",
     }),
   },
 };
@@ -1927,6 +1990,138 @@ describe("ownBlockingSkipReason: the skip line of a closed ifOwnBlockingAt gate"
   test("a gate closed with nothing unlocated keeps the previous line", () => {
     expect(ownBlockingSkipReason(obs(), "src/mute.ts")).toBe(
       "the re-review found no blocking finding at src/mute.ts",
+    );
+  });
+});
+
+describe("budget scenarios: the conditional status texts (budget-exhausted-carry S2, S3, S6)", () => {
+  const phase = (name: string) => {
+    const found = findScenario(name)?.phases[1];
+    if (found === undefined) throw new Error(`no phase 2 in ${name}`);
+    return found;
+  };
+  const all = (checks: readonly Check[] | undefined, o: Observation) =>
+    evaluateChecks(checks ?? [], o).every((r) => r.pass);
+  const answered = unverifiedFixesDescription(1, BUDGET_LABEL, OLD);
+  const carriedRed = carriedBlockingDescription(1, OLD);
+  const carriedGreen = carriedSuccessDescription(BUDGET_LABEL, OLD);
+
+  test("budget-answered: a red with every finding answered must read as the unverified green", () => {
+    const after = phase("budget-answered").afterPriorBlocking;
+    expect(all(after, budgetPush(answered, "success"))).toBe(true);
+    // The answers were ignored and the red was carried.
+    expect(all(after, budgetPush(carriedRed, "failure"))).toBe(false);
+    // A green that does not say its fixes are unverified (S6).
+    expect(all(after, budgetPush(carriedGreen, "success"))).toBe(false);
+    // The legacy lead reads as crysk (canonicalStatusText), as every product reader takes it.
+    expect(
+      all(
+        after,
+        budgetPush(answered.replace(/^crysk:/, "pr-hero:"), "success"),
+      ),
+    ).toBe(true);
+  });
+
+  test("budget-answered: its unconditional checks require a green", () => {
+    const checks = phase("budget-answered").checks;
+    expect(all(checks, budgetPush(answered, "success"))).toBe(true);
+    expect(all(checks, budgetPush(carriedRed, "failure"))).toBe(false);
+  });
+
+  test("budget-unanswered: a red answered only deferred stays red with the carried count", () => {
+    const after = phase("budget-unanswered").afterPriorBlocking;
+    expect(all(after, budgetPush(carriedRed, "failure"))).toBe(true);
+    // The deferral unlocked the gate.
+    expect(all(after, budgetPush(answered, "success"))).toBe(false);
+    // Its unconditional checks pass on the red: they do not pin the state.
+    expect(
+      all(phase("budget-unanswered").checks, budgetPush(carriedRed, "failure")),
+    ).toBe(true);
+  });
+
+  test("both: a clean first review carries its green, naming the budget", () => {
+    for (const name of ["budget-answered", "budget-unanswered"]) {
+      const clean = phase(name).ifNoPriorBlocking;
+      expect(clean?.length).toBe(1);
+      expect(all(clean, budgetPush(carriedGreen, "success"))).toBe(true);
+      // A plain finished-review green: the push was reviewed, not carried.
+      expect(
+        all(clean, budgetPush("crysk: no blocking findings", "success")),
+      ).toBe(false);
+      expect(all(clean, budgetPush(carriedRed, "failure"))).toBe(false);
+    }
+  });
+});
+
+describe("status with descriptionContains", () => {
+  const check = {
+    kind: "status",
+    state: "success",
+    descriptionContains: "fixes unverified",
+  } as const;
+
+  test("passes when the description carries the text, and fails with what it saw", () => {
+    const seen = obs({
+      status: {
+        state: "success",
+        description: "crysk: 2 answered finding(s), fixes unverified (x)",
+      },
+    });
+    expect(evaluateCheck(check, seen).pass).toBe(true);
+    const other = evaluateCheck(
+      check,
+      obs({ status: { state: "success", description: "review posted" } }),
+    );
+    expect(other.pass).toBe(false);
+    expect(other.detail).toBe("got success: review posted");
+    expect(other.label).toBe(
+      "status is success, description contains fixes unverified",
+    );
+  });
+});
+
+describe("end-of-budget-comment: the S10 notice, not the marker alone", () => {
+  const check = { kind: "end-of-budget-comment" } as const;
+
+  test("a manual-required notice stating the end of the budget classifies with endOfBudget", () => {
+    expect(
+      classifyComment(
+        `${SKIP_MARKERS["manual-required"]}\n## Crysk\n\n⏹️ ${END_OF_BUDGET_SENTENCE}\n`,
+        "issue",
+      ),
+    ).toEqual(END_OF_BUDGET_NOTICE);
+    // The pre-S10 notice keeps the marker, and only the marker.
+    expect(
+      classifyComment(
+        `${SKIP_MARKERS["manual-required"]}\n## Crysk review requires manual override\n`,
+        "issue",
+      ),
+    ).toEqual({ source: "issue", kind: "skip", skip: "manual-required" });
+    // The sentence under another marker is not the notice.
+    expect(
+      classifyComment(
+        `${SKIP_MARKERS.size}\n${END_OF_BUDGET_SENTENCE}\n`,
+        "issue",
+      ).endOfBudget,
+    ).toBeUndefined();
+  });
+
+  test("passes on the notice, and fails on no notice or a pre-S10 one", () => {
+    expect(
+      evaluateCheck(check, obs({ comments: [END_OF_BUDGET_NOTICE] })).pass,
+    ).toBe(true);
+    const none = evaluateCheck(check, obs());
+    expect(none.pass).toBe(false);
+    expect(none.detail).toBe("no manual-required comment on the PR");
+    const old = evaluateCheck(
+      check,
+      obs({
+        comments: [{ source: "issue", kind: "skip", skip: "manual-required" }],
+      }),
+    );
+    expect(old.pass).toBe(false);
+    expect(old.detail).toBe(
+      "the manual-required comment does not say that no more automatic reviews will run",
     );
   });
 });

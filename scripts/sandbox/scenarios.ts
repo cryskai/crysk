@@ -8,7 +8,13 @@
 
 import { GOTCHAS_TEMPLATE } from "#review/preflight";
 import type { Check } from "./expect";
-import { GOTCHAS_PATH, MUTE_BUGGY, MUTE_PATH } from "./seed";
+import {
+  BUDGET_ONE_CONFIG_JSON,
+  GOTCHAS_PATH,
+  MUTE_BUGGY,
+  MUTE_PATH,
+  REPO_CONFIG_PATH,
+} from "./seed";
 import type { VariantName } from "./variants";
 
 // A file the scenario branch commits on top of the planted volume. The path is a
@@ -16,9 +22,13 @@ import type { VariantName } from "./variants";
 // defines. Variants edit only the workflow, so this is the one other way a
 // scenario changes the branch.
 export interface FileOverride {
-  path: typeof GOTCHAS_PATH;
+  path: typeof GOTCHAS_PATH | typeof REPO_CONFIG_PATH;
   contents: string;
 }
+
+// The triage tags the answer-and-push action can reply with: the one that unlocks a
+// carried red once the budget is used up, and one that must not.
+export type AnswerTag = "applied" | "deferred";
 
 // D3: a file a later push adds. The path is a seed constant, so a scenario can only
 // add a file the seed names.
@@ -41,6 +51,9 @@ export type Action =
   | { kind: "comment"; body: string }
   // T5b: reply `dismissed` on the first blocking finding's thread, then comment /pr-hero recheck.
   | { kind: "dismiss-and-recheck"; argument: string }
+  // budget-exhausted-carry S3: reply `tag` on every blocking finding thread of the current
+  // head, then push a commit that adds MUTE_PATH, so the push is never empty.
+  | { kind: "answer-and-push"; tag: AnswerTag }
   // SB3: `gh run rerun` of the scenario's first run (its head is the older one).
   | { kind: "rerun-first" };
 
@@ -59,6 +72,10 @@ export interface Phase {
   // finding comment, such as a re-run on the same head that must keep a red gate
   // red. Otherwise they are not asserted, and the runner says why.
   afterPriorBlocking?: readonly Check[];
+  // The inverse: asserted only when the phase before this one posted no blocking
+  // finding comment and its head's report lists none outside the diff, such as a
+  // carried green. Otherwise they are not asserted, and the runner says why.
+  ifNoPriorBlocking?: readonly Check[];
   // S3: asserted only when this phase's own observation carries a blocking finding
   // comment on this head at `path`, such as a re-review that must name the row it
   // found. Otherwise they are not asserted, and the runner says why.
@@ -85,6 +102,64 @@ const ONE_REPORT: Check = { kind: "report-min", min: 1 };
 // run's own log or its findings, so a phase that asks for them reads the log.
 const PLANTED_FINDING: Check = { kind: "finding-at-planted-site" };
 const NO_HUNTER_FAILED: Check = { kind: "no-hunter-failed" };
+
+// budget-exhausted-carry: the label the gate gives an exhausted budget
+// (review-admission.ts ciReviewSkipLabel), as the carried texts name it.
+const BUDGET_LABEL = "(review budget for this PR is used up)";
+
+// The first review of a budget scenario, under a budget of one automatic review. Its
+// hunters must all have run: a partial review carries its own red, which neither the
+// answered nor the clean branch below describes, so a hunter flake is re-run instead.
+const BUDGET_FIRST_REVIEW: Phase = {
+  action: {
+    kind: "open",
+    variant: "normal",
+    overrides: [{ path: REPO_CONFIG_PATH, contents: BUDGET_ONE_CONFIG_JSON }],
+  },
+  wait: "pull_request",
+  checks: [REVIEWED, STEP_SUCCEEDED, STATUS_MATCHES_FINDINGS, NO_HUNTER_FAILED],
+};
+
+// The push after the budget is used up. Every case asserts that no review ran on the new
+// head (S1) and that the end-of-budget comment is there (S10). The status depends on what
+// the first review found, which the free model decides: a clean first review carries its
+// green, a red one turns green only when every blocking finding was answered `applied`.
+function budgetAnswerPhase(tag: AnswerTag): Phase {
+  return {
+    action: { kind: "answer-and-push", tag },
+    wait: "pull_request",
+    checks: [
+      { kind: "run-completed", event: "pull_request" },
+      { kind: "path", accept: ["skipped:manual-required"] },
+      { kind: "no-report" },
+      { kind: "end-of-budget-comment" },
+      ...(tag === "applied"
+        ? [{ kind: "status", state: "success" } as const]
+        : []),
+    ],
+    afterPriorBlocking: [
+      tag === "applied"
+        ? {
+            kind: "status",
+            state: "success",
+            descriptionStartsWith: "crysk: ",
+            descriptionContains: `answered finding(s), fixes unverified ${BUDGET_LABEL}`,
+          }
+        : {
+            kind: "status",
+            state: "failure",
+            descriptionContains: "blocking finding(s) carried from",
+          },
+    ],
+    ifNoPriorBlocking: [
+      {
+        kind: "status",
+        state: "success",
+        descriptionContains: `no review needed ${BUDGET_LABEL}`,
+      },
+    ],
+  };
+}
 
 export const SCENARIOS: readonly Scenario[] = [
   {
@@ -432,6 +507,18 @@ export const SCENARIOS: readonly Scenario[] = [
         ],
       },
     ],
+  },
+  {
+    name: "budget-answered",
+    description:
+      "the automatic review budget is used up after one review: the next push runs no review, posts the end-of-budget comment, and a red whose every blocking finding was answered `applied` turns into an unverified green (budget-exhausted-carry S1, S3, S6, S10)",
+    phases: [BUDGET_FIRST_REVIEW, budgetAnswerPhase("applied")],
+  },
+  {
+    name: "budget-unanswered",
+    description:
+      "the automatic review budget is used up after one review: the next push runs no review, posts the end-of-budget comment, and a red answered only `deferred` stays red with the carried count (budget-exhausted-carry S1, S2, S3, S10)",
+    phases: [BUDGET_FIRST_REVIEW, budgetAnswerPhase("deferred")],
   },
   {
     name: "stale-tmp",
