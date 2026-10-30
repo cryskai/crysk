@@ -402,9 +402,9 @@ function skipCoverageLines(data: CiSkipCoverageSummary): string[] {
 
 function manualRequiredLines(data: CiManualRequiredSummary): string[] {
   return [
-    `### 🛑 Crysk Review — Manual Override Required — PR #${data.prNumber}`,
+    `### ⏹️ Crysk Review — Automatic Reviews Done — PR #${data.prNumber}`,
     "",
-    "**Reason:** automatic review did not run on this push.",
+    "**Reason:** no automatic review is left for this pull request; the gate keeps the last verdict.",
     "",
     "| Metric | Value |",
     "| --- | --- |",

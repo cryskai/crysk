@@ -664,21 +664,43 @@ function buildCoverageSkipComment(
   return `${lines.join("\n")}\n`;
 }
 
+// budget-exhausted-carry S10: the comment a PR gets once no automatic review is left. It says so, explains
+// it by the repository's own rules, says what the gate does with the next pushes, and how to ask for more.
+// WHY no "override" here: an exhausted budget carries the last verdict (S2), and answered findings unlock a
+// carried red (S3), so nothing in this situation needs a human to unlock the gate.
 function buildManualRequiredComment(data: ManualRequiredSummary): string {
+  const manualOnly = data.admissionReason === "manual-only-policy";
+  const rules = [
+    ...(data.policyMode === undefined
+      ? []
+      : [`- Review policy: \`${data.policyMode}\` (\`ci_review_policy\`).`]),
+    manualOnly
+      ? "- This repository reviews automatically once per pull request; every later review is on request."
+      : `- Automatic reviews used: ${data.reviewCount}/${data.maxAttempts} (\`ci_max_attempts\`).`,
+    ...(data.reviewedHead === undefined || data.reviewedHead === null
+      ? []
+      : [`- Last reviewed head: \`${data.reviewedHead.slice(0, 7)}\`.`]),
+  ];
   const lines = [
     MANUAL_REQUIRED_COMMENT_MARKER,
-    "## Crysk review requires manual override",
+    "## Crysk: automatic reviews are done for this pull request",
     "",
-    "🛑 Automatic review did not run on this push.",
+    "⏹️ No more automatic reviews will run on this pull request.",
     "",
     `**${data.detail}**`,
     "",
-    `Attempts on this PR: ${data.reviewCount}/${data.maxAttempts}.`,
+    "How it got here, by this repository's rules:",
     "",
-    "The existing review comment still describes the last head Crysk " +
-      "reviewed.",
+    ...rules,
     "",
-    ciForceReviewHintLine(data.prNumber),
+    "What the gate does with the next pushes: it keeps the last review's verdict. A red verdict turns " +
+      "green, marked unverified, once every blocking finding has a reply from someone with write access: " +
+      "`applied`, or a `dismissed` the CI adjudicator upheld. Reply before you push: the gate reads the " +
+      "replies when the push arrives.",
+    "",
+    "The existing review comment still describes the last head Crysk reviewed.",
+    "",
+    `Want more review rounds? ${ciForceReviewHintLine(data.prNumber)}`,
   ];
   return `${lines.join("\n")}\n`;
 }

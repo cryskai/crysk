@@ -634,6 +634,54 @@ describe("observability — admission metadata in step summaries", () => {
     expect(rendered).toContain(POLICY_HASH.slice(0, 8));
   });
 
+  // budget-exhausted-carry S10: the end-of-budget comment explains the situation by the repo's rules and
+  // offers more rounds, and never asks for an override.
+  test("the end-of-budget comment says reviews are done, why, what the gate does, and how to get more", () => {
+    const verdict = evaluateCiReviewAdmission(
+      admissionInput({
+        currentHead: HEAD_D,
+        summaryHead: HEAD_A,
+        markerSeen: true,
+        reviewCount: 2,
+        state: null,
+        admission: parseCiAdmissionBlock(
+          admissionBody(HEAD_A, { blocking: 0, advisory: 1 }),
+        ),
+        postedFindings: null,
+        policy: POLICY,
+      }),
+    );
+    if (verdict.action !== "manual-required")
+      throw new Error("expected manual-required");
+    const comment = planCiReviewManualRequired({
+      prNumber: PR,
+      ciMode: "gate",
+      verdict,
+      admission: {
+        currentHead: HEAD_D,
+        reviewedHead: HEAD_A,
+        policyMode: POLICY.mode,
+        policyHash: POLICY_HASH,
+      },
+    }).comment;
+    expect(comment).toContain(
+      "No more automatic reviews will run on this pull request.",
+    );
+    expect(comment).toContain(
+      `Review policy: \`${POLICY.mode}\` (\`ci_review_policy\`).`,
+    );
+    expect(comment).toContain(
+      "Automatic reviews used: 2/2 (`ci_max_attempts`).",
+    );
+    expect(comment).toContain(`Last reviewed head: \`${HEAD_A.slice(0, 7)}\`.`);
+    expect(comment).toContain("it keeps the last review's verdict");
+    expect(comment).toContain("marked unverified");
+    expect(comment).toContain(
+      "Want more review rounds? Comment `/crysk review`",
+    );
+    expect(comment.toLowerCase()).not.toContain("override");
+  });
+
   test("formatCiAdmissionObserveNotice describes a would-skip decision", () => {
     const verdict = evaluateCiReviewAdmission(
       admissionInput({
