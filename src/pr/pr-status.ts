@@ -249,6 +249,15 @@ function gateStateOf(state: string): PrGateState {
   return "error";
 }
 
+// The live blocking findings at input.head, each with its newest triage reply and CI ruling, read exactly as
+// buildPrStatus reads them. The admission gate reads them for the reviewed head (pr/answered-findings.ts).
+export function liveBlockingFindings(input: PrStatusInput): PrStatusFinding[] {
+  const summary = readSummary(input.issueComments);
+  return readFindings(input, summary.rows)
+    .filter((a) => a.finding.blocking && a.finding.live_on_head)
+    .map((a) => a.finding);
+}
+
 // The summary is the newest comment carrying the report marker (findMarkedCommentId picks
 // the newest). Its head and completeness come from the marker; its reviews count and its
 // live rows come from the state block that the summary carries.
@@ -527,9 +536,18 @@ function gateBlockingCount(gate: PrStatusGate): number | null {
 }
 
 // The gate descriptions that name no review of this head: the automatic budget is used up, or the
-// policy is manual (src/pr/admission.ts). Their text is the gate's own, so no count is read.
+// policy is manual. A gate stopped writing them on 2026-10-30 (budget-exhausted-carry S2: both carry the
+// last verdict now), so only a head statused before that still carries one. Their text is the gate's own,
+// so no count is read.
 const REVIEW_TRIGGER_GATE =
   /^crysk: review (budget for this PR is used up|needs a manual trigger)/;
+
+// A blocking red a skip carried from an earlier commit (admission.ts carriedBlockingDescription).
+const CARRIED_BLOCKING_GATE = /^crysk: \d+ blocking finding\(s\) carried from /;
+
+// The green a skip writes over answered findings no review verified (admission.ts unverifiedFixesDescription).
+const UNVERIFIED_FIXES_GATE =
+  /^crysk: \d+ answered finding\(s\), fixes unverified \(/;
 
 // A blocking finding whose newest reply is a dismissal the CI adjudicator upheld on this head.
 function upheldDismissal(a: AnalyzedFinding): boolean {
@@ -606,6 +624,16 @@ function decideNext(
         reason: `The gate is green, but ${owed.length} finding(s) on this head have no reply yet; triage them.`,
       };
     }
+    // budget-exhausted-carry S6: a green no review verified. Nothing is owed, and the reason says why
+    // it is green, so the skill reports the fixes as unverified rather than reviewed.
+    if (
+      UNVERIFIED_FIXES_GATE.test(canonicalStatusText(gate.description ?? ""))
+    ) {
+      return {
+        next_action: "done",
+        reason: `The gate is green on answered findings no review verified (${gate.description}); the PR is ready to merge, or comment ${commandHint(REVIEW_COMMAND, "")} for another review.`,
+      };
+    }
     return {
       next_action: "done",
       reason:
@@ -651,6 +679,36 @@ function decideNext(
     (a) => a.finding.triage?.tag === "applied",
   );
   if (applied.length > 0) {
+    // budget-exhausted-carry S3: a carried blocking red means a review rule skipped this head. The next push
+    // may be skipped too, and then the gate reads the replies instead of a review, but only every blocking
+    // finding answered unlocks it (answered-findings.ts), so the reason promises that only when it holds.
+    // A carried partial red is never unlocked by replies, so it keeps the plain reason.
+    if (
+      CARRIED_BLOCKING_GATE.test(canonicalStatusText(gate.description ?? ""))
+    ) {
+      // The gate's own rules (admission.ts admissionSkipDecision, answered-findings.ts): a finding is
+      // answered only by its newest reply at the head it was posted on, and the gate must see at least as
+      // many blocking findings as the red counts. The stale-reply cutoff needs the carried verdict's time,
+      // which this read does not have, so the reason says the push can turn green, never that it will.
+      const open = liveBlocking.filter(
+        (a) =>
+          !(
+            (a.finding.triage?.tag === "applied" &&
+              a.finding.triage.head === a.finding.head) ||
+            upheldDismissal(a)
+          ),
+      ).length;
+      const counted = gateBlockingCount(gate);
+      const unseen =
+        counted === null ? 0 : Math.max(0, counted - liveBlocking.length);
+      return {
+        next_action: "fix",
+        reason:
+          open === 0 && unseen === 0
+            ? "Every live blocking finding is answered and a review rule skipped this head; push the fix. If a rule skips that push too, the gate reads the replies on it and can turn green, marked unverified; otherwise the review verifies it."
+            : `A live blocking finding is tagged applied, but ${open + unseen} blocking finding(s) are still open (deferred, misclassified, a dismissal not upheld, a reply at another head, or one this read cannot see), so replies alone will not unlock the carried red; push the fix, and answer or fix the rest.`,
+      };
+    }
     return {
       next_action: "fix",
       reason:

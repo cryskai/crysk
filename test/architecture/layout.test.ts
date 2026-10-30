@@ -150,6 +150,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
     domain: "pr",
     files: [
       "admission",
+      "answered-findings",
       "ci-admission-gate",
       "ci-publish",
       "discovery",

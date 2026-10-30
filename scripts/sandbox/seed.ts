@@ -104,6 +104,17 @@ export const REPO_CONFIG_JSON = `${JSON.stringify(
   2,
 )}\n`;
 
+// The repo config the budget scenarios commit on their branch (budget-answered,
+// budget-unanswered): the same policy, with a budget of one automatic review, so the
+// first push is reviewed and the second meets the exhausted budget. A pull_request run
+// checks out the PR's merge ref (the scaffold's checkout sets no `ref:`), and the CLI
+// reads the repo config from that checkout, so the branch's file is the one admission reads.
+export const BUDGET_ONE_CONFIG_JSON = `${JSON.stringify(
+  { ci_review_policy: "every_push", ci_max_attempts: 1 },
+  null,
+  2,
+)}\n`;
+
 export const REPO_DESCRIPTION =
   "pr-hero's CI test bed: a scratch repo for scenario runs of the pr-hero review action";
 

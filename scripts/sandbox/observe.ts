@@ -67,6 +67,13 @@ const OWNER_LEAD =
 // before the comment from being mistaken for an earlier one.
 export const COMMENT_RUN_CLOCK_SKEW_MS = 5_000;
 
+// budget-exhausted-carry S10: the sentence the manual-required notice states once the
+// automatic review budget is used up (src/ci/gates.ts buildManualRequiredComment, which
+// keeps it private). Mirrored here, and pinned by test/sandbox/seed.test.ts against
+// planCiReviewManualRequired's real output, so a drift in the notice fails that test.
+export const END_OF_BUDGET_SENTENCE =
+  "No more automatic reviews will run on this pull request.";
+
 export type CommentKind =
   | "report"
   | "finding"
@@ -86,6 +93,8 @@ export interface CommentFact {
   // An outcome's owner lead, when its summary names one (OWNER_LEAD).
   lead?: string;
   skip?: SkipReason;
+  // S10: set only on a manual-required notice whose body states END_OF_BUDGET_SENTENCE.
+  endOfBudget?: true;
   // A report, an outcome or a finding names the head it was written for (a finding
   // in its marker). Only a report for the head under test counts as this run's
   // review, and only an outcome for it decides this run's path: an earlier head's
@@ -387,8 +396,15 @@ export function classifyComment(
     };
   }
   for (const [reason, marker] of Object.entries(SKIP_MARKERS)) {
-    if (matchMarkerPrefix(first, marker) === first)
-      return { source, kind: "skip", skip: reason as SkipReason };
+    if (matchMarkerPrefix(first, marker) !== first) continue;
+    const endOfBudget =
+      reason === "manual-required" && body.includes(END_OF_BUDGET_SENTENCE);
+    return {
+      source,
+      kind: "skip",
+      skip: reason as SkipReason,
+      ...(endOfBudget ? { endOfBudget: true as const } : {}),
+    };
   }
   if (matchMarkerPrefix(first, OVERRIDE_MARKER_PREFIX) !== undefined) {
     // The head names the commit the override unlocked; an override is valid for that head only.

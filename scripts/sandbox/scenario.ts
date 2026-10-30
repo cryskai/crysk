@@ -11,13 +11,14 @@
 //
 // smoke is the review-free scenario, run through this same code (smoke.ts).
 
-import { TRIAGE_MARKER_PREFIX } from "#triage/triage";
+import { TRIAGE_MARKER_PREFIX, triageMarker } from "#triage/triage";
 import { matchMarkerPrefix } from "../../src/brand";
 import {
   type Check,
   type CheckResult,
   describeCheck,
   evaluateChecks,
+  outsideDiffBlockingOn,
   ownBlockingGate,
   ownBlockingSkipReason,
   ownBlockingUndecided,
@@ -85,12 +86,16 @@ import {
 } from "./runs";
 import {
   type Action,
+  type AnswerTag,
   findScenario,
+  type NewFile,
   type Phase,
   type Scenario,
 } from "./scenarios";
 import {
+  MUTE_BUGGY,
   MUTE_COMMIT_MESSAGE,
+  MUTE_PATH,
   PLANTED_COMMIT_MESSAGE,
   plantedVolume,
   VOLUME_PATH,
@@ -274,6 +279,7 @@ export function phaseReadsLog(phase: Phase): boolean {
     phase.checks,
     phase.afterPriorOutcome,
     phase.afterPriorBlocking,
+    phase.ifNoPriorBlocking,
     phase.ifOwnBlockingAt?.checks,
   ];
   return lists.some(
@@ -557,6 +563,27 @@ async function runOne(
           );
         }
       }
+      // The inverse gate: the phase before posted no blocking finding, inline or in its
+      // head's report outside the diff, so its checks read a carried green. A phase with
+      // no phase before it has nothing to carry, so these checks are named there too.
+      const priorClean =
+        previous !== undefined &&
+        !priorBlocking &&
+        outsideDiffBlockingOn(previous) === 0;
+      const noBlocking = phase.ifNoPriorBlocking ?? [];
+      if (!priorClean) {
+        const why =
+          previous === undefined
+            ? "no phase before it"
+            : priorBlocking
+              ? `phase ${index} posted a blocking finding`
+              : `phase ${index}'s report lists a blocking finding outside the diff`;
+        for (const check of noBlocking) {
+          deps.log(
+            `  not asserted: ${scenario.name} [${index + 1}] ${describeCheck(check)} (${why})`,
+          );
+        }
+      }
       // S3: the phase's own observation decides, not the previous phase's. A head with no
       // blocking finding at the path (inline or outside the diff) has nothing for these
       // checks to read, so they are named.
@@ -580,6 +607,7 @@ async function runOne(
         ...phase.checks,
         ...(priorOutcome ? after : []),
         ...(priorBlocking ? afterBlocking : []),
+        ...(priorClean ? noBlocking : []),
         ...(ownAt !== undefined && ownBlocking ? ownAt.checks : []),
       ];
       // A failed check of a run whose hunters failed is the free model's flake. It
@@ -690,28 +718,19 @@ async function perform(
     return;
   }
   if (action.kind === "push") {
-    // A push with nothing new would be an empty commit, which the rails do not
-    // make. A scenario that pushes must change the workflow, and says so if not.
-    // A push that adds files is never empty.
-    const files = action.files ?? [];
-    const pinned = await pinVariant(deps, live, action.variant, ref);
-    for (const file of files) {
-      await deps.workspace.write(live.dir, file.path, file.contents);
-    }
-    if (files.length > 0) {
-      await commitPaths(
-        deps,
-        live.dir,
-        files.map((file) => file.path),
-        MUTE_COMMIT_MESSAGE,
-      );
-    }
-    if (!pinned && files.length === 0) {
-      throw new Error(
-        `the ${action.variant} workflow is already on ${live.branch}, so the push would be empty`,
-      );
-    }
-    await pushBranch(deps, live);
+    await pushCommit(deps, live, action.variant, action.files ?? [], ref);
+    return;
+  }
+  if (action.kind === "answer-and-push") {
+    // The replies land before the push: the gate reads them when the push's run arrives.
+    await answerBlockingFindings(deps, live, action.tag);
+    await pushCommit(
+      deps,
+      live,
+      "normal",
+      [{ path: MUTE_PATH, contents: MUTE_BUGGY }],
+      ref,
+    );
     return;
   }
   if (action.kind === "dismiss-and-recheck") {
@@ -724,6 +743,37 @@ async function perform(
     return;
   }
   await postComment(deps, live, action.body);
+}
+
+// A later commit on the scenario branch: the variant's workflow when it differs, and
+// `files`, then a plain push. A push with nothing new would be an empty commit, which
+// the rails do not make. A scenario that pushes must change the workflow, and says so
+// if not. A push that adds files is never empty.
+async function pushCommit(
+  deps: SandboxDeps,
+  live: Live,
+  variant: VariantName,
+  files: readonly NewFile[],
+  ref: string,
+): Promise<void> {
+  const pinned = await pinVariant(deps, live, variant, ref);
+  for (const file of files) {
+    await deps.workspace.write(live.dir, file.path, file.contents);
+  }
+  if (files.length > 0) {
+    await commitPaths(
+      deps,
+      live.dir,
+      files.map((file) => file.path),
+      MUTE_COMMIT_MESSAGE,
+    );
+  }
+  if (!pinned && files.length === 0) {
+    throw new Error(
+      `the ${variant} workflow is already on ${live.branch}, so the push would be empty`,
+    );
+  }
+  await pushBranch(deps, live);
 }
 
 // The status of one head, as the combined status of its commit reads it (the gate's context
@@ -816,6 +866,57 @@ async function postComment(
   live.commentCreatedAt = await commentCreatedAt(deps, live.commentId);
 }
 
+// A blocking finding comment on the PR, with the head its own marker names.
+interface BlockingFindingComment {
+  id: number;
+  head?: string;
+}
+
+// The PR's blocking finding comments, in the order GitHub lists them. The tier is the
+// finding header's (`🔴 blocking`), the same test the status checks read.
+async function blockingFindingComments(
+  deps: SandboxDeps,
+  live: Live,
+): Promise<BlockingFindingComment[]> {
+  const pr = requirePr(live);
+  const comments = await ghJson<{ id: number; body: string }[]>(deps, [
+    "api",
+    `repos/${SANDBOX_REPO}/pulls/${pr.number}/comments?per_page=100`,
+  ]);
+  return comments
+    .filter(
+      (c) =>
+        matchMarkerPrefix(c.body, FINDING_MARKER_PREFIX) !== undefined &&
+        c.body.includes("🔴 blocking"),
+    )
+    .map((c) => {
+      const head = classifyComment(c.body, "inline").head;
+      return head === undefined ? { id: c.id } : { id: c.id, head };
+    });
+}
+
+// A reply on a finding's thread, as the PR's author would post it. The one call shape
+// the rails allow for a write to a review comment (rails.ts): a POST of `body` and
+// `in_reply_to`, and nothing else.
+async function replyToFinding(
+  deps: SandboxDeps,
+  live: Live,
+  findingId: number,
+  body: string,
+): Promise<void> {
+  const pr = requirePr(live);
+  await ghOk(deps, [
+    "api",
+    `repos/${SANDBOX_REPO}/pulls/${pr.number}/comments`,
+    "--method",
+    "POST",
+    "-f",
+    `body=${body}`,
+    "-F",
+    `in_reply_to=${findingId}`,
+  ]);
+}
+
 // T5b: replies `dismissed` on the first blocking finding's thread, as a human author
 // would. A PR with no blocking finding has nothing to dismiss, so no reply is posted.
 async function dismissBlockingFinding(
@@ -823,34 +924,70 @@ async function dismissBlockingFinding(
   live: Live,
   argument: string,
 ): Promise<void> {
-  const pr = requirePr(live);
+  requirePr(live);
   const headSha = live.headSha;
   if (headSha === undefined)
     throw new Error("the branch has no head to dismiss on");
-  const comments = await ghJson<{ id: number; body: string }[]>(deps, [
-    "api",
-    `repos/${SANDBOX_REPO}/pulls/${pr.number}/comments?per_page=100`,
-  ]);
-  const finding = comments.find(
-    (c) =>
-      matchMarkerPrefix(c.body, FINDING_MARKER_PREFIX) !== undefined &&
-      c.body.includes("🔴 blocking"),
-  );
+  const finding = (await blockingFindingComments(deps, live))[0];
   if (finding === undefined) {
     deps.log("no blocking finding to dismiss");
     return;
   }
-  await ghOk(deps, [
-    "api",
-    `repos/${SANDBOX_REPO}/pulls/${pr.number}/comments`,
-    "--method",
-    "POST",
-    "-f",
-    `body=${TRIAGE_MARKER_PREFIX}tag=dismissed head=${headSha} actor=agent verdict=upheld -->\n\n${argument}`,
-    "-F",
-    `in_reply_to=${finding.id}`,
-  ]);
+  await replyToFinding(
+    deps,
+    live,
+    finding.id,
+    `${TRIAGE_MARKER_PREFIX}tag=dismissed head=${headSha} actor=agent verdict=upheld -->\n\n${argument}`,
+  );
   deps.log(`dismissed blocking finding ${finding.id}`);
+}
+
+// What each answer's reply says after its marker.
+const ANSWER_TEXT: Record<AnswerTag, string> = {
+  applied: "Applied in the next push.",
+  deferred: "Deferred to a later pull request.",
+};
+
+// budget-exhausted-carry S3: replies `tag` on every blocking finding thread of the current
+// head, each with the head its own marker names (the gate matches the reply's head= to the
+// finding's). A finding of an older head is not answered. A head with no blocking finding
+// has nothing to answer, so no reply is posted and the push still follows.
+async function answerBlockingFindings(
+  deps: SandboxDeps,
+  live: Live,
+  tag: AnswerTag,
+): Promise<void> {
+  const headSha = live.headSha;
+  if (headSha === undefined)
+    throw new Error("the branch has no head to answer on");
+  const findings = (await blockingFindingComments(deps, live)).filter(
+    (f) => f.head === headSha,
+  );
+  if (findings.length === 0) {
+    deps.log(`no blocking finding on ${headSha.slice(0, 7)} to answer`);
+    return;
+  }
+  for (const finding of findings) {
+    // The product's own builder: `applied` carries no verdict, and the other tags must.
+    // head= is the finding marker's own head, which the filter above made the current one.
+    // WHY `upheld` on a deferral: it is the reading most favourable to the author, and S3
+    // says a deferral keeps the carried red whatever its ruling, so the strongest case is
+    // the one under test.
+    const marker = triageMarker(
+      tag === "applied"
+        ? { tag, headSha, actor: "agent" }
+        : { tag, headSha, actor: "agent", verdict: "upheld" },
+    );
+    await replyToFinding(
+      deps,
+      live,
+      finding.id,
+      `${marker}\n\n${ANSWER_TEXT[tag]}`,
+    );
+  }
+  deps.log(
+    `answered ${findings.length} blocking finding(s) ${tag}: ${findings.map((f) => f.id).join(", ")}`,
+  );
 }
 
 // The id GitHub gave the comment whose URL gh printed. The comment's run and its

@@ -28,7 +28,14 @@ export type Check =
   // T2e: this run posted no outcome comment. Unlike no-outcome it reads the outcomes
   // this run created (postedByThisRun), so an outcome an earlier run left stays out of it.
   | { kind: "no-own-outcome" }
-  | { kind: "status"; state: string; descriptionStartsWith?: string }
+  // `descriptionContains` (optional) is a substring the description must carry, for a text
+  // whose count or sha varies (the carried and unverified texts of budget-exhausted-carry).
+  | {
+      kind: "status";
+      state: string;
+      descriptionStartsWith?: string;
+      descriptionContains?: string;
+    }
   // S4: the head's status is failure when the PR shows a blocking finding
   // comment, and success when it shows none. For a review whose findings vary.
   | { kind: "status-matches-findings" }
@@ -70,7 +77,10 @@ export type Check =
   | { kind: "no-hunter-failed" }
   // The head a rerun did not observe kept its status: its status before the rerun and
   // after it are the same. Reads Observation.newerHead, so it is a single-observation check.
-  | { kind: "newer-head-unchanged" };
+  | { kind: "newer-head-unchanged" }
+  // budget-exhausted-carry S10: the PR carries the end-of-budget comment, the manual-required
+  // notice that says no more automatic reviews will run (observe.ts END_OF_BUDGET_SENTENCE).
+  | { kind: "end-of-budget-comment" };
 
 export interface CheckResult {
   label: string;
@@ -98,10 +108,14 @@ export function describeCheck(check: Check): string {
       return "no outcome comment";
     case "no-own-outcome":
       return "this run posted no outcome comment";
-    case "status":
-      return check.descriptionStartsWith === undefined
-        ? `status is ${check.state}`
-        : `status is ${check.state}, description starts with ${check.descriptionStartsWith}`;
+    case "status": {
+      const parts = [`status is ${check.state}`];
+      if (check.descriptionStartsWith !== undefined)
+        parts.push(`description starts with ${check.descriptionStartsWith}`);
+      if (check.descriptionContains !== undefined)
+        parts.push(`description contains ${check.descriptionContains}`);
+      return parts.join(", ");
+    }
     case "status-matches-findings":
       return "status matches the blocking findings: failure when any is visible, success or a counted failure otherwise";
     case "report-min":
@@ -136,6 +150,8 @@ export function describeCheck(check: Check): string {
       return "no hunter failed in the run";
     case "newer-head-unchanged":
       return "the newer head's pr-hero status is unchanged by the rerun";
+    case "end-of-budget-comment":
+      return "the end-of-budget comment says no more automatic reviews will run";
   }
 }
 
@@ -285,13 +301,15 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
     case "status": {
       const status = obs.status;
       if (status === undefined) return pass(false, "no status on the head");
+      const text = canonicalStatusText(status.description);
       const prefixOk =
         check.descriptionStartsWith === undefined ||
-        canonicalStatusText(status.description).startsWith(
-          check.descriptionStartsWith,
-        );
+        text.startsWith(check.descriptionStartsWith);
+      const containsOk =
+        check.descriptionContains === undefined ||
+        text.includes(check.descriptionContains);
       return pass(
-        status.state === check.state && prefixOk,
+        status.state === check.state && prefixOk && containsOk,
         `got ${status.state}: ${status.description}`,
       );
     }
@@ -548,6 +566,19 @@ export function evaluateCheck(check: Check, obs: Observation): CheckResult {
         detail: `hunters failed: ${failed.join(", ")}`,
         cause: "free-model-hunters-failed",
       };
+    }
+    case "end-of-budget-comment": {
+      // The manual-required marker alone is not enough: before S10 the same marker opened a
+      // notice that asked for a manual override. Only the S10 sentence passes.
+      const notices = obs.comments.filter(
+        (c) => c.kind === "skip" && c.skip === "manual-required",
+      );
+      return pass(
+        notices.some((c) => c.endOfBudget === true),
+        notices.length === 0
+          ? "no manual-required comment on the PR"
+          : "the manual-required comment does not say that no more automatic reviews will run",
+      );
     }
     case "newer-head-unchanged": {
       const newer = obs.newerHead;
