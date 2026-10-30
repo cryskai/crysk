@@ -37,11 +37,16 @@ function summary(rows: { id: string; loc: string; claim: string }[]): string {
   ].join("\n");
 }
 
-function finding(id: number, line: number, claim: string): AnswerReviewComment {
+function finding(
+  id: number,
+  line: number,
+  claim: string,
+  head: string = REVIEWED,
+): AnswerReviewComment {
   const marker = findingMarker({
     path: "src/a.ts",
     line,
-    headSha: REVIEWED,
+    headSha: head,
     claim,
   });
   return {
@@ -66,11 +71,12 @@ function reply(
   id: number,
   parent: number,
   tag: TriageTag,
-  options: { user?: string; head?: string } = {},
+  options: { user?: string; head?: string; at?: string } = {},
 ): AnswerReviewComment {
   return {
     id,
     user: options.user ?? AUTHOR,
+    ...(options.at === undefined ? {} : { created_at: options.at }),
     body: `${triageMarker({
       tag,
       headSha: options.head ?? REVIEWED,
@@ -95,6 +101,10 @@ function ruling(
   };
 }
 
+const OLD = "2".repeat(40);
+const VERDICT_AT = "2026-10-30T10:00:00Z";
+const BEFORE = "2026-10-30T09:00:00Z";
+const AFTER = "2026-10-30T11:00:00Z";
 const CLAIM_A = "the value is stored in seconds and read as milliseconds";
 const CLAIM_B = "the retry loop never stops on a permanent error";
 
@@ -103,6 +113,7 @@ function read(options: {
   writers?: Record<string, boolean | null>;
   trustedActors?: ReadonlySet<string>;
   issueComments?: AnswerIssueComment[];
+  verdictAt?: string | null;
 }) {
   return answeredBlockingFindings({
     pr: 12,
@@ -120,6 +131,7 @@ function read(options: {
     reviewComments: options.reviewComments,
     trustedActors: options.trustedActors ?? new Set([AUTHOR]),
     writers: new Map(Object.entries(options.writers ?? { [AUTHOR]: true })),
+    verdictAt: options.verdictAt === undefined ? VERDICT_AT : options.verdictAt,
   });
 }
 
@@ -290,5 +302,85 @@ describe("triageReplyAuthors", () => {
         { id: 30, user: "commenter", body: "looks good" },
       ]),
     ).toEqual([AUTHOR, STRANGER]);
+  });
+});
+
+// Verifier probes P1 and P3, kept as regressions.
+describe("answeredBlockingFindings: what cannot unlock the gate", () => {
+  // A finding posted on an older head stays live on the reviewed head through the summary's row. Its
+  // reply carries the older head, so only its time says whether it answers the review that kept it.
+  const olderHeadFinding = (replyAt: string | undefined) =>
+    read({
+      issueComments: [
+        {
+          id: 1,
+          user: BOT,
+          body: summary([{ id: "R001", loc: "src/a.ts:10", claim: CLAIM_A }]),
+        },
+      ],
+      reviewComments: [
+        finding(10, 10, CLAIM_A, OLD),
+        reply(11, 10, "applied", {
+          head: OLD,
+          ...(replyAt === undefined ? {} : { at: replyAt }),
+        }),
+      ],
+    });
+
+  test("an older head's applied from before the carried verdict is stale: the review kept the finding", () => {
+    expect(olderHeadFinding(BEFORE)).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("an older head's applied from after the carried verdict answers it", () => {
+    expect(olderHeadFinding(AFTER)).toEqual({ blocking: 1, open: 0 });
+  });
+
+  test("an older head's reply with no time, or no verdict time, is stale (fail closed)", () => {
+    expect(olderHeadFinding(undefined)).toEqual({ blocking: 1, open: 1 });
+    expect(
+      read({
+        verdictAt: null,
+        issueComments: [
+          {
+            id: 1,
+            user: BOT,
+            body: summary([{ id: "R001", loc: "src/a.ts:10", claim: CLAIM_A }]),
+          },
+        ],
+        reviewComments: [
+          finding(10, 10, CLAIM_A, OLD),
+          reply(11, 10, "applied", { head: OLD, at: AFTER }),
+        ],
+      }),
+    ).toEqual({ blocking: 1, open: 1 });
+  });
+
+  test("a reply at the reviewed head answers whatever its time", () => {
+    expect(
+      read({
+        reviewComments: [
+          ...TWO_FINDINGS,
+          reply(11, 10, "applied", { at: BEFORE }),
+          reply(21, 20, "applied", { at: BEFORE }),
+        ],
+      }),
+    ).toEqual({ blocking: 2, open: 0 });
+  });
+
+  test("a finding whose tier cannot be read fails the read closed, applied or not", () => {
+    const noBadge: AnswerReviewComment = {
+      id: 10,
+      user: BOT,
+      body: `${findingMarker({ path: "src/a.ts", line: 10, headSha: REVIEWED, claim: CLAIM_A })}\n\n${CLAIM_A}`,
+      in_reply_to_id: null,
+      path: "src/a.ts",
+      line: 10,
+    };
+    expect(
+      read({
+        issueComments: [],
+        reviewComments: [noBadge, reply(11, 10, "applied")],
+      }),
+    ).toBeNull();
   });
 });

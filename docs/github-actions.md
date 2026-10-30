@@ -663,7 +663,10 @@ and a later skip carries it with the same wording, never as a green a review ear
 write or admin access counts (looked up once per author, with one retry); a reply from anyone else is ignored, and a
 lookup that fails keeps the red. A truncated comment read, an unanswered, `deferred` or `misclassified` finding, a
 dismissal with no upheld ruling, a summary-only finding with no thread, or fewer blocking findings visible than the red
-counts keeps the red too. A partial review's red is never unlocked this way: answers cannot cover hunters that failed.
+counts keeps the red too, and so does a finding whose tier cannot be read. A reply to a finding posted on an older
+head (still live through the summary) counts only when it is newer than the carried verdict: the review behind that
+verdict already saw any older reply and kept the finding. A partial review's red is never unlocked this way: answers
+cannot cover hunters that failed.
 The gate reads the replies when the push arrives, so reply before you push. A green one reads as no review
 needed. An override is never carried: it is a human's decision for the code at the head it names, and the skipped head
 was never reviewed, so carrying it would turn a new head green with no review behind it. With no readable verdict (no
@@ -934,7 +937,7 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. When the red is carried (a review rule skipped the head), no review will run: the gate reads the replies on that push instead. |
 | `recheck` | The gate is red and a live blocking inline finding is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. Comment `/crysk recheck`; the CI adjudicator rules on it. |
 | `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/crysk review`, and that review no longer counts them. |
-| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or an outside-diff finding, which has no thread to rule on). A skipped review (size or budget) also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. |
+| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or an outside-diff finding, which has no thread to rule on). A size- or spend-ceiling-skipped review also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. |
 
 The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list, or a
 gate status it cannot read exits 1 with nothing on stdout, so a partial answer never looks like a clean PR.

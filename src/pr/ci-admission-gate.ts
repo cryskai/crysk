@@ -667,11 +667,17 @@ function answeredReader(input: {
   operatorRoot: string;
   prNumber: number;
   reviewedHead: string | null;
-  issueComments: readonly { id: number; user: string; body: string }[];
+  issueComments: readonly {
+    id: number;
+    user: string;
+    body: string;
+    created_at?: string;
+  }[];
   reviewComments: readonly {
     id: number;
     user: string;
     body: string;
+    created_at?: string;
     in_reply_to_id: number | null;
     path?: string;
     line?: number | null;
@@ -679,8 +685,8 @@ function answeredReader(input: {
   trustedActors: ReadonlySet<string> | undefined;
   spawnFn: typeof Bun.spawn | undefined;
   sleepFn: (ms: number) => Promise<void>;
-}): () => Promise<AnsweredFindings | null> {
-  return async () => {
+}): (verdictAt: string | null) => Promise<AnsweredFindings | null> {
+  return async (verdictAt) => {
     const reviewedHead = input.reviewedHead;
     if (reviewedHead === null) return null;
     const writers = new Map<string, boolean | null>();
@@ -708,6 +714,7 @@ function answeredReader(input: {
       reviewComments: input.reviewComments,
       trustedActors: input.trustedActors,
       writers,
+      verdictAt,
     });
   };
 }

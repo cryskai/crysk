@@ -1,5 +1,6 @@
 import { liveBlockingFindings } from "#pr/pr-status";
 import { parseFindingMarker } from "#pr/preflight";
+import { TIER_UNRECOVERABLE } from "#rereview/classify";
 import { CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
 import { parseTriageMarker } from "#triage/triage";
 import { parsePrCommentMarker } from "#watch/preflight";
@@ -21,6 +22,7 @@ export interface AnswerIssueComment {
   id: number;
   user: string;
   body: string;
+  created_at?: string;
 }
 
 export interface AnswerReviewComment extends AnswerIssueComment {
@@ -61,6 +63,27 @@ function isGateInput(body: string): boolean {
   );
 }
 
+// WHY a reply to a finding from an older head must be newer than the carried verdict: such a finding is live
+// on the reviewed head through the summary's rows, so the review that wrote the verdict saw its reply and kept
+// it. A reply from before that verdict is the claim the review already contradicted. A reply carries the
+// head its finding was posted on (triage/reply.ts), so its time is the only thing that says it came after.
+// A reply at the reviewed head itself always answers the review of that head.
+function isStaleReply(
+  comment: AnswerIssueComment,
+  reviewedHead: string,
+  verdictAt: number | null,
+): boolean {
+  const marker = parseTriageMarker(comment.body);
+  if (marker === null || marker.headSha === reviewedHead) return false;
+  const createdAt =
+    comment.created_at === undefined
+      ? Number.NaN
+      : Date.parse(comment.created_at);
+  return (
+    verdictAt === null || Number.isNaN(createdAt) || createdAt <= verdictAt
+  );
+}
+
 // The comments the read may trust, or null when one cannot be judged (S5: fail closed).
 // WHY a triage reply needs write access (S4): it is the only thing that turns a red green here, and anyone
 // can comment on a pull request. A reply from a login with no write access is dropped; a login whose
@@ -69,10 +92,13 @@ function trustedComments<T extends AnswerIssueComment>(
   comments: readonly T[],
   writers: ReadonlyMap<string, boolean | null>,
   trustedActors: ReadonlySet<string> | undefined,
+  reviewedHead: string,
+  verdictAt: number | null,
 ): T[] | null {
   const kept: T[] = [];
   for (const comment of comments) {
     if (isTriageReply(comment.body)) {
+      if (isStaleReply(comment, reviewedHead, verdictAt)) continue;
       const writer = writers.get(comment.user);
       if (writer === undefined || writer === null) return null;
       if (writer) kept.push(comment);
@@ -95,16 +121,25 @@ export function answeredBlockingFindings(input: {
   reviewComments: readonly AnswerReviewComment[];
   trustedActors: ReadonlySet<string> | undefined;
   writers: ReadonlyMap<string, boolean | null>;
+  // When the carried verdict was written (its commit status's created_at), or null when unknown.
+  verdictAt: string | null;
 }): AnsweredFindings | null {
+  const parsedAt =
+    input.verdictAt === null ? Number.NaN : Date.parse(input.verdictAt);
+  const verdictAt = Number.isNaN(parsedAt) ? null : parsedAt;
   const issueComments = trustedComments(
     input.issueComments,
     input.writers,
     input.trustedActors,
+    input.reviewedHead,
+    verdictAt,
   );
   const reviewComments = trustedComments(
     input.reviewComments,
     input.writers,
     input.trustedActors,
+    input.reviewedHead,
+    verdictAt,
   );
   if (issueComments === null || reviewComments === null) return null;
   const findings = liveBlockingFindings({
@@ -115,6 +150,10 @@ export function answeredBlockingFindings(input: {
     issueComments,
     reviewComments,
   });
+  // S5: a finding whose tier could not be read is blocking only by fail-closed default; it cannot be
+  // the evidence that unlocks the gate.
+  if (findings.some((finding) => finding.tier === TIER_UNRECOVERABLE))
+    return null;
   let open = 0;
   for (const finding of findings) {
     const triage = finding.triage;

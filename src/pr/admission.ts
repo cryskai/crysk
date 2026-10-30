@@ -313,7 +313,8 @@ export interface AdmissionStatusInput {
   priorBlocking: number;
   // Reads the reviewed head's answered blocking findings (pr/answered-findings.ts). Called only when the
   // carried verdict is a blocking red, so every other skip makes no extra API call. Absent means never read.
-  readAnswered?: () => Promise<AnsweredFindings | null>;
+  // `verdictAt` is when the carried verdict was written (its status's created_at), or null when unknown.
+  readAnswered?: (verdictAt: string | null) => Promise<AnsweredFindings | null>;
 }
 
 export interface AdmissionStatusDecision {
@@ -775,7 +776,11 @@ async function gateSkipDecision(
     input.admission.readAnswered !== undefined
   ) {
     try {
-      answered = await input.admission.readAnswered();
+      answered = await input.admission.readAnswered(
+        carried === null
+          ? null
+          : (newestCarriedVerdict(carried.statuses)?.created_at ?? null),
+      );
     } catch {
       answered = null;
     }

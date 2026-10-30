@@ -249,9 +249,6 @@ function gateStateOf(state: string): PrGateState {
   return "error";
 }
 
-// The summary is the newest comment carrying the report marker (findMarkedCommentId picks
-// the newest). Its head and completeness come from the marker; its reviews count and its
-// live rows come from the state block that the summary carries.
 // The live blocking findings at input.head, each with its newest triage reply and CI ruling, read exactly as
 // buildPrStatus reads them. The admission gate reads them for the reviewed head (pr/answered-findings.ts).
 export function liveBlockingFindings(input: PrStatusInput): PrStatusFinding[] {
@@ -261,6 +258,9 @@ export function liveBlockingFindings(input: PrStatusInput): PrStatusFinding[] {
     .map((a) => a.finding);
 }
 
+// The summary is the newest comment carrying the report marker (findMarkedCommentId picks
+// the newest). Its head and completeness come from the marker; its reviews count and its
+// live rows come from the state block that the summary carries.
 function readSummary(comments: PrStatusComment[]): {
   head: string | null;
   complete: boolean | null;
