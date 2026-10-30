@@ -542,6 +542,9 @@ function gateBlockingCount(gate: PrStatusGate): number | null {
 const REVIEW_TRIGGER_GATE =
   /^crysk: review (budget for this PR is used up|needs a manual trigger)/;
 
+// A blocking red a skip carried from an earlier commit (admission.ts carriedBlockingDescription).
+const CARRIED_BLOCKING_GATE = /^crysk: \d+ blocking finding\(s\) carried from /;
+
 // The green a skip writes over answered findings no review verified (admission.ts unverifiedFixesDescription).
 const UNVERIFIED_FIXES_GATE =
   /^crysk: \d+ answered finding\(s\), fixes unverified \(/;
@@ -676,16 +679,28 @@ function decideNext(
     (a) => a.finding.triage?.tag === "applied",
   );
   if (applied.length > 0) {
-    // budget-exhausted-carry S3: a carried red means a review rule skipped this head, so no review will
-    // verify the push. The gate reads the replies on that push instead.
-    const carried = canonicalStatusText(gate.description ?? "").includes(
-      "carried from ",
-    );
+    // budget-exhausted-carry S3: a carried blocking red means a review rule skipped this head. The next push
+    // may be skipped too, and then the gate reads the replies instead of a review, but only every blocking
+    // finding answered unlocks it (answered-findings.ts), so the reason promises that only when it holds.
+    // A carried partial red is never unlocked by replies, so it keeps the plain reason.
+    if (
+      CARRIED_BLOCKING_GATE.test(canonicalStatusText(gate.description ?? ""))
+    ) {
+      const open = liveBlocking.filter(
+        (a) => !(a.finding.triage?.tag === "applied" || upheldDismissal(a)),
+      ).length;
+      return {
+        next_action: "fix",
+        reason:
+          open === 0
+            ? "Every live blocking finding is answered and a review rule skipped this head; push the fix. If a rule skips that push too, the gate reads the replies on it and turns green, marked unverified; otherwise the review verifies it."
+            : `A live blocking finding is tagged applied, but ${open} live blocking finding(s) are still open (deferred, misclassified, or a dismissal not upheld), so replies alone will not unlock the carried red; push the fix, and answer or fix the rest.`,
+      };
+    }
     return {
       next_action: "fix",
-      reason: carried
-        ? "A live blocking finding is tagged applied, and no automatic review is left on this PR; push the fix, and the gate reads the replies on that push (every blocking finding answered turns it green, marked unverified)."
-        : "A live blocking finding is tagged applied; push the fix, and the next review verifies it.",
+      reason:
+        "A live blocking finding is tagged applied; push the fix, and the next review verifies it.",
     };
   }
   // A dismissal leaves the count only on a CI ruling of "upheld" (src/triage/adjudication.ts). A

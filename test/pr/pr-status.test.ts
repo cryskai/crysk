@@ -2180,12 +2180,18 @@ describe("buildPrStatus: a head a review rule skipped", () => {
   test.each([
     [
       "a carried red",
-      `crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override`,
-      "no automatic review is left",
+      "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+      "Every live blocking finding is answered",
     ],
     [
       "a red a review wrote",
       BLOCKING_DESCRIPTION(1),
+      "the next review verifies it",
+    ],
+    // PR #442 F (advisory): a carried partial red is never unlocked by replies, so no unlock promise.
+    [
+      "a carried partial red",
+      "crysk: review partial (1 of 4 hunters failed) carried from 1111111 — /pr-hero review retries it",
       "the next review verifies it",
     ],
   ])(
@@ -2205,4 +2211,47 @@ describe("buildPrStatus: a head a review rule skipped", () => {
       expect(status.reason).toContain(phrase);
     },
   );
+
+  // PR #442 F (blocking): one applied beside a deferred must not promise that replies unlock the red.
+  test("a carried red with one applied and one deferred finding says the rest is still open", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "crysk: 2 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+          ),
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+          {
+            id: 3,
+            body: findingBody({
+              head: CURRENT,
+              claim: "the retry loop never stops",
+              line: 40,
+            }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 4,
+            parent: 3,
+            head: CURRENT,
+            tag: "deferred",
+            verdict: "upheld",
+          }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+    expect(status.reason).toContain(
+      "1 live blocking finding(s) are still open",
+    );
+    expect(status.reason).not.toContain("turns green");
+  });
 });

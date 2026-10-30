@@ -1027,6 +1027,65 @@ describe("publishCiSkip: the outcome record", () => {
           },
         );
 
+        // PR #442 F (blocking): a chained carry's cutoff is the review's own verdict time, not the later
+        // skip's, so a reply made between the review and the first skip still answers the review.
+        test("a chained carry hands readAnswered the review's own verdict time", async () => {
+          const SKIPPED = "c".repeat(40);
+          const T3 = "2026-10-16T12:00:00Z";
+          const bySha: Record<string, Row[]> = {
+            [SKIPPED]: [
+              row(
+                "failure",
+                "crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+                T3,
+              ),
+            ],
+            [REVIEWED_HEAD]: [row("failure", BLOCKING_2, T1)],
+          };
+          const reads: string[] = [];
+          const cutoffs: (string | null)[] = [];
+          const calls: StatusCall[] = [];
+          await publishCiSkip(
+            gateInput("manual-required", recordingStatus(calls), {
+              admission: admissionInput("max-attempts-exhausted", {
+                readAnswered: async (verdictAt) => {
+                  cutoffs.push(verdictAt);
+                  return { blocking: 2, open: 0 };
+                },
+              }),
+              readStatuses: async (_root: string, sha: string) => {
+                reads.push(sha);
+                return bySha[sha] ?? [];
+              },
+              listCommits: async () => [REVIEWED_HEAD, SKIPPED, STATUS_HEAD],
+            }),
+          );
+          expect(cutoffs).toEqual([T1]);
+          expect(reads).toEqual([SKIPPED, REVIEWED_HEAD]);
+          expect(calls.map((c) => c.state)).toEqual(["success"]);
+        });
+
+        test("no review verdict down the chain hands readAnswered no cutoff (fail closed)", async () => {
+          const cutoffs: (string | null)[] = [];
+          await skipWith(
+            [
+              row(
+                "failure",
+                "crysk: 2 blocking finding(s) carried from bbbbbbb — fix and push, or /pr-hero override",
+                T1,
+              ),
+            ],
+            "max-attempts-exhausted",
+            {
+              readAnswered: async (verdictAt) => {
+                cutoffs.push(verdictAt);
+                return null;
+              },
+            },
+          );
+          expect(cutoffs).toEqual([null]);
+        });
+
         test("one open finding keeps the red", async () => {
           const { calls } = await skipWith(
             [row("failure", BLOCKING_2, T1)],

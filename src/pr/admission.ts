@@ -326,6 +326,9 @@ export interface AdmissionStatusDecision {
 export interface CarriedVerdict {
   sha: string;
   statuses: readonly CommitStatusFact[];
+  // The PR's commits older than `sha`, newest first, within the walk's cap: where a chained carry's review
+  // verdict is looked up (reviewVerdictTime). Absent means none to look at.
+  older?: readonly string[];
 }
 
 type CarriedReason = Exclude<AdmissionStatusReason, "same-head">;
@@ -689,7 +692,9 @@ async function findCarriedVerdict(input: {
       spawnFn: input.spawnFn,
     });
     if (statuses === null) return null;
-    if (newestCarriedVerdict(statuses) !== undefined) return { sha, statuses };
+    if (newestCarriedVerdict(statuses) !== undefined) {
+      return { sha, statuses, older: earlier.slice(earlier.indexOf(sha) + 1) };
+    }
   }
   return null;
 }
@@ -727,6 +732,53 @@ async function overrideStandsOnHead(input: {
   }
   const newest = newestStatusInContext(statuses, COMMIT_STATUS_CONTEXT);
   return newest !== undefined && isOverrideStatus(newest);
+}
+
+// When the review behind the carried verdict wrote its own verdict, or null when none reads: the stale-reply
+// cutoff (answered-findings.ts isStaleReply). WHY the review's own verdict, not the carried one: a chained
+// skip carries a status a skip wrote later, and a reply made between the review and that skip answers the
+// review; cutting at the skip's time would drop it. The walk goes on down the PR's own commits from the
+// carried one, the carry's source (never the summary's head, which a comment can name), and stops at the
+// first commit with a review's own verdict. A failed read, or none within the cap, is null: fail closed.
+async function reviewVerdictTime(input: {
+  operatorRoot: string;
+  carried: CarriedVerdict | null;
+  spawnFn?: typeof Bun.spawn;
+  readStatuses: typeof fetchCommitStatusList;
+}): Promise<string | null> {
+  if (input.carried === null) return null;
+  const ownIn = (statuses: readonly CommitStatusFact[]) =>
+    newestStatusInContext(
+      statuses.filter((status) => finishedVerdict(status)),
+      COMMIT_STATUS_CONTEXT,
+    );
+  const first = ownIn(input.carried.statuses);
+  if (first !== undefined) return first.created_at ?? null;
+  for (const sha of input.carried.older ?? []) {
+    const statuses = await input.readStatuses(input.operatorRoot, sha, {
+      spawnFn: input.spawnFn,
+    });
+    if (statuses === null) return null;
+    const own = ownIn(statuses);
+    if (own !== undefined) return own.created_at ?? null;
+  }
+  return null;
+}
+
+// A verdict a review wrote itself: never a carried, skipped, or override text.
+function finishedVerdict(
+  status: Pick<CommitStatusFact, "state" | "description">,
+): boolean {
+  const description = status.description;
+  if (typeof description !== "string") return false;
+  if (status.state === "success") return finishedSuccessMatches(description);
+  if (status.state === "failure") {
+    return (
+      finishedBlockingMatches(description) ||
+      finishedPartialMatches(description)
+    );
+  }
+  return false;
 }
 
 // The status a gate-mode skip writes, or null for none. A size or budget skip is a fixed failure.
@@ -777,9 +829,12 @@ async function gateSkipDecision(
   ) {
     try {
       answered = await input.admission.readAnswered(
-        carried === null
-          ? null
-          : (newestCarriedVerdict(carried.statuses)?.created_at ?? null),
+        await reviewVerdictTime({
+          operatorRoot: input.operatorRoot,
+          carried,
+          spawnFn: input.spawnFn,
+          readStatuses: input.readStatuses ?? fetchCommitStatusList,
+        }),
       );
     } catch {
       answered = null;
