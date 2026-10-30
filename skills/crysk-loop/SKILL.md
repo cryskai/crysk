@@ -60,13 +60,30 @@ tag, not applying the review as a todo list.
 
 Every Crysk comment is a **claim to verify**, not an order. An advisory report never blocks anything. A CI
 report in gate mode can turn the `crysk` status red on blocking findings. Your reply is argument and evidence,
-and it never clears that status on its own. A blocking finding stops counting in exactly two ways:
+and it never clears that status on its own while a review can still run. A blocking finding stops counting in
+exactly two ways:
 
 - **A fix**, pushed to the head and verified gone by the next review.
 - **A dismissal the CI adjudicator upholds.** You reply `dismissed`, comment `/crysk recheck`, an
   adjudicator running in CI rules on your argument, and only its `upheld` (posted by
   `github-actions[bot]` on that head) lets the next review stop counting the finding. See
   "Closing a dismissal" below.
+
+**When no review is left, answers unlock the gate.** Every review rule that skips a push (the
+attempt budget used up, `/crysk stop`, `once_per_pr`, a low-risk or below-threshold delta,
+`manual_only`) carries the last verdict. A carried red turns green, marked
+`fixes unverified`, on the next push when every blocking finding's newest reply, from your
+write-access account, is `applied` at the head it was posted on or a `dismissed` the adjudicator
+upheld. Nobody verifies those fixes, so `applied` must mean you fixed it and ran the tests. The
+gate reads the replies when the push arrives: **reply first, then push.**
+
+**`/crysk override` is a maintainer's, and only for what answers cannot unlock.** Never post it,
+and never ask for it because the review budget ran out. Ask a maintainer for it only when:
+- the CI review itself is broken (every hunter failing, credit or credentials, `PRH-HUNTERS-FAILED`):
+  stop the loop and report what is failing, never route around it;
+- a `deferred` or `misclassified` finding should merge unfixed: it names a real defect, so
+  accepting it is the maintainer's call;
+- a partial review keeps failing on the same hunters and their route cannot be fixed.
 
 `deferred` and `misclassified` never leave the gate count, whatever any adjudicator says: they are
 for findings that are real (or real at another severity), so the gate stays red until a fix or a
@@ -96,15 +113,15 @@ Later review passes hunt only the push delta. Once the real defects from pass 1 
 1. **Never patch code to appease a contrived or over-severitied finding.**
    - If the claimed bug requires an impossible precondition, contradicts an intentional invariant, or is already guarded: tag it `dismissed` with cited code and use `/crysk recheck` so the CI adjudicator clears it **without** a code change or a new push.
    - If the observation is technically true but trivial, stylistic, pre-existing, or inflated to blocking: tag it `misclassified` or `deferred`. Never rewrite working code just to avoid asking for `/crysk override`.
-2. **Do not auto-force past `ci_max_attempts` on routine fix-ups.** The repository's `ci_max_attempts` (default `2`) exists specifically to stop diminishing-returns re-reviews. When step 0 returns `next_action: "review"` with reason *"The automatic review budget for this PR is used up"*, inspect `git diff <report.head>..<head>`: if the commits since `report.head` only applied straightforward fixes for already-triaged findings, **stop the loop**. Do not post `/crysk review`. Tell the user the PR has completed its review passes, the fixes are in place, and it is ready for `/crysk override` and merge.
+2. **Do not auto-force past `ci_max_attempts` on routine fix-ups.** The repository's `ci_max_attempts` (default `2`) exists specifically to stop diminishing-returns re-reviews, and the PR gets an "automatic reviews are done" comment when it runs out. The gate then carries the last verdict: answer every blocking finding (`applied` with the fix in the tree, or `dismissed` + `/crysk recheck`) **before** you push, and that push turns a carried red green, marked `fixes unverified`. If the commits since `report.head` only applied straightforward fixes for already-triaged findings, do not post `/crysk review`: stop the loop and tell the user the PR finished its review passes and is ready to merge, with the fixes unverified by a review. No override is needed.
 3. **Stop and recommend merge when only diminishing-returns items remain.** On `override-or-fix` (or pass 2+ when every real bug is fixed and the only remaining red-gate items are `deferred`, `misclassified`, or a contrived finding whose dismissal the adjudicator did not uphold), **do not cave in and edit the code**. Exit the loop, list the remaining finding(s) with a one-line explanation of why they are contrived/out-of-scope, and tell the user the PR is ready to `/crysk override` and merge.
-4. **Stop automatic reviews BEFORE the push that should not be reviewed.** When you decide no further review pass is needed but you still have fixes to push, post `gh pr comment <n> --body "/crysk stop"` **first**, then `git push`. CI admission reads the stop on that push and skips the review, carrying the last verdict (a red gate stays red: it still needs `/crysk override`). The stop stays in force for every later push until someone comments `/crysk review` or `/crysk recheck`. It counts only from a user with write access, starts no workflow run, and costs $0. Never push first and try to stop the review afterwards: nothing cancels a review that already started.
+4. **Stop automatic reviews BEFORE the push that should not be reviewed.** When you decide no further review pass is needed but you still have fixes to push, post `gh pr comment <n> --body "/crysk stop"` **first**, then `git push`. CI admission reads the stop on that push and skips the review, carrying the last verdict (a carried red turns green, marked `fixes unverified`, when every blocking finding was answered before that push; otherwise it stays red). The stop stays in force for every later push until someone comments `/crysk review` or `/crysk recheck`. It counts only from a user with write access, starts no workflow run, and costs $0. Never push first and try to stop the review afterwards: nothing cancels a review that already started.
 
 ### B. Requesting or suggesting another review when workflow rules skipped it
 
 The opposite happens when a repository's workflow policy (`once_per_pr`, `thresholded`, `risk_aware` below the score floor, `ci_max_attempts` exhausted, or the size gate) suppresses an automatic review on a push that **genuinely changed load-bearing code**:
 - Under `once_per_pr`, `thresholded`, or `risk_aware`, a skipped push can inherit a carried `success` status from `report.head`, so `next_action` reads `"done"` even though `report.head !== head` (the commits `report.head..head` were never reviewed).
-- Under `ci_max_attempts` or the size/budget gate, the automatic run is blocked and `report.head !== head`.
+- Under `ci_max_attempts` or `manual_only`, the push carries the last verdict the same way, or a `fixes unverified` green once every blocking finding is answered. Under the size or spend-ceiling gate, the automatic run is blocked and the head is red. Either way `report.head !== head`.
 
 Whenever `report.head !== head`, inspect `git diff <report.head>..<head>`:
 - If that unreviewed delta introduced **new business logic, state-machine or concurrency changes, auth/security/isolation edits, or a non-trivial refactor** (for example, fixing a finding required redesigning a function rather than adding a guard), an extra review **is** justified:
@@ -158,10 +175,11 @@ read that file instead.
 
    Act on its `next_action` and immediately loop back to step 0 until `done`:
    - `wait`: if `--wait` was omitted, re-run with `--wait` and let it block until the review finishes.
-   - `review`: no review has run on this head, the last one did not finish, the CI adjudicator
-     upheld every dismissal and the next review will stop counting them, or the automatic review
-     budget for this PR is used up (or the review policy is manual-only). **Exception — budget used up on a routine fix-up:** when the reason is that the automatic review budget is used up and the latest push only fixed already-triaged findings (see "Stopping diminishing returns" above), do **not** force another review; stop the loop and report that the PR is ready for `/crysk override` and merge. Otherwise check the forced-run bound
-     below, comment `gh pr comment <n> --body "/crysk review"`, and immediately run step 0 with `--wait`.
+   - `review`: no review has run on this head, the last one did not finish, or the CI adjudicator
+     upheld every dismissal and the next review will stop counting them. (A head statused before
+     2026-10-30 may also read "the automatic review budget for this PR is used up"; push the answered
+     fixes instead, and the gate carries the verdict.) Check the forced-run bound below, comment
+     `gh pr comment <n> --body "/crysk review"`, and immediately run step 0 with `--wait`.
    - `triage`: a live blocking finding on this head has no triage reply at the head it was posted
      on, or the gate is green and a finding posted on this head has no reply yet (advisory findings
      need one too). Run the triage batch below (steps 1–6), which judges every finding, applies real fixes in the tree, posts all replies, and either pushes the fixes or triggers `recheck` before looping back to step 0 with `--wait`.
@@ -177,12 +195,13 @@ read that file instead.
        (model or credential), or ask a maintainer to override;
      - every blocking finding is already answered but none can clear without a fix (a dismissal the
        CI adjudicator rejected, a `deferred` / `misclassified` tag, or a `dismissed` finding with no
-       review thread, which no adjudicator can rule on): if the adjudicator's rejection exposed a real defect you missed, fix, commit, and `git push` (then step 0 `--wait`); if the finding is `deferred`, `misclassified`, or still contrived/absurd ("Stopping diminishing returns" above), **do not edit code to appease it** — exit the loop and tell the maintainer the PR is ready for `/crysk override` and merge;
+       review thread, which no adjudicator can rule on): if the adjudicator's rejection exposed a real defect you missed, fix, commit, and `git push` (then step 0 `--wait`); if the finding is `deferred`, `misclassified`, or still contrived/absurd ("Stopping diminishing returns" above), **do not edit code to appease it** — exit the loop and tell the maintainer the PR is ready for `/crysk override` and merge (a `deferred` or `misclassified` finding names a real defect, so accepting it unfixed is the maintainer's call);
      - the red gate names no live blocking finding on this head (the `reason` quotes the gate
        description): read that description and act on what it says; when it names nothing you can
        fix, ask a maintainer.
    - `done`: nothing is owed on this head. The gate passed (or an override unlocked it) and every
-     finding posted on this head has a reply. Before exiting, check whether `report.head && report.head !== head` (a green status carried over an unreviewed push under `once_per_pr`, `thresholded`, or `risk_aware`): if `git diff <report.head>..<head>` contains non-trivial logic or risky changes ("Requesting or suggesting another review" above), recommend `/crysk review` naming those changes; otherwise exit the loop and report that the PR is ready to merge.
+     finding posted on this head has a reply. A `fixes unverified` green (the `reason` says no review
+     verified it) is done too: report the PR ready to merge and say the fixes were not verified by a review. Before exiting, check whether `report.head && report.head !== head` (a green status carried over an unreviewed push under `once_per_pr`, `thresholded`, or `risk_aware`): if `git diff <report.head>..<head>` contains non-trivial logic or risky changes ("Requesting or suggesting another review" above), recommend `/crysk review` naming those changes; otherwise exit the loop and report that the PR is ready to merge.
 
    **Bound the forced runs.** `/crysk review` and `/crysk recheck` each run a full paid review
    that bypasses the size, budget and admission gates (`ci_max_attempts` included), and a gate
@@ -244,7 +263,7 @@ current head:
    `--verdict` from the adjudicator. `--issue` is optional and only valid
    with `--tag deferred`.
 6. **Advance the loop in one batch once all findings on this head are answered:**
-   - **If you made clean code fixes (`applied` or unthreaded blocking fixes):** if you decided this push needs no further review ("Stopping diminishing returns", rule 4), post `/crysk stop` before pushing, and after the push do **not** wait for a re-review: none will run. Report that the fixes are pushed and the PR is ready for `/crysk override` and merge (a carried green gate needs no override). Otherwise, commit and `git push` all fixes in a single push, then immediately run `npx -y crysk status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/crysk recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
+   - **If you made clean code fixes (`applied` or unthreaded blocking fixes):** if you decided this push needs no further review ("Stopping diminishing returns", rule 4), post `/crysk stop` before pushing, and after the push do **not** wait for a re-review: none will run. Report that the fixes are pushed and the PR is ready to merge: the gate carries the last verdict, and every blocking finding you answered before the push turns a carried red green, marked `fixes unverified`. Only a finding left `deferred` or `misclassified` still needs a maintainer's `/crysk override`. Otherwise, commit and `git push` all fixes in a single push, then immediately run `npx -y crysk status --pr <n> --wait --json` to subscribe to the re-review on the new head. Do **not** run `/crysk recheck` before pushing: a new push invalidates prior-head recheck rulings and wastes a CI run.
    - **If no code changes were needed:** run `npx -y crysk status --pr <n> --wait --json` and execute its `next_action` (`recheck` when blocking findings were `dismissed`, or `done` when the gate is already green).
 
    *(Note: The MCP server is strictly read-only for querying runs, findings, and

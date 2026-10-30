@@ -628,9 +628,8 @@ The table shows the status and the job exit for each case:
 | Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `0` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
 | Size or budget skip (`/crysk review` reviews it anyway) | `failure`: `crysk skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
-| Admission skip for a low-risk or below-threshold delta, once per PR, or a `/crysk stop` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `crysk: no review needed (<reason>); carried from <sha>`, or `failure` `crysk: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `crysk: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; with no readable verdict, `failure` `crysk skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
+| Admission skip by any review rule: a low-risk or below-threshold delta, once per PR, a `/crysk stop`, the attempt budget used up (`ci_max_attempts`), or `manual_only` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `crysk: no review needed (<reason>); carried from <sha>`, or `failure` `crysk: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `crysk: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; a carried blocking failure whose blocking findings are all answered becomes `success` `crysk: N answered finding(s), fixes unverified (<reason>); carried from <sha>` (see below); with no readable verdict, `failure` `crysk skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
 | Same head, already reviewed | none (that head's own status already exists) | none | `0` |
-| Manual re-review required (attempt budget used up, or `manual_only`) | `failure`: `crysk: review budget for this PR is used up — /pr-hero review reviews this head` (`manual_only` names the manual trigger instead) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
 A review where an agent (a hunter, the refuter or the summarizer) failed also prints a `::warning title=crysk::`
@@ -642,16 +641,30 @@ fixed, machine-read contract (the repeat check rebuilds it), so it carries the c
 Fatal failures (missing or invalid credentials, a crashed process, a malformed argument) and the two cases
 below keep their own status and exit, as they did before the gate.
 
-**A skipped head inherits the verdict of the last reviewed commit of its pull request.** When the admission gate
-skips a new head as a low-risk or below-threshold delta, or once per PR, the head takes the newest review verdict from
+**A skipped head inherits the verdict of the last reviewed commit of its pull request.** Every review rule is respected
+the same way: when the admission gate skips a new head as a low-risk or below-threshold delta, once per PR, after a
+`/crysk stop`, with the attempt budget used up, or under `manual_only`, no review runs and the head takes the newest review verdict from
 this pull request's own commit statuses: a `crysk` success or failure that a finished review wrote, or a verdict
 carried from this pull request. The gate walks the pull request's commits newest-first from the head, skips each commit
 that carries no verdict, and stops at the first one that does, within the last 20 commits before the head. A skip's
-failure, a fail-closed, budget or manual-only failure, an error, a pending status, and an override are not verdicts, so
+failure, a fail-closed, a budget or manual-only failure written before 2026-10-30, an error, a pending status, and an override are not verdicts, so
 the walk passes over them. The verdict never comes from comment content: a comment, a summary marker included, can name a head,
 but only a write-access actor can set a commit's status, so a comment naming a green head carries nothing. A verdict
 carried onto a skipped head may be carried again onto a later one, because it came from a real review. A red verdict
-stays red, with its count, until the head is reviewed (`/crysk review`) or overridden. A green one reads as no review
+stays red, with its count, until the head is reviewed (`/crysk review`), its blocking findings are all answered (below),
+or it is overridden.
+
+**Answered findings unlock a carried red, unverified.** With no review left to run, a fix cannot be verified, so the
+gate accepts the most it can know. When the carried verdict is a blocking failure, the gate reads the reviewed head's
+live blocking findings and their newest triage replies. If every one is answered `applied` at the head it was posted
+on, or `dismissed` with an upheld CI ruling, the head turns `success`
+`crysk: N answered finding(s), fixes unverified (<reason>); carried from <sha>`. The text says no review verified it,
+and a later skip carries it with the same wording, never as a green a review earned. Only a reply from a login with
+write or admin access counts (looked up once per author, with one retry); a reply from anyone else is ignored, and a
+lookup that fails keeps the red. A truncated comment read, an unanswered, `deferred` or `misclassified` finding, a
+dismissal with no upheld ruling, a summary-only finding with no thread, or fewer blocking findings visible than the red
+counts keeps the red too. A partial review's red is never unlocked this way: answers cannot cover hunters that failed.
+The gate reads the replies when the push arrives, so reply before you push. A green one reads as no review
 needed. An override is never carried: it is a human's decision for the code at the head it names, and the skipped head
 was never reviewed, so carrying it would turn a new head green with no review behind it. With no readable verdict (no
 reviewed head, a failed read, a head missing from the pull request's commits, or no verdict within the last 20 commits),
@@ -916,9 +929,9 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | --- | --- |
 | `wait` | The gate is pending and in flight (less than 90 minutes old). |
 | `review` | No `crysk` (or `pr-hero`) status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`crysk: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
-| `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. |
+| `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. A green over answered findings no review verified (`crysk: N answered finding(s), fixes unverified`) is `done` too, and its reason says so. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. |
 | `triage` | The gate is red and a live blocking finding on this head has no triage reply at the head it was posted on. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
-| `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. |
+| `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. When the red is carried (a review rule skipped the head), no review will run: the gate reads the replies on that push instead. |
 | `recheck` | The gate is red and a live blocking inline finding is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. Comment `/crysk recheck`; the CI adjudicator rules on it. |
 | `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/crysk review`, and that review no longer counts them. |
 | `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or an outside-diff finding, which has no thread to rule on). A skipped review (size or budget) also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. |
