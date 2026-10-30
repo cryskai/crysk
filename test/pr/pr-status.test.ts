@@ -2212,6 +2212,61 @@ describe("buildPrStatus: a head a review rule skipped", () => {
     },
   );
 
+  // PR #442 F (advisory, adjudicator rejected the deferral): the reason mirrors the gate's count and
+  // reply-head rules, so it never promises an unlock the gate will refuse.
+  test("a carried red counting more findings than the read sees promises no unlock", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "crysk: 2 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+          ),
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+    expect(status.reason).toContain("1 blocking finding(s) are still open");
+  });
+
+  test("an applied reply at another head than the finding's promises no unlock", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+          ),
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "deferred",
+            verdict: "upheld",
+          }),
+          triageReply({ id: 3, parent: 1, head: EARLIER, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+    expect(status.reason).toContain("are still open");
+  });
+
   // PR #442 F (blocking): one applied beside a deferred must not promise that replies unlock the red.
   test("a carried red with one applied and one deferred finding says the rest is still open", () => {
     const status = buildPrStatus(
@@ -2249,9 +2304,7 @@ describe("buildPrStatus: a head a review rule skipped", () => {
       }),
     );
     expect(status.next_action).toBe("fix");
-    expect(status.reason).toContain(
-      "1 live blocking finding(s) are still open",
-    );
+    expect(status.reason).toContain("1 blocking finding(s) are still open");
     expect(status.reason).not.toContain("turns green");
   });
 });

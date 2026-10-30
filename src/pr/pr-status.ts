@@ -686,15 +686,27 @@ function decideNext(
     if (
       CARRIED_BLOCKING_GATE.test(canonicalStatusText(gate.description ?? ""))
     ) {
+      // The gate's own rules (admission.ts admissionSkipDecision, answered-findings.ts): a finding is
+      // answered only by its newest reply at the head it was posted on, and the gate must see at least as
+      // many blocking findings as the red counts. The stale-reply cutoff needs the carried verdict's time,
+      // which this read does not have, so the reason says the push can turn green, never that it will.
       const open = liveBlocking.filter(
-        (a) => !(a.finding.triage?.tag === "applied" || upheldDismissal(a)),
+        (a) =>
+          !(
+            (a.finding.triage?.tag === "applied" &&
+              a.finding.triage.head === a.finding.head) ||
+            upheldDismissal(a)
+          ),
       ).length;
+      const counted = gateBlockingCount(gate);
+      const unseen =
+        counted === null ? 0 : Math.max(0, counted - liveBlocking.length);
       return {
         next_action: "fix",
         reason:
-          open === 0
-            ? "Every live blocking finding is answered and a review rule skipped this head; push the fix. If a rule skips that push too, the gate reads the replies on it and turns green, marked unverified; otherwise the review verifies it."
-            : `A live blocking finding is tagged applied, but ${open} live blocking finding(s) are still open (deferred, misclassified, or a dismissal not upheld), so replies alone will not unlock the carried red; push the fix, and answer or fix the rest.`,
+          open === 0 && unseen === 0
+            ? "Every live blocking finding is answered and a review rule skipped this head; push the fix. If a rule skips that push too, the gate reads the replies on it and can turn green, marked unverified; otherwise the review verifies it."
+            : `A live blocking finding is tagged applied, but ${open + unseen} blocking finding(s) are still open (deferred, misclassified, a dismissal not upheld, a reply at another head, or one this read cannot see), so replies alone will not unlock the carried red; push the fix, and answer or fix the rest.`,
       };
     }
     return {
