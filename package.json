@@ -1,13 +1,13 @@
 {
   "name": "crysk",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": false,
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cryskai/crysk.git"
   },
-  "homepage": "https://github.com/cryskai/crysk#readme",
+  "homepage": "https://crysk.dev",
   "bugs": {
     "url": "https://github.com/cryskai/crysk/issues"
   },

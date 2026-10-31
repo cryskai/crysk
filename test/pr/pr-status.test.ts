@@ -2151,3 +2151,160 @@ describe("buildPrStatus: the gate over two names", () => {
     expect(status.next_action).toBe("review");
   });
 });
+
+// budget-exhausted-carry S6, S8: what crysk status says once a review rule skipped the head.
+describe("buildPrStatus: a head a review rule skipped", () => {
+  test("an unverified green is done, and its reason says no review verified it", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "success",
+            "crysk: 2 answered finding(s), fixes unverified (review budget for this PR is used up); carried from 1111111",
+          ),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+    expect(status.reason).toContain("no review verified");
+  });
+
+  test("an ordinary green keeps its reason", () => {
+    const status = buildPrStatus(
+      input({ statuses: [gate("success", "review posted")] }),
+    );
+    expect(status.next_action).toBe("done");
+    expect(status.reason).not.toContain("no review verified");
+  });
+
+  test.each([
+    [
+      "a carried red",
+      "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+      "Every live blocking finding is answered",
+    ],
+    [
+      "a red a review wrote",
+      BLOCKING_DESCRIPTION(1),
+      "the next review verifies it",
+    ],
+    // PR #442 F (advisory): a carried partial red is never unlocked by replies, so no unlock promise.
+    [
+      "a carried partial red",
+      "crysk: review partial (1 of 4 hunters failed) carried from 1111111 — /pr-hero review retries it",
+      "the next review verifies it",
+    ],
+  ])(
+    "%s with an applied finding asks for a push, and says who verifies it",
+    (_name, description, phrase) => {
+      const posted = findingBody({ head: CURRENT, claim: CLAIM });
+      const status = buildPrStatus(
+        input({
+          statuses: [gate("failure", description)],
+          reviewComments: [
+            { id: 1, body: posted, in_reply_to_id: null },
+            triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+          ],
+        }),
+      );
+      expect(status.next_action).toBe("fix");
+      expect(status.reason).toContain(phrase);
+    },
+  );
+
+  // PR #442 F (advisory, adjudicator rejected the deferral): the reason mirrors the gate's count and
+  // reply-head rules, so it never promises an unlock the gate will refuse.
+  test("a carried red counting more findings than the read sees promises no unlock", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "crysk: 2 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+          ),
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+    expect(status.reason).toContain("1 blocking finding(s) are still open");
+  });
+
+  test("an applied reply at another head than the finding's promises no unlock", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "crysk: 1 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+          ),
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 2,
+            parent: 1,
+            head: CURRENT,
+            tag: "deferred",
+            verdict: "upheld",
+          }),
+          triageReply({ id: 3, parent: 1, head: EARLIER, tag: "applied" }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+    expect(status.reason).toContain("are still open");
+  });
+
+  // PR #442 F (blocking): one applied beside a deferred must not promise that replies unlock the red.
+  test("a carried red with one applied and one deferred finding says the rest is still open", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [
+          gate(
+            "failure",
+            "crysk: 2 blocking finding(s) carried from 1111111 — fix and push, or /pr-hero override",
+          ),
+        ],
+        reviewComments: [
+          {
+            id: 1,
+            body: findingBody({ head: CURRENT, claim: CLAIM }),
+            in_reply_to_id: null,
+          },
+          triageReply({ id: 2, parent: 1, head: CURRENT, tag: "applied" }),
+          {
+            id: 3,
+            body: findingBody({
+              head: CURRENT,
+              claim: "the retry loop never stops",
+              line: 40,
+            }),
+            in_reply_to_id: null,
+          },
+          triageReply({
+            id: 4,
+            parent: 3,
+            head: CURRENT,
+            tag: "deferred",
+            verdict: "upheld",
+          }),
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("fix");
+    expect(status.reason).toContain("1 blocking finding(s) are still open");
+    expect(status.reason).not.toContain("turns green");
+  });
+});

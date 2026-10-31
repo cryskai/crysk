@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-31
+
+### Changed
+- **Every review rule keeps the last verdict, and an exhausted review budget no longer needs a human
+  override.** When `ci_max_attempts` is used up, or `ci_review_policy` is `manual_only`, the `crysk` gate now
+  carries the last reviewed verdict like the other skips (once per PR, low-risk or below-threshold deltas,
+  `/crysk stop`) instead of writing a fixed failure, even over a green review.
+- **Answered findings unlock a carried red, marked unverified.** With no review left to run, a carried
+  blocking failure turns `success` with `crysk: N answered finding(s), fixes unverified (<rule>); carried from
+  <sha>` when every live blocking finding's newest reply, from a login with write access, is `applied` at the
+  head it was posted on or a `dismissed` the CI adjudicator upheld. Anything else keeps the red: an
+  unanswered, `deferred` or `misclassified` finding, a reply older than the review that kept the finding, a
+  failed permission lookup, a truncated comment read, or a partial review. Reply before you push: the gate
+  reads the replies when the push arrives.
+- **The end-of-budget comment explains the situation.** It says no more automatic reviews will run, why by
+  the repository's rules (policy, attempts used, last reviewed head), what the gate does next, and how to ask
+  for more rounds with `/crysk review`. It no longer asks for an override.
+- `crysk status` reports the unverified green as `done`, and on a carried red names what is still open.
+- The `crysk-loop` skill answers every blocking finding before the push and reserves `/crysk override` for a
+  broken CI review, an accepted `deferred`/`misclassified` finding, or a partial review that keeps failing.
+- The package homepage and README header point at crysk.dev.
+
+### Added
+- Every final release is mirrored to `juanmaagd/pr-hero` automatically by `release.yml`.
+
 ## [0.3.0] - 2026-10-29
 
 ### Changed
@@ -567,7 +592,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/cryskai/crysk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/cryskai/crysk/compare/v0.2.6...v0.3.0
 [0.2.6]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...v0.2.6
 [0.2.5]: https://www.npmjs.com/package/pr-hero/v/0.2.5

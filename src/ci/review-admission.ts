@@ -801,13 +801,22 @@ export function ciReviewSkipDetail(
   }
 }
 
-// The short label a status description names for a coverage skip (the carry-forward in
+// The short label a status description names for a skip (the carry-forward in
 // src/pr/admission.ts). The same wording as the coverage comment (ci/gates.ts COVERAGE_REASON_LABEL,
 // which is not exported), kept here so a description reads the same as the comment beside it.
 export function ciReviewSkipLabel(
-  reason: "once-per-pr" | "below-threshold" | "low-risk-delta" | "stopped",
+  reason:
+    | "once-per-pr"
+    | "below-threshold"
+    | "low-risk-delta"
+    | "stopped"
+    | CiReviewManualRequiredReason,
 ): string {
   switch (reason) {
+    case "max-attempts-exhausted":
+      return "review budget for this PR is used up";
+    case "manual-only-policy":
+      return "ci_review_policy is manual_only";
     case "once-per-pr":
       return "once_per_pr policy allows one automatic review";
     case "below-threshold":

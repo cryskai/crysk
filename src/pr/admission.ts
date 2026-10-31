@@ -22,6 +22,7 @@ import {
   formatWorkflowCommand,
 } from "#ci/reporter";
 import { type CiReviewPolicy, ciReviewSkipLabel } from "#ci/review-admission";
+import type { AnsweredFindings } from "#pr/answered-findings";
 import {
   fetchCommitStatuses,
   fetchCommitStatusList,
@@ -282,8 +283,15 @@ export async function recordCiAdmissionGateSkip(input: {
 // WHY fail closed: no verdict within the cap, a failed read, a head missing from the PR's commits (a
 // force-push, or a list cut short by GitHub's cap), or no reviewed head writes failure, so a trivial push
 // cannot pass the gate without a verdict behind it.
-// WHY manual-required is always failure: its code was never reviewed, so carrying a green verdict over it
-// would be a bypass. Same-head writes nothing, because that head's own status already exists.
+// WHY an exhausted budget and a manual-only policy carry too (budget-exhausted-carry S2, the owner's
+// decision of 2026-10-30, replacing the fixed failure S4 first wrote): every review rule is respected the
+// same way. The once-per-pr, threshold and stop skips already carried a green over an unreviewed push, so a
+// fixed failure here only turned the agent's last fix-up push red and made a human override routine.
+// Same-head writes nothing, because that head's own status already exists.
+// WHY answered findings may turn a carried blocking red green (S3): with no review left, the fixes cannot
+// be verified. A write-access `applied` reply, or a dismissal the CI adjudicator upheld, on every blocking
+// finding of the reviewed head is the most the gate can know, and the green it writes says so
+// (unverifiedFixesDescription), so it never reads as a green a review earned.
 export type AdmissionStatusReason =
   | "same-head"
   | "once-per-pr"
@@ -303,6 +311,10 @@ export interface AdmissionStatusInput {
   // failure's description does not name a count. Every text isReviewVerdictStatus admits names one, so this
   // is unreachable through the walk today; it stays because ci-admission-gate.ts still supplies it.
   priorBlocking: number;
+  // Reads the reviewed head's answered blocking findings (pr/answered-findings.ts). Called only when the
+  // carried verdict is a blocking red, so every other skip makes no extra API call. Absent means never read.
+  // `verdictAt` is when the carried verdict was written (its status's created_at), or null when unknown.
+  readAnswered?: (verdictAt: string | null) => Promise<AnsweredFindings | null>;
 }
 
 export interface AdmissionStatusDecision {
@@ -314,23 +326,20 @@ export interface AdmissionStatusDecision {
 export interface CarriedVerdict {
   sha: string;
   statuses: readonly CommitStatusFact[];
+  // The PR's commits older than `sha`, newest first, within the walk's cap: where a chained carry's review
+  // verdict is looked up (reviewVerdictTime). Absent means none to look at.
+  older?: readonly string[];
 }
 
-type CarriedReason =
-  | "once-per-pr"
-  | "below-threshold"
-  | "low-risk-delta"
-  | "stopped";
+type CarriedReason = Exclude<AdmissionStatusReason, "same-head">;
 
+// Every rule that skips a review carries the last verdict the same way (budget-exhausted-carry S2): the
+// rule is respected, so no review runs, and the head reads what the last review decided. Same-head is the
+// one exception: that head's own status already exists.
 function isCarriedReason(
   reason: AdmissionStatusReason,
 ): reason is CarriedReason {
-  return (
-    reason === "once-per-pr" ||
-    reason === "below-threshold" ||
-    reason === "low-risk-delta" ||
-    reason === "stopped"
-  );
+  return reason !== "same-head";
 }
 
 // The readers below rewrite a legacy `pr-hero` lead into `crysk` first (canonicalStatusText), so the
@@ -366,6 +375,28 @@ export function carriedBlockingDescription(count: number, sha: string): string {
   );
 }
 
+// The text a skip writes when a carried blocking red has every blocking finding answered and no review is
+// left to verify the fixes (S3, S6). It names the rule that skipped, so a reader sees why nothing verified it.
+// WHY "answered finding(s)" and not "blocking finding(s)": BLOCKING_COUNT reads that prefix as a red count.
+export function unverifiedFixesDescription(
+  count: number,
+  label: string,
+  sha: string,
+): string {
+  return clipStatusDescription(
+    `${STATUS_CONTEXT}: ${count} answered finding(s), fixes unverified (${label}); ${CARRIED_FROM}${sha.slice(0, 7)}`,
+  );
+}
+
+const ANSWERED_COUNT = /^crysk: (\d+) answered finding\(s\), fixes unverified/;
+
+function answeredCountIn(description: string): number | null {
+  const match = ANSWERED_COUNT.exec(canonicalStatusText(description));
+  if (match === null) return null;
+  const count = Number(match[1]);
+  return count > 0 ? count : null;
+}
+
 // The text a skip writes when it inherits a finished review's partial verdict (some hunters failed).
 export function carriedPartialDescription(
   failed: number,
@@ -384,6 +415,8 @@ const CARRY_REASONS: readonly CarriedReason[] = [
   "below-threshold",
   "low-risk-delta",
   "stopped",
+  "max-attempts-exhausted",
+  "manual-only-policy",
 ];
 
 function finishedSuccessMatches(rawDescription: string): boolean {
@@ -424,6 +457,21 @@ function carriedSuccessMatches(rawDescription: string): boolean {
     CARRY_REASONS.some(
       (reason) =>
         carriedSuccessDescription(ciReviewSkipLabel(reason), sha) ===
+        description,
+    )
+  );
+}
+
+function unverifiedFixesMatches(rawDescription: string): boolean {
+  const description = canonicalStatusText(rawDescription);
+  const sha = carriedSha(description);
+  const count = answeredCountIn(description);
+  return (
+    sha !== null &&
+    count !== null &&
+    CARRY_REASONS.some(
+      (reason) =>
+        unverifiedFixesDescription(count, ciReviewSkipLabel(reason), sha) ===
         description,
     )
   );
@@ -499,7 +547,9 @@ export function isReviewVerdictStatus(
   if (typeof description !== "string") return false;
   if (status.state === "success") {
     return (
-      finishedSuccessMatches(description) || carriedSuccessMatches(description)
+      finishedSuccessMatches(description) ||
+      carriedSuccessMatches(description) ||
+      unverifiedFixesMatches(description)
     );
   }
   if (status.state === "failure") {
@@ -534,39 +584,27 @@ function failClosed(label: string): AdmissionStatusDecision {
 // What the gate's skip writes on the new head, or null for no write. `carried` is the verdict the skip
 // inherits (findCarriedVerdict), or null when none was read or found. A reason that never carries reads none.
 export function admissionSkipDecision(
-  input: AdmissionStatusInput & { carried: CarriedVerdict | null },
+  input: AdmissionStatusInput & {
+    carried: CarriedVerdict | null;
+    // The blocking findings of the reviewed head and how many are still open (answeredBlockingFindings),
+    // read only when the carried verdict is a blocking red. Null when unread or failed closed.
+    answered?: AnsweredFindings | null;
+  },
 ): AdmissionStatusDecision | null {
-  switch (input.reason) {
-    case "same-head":
-      return null;
-    case "max-attempts-exhausted":
-      return {
-        state: "failure",
-        description: clipStatusDescription(
-          `${STATUS_CONTEXT}: review budget for this PR is used up — /pr-hero review reviews this head`,
-        ),
-      };
-    case "manual-only-policy":
-      return {
-        state: "failure",
-        description: clipStatusDescription(
-          `${STATUS_CONTEXT}: review needs a manual trigger (ci_review_policy is manual_only) — /pr-hero review reviews this head`,
-        ),
-      };
-    case "once-per-pr":
-    case "below-threshold":
-    case "low-risk-delta":
-    case "stopped":
-      break;
-  }
+  if (input.reason === "same-head") return null;
   const label = ciReviewSkipLabel(input.reason);
   if (input.carried === null) return failClosed(label);
   const verdict = newestCarriedVerdict(input.carried.statuses);
   if (verdict === undefined) return failClosed(label);
   if (verdict.state === "success") {
+    // A carried unverified green stays unverified: chaining it never turns it into a green a review earned.
+    const answeredCount = answeredCountIn(verdict.description ?? "");
     return {
       state: "success",
-      description: carriedSuccessDescription(label, input.carried.sha),
+      description:
+        answeredCount === null
+          ? carriedSuccessDescription(label, input.carried.sha)
+          : unverifiedFixesDescription(answeredCount, label, input.carried.sha),
     };
   }
   // S5: a partial verdict is red, and it is never read as a blocking count (it has none). Taking the
@@ -587,10 +625,40 @@ export function admissionSkipDecision(
     blockingCountIn(verdict.description) ??
     (input.priorBlocking > 0 ? input.priorBlocking : null);
   if (blocking === null) return failClosed(label);
+  // S3, S5: every blocking finding answered unlocks the red, and the read must see at least as many
+  // blocking findings as the red counts; fewer means some live where this read cannot see them.
+  const answered = input.answered ?? null;
+  if (
+    answered !== null &&
+    answered.open === 0 &&
+    answered.blocking > 0 &&
+    answered.blocking >= blocking
+  ) {
+    return {
+      state: "success",
+      description: unverifiedFixesDescription(
+        answered.blocking,
+        label,
+        input.carried.sha,
+      ),
+    };
+  }
   return {
     state: "failure",
     description: carriedBlockingDescription(blocking, input.carried.sha),
   };
+}
+
+// The carried verdict's blocking count when it is a blocking red (not a partial), else null. The gate reads
+// the answered findings only then, so a carried green or a partial red makes no extra API call.
+export function carriedBlockingCount(
+  carried: CarriedVerdict | null,
+): number | null {
+  if (carried === null) return null;
+  const verdict = newestCarriedVerdict(carried.statuses);
+  if (verdict === undefined || verdict.state !== "failure") return null;
+  if (partialCountsIn(verdict.description) !== null) return null;
+  return blockingCountIn(verdict.description);
 }
 
 // The most earlier commits the carry reads for a verdict. A push on top of a longer run of commits with
@@ -624,7 +692,9 @@ async function findCarriedVerdict(input: {
       spawnFn: input.spawnFn,
     });
     if (statuses === null) return null;
-    if (newestCarriedVerdict(statuses) !== undefined) return { sha, statuses };
+    if (newestCarriedVerdict(statuses) !== undefined) {
+      return { sha, statuses, older: earlier.slice(earlier.indexOf(sha) + 1) };
+    }
   }
   return null;
 }
@@ -662,6 +732,53 @@ async function overrideStandsOnHead(input: {
   }
   const newest = newestStatusInContext(statuses, COMMIT_STATUS_CONTEXT);
   return newest !== undefined && isOverrideStatus(newest);
+}
+
+// When the review behind the carried verdict wrote its own verdict, or null when none reads: the stale-reply
+// cutoff (answered-findings.ts isStaleReply). WHY the review's own verdict, not the carried one: a chained
+// skip carries a status a skip wrote later, and a reply made between the review and that skip answers the
+// review; cutting at the skip's time would drop it. The walk goes on down the PR's own commits from the
+// carried one, the carry's source (never the summary's head, which a comment can name), and stops at the
+// first commit with a review's own verdict. A failed read, or none within the cap, is null: fail closed.
+async function reviewVerdictTime(input: {
+  operatorRoot: string;
+  carried: CarriedVerdict | null;
+  spawnFn?: typeof Bun.spawn;
+  readStatuses: typeof fetchCommitStatusList;
+}): Promise<string | null> {
+  if (input.carried === null) return null;
+  const ownIn = (statuses: readonly CommitStatusFact[]) =>
+    newestStatusInContext(
+      statuses.filter((status) => finishedVerdict(status)),
+      COMMIT_STATUS_CONTEXT,
+    );
+  const first = ownIn(input.carried.statuses);
+  if (first !== undefined) return first.created_at ?? null;
+  for (const sha of input.carried.older ?? []) {
+    const statuses = await input.readStatuses(input.operatorRoot, sha, {
+      spawnFn: input.spawnFn,
+    });
+    if (statuses === null) return null;
+    const own = ownIn(statuses);
+    if (own !== undefined) return own.created_at ?? null;
+  }
+  return null;
+}
+
+// A verdict a review wrote itself: never a carried, skipped, or override text.
+function finishedVerdict(
+  status: Pick<CommitStatusFact, "state" | "description">,
+): boolean {
+  const description = status.description;
+  if (typeof description !== "string") return false;
+  if (status.state === "success") return finishedSuccessMatches(description);
+  if (status.state === "failure") {
+    return (
+      finishedBlockingMatches(description) ||
+      finishedPartialMatches(description)
+    );
+  }
+  return false;
 }
 
 // The status a gate-mode skip writes, or null for none. A size or budget skip is a fixed failure.
@@ -703,7 +820,27 @@ async function gateSkipDecision(
           readStatuses: input.readStatuses ?? fetchCommitStatusList,
         })
       : null;
-  return admissionSkipDecision({ ...input.admission, carried });
+  // S3: a carried blocking red asks whether every blocking finding was answered. A read that throws fails
+  // closed: the red stays.
+  let answered: AnsweredFindings | null = null;
+  if (
+    carriedBlockingCount(carried) !== null &&
+    input.admission.readAnswered !== undefined
+  ) {
+    try {
+      answered = await input.admission.readAnswered(
+        await reviewVerdictTime({
+          operatorRoot: input.operatorRoot,
+          carried,
+          spawnFn: input.spawnFn,
+          readStatuses: input.readStatuses ?? fetchCommitStatusList,
+        }),
+      );
+    } catch {
+      answered = null;
+    }
+  }
+  return admissionSkipDecision({ ...input.admission, carried, answered });
 }
 
 // The skip kind a plan stands for, read from the status its outputs carry. The

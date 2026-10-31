@@ -12,12 +12,20 @@
 // outcome comments of earlier runs. Live runs are the proof of the product; this
 // fake is the proof of the runner's sequencing and its reads.
 
+import { planCiReviewManualRequired } from "#ci/gates";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
+import { ciReviewSkipLabel } from "#ci/review-admission";
+import {
+  carriedBlockingDescription,
+  carriedSuccessDescription,
+  unverifiedFixesDescription,
+} from "#pr/admission";
 import {
   blockingCommitStatusRequest,
   skipCommitStatusRequest,
 } from "#pr/preflight";
-import { gotchasUnusableReason } from "#review/preflight";
+import { gotchasUnusableReason, parseLocalConfig } from "#review/preflight";
+import { parseTriageMarker } from "#triage/triage";
 import {
   OVERRIDE_MARKER_PREFIX,
   RUN_STEP_NAME,
@@ -30,6 +38,7 @@ import {
   GOTCHAS_PATH,
   MUTE_PATH,
   PLANTED_SITE,
+  REPO_CONFIG_PATH,
   sandboxFiles,
   WORKFLOW_PATH,
 } from "../../scripts/sandbox/seed";
@@ -93,6 +102,8 @@ interface CommentRow {
   id: number;
   body: string;
   createdAt: string;
+  // A reply on a review comment's thread: the id it answers (`-F in_reply_to=`).
+  inReplyTo?: number;
 }
 
 // What a run leaves behind. `hunters-failed` is the free model's flake: every
@@ -114,7 +125,10 @@ type Outcome =
   | "size-skip"
   | "override"
   | "near-miss"
-  | "hunters-failed";
+  | "hunters-failed"
+  // budget-exhausted-carry: a pull_request run past the repo config's ci_max_attempts. No
+  // review: the manual-required notice and the carried status (see budgetCarry).
+  | "budget-carry";
 
 // The actor the fake gives an override: the sandbox owner's login.
 const FAKE_ACTOR = "juanmaagd";
@@ -144,7 +158,12 @@ function triggerReaction(body: string): "eyes" | "confused" | undefined {
 const OUTCOME_CODE: Record<
   Exclude<
     Outcome,
-    "review" | "review-advisory" | "size-skip" | "override" | "near-miss"
+    | "review"
+    | "review-advisory"
+    | "size-skip"
+    | "override"
+    | "near-miss"
+    | "budget-carry"
   >,
   string
 > = {
@@ -241,6 +260,11 @@ export interface WorldOptions {
   // as `log not found`, and runLogNeverServed fails every one of them.
   runLogMissingReads?: number;
   runLogNeverServed?: true;
+  // budget-exhausted-carry mutations of the carry the budget scenarios must catch:
+  // `answers-ignored` carries the red over answered findings, `any-answer-unlocks`
+  // turns a red green on any reply (a deferral included), `no-notice` posts no
+  // end-of-budget comment.
+  budgetCarry?: "answers-ignored" | "any-answer-unlocks" | "no-notice";
 }
 
 // The gate's own status texts, from the product's request builders, so the fake
@@ -286,6 +310,12 @@ export class FakeGithub {
   private readonly pushedGotchas = new Map<string, string>();
   // The heads whose branch carries the D3 mute file, for the state block of their report.
   private readonly muteHeads = new Set<string>();
+  // The repo config's ci_max_attempts each pushed head carries, read from its checkout.
+  private readonly pushedMaxAttempts = new Map<string, number>();
+  // The reviews each PR has had, and the head the last one reviewed: the budget's count
+  // and the verdict a budget carry inherits.
+  private readonly reviewsOf = new Map<number, number>();
+  private readonly reviewedHeadOf = new Map<number, string>();
   // The reactions on each comment, by comment id: what the trigger gave it.
   private readonly reactions = new Map<number, string[]>();
   private readonly queued: Outcome[];
@@ -422,7 +452,7 @@ export class FakeGithub {
     // A pull_request run checks out the PR, so it reads that head's gotchas. A
     // comment run reads the base branch (the ERROR_CATALOG fix text says so), which
     // this fake does not model: it passes no gotchas, so the gate does not fire.
-    const outcome =
+    const decided =
       forced ??
       this.queued.shift() ??
       this.decide(
@@ -430,6 +460,16 @@ export class FakeGithub {
         event,
         event === "pull_request" ? this.pushedGotchas.get(headSha) : undefined,
       );
+    // A pull_request review past the head's budget runs no review (admission); a forced
+    // comment run bypasses the budget, so only a pull_request run is counted here.
+    const maxAttempts = this.pushedMaxAttempts.get(headSha);
+    const outcome: Outcome =
+      decided === "review" &&
+      event === "pull_request" &&
+      maxAttempts !== undefined &&
+      (this.reviewsOf.get(prNumber) ?? 0) >= maxAttempts
+        ? "budget-carry"
+        : decided;
     // A run whose hunters all failed fails its review step, as the engine exits non-zero.
     const failed = outcome === "hunters-failed";
     const stepFails =
@@ -516,7 +556,14 @@ export class FakeGithub {
     // A near miss runs nothing, so it leaves no report, outcome or status (T2e).
     if (outcome === "near-miss") return;
     const list = this.comments.get(prNumber) ?? [];
+    if (outcome === "budget-carry") {
+      this.budgetCarry(prNumber, sha, list);
+      this.comments.set(prNumber, list);
+      return;
+    }
     if (outcome === "review" || outcome === "review-advisory") {
+      this.reviewsOf.set(prNumber, (this.reviewsOf.get(prNumber) ?? 0) + 1);
+      this.reviewedHeadOf.set(prNumber, sha);
       const report = `${REPORT_PREFIX} head=${sha} -->\n\n# pr-hero review${this.stateBlock(sha)}`;
       const at = list.findIndex((c) =>
         c.body.startsWith(`${REPORT_PREFIX} head=${sha}`),
@@ -603,6 +650,77 @@ export class FakeGithub {
       });
     }
     this.comments.set(prNumber, list);
+  }
+
+  // budget-exhausted-carry: what a push past the budget leaves, built from the product's
+  // own texts. The notice is upserted under its marker; the status inherits the last
+  // reviewed head's verdict, and a red turns into the unverified green once every blocking
+  // finding on that head has, as its newest reply, `applied` naming that head (S3).
+  private budgetCarry(prNumber: number, sha: string, list: CommentRow[]) {
+    const reviewed = this.reviewedHeadOf.get(prNumber) ?? sha;
+    const reviews = this.reviewsOf.get(prNumber) ?? 0;
+    if (this.options.budgetCarry !== "no-notice") {
+      const notice = planCiReviewManualRequired({
+        prNumber,
+        ciMode: "gate",
+        verdict: {
+          action: "manual-required",
+          reason: "max-attempts-exhausted",
+          prior: { blocking: 0, advisory: 0, score: 0, source: "none" },
+          reviewCount: reviews,
+          maxAttempts: reviews,
+          minScore: 4,
+        },
+      }).comment;
+      const marker = SKIP_MARKERS["manual-required"];
+      const at = list.findIndex((c) => c.body.startsWith(marker));
+      if (at >= 0) list[at] = { ...(list[at] as CommentRow), body: notice };
+      else list.push(this.comment(notice));
+    }
+    const label = ciReviewSkipLabel("max-attempts-exhausted");
+    const inherited = this.statuses.get(reviewed);
+    if (inherited?.state !== "failure") {
+      this.statuses.set(sha, {
+        state: "success",
+        description: carriedSuccessDescription(label, reviewed),
+      });
+      return;
+    }
+    const inline = this.inlineOf(prNumber);
+    const findings = inline.filter(
+      (c) =>
+        c.inReplyTo === undefined &&
+        c.body.startsWith(`<!-- pr-hero-finding `) &&
+        c.body.includes(`head=${reviewed}`) &&
+        c.body.includes("🔴 blocking"),
+    );
+    const answered = (finding: CommentRow): boolean => {
+      const newest = inline.filter((c) => c.inReplyTo === finding.id).at(-1);
+      if (newest === undefined) return false;
+      if (this.options.budgetCarry === "any-answer-unlocks") return true;
+      const parsed = parseTriageMarker(newest.body);
+      return parsed?.tag === "applied" && parsed.headSha === reviewed;
+    };
+    const unlocked =
+      this.options.budgetCarry !== "answers-ignored" &&
+      findings.length > 0 &&
+      findings.every(answered);
+    this.statuses.set(
+      sha,
+      unlocked
+        ? {
+            state: "success",
+            description: unverifiedFixesDescription(
+              findings.length,
+              label,
+              reviewed,
+            ),
+          }
+        : {
+            state: "failure",
+            description: carriedBlockingDescription(findings.length, reviewed),
+          },
+    );
   }
 
   private gh(args: readonly string[], h: Harness): GhResult {
@@ -818,7 +936,13 @@ export class FakeGithub {
     const reply = /\/pulls\/(\d+)\/comments$/.exec(path);
     if (reply !== null && flag(args, "--method") === "POST") {
       const body = (flag(args, "-f") ?? "").replace(/^body=/, "");
-      const posted = this.comment(body);
+      const replyTo = Number(
+        (flag(args, "-F") ?? "").replace(/^in_reply_to=/, ""),
+      );
+      const posted: CommentRow = {
+        ...this.comment(body),
+        ...(replyTo > 0 ? { inReplyTo: replyTo } : {}),
+      };
       this.inlineOf(Number(reply[1])).push(posted);
       return ok(JSON.stringify({ id: posted.id }));
     }
@@ -941,6 +1065,13 @@ export class FakeGithub {
       this.pushedWorkflow.set(sha, workflow);
       const gotchas = h.workspace.dirs.get(cwd)?.get(GOTCHAS_PATH);
       if (gotchas !== undefined) this.pushedGotchas.set(sha, gotchas);
+      const config = h.workspace.dirs.get(cwd)?.get(REPO_CONFIG_PATH);
+      const maxAttempts =
+        config === undefined
+          ? undefined
+          : parseLocalConfig(config).ci_max_attempts;
+      if (maxAttempts !== undefined)
+        this.pushedMaxAttempts.set(sha, maxAttempts);
       if (h.workspace.dirs.get(cwd)?.has(MUTE_PATH) === true) {
         this.muteHeads.add(sha);
       }

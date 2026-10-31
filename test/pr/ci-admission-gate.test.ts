@@ -47,6 +47,7 @@ import { CommentsTruncatedError, upsertAdmissionCheckRun } from "#pr/pr";
 import {
   COMMIT_STATUS_CONTEXT,
   type CommitStatusContext,
+  findingMarker,
   LOCAL_COMMIT_STATUS_CONTEXT,
   PR_COMMENT_MARKER_PREFIX,
 } from "#pr/preflight";
@@ -55,6 +56,7 @@ import {
   EMPTY_LOCAL_CONFIG,
   type LocalConfig,
 } from "#review/preflight";
+import { triageMarker } from "#triage/triage";
 import { CliError } from "../../src/errors";
 
 const PR = 42;
@@ -1460,6 +1462,117 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes[0]).toContain(
       "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
     );
+  });
+
+  // budget-exhausted-carry S3, S4: a carried red with every blocking finding answered by a writer turns
+  // green, marked unverified; the same answers from a login without write access leave it red.
+  describe("answered findings on the reviewed head", () => {
+    const RED_2 = statusRows([
+      {
+        state: "failure",
+        context: "pr-hero",
+        created_at: T1,
+        description:
+          "pr-hero: 2 blocking finding(s) — fix and push, or /pr-hero override",
+      },
+    ]);
+    const findingComment = (id: number, line: number, claim: string) => ({
+      id,
+      user: "github-actions[bot]",
+      body: [
+        findingMarker({ path: "src/a.ts", line, headSha: HEAD_A, claim }),
+        "",
+        "🔴 blocking · CRITICAL · introduced · reliability",
+        "",
+        claim,
+      ].join("\n"),
+      path: "src/a.ts",
+      line,
+      original_line: line,
+      in_reply_to_id: null,
+    });
+    const applied = (id: number, parent: number) => ({
+      id,
+      user: "alice",
+      body: `${triageMarker({ tag: "applied", headSha: HEAD_A, actor: "agent" })}\n\nfixed`,
+      path: "src/a.ts",
+      line: null,
+      original_line: null,
+      in_reply_to_id: parent,
+    });
+    const reviewComments = (permission: string): ScriptEntry[] => [
+      {
+        match: ["pulls", "comments"],
+        response: {
+          stdout: [
+            findingComment(10, 10, "the value is read in the wrong unit"),
+            applied(11, 10),
+            findingComment(20, 40, "the retry loop never stops"),
+            applied(21, 20),
+          ]
+            .map((c) => `${JSON.stringify(c)}\n`)
+            .join(""),
+        },
+      },
+      {
+        match: ["collaborators", "alice", "permission"],
+        response: { stdout: `${permission}\n` },
+      },
+    ];
+
+    test("a writer's applied on every blocking finding turns the carried red green, unverified", async () => {
+      const calls: string[][] = [];
+      await runGate(
+        [...reviewComments("write"), ...gateScript(RED_2)],
+        "gate",
+        calls,
+      );
+      const writes = statusWrites(calls);
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toContain("state=success");
+      expect(writes[0]).toContain(
+        "description=crysk: 2 answered finding(s), fixes unverified (delta touches only low-risk paths); carried from aaaaaaa",
+      );
+    });
+
+    test("the same replies from a login with read access leave the carried red", async () => {
+      const calls: string[][] = [];
+      await runGate(
+        [...reviewComments("read"), ...gateScript(RED_2)],
+        "gate",
+        calls,
+      );
+      const writes = statusWrites(calls);
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toContain("state=failure");
+      expect(writes[0]).toContain(
+        "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
+      );
+    });
+
+    test("a carried green looks up no permission", async () => {
+      const calls: string[][] = [];
+      await runGate(
+        [
+          ...reviewComments("write"),
+          ...gateScript(
+            statusRows([
+              {
+                state: "success",
+                context: "pr-hero",
+                created_at: T1,
+                description: "review posted",
+              },
+            ]),
+          ),
+        ],
+        "gate",
+        calls,
+      );
+      expect(
+        calls.some((argv) => argv.join(" ").includes("collaborators")),
+      ).toBe(false);
+    });
   });
 
   test("an unreadable reviewed-head history posts a fail-closed failure on the new head", async () => {
