@@ -2146,6 +2146,33 @@ describe("postInlineFindings — re-review closing comment", () => {
     ]);
   }
 
+  test("a re-review whose only finding is below post_min_severity does not claim kept findings", async () => {
+    const { spawnFn, calls } = rereviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 10,
+            severity: "SUGGESTION",
+            tier: "advisory",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      postMinSeverity: "warning",
+    });
+    const body = closingPosts(calls)[0]?.stdin ?? "";
+    expect(body).not.toContain("findings already on the PR were kept");
+    expect(body).toContain("No findings in this pass.");
+  });
+
   test("a clean re-review posts one closing comment after the summary PATCH", async () => {
     const { spawnFn, calls } = rereviewScript();
     const outcome = await postInlineFindings({

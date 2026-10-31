@@ -3498,7 +3498,7 @@ export async function postInlineFindings(input: {
           headSha,
           delta: overlayDelta(delta),
           newPosted: reachedIds.size,
-          totalFindings: doc.findings.length,
+          totalFindings: postedDoc.findings.length,
           runStatus: doc.run_status,
           summaryUrl:
             webUrl === undefined
