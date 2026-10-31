@@ -47,6 +47,8 @@ Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only 
 
 Size threshold: `max_changed_lines` is always written (default 4000, `--max-changed-lines`, `0` = no limit). Unlike the budget it applies on any billing: left unset, a subscription route reviews a PR of any size.
 
+Posting floor: setup writes `post_min_severity: "warning"` only when the repo config has no value, so a re-run never replaces a chosen floor. `warning` hides advisory suggestions, `blocking` hides every advisory finding, `suggestion` (or unset) posts everything. Hidden findings are counted in the summary comment. The gate is unchanged, since a blocking finding always posts; admission scores only posted findings, so a hidden one never triggers a re-review.
+
 ## Policy modes
 
 | Mode | Use when |

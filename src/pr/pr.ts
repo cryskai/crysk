@@ -85,6 +85,7 @@ import {
   parseHunkAnchors,
   resolvePostLine,
 } from "./inline";
+import { isBelowPostFloor, type PostMinSeverity } from "./post-floor";
 import {
   type CiMode,
   COMMIT_STATUS_TIMEOUT_MS,
@@ -2730,6 +2731,7 @@ export async function resolveInlinePostPlan(input: {
   doc: FindingsDocument;
   diffPatch: string;
   spawnFn?: typeof Bun.spawn;
+  postMinSeverity?: PostMinSeverity;
 }): Promise<{
   plan: PostPlan;
   previousHeadSha: string | undefined;
@@ -2787,6 +2789,11 @@ export async function resolveInlinePostPlan(input: {
     anchors,
     posted,
     headSha: input.headSha,
+    hiddenIds: new Set(
+      input.doc.findings
+        .filter((f) => isBelowPostFloor(f, input.postMinSeverity))
+        .map((f) => f.id),
+    ),
   });
   return {
     plan,
@@ -2977,6 +2984,8 @@ export async function postInlineFindings(input: {
   // The run was a comment-triggered (forced) run. It leaves the summary counter
   // where it was: the budget bounds automatic reviews (see nextStateReviewCount).
   force?: boolean;
+  // The `post_min_severity` config key (pr/post-floor.ts). Absent posts all.
+  postMinSeverity?: PostMinSeverity;
 }): Promise<InlinePostOutcome> {
   const { operatorRoot, pr, headSha, doc, webUrl, spawnFn } = input;
   const ghTimeoutMs = input.ghTimeoutMs ?? COLLAPSE_GH_TIMEOUT_MS;
@@ -3104,7 +3113,23 @@ export async function postInlineFindings(input: {
     )
       ? "outside"
       : "inline";
-  const freshFindings: FreshStateFinding[] = doc.findings.map((f) => ({
+  // The summary and the state block describe what was POSTED. Findings below
+  // `post_min_severity` have no comment, so they are left out of both and
+  // counted in one summary line instead; a state row would otherwise claim an
+  // inline comment that does not exist. The admission block below counts
+  // `postedDoc` too, so a re-review scores the same findings the first review
+  // did and a hidden finding never spends a re-review. The gate is unaffected:
+  // the floor never hides a blocking finding.
+  const hiddenIds = new Set(plan.notPosted.map((f) => f.id));
+  const postedDoc: FindingsDocument =
+    hiddenIds.size === 0
+      ? doc
+      : { ...doc, findings: doc.findings.filter((f) => !hiddenIds.has(f.id)) };
+  const notPosted =
+    hiddenIds.size === 0 || input.postMinSeverity === undefined
+      ? undefined
+      : { count: hiddenIds.size, floor: input.postMinSeverity };
+  const freshFindings: FreshStateFinding[] = postedDoc.findings.map((f) => ({
     path: f.path,
     line: lineById.get(f.id) ?? f.line,
     proof_refs: f.proof_refs,
@@ -3114,13 +3139,15 @@ export async function postInlineFindings(input: {
     channel: freshChannel(f.id),
   }));
   const referenceBody = renderPrComment(
-    doc,
+    postedDoc,
     webUrl,
     overlayDelta({ ...plan.delta, previousHeadSha }),
     plannedOutsideDiff,
     undefined,
     undefined,
     input.ciMode,
+    undefined,
+    notPosted,
   );
   // WHY one merge function for both writes: the S1 re-merge reruns it with a
   // PATCH-sized budget and the SAME inputs, so the kept ids and hw cannot
@@ -3154,7 +3181,7 @@ export async function postInlineFindings(input: {
     compactFrom?: number,
   ): string => {
     const body = renderPrComment(
-      doc,
+      postedDoc,
       webUrl,
       overlayDelta(delta),
       outside,
@@ -3162,6 +3189,7 @@ export async function postInlineFindings(input: {
       urls,
       input.ciMode,
       compactFrom,
+      notPosted,
     );
     // WHY the admission block is written on BOTH paths: its `reviews` is the
     // only count a summary keeps when the count is 0. renderStateBlock omits 0
@@ -3172,7 +3200,7 @@ export async function postInlineFindings(input: {
     // priorScoreForAdmission), and the first-review path already writes them
     // this way.
     const counts = tierCountsFromFindings(
-      canonicalAdmissionFindings(doc.findings),
+      canonicalAdmissionFindings(postedDoc.findings),
     );
     const admissionBlock = renderCiAdmissionBlock(
       doc.head_sha,
@@ -3604,6 +3632,7 @@ export async function postInlineIfEligible(input: {
   ciMode?: CiMode;
   // Forwarded to postInlineFindings: a forced run leaves the summary counter alone.
   force?: boolean;
+  postMinSeverity?: PostMinSeverity;
 }): Promise<InlinePostOutcome | null> {
   if (input.sessionFailed) {
     log(input.skippedReason);

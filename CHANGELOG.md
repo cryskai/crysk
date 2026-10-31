@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`post_min_severity` sets the lowest finding a PR review posts.** `suggestion` posts everything (the
+  default when unset), `warning` hides advisory suggestions, and `blocking` hides every advisory finding. A
+  blocking finding always posts. Hidden findings get no inline or Outside Diff comment, and the summary says
+  how many were held back. The gate and local reports still count every finding; re-review admission
+  scores only the posted ones. `setup --ci` writes the recommended `warning` when the repo config has no value, and never replaces one.
+
 ## [0.3.1] - 2026-10-31
 
 ### Changed

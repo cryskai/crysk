@@ -663,6 +663,98 @@ describe("postInlineFindings — step-14 ordering", () => {
   });
 });
 
+describe("postInlineFindings — post_min_severity", () => {
+  // The floor is a posting filter: a finding below it gets no inline comment
+  // and no Outside Diff entry, and the summary counts it in one line. Its
+  // absence from droppedFindingIds is the point: it was held back, not lost.
+  test("findings below the floor are never posted and are counted in the summary", async () => {
+    const findings = [
+      finding({ id: "F001", path: "src/a.ts", line: 10 }),
+      finding({
+        id: "F002",
+        path: "src/a.ts",
+        line: 12,
+        severity: "WARNING",
+        tier: "advisory",
+      }),
+      finding({
+        id: "F003",
+        path: "src/never.ts",
+        line: 1,
+        severity: "SUGGESTION",
+        tier: "advisory",
+      }),
+    ];
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      postMinSeverity: "blocking",
+    });
+    expect(outcome.reviewFindingCount).toBe(1);
+    expect(outcome.outsideDiffCount).toBe(0);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    const review = calls.find((c) =>
+      c.argv.join(" ").includes("pulls/42/reviews"),
+    );
+    expect(review?.stdin).toContain("line=10 ");
+    expect(review?.stdin).not.toContain("line=12 ");
+    const bodies = summaryStdins(calls);
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body).toContain(
+        "2 advisory findings not posted (`post_min_severity: blocking`).",
+      );
+      expect(body).not.toContain("src/never.ts");
+      expect(body).not.toContain("Comments Outside Diff");
+      // Admission scores what was posted, so a hidden finding never spends a
+      // re-review. The state block already holds posted rows only; the
+      // admission block must agree with it.
+      const admission = parseCiAdmissionBlock(body);
+      expect(admission?.blocking).toBe(1);
+      expect(admission?.advisory).toBe(0);
+    }
+  });
+
+  test("without a floor every finding posts, as before", async () => {
+    const findings = [
+      finding({ id: "F001", path: "src/a.ts", line: 10 }),
+      finding({
+        id: "F002",
+        path: "src/a.ts",
+        line: 12,
+        severity: "SUGGESTION",
+        tier: "advisory",
+      }),
+    ];
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(outcome.reviewFindingCount).toBe(2);
+    expect(summaryStdins(calls).some((b) => b.includes("not posted"))).toBe(
+      false,
+    );
+  });
+});
+
 describe("postInlineFindings — the 422 recovery never drops a finding", () => {
   // Mirrors verify-report-pr2 (#3296)'s CRIT-1 repro at THIS composition
   // layer: a prior comment already claimed by a PERSISTING finding must not

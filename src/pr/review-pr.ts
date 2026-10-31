@@ -871,6 +871,7 @@ export async function reviewPr(
         worktreePath,
         isCi,
         ciMode,
+        postMinSeverity: config.post_min_severity,
         estimate,
         freeRoute,
         ciAdmissionLedger,

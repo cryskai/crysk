@@ -9,6 +9,7 @@
 
 import { listPaths } from "#git/refs";
 import type { ResolvedModelRoute, ResolvedStepRoute } from "#model/routing";
+import type { PostMinSeverity } from "#pr/post-floor";
 import {
   type CiMode,
   findingMarker,
@@ -726,6 +727,9 @@ export function renderPrComment(
   // compacts from the last entry backwards, one entry at a time, until the
   // body fits. Omitted or past the end, the section is byte-identical.
   compactFrom?: number,
+  // Findings below `post_min_severity` (pr/post-floor.ts): left out of `doc`
+  // by the caller, counted here in one line so the summary says they exist.
+  notPosted?: { count: number; floor: PostMinSeverity },
 ): string {
   // Normalize away one trailing slash so `gh repo view` output and a
   // hand-typed URL build the same links.
@@ -875,10 +879,21 @@ export function renderPrComment(
     // Item 7 C7: zero new findings is also not a clean bill when priors
     // remain live (carried / unconfirmed / deferred / suppressed) or this
     // run returned / re-tiered a prior. MatchResult.resolved cannot say so.
-    out.push(cleanBillLine(doc.run_status, delta?.rereview));
+    const cleanBill = cleanBillLine(doc.run_status, delta?.rereview);
+    // The ✅ claims nothing was found. With findings held back by the floor
+    // that claim is false, so it narrows to what the floor let through.
+    out.push(
+      notPosted !== undefined && cleanBill === CLEAN_BILL
+        ? `No findings at or above ${code(notPosted.floor)} severity.`
+        : cleanBill,
+    );
     out.push("");
   } else {
     out.push(...findingIndexLines(doc.findings, commentUrlByFindingId));
+    out.push("");
+  }
+  if (notPosted !== undefined) {
+    out.push(notPostedLine(notPosted));
     out.push("");
   }
   out.push(...liveFindingLines(delta?.rereview));
@@ -1058,7 +1073,21 @@ function cleanBillLine(
   if (!rereviewIsClean(rereview) && rereview !== undefined) {
     return `No new findings this delta. Live: ${liveBits(rereview).join(" · ")}.`;
   }
-  return "✅ Crysk reviewed this PR and found nothing to report.";
+  return CLEAN_BILL;
+}
+
+const CLEAN_BILL = "✅ Crysk reviewed this PR and found nothing to report.";
+
+function notPostedLine(notPosted: {
+  count: number;
+  floor: PostMinSeverity;
+}): string {
+  const noun = notPosted.count === 1 ? "finding" : "findings";
+  const what = notPosted.floor === "blocking" ? "advisory" : "lower-severity";
+  return (
+    `${notPosted.count} ${what} ${noun} not posted ` +
+    `(${code(`post_min_severity: ${notPosted.floor}`)}).`
+  );
 }
 
 function deltaLine(delta: PrCommentDelta): string {

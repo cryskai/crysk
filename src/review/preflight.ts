@@ -19,6 +19,7 @@ import type {
   RoutingConfig,
   RunnerBackend,
 } from "#model/routing";
+import { POST_MIN_SEVERITIES, type PostMinSeverity } from "#pr/post-floor";
 import type { SuspicionPrior } from "#review/prompt-set";
 import { type AgentSpec, isSafeSlug, type ReviewSpec } from "#review/spec";
 import {
@@ -2179,6 +2180,10 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   max_changed_files: "capped",
   scout: "capped",
   post: "capped",
+  // `person`: a global floor applies to every repo, and a repo file overrides
+  // it either way. It changes only what a PR shows, never what a review costs,
+  // so the spend asymmetry behind `capped` does not apply.
+  post_min_severity: "person",
   ci_review_policy: "repo",
   ci_max_attempts: "repo",
   ci_max_reviews: "repo",
@@ -2220,6 +2225,8 @@ export interface LocalConfig {
   max_changed_files?: number;
   scout?: boolean;
   post?: boolean;
+  // The lowest finding a PR review posts (pr/post-floor.ts). Absent posts all.
+  post_min_severity?: PostMinSeverity;
   // CI admission: when to spend on a synchronize push (see ci/review-admission.ts).
   ci_review_policy?: CiReviewPolicyMode;
   ci_max_attempts?: number;
@@ -2459,6 +2466,7 @@ function parseConfigLayer(
   );
   const scout = parseOptionalBoolean(config.scout, "scout", file);
   const post = parseOptionalBoolean(config.post, "post", file);
+  const postMinSeverity = parsePostMinSeverity(config.post_min_severity, file);
   const ciReviewPolicy = parseCiReviewPolicyMode(config.ci_review_policy, file);
   const ciMaxAttempts = parseCiAdmissionInteger(
     config.ci_max_attempts,
@@ -2529,6 +2537,9 @@ function parseConfigLayer(
       : { max_changed_files: maxChangedFiles }),
     ...(scout === undefined ? {} : { scout }),
     ...(post === undefined ? {} : { post }),
+    ...(postMinSeverity === undefined
+      ? {}
+      : { post_min_severity: postMinSeverity }),
     ...(ciReviewPolicy === undefined
       ? {}
       : { ci_review_policy: ciReviewPolicy }),
@@ -2863,6 +2874,22 @@ function parseCiAdmissionInteger(
   return parsed;
 }
 
+function parsePostMinSeverity(
+  value: unknown,
+  file: string,
+): PostMinSeverity | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    !(POST_MIN_SEVERITIES as readonly string[]).includes(value)
+  ) {
+    throw new CliUsageError(
+      `${file} post_min_severity must be one of: ${POST_MIN_SEVERITIES.join(", ")}`,
+    );
+  }
+  return value as PostMinSeverity;
+}
+
 function parseCiReviewPolicyMode(
   value: unknown,
   file: string,
@@ -3095,6 +3122,11 @@ export function mergeConfig(
     (layer) => layer.post,
     (a, b) => a && b,
   );
+  const postMinSeverity = foldKey(
+    layers,
+    CONFIG_DIRECTION.post_min_severity,
+    (layer) => layer.post_min_severity,
+  );
   const routing = foldKey(
     layers,
     CONFIG_DIRECTION.routing,
@@ -3179,6 +3211,9 @@ export function mergeConfig(
       : { max_changed_files: maxFiles.value }),
     ...(scout.value === undefined ? {} : { scout: scout.value }),
     ...(post.value === undefined ? {} : { post: post.value }),
+    ...(postMinSeverity.value === undefined
+      ? {}
+      : { post_min_severity: postMinSeverity.value }),
     ...(ciReviewPolicy.value === undefined
       ? {}
       : { ci_review_policy: ciReviewPolicy.value }),
@@ -3219,6 +3254,7 @@ export function mergeConfig(
     max_changed_files: maxFiles.source,
     scout: scout.source,
     post: post.source,
+    post_min_severity: postMinSeverity.source,
     ci_review_policy: ciReviewPolicy.source,
     ci_max_attempts: ciMaxAttempts.source,
     ci_max_reviews: ciMaxReviews.source,
