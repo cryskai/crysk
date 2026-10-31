@@ -3064,6 +3064,19 @@ export async function postInlineFindings(input: {
   }
   if (priorSummaryVanished) log(vanishedPriorSummaryDegradedMessage(pr));
 
+  // The summary and the state block describe what was POSTED. Findings below
+  // `post_min_severity` have no comment, so they are left out of both and
+  // counted in one summary line instead; a state row would otherwise claim an
+  // inline comment that does not exist. The re-review Δ `new` count and the
+  // admission block below count `postedDoc` too, so the summary never counts a
+  // finding it does not show, a re-review scores the same findings the first
+  // review did, and a hidden finding never spends a re-review. The gate is
+  // unaffected: the floor never hides a blocking finding.
+  const hiddenIds = new Set(plan.notPosted.map((f) => f.id));
+  const postedDoc: FindingsDocument =
+    hiddenIds.size === 0
+      ? doc
+      : { ...doc, findings: doc.findings.filter((f) => !hiddenIds.has(f.id)) };
   // Every re-review-framed surface reads off THIS, never `input.rereview`
   // directly — the delta overlay, the `Still live:` list it carries, and the
   // state block appended after the report marker. The collapse loop at the
@@ -3076,7 +3089,7 @@ export async function postInlineFindings(input: {
   const rereviewDelta =
     framing === undefined
       ? undefined
-      : rereviewDeltaFromProvenance(framing, doc.findings.length);
+      : rereviewDeltaFromProvenance(framing, postedDoc.findings.length);
   const overlayDelta = (delta: PrCommentDelta): PrCommentDelta =>
     rereviewDelta === undefined ? delta : { ...delta, rereview: rereviewDelta };
   const byId = new Map(doc.findings.map((f) => [f.id, f]));
@@ -3113,18 +3126,6 @@ export async function postInlineFindings(input: {
     )
       ? "outside"
       : "inline";
-  // The summary and the state block describe what was POSTED. Findings below
-  // `post_min_severity` have no comment, so they are left out of both and
-  // counted in one summary line instead; a state row would otherwise claim an
-  // inline comment that does not exist. The admission block below counts
-  // `postedDoc` too, so a re-review scores the same findings the first review
-  // did and a hidden finding never spends a re-review. The gate is unaffected:
-  // the floor never hides a blocking finding.
-  const hiddenIds = new Set(plan.notPosted.map((f) => f.id));
-  const postedDoc: FindingsDocument =
-    hiddenIds.size === 0
-      ? doc
-      : { ...doc, findings: doc.findings.filter((f) => !hiddenIds.has(f.id)) };
   const notPosted =
     hiddenIds.size === 0 || input.postMinSeverity === undefined
       ? undefined

@@ -2392,6 +2392,37 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
     return parseStateBlock(bodies[bodies.length - 1] ?? "");
   }
 
+  test("a re-review's Δ new count leaves out findings below post_min_severity", async () => {
+    const { spawnFn, calls } = reviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({ id: "F001", path: "src/a.ts", line: 10 }),
+          finding({
+            id: "F002",
+            path: "src/a.ts",
+            line: 12,
+            severity: "SUGGESTION",
+            tier: "advisory",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenance([]),
+      rereviewPriors: [],
+      postMinSeverity: "warning",
+    });
+    const bodies = summaryStdins(calls);
+    const last = bodies[bodies.length - 1] ?? "";
+    expect(last).toContain("· 1 new");
+    expect(last).not.toContain("· 2 new");
+  });
+
   test("S1 — review 2's fresh blocking finding is in the state, and review 3 still counts it", async () => {
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
