@@ -528,6 +528,51 @@ describe("renderPrComment", () => {
     expect(firstLine.startsWith(PR_COMMENT_MARKER_PREFIX)).toBe(true);
   });
 
+  // post_min_severity: the caller passes only the posted findings, and the
+  // summary says how many it held back instead of claiming a clean bill.
+  test("findings below the post floor are counted, not listed", () => {
+    const body = renderPrComment(
+      doc({ findings: [finding({ id: "F001" })] }),
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      "advisory",
+      undefined,
+      { count: 3, floor: "warning" },
+    );
+    expect(body).toContain(
+      "3 lower-severity findings not posted (`post_min_severity: warning`).",
+    );
+    expect(body).toContain("src/app.ts:42");
+  });
+
+  test("with every finding below the floor, the clean bill narrows to the floor", () => {
+    const body = renderPrComment(
+      doc(),
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      "advisory",
+      undefined,
+      { count: 1, floor: "blocking" },
+    );
+    expect(body).not.toContain("found nothing to report");
+    expect(body).toContain("No findings at or above `blocking` severity.");
+    expect(body).toContain(
+      "1 advisory finding not posted (`post_min_severity: blocking`).",
+    );
+  });
+
+  test("without a floor the summary is unchanged", () => {
+    const body = renderPrComment(doc(), undefined, undefined, [], undefined);
+    expect(body).toContain("found nothing to report");
+    expect(body).not.toContain("not posted");
+  });
+
   // findMarkedCommentId matches on the prefix; a rendered comment that
   // stopped starting with it would orphan its own update path.
   test("the rendered body starts with the matcher's prefix", () => {

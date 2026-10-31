@@ -15,6 +15,7 @@
 // comparison guard in comparison.ts.
 
 import type { InlinePostOutcome } from "#pr/inline";
+import type { PostMinSeverity } from "#pr/post-floor";
 import { ghRepoWebUrl, postInlineIfEligible, writePostReceipt } from "#pr/pr";
 import type { CiMode } from "#pr/preflight";
 import type { RereviewProvenance } from "#rereview/prepare";
@@ -57,6 +58,8 @@ export async function postFindingsIfEnabled(input: {
   // A comment-triggered run. Forwarded so the summary counter stays put (see
   // nextStateReviewCount in ci/review-admission.ts).
   force?: boolean;
+  // The `post_min_severity` config key (pr/post-floor.ts). Absent posts all.
+  postMinSeverity?: PostMinSeverity;
 }): Promise<PostingStageResult> {
   if (!input.postEnabled) {
     return { posted: null, postedWebUrl: undefined };
@@ -83,6 +86,7 @@ export async function postFindingsIfEnabled(input: {
     rereviewPriors: input.rereviewPriors,
     ciMode: input.ciMode,
     force: input.force,
+    postMinSeverity: input.postMinSeverity,
   });
   if (posted) {
     input.onDelivered?.();

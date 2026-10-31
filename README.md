@@ -283,6 +283,7 @@ never be able to enlarge *your* bill: on the two keys that spend, the team can o
 | `max_changed_files` | both — team may only **lower** it | File count budget threshold before the size gate skips a review. Defaults to `150`; `0` disables file budget check. |
 | `scout` | both — team may only turn it **off** | Whether the reconnaissance scout hunter runs before review. Defaults to `false`. |
 | `post` | both — team may only turn it **off** | Whether review reports publish as GitHub PR comments by default. Defaults to `false`. |
+| `post_min_severity` | both — the repo file wins either way | The lowest finding a PR review posts: `suggestion` (everything), `warning` (hides advisory suggestions) or `blocking` (hides every advisory finding). A blocking finding always posts. Hidden findings get no comment; the summary counts them in one line. The gate and local reports still see every finding; re-review admission scores only what was posted, so a hidden finding never triggers a re-review. Unset posts everything; `setup --ci` writes the recommended `warning` when the file has no value. |
 
 **Why `default_base` is repo-only, since it is the one restriction that looks arbitrary:** the
 resolver checks the config value *before* the remote head. A global `default_base` would therefore

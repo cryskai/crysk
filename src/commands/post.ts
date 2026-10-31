@@ -1,8 +1,11 @@
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { assertRunMatchesPr } from "#ci/gates";
+import { loadEffectiveConfig } from "#config/config";
 import { resolveRepoRoot } from "#git/git";
 import { postingExitCode } from "#pr/inline";
+import type { PostMinSeverity } from "#pr/post-floor";
 import {
   ghCurrentBranchPr,
   ghRepoWebUrl,
@@ -54,11 +57,19 @@ export async function postCommand(options: CliOptions): Promise<number> {
     options.pr === "current"
       ? resolveCurrentPrNumber(await ghCurrentBranchPr(operatorRoot))
       : options.pr;
+  // The same floor `review --pr --post` applies, read from the same layers,
+  // so a replayed run posts what the live run would have.
+  const { effective } = await loadEffectiveConfig({
+    root: operatorRoot,
+    home: os.homedir(),
+    configFlag: options.config,
+  });
   return runPostCommand({
     operatorRoot,
     pr: prNumber,
     from: options.from,
     dryRun: options.dryRun,
+    postMinSeverity: effective.post_min_severity,
   });
 }
 
@@ -68,6 +79,7 @@ export async function runPostCommand(input: {
   from: string;
   dryRun: boolean;
   spawnFn?: typeof Bun.spawn;
+  postMinSeverity?: PostMinSeverity;
 }): Promise<number> {
   const { operatorRoot, pr: prNumber, dryRun, spawnFn } = input;
   const runDir = path.resolve(input.from);
@@ -193,6 +205,7 @@ export async function runPostCommand(input: {
         doc,
         diffPatch,
         spawnFn,
+        postMinSeverity: input.postMinSeverity,
       });
     // The preview refuses whatever the post would refuse. A dry run that
     // prints a plan for a run dir the live path then rejects is a $0 gate
@@ -234,6 +247,9 @@ export async function runPostCommand(input: {
     for (const finding of plan.issueComments) {
       log(`  outside ${finding.path}:${finding.line} ${finding.id}`);
     }
+    for (const finding of plan.notPosted) {
+      log(`  hidden  ${finding.path}:${finding.line} ${finding.id}`);
+    }
     log("dry run: nothing was fetched-for-mutation or posted.");
     return 0;
   }
@@ -253,6 +269,7 @@ export async function runPostCommand(input: {
     ...(rereview === undefined ? {} : { rereview, rereviewPriors: [] }),
     requireRereviewOnPriorSummary: true,
     refuseOnVanishedPriorSummary: true,
+    postMinSeverity: input.postMinSeverity,
   });
   await writePostReceipt(runDir, prNumber, doc.head_sha, outcome);
   log(

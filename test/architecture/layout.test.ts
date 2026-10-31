@@ -157,6 +157,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "inline",
       "plan",
       "pr",
+      "post-floor",
       "posting",
       "pr-status",
       "preflight",

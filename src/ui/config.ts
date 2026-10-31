@@ -180,6 +180,10 @@ export function configRows(
     ),
     scout: cell(effective.scout?.toString(), sources.scout),
     post: cell(effective.post?.toString(), sources.post),
+    post_min_severity: cell(
+      effective.post_min_severity,
+      sources.post_min_severity,
+    ),
     ci_review_policy: cell(
       effective.ci_review_policy,
       sources.ci_review_policy,

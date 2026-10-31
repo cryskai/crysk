@@ -347,6 +347,32 @@ describe("parseArgs", () => {
     );
   });
 
+  test("the config file admits post_min_severity and rejects other values", () => {
+    for (const value of ["suggestion", "warning", "blocking"] as const) {
+      expect(parseLocalConfig(`{"post_min_severity": "${value}"}`)).toEqual({
+        post_min_severity: value,
+      });
+    }
+    expect(() => parseLocalConfig('{"post_min_severity": "critical"}')).toThrow(
+      "post_min_severity must be one of: suggestion, warning, blocking",
+    );
+    expect(() => parseLocalConfig('{"post_min_severity": 1}')).toThrow(
+      "post_min_severity must be one of",
+    );
+  });
+
+  test("a repo post_min_severity overrides the global one in either direction", () => {
+    const merged = mergeConfig(
+      { post_min_severity: "blocking" },
+      { post_min_severity: "suggestion" },
+    );
+    expect(merged.effective.post_min_severity).toBe("suggestion");
+    expect(merged.sources.post_min_severity).toBe("repo");
+    const globalOnly = mergeConfig({ post_min_severity: "warning" }, {});
+    expect(globalOnly.effective.post_min_severity).toBe("warning");
+    expect(globalOnly.sources.post_min_severity).toBe("global");
+  });
+
   test("--scout-model never swallows the following flag", () => {
     expect(() =>
       parseArgs(["review", "--scout", "--scout-model", "--yes"]),
@@ -1350,6 +1376,7 @@ const PRE_C5_LOCAL_KEYS = [
   "max_verification_steps",
   "parity_trigger_paths",
   "post",
+  "post_min_severity",
   "scout",
   "summary",
   "suspicion_priors",
@@ -1374,6 +1401,7 @@ describe("CONFIG_DIRECTION", () => {
       max_changed_files: 150,
       scout: false,
       post: false,
+      post_min_severity: "warning",
       ci_review_policy: "risk_aware",
       ci_max_attempts: 2,
       ci_max_reviews: 2,
@@ -1413,6 +1441,7 @@ describe("CONFIG_DIRECTION", () => {
       max_changed_files: "capped",
       scout: "capped",
       post: "capped",
+      post_min_severity: "person",
       ci_review_policy: "repo",
       ci_max_attempts: "repo",
       ci_max_reviews: "repo",
@@ -1912,6 +1941,7 @@ describe("mergeConfig", () => {
       max_changed_files: "default",
       scout: "default",
       post: "default",
+      post_min_severity: "default",
       ci_review_policy: "default",
       ci_max_attempts: "default",
       ci_max_reviews: "default",
