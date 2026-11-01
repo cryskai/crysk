@@ -470,6 +470,7 @@ exclusions, see the README): under CI it is read from the PR's base ref, never t
 | `ci_blocking_weight` | `2` | Score weight for blocking-tier findings. |
 | `ci_advisory_weight` | `1` | Score weight for advisory-tier findings. |
 | `ci_trusted_actors` | `[]` (+ `GITHUB_ACTOR`) | GitHub logins whose finding markers count as authoritative. |
+| `materiality_gate` | `false` | When `true`, an extra judge checks each blocking finding and posts it as advisory if it is not material under normal use. Security, credential and data-loss findings are never demoted. One judge call per blocking finding; Claude route only. |
 | `ci_admission_observe_only` | `false` | When `true`, admission still evaluates and emits a `::notice::` with the would-be decision but **always runs** the review. Use during rollout. A `/crysk stop` still skips: it is a maintainer's decision, not an automatic one. |
 
 #### `ci_review_policy` modes

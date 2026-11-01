@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`materiality_gate` demotes immaterial blocking findings to advisory (opt-in, off by default).** When
+  `true`, an extra isolated judge checks each blocking finding against Crysk's posting policy, and a finding
+  judged not material under normal use is posted as advisory instead of blocking. Findings about security,
+  credentials or data loss are never demoted. It adds one judge call per blocking finding and runs on the
+  Claude route only; other routes leave findings blocking. Known limitation: on a re-review, a finding that
+  was blocking on an earlier head still counts toward the gate.
 - **`post_min_severity` sets the lowest finding a PR review posts.** `suggestion` posts everything (the
   default when unset), `warning` hides advisory suggestions, and `blocking` hides every advisory finding. A
   blocking finding always posts. Hidden findings get no inline or Outside Diff comment, and the summary says
