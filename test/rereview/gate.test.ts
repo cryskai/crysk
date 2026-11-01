@@ -33,6 +33,7 @@ function row(id: string, over: Partial<GateRow> = {}): GateRow {
     tier: "blocking",
     locs: ["src/app.ts:10"],
     status: "carried",
+    claim: `the cached width is scaled twice (${id})`,
     ...over,
   };
 }
@@ -270,6 +271,30 @@ describe("unresolvedBlockingCount — a materiality-demoted survivor releases it
         [row("R001", { status: "carried" })],
       ),
     ).toBe(1);
+  });
+
+  test("a prior the materiality safety guard protects is never released, even by a demoted survivor at its spot", () => {
+    // The guard read only the survivor's claim. The window can pair it with a
+    // different prior, and this one names a leaked session token.
+    const rows = [
+      row("R001", {
+        claim: "the session token is written to the debug log on every request",
+      }),
+    ];
+    expect(unresolvedBlockingCount([demoted(10)], rows)).toBe(1);
+    expect(materialityReleasedIds([demoted(10)], rows)).toEqual([]);
+  });
+
+  test("a prior whose path the safety guard protects is never released", () => {
+    const rows = [row("R001", { locs: ["src/auth/session.ts:10"] })];
+    expect(
+      unresolvedBlockingCount([demoted(10, "src/auth/session.ts")], rows),
+    ).toBe(1);
+  });
+
+  test("a prior with no known claim is never released (fail closed)", () => {
+    const rows = [row("R001", { claim: undefined })];
+    expect(unresolvedBlockingCount([demoted(10)], rows)).toBe(1);
   });
 
   test("blocking survivors pair first, so a demoted survivor cannot take the row an unrecoverable prior relies on", () => {

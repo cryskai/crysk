@@ -485,40 +485,6 @@ describe("publishRunOutcome", () => {
         ),
       ).toBe(1);
     });
-
-    test("a blocking prior re-found and demoted by the materiality gate leaves the count, and its id reaches the posting stage", async () => {
-      const gatePriors = gateRowsOf(
-        [blockingPrior("R001", ["src/app.ts:10"])],
-        caseC,
-      );
-      const demotedSurvivor = {
-        ...findingFixture("F001", "advisory"),
-        path: "src/app.ts",
-        line: 10,
-        materiality: { label: "immaterial", reason: "pathological input" },
-      } as Finding;
-      const result = baseResult({
-        gatePriors,
-        skillOutput: { ...baseSkillOutput(), findings: [demotedSurvivor] },
-      });
-      const counts: number[] = [];
-      let releasedAtPost: readonly string[] | undefined;
-      await publishRunOutcome(
-        baseInput({
-          result,
-          postEnabled: true,
-          onBlockingCount: (count) => {
-            counts.push(count);
-          },
-          postFindings: async (stage) => {
-            releasedAtPost = stage.materialityReleasedIds;
-            return { posted: null, postedWebUrl: undefined };
-          },
-        }),
-      );
-      expect(counts).toEqual([0]);
-      expect(releasedAtPost).toEqual(["R001"]);
-    });
   });
 
   // S4, report artifact chain: publishRunOutcome -> writeRunReport -> report.md.

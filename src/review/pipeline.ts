@@ -41,7 +41,11 @@ import {
   type WorseningHit,
 } from "#rereview/classify";
 import type { RereviewProvenance } from "#rereview/prepare";
-import { assembleLive, type GateRow } from "#rereview/state";
+import {
+  assembleLive,
+  type GateRow,
+  materialityReleasedIds,
+} from "#rereview/state";
 import {
   assignVerifyIds,
   closeVerifyQueue,
@@ -1237,6 +1241,10 @@ interface RunState {
   // finish() applies it after the consolidation plan; a finding with no entry
   // (not judged, failed, unsafe) keeps the tier finish() derived.
   materialityVerdicts?: Map<string, MaterialityVerdict>;
+  // The findings finish() returns, set just before it writes pipeline.json, so
+  // fillRereviewProvenance can record which priors a materiality demotion
+  // released. Absent on every road that writes no findings.
+  finalFindings?: Finding[];
   // When the pipeline ceiling will fire (epoch ms). Set once in runPipeline;
   // runConsolidation reads it to refuse a spawn that could outlive it.
   ceilingDeadlineMs?: number;
@@ -3951,6 +3959,7 @@ async function finish(
     run_status: state.partial ? "partial" : "complete",
     ...(state.summary === undefined ? {} : { summary: state.summary }),
   };
+  state.finalFindings = clustered;
   await writePipelinePlan(input, state);
   return {
     skillOutput,
@@ -4179,6 +4188,7 @@ function fillRereviewProvenance(
             tier: row.tier,
             locs: row.locs,
             status: row.status,
+            claim: row.claim,
           })),
           verifiedGone: base.resolved_verified ?? 0,
           verifiedGoneIds: base.resolved_ids ?? [],
@@ -4198,6 +4208,14 @@ function fillRereviewProvenance(
           verifyVerdicts: state.verifyVerdicts,
         });
   state.gatePriors = assembled.gateRows;
+  // The priors the gate count releases through a materiality demotion, read
+  // off the same findings and gate rows the count reads. Recorded here so both
+  // posting roads re-tier them in the state block: --pr --post reads this
+  // object, and post --from reads it back from pipeline.json.
+  const released = materialityReleasedIds(
+    state.finalFindings ?? [],
+    assembled.gateRows,
+  );
   const filled: RereviewProvenance = {
     ...base,
     verified: state.verificationSpawned,
@@ -4209,6 +4227,7 @@ function fillRereviewProvenance(
     returned: assembled.returned,
     re_tiered: assembled.reTiered,
     ...(state.worsenedHits.length > 0 ? { worsened: state.worsenedHits } : {}),
+    ...(released.length > 0 ? { materiality_released_ids: released } : {}),
   };
   // The CLI holds this object; mutating it is how the post path sees live[].
   Object.assign(base, filled);

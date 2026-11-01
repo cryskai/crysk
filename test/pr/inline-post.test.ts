@@ -2578,9 +2578,10 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
         diffPatch: diffAddingLines("src/a.ts", 20),
         webUrl: undefined,
         spawnFn,
-        rereview: reviewProvenance([{ ...prior, status: "carried" }]),
+        rereview: reviewProvenance([{ ...prior, status: "carried" }], {
+          materiality_released_ids: ["R001"],
+        }),
         rereviewPriors: [],
-        materialityReleasedIds: ["R001"],
         ...(postMinSeverity === undefined ? {} : { postMinSeverity }),
       });
       const state = summaryState(calls);

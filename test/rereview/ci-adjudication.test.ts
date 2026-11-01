@@ -320,6 +320,7 @@ describe("assembleLive — ci-dismissed", () => {
         tier: "blocking",
         locs: ["src/app.ts:10"],
         status: "ci-dismissed",
+        claim: "a live defect",
       },
     ]);
     expect(assembled.live).toHaveLength(1);

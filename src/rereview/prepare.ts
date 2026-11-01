@@ -110,6 +110,11 @@ export interface RereviewProvenance {
   discovery_skip_reason?: "no_delta" | "all_excluded";
   // Populated only when `discovery_skip_reason` is `"all_excluded"`.
   discovery_excluded_paths?: string[];
+  // The prior ids this run's gate count released through a materiality
+  // demotion (rereview/state.ts materialityReleasedIds). The state merge
+  // re-tiers them advisory. Absent when none was released, and on every
+  // pipeline.json written before this field existed.
+  materiality_released_ids?: string[];
   prior_findings: number;
   settled_deterministically: number;
   verified: number;
@@ -413,6 +418,14 @@ export function readRereviewProvenance(
   ) {
     return problem("discovery_excluded_paths");
   }
+  const releasedIds = raw.materiality_released_ids;
+  if (
+    releasedIds !== undefined &&
+    (!Array.isArray(releasedIds) ||
+      !releasedIds.every((id) => typeof id === "string"))
+  ) {
+    return problem("materiality_released_ids");
+  }
 
   return {
     kind: "ok",
@@ -449,6 +462,9 @@ export function readRereviewProvenance(
       returned: (raw.returned as number | undefined) ?? 0,
       re_tiered: (raw.re_tiered as number | undefined) ?? 0,
       ...(worsened === undefined ? {} : { worsened }),
+      ...(releasedIds === undefined
+        ? {}
+        : { materiality_released_ids: releasedIds as string[] }),
     },
   };
 }

@@ -20,6 +20,7 @@ import {
   identityFromLocs,
 } from "#rereview/identity";
 import type { Finding, Severity } from "#review/findings";
+import { isSafetyProtected } from "#review/materiality-gate";
 import { findMarker, MARKER_BRAND_PATTERN, MARKER_OPEN } from "../brand";
 import {
   type FindingChannel,
@@ -407,6 +408,7 @@ export function assembleLive(input: {
         tier: gatePrior.tier,
         locs: row.locs,
         status,
+        claim: gatePrior.claim,
       });
     }
     // Only a triage-driven settlement persists, as `carried`: the author's
@@ -480,7 +482,11 @@ export function assembleLive(input: {
 //     This carries the same identity risk a blocking survivor already accepts:
 //     the survivor was blocking on its own merits before the judge spoke. The
 //     gate tracks the current verdict, so a judge that flips back to material
-//     on a later head blocks again.
+//     on a later head blocks again. One exception keeps the materiality gate's
+//     safety guard whole: the guard reads the survivor's claim, and the window
+//     can pair it with a different issue, so a prior whose own claim or path
+//     the guard protects (auth, secrets, data loss), or whose claim is unknown,
+//     is never released.
 // Nothing else this run concludes about a prior lowers it. A plain advisory
 // survivor at a blocking prior's spot does not clear that prior: identity
 // matching is a 5-line window, so a different issue can sit there, and the
@@ -521,6 +527,10 @@ export interface GateRow {
   tier: RecoveredTier;
   locs: readonly string[];
   status: GateStatus;
+  // The prior's claim, read only by the materiality release: a prior the
+  // materiality gate's safety guard protects is never released. Absent fails
+  // closed, the prior cannot be released.
+  claim?: string;
 }
 
 export type GateSurvivor = Pick<
@@ -564,13 +574,14 @@ export function pairBlockingSurvivors(
 }
 
 // Pairs each survivor that `preferenceOf` admits with the first row, in its
-// preference order, that is not in `paired` and whose identity matches. Adds
-// every row it takes to `paired`.
+// preference order, that is not in `paired`, that `rowAllowed` admits, and
+// whose identity matches. Adds every row it takes to `paired`.
 function pairInto(
   survivors: readonly GateSurvivor[],
   rows: readonly { tier: RecoveredTier; locs: readonly string[] }[],
   paired: Set<number>,
   preferenceOf: (survivor: GateSurvivor) => readonly RecoveredTier[] | null,
+  rowAllowed: (row: number) => boolean = () => true,
 ): SurvivorPair[] {
   const identities = rows.map((row) => identityFromLocs(row.locs));
   const pairs: SurvivorPair[] = [];
@@ -587,6 +598,7 @@ function pairInto(
         (row, i) =>
           !paired.has(i) &&
           row.tier === tier &&
+          rowAllowed(i) &&
           identitiesMatch(identities[i] ?? new Map(), survivorIdentity),
       );
       if (pick !== -1) {
@@ -636,11 +648,27 @@ function gatePairing(
     ).map((p) => p.row),
   );
   const released = new Set(
-    pairInto(survivors, open, taken, (survivor) =>
-      isMaterialityDemoted(survivor) ? ["blocking"] : null,
+    pairInto(
+      survivors,
+      open,
+      taken,
+      (survivor) => (isMaterialityDemoted(survivor) ? ["blocking"] : null),
+      (i) => isReleasable(open[i]),
     ).map((p) => p.row),
   );
   return { open, carried, released };
+}
+
+// WHY the guard runs on the prior too: applyMaterialityVerdicts never demotes a
+// safety-protected finding, but it reads only the survivor. The 5-line window
+// can pair that survivor with a different, protected prior, and releasing it
+// would turn the gate green on a finding the guard exists to keep blocking.
+function isReleasable(row: GateRow | undefined): boolean {
+  if (row?.claim === undefined) return false;
+  const claim = row.claim;
+  const paths = [...identityFromLocs(row.locs).keys()];
+  if (paths.length === 0) return !isSafetyProtected({ claim, path: "" });
+  return paths.every((path) => !isSafetyProtected({ claim, path }));
 }
 
 export function unresolvedBlockingCount(

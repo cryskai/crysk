@@ -46,10 +46,7 @@ import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
 import type { PostMinSeverity } from "#pr/post-floor";
 import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
 import type { CiMode } from "#pr/preflight";
-import {
-  materialityReleasedIds,
-  unresolvedBlockingCount,
-} from "#rereview/state";
+import { unresolvedBlockingCount } from "#rereview/state";
 import type { Telemetry } from "#review/findings";
 import type { PipelineResult } from "#review/pipeline";
 import type { CliOptions } from "#review/preflight";
@@ -156,13 +153,6 @@ export async function publishRunOutcome(
     doc.findings,
     result.gatePriors ?? [],
   );
-  // The priors that count released through a materiality demotion. Handed to
-  // the state merge, so the state block records them advisory and the next
-  // run's count agrees with this one. Read off the same inputs as the count.
-  const releasedIds = materialityReleasedIds(
-    doc.findings,
-    result.gatePriors ?? [],
-  );
   input.onBlockingCount(blockingCount);
   const reportPath = await writeRunReport({
     runDir: input.runDir,
@@ -241,7 +231,6 @@ export async function publishRunOutcome(
       },
       ciMode: input.ciMode,
       postMinSeverity: input.postMinSeverity,
-      materialityReleasedIds: releasedIds,
     });
   } catch (error) {
     if (!delivered) {
