@@ -49,6 +49,8 @@ Size threshold: `max_changed_lines` is always written (default 4000, `--max-chan
 
 Posting floor: setup writes `post_min_severity: "warning"` only when the repo config has no value, so a re-run never replaces a chosen floor. `warning` hides advisory suggestions, `blocking` hides every advisory finding, `suggestion` (or unset) posts everything. Hidden findings are counted in the summary comment. The gate is unchanged, since a blocking finding always posts; admission scores only posted findings, so a hidden one never triggers a re-review.
 
+Materiality gate: `materiality_gate: true` (opt-in; setup never writes it) sends each blocking finding the safety guard does not protect to an isolated sonnet judge (no tools, no MCP, PR title + claim + a ±25-line code window as untrusted data) that applies Crysk's written posting policy. An `immaterial` verdict demotes the finding to advisory with the reason in its comment, so the gate stops counting it; with `post_min_severity: "blocking"` it is not posted at all. Findings about security, credentials, permissions, sandboxing, injection or data loss are never sent and never demoted, including when consolidation merged them into another finding. Any failure (spawn, parse, unsafe input, unsupported route, ceiling) leaves the finding blocking. The key is capped: a global config can turn it off for every repo. Every run's `pipeline.json` carries a `materiality` record (`status`, `judged`, `demoted`, `protected`). Known limit: a finding that blocked on an earlier push still counts toward the gate on a re-review, so the effect shows mostly on first reviews and on new findings in later rounds.
+
 ## Policy modes
 
 | Mode | Use when |

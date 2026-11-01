@@ -1,10 +1,10 @@
 ---
 name: crysk-ci-setup
-description: "Trigger: setup CI, add Crysk to CI, GitHub Actions review, OpenCode, OPENCODE_AUTH_JSON, CRYSK_ROUTING, DeepSeek, admission policy, configure CI workflow, retrigger, force review, skipped review, /crysk review, /crysk override, pr-hero-force. Scaffolds the one workflow, secrets, routing, and admission config."
+description: "Trigger: setup CI, add Crysk to CI, GitHub Actions review, OpenCode, OPENCODE_AUTH_JSON, CRYSK_ROUTING, DeepSeek, admission policy, configure CI workflow, retrigger, force review, skipped review, /crysk review, /crysk override, pr-hero-force, too many findings, noisy review, post_min_severity, materiality_gate. Scaffolds the one workflow, secrets, routing, admission config, and the posting and noise settings."
 license: Apache-2.0
 metadata:
   author: juanmaagd
-  version: "3.2"
+  version: "3.3"
 ---
 
 ## Activation Contract
@@ -14,6 +14,7 @@ Load when the user asks to:
 - Configure **OpenCode** in CI (`OPENCODE_AUTH_JSON`, `CRYSK_ROUTING`, DeepSeek, mixed Claude+OpenCode).
 - Tune CI spend / re-review / admission policy.
 - Retrigger a skipped CI review (size, admission, or budget) without running the review locally.
+- Reduce review noise: fewer comments (`post_min_severity`) or fewer blocking findings that are real but improbable (`materiality_gate`).
 
 ## Hard Rules
 
@@ -57,6 +58,9 @@ Load when the user asks to:
 | First-time admission | Recommend `ci_admission_observe_only: true` — `references/ci-admission.md` |
 | User wants max CI spend | Lower `ci_max_attempts` and/or raise `ci_rereview_min_score` |
 | Custom bot posts findings | Add login to `ci_trusted_actors` |
+| Too many advisory comments on PRs | Raise the posting floor: `post_min_severity: "blocking"` in `.crysk/config.json` posts only blocking findings (`"warning"`, the recommended floor setup writes, hides advisory suggestions only). Blocking findings always post; the gate is unchanged. |
+| Blocking findings that are real but improbable keep PRs red ("an edge case that never happens") | Offer `materiality_gate: true` in `.crysk/config.json` (opt-in, off by default). An isolated judge checks each blocking finding against Crysk's posting policy; one judged not material under normal use posts as advisory and does not block. Security, credential and data-loss findings are never demoted, and any judge failure keeps the finding blocking. Cost: one sonnet call per blocking finding (about 1 per PR, roughly +$0.015 notional and +10 s per review). Pair it with `post_min_severity: "blocking"` to hide the demoted ones entirely. |
+| `materiality_gate` is on but nothing is ever demoted | Read the `materiality` record in the run's `pipeline.json` (in the `crysk-run-*` artifact). `unsupported_route`: the judge runs only on the Claude Code CLI talking to Anthropic directly, so a `CRYSK_ROUTING` that sends `sonnet` to OpenCode or through a gateway stands it down; keep a direct Claude route for `sonnet` or accept the gate off. `ceiling`: the pipeline ceiling left no room for one judge wave (about 9 minutes). `skipped`: the key did not reach the run: the repo config must be on the PR's base branch (CI reads it from there) and a global config must not set it `false` (the key is capped). |
 | CI skipped (size, admission, or budget) | `gh pr comment <n> --body "/crysk review"`. The review runs on GitHub Actions. Do not run `crysk review --force` locally for this. Legacy scaffold (no `issue_comment` trigger): `gh workflow run pr-hero-force.yml -f pr=<n>`. |
 | Gate is red with blocking findings the team accepts | `gh pr comment <n> --body "/crysk override"` (write access, same-repo PRs only, valid for that head only; a same-head `/crysk review` keeps it red). |
 | Prior review of the same head was hollow or wrong; re-runs say "No changes to discover" | `gh pr comment <n> --body "/crysk review --full"`. A plain `/crysk review` keeps the narrowed discovery. |
@@ -89,7 +93,9 @@ Before step 4, ask the human these questions in their language. Use the native q
    - observe only (`ci_admission_observe_only`): log what the rules would skip, but review every push; good for one PR cycle;
    - trusted actors (`ci_trusted_actors`): extra GitHub logins whose Crysk markers count;
    - changed-files limit (`max_changed_files`): a PR touching more files is skipped; unset = none on a subscription, 50 on an API key;
-   - exclusions: patterns in `.cryskignore` (gitignore syntax) the review never reads.
+   - exclusions: patterns in `.cryskignore` (gitignore syntax) the review never reads;
+   - posting floor (`post_min_severity`): `suggestion` posts everything, `warning` (recommended, and what setup writes when the key is absent) hides advisory suggestions, `blocking` posts only blocking findings. Hidden findings are counted in the summary comment, and the gate is unchanged;
+   - materiality gate (`materiality_gate`, off unless they say yes): blocking findings that are real but not material under normal use are posted as advisory instead of blocking, judged by an isolated sonnet call per blocking finding against Crysk's posting policy; security, credential and data-loss findings are never demoted. Tell them the cost (about one call per PR, +$0.015 notional, +10 s), that it needs a direct Claude route for `sonnet`, and the known limit: on a re-review, a finding that already blocked on an earlier push still counts toward the gate.
 
 **On a re-run** (`.crysk/config.json` already has re-review keys, or the workflow already exists), first show the human the current values (`npx -y crysk config`) and offer **Keep current settings** for the level and for the line threshold. When they keep them, omit `--level` / `--max-changed-lines`: passing a flag overwrites that group, including a tuned `max_verification_steps`.
 
@@ -109,7 +115,7 @@ It writes the workflow, merges the level's keys into `.crysk/config.json` (keepi
 4. **Workflow:** run the interview above, then `npx -y crysk setup --ci` with its flags. It writes `.github/workflows/crysk.yml` (or rewrites an existing `pr-hero.yml` in place) and the level keys in `.crysk/config.json`. Confirm `checks: write` and `actions: read`, both `pull_request` and `issue_comment` triggers, quoted `routing` / `opencode-auth`. `--force` if an old template lacks them (an old `credentials` job or a missing `issue_comment` trigger means it predates the single workflow).
 5. **Gotchas (required before the first review):** if `.crysk/` is missing on the default branch, run `npx -y crysk init` in the clone. The agent writes the gotchas from the repository it has in context, not from the template: the deliberate oddity that looks like a bug, the invariant enforced outside the diff, the ownership rule a newcomer would break. Each line is injected verbatim into every hunter's prompt. Delete the `human-attention-required` marker line (Crysk refuses to review while it is there), then commit `.crysk/` to the default branch. Without it the run fails `PRH-GOTCHAS-MISSING`.
 6. **Require the check:** in branch protection, require the `crysk` status check (the gate), not the `review` job. The legacy `pr-hero` status is still posted for one version, so a repository that already requires it keeps working; move the rule to `crysk`. A private repository on GitHub Free cannot require status checks (HTTP 403): report that the gate is advisory there. With `gh`, and only after asking the human: read the current protection first (`gh api repos/<o>/<r>/branches/<default>/protection`), because the PUT replaces all of it; then `gh api -X PUT repos/<o>/<r>/branches/<default>/protection` with `required_status_checks` contexts `["crysk"]`.
-7. **Advanced settings:** write the answers from interview question 5 into `.crysk/config.json` (and `.cryskignore`); commit both to the default branch. **No `routing` key.** `npx -y crysk config` to verify.
+7. **Advanced settings:** write the answers from interview question 5 into `.crysk/config.json` (and `.cryskignore`), including `post_min_severity` when they chose a floor other than `warning` and `materiality_gate: true` only when they said yes; commit both to the default branch, and to any other branch PRs target (CI reads the config from the PR's base branch, so it applies from the next PR after the merge). **No `routing` key.** `npx -y crysk config` to verify.
 8. **Verify:** `npx -y crysk doctor`. `git status`. Confirm no openai `type:"api"` blob, no echoed auth, `modelSnapshot` matches `opencode models` when OpenCode is on.
 9. **Deploy:** Offer commit. Open a **same-repo** test PR (forks skip).
 
@@ -119,7 +125,7 @@ Report:
 - Secret status (set or manual link). Names only: which of `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `OPENCODE_AUTH_JSON` exist. Never values.
 - OpenCode (if in scope): `OPENCODE_AUTH_JSON` set; blob providers **names + type only**; whether the blob was stripped to one CI provider; `CRYSK_ROUTING` JSON (no credentials); `modelSnapshot` vs `opencode models`.
 - Workflow path (`crysk.yml`, or the pre-rename `pr-hero.yml`; both present means two reviews per PR, delete one) and whether `checks: write`, `actions: read`, the `issue_comment` trigger, and quoted `routing` / `opencode-auth` are present.
-- The review settings summary `setup --ci` printed (level, gate, budget, advanced settings), and which ones the human chose. Confirm repo `.crysk/config.json` has no `routing` key.
+- The review settings summary `setup --ci` printed (level, gate, budget, advanced settings), and which ones the human chose, including the posting floor (`post_min_severity`) and whether `materiality_gate` is on. Confirm repo `.crysk/config.json` has no `routing` key.
 - `npx -y crysk doctor` / `npx -y crysk config` outcome.
 - Whether `.crysk/` exists on the default branch with real gotchas (no `human-attention-required` marker line).
 - Whether `crysk` is a required check (or only the legacy `pr-hero`, which should move to `crysk`), or that the repository cannot require one (private repository on GitHub Free).
