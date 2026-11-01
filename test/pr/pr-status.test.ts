@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { OVERRIDE_DESCRIPTION_PREFIX } from "#ci/override";
+import { NOTHING_TO_REVIEW_DESCRIPTION } from "#pr/admission";
 import {
   buildPrStatus,
   type PrStatusInput,
@@ -2167,6 +2168,19 @@ describe("buildPrStatus: a head a review rule skipped", () => {
     );
     expect(status.next_action).toBe("done");
     expect(status.reason).toContain("no review verified");
+  });
+
+  // #317: nothing reviewable changed. Done, but never "the review passed":
+  // no review ran, and the reason must not read as a clean bill.
+  test("an all-excluded green is done, and its reason says nothing was reviewed", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", NOTHING_TO_REVIEW_DESCRIPTION)],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+    expect(status.reason).toContain("excluded");
+    expect(status.reason).not.toContain("passed the gate");
   });
 
   test("an ordinary green keeps its reason", () => {

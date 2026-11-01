@@ -572,6 +572,10 @@ function newestCarriedVerdict(statuses: readonly CommitStatusFact[]) {
   );
 }
 
+export const NOTHING_TO_REVIEW_DESCRIPTION = clipStatusDescription(
+  `${STATUS_CONTEXT}: nothing to review — every changed file is excluded`,
+);
+
 function failClosed(label: string): AdmissionStatusDecision {
   return {
     state: "failure",
@@ -796,6 +800,12 @@ async function gateSkipDecision(
   },
   skip: CliRecord["skip"],
 ): Promise<AdmissionStatusDecision | null> {
+  // #317: nothing reviewable changed. A finished no-op, so the head reads
+  // green; the text is no review verdict (isReviewVerdictStatus), so a later
+  // skip's carry walks past it to the last real review.
+  if (skip === "excluded") {
+    return { state: "success", description: NOTHING_TO_REVIEW_DESCRIPTION };
+  }
   if (skip === "size" || skip === "budget") {
     const request = skipCommitStatusRequest({
       kind: skip,
@@ -856,6 +866,8 @@ function cliSkipKindOf(plan: CiGateSkipPlan): CliRecord["skip"] {
       return "coverage";
     case "manual-required":
       return "manual-required";
+    case "skipped-excluded":
+      return "excluded";
     default:
       return undefined;
   }
@@ -892,7 +904,7 @@ export async function publishCiSkip(input: {
   // The record names the skip kind only. The plan carries no head, so none is
   // written: the publisher takes the head from the trigger's record.
   const skip = cliSkipKindOf(input.plan);
-  if (input.post) {
+  if (input.post && input.plan.postsComment !== false) {
     // Repost, never edit in place: an edited notice is invisible on GitHub,
     // so a later push that was skipped again looked like nothing happened.
     // See repostMarkedPrComment's WHY. A repost that throws is the notice's own

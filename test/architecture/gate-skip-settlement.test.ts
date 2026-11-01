@@ -78,3 +78,29 @@ describe("gate skips settle through settleCiGateSkip (#326)", () => {
     });
   }
 });
+
+// #317: a first review whose every changed file is excluded ends as a skip, in
+// CI only. Same seam problem as above, so the guard pins the catch branch: it
+// is CI-only, it settles through settleCiGateSkip (unspent, grey), and it
+// publishes the excluded plan rather than rethrowing.
+describe("the all-excluded skip settles through settleCiGateSkip (#317)", () => {
+  const source = codeOnly(readSource("pr/review-pr.ts"));
+  const start = source.indexOf("error instanceof AllExcludedError");
+  const branch =
+    start === -1
+      ? ""
+      : source.slice(start, source.indexOf("planCiExcludedSkip(", start));
+
+  test("the branch exists and is CI-only", () => {
+    expect(branch.length).toBeGreaterThan(0);
+    expect(source).toContain("!(isCi && error instanceof AllExcludedError)");
+  });
+
+  test("it settles the ledger with settleCiGateSkip before publishing", () => {
+    expect(branch).toContain("settleCiGateSkip(");
+    expect(branch).toContain("publishCiSkip({");
+    expect(branch.indexOf("settleCiGateSkip(")).toBeLessThan(
+      branch.indexOf("publishCiSkip({"),
+    );
+  });
+});

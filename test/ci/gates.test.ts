@@ -22,6 +22,7 @@ import {
   ciSizeGateSkip,
   deriveCiBillingMode,
   evaluateBudgetGate,
+  planCiExcludedSkip,
   resolveCiBudgetCeiling,
   resolveCiSizeLimits,
   sizeGateUnlimitedNoticeMessage,
@@ -746,5 +747,68 @@ describe("sizeGateUnlimitedNoticeMessage", () => {
     });
     expect(message).toContain("no changed-files limit");
     expect(message).not.toContain("changed-lines or");
+  });
+});
+
+// #317: a PR whose every changed file is excluded has nothing to review. The
+// plan is a finished no-op: no comment, zero counts, and a summary that names
+// what was excluded and says nothing was spent.
+describe("planCiExcludedSkip", () => {
+  test("builds status=skipped-excluded outputs with zero counts and no comment", () => {
+    const plan = planCiExcludedSkip({
+      prNumber: 7,
+      excludedPaths: ["package-lock.json", "ROADMAP.md"],
+      ciMode: "gate",
+    });
+    expect(plan.postsComment).toBe(false);
+    expect(plan.outputs).toEqual({
+      status: "skipped-excluded",
+      findings_count: 0,
+      blocking_count: 0,
+      advisory_count: 0,
+      cost_usd_est: 0,
+      run_dir: "",
+    });
+  });
+
+  test("the step summary names the excluded paths and says nothing was spent", () => {
+    const plan = planCiExcludedSkip({
+      prNumber: 7,
+      excludedPaths: ["package-lock.json", "ROADMAP.md"],
+      ciMode: "advisory",
+    });
+    expect(plan.summaryMarkdown).toContain("PR #7");
+    expect(plan.summaryMarkdown).toContain("package-lock.json");
+    expect(plan.summaryMarkdown).toContain("ROADMAP.md");
+    expect(plan.summaryMarkdown).toContain(
+      "Nothing was spawned and nothing was spent",
+    );
+    expect(plan.summaryMarkdown).not.toContain("found nothing");
+    expect(plan.summaryMarkdown).not.toContain("\x1b");
+  });
+
+  test("the summary lists at most five paths and counts the rest, like every other path list", () => {
+    const excludedPaths = Array.from(
+      { length: 8 },
+      (_, i) => `gen/file-${i}.lock`,
+    );
+    const plan = planCiExcludedSkip({
+      prNumber: 7,
+      excludedPaths,
+      ciMode: "gate",
+    });
+    expect(plan.summaryMarkdown).toContain("gen/file-4.lock");
+    expect(plan.summaryMarkdown).not.toContain("gen/file-5.lock");
+    expect(plan.summaryMarkdown).toContain("+3 more");
+  });
+
+  test("a backtick in an author's path cannot break out of its code span", () => {
+    const plan = planCiExcludedSkip({
+      prNumber: 7,
+      excludedPaths: ["weird`name.lock"],
+      ciMode: "gate",
+    });
+    expect(plan.summaryMarkdown).toContain("`weird'name.lock`");
+    expect(plan.summaryMarkdown).not.toContain("weird`name");
   });
 });
