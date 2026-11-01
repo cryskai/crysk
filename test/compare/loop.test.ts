@@ -163,6 +163,24 @@ describe("prLoop", () => {
     expect(loop?.budgetExhausted).toBe(true);
   });
 
+  test("only reviews run while the gate was red on blocking findings are fix rounds", () => {
+    const loop = prLoop(
+      pr([
+        status("2026-10-20T10:05:00Z", "success", CLEAN),
+        // The author keeps pushing after a green: not the gate's loop.
+        status("2026-10-20T10:20:00Z", "success", CLEAN),
+        status("2026-10-20T10:30:00Z", "failure", BLOCKING),
+        // A failed run does not clear the red.
+        status("2026-10-20T10:40:00Z", "error", "review did not finish"),
+        status("2026-10-20T10:50:00Z", "failure", BLOCKING),
+        status("2026-10-20T11:00:00Z", "success", CLEAN),
+        status("2026-10-20T11:30:00Z", "success", CLEAN),
+      ]),
+    );
+    expect(loop?.reviews).toBe(6);
+    expect(loop?.fixRounds).toBe(2);
+  });
+
   test("an override ends the loop with the reviews before it", () => {
     const loop = prLoop(
       pr([
@@ -244,6 +262,13 @@ describe("loopReport", () => {
       "0": 0,
       "1": 1,
       "2": 1,
+      "3": 0,
+      "4+": 0,
+    });
+    expect(report.fixRounds).toEqual({
+      "0": 2,
+      "1": 1,
+      "2": 0,
       "3": 0,
       "4+": 0,
     });

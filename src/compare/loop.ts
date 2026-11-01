@@ -109,6 +109,11 @@ export interface PrLoop {
   budgetExhausted: boolean;
   // Reviews that completed up to the final green, the gate state the PR ended in.
   roundsToGreen: number | null;
+  // Reviews that ran while the gate was red on blocking findings: the loop the
+  // gate itself caused. A review after a green is the author still building,
+  // and counting it as loop friction would blame the gate for it (half of one
+  // repo's re-reviews followed a clean verdict).
+  fixRounds: number;
   greenBy: GreenBy | null;
   hoursToGreen: number | null;
 }
@@ -143,6 +148,15 @@ export function prLoop(pr: RawPr): PrLoop | null {
   const green = timeline.slice(lastRed + 1)[0];
   const greenIndex = green === undefined ? -1 : lastRed + 1;
 
+  let fixRounds = 0;
+  let blocked = false;
+  for (const e of timeline) {
+    if (isReview(e.event) && blocked) fixRounds += 1;
+    if (e.event === "review-blocking" || e.event === "carried-blocking")
+      blocked = true;
+    else if (!NOT_GREEN.has(e.event)) blocked = false;
+  }
+
   return {
     number: pr.number,
     merged: pr.mergedAt !== null,
@@ -160,6 +174,7 @@ export function prLoop(pr: RawPr): PrLoop | null {
         ? null
         : timeline.slice(0, greenIndex + 1).filter((e) => isReview(e.event))
             .length,
+    fixRounds,
     greenBy: green === undefined ? null : (green.event as GreenBy),
     hoursToGreen:
       green === undefined ? null : hoursBetween(pr.createdAt, green.createdAt),
@@ -197,6 +212,7 @@ export interface LoopReport {
   merged: number;
   firstReview: { clean: number; blocking: number; none: number };
   roundsToGreen: Record<string, number>;
+  fixRounds: Record<string, number>;
   greenBy: Record<string, number>;
   neverGreen: number;
   budgetExhausted: number;
@@ -231,8 +247,17 @@ export function loopReport(prs: RawPr[]): LoopReport {
     "3": 0,
     "4+": 0,
   };
+  const fixRounds: Record<string, number> = {
+    "0": 0,
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4+": 0,
+  };
   const greenBy: Record<string, number> = {};
   for (const loop of loops) {
+    const fixKey = bucket(loop.fixRounds);
+    fixRounds[fixKey] = (fixRounds[fixKey] ?? 0) + 1;
     if (loop.roundsToGreen !== null) {
       const key = bucket(loop.roundsToGreen);
       roundsToGreen[key] = (roundsToGreen[key] ?? 0) + 1;
@@ -253,6 +278,7 @@ export function loopReport(prs: RawPr[]): LoopReport {
       none: loops.filter((l) => l.firstReview === null).length,
     },
     roundsToGreen,
+    fixRounds,
     greenBy,
     neverGreen: loops.filter((l) => l.greenBy === null).length,
     budgetExhausted: loops.filter((l) => l.budgetExhausted).length,
@@ -287,6 +313,11 @@ export function renderLoopReport(report: LoopReport): string[] {
     "rounds to the final green (completed reviews up to it):",
     ...Object.entries(report.roundsToGreen).map(
       ([k, v]) => `  ${k.padEnd(9)} ${share(v, green)}`,
+    ),
+    "",
+    "fix rounds per PR (reviews run while the gate was red on blocking findings):",
+    ...Object.entries(report.fixRounds).map(
+      ([k, v]) => `  ${k.padEnd(9)} ${share(v, n)}`,
     ),
     "",
     "how the final green was reached:",
