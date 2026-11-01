@@ -875,8 +875,11 @@ describe("materiality gate: route and ceiling (S14, S5)", () => {
 
     expect(judgeSteps(runner)).toEqual([]);
     expect(result.skillOutput.findings[0]?.tier).toBe("blocking");
+    // The reason names the rejected route in hand, not a re-resolution from
+    // config (which, absent here, would claim the plan has no judge step).
     expect(await readMaterialityRecord(input.runDir)).toMatchObject({
       status: "unsupported_route",
+      reason: "judge route is not the measured claude-code route",
     });
   });
 

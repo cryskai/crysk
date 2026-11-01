@@ -3564,7 +3564,11 @@ async function runMaterialityJudge(
     route = routeForStepKey(state.routePlan, MATERIALITY_STEP_KEY);
     if (route === undefined || !isMeasuredJudgeRoute(route)) {
       record.status = "unsupported_route";
+      // A route in hand that fails the check names itself; only a plan with
+      // no judge step asks the config whether the step was left out because
+      // the configured route is not the measured one.
       record.reason =
+        route !== undefined ||
         resolveMaterialityJudgeRoute(
           input.routingConfig ?? input.config?.effective?.routing,
         ) === undefined
