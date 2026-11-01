@@ -163,6 +163,8 @@ export const SKIP_SIZE_COMMENT_MARKER = `${MARKER_OPEN}skip-size -->`;
 export const SKIP_BUDGET_COMMENT_MARKER = `${MARKER_OPEN}skip-budget -->`;
 export const SKIP_COVERAGE_COMMENT_MARKER = `${MARKER_OPEN}skip-coverage -->`;
 export const MANUAL_REQUIRED_COMMENT_MARKER = `${MARKER_OPEN}manual-required -->`;
+// Never posted (planCiExcludedSkip has no comment); kept so the plan shape stays whole.
+export const SKIP_EXCLUDED_COMMENT_MARKER = `${MARKER_OPEN}skip-excluded -->`;
 
 // Same register as ci/reporter.ts's `skipSizeLines`/`skipBudgetLines` and
 // project rule 4 (assistant posture): a gate skip is a courteous notice
@@ -566,6 +568,9 @@ export interface CiGateSkipPlan {
   markerPrefix: string;
   summaryMarkdown: string;
   outputs: CiOutputs;
+  // False for a skip that never posts a PR comment, even under --post (#317:
+  // nothing to review). Absent posts `comment` as every other skip does.
+  postsComment?: false;
 }
 
 // Spec 1.1's $GITHUB_OUTPUT contract for a skip: no review ran, so every
@@ -579,6 +584,7 @@ export function ciGateSkipOutputs(
     | "skipped-size"
     | "skipped-budget"
     | "skipped-coverage"
+    | "skipped-excluded"
     | "manual-required",
   estimatedCostUsd: number,
 ): CiOutputs {
@@ -602,6 +608,31 @@ export function planCiSizeSkip(
     markerPrefix: SKIP_SIZE_COMMENT_MARKER,
     summaryMarkdown: renderStepSummary(skip.summary, input.ciMode),
     outputs: ciGateSkipOutputs("skipped-size", 0),
+  };
+}
+
+// #317: every changed file is excluded by the ignore rules, so there is nothing
+// to review. Unlike a size or budget skip this is not a review held back, so it
+// posts no PR comment: a lockfile-only PR would otherwise collect one per push.
+// The step summary and the commit status (admission.ts) say what happened.
+export function planCiExcludedSkip(input: {
+  prNumber: number;
+  excludedPaths: readonly string[];
+  ciMode: CiMode;
+}): CiGateSkipPlan {
+  return {
+    comment: "",
+    postsComment: false,
+    markerPrefix: SKIP_EXCLUDED_COMMENT_MARKER,
+    summaryMarkdown: renderStepSummary(
+      {
+        kind: "skipped-excluded",
+        prNumber: input.prNumber,
+        excludedPaths: [...input.excludedPaths],
+      },
+      input.ciMode,
+    ),
+    outputs: ciGateSkipOutputs("skipped-excluded", 0),
   };
 }
 

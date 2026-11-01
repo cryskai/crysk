@@ -787,7 +787,7 @@ PR that came back clean.
 
 | Output | Meaning |
 |---|---|
-| `status` | `reviewed`, `skipped-size`, `skipped-budget`, or `error` — see the caveat below. |
+| `status` | `reviewed`, `skipped-size`, `skipped-budget`, `skipped-excluded`, or `error` — see the caveat below. `skipped-excluded` means every changed file is excluded by the ignore rules, so there was nothing to review: exit 0, a green `crysk` status in gate mode, no PR comment, nothing spent. |
 | `findings-count` | Total verified findings. |
 | `blocking-count` | Blocking-tier findings. |
 | `advisory-count` | Advisory-tier findings. |

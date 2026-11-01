@@ -95,6 +95,19 @@ export interface PrDiscoveryGit {
   ): Promise<{ ok: boolean; stdout: string; stderr: string }>;
 }
 
+// A first review whose every changed file is excluded by the ignore rules
+// (#317). A CliError with the same message as before, so a caller that does not
+// look for it still exits 1 with the same line. The CI path catches it and ends
+// the run as a skip: nothing reviewable changed, so nothing is owed.
+export class AllExcludedError extends CliError {
+  readonly droppedPaths: readonly string[];
+
+  constructor(droppedPaths: readonly string[]) {
+    super(allExcludedMessage([...droppedPaths]));
+    this.droppedPaths = droppedPaths;
+  }
+}
+
 export interface PrDiscoveryResult {
   prepared: PreparedDiscovery;
   skipDiscovery: boolean;
@@ -224,11 +237,10 @@ export async function resolvePrDiscovery(params: {
     prepared.plan.emptyDeltaIsError &&
     effectiveDiff.patch.trim().length === 0
   ) {
-    throw new CliError(
-      effectiveDiff.droppedPaths.length > 0
-        ? allExcludedMessage(effectiveDiff.droppedPaths)
-        : emptyDiffMessage(baseRef, headLabel, false),
-    );
+    if (effectiveDiff.droppedPaths.length > 0) {
+      throw new AllExcludedError(effectiveDiff.droppedPaths);
+    }
+    throw new CliError(emptyDiffMessage(baseRef, headLabel, false));
   }
   const skipDiscovery =
     skipPlannedDiscovery || effectiveDiff.patch.trim().length === 0;

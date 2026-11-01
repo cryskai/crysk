@@ -155,6 +155,12 @@ interface CiSkipBudgetSummary {
   budgetUsd: number;
 }
 
+interface CiSkipExcludedSummary {
+  kind: "skipped-excluded";
+  prNumber: number;
+  excludedPaths: string[];
+}
+
 interface CiSkipCoverageSummary {
   kind: "skipped-coverage";
   prNumber: number;
@@ -198,6 +204,7 @@ export type CiSummaryData =
   | CiReviewSummary
   | CiSkipSizeSummary
   | CiSkipBudgetSummary
+  | CiSkipExcludedSummary
   | CiSkipCoverageSummary
   | CiManualRequiredSummary;
 
@@ -336,6 +343,22 @@ function skipBudgetLines(data: CiSkipBudgetSummary): string[] {
   ];
 }
 
+// #317: not a review held back but a diff with nothing in scope, so the heading
+// is a plain fact, not a warning, and the wording never says "found nothing":
+// nothing was looked at.
+function skipExcludedLines(data: CiSkipExcludedSummary): string[] {
+  return [
+    `### Crysk: nothing to review — PR #${data.prNumber}`,
+    "",
+    "**Reason:** every changed file is excluded from review by the ignore " +
+      "rules (`.cryskignore` and the shipped defaults).",
+    "",
+    ...data.excludedPaths.map((p) => `- \`${p}\``),
+    "",
+    "Nothing was spawned and nothing was spent.",
+  ];
+}
+
 function admissionMetricRows(
   data: CiSkipCoverageSummary | CiManualRequiredSummary,
 ): string[] {
@@ -466,11 +489,13 @@ export function renderStepSummary(
       ? skipSizeLines(data)
       : data.kind === "skipped-budget"
         ? skipBudgetLines(data)
-        : data.kind === "skipped-coverage"
-          ? skipCoverageLines(data)
-          : data.kind === "manual-required"
-            ? manualRequiredLines(data)
-            : reviewedLines(data);
+        : data.kind === "skipped-excluded"
+          ? skipExcludedLines(data)
+          : data.kind === "skipped-coverage"
+            ? skipCoverageLines(data)
+            : data.kind === "manual-required"
+              ? manualRequiredLines(data)
+              : reviewedLines(data);
   const out = [...body, "---", "", footerFor(ciMode)];
   return `${out.join("\n").trimEnd()}\n`;
 }
