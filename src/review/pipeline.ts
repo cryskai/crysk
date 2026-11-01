@@ -19,6 +19,7 @@ import {
 import {
   agentStepKey,
   buildResolvedRoutePlan,
+  isMeasuredJudgeRoute,
   MATERIALITY_JUDGE_MODEL,
   MATERIALITY_STEP_KEY,
   type ResolvedModelRoute,
@@ -3561,13 +3562,13 @@ async function runMaterialityJudge(
   let route: ResolvedModelRoute | undefined;
   if (state.routePlan !== undefined) {
     route = routeForStepKey(state.routePlan, MATERIALITY_STEP_KEY);
-    if (route === undefined || route.backend !== "claude-code") {
+    if (route === undefined || !isMeasuredJudgeRoute(route)) {
       record.status = "unsupported_route";
       record.reason =
         resolveMaterialityJudgeRoute(
           input.routingConfig ?? input.config?.effective?.routing,
         ) === undefined
-          ? "judge route is not claude-code"
+          ? "judge route is not the measured claude-code route"
           : "route plan carries no judge step";
       return;
     }
@@ -3575,20 +3576,29 @@ async function runMaterialityJudge(
   if (judge.length === 0) return;
 
   // The consolidation pass's budget rule: an optional precision pass must
-  // never be the step that turns a complete run partial. If the ceiling could
-  // fire inside the worst case of this leg (the steps run in parallel, so one
-  // step's worst case: maxAttempts + the format retry at the full watchdog,
-  // plus the ceiling's settle grace), the gate stands down.
+  // never be the step that turns a complete run partial. One step's worst case
+  // is maxAttempts + the format retry at the full watchdog. The steps are
+  // admitted through the max_concurrent_steps gate, so with a cap they run in
+  // waves of `cap`, and the leg's worst case is one step's worst case per
+  // wave. Only the waves that fit before the ceiling (minus its settle grace)
+  // are judged; findings past them keep their tier, unjudged (fail-open
+  // toward blocking). No wave fits: the gate stands down.
   const deadline = state.ceilingDeadlineMs;
-  if (
-    deadline !== undefined &&
-    deadline - Date.now() <
-      MATERIALITY_TIMEOUT_MS * (MATERIALITY_MAX_ATTEMPTS + 1) +
-        (state.ceilingGraceMs ?? ceilingGraceMs(input))
-  ) {
-    record.status = "ceiling";
-    record.reason = "ceiling budget";
-    return;
+  if (deadline !== undefined) {
+    const perWaveMs = MATERIALITY_TIMEOUT_MS * (MATERIALITY_MAX_ATTEMPTS + 1);
+    const budgetMs =
+      deadline - Date.now() - (state.ceilingGraceMs ?? ceilingGraceMs(input));
+    const waves = Math.floor(budgetMs / perWaveMs);
+    if (waves < 1) {
+      record.status = "ceiling";
+      record.reason = "ceiling budget";
+      return;
+    }
+    const cap = input.config?.effective.max_concurrent_steps;
+    if (cap !== undefined && judge.length > waves * cap) {
+      record.reason = `ceiling budget: judged ${waves * cap} of ${judge.length}`;
+      judge.splice(waves * cap);
+    }
   }
 
   const systemPromptPath = path.join(stepsDir, "materiality.system.md");

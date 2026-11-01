@@ -1204,6 +1204,25 @@ describe("buildResolvedRoutePlan: the materiality judge step", () => {
     expect(resolveMaterialityJudgeRoute(routingConfig)).toBeUndefined();
   });
 
+  test("a claude-code judge route behind a non-direct gateway is not the measured judge", () => {
+    const routingConfig: RoutingConfig = {
+      mappings: [
+        {
+          logical: "sonnet",
+          backend: "claude-code",
+          provider: "anthropic",
+          gateway: "openrouter",
+          modelSnapshot: "other/model",
+        },
+      ],
+    };
+    expect(resolveMaterialityJudgeRoute(routingConfig)).toBeUndefined();
+    // The default route still qualifies.
+    expect(resolveMaterialityJudgeRoute(undefined)?.route.backend).toBe(
+      "claude-code",
+    );
+  });
+
   test("a judge route that cannot resolve stands the judge down, never throws", () => {
     const routingConfig: RoutingConfig = {
       mappings: [

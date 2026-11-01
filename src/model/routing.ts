@@ -556,7 +556,24 @@ export function resolveMaterialityJudgeRoute(
   } catch {
     return undefined;
   }
-  return step.route.backend === "claude-code" ? step : undefined;
+  return isMeasuredJudgeRoute(step.route) ? step : undefined;
+}
+
+// The route the judge was measured on: the Claude Code CLI talking straight to
+// Anthropic. Through any other gateway, spawnModelForClaudeCli passes the
+// mapping's modelSnapshot verbatim as --model, so a claude-code route over
+// openrouter or a configured gateway can run an arbitrary model — a different,
+// unmeasured judge that the pinned prompt hash cannot detect.
+export function isMeasuredJudgeRoute(route: {
+  backend: string;
+  provider: string;
+  gateway?: string;
+}): boolean {
+  return (
+    route.backend === "claude-code" &&
+    route.provider === "anthropic" &&
+    (route.gateway === undefined || route.gateway === "direct")
+  );
 }
 
 export function buildResolvedRoutePlan(

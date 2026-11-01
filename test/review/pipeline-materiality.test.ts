@@ -838,7 +838,89 @@ describe("materiality gate: route and ceiling (S14, S5)", () => {
     expect(result.skillOutput.findings[0]?.tier).toBe("blocking");
     expect(await readMaterialityRecord(input.runDir)).toMatchObject({
       status: "unsupported_route",
-      reason: "judge route is not claude-code",
+      reason: "judge route is not the measured claude-code route",
+    });
+  });
+
+  test("a claude-code judge step behind a non-direct gateway stands down", async () => {
+    // claude-code over openrouter passes the snapshot verbatim as --model:
+    // a different, unmeasured judge, so the gate must not run it.
+    const claude = (stepKey: string, role: string) =>
+      resolveStepRoute({ stepKey, role, specModel: "sonnet" });
+    const judge = claude("materiality", "other");
+    const routePlan = createResolvedRoutePlan([
+      claude("hunter-reliability", "hunter"),
+      claude("hunter-resilience", "hunter"),
+      claude("hunter-parity", "hunter"),
+      claude("refuter", "refuter"),
+      {
+        ...judge,
+        route: {
+          ...judge.route,
+          gateway: "openrouter",
+          modelSnapshot: "other/model",
+        },
+      },
+    ]);
+    const input = await makeInput({ ...GATE_ON, routePlan });
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("immaterial")),
+    });
+
+    const result = await runPipeline(input, {
+      runner,
+      transportRegistry: new DefaultTransportRegistry(),
+    });
+
+    expect(judgeSteps(runner)).toEqual([]);
+    expect(result.skillOutput.findings[0]?.tier).toBe("blocking");
+    expect(await readMaterialityRecord(input.runDir)).toMatchObject({
+      status: "unsupported_route",
+    });
+  });
+
+  test("a queued fan-out judges only what fits the ceiling; the rest stays blocking", async () => {
+    // max_concurrent_steps 1 queues the judge steps one after another, so
+    // the budget is per wave, not per step: one 9-minute wave fits a 13.5
+    // minute ceiling, a second does not.
+    const input = await makeInput({
+      ...GATE_ON,
+      pipelineTimeoutMs: 810_000,
+      ceilingGraceMs: 10,
+      config: {
+        effective: { max_concurrent_steps: 1 },
+        sources: {},
+        global_present: false,
+      } as unknown as PipelineInput["config"],
+    });
+    const runner = new FakeStepRunner({
+      ...hunters([
+        draft(),
+        draft({
+          id: "REL-2",
+          line: 40,
+          symbol: "export",
+          claim: CLAIMS.exporter,
+          dedupe_key: "src/app.ts:export:1",
+        }),
+      ]),
+      materiality: (spec) => parsed(spec, verdict("immaterial")),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(judgeSteps(runner).map((s) => s.name)).toEqual(["materiality-F001"]);
+    expect(result.skillOutput.findings.map((f) => [f.id, f.tier])).toEqual([
+      ["F001", "advisory"],
+      ["F002", "blocking"],
+    ]);
+    expect(result.skillOutput.run_status).toBe("complete");
+    expect(await readMaterialityRecord(input.runDir)).toMatchObject({
+      status: "ran",
+      judged: 1,
+      demoted: 1,
+      reason: "ceiling budget: judged 1 of 2",
     });
   });
 
