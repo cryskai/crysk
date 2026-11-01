@@ -38,8 +38,9 @@ export function codeWindow(fileText: string, line: number): string {
   return redactEvidenceText(out.join("\n"));
 }
 
-// The title, the claim, the path and the window are all author-controlled, so
-// each block is wrapped with the run's boundary nonce (S12). Content that
+// The title, the claim, the path and the window are all author-controlled.
+// The title, claim and window are wrapped with the run's boundary nonce (S12);
+// the path stays a plain line but must carry no control character. Content that
 // already carries the nonce returns null rather than throwing: wrapBlock's
 // throw would kill a paid run, and the caller treats null as "cannot judge
 // safely" and leaves the finding blocking (fail-open toward blocking, S6).
@@ -55,6 +56,11 @@ export function renderMaterialityPrompt(
 ): string | null {
   const title = input.prTitle.replace(/\s+/g, " ").trim();
   const claim = normalizeClaim(redactEvidenceText(input.claim));
+  // The path is the one author-controlled string outside a nonced block. A
+  // control character (a newline above all) would let it open a fresh line
+  // that reads as an instruction, so such a path cannot be judged safely.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: detecting them is the point
+  if (/[\u0000-\u001f\u007f]/.test(input.path)) return null;
   const filePath = input.path.replace(/\s+/g, " ").trim();
   const window = input.window ?? "";
   if (
@@ -79,17 +85,30 @@ export function renderMaterialityPrompt(
   return parts.join("\n");
 }
 
+// `protectedIds` carries protection the finding's own text no longer shows:
+// consolidation can fold a protected finding into a primary whose merged claim
+// and path read benign, and the guard must follow the defect, not the wording.
 export function materialityCandidates<
-  T extends { tier: Tier; claim: string; path: string },
->(findings: T[]): { judge: T[]; protectedCount: number } {
+  T extends { id?: string; tier: Tier; claim: string; path: string },
+>(
+  findings: T[],
+  protectedIds: ReadonlySet<string> = new Set(),
+): { judge: T[]; protectedCount: number } {
   const judge: T[] = [];
   let protectedCount = 0;
   for (const f of findings) {
     if (f.tier !== "blocking") continue;
-    if (isSafetyProtected(f)) protectedCount++;
+    if (isProtected(f, protectedIds)) protectedCount++;
     else judge.push(f);
   }
   return { judge, protectedCount };
+}
+
+function isProtected(
+  f: { id?: string; claim: string; path: string },
+  protectedIds: ReadonlySet<string>,
+): boolean {
+  return isSafetyProtected(f) || (f.id !== undefined && protectedIds.has(f.id));
 }
 
 // The guard is re-checked here, not only in materialityCandidates: a verdict
@@ -99,13 +118,14 @@ export function applyMaterialityVerdicts<
 >(
   findings: T[],
   verdicts: Map<string, MaterialityVerdict>,
+  protectedIds: ReadonlySet<string> = new Set(),
 ): (T & { materiality?: MaterialityVerdict })[] {
   return findings.map((f) => {
     const verdict = verdicts.get(f.id);
     if (
       f.tier !== "blocking" ||
       verdict?.label !== "immaterial" ||
-      isSafetyProtected(f)
+      isProtected(f, protectedIds)
     ) {
       return f;
     }

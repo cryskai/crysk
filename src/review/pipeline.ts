@@ -94,6 +94,7 @@ import {
 import {
   applyMaterialityVerdicts,
   codeWindow,
+  isSafetyProtected,
   materialityCandidates,
   renderMaterialityPrompt,
 } from "#review/materiality-gate";
@@ -3542,8 +3543,10 @@ async function runMaterialityJudge(
     state.deduped = deduped;
   }
   // The list finish() will post, from the same derivation finish() uses.
+  const tiered = tierFindings(state, state.survivors);
   const { judge, protectedCount } = materialityCandidates(
-    tierFindings(state, state.survivors).findings,
+    tiered.findings,
+    tiered.protectedIds,
   );
   record.protected = protectedCount;
 
@@ -3735,6 +3738,12 @@ interface TieredFindings {
   // Pre-plan count, for a plan that no longer matches.
   tieredCount: number;
   refuted: DebugRefutedFinding[];
+  // Ids in `findings` the materiality safety guard must protect: every
+  // pre-plan finding the guard matches, plus every plan primary that folded
+  // one in. Consolidation rewrites the claim and keeps the primary's path, so
+  // a protected source merged into a benign primary would otherwise vanish
+  // from the guard's view (S4) — the guard follows the defect, not its wording.
+  protectedIds: Set<string>;
   consolidation:
     | { kind: "none" }
     | { kind: "mismatch" }
@@ -3797,6 +3806,9 @@ function tierFindings(
     });
   }
   const tieredCount = findings.length;
+  const protectedIds = new Set(
+    findings.filter((f) => isSafetyProtected(f)).map((f) => f.id),
+  );
   // The consolidation plan was validated against the ids runConsolidation
   // sent; it is re-validated here against the ids this function produced,
   // because the two lists are derived separately and a plan applied to a
@@ -3807,6 +3819,7 @@ function tierFindings(
       findings,
       tieredCount,
       refuted,
+      protectedIds,
       consolidation: { kind: "none" },
     };
   }
@@ -3825,15 +3838,22 @@ function tierFindings(
       findings,
       tieredCount,
       refuted,
+      protectedIds,
       consolidation: { kind: "mismatch" },
     };
   }
   const stats = { repairs: 0 };
   plan = enforcePlanInvariants(plan, findings, stats);
+  for (const entry of plan) {
+    if (entry.sources.some((id) => protectedIds.has(id))) {
+      protectedIds.add(entry.primary);
+    }
+  }
   return {
     findings: applyPlan(findings, plan, []),
     tieredCount,
     refuted,
+    protectedIds,
     consolidation: {
       kind: "applied",
       repairs: stats.repairs,
@@ -3890,7 +3910,11 @@ async function finish(
   const findings =
     state.materialityVerdicts === undefined
       ? tiered.findings
-      : applyMaterialityVerdicts(tiered.findings, state.materialityVerdicts);
+      : applyMaterialityVerdicts(
+          tiered.findings,
+          state.materialityVerdicts,
+          tiered.protectedIds,
+        );
   state.consolidation ??= skippedConsolidation(input);
   const rootCauses = clusterByRootCause(findings);
   const rootCauseId = rootCauseIdByFinding(rootCauses);

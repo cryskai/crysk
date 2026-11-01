@@ -548,6 +548,109 @@ describe("materiality gate: what finish() writes", () => {
   });
 });
 
+describe("materiality gate: consolidation cannot launder a protected finding (S4)", () => {
+  test("a protected finding folded into a benign primary keeps the primary protected", async () => {
+    const input = await makeInput({
+      ...GATE_ON,
+      consolidate: {
+        promptPath: path.join(
+          import.meta.dir,
+          "..",
+          "..",
+          "prompts",
+          "consolidate.md",
+        ),
+      },
+    });
+    const runner = new FakeStepRunner({
+      ...hunters([
+        draft({ claim: CLAIMS.protected }),
+        draft({
+          id: "REL-2",
+          line: 40,
+          symbol: "export",
+          claim: CLAIMS.exporter,
+          dedupe_key: "src/app.ts:export:1",
+        }),
+      ]),
+      consolidate: (spec) =>
+        ok(spec, [
+          {
+            primary: "F002",
+            sources: ["F001", "F002"],
+            split: false,
+            claim:
+              "the request handler logs per-request state twice, which is noisy",
+          },
+        ]),
+      materiality: (spec) => parsed(spec, verdict("immaterial")),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(judgeSteps(runner)).toEqual([]);
+    expect(result.skillOutput.findings.map((f) => [f.id, f.tier])).toEqual([
+      ["F002", "blocking"],
+    ]);
+    expect(await readMaterialityRecord(input.runDir)).toMatchObject({
+      judged: 0,
+      demoted: 0,
+      protected: 1,
+    });
+  });
+});
+
+describe("materiality gate: a path-protected source survives consolidation (S4)", () => {
+  test("a finding protected only by its path keeps the merged primary protected", async () => {
+    const input = await makeInput({
+      ...GATE_ON,
+      consolidate: {
+        promptPath: path.join(
+          import.meta.dir,
+          "..",
+          "..",
+          "prompts",
+          "consolidate.md",
+        ),
+      },
+    });
+    const runner = new FakeStepRunner({
+      ...hunters([
+        draft({
+          path: "src/auth/session.ts",
+          proof_refs: ["src/auth/session.ts:10"],
+          dedupe_key: "src/auth/session.ts:run:1",
+        }),
+        draft({
+          id: "REL-2",
+          line: 40,
+          symbol: "export",
+          claim: CLAIMS.exporter,
+          dedupe_key: "src/app.ts:export:1",
+        }),
+      ]),
+      consolidate: (spec) =>
+        ok(spec, [
+          {
+            primary: "F002",
+            sources: ["F001", "F002"],
+            split: false,
+            claim:
+              "the request handler logs per-request state twice, which is noisy",
+          },
+        ]),
+      materiality: (spec) => parsed(spec, verdict("immaterial")),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    expect(judgeSteps(runner)).toEqual([]);
+    expect(result.skillOutput.findings.map((f) => f.tier)).toEqual([
+      "blocking",
+    ]);
+  });
+});
+
 describe("materiality gate: the spawned step (S3, S9)", () => {
   async function worktreeWith(file: string, text: string): Promise<string> {
     const dir = await mkdtemp(path.join(tmpdir(), "pr-hero-materiality-wt-"));
