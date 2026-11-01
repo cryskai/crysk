@@ -37,10 +37,19 @@ type GateEvent =
   | "stopped"
   | "low-risk"
   | "excluded"
+  | "unverified-fixes"
+  | "budget-carried"
   | "error"
   | "pending"
   | "other-success"
   | "other-failure";
+
+// Before 2026-10-30 an exhausted budget wrote a red with this label; since
+// then the gate carries the last verdict and the label rides inside a carried
+// green ("no review needed (review budget ...)") or an unverified-fixes green.
+// A carried blocking red names no rule, so a budget skip that carries a red is
+// not countable from the status alone.
+const BUDGET_LABEL = "budget for this PR is used up";
 
 export function classifyStatus(status: RawStatus): GateEvent {
   const d = status.description ?? "";
@@ -52,6 +61,11 @@ export function classifyStatus(status: RawStatus): GateEvent {
     case "success":
       if (d === "review posted" || d === "review complete")
         return "review-clean";
+      // Carried greens embed the skip rule's label ("... fixes unverified
+      // (automatic reviews stopped by a maintainer); carried from ..."), so
+      // these two go first: no review and no human stop earned them.
+      if (d.includes("fixes unverified")) return "unverified-fixes";
+      if (d.includes(BUDGET_LABEL)) return "budget-carried";
       if (d.includes("overridden")) return "override";
       if (d.includes("stopped by a maintainer")) return "stopped";
       if (d.includes("low-risk paths")) return "low-risk";
@@ -63,8 +77,7 @@ export function classifyStatus(status: RawStatus): GateEvent {
           ? "carried-blocking"
           : "review-blocking";
       }
-      if (d.includes("budget for this PR is used up"))
-        return "budget-exhausted";
+      if (d.includes(BUDGET_LABEL)) return "budget-exhausted";
       if (d.includes("size gate")) return "size-skipped";
       return "other-failure";
     default:
@@ -80,7 +93,9 @@ export function classifyStatus(status: RawStatus): GateEvent {
 // every commit of the feature PRs it ships, each still carrying the reviews
 // of the PR it came from (one release PR read 103 reviews). So only statuses
 // set while this PR was open count.
-function gateTimeline(pr: RawPr): { createdAt: string; event: GateEvent }[] {
+function gateTimeline(
+  pr: RawPr,
+): { createdAt: string; event: GateEvent; budget: boolean }[] {
   const closed = pr.closedAt ?? "9999";
   const all = pr.commits
     .flatMap((c) => c.statuses)
@@ -88,7 +103,11 @@ function gateTimeline(pr: RawPr): { createdAt: string; event: GateEvent }[] {
   const context = all.some((s) => s.context === "crysk") ? "crysk" : "pr-hero";
   return all
     .filter((s) => s.context === context)
-    .map((s) => ({ createdAt: s.createdAt, event: classifyStatus(s) }))
+    .map((s) => ({
+      createdAt: s.createdAt,
+      event: classifyStatus(s),
+      budget: (s.description ?? "").includes(BUDGET_LABEL),
+    }))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
@@ -98,6 +117,8 @@ type GreenBy =
   | "stopped"
   | "low-risk"
   | "excluded"
+  | "unverified-fixes"
+  | "budget-carried"
   | "other-success";
 
 export interface PrLoop {
@@ -168,7 +189,7 @@ export function prLoop(pr: RawPr): PrLoop | null {
           : "blocking",
     reviews: timeline.filter((e) => isReview(e.event)).length,
     failedRuns: timeline.filter((e) => e.event === "error").length,
-    budgetExhausted: timeline.some((e) => e.event === "budget-exhausted"),
+    budgetExhausted: timeline.some((e) => e.budget),
     roundsToGreen:
       green === undefined
         ? null

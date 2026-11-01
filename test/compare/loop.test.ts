@@ -74,9 +74,57 @@ describe("classifyStatus", () => {
       ),
     ).toBe("stopped");
   });
+
+  test("a carried green is filed by what carried it, not by the label it embeds", () => {
+    // The producer's own strings (src/pr/admission.ts carriedSuccessDescription,
+    // unverifiedFixesDescription): both embed a skip rule's label.
+    expect(
+      classifyStatus(
+        status(
+          "t",
+          "success",
+          "crysk: 2 answered finding(s), fixes unverified (automatic reviews stopped by a maintainer); carried from abc1234",
+        ),
+      ),
+    ).toBe("unverified-fixes");
+    expect(
+      classifyStatus(
+        status(
+          "t",
+          "success",
+          "crysk: no review needed (review budget for this PR is used up); carried from abc1234",
+        ),
+      ),
+    ).toBe("budget-carried");
+  });
 });
 
 describe("prLoop", () => {
+  test("an exhausted budget counts whether it wrote a red or carried a green", () => {
+    const red = prLoop(
+      pr([
+        status(
+          "2026-10-20T10:05:00Z",
+          "failure",
+          "crysk: review budget for this PR is used up — /pr-hero review reviews this head",
+        ),
+      ]),
+    );
+    const carried = prLoop(
+      pr([
+        status("2026-10-20T10:05:00Z", "success", CLEAN),
+        status(
+          "2026-10-20T10:30:00Z",
+          "success",
+          "crysk: no review needed (review budget for this PR is used up); carried from abc1234",
+        ),
+      ]),
+    );
+    expect(red?.budgetExhausted).toBe(true);
+    expect(carried?.budgetExhausted).toBe(true);
+    expect(carried?.greenBy).toBe("review-clean");
+  });
+
   test("a review posted under both contexts counts once", () => {
     const loop = prLoop(
       pr([

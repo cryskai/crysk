@@ -104,6 +104,9 @@ async function runFetch(args: string[]): Promise<void> {
     flag(args, "--out") ??
     path.join(homedir(), "Desktop", "loop-metrics", repo.replace("/", "-"));
   const concurrency = Number(flag(args, "--concurrency") ?? "6");
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    fail("--concurrency must be a positive integer");
+  }
   const since = flag(args, "--since");
   await mkdir(out, { recursive: true });
   const file = path.join(out, "raw.json");
@@ -111,11 +114,15 @@ async function runFetch(args: string[]): Promise<void> {
   const cached: RawPr[] = existsSync(file)
     ? JSON.parse(readFileSync(file, "utf8"))
     : [];
-  // Only closed PRs are final; an open one is refetched every run.
-  const done = new Map(
-    cached.filter((p) => p.state !== "OPEN").map((p) => [p.number, p]),
-  );
+  // The cache is keyed by PR number, which another repo's file shares.
+  const foreign = cached.find((p) => p.repo !== repo);
+  if (foreign !== undefined) {
+    fail(`${file} holds ${foreign.repo}, not ${repo}; pass another --out`);
+  }
 
+  // `gh pr list --search` goes through the search API, which stops at 1000
+  // results; past either cap the listing is the newest PRs only.
+  const limit = since === undefined ? 2000 : 1000;
   const listings = JSON.parse(
     await gh([
       "pr",
@@ -125,7 +132,7 @@ async function runFetch(args: string[]): Promise<void> {
       "--state",
       "all",
       "--limit",
-      "2000",
+      String(limit),
       // A large repo's history predates the gate by thousands of PRs, each
       // costing a call per commit against a 5000/h API budget.
       ...(since === undefined ? [] : ["--search", `created:>=${since}`]),
@@ -133,11 +140,26 @@ async function runFetch(args: string[]): Promise<void> {
       "number,title,createdAt,mergedAt,closedAt,state,isDraft,baseRefName",
     ]),
   ) as PrListing[];
-  // The listing is fetched every run anyway, so a cached PR takes its fields
-  // from it: a field added to the listing later reaches old entries for free.
+  if (listings.length >= limit) {
+    fail(`the listing hit its ${limit}-PR cap; pass a later --since`);
+  }
+
+  // A cached PR is final only while GitHub still lists it closed the same
+  // way: one reopened, pushed to and closed again has a new history. Every
+  // reused entry takes its fields from the fresh listing, so a field added to
+  // the listing later reaches old entries for free.
+  const byNumber = new Map(cached.map((p) => [p.number, p]));
+  const done = new Map<number, RawPr>();
   for (const listing of listings) {
-    const old = done.get(listing.number);
-    if (old !== undefined) done.set(listing.number, { ...old, ...listing });
+    const old = byNumber.get(listing.number);
+    if (
+      old !== undefined &&
+      listing.state !== "OPEN" &&
+      old.state === listing.state &&
+      old.closedAt === listing.closedAt
+    ) {
+      done.set(listing.number, { ...old, ...listing });
+    }
   }
   const todo = listings.filter((l) => !done.has(l.number));
   console.log(
@@ -145,6 +167,7 @@ async function runFetch(args: string[]): Promise<void> {
   );
 
   const fetched: RawPr[] = [];
+  const failed: number[] = [];
   let next = 0;
   const worker = async () => {
     while (next < todo.length) {
@@ -152,6 +175,7 @@ async function runFetch(args: string[]): Promise<void> {
       try {
         fetched.push(await fetchPr(repo, listing));
       } catch (error) {
+        failed.push(listing.number);
         console.error(`#${listing.number}: ${(error as Error).message}`);
       }
       if ((fetched.length + 1) % 25 === 0)
@@ -160,11 +184,16 @@ async function runFetch(args: string[]): Promise<void> {
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
 
+  // What was fetched is kept, so a re-run resumes; but a report over a set
+  // with holes skews every percentile, so the run still fails.
   const all = [...done.values(), ...fetched].sort(
     (a, b) => a.number - b.number,
   );
   writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`);
   console.log(`wrote ${all.length} PRs to ${file}`);
+  if (failed.length > 0) {
+    fail(`${failed.length} PRs failed to fetch; re-run fetch to resume`);
+  }
 }
 
 function runReport(args: string[]): void {
