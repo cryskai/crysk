@@ -74,6 +74,7 @@ bun run scripts/m6.ts run    # LIVE and the big one: 56 serial reviews, ~$174-37
 bun run scripts/martian-cal.ts plan|check|run|score   # Martian Cal.com slice (never --pr)
 bun run scripts/martian-judge.ts     # LIVE: Martian Surface A judge on existing runs
 bun run scripts/materiality-probe.ts plan|run|score   # materiality judge exam on known-answer anchors (plan/score $0, run LIVE, 176 opus spawns)
+bun run scripts/noise-baseline.ts plan|run|report      # share of posted store findings the materiality judge calls immaterial (plan/report $0, run LIVE; output stays outside the repo)
 bun scripts/sandbox.ts run <scenario...> --ref <ref>   # LIVE in juanmaagd/pr-hero-sandbox, on the route init set (claude: subscription quota, $0 cash)
 bun scripts/sandbox.ts init --ref <ref> [--route claude|opencode:<modelSnapshot>]   # route defaults to claude
 ```
