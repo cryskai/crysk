@@ -30,7 +30,10 @@ export type BoundaryTag =
   | "previous_finding"
   | "author_reply"
   | "comment_body"
-  | "triage_tag";
+  | "triage_tag"
+  | "pr_title"
+  | "review_comment"
+  | "code_window";
 
 // 8 hex characters: short enough to cost nothing in a prompt, wide enough
 // (2^32) that guessing it from inside attacker-authored content is not a
