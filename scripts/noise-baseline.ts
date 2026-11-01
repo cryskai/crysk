@@ -7,7 +7,8 @@
 // repo and triage tag. It is the line Stage 2's prompt changes are measured
 // against.
 //
-// "Posted" means: a PR-mode run (`runs.pr` set) in one of REPOS. Refuted
+// "Posted" means: a complete, non-failed PR-mode run (`runs.pr` set) in one of
+// REPOS — the only runs `post` publishes (src/commands/post.ts). Refuted
 // findings never reach the findings table. One item per (repo, PR, dedupe
 // key), so a defect re-posted at every head counts once.
 //
@@ -88,7 +89,8 @@ function loadItems(): NoiseItem[] {
                   WHERE t.run_id = f.run_id AND t.finding_id = f.finding_id
                   ORDER BY t.created_at DESC LIMIT 1) AS triageTag
            FROM findings f JOIN runs r ON r.id = f.run_id
-          WHERE r.pr IS NOT NULL AND r.repo_id IN (${placeholders})`,
+          WHERE r.pr IS NOT NULL AND r.repo_id IN (${placeholders})
+            AND r.run_status = 'complete' AND ifnull(r.session_failed, 0) = 0`,
       )
       .all(...REPOS) as PostedFindingRow[];
     return dedupePostedFindings(rows);
