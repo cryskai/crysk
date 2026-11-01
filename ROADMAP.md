@@ -86,8 +86,12 @@ Anthropic's "Solving code review at Anthropic" (claude.dev/blog, 2026-10-15) and
   (Anthropic: "any incidents are now an eval".)
 - **Noise metric:** per hunter, the share of findings triaged as fixed, wrong, intentional or did not
   matter, read from triage outcomes (the store's `finding_triage` table, plus the historical
-  verdicts kept read-only in `comparison_rows`).
-- **Clean-PR arm:** PRs with no known bug, to count pure false positives.
+  verdicts kept read-only in `comparison_rows`). **Done** (#446, #447): 24% of posted findings are
+  immaterial by an exam-validated judge. The noise is spread across hunters (largest cell: resilience
+  advisories, 9% of posted findings), so no single prompt is the cause.
+- **Clean-PR arm:** PRs with no known bug, to count pure false positives. **Proxy measured
+  (2026-11-01):** small and docs-only PRs are quiet (19 of 21 reviews of diffs of 100 lines or fewer
+  had no blocking finding), so a dedicated arm is not urgent.
 - **Loop metrics:** rounds to a green gate, and time from PR open to green.
 
 **Then the changes**, one variable each, measured against the Martian 50 baseline with a same-session
@@ -98,12 +102,23 @@ control, plus the incident eval:
    emit the standard directly. The findings schema is shared with the lab, so it is a coordinated bump.
 2. **Calibrated severity** (#19): today the hunter prompts forbid lowering severity, so two thirds of
    findings come out BLOCKER/CRITICAL and none SUGGESTION. Calibrate the criteria, not the temperature.
+   **Parked by measurement (2026-11-01):** the blocking findings are real, so lowering severity would
+   hide bugs, not fix a miscalibration. 48 of 52 blocking findings on re-reviews were judged material,
+   and #19's own check found 35 of 36 musive 🔴 findings corroborated by the refuter.
 3. **Empty is a valid answer:** the prompts say plainly that a review with no findings is a correct
-   result, not a failed one.
+   result, not a failed one. **Already true:** the reliability, logic, parity and lifecycle prompts say
+   it, a quarter of reviews end with no findings, and 12 of 21 reviews of diffs of 100 lines or fewer
+   found nothing.
 4. **Materiality rule:** a real defect that is not crucial is not posted, or goes to the summary. The
-   threshold is configurable.
+   threshold is configurable. **Done for blocking findings** (#448, live on this repo since #449).
+   **Open: WARNING advisories.** They reach neither the refuter nor the materiality judge, and the
+   hunter prompts say "you do not filter — a downstream refuter owns precision", so 70% of the
+   measured noise is advisories nothing checks. Sizing from existing verdicts: 0.73 WARNING advisories
+   per review (half of reviews have none, max 6); the judge calls 65 of 185 immaterial (35%), more
+   than half of all measured noise; about $0.011 per review on average and ~10 s on reviews that
+   have any. Hiding them never touches the gate. This is a pipeline change, not a prompt change.
 5. **Configurable strictness:** one setting decides what posts inline, what goes to the summary and
-   what blocks the gate.
+   what blocks the gate. **Partly done:** `post_min_severity` (#445) decides what posts.
 6. **Owner-written review guide per repo** (Anthropic): a `REVIEW.md` that says what counts as a
    failure, caps nits, lists paths to skip and asks for file:line evidence.
 7. **Depth by risk** (Anthropic): the admission risk picks the hunter set and effort, not only review or
@@ -111,9 +126,12 @@ control, plus the incident eval:
 8. **A shorter loop:**
    - a round cap (about 3), after which the author is asked to rethink rather than patch again
      (Anthropic; our own cap is 2 review rounds per PR today);
-   - re-reviews skip findings on code that was already there at the first pass (Anthropic: 59% of
-     repeat flags were old code);
-   - re-reviews look again only at what matters, and minor findings are not re-raised every round.
+   - ~~re-reviews skip findings on code that was already there at the first pass~~ and ~~minor
+     findings are not re-raised every round~~: **dropped by measurement (2026-11-01).** A re-review
+     already reads only the delta since the last review, so 2-6% of re-review findings sit on unchanged
+     lines (Anthropic measured 59%) and 3% re-raise an open advisory. The extra rounds come from real
+     bugs in the fixes: 85% of re-review findings are new findings on changed lines.
+   - a blocking prior the materiality gate demotes on a later head is released (#451).
 9. **Re-review keeps history:** a re-review adds to the thread instead of rewriting the posted comment,
    so what was said at each head stays traceable.
 10. **PR score as an acceptance gate:** a deterministic score computed over the final evidence, not
