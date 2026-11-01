@@ -1,0 +1,5 @@
+{
+  "post": true,
+  "post_min_severity": "warning",
+  "materiality_gate": true
+}
