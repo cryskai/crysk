@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { MaterialityVerdict } from "#compare/materiality";
 import type { Tier } from "#review/findings";
@@ -229,6 +230,20 @@ describe("bundled materiality prompt", () => {
     resolveEngineAssets().materialityPromptPath,
     "utf8",
   );
+
+  // The gate is only as good as the judge that was measured. These bytes
+  // passed the gate exam on 2026-11-01 (policy agreement 47/49 and 47/53,
+  // 0/33 blocking Martian bugs demoted, 0/5 injection anchors flipped; lab
+  // bench/METRICS.md). Editing the prompt makes it an unmeasured judge:
+  // re-run the exam, record it in the lab, then move this hash.
+  test("is the judge the gate exam measured", () => {
+    const sha = createHash("sha256")
+      .update(readFileSync(resolveEngineAssets().materialityPromptPath))
+      .digest("hex");
+    expect(sha).toBe(
+      "f684574fb9554db809d8bdd15ddbf5945b1b70c5a2b6d8475f6c18f99a3f855d",
+    );
+  });
 
   test("drops the intended-by-the-PR rule", () => {
     expect(prompt).not.toContain("Intended by the PR");

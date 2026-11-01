@@ -32,12 +32,14 @@ import {
   type CliOptions,
   createRunDir,
   emptyDiffMessage,
+  resolveMaterialityGate,
   resolveMaxConcurrentSteps,
   resolveSharedPrefix,
 } from "#review/preflight";
 import { estimateCost } from "#review/report";
 import {
   pipelineConsolidateInput,
+  pipelineMaterialityInput,
   pipelineScoutInput,
   pipelineSummarizerInput,
 } from "#review/route-preflight";
@@ -238,6 +240,7 @@ export async function review(options: CliOptions): Promise<number> {
     agentFiles,
     routingConfig: config.routing,
     summary,
+    materialityEnabled: resolveMaterialityGate(config),
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
@@ -355,6 +358,17 @@ export async function review(options: CliOptions): Promise<number> {
   // same signal and refuses to start another attempt. Two controllers would
   // leave the ceiling unable to stop the steps it is waiting on.
   const ceilingController = new AbortController();
+  // Local mode has no PR, so the materiality judge reads the reviewed head's
+  // commit subject as the title (S9). Only asked for when the gate is on, so
+  // a run with it off spawns exactly the processes it always did. A failed
+  // read leaves it absent and the pipeline renders its fallback.
+  let prTitle: string | undefined;
+  if (resolveMaterialityGate(config)) {
+    const subject = await git(repoRoot, ["log", "-1", "--format=%s", headSha]);
+    if (subject.ok && subject.stdout.trim() !== "") {
+      prTitle = subject.stdout.trim();
+    }
+  }
   let productionRuntime: ProductionRuntime | undefined;
   try {
     const prepared = await prepareRunnerForRoute({
@@ -395,6 +409,8 @@ export async function review(options: CliOptions): Promise<number> {
         ...pipelineSummarizerInput(summary),
         ...pipelineScoutInput(options),
         ...pipelineConsolidateInput(),
+        ...pipelineMaterialityInput(config),
+        ...(prTitle === undefined ? {} : { prTitle }),
         ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
         ...pipelineConfigInput(loaded),
         ...(routePlan === undefined ? {} : { routePlan }),

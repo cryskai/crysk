@@ -6,6 +6,7 @@ import {
   computeRouteFingerprint,
   createResolvedRoutePlan,
   freezeRoutePlan,
+  MATERIALITY_STEP_KEY,
   ModelRoutingError,
   parseLogicalIdentity,
   type ResolvedModelRoute,
@@ -13,6 +14,7 @@ import {
   type ResolvedStepRoute,
   type RoutingConfig,
   resolveLogicalModel,
+  resolveMaterialityJudgeRoute,
   resolveModelRoute,
   resolveStepRoute,
   spawnModelForClaudeCli,
@@ -1124,5 +1126,96 @@ describe("buildResolvedRoutePlan: the consolidate step", () => {
     expect(consolidate?.backend).toBe("opencode");
     expect(consolidate?.modelSnapshot).toBe("claude-sonnet-5-20250219");
     expect(consolidate).toEqual(step(plan, "scout")?.route);
+  });
+});
+
+describe("buildResolvedRoutePlan: the materiality judge step", () => {
+  const agents = [{ key: "reliability", role: "hunter", model: "sonnet" }];
+  const step = (plan: ResolvedRoutePlan, key: string) =>
+    plan.steps.find((s) => s.stepKey === key);
+
+  test("a claude-code opus route is resolved for the judge when enabled", () => {
+    const plan = buildResolvedRoutePlan({
+      agents,
+      consolidate: { defaultModel: "sonnet" },
+      materiality: true,
+    });
+    const judge = step(plan, MATERIALITY_STEP_KEY);
+    expect(judge?.role).toBe("other");
+    expect(judge?.route.backend).toBe("claude-code");
+    expect(judge?.logicalIdentity).toBe(
+      resolveStepRoute({ stepKey: "x", role: "other", specModel: "opus" })
+        .logicalIdentity,
+    );
+  });
+
+  test("--model never moves the judge off opus", () => {
+    const plan = buildResolvedRoutePlan({
+      agents,
+      cliModel: "sonnet",
+      consolidate: { defaultModel: "sonnet" },
+      materiality: true,
+    });
+    expect(step(plan, MATERIALITY_STEP_KEY)?.logicalIdentity).not.toBe(
+      step(plan, "consolidate")?.logicalIdentity,
+    );
+    expect(step(plan, MATERIALITY_STEP_KEY)?.route.modelSnapshot).toBe("opus");
+  });
+
+  test("off: no judge key, and the plan's fingerprint is today's", () => {
+    const without = buildResolvedRoutePlan({
+      agents,
+      consolidate: { defaultModel: "sonnet" },
+    });
+    expect(step(without, MATERIALITY_STEP_KEY)).toBeUndefined();
+    const withJudge = buildResolvedRoutePlan({
+      agents,
+      consolidate: { defaultModel: "sonnet" },
+      materiality: true,
+    });
+    expect(withJudge.routeFingerprint).not.toBe(without.routeFingerprint);
+    expect(
+      buildResolvedRoutePlan({
+        agents,
+        consolidate: { defaultModel: "sonnet" },
+      }).routeFingerprint,
+    ).toBe(without.routeFingerprint);
+  });
+
+  test("opus routed to OpenCode leaves the judge out of the plan", () => {
+    const routingConfig: RoutingConfig = {
+      mappings: [
+        {
+          logical: "opus",
+          backend: "opencode",
+          provider: "anthropic",
+          modelSnapshot: "claude-opus-5-20250219",
+        },
+      ],
+    };
+    const plan = buildResolvedRoutePlan({
+      agents,
+      routingConfig,
+      materiality: true,
+    });
+    expect(step(plan, MATERIALITY_STEP_KEY)).toBeUndefined();
+    expect(resolveMaterialityJudgeRoute(routingConfig)).toBeUndefined();
+  });
+
+  test("a judge route that cannot resolve stands the judge down, never throws", () => {
+    const routingConfig: RoutingConfig = {
+      mappings: [
+        {
+          logical: "opus",
+          backend: "claude-code",
+          provider: "anthropic",
+          disabled: true,
+        },
+      ],
+    };
+    expect(() =>
+      buildResolvedRoutePlan({ agents, routingConfig, materiality: true }),
+    ).not.toThrow();
+    expect(resolveMaterialityJudgeRoute(routingConfig)).toBeUndefined();
   });
 });

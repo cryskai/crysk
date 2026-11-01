@@ -1284,6 +1284,15 @@ function tierExplanationLines(finding: Finding): string[] {
   const isBlockerClass =
     finding.severity === "BLOCKER" || finding.severity === "CRITICAL";
   if (!isBlockerClass || finding.tier !== "advisory") return [];
+  // FIRST, ahead of the refuter text: a finding the materiality gate demoted
+  // may carry a `corroborated` verdict, and "the refuter returned
+  // corroborated" would explain nothing about why it is advisory.
+  if (finding.materiality?.label === "immaterial") {
+    return [
+      "⚖️ Demoted to advisory — not material under normal use: " +
+        materialityReason(finding.materiality.reason),
+    ];
+  }
   // `not_submitted` never reached the refuter, so "the refuter returned" it
   // would be false, and printing the engine's word here would contradict the
   // header, which says `refuter: unchecked` (refuterLabel).
@@ -1305,6 +1314,23 @@ function tierExplanationLines(finding: Finding): string[] {
     lines.push("   (real, but no live trigger today)");
   }
   return lines;
+}
+
+// The judge's reason is model text written about author-controlled input,
+// and it is posted. One line (a newline would end the list item and could
+// start a forged header line), capped, with HTML comment delimiters broken so
+// it can never open or close a marker the comment parsers read, and `@`
+// defused so it cannot notify anyone.
+const MATERIALITY_REASON_MAX = 280;
+
+function materialityReason(reason: string): string {
+  const flat = oneLine(reason)
+    .replaceAll("<!--", "<!‐‐")
+    .replaceAll("-->", "‐‐>")
+    .replaceAll("@", "@\u200b");
+  return flat.length <= MATERIALITY_REASON_MAX
+    ? flat
+    : `${flat.slice(0, MATERIALITY_REASON_MAX - 1).trimEnd()}…`;
 }
 
 // Item "Prompt to fix with AI" (Juanma's PR #2 feedback): a copy-pasteable

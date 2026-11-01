@@ -46,6 +46,7 @@ import type { buildPhaseBQueue, PreparedDiscovery } from "#rereview/prepare";
 import {
   type AgentsDirSource,
   type CliOptions,
+  resolveMaterialityGate,
   resolveMaxVerificationSteps,
 } from "#review/preflight";
 import type { ParsedAgent } from "#review/prompt-set";
@@ -213,6 +214,10 @@ export async function resolvePrPlanAndConfirm(params: {
     summarizerEnabled: params.summary.enabled && !params.skipDiscovery,
     scoutEnabled: params.options.scout && !params.skipDiscovery,
     consolidateEnabled: !params.skipDiscovery,
+    // Mirrors pipelineMaterialityInput in review-pr.ts: no judge step on a
+    // re-review that hunts nothing new.
+    materialityEnabled:
+      resolveMaterialityGate(params.config) && !params.skipDiscovery,
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;

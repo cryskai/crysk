@@ -517,6 +517,43 @@ export interface BuildRoutePlanInput {
     frontmatterModel?: string;
     defaultModel?: string;
   };
+  // The materiality judge (odd/tasks/materiality-gate.md S14). Present only
+  // when the gate is enabled, so a run with the gate off keeps its plan's step
+  // keys and fingerprint byte for byte.
+  readonly materiality?: true;
+}
+
+// The step key the materiality judge runs under in every route plan.
+export const MATERIALITY_STEP_KEY = "materiality";
+
+// The judge was measured on Claude opus through the Claude Code CLI; a judge on
+// any other model or transport is a different, unmeasured judge. So the model
+// is pinned (never `--model`, never the routing default model) and the route is
+// returned only when it lands on the claude-code backend.
+export const MATERIALITY_JUDGE_MODEL = "opus";
+
+// The judge's route, or undefined when it would not run the measured judge:
+// the routing config sends opus to another backend, or cannot resolve it at
+// all (a disabled route, an unmapped snapshot). Never throws: the gate is
+// optional and fails open toward blocking, so a route it cannot use must make
+// the stage stand down, never kill the run. Omitting a non-claude route from
+// the plan also keeps route admission from gating the run on a step that will
+// never spawn.
+export function resolveMaterialityJudgeRoute(
+  routingConfig: RoutingConfig | undefined,
+): ResolvedStepRoute | undefined {
+  let step: ResolvedStepRoute;
+  try {
+    step = resolveStepRoute({
+      stepKey: MATERIALITY_STEP_KEY,
+      role: "other",
+      specModel: MATERIALITY_JUDGE_MODEL,
+      routingConfig,
+    });
+  } catch {
+    return undefined;
+  }
+  return step.route.backend === "claude-code" ? step : undefined;
 }
 
 export function buildResolvedRoutePlan(
@@ -570,6 +607,11 @@ export function buildResolvedRoutePlan(
         routingConfig: input.routingConfig,
       }),
     );
+  }
+  if (input.materiality) {
+    // No `cliModel` on purpose: `--model sonnet` must not move the judge.
+    const judge = resolveMaterialityJudgeRoute(input.routingConfig);
+    if (judge !== undefined) stepRoutes.push(judge);
   }
   return createResolvedRoutePlan(stepRoutes);
 }
