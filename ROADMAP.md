@@ -33,8 +33,8 @@ measured number.
 | 0 | 0.2.5 | Ship what is merged | none (quiet release) |
 | 1 | 0.3.0 | Rebrand + launch | launch video, new site, benchmark story |
 | 2 | 0.4 | Quieter, faster reviews | update post with a new benchmark |
-| 3 | 0.5 | Model squads | update post: pick your models |
-| 4 | 1.0 | Platform: dashboard + GitHub App | product launch |
+| 3 | 0.5 | Platform: GitHub App, dashboard, token broker | product launch |
+| 4 | 1.0 | Model squads | update post: pick your models |
 
 Evals and hygiene run continuously alongside every stage (see the end of this file). Version numbers
 are the maintainer's decision at release time; the table records intent.
@@ -86,8 +86,12 @@ Anthropic's "Solving code review at Anthropic" (claude.dev/blog, 2026-10-15) and
   (Anthropic: "any incidents are now an eval".)
 - **Noise metric:** per hunter, the share of findings triaged as fixed, wrong, intentional or did not
   matter, read from triage outcomes (the store's `finding_triage` table, plus the historical
-  verdicts kept read-only in `comparison_rows`).
-- **Clean-PR arm:** PRs with no known bug, to count pure false positives.
+  verdicts kept read-only in `comparison_rows`). **Done** (#446, #447): 24% of posted findings are
+  immaterial by an exam-validated judge. The noise is spread across hunters (largest cell: resilience
+  advisories, 9% of posted findings), so no single prompt is the cause.
+- **Clean-PR arm:** PRs with no known bug, to count pure false positives. **Proxy measured
+  (2026-11-01):** small and docs-only PRs are quiet (19 of 21 reviews of diffs of 100 lines or fewer
+  had no blocking finding), so a dedicated arm is not urgent.
 - **Loop metrics:** rounds to a green gate, and time from PR open to green.
 
 **Then the changes**, one variable each, measured against the Martian 50 baseline with a same-session
@@ -98,12 +102,23 @@ control, plus the incident eval:
    emit the standard directly. The findings schema is shared with the lab, so it is a coordinated bump.
 2. **Calibrated severity** (#19): today the hunter prompts forbid lowering severity, so two thirds of
    findings come out BLOCKER/CRITICAL and none SUGGESTION. Calibrate the criteria, not the temperature.
+   **Parked by measurement (2026-11-01):** the blocking findings are real, so lowering severity would
+   hide bugs, not fix a miscalibration. 48 of 52 blocking findings on re-reviews were judged material,
+   and #19's own check found 35 of 36 musive 🔴 findings corroborated by the refuter.
 3. **Empty is a valid answer:** the prompts say plainly that a review with no findings is a correct
-   result, not a failed one.
+   result, not a failed one. **Already true:** the reliability, logic, parity and lifecycle prompts say
+   it, a quarter of reviews end with no findings, and 12 of 21 reviews of diffs of 100 lines or fewer
+   found nothing.
 4. **Materiality rule:** a real defect that is not crucial is not posted, or goes to the summary. The
-   threshold is configurable.
+   threshold is configurable. **Done for blocking findings** (#448, live on this repo since #449).
+   **Open: WARNING advisories.** They reach neither the refuter nor the materiality judge, and the
+   hunter prompts say "you do not filter — a downstream refuter owns precision", so 70% of the
+   measured noise is advisories nothing checks. Sizing from existing verdicts: 0.73 WARNING advisories
+   per review (half of reviews have none, max 6); the judge calls 65 of 185 immaterial (35%), more
+   than half of all measured noise; about $0.011 per review on average and ~10 s on reviews that
+   have any. Hiding them never touches the gate. This is a pipeline change, not a prompt change.
 5. **Configurable strictness:** one setting decides what posts inline, what goes to the summary and
-   what blocks the gate.
+   what blocks the gate. **Partly done:** `post_min_severity` (#445) decides what posts.
 6. **Owner-written review guide per repo** (Anthropic): a `REVIEW.md` that says what counts as a
    failure, caps nits, lists paths to skip and asks for file:line evidence.
 7. **Depth by risk** (Anthropic): the admission risk picks the hunter set and effort, not only review or
@@ -111,9 +126,12 @@ control, plus the incident eval:
 8. **A shorter loop:**
    - a round cap (about 3), after which the author is asked to rethink rather than patch again
      (Anthropic; our own cap is 2 review rounds per PR today);
-   - re-reviews skip findings on code that was already there at the first pass (Anthropic: 59% of
-     repeat flags were old code);
-   - re-reviews look again only at what matters, and minor findings are not re-raised every round.
+   - ~~re-reviews skip findings on code that was already there at the first pass~~ and ~~minor
+     findings are not re-raised every round~~: **dropped by measurement (2026-11-01).** A re-review
+     already reads only the delta since the last review, so 2-6% of re-review findings sit on unchanged
+     lines (Anthropic measured 59%) and 3% re-raise an open advisory. The extra rounds come from real
+     bugs in the fixes: 85% of re-review findings are new findings on changed lines.
+   - a blocking prior the materiality gate demotes on a later head is released (#451).
 9. **Re-review keeps history:** a re-review adds to the thread instead of rewriting the posted comment,
    so what was said at each head stays traceable.
 10. **PR score as an acceptance gate:** a deterministic score computed over the final evidence, not
@@ -125,12 +143,48 @@ control, plus the incident eval:
 **Done when:** precision and the noise metric improve with H+C recall within noise of 52/66, rounds to
 green and time to green go down, and the new numbers are published.
 
-## Stage 3 — Model squads (0.5)
+## Stage 3 — Platform (0.5)
+
+The product: one place to configure everything and see the state of every review, kept cheap.
+Moved ahead of model squads on 2026-10-31: a squad that cannot run on the user's own subscription
+is half a feature, and subscriptions other than Claude's need this stage's backend (see the token
+broker below).
+
+- **GitHub App:** one-click install and repo selection.
+- **Reviews keep running on the user's own CI runner**, with their model and their key or
+  subscription. The App and its hosted backend coordinate (webhooks, configuration, state); they do
+  not run reviews or pay for models. This keeps the "no extra cost on your plan" story and is the model
+  Pullfrog (github.com/pullfrog/pullfrog) runs in production. Decided 2026-10-31.
+- **Token broker:** a hosted store for subscription credentials whose refresh token rotates on every
+  use (ChatGPT/Codex today, possibly others). GitHub Actions secrets cannot hold them: a job cannot
+  write a secret back with its own token, so the stored chain goes stale after the first refresh.
+  - The action authenticates with a GitHub OIDC token (`id-token: write`), so no Crysk key sits in
+    the user's secrets.
+  - At run start the broker takes a per-credential lock, refreshes if needed and hands out a fresh
+    `auth.json`. The lock is required: two concurrent runs refreshing the same token break the chain.
+  - The action's `post:` hook, which runs even on cancel or timeout, writes a rotated token back.
+  - A credential OpenAI rejects is latched as dead and the user is told to re-run the login, instead
+    of retrying it on every run.
+  - Enrolment: `crysk auth codex` runs `codex login` against a temporary `CODEX_HOME` with
+    `cli_auth_credentials_store = "file"`, then uploads the result.
+  - Credentials are encrypted at rest. Holding third-party credentials raises the security bar for
+    the whole backend.
+- **Dashboard:** findings, triage, scores and cost per repo and per PR, on top of the existing store
+  and server (`src/store/`, `src/server/`).
+- **Persistent storage:** run history that survives CI runners (#157), backend and provider columns for
+  cost attribution (#139), home hardening (#35), observability (#23).
+- **Open question, answer before building the broker:** whether OpenAI's terms allow a ChatGPT
+  subscription to be used from CI automation.
+
+**Done when:** a team installs the App, reviews run on their runner, the dashboard shows their state,
+and a ChatGPT subscription credential survives consecutive and concurrent runs.
+
+## Stage 4 — Model squads (1.0)
 
 Presets the user picks with one setting, each with its own measured number, like today's Claude default:
 
 - **Claude** (default): Sonnet hunters, Opus refuter.
-- **OpenAI** models.
+- **OpenAI** models, on an API key or, through Stage 3's token broker, a ChatGPT subscription.
 - **Low-cost** models (the DeepSeek/GLM family already runs through OpenCode).
 - Mixed providers in one review (#195), reasoning effort across backends (#207), and the OpenCode
   coverage gaps (#142).
@@ -138,22 +192,6 @@ Presets the user picks with one setting, each with its own measured number, like
 Each squad is a Martian arm plus the incident eval, and the site shows quality and cost per squad.
 
 **Done when:** at least three squads ship with published numbers and a one-line way to choose.
-
-## Stage 4 — Platform (1.0)
-
-The product: one place to configure everything and see the state of every review, kept cheap.
-
-- **Dashboard:** findings, triage, scores and cost per repo and per PR, on top of the existing store
-  and server (`src/store/`, `src/server/`).
-- **Persistent storage:** run history that survives CI runners (#157), backend and provider columns for
-  cost attribution (#139), home hardening (#35), observability (#23).
-- **GitHub App:** one-click install and repo selection.
-- **Open design question:** a GitHub App needs a hosted webhook backend. Either reviews run hosted (we
-  pay compute and models) or the App coordinates while reviews still run on the user's own CI runner
-  with their model and key (cheaper to operate, and it keeps the "no extra cost on your plan" story).
-  Decide at the start of this stage.
-
-**Done when:** a team installs the App, reviews run, and the dashboard shows their state.
 
 ## Continuous
 
