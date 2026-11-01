@@ -549,6 +549,10 @@ const CARRIED_BLOCKING_GATE = /^crysk: \d+ blocking finding\(s\) carried from /;
 const UNVERIFIED_FIXES_GATE =
   /^crysk: \d+ answered finding\(s\), fixes unverified \(/;
 
+// The green a skip writes when every changed file is excluded (admission.ts NOTHING_TO_REVIEW_DESCRIPTION, #317).
+const NOTHING_TO_REVIEW_GATE =
+  /^crysk: nothing to review — every changed file is excluded$/;
+
 // A blocking finding whose newest reply is a dismissal the CI adjudicator upheld on this head.
 function upheldDismissal(a: AnalyzedFinding): boolean {
   return (
@@ -632,6 +636,16 @@ function decideNext(
       return {
         next_action: "done",
         reason: `The gate is green on answered findings no review verified (${gate.description}); the PR is ready to merge, or comment ${commandHint(REVIEW_COMMAND, "")} for another review.`,
+      };
+    }
+    // #317: no review ran, so the reason must not read as a review that passed.
+    if (
+      NOTHING_TO_REVIEW_GATE.test(canonicalStatusText(gate.description ?? ""))
+    ) {
+      return {
+        next_action: "done",
+        reason:
+          "Every changed file on this head is excluded from review, so there was nothing to review; nothing is owed.",
       };
     }
     return {

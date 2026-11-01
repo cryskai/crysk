@@ -164,7 +164,7 @@ export const SKIP_BUDGET_COMMENT_MARKER = `${MARKER_OPEN}skip-budget -->`;
 export const SKIP_COVERAGE_COMMENT_MARKER = `${MARKER_OPEN}skip-coverage -->`;
 export const MANUAL_REQUIRED_COMMENT_MARKER = `${MARKER_OPEN}manual-required -->`;
 // Never posted (planCiExcludedSkip has no comment); kept so the plan shape stays whole.
-export const SKIP_EXCLUDED_COMMENT_MARKER = `${MARKER_OPEN}skip-excluded -->`;
+const SKIP_EXCLUDED_COMMENT_MARKER = `${MARKER_OPEN}skip-excluded -->`;
 
 // Same register as ci/reporter.ts's `skipSizeLines`/`skipBudgetLines` and
 // project rule 4 (assistant posture): a gate skip is a courteous notice

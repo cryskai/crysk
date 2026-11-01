@@ -572,7 +572,7 @@ function newestCarriedVerdict(statuses: readonly CommitStatusFact[]) {
   );
 }
 
-const NOTHING_TO_REVIEW_DESCRIPTION = clipStatusDescription(
+export const NOTHING_TO_REVIEW_DESCRIPTION = clipStatusDescription(
   `${STATUS_CONTEXT}: nothing to review — every changed file is excluded`,
 );
 
