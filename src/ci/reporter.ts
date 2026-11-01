@@ -31,10 +31,12 @@
 // multiple output keys written across several tool calls). An overwrite here
 // would silently destroy an earlier step's contribution to the same file.
 import { appendFile } from "node:fs/promises";
+import { listPaths } from "#git/refs";
 import type { CiMode } from "#pr/preflight";
 import type { Finding, Severity } from "#review/findings";
 import {
   blobUrl,
+  code,
   formatElapsed,
   type PrCommentDelta,
   severityEmoji,
@@ -353,7 +355,9 @@ function skipExcludedLines(data: CiSkipExcludedSummary): string[] {
     "**Reason:** every changed file is excluded from review by the ignore " +
       "rules (`.cryskignore` and the shipped defaults).",
     "",
-    ...data.excludedPaths.map((p) => `- \`${p}\``),
+    // Capped like every other path list (listPaths), and each path through
+    // code(): the paths are the author's, and a backtick would break the span.
+    listPaths(data.excludedPaths.map(code)),
     "",
     "Nothing was spawned and nothing was spent.",
   ];

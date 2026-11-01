@@ -786,4 +786,29 @@ describe("planCiExcludedSkip", () => {
     expect(plan.summaryMarkdown).not.toContain("found nothing");
     expect(plan.summaryMarkdown).not.toContain("\x1b");
   });
+
+  test("the summary lists at most five paths and counts the rest, like every other path list", () => {
+    const excludedPaths = Array.from(
+      { length: 8 },
+      (_, i) => `gen/file-${i}.lock`,
+    );
+    const plan = planCiExcludedSkip({
+      prNumber: 7,
+      excludedPaths,
+      ciMode: "gate",
+    });
+    expect(plan.summaryMarkdown).toContain("gen/file-4.lock");
+    expect(plan.summaryMarkdown).not.toContain("gen/file-5.lock");
+    expect(plan.summaryMarkdown).toContain("+3 more");
+  });
+
+  test("a backtick in an author's path cannot break out of its code span", () => {
+    const plan = planCiExcludedSkip({
+      prNumber: 7,
+      excludedPaths: ["weird`name.lock"],
+      ciMode: "gate",
+    });
+    expect(plan.summaryMarkdown).toContain("`weird'name.lock`");
+    expect(plan.summaryMarkdown).not.toContain("weird`name");
+  });
 });

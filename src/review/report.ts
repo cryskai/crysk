@@ -1796,7 +1796,7 @@ function commentDisclaimer(ciMode: CiMode): string {
 // Hunter-authored text lands inside code spans and list items. A stray
 // backtick in a path or proof_ref would break out of its span and mangle
 // every line after it, so spans are built here and never by hand.
-function code(text: string): string {
+export function code(text: string): string {
   return `\`${oneLine(text).replaceAll("`", "'")}\``;
 }
 
