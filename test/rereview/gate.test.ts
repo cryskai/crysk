@@ -9,6 +9,7 @@ import {
   assembleLive,
   type GateRow,
   type GateSurvivor,
+  materialityReleasedIds,
   parseStateBlock,
   renderStateBlock,
   unresolvedBlockingCount,
@@ -32,6 +33,7 @@ function row(id: string, over: Partial<GateRow> = {}): GateRow {
     tier: "blocking",
     locs: ["src/app.ts:10"],
     status: "carried",
+    claim: `the cached width is scaled twice (${id})`,
     ...over,
   };
 }
@@ -205,6 +207,160 @@ describe("unresolvedBlockingCount — an advisory survivor never clears a blocki
         [row("R001", { status: "re-tiered" })],
       ),
     ).toBe(1);
+  });
+});
+
+// A survivor the materiality gate demoted from blocking: advisory, carrying the
+// judge's immaterial verdict, exactly as doc.findings holds it.
+function demoted(line: number, path = "src/app.ts"): GateSurvivor {
+  return {
+    ...survivor(line, "advisory", path),
+    materiality: { label: "immaterial", reason: "needs a pathological input" },
+  };
+}
+
+describe("unresolvedBlockingCount — a materiality-demoted survivor releases its blocking prior", () => {
+  test("a blocking prior re-found and demoted by the materiality gate no longer counts", () => {
+    expect(
+      unresolvedBlockingCount(
+        [demoted(10)],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(0);
+  });
+
+  test("a demoted survivor releases one blocking prior only: a second at the same spot still counts", () => {
+    expect(
+      unresolvedBlockingCount(
+        [demoted(10)],
+        [
+          row("R001", { status: "carried" }),
+          row("R002", { status: "carried" }),
+        ],
+      ),
+    ).toBe(1);
+  });
+
+  test("a demoted survivor never releases an unrecoverable prior (fail closed)", () => {
+    expect(
+      unresolvedBlockingCount(
+        [demoted(10)],
+        [row("R001", { tier: "unrecoverable", status: "carried" })],
+      ),
+    ).toBe(1);
+  });
+
+  test("an advisory survivor with a material verdict does not release the prior", () => {
+    expect(
+      unresolvedBlockingCount(
+        [
+          {
+            ...survivor(10, "advisory"),
+            materiality: { label: "material", reason: "reachable" },
+          },
+        ],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(1);
+  });
+
+  test("a demoted survivor on another file does not release the prior", () => {
+    expect(
+      unresolvedBlockingCount(
+        [demoted(10, "src/other.ts")],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(1);
+  });
+
+  test("a prior the materiality safety guard protects is never released, even by a demoted survivor at its spot", () => {
+    // The guard read only the survivor's claim. The window can pair it with a
+    // different prior, and this one names a leaked session token.
+    const rows = [
+      row("R001", {
+        claim: "the session token is written to the debug log on every request",
+      }),
+    ];
+    expect(unresolvedBlockingCount([demoted(10)], rows)).toBe(1);
+    expect(materialityReleasedIds([demoted(10)], rows)).toEqual([]);
+  });
+
+  test("a prior whose path the safety guard protects is never released", () => {
+    const rows = [row("R001", { locs: ["src/auth/session.ts:10"] })];
+    expect(
+      unresolvedBlockingCount([demoted(10, "src/auth/session.ts")], rows),
+    ).toBe(1);
+  });
+
+  test("a prior with no known claim is never released (fail closed)", () => {
+    const rows = [row("R001", { claim: undefined })];
+    expect(unresolvedBlockingCount([demoted(10)], rows)).toBe(1);
+  });
+
+  test("a prior whose claim is blank is never released: the codebase writes an unknown claim as an empty string", () => {
+    for (const claim of ["", "   "]) {
+      const rows = [row("R001", { claim })];
+      expect(unresolvedBlockingCount([demoted(10)], rows)).toBe(1);
+    }
+  });
+
+  test("blocking survivors pair first, so a demoted survivor cannot take the row an unrecoverable prior relies on", () => {
+    // The blocking survivor matches both rows and prefers the blocking one. If
+    // the demoted survivor went first it would take that row, push the
+    // blocking survivor onto the unrecoverable row, and the count would drop.
+    expect(
+      unresolvedBlockingCount(
+        [demoted(10), survivor(10, "blocking")],
+        [
+          row("R001", { status: "carried" }),
+          row("R002", { tier: "unrecoverable", status: "carried" }),
+        ],
+      ),
+    ).toBe(2);
+  });
+});
+
+describe("materialityReleasedIds — the ids the count released, for the state merge", () => {
+  test("names the blocking prior a demoted survivor released", () => {
+    expect(
+      materialityReleasedIds(
+        [demoted(10)],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toEqual(["R001"]);
+  });
+
+  test("names nothing for a plain advisory survivor, or a prior a blocking survivor carries", () => {
+    expect(
+      materialityReleasedIds(
+        [survivor(10, "advisory"), survivor(30, "blocking")],
+        [
+          row("R001", { status: "carried" }),
+          row("R002", { status: "carried", locs: ["src/app.ts:30"] }),
+        ],
+      ),
+    ).toEqual([]);
+  });
+
+  test("skips a ci-dismissed prior the count skips, and names the carried one beside it", () => {
+    // The state merge sees the ci-dismissed row as suppressed. Pairing again
+    // there would take it first and leave the carried row blocking, while the
+    // count already released the carried one.
+    const rows = [
+      row("R001", { status: "ci-dismissed" }),
+      row("R002", { status: "carried" }),
+    ];
+    expect(unresolvedBlockingCount([demoted(10)], rows)).toBe(0);
+    expect(materialityReleasedIds([demoted(10)], rows)).toEqual(["R002"]);
+  });
+
+  test("names a returned prior the count released, even though the state no longer holds it", () => {
+    const rows = [
+      row("R001", { status: "returned" }),
+      row("R002", { status: "carried" }),
+    ];
+    expect(unresolvedBlockingCount([demoted(10)], rows)).toBe(1);
+    expect(materialityReleasedIds([demoted(10)], rows)).toEqual(["R001"]);
   });
 });
 

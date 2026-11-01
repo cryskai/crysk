@@ -3168,6 +3168,12 @@ export async function postInlineFindings(input: {
             ...(framing.resolved_ids ?? []),
             ...(framing.worsened ?? []).map((w) => w.priorId),
           ],
+          // The priors this run's gate count released through a materiality
+          // demotion, recorded on the rereview block by the pipeline, so the
+          // state the next run reads agrees with this run's count.
+          ...(input.rereview?.materiality_released_ids === undefined
+            ? {}
+            : { releasedIds: input.rereview.materiality_released_ids }),
           fresh: freshFindings,
           stateBudget,
         });

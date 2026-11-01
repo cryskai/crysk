@@ -1117,6 +1117,30 @@ describe("F007 — readRereviewProvenance", () => {
     expect(readRereviewProvenance({ steps: [] })).toEqual({ kind: "absent" });
   });
 
+  test("materiality_released_ids reads back, and stays absent when the block has none", () => {
+    const withIds = readRereviewProvenance({
+      rereview: block({ materiality_released_ids: ["R001"] }),
+    });
+    expect(
+      withIds.kind === "ok" && withIds.rereview.materiality_released_ids,
+    ).toEqual(["R001"]);
+    const without = readRereviewProvenance({ rereview: block() });
+    expect(
+      without.kind === "ok" && "materiality_released_ids" in without.rereview,
+    ).toBe(false);
+  });
+
+  test("a materiality_released_ids that is not a list of strings is invalid", () => {
+    expect(
+      readRereviewProvenance({
+        rereview: block({ materiality_released_ids: [1] }),
+      }),
+    ).toEqual({
+      kind: "invalid",
+      problem: "rereview.materiality_released_ids",
+    });
+  });
+
   test("a complete block parses, and the optional counters default to zero", () => {
     const read = readRereviewProvenance({ rereview: block() });
     expect(read.kind).toBe("ok");

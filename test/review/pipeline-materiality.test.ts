@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
+import type { PriorRecord } from "#rereview/classify";
+import type { RereviewProvenance } from "#rereview/prepare";
 import type { DraftFinding, HunterDraft } from "#review/drafts";
 import {
   mergeRunEnvelope,
@@ -980,5 +982,96 @@ describe("materiality gate: route and ceiling (S14, S5)", () => {
       status: "ceiling",
       judged: 0,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The re-review release (rereview/state.ts materialityReleasedIds): a prior
+// this run re-finds and demotes is recorded on the rereview block, the object
+// the posting path reads and the block post --from reads back from pipeline.json.
+// ---------------------------------------------------------------------------
+
+describe("materiality gate: a re-review records the priors it released", () => {
+  function rereviewBlock(): RereviewProvenance {
+    return {
+      case: "C",
+      last_reviewed_head: "1".repeat(40),
+      last_head_source: "summary_marker",
+      discovery_range: `${"1".repeat(40)}..${"2".repeat(40)}`,
+      discovery_restricted: true,
+      discovery_skipped_empty_delta: false,
+      prior_findings: 1,
+      settled_deterministically: 1,
+      verified: 0,
+      verification_capped: 0,
+      verification_triggers: {
+        applied: 0,
+        touched: 0,
+        overlap: 0,
+        verify_all: 0,
+      },
+      live: [],
+      resolved_verified: 0,
+      returned: 0,
+      re_tiered: 0,
+    };
+  }
+
+  function priorAtSpot(claim: string): PriorRecord {
+    return {
+      id: "R001",
+      sev: "BLOCKER",
+      tier: "blocking",
+      channel: "inline",
+      locs: ["src/app.ts:10"],
+      claim,
+      triage: null,
+      newThreadReply: false,
+    };
+  }
+
+  async function rereviewRun(priorClaim: string) {
+    const rereview = rereviewBlock();
+    const input = await makeInput({
+      ...GATE_ON,
+      rereview,
+      phaseB: {
+        priors: [priorAtSpot(priorClaim)],
+        settled: [
+          {
+            id: "R001",
+            status: "carried",
+            locs: ["src/app.ts:10"],
+            renamed: false,
+          },
+        ],
+      },
+    });
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("immaterial")),
+    });
+    const result = await runPipeline(input, { runner });
+    const plan = (await Bun.file(
+      path.join(input.runDir, "pipeline.json"),
+    ).json()) as { rereview?: { materiality_released_ids?: string[] } };
+    return { rereview, result, plan };
+  }
+
+  test("a blocking prior re-found and demoted is named on the rereview block and in pipeline.json", async () => {
+    const { rereview, result, plan } = await rereviewRun(CLAIMS.exporter);
+    expect(result.skillOutput.findings.map((f) => f.tier)).toEqual([
+      "advisory",
+    ]);
+    expect(rereview.materiality_released_ids).toEqual(["R001"]);
+    expect(plan.rereview?.materiality_released_ids).toEqual(["R001"]);
+  });
+
+  test("a prior the safety guard protects is not released, and the field stays absent", async () => {
+    const { rereview, plan } = await rereviewRun(CLAIMS.protected);
+    expect("materiality_released_ids" in rereview).toBe(false);
+    expect(plan.rereview && "materiality_released_ids" in plan.rereview).toBe(
+      false,
+    );
   });
 });
