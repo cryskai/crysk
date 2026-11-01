@@ -28,6 +28,9 @@
 //   bun run scripts/materiality-probe.ts plan
 //   bun run scripts/materiality-probe.ts run [--out <dir>] [--concurrency <n>]
 //   bun run scripts/materiality-probe.ts score <results.json>
+//
+// `run` checkpoints every judgment to runs.partial.json next to results.json;
+// `score runs.partial.json` rescores an interrupted run.
 
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
@@ -152,7 +155,9 @@ async function judgeOne(
     // actually runs in.
     const authority = await resolveRunnerAuthority({ workspaceRoot: tmp });
     if (authority.error !== undefined) {
-      fail(`execution authority unavailable: ${authority.error}`);
+      // Thrown, not fail(): the worker records it as this claim's error, so
+      // one bad spawn never discards the judgments already paid for.
+      throw new Error(`execution authority unavailable: ${authority.error}`);
     }
     const result = await new ClaudeCodeRunner(authority.runnerOptions).run({
       name: `materiality-${anchor.id}-${replicate}`,
@@ -213,6 +218,7 @@ async function run(args: string[]): Promise<void> {
     path.join(homedir(), "Desktop", "materiality-probe", stamp);
   await mkdir(outDir, { recursive: true });
   const outPath = path.join(outDir, "results.json");
+  const partialPath = path.join(outDir, "runs.partial.json");
 
   for (const line of describeAnchors(anchors, jobs)) console.log(line);
   console.log(`writing ${outPath}`);
@@ -229,9 +235,28 @@ async function run(args: string[]): Promise<void> {
       if (job === undefined) break;
       const anchor = byId.get(job.anchorId);
       if (anchor === undefined) continue;
-      const out = await judgeOne(anchor, job.replicate);
+      let out: { run: JudgeRun; cost: number };
+      try {
+        out = await judgeOne(anchor, job.replicate);
+      } catch (error) {
+        out = {
+          run: {
+            anchorId: anchor.id,
+            replicate: job.replicate,
+            label: null,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          cost: 0,
+        };
+      }
       runs.push(out.run);
       cost += out.cost;
+      // Checkpoint after every judgment, so a killed run keeps what it paid
+      // for. Sync on purpose: concurrent workers never interleave a write.
+      writeFileSync(
+        partialPath,
+        `${JSON.stringify({ judge_system_sha256: judgeSystemSha256(), anchors, runs }, null, 2)}\n`,
+      );
       const mark =
         out.run.label === null
           ? "ERR"
