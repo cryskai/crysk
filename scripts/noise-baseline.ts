@@ -43,6 +43,13 @@ const REPOS = [
   "github.com/juanmaagd/supermarket-pro",
 ];
 
+// Where a store repo's pull requests live now. pr-hero's PRs moved with the
+// repo to cryskai/crysk (same numbers); juanmaagd/pr-hero is a tags-and-
+// releases mirror whose API answers 404 for them.
+const PR_HOME: Record<string, string> = {
+  "github.com/juanmaagd/pr-hero": "cryskai/crysk",
+};
+
 interface Judgment {
   key: string;
   label: MaterialityLabel | null;
@@ -98,7 +105,7 @@ async function prTitle(
   const key = `${repo}#${pr}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
-  const slug = repo.replace(/^github\.com\//, "");
+  const slug = PR_HOME[repo] ?? repo.replace(/^github\.com\//, "");
   const proc = Bun.spawn(
     ["gh", "api", `repos/${slug}/pulls/${pr}`, "--jq", ".title"],
     { stdout: "pipe", stderr: "pipe" },
