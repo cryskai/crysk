@@ -32,34 +32,28 @@
 // `run` checkpoints every judgment to runs.partial.json next to results.json;
 // `score runs.partial.json` rescores an interrupted run.
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { MartianGoldenPr } from "#compare/martian-adapter";
 import {
   type Anchor,
   type ExamScore,
   goldenAnchors,
-  JUDGE_SYSTEM,
   type JudgeRun,
   judgeSystemSha256,
   PASS_BAR,
   type PlantedAnchor,
-  parseJudgeVerdict,
   plantedAnchors,
-  renderJudgePrompt,
   scoreExam,
   stabilitySubset,
 } from "#compare/materiality";
-import { defaultEffortForRole } from "#model/catalog";
-import { ClaudeCodeRunner } from "#review/step-runner";
-import { resolveRunnerAuthority } from "../src/runner-authority";
+import { JUDGE_MODEL, judgeClaim } from "./materiality-spawn";
 
 const ROOT = path.join(import.meta.dir, "..");
 const BENCH = path.join(ROOT, "docs", "benchmarks");
 const CORPORA = ["cal", "discourse", "grafana", "keycloak", "sentry"];
-const JUDGE_MODEL = "opus";
 const STABILITY_PER_LABEL = 15;
 const REPLICATES = 3;
 
@@ -144,60 +138,15 @@ async function judgeOne(
   anchor: Anchor,
   replicate: number,
 ): Promise<{ run: JudgeRun; cost: number }> {
-  const tmp = mkdtempSync(path.join(tmpdir(), "materiality-judge-"));
-  try {
-    const systemPromptPath = path.join(tmp, "system.md");
-    const mcpConfigPath = path.join(tmp, "mcp.json");
-    writeFileSync(systemPromptPath, JUDGE_SYSTEM);
-    writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
-    chmodSync(systemPromptPath, 0o600);
-    // Re-resolved per spawn: workspaceRoot must name the tmp dir this judge
-    // actually runs in.
-    const authority = await resolveRunnerAuthority({ workspaceRoot: tmp });
-    if (authority.error !== undefined) {
-      // Thrown, not fail(): the worker records it as this claim's error, so
-      // one bad spawn never discards the judgments already paid for.
-      throw new Error(`execution authority unavailable: ${authority.error}`);
-    }
-    const result = await new ClaudeCodeRunner(authority.runnerOptions).run({
-      name: `materiality-${anchor.id}-${replicate}`,
-      systemPromptPath,
-      prompt: renderJudgePrompt(anchor.prTitle, anchor.claim),
-      tools: [],
-      mcpConfigPath,
-      model: JUDGE_MODEL,
-      effort: defaultEffortForRole("other"),
-      cwd: tmp,
-      outPath: path.join(tmp, "out.json"),
-      timeoutMs: 3 * 60 * 1000,
-      maxAttempts: 2,
-      parse: parseJudgeVerdict,
-    });
-    const cost = result.usage.cost_usd_est;
-    if (result.status !== "ok" || result.output === undefined) {
-      return {
-        run: {
-          anchorId: anchor.id,
-          replicate,
-          label: null,
-          error: result.stderrTail.slice(-300),
-        },
-        cost,
-      };
-    }
-    const verdict = result.output as ReturnType<typeof parseJudgeVerdict>;
-    return {
-      run: {
-        anchorId: anchor.id,
-        replicate,
-        label: verdict.label,
-        reason: verdict.reason,
-      },
-      cost,
-    };
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+  const out = await judgeClaim({
+    name: `materiality-${anchor.id}-${replicate}`,
+    prTitle: anchor.prTitle,
+    claim: anchor.claim,
+  });
+  const run: JudgeRun = { anchorId: anchor.id, replicate, label: out.label };
+  if (out.reason !== undefined) run.reason = out.reason;
+  if (out.error !== undefined) run.error = out.error;
+  return { run, cost: out.cost };
 }
 
 function flag(args: string[], name: string): string | undefined {
