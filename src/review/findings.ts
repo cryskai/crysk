@@ -82,6 +82,11 @@ export interface Finding {
   // this field still validates against the unchanged 1.0.0 schema on the lab
   // side and a document without it still validates here. No version bump.
   root_cause_id?: string;
+  // The materiality gate's verdict, present only on a finding it demoted from
+  // blocking to advisory. ADDITIVE and OPTIONAL, same precedent as
+  // `root_cause_id`: both validators are allowlists that never reject unknown
+  // keys, so the schema stays 1.0.0 and a document without it still validates.
+  materiality?: { label: "material" | "immaterial"; reason: string };
 }
 
 // Refuted findings are excluded from `findings[]` (scorer contract unchanged)

@@ -91,6 +91,7 @@ import {
 import { estimateCost } from "#review/report";
 import {
   pipelineConsolidateInput,
+  pipelineMaterialityInput,
   pipelineScoutInput,
   pipelineSummarizerInput,
 } from "#review/route-preflight";
@@ -797,6 +798,10 @@ export async function reviewPr(
               ...(skipDiscovery ? {} : pipelineSummarizerInput(summary)),
               ...(skipDiscovery ? {} : pipelineScoutInput(options)),
               ...(skipDiscovery ? {} : pipelineConsolidateInput()),
+              // Gated on skipDiscovery like consolidation: an empty-delta
+              // re-review posts no new findings, so there is nothing to judge.
+              ...(skipDiscovery ? {} : pipelineMaterialityInput(config)),
+              prTitle: target.title,
               ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
               // NOT gated on skipDiscovery: an empty-delta re-review still
               // classifies and verifies against this config, and a run whose

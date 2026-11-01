@@ -692,6 +692,7 @@ const provenance = (
     max_changed_lines: "default",
     max_changed_files: "default",
     scout: "default",
+    materiality_gate: "default",
     post: "default",
     post_min_severity: "default",
     ci_review_policy: "default",

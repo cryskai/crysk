@@ -93,6 +93,21 @@ describe("pr-hero config names the layer behind every value", () => {
     );
     expect(rowFor(lines, "scout")).toBe("scout default (unset)");
     expect(rowFor(lines, "post")).toBe("post default (unset)");
+    expect(rowFor(lines, "materiality_gate")).toBe(
+      "materiality_gate default (unset)",
+    );
+  });
+
+  test("materiality_gate displays its value and the capped marker", () => {
+    expect(
+      rowFor(render(undefined, { materiality_gate: true }), "materiality_gate"),
+    ).toBe("materiality_gate repo true");
+    expect(
+      rowFor(
+        render({ materiality_gate: false }, { materiality_gate: true }),
+        "materiality_gate",
+      ),
+    ).toBe("materiality_gate capped false ← narrowed by the global ceiling");
   });
 
   test("scout and post display capped marker when global ceiling narrows repo setting", () => {

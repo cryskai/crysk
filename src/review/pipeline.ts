@@ -5,8 +5,12 @@
 // the hunts and the refutation themselves.
 
 import { existsSync } from "node:fs";
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import {
+  type MaterialityVerdict,
+  parseJudgeVerdict,
+} from "#compare/materiality";
 import {
   defaultEffortForRole,
   type Effort,
@@ -15,10 +19,14 @@ import {
 import {
   agentStepKey,
   buildResolvedRoutePlan,
+  isMeasuredJudgeRoute,
+  MATERIALITY_JUDGE_MODEL,
+  MATERIALITY_STEP_KEY,
   type ResolvedModelRoute,
   type ResolvedRoutePlan,
   type RoutingConfig,
   type RunnerBackend,
+  resolveMaterialityJudgeRoute,
   spawnModelForClaudeCli,
 } from "#model/routing";
 import {
@@ -84,6 +92,13 @@ import {
   type RunSummary,
   type SkillOutput,
 } from "#review/findings";
+import {
+  applyMaterialityVerdicts,
+  codeWindow,
+  isSafetyProtected,
+  materialityCandidates,
+  renderMaterialityPrompt,
+} from "#review/materiality-gate";
 import {
   parseAgentFile,
   parseAgentSource,
@@ -262,6 +277,20 @@ export interface PipelineInput {
   // (`enabled: false`, `status: "skipped"`), the scout's rule, so the two
   // arms are told apart from the artifact alone.
   consolidate?: { promptPath: string; model?: string };
+  // Optional engine-owned materiality gate (odd/tasks/materiality-gate.md):
+  // an isolated judge reads every finding that would post as blocking and
+  // demotes the immaterial ones to advisory. ABSENT means no judge step and
+  // findings exactly as before (the scout's rule); pipeline.json still
+  // carries a `materiality` record (`enabled: false`, `status: "skipped"`).
+  // No `model` seat on purpose: the judge is pinned to the model it was
+  // measured on (MATERIALITY_JUDGE_MODEL), and neither `--model` nor a
+  // frontmatter edit may move it.
+  materiality?: { promptPath: string };
+  // The PR title the materiality judge reads (S9): PrTarget.title in PR mode,
+  // the reviewed head's commit subject in local mode. Author-controlled, so
+  // the judge receives it wrapped as untrusted data. Absent or blank renders
+  // MATERIALITY_TITLE_FALLBACK. Read by no other step.
+  prTitle?: string;
   // `--shared-prefix` (opt-in, off by default). Each hunter's system prompt
   // becomes the patch and output contract, which is byte-identical across
   // hunters that share settings, and its role moves to the user message. A
@@ -1157,6 +1186,35 @@ interface ConsolidationRecord {
   duration_ms: number;
 }
 
+// pipeline.json's `materiality` key, written on every run for ScoutRecord's
+// reason: "the key is missing" is indistinguishable from "this run predates
+// the key". "skipped" means the gate was not asked for; "ceiling" means it was
+// asked for and the pipeline ceiling (or its budget) stood it down before it
+// spawned; "unsupported_route" means the judge would not have run the
+// measured model through the Claude Code CLI, so it never spawned (S14); "ran"
+// means candidates were selected and every judgeable one was sent. In every
+// road but "ran" no finding is demoted.
+interface MaterialityRecord {
+  enabled: boolean;
+  status: "skipped" | "ran" | "unsupported_route" | "ceiling";
+  reason?: string;
+  // Steps actually spawned, one per judged finding.
+  judged: number;
+  // Findings the judge labelled immaterial: the ones finish() demotes.
+  demoted: number;
+  // Blocking findings the safety guard kept away from the judge.
+  protected: number;
+  // Spawned steps with no usable verdict (step failed, output unparsable,
+  // runner threw). Each one stays blocking (S6).
+  failed: number;
+  // Findings whose content carried the boundary nonce, so no safe prompt
+  // could be composed. Never spawned, stay blocking.
+  skipped_unsafe: number;
+  model?: string;
+  prompt_sha256?: string;
+  duration_ms: number;
+}
+
 // Mutated as steps complete so the pipeline-ceiling path can assemble
 // whatever exists at the moment the ceiling fires.
 interface RunState {
@@ -1174,6 +1232,11 @@ interface RunState {
   // applies it; the ceiling path reaches finish() without one and so never
   // consolidates.
   consolidationPlan?: PlanEntry[];
+  materiality?: MaterialityRecord;
+  // Set only by a materiality step leg that settled, keyed by finding id.
+  // finish() applies it after the consolidation plan; a finding with no entry
+  // (not judged, failed, unsafe) keeps the tier finish() derived.
+  materialityVerdicts?: Map<string, MaterialityVerdict>;
   // When the pipeline ceiling will fire (epoch ms). Set once in runPipeline;
   // runConsolidation reads it to refuse a spawn that could outlive it.
   ceilingDeadlineMs?: number;
@@ -1555,6 +1618,9 @@ async function execute(
                 defaultModel: DEFAULT_CONSOLIDATE_MODEL,
               },
             }),
+        ...(input.materiality === undefined
+          ? {}
+          : { materiality: true as const }),
       });
     } catch (error) {
       // Spec: legacy Claude-only runs without operator routing keep today's
@@ -2298,6 +2364,16 @@ async function execute(
     await runConsolidation(input, deps, state, stepsDir, boundaryNonce);
   }
   state.consolidation ??= skippedConsolidation(input);
+
+  // Step 6c — the materiality gate, over exactly the blocking findings
+  // finish() will post (post-refuter, post-consolidation). HERE and never
+  // inside finish(): finish() is also the ceiling's landing zone, and a
+  // landing zone that spawns would bill a run already reported finished.
+  // The verdicts ride on state; finish() applies whatever settled.
+  if (input.materiality !== undefined && !ceilingAborted(deps, state)) {
+    await runMaterialityJudge(input, deps, state, stepsDir, boundaryNonce);
+  }
+  state.materiality ??= skippedMateriality(input, state);
 
   // Steps 7 + 8 live in finish(), shared with the ceiling path.
   return finish(input, state);
@@ -3363,21 +3439,338 @@ async function runConsolidation(
   record.duration_ms = Date.now() - startedAt;
 }
 
-// Steps 7 + 8: map verdicts, assign tiers, assemble the SkillOutput draft and
-// write pipeline.json. Also the ceiling path's landing zone — it dedupes
-// whatever hunters completed so even a truncated run emits canonical ids.
-async function finish(
+// The judge's budgets. A judgment is one short JSON object over a claim and a
+// 51-line window with no tools, so a step that needs more than three minutes
+// is stuck, not thinking. Two attempts, the consolidation pass's count: a
+// transient failure gets one retry, and a judge that still cannot answer
+// leaves the finding blocking (S6) rather than holding the run.
+const MATERIALITY_TIMEOUT_MS = 3 * 60 * 1000;
+const MATERIALITY_MAX_ATTEMPTS = 2;
+// The per-agent usage key: one row for the whole fan-out, runAdjudicate's
+// shape, so `per_agent` stays one entry per stage however many were judged.
+const MATERIALITY_AGENT = "materiality";
+export const MATERIALITY_TITLE_FALLBACK = "(title unavailable)";
+// A source file larger than this is not read for the window: the judge then
+// sees the claim and path without code, which the prompt already allows for.
+// It bounds what a hunter-chosen path can pull into a prompt.
+const MATERIALITY_MAX_FILE_BYTES = 1024 * 1024;
+
+function skippedMateriality(
   input: PipelineInput,
   state: RunState,
-): Promise<PipelineResult> {
+): MaterialityRecord {
+  const enabled = input.materiality !== undefined;
+  return {
+    // `enabled` reports whether the gate was ASKED for, so a ceiling-cut run
+    // that wanted it reads "enabled, ceiling", never as the flag off.
+    enabled,
+    status: enabled && state.ceilingFired ? "ceiling" : "skipped",
+    judged: 0,
+    demoted: 0,
+    protected: 0,
+    failed: 0,
+    skipped_unsafe: 0,
+    duration_ms: 0,
+  };
+}
+
+// The ±25-line window at the reviewed head, or null when it cannot be read
+// safely. `finding.path` is hunter-written text, and what this reads goes
+// into a model prompt whose reason may be posted: an absolute path, a `../`
+// walk or a symlink whose target leaves the worktree is refused, the
+// threat model of rule 4 applied to a read the driver makes on an agent's
+// behalf. Any failure is a null window, never a thrown run.
+async function materialityWindow(
+  worktree: string,
+  relPath: string,
+  line: number,
+): Promise<string | null> {
+  if (path.isAbsolute(relPath)) return null;
+  try {
+    const root = await realpath(worktree);
+    const target = await realpath(path.join(root, relPath));
+    const rel = path.relative(root, target);
+    if (
+      rel === "" ||
+      rel === ".." ||
+      rel.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(rel)
+    ) {
+      return null;
+    }
+    const file = Bun.file(target);
+    if (file.size > MATERIALITY_MAX_FILE_BYTES) return null;
+    return codeWindow(await file.text(), line);
+  } catch {
+    return null;
+  }
+}
+
+// One isolated judge step per blocking, unprotected finding (S3-S7). The
+// verdicts land on `state.materialityVerdicts` for finish() to apply.
+//
+// NEVER sets `state.partial`, on any road, for the consolidation pass's
+// reason: the gate is a precision pass, and a judge that failed leaves the
+// finding exactly as the refuter left it — blocking (S6). The review is
+// complete; it just posts one more blocker. The failure is still never
+// silent: the record's `failed`, the step rows and `per_agent.materiality`.
+async function runMaterialityJudge(
+  input: PipelineInput,
+  deps: PipelineDeps,
+  state: RunState,
+  stepsDir: string,
+  nonce: string,
+): Promise<void> {
+  if (!input.materiality) {
+    state.materiality = skippedMateriality(input, state);
+    return;
+  }
+  const startedAt = Date.now();
+  const record: MaterialityRecord = {
+    enabled: true,
+    status: "ran",
+    judged: 0,
+    demoted: 0,
+    protected: 0,
+    failed: 0,
+    skipped_unsafe: 0,
+    model: MATERIALITY_JUDGE_MODEL,
+    duration_ms: 0,
+  };
+  state.materiality = record;
   if (!state.survivors) {
     const { survivors, deduped } = mergeAndDedupe(state.drafts);
     state.survivors = survivors;
     state.deduped = deduped;
   }
-  let findings: Finding[] = [];
+  // The list finish() will post, from the same derivation finish() uses.
+  const tiered = tierFindings(state, state.survivors);
+  const { judge, protectedCount } = materialityCandidates(
+    tiered.findings,
+    tiered.protectedIds,
+  );
+  record.protected = protectedCount;
+
+  // S14. A routed run whose plan does not carry a claude-code judge would run
+  // some other model, or nothing at all: a different, unmeasured judge is
+  // worse than no judge, so the stage stands down and every finding keeps
+  // its tier. A run with no route plan is the legacy Claude-only path, where
+  // the step goes to the Claude Code runner exactly as the judge was
+  // measured. A plan WITHOUT the key also stands down rather than spawning a
+  // route-less step inside a routed run: that is a caller that never threaded
+  // the gate into its plan, and the record's reason says so.
+  let route: ResolvedModelRoute | undefined;
+  if (state.routePlan !== undefined) {
+    route = routeForStepKey(state.routePlan, MATERIALITY_STEP_KEY);
+    if (route === undefined || !isMeasuredJudgeRoute(route)) {
+      record.status = "unsupported_route";
+      // A route in hand that fails the check names itself; only a plan with
+      // no judge step asks the config whether the step was left out because
+      // the configured route is not the measured one.
+      record.reason =
+        route !== undefined ||
+        resolveMaterialityJudgeRoute(
+          input.routingConfig ?? input.config?.effective?.routing,
+        ) === undefined
+          ? "judge route is not the measured claude-code route"
+          : "route plan carries no judge step";
+      return;
+    }
+  }
+  if (judge.length === 0) return;
+
+  // The consolidation pass's budget rule: an optional precision pass must
+  // never be the step that turns a complete run partial. One step's worst case
+  // is maxAttempts + the format retry at the full watchdog. The steps are
+  // admitted through the max_concurrent_steps gate, so with a cap they run in
+  // waves of `cap`, and the leg's worst case is one step's worst case per
+  // wave. Only the waves that fit before the ceiling (minus its settle grace)
+  // are judged; findings past them keep their tier, unjudged (fail-open
+  // toward blocking). No wave fits: the gate stands down.
+  const deadline = state.ceilingDeadlineMs;
+  if (deadline !== undefined) {
+    const perWaveMs = MATERIALITY_TIMEOUT_MS * (MATERIALITY_MAX_ATTEMPTS + 1);
+    const budgetMs =
+      deadline - Date.now() - (state.ceilingGraceMs ?? ceilingGraceMs(input));
+    const waves = Math.floor(budgetMs / perWaveMs);
+    if (waves < 1) {
+      record.status = "ceiling";
+      record.reason = "ceiling budget";
+      return;
+    }
+    const cap = input.config?.effective.max_concurrent_steps;
+    if (cap !== undefined && judge.length > waves * cap) {
+      record.reason = `ceiling budget: judged ${waves * cap} of ${judge.length}`;
+      judge.splice(waves * cap);
+    }
+  }
+
+  const systemPromptPath = path.join(stepsDir, "materiality.system.md");
+  // An EMPTY registry, written per run and never `input.mcpConfigPath`: the
+  // judge was measured claims-and-window only, and the hunters' registry
+  // grants codegraph, which would let the judge go read the repository.
+  // Combined with `--strict-mcp-config` (the runner always passes it) this
+  // file is the whole MCP surface the step has.
+  const mcpConfigPath = path.join(stepsDir, "materiality.mcp.json");
+  try {
+    // Read once, hashed and parsed from the same bytes.
+    const raw = await Bun.file(input.materiality.promptPath).text();
+    const agent = parseAgentSource(raw);
+    record.prompt_sha256 = new Bun.CryptoHasher("sha256")
+      .update(raw)
+      .digest("hex");
+    // writeSystemPrompt prepends RUNTIME_PREAMBLE, as for every step.
+    await writeSystemPrompt(systemPromptPath, agent.body);
+    await Bun.write(mcpConfigPath, JSON.stringify({ mcpServers: {} }));
+    await chmod(mcpConfigPath, 0o600);
+  } catch {
+    // A missing or malformed prompt file: nothing is judged, every candidate
+    // stays blocking, and the record says why.
+    record.failed = judge.length;
+    record.reason = "prompt file unreadable";
+    record.duration_ms = Date.now() - startedAt;
+    return;
+  }
+
+  const prTitle =
+    input.prTitle !== undefined && input.prTitle.trim() !== ""
+      ? input.prTitle
+      : MATERIALITY_TITLE_FALLBACK;
+  const effort = defaultEffortForRole("other");
+  const specs: Array<{ id: string; spec: StepSpec; meta: StepMeta }> = [];
+  for (const finding of judge) {
+    const prompt = renderMaterialityPrompt(
+      {
+        prTitle,
+        claim: finding.claim,
+        path: finding.path,
+        window: await materialityWindow(
+          input.worktree,
+          finding.path,
+          finding.line,
+        ),
+      },
+      nonce,
+    );
+    // Content that already carries the run's nonce could forge a boundary.
+    // The nonce cannot be re-drawn mid-run, so the finding is not judged and
+    // stays blocking.
+    if (prompt === null) {
+      record.skipped_unsafe++;
+      continue;
+    }
+    const dir = path.join(stepsDir, "materiality", finding.id);
+    await mkdir(dir, { recursive: true });
+    const spec: StepSpec = {
+      name: `materiality-${finding.id}`,
+      systemPromptPath,
+      prompt,
+      // FORCED to empty, never read from the prompt's frontmatter, for the
+      // scout's and the consolidation pass's reason: the judge is measured
+      // without tools, and a guarantee a prompt edit can revoke is not a
+      // guarantee.
+      tools: [],
+      mcpConfigPath,
+      // PINNED, never `input.model` or the frontmatter: the measured judge is
+      // sonnet, and a judge on another model is a different, unmeasured judge
+      // deciding which blockers post.
+      model: MATERIALITY_JUDGE_MODEL,
+      effort,
+      cwd: input.worktree,
+      outPath: path.join(dir, "result.json"),
+      timeoutMs: MATERIALITY_TIMEOUT_MS,
+      maxAttempts: MATERIALITY_MAX_ATTEMPTS,
+      ...(route === undefined ? {} : { route }),
+      parse: parseJudgeVerdict,
+      onRetry: (info) => emit(deps, { kind: "step-retry", ...info }),
+    };
+    specs.push({ id: finding.id, spec, meta: stepMeta(spec) });
+  }
+  record.judged = specs.length;
+  if (specs.length === 0) {
+    record.duration_ms = Date.now() - startedAt;
+    return;
+  }
+  for (const { meta } of specs) state.steps.push(meta);
+  const settled = await Promise.allSettled(
+    specs.map(({ spec }) => deps.runner.run(spec)),
+  );
+  const verdicts = new Map<string, MaterialityVerdict>();
+  let usage: SessionUsage | undefined;
+  let attempts = 0;
+  for (const [i, entry] of specs.entries()) {
+    const outcome = settled[i];
+    const result = outcome?.status === "fulfilled" ? outcome.value : undefined;
+    if (result) {
+      usage = usage ? sumUsage(usage, result.usage) : result.usage;
+      attempts += result.attempts;
+      recordSettlement(entry.meta, result, input.runDir);
+      state.usageTotal = sumUsage(state.usageTotal, result.usage);
+      accumulateUsageV2(state, result);
+    } else {
+      recordStepFailure(
+        entry.meta,
+        outcome?.status === "rejected"
+          ? outcome.reason
+          : "materiality step produced no result",
+      );
+    }
+    if (result?.status === "ok") {
+      const verdict = result.output as MaterialityVerdict;
+      verdicts.set(entry.id, verdict);
+      if (verdict.label === "immaterial") record.demoted++;
+      continue;
+    }
+    record.failed++;
+  }
+  state.perAgent[MATERIALITY_AGENT] = usage
+    ? {
+        tokens_total: usage.tokens_total,
+        duration_ms: Date.now() - startedAt,
+        tokens_in: usage.tokens_in,
+        tokens_out: usage.tokens_out,
+        cost_usd_est: usage.cost_usd_est,
+        attempts,
+        status: record.failed > 0 ? "failed" : "ok",
+        ...(record.failed > 0 ? firstFailureDetail(settled) : {}),
+      }
+    : failedAgentEntry();
+  state.materialityVerdicts = verdicts;
+  record.duration_ms = Date.now() - startedAt;
+}
+
+// The findings finish() posts, before root-cause clustering and the
+// materiality verdicts: tiers derived from the refuter's verdicts, refuted
+// findings set aside, and the consolidation plan applied when it still
+// matches. PURE over `state`: it reads, never writes. Two callers need the
+// exact same list — finish(), and runMaterialityJudge, which must judge the
+// list that will actually post — and a second copy of this derivation would
+// be a parallel mechanism able to disagree with the first. What happened to
+// the plan comes back in `consolidation` for finish() alone to record.
+interface TieredFindings {
+  findings: Finding[];
+  // Pre-plan count, for a plan that no longer matches.
+  tieredCount: number;
+  refuted: DebugRefutedFinding[];
+  // Ids in `findings` the materiality safety guard must protect: every
+  // pre-plan finding the guard matches, plus every plan primary that folded
+  // one in. Consolidation rewrites the claim and keeps the primary's path, so
+  // a protected source merged into a benign primary would otherwise vanish
+  // from the guard's view (S4) — the guard follows the defect, not its wording.
+  protectedIds: Set<string>;
+  consolidation:
+    | { kind: "none" }
+    | { kind: "mismatch" }
+    | { kind: "applied"; repairs: number; findingsOut: number };
+}
+
+function tierFindings(
+  state: RunState,
+  survivors: readonly DedupedSurvivor[],
+): TieredFindings {
+  const findings: Finding[] = [];
   const refuted: DebugRefutedFinding[] = [];
-  for (const survivor of state.survivors) {
+  for (const survivor of survivors) {
     const verdict: RefuterVerdict =
       state.verdicts.get(survivor.id) ?? "not_submitted";
     if (verdict === "refuted") {
@@ -3426,6 +3819,77 @@ async function finish(
       ),
     });
   }
+  const tieredCount = findings.length;
+  const protectedIds = new Set(
+    findings.filter((f) => isSafetyProtected(f)).map((f) => f.id),
+  );
+  // The consolidation plan was validated against the ids runConsolidation
+  // sent; it is re-validated here against the ids this function produced,
+  // because the two lists are derived separately and a plan applied to a
+  // list it was not written for would merge the wrong findings. A mismatch
+  // keeps the findings as they are: precision lost, never recall.
+  if (state.consolidationPlan === undefined) {
+    return {
+      findings,
+      tieredCount,
+      refuted,
+      protectedIds,
+      consolidation: { kind: "none" },
+    };
+  }
+  let plan: PlanEntry[] | undefined;
+  try {
+    plan = validatePlan(
+      { findings: state.consolidationPlan },
+      findings.map((f) => f.id),
+      new Set(),
+    );
+  } catch {
+    plan = undefined;
+  }
+  if (plan === undefined) {
+    return {
+      findings,
+      tieredCount,
+      refuted,
+      protectedIds,
+      consolidation: { kind: "mismatch" },
+    };
+  }
+  const stats = { repairs: 0 };
+  plan = enforcePlanInvariants(plan, findings, stats);
+  for (const entry of plan) {
+    if (entry.sources.some((id) => protectedIds.has(id))) {
+      protectedIds.add(entry.primary);
+    }
+  }
+  return {
+    findings: applyPlan(findings, plan, []),
+    tieredCount,
+    refuted,
+    protectedIds,
+    consolidation: {
+      kind: "applied",
+      repairs: stats.repairs,
+      findingsOut: plan.length,
+    },
+  };
+}
+
+// Steps 7 + 8: map verdicts, assign tiers, assemble the SkillOutput draft and
+// write pipeline.json. Also the ceiling path's landing zone — it dedupes
+// whatever hunters completed so even a truncated run emits canonical ids.
+async function finish(
+  input: PipelineInput,
+  state: RunState,
+): Promise<PipelineResult> {
+  if (!state.survivors) {
+    const { survivors, deduped } = mergeAndDedupe(state.drafts);
+    state.survivors = survivors;
+    state.deduped = deduped;
+  }
+  const tiered = tierFindings(state, state.survivors);
+  const refuted = tiered.refuted;
   // Merge losers were never submitted to the refuter — stamp the canonical
   // not_submitted verdict the debug shape requires.
   const deduped = (state.deduped ?? []).map((loser) => ({
@@ -3440,40 +3904,31 @@ async function finish(
   // above keep their ids, order, tiers and verdicts; only `root_cause_id` is
   // stamped on, and only when the clusterer actually placed the finding.
   //
-  // Consolidation is applied FIRST, so the clusterer and everything after it
-  // see the list that is actually posted. The plan was validated against the
-  // ids runConsolidation sent; it is re-validated here against the ids this
-  // function produced, because the two lists are derived separately and a
-  // plan applied to a list it was not written for would merge the wrong
-  // findings. A mismatch keeps the findings as they are: precision lost,
-  // never recall.
-  if (state.consolidationPlan !== undefined) {
-    let plan: PlanEntry[] | undefined;
-    try {
-      plan = validatePlan(
-        { findings: state.consolidationPlan },
-        findings.map((f) => f.id),
-        new Set(),
-      );
-    } catch {
-      plan = undefined;
-    }
-    if (plan === undefined) {
-      if (state.consolidation !== undefined) {
-        state.consolidation.status = "failed";
-        state.consolidation.reason = "plan no longer matches findings";
-        state.consolidation.findings_out = findings.length;
-      }
-    } else {
-      const stats = { repairs: 0 };
-      plan = enforcePlanInvariants(plan, findings, stats);
-      if (state.consolidation !== undefined) {
-        state.consolidation.plan_repairs = stats.repairs;
-        state.consolidation.findings_out = plan.length;
-      }
-      findings = applyPlan(findings, plan, []);
+  // Consolidation is applied FIRST (inside tierFindings), so the clusterer
+  // and everything after it see the list that is actually posted.
+  if (state.consolidation !== undefined) {
+    if (tiered.consolidation.kind === "mismatch") {
+      state.consolidation.status = "failed";
+      state.consolidation.reason = "plan no longer matches findings";
+      state.consolidation.findings_out = tiered.tieredCount;
+    } else if (tiered.consolidation.kind === "applied") {
+      state.consolidation.plan_repairs = tiered.consolidation.repairs;
+      state.consolidation.findings_out = tiered.consolidation.findingsOut;
     }
   }
+  // The materiality verdicts land AFTER the plan (S5), keyed by id, on the
+  // list runMaterialityJudge judged. applyMaterialityVerdicts re-checks the
+  // tier and the safety guard itself, so a verdict can only ever demote a
+  // blocking, unprotected finding — and a finding with no verdict (stage off,
+  // a failed step, an unsafe prompt, a ceiling cut) keeps its tier.
+  const findings =
+    state.materialityVerdicts === undefined
+      ? tiered.findings
+      : applyMaterialityVerdicts(
+          tiered.findings,
+          state.materialityVerdicts,
+          tiered.protectedIds,
+        );
   state.consolidation ??= skippedConsolidation(input);
   const rootCauses = clusterByRootCause(findings);
   const rootCauseId = rootCauseIdByFinding(rootCauses);
@@ -3652,6 +4107,9 @@ async function writePipelinePlan(
     ...(state.consolidation === undefined
       ? {}
       : { consolidation: state.consolidation }),
+    // Unconditional, unlike the two above: every road to this write (the
+    // gotchas early return included) records whether the gate was asked for.
+    materiality: state.materiality ?? skippedMateriality(input, state),
     // `--shared-prefix` arm identity, read off the artifact like `scout`: a run
     // whose hunters all sit in groups of one has no warm-up row to tell it
     // from control. Absent means the control layout, byte for byte.

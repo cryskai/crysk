@@ -179,6 +179,10 @@ export function configRows(
       sources.max_changed_files,
     ),
     scout: cell(effective.scout?.toString(), sources.scout),
+    materiality_gate: cell(
+      effective.materiality_gate?.toString(),
+      sources.materiality_gate,
+    ),
     post: cell(effective.post?.toString(), sources.post),
     post_min_severity: cell(
       effective.post_min_severity,

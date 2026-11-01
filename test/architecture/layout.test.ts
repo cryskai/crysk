@@ -131,6 +131,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "drafts",
       "findings",
       "findings-conformance",
+      "materiality-gate",
       "pipeline",
       "preflight",
       "prompt-set",

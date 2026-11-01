@@ -461,6 +461,7 @@ export async function resolvePipelineRoute(params: {
   summarizerEnabled?: boolean;
   scoutEnabled?: boolean;
   consolidateEnabled?: boolean;
+  materialityEnabled?: boolean;
 }): Promise<ProductionRoutePlanResult | undefined> {
   return resolveProductionRoutePlanAtConfirm({
     routingConfigured: params.routingConfigured,
@@ -475,6 +476,7 @@ export async function resolvePipelineRoute(params: {
         summarizerEnabled: params.summarizerEnabled,
         scoutEnabled: params.scoutEnabled,
         consolidateEnabled: params.consolidateEnabled,
+        materialityEnabled: params.materialityEnabled,
       }),
   });
 }

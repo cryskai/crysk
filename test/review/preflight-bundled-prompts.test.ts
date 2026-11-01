@@ -268,6 +268,7 @@ function compiledAssets(
     // of an embedded path. It is not a directory that exists.
     defaultAgentsDir: EMBEDDED_ROOT,
     consolidatePromptPath: `${EMBEDDED_ROOT}/consolidate-c0n5011d.md`,
+    materialityPromptPath: `${EMBEDDED_ROOT}/materiality-m4t3r1a1.md`,
     scoutPromptPath: `${EMBEDDED_ROOT}/scout-a1b2c300.md`,
     summarizerPromptPath: `${EMBEDDED_ROOT}/summarizer-d4e5f600.md`,
     triageSkillFiles: {},

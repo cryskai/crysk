@@ -2179,6 +2179,10 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   max_changed_lines: "capped",
   max_changed_files: "capped",
   scout: "capped",
+  // `capped` like the scout, for the same reason: switching it on adds one
+  // judge spawn per blocking finding, so a committed file may turn it off but
+  // never on against the operator's global ceiling.
+  materiality_gate: "capped",
   post: "capped",
   // `person`: a global floor applies to every repo, and a repo file overrides
   // it either way. It changes only what a PR shows, never what a review costs,
@@ -2224,6 +2228,9 @@ export interface LocalConfig {
   max_changed_lines?: number;
   max_changed_files?: number;
   scout?: boolean;
+  // Opt-in judge that demotes immaterial blocking findings to advisory
+  // (review/materiality-gate.ts). Absent means off.
+  materiality_gate?: boolean;
   post?: boolean;
   // The lowest finding a PR review posts (pr/post-floor.ts). Absent posts all.
   post_min_severity?: PostMinSeverity;
@@ -2465,6 +2472,11 @@ function parseConfigLayer(
     file,
   );
   const scout = parseOptionalBoolean(config.scout, "scout", file);
+  const materialityGate = parseOptionalBoolean(
+    config.materiality_gate,
+    "materiality_gate",
+    file,
+  );
   const post = parseOptionalBoolean(config.post, "post", file);
   const postMinSeverity = parsePostMinSeverity(config.post_min_severity, file);
   const ciReviewPolicy = parseCiReviewPolicyMode(config.ci_review_policy, file);
@@ -2536,6 +2548,9 @@ function parseConfigLayer(
       ? {}
       : { max_changed_files: maxChangedFiles }),
     ...(scout === undefined ? {} : { scout }),
+    ...(materialityGate === undefined
+      ? {}
+      : { materiality_gate: materialityGate }),
     ...(post === undefined ? {} : { post }),
     ...(postMinSeverity === undefined
       ? {}
@@ -2954,6 +2969,14 @@ export function resolveScout(
   return options.scout ?? config.scout ?? false;
 }
 
+// No CLI flag on purpose: the gate is opt-in through config only, so the
+// merged config is the whole answer and absent means off.
+export function resolveMaterialityGate(
+  config: Pick<ConfigLayer, "materiality_gate">,
+): boolean {
+  return config.materiality_gate ?? false;
+}
+
 export function resolvePost(
   options: Pick<CliOptions, "post">,
   config: Pick<ConfigLayer, "post">,
@@ -3116,6 +3139,12 @@ export function mergeConfig(
     (layer) => layer.scout,
     (a, b) => a && b,
   );
+  const materialityGate = foldKey(
+    layers,
+    CONFIG_DIRECTION.materiality_gate,
+    (layer) => layer.materiality_gate,
+    (a, b) => a && b,
+  );
   const post = foldKey(
     layers,
     CONFIG_DIRECTION.post,
@@ -3210,6 +3239,9 @@ export function mergeConfig(
       ? {}
       : { max_changed_files: maxFiles.value }),
     ...(scout.value === undefined ? {} : { scout: scout.value }),
+    ...(materialityGate.value === undefined
+      ? {}
+      : { materiality_gate: materialityGate.value }),
     ...(post.value === undefined ? {} : { post: post.value }),
     ...(postMinSeverity.value === undefined
       ? {}
@@ -3253,6 +3285,7 @@ export function mergeConfig(
     max_changed_lines: maxLines.source,
     max_changed_files: maxFiles.source,
     scout: scout.source,
+    materiality_gate: materialityGate.source,
     post: post.source,
     post_min_severity: postMinSeverity.source,
     ci_review_policy: ciReviewPolicy.source,
