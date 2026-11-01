@@ -523,14 +523,14 @@ describe("Packaging & distribution configuration", () => {
       );
     });
 
-    test("declares the four-member status enum spec 1.1 actually emits", () => {
+    test("declares the status enum spec 1.1 actually emits", () => {
       // Not five: skipped-clean was never wired (a clean review already
       // reports status=reviewed, findings_count=0) and was dropped from
       // spec.md 1.1 rather than left as a documented lie. `error` IS now
       // wired, via reportFatalCiError (src/ci/reporter.ts).
       const action = parsedAction();
       expect(action.outputs.status.description).toContain(
-        "reviewed, skipped-size, skipped-budget, or error",
+        "reviewed, skipped-size, skipped-budget, skipped-excluded, or error",
       );
     });
 
