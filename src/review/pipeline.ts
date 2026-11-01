@@ -3655,7 +3655,7 @@ async function runMaterialityJudge(
       tools: [],
       mcpConfigPath,
       // PINNED, never `input.model` or the frontmatter: the measured judge is
-      // opus, and a judge on another model is a different, unmeasured judge
+      // sonnet, and a judge on another model is a different, unmeasured judge
       // deciding which blockers post.
       model: MATERIALITY_JUDGE_MODEL,
       effort,

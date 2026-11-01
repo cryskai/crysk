@@ -232,10 +232,11 @@ describe("bundled materiality prompt", () => {
   );
 
   // The gate is only as good as the judge that was measured. These bytes
-  // passed the gate exam on 2026-11-01 (policy agreement 47/49 and 47/53,
-  // 0/33 blocking Martian bugs demoted, 0/5 injection anchors flipped; lab
-  // bench/METRICS.md). Editing the prompt makes it an unmeasured judge:
-  // re-run the exam, record it in the lab, then move this hash.
+  // passed the gate exam on 2026-11-01 on sonnet, the pinned judge model
+  // (policy agreement 46/49 and 47/53, 0/33 blocking Martian bugs demoted,
+  // 0/5 injection anchors flipped, stability 29/30; opus passed too; lab
+  // bench/METRICS.md). Editing the prompt or the model makes it an unmeasured
+  // judge: re-run the exam, record it in the lab, then move this hash.
   test("is the judge the gate exam measured", () => {
     const sha = createHash("sha256")
       .update(readFileSync(resolveEngineAssets().materialityPromptPath))

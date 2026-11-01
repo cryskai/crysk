@@ -526,14 +526,17 @@ export interface BuildRoutePlanInput {
 // The step key the materiality judge runs under in every route plan.
 export const MATERIALITY_STEP_KEY = "materiality";
 
-// The judge was measured on Claude opus through the Claude Code CLI; a judge on
-// any other model or transport is a different, unmeasured judge. So the model
+// The judge was measured on Claude sonnet and opus through the Claude Code CLI
+// (same bundled prompt, same bar; both passed, lab bench/METRICS.md
+// 2026-11-01); sonnet was chosen because it costs half for a difference within
+// one run's noise. A judge on any other model or transport is a different,
+// unmeasured judge. So the model
 // is pinned (never `--model`, never the routing default model) and the route is
 // returned only when it lands on the claude-code backend.
-export const MATERIALITY_JUDGE_MODEL = "opus";
+export const MATERIALITY_JUDGE_MODEL = "sonnet";
 
 // The judge's route, or undefined when it would not run the measured judge:
-// the routing config sends opus to another backend, or cannot resolve it at
+// the routing config sends sonnet to another backend, or cannot resolve it at
 // all (a disabled route, an unmapped snapshot). Never throws: the gate is
 // optional and fails open toward blocking, so a route it cannot use must make
 // the stage stand down, never kill the run. Omitting a non-claude route from

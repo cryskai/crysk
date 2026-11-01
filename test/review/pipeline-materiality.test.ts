@@ -315,7 +315,7 @@ describe("materiality gate: the judge's verdict (S5, S6)", () => {
       protected: 0,
       failed: 0,
       skipped_unsafe: 0,
-      model: "opus",
+      model: "sonnet",
       prompt_sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
   });
@@ -559,12 +559,12 @@ describe("materiality gate: the spawned step (S3, S9)", () => {
     "\n",
   );
 
-  test("tools [], an empty MCP registry, opus even under --model sonnet", async () => {
+  test("tools [], an empty MCP registry, sonnet even under --model opus", async () => {
     const worktree = await worktreeWith("src/app.ts", fileText);
     const input = await makeInput({
       ...GATE_ON,
       worktree,
-      model: "sonnet",
+      model: "opus",
       prTitle: "fix: width on retina",
     });
     const runner = new FakeStepRunner({
@@ -577,7 +577,7 @@ describe("materiality gate: the spawned step (S3, S9)", () => {
     const [judge] = judgeSteps(runner);
     expect(judge?.name).toBe("materiality-F001");
     expect(judge?.tools).toEqual([]);
-    expect(judge?.model).toBe("opus");
+    expect(judge?.model).toBe("sonnet");
     expect(judge?.mcpConfigPath).not.toBe(input.mcpConfigPath);
     expect(await Bun.file(judge?.mcpConfigPath ?? "").text()).toBe(
       '{"mcpServers":{}}',
@@ -587,7 +587,7 @@ describe("materiality gate: the spawned step (S3, S9)", () => {
     // Hunters do run on the overridden model; only the judge is pinned.
     expect(
       runner.specs.find((s) => s.name === "hunter-reliability")?.model,
-    ).toBe("sonnet");
+    ).toBe("opus");
 
     const prompt = judge?.prompt ?? "";
     expect(prompt).toContain(`<pr_title ${NONCE}>`);
@@ -690,7 +690,7 @@ describe("materiality gate: route and ceiling (S14, S5)", () => {
       claude("hunter-resilience", "hunter"),
       claude("hunter-parity", "hunter"),
       claude("refuter", "refuter"),
-      claude("materiality", "other", "opus"),
+      claude("materiality", "other", "sonnet"),
     ]);
     const input = await makeInput({ ...GATE_ON, routePlan });
     const runner = new FakeStepRunner({
@@ -707,16 +707,19 @@ describe("materiality gate: route and ceiling (S14, S5)", () => {
     expect(result.skillOutput.findings[0]?.tier).toBe("advisory");
   });
 
-  test("an in-run plan built over routing that sends opus to OpenCode stands down", async () => {
+  test("an in-run plan built over routing that sends sonnet to OpenCode stands down", async () => {
+    // Hunters moved to haiku so the sonnet→OpenCode mapping reaches only the
+    // judge: the hunters share the judge's alias by default.
     const input = await makeInput({
       ...GATE_ON,
+      model: "haiku",
       routingConfig: {
         mappings: [
           {
-            logical: "opus",
+            logical: "sonnet",
             backend: "opencode",
             provider: "anthropic",
-            modelSnapshot: "claude-opus-5-20250219",
+            modelSnapshot: "claude-sonnet-5-5",
           },
         ],
       },

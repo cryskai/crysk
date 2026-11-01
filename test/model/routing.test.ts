@@ -1134,7 +1134,7 @@ describe("buildResolvedRoutePlan: the materiality judge step", () => {
   const step = (plan: ResolvedRoutePlan, key: string) =>
     plan.steps.find((s) => s.stepKey === key);
 
-  test("a claude-code opus route is resolved for the judge when enabled", () => {
+  test("a claude-code sonnet route is resolved for the judge when enabled", () => {
     const plan = buildResolvedRoutePlan({
       agents,
       consolidate: { defaultModel: "sonnet" },
@@ -1144,22 +1144,24 @@ describe("buildResolvedRoutePlan: the materiality judge step", () => {
     expect(judge?.role).toBe("other");
     expect(judge?.route.backend).toBe("claude-code");
     expect(judge?.logicalIdentity).toBe(
-      resolveStepRoute({ stepKey: "x", role: "other", specModel: "opus" })
+      resolveStepRoute({ stepKey: "x", role: "other", specModel: "sonnet" })
         .logicalIdentity,
     );
   });
 
-  test("--model never moves the judge off opus", () => {
+  test("--model never moves the judge off sonnet", () => {
     const plan = buildResolvedRoutePlan({
       agents,
-      cliModel: "sonnet",
+      cliModel: "opus",
       consolidate: { defaultModel: "sonnet" },
       materiality: true,
     });
     expect(step(plan, MATERIALITY_STEP_KEY)?.logicalIdentity).not.toBe(
       step(plan, "consolidate")?.logicalIdentity,
     );
-    expect(step(plan, MATERIALITY_STEP_KEY)?.route.modelSnapshot).toBe("opus");
+    expect(step(plan, MATERIALITY_STEP_KEY)?.route.modelSnapshot).toBe(
+      "sonnet",
+    );
   });
 
   test("off: no judge key, and the plan's fingerprint is today's", () => {
@@ -1182,14 +1184,14 @@ describe("buildResolvedRoutePlan: the materiality judge step", () => {
     ).toBe(without.routeFingerprint);
   });
 
-  test("opus routed to OpenCode leaves the judge out of the plan", () => {
+  test("sonnet routed to OpenCode leaves the judge out of the plan", () => {
     const routingConfig: RoutingConfig = {
       mappings: [
         {
-          logical: "opus",
+          logical: "sonnet",
           backend: "opencode",
           provider: "anthropic",
-          modelSnapshot: "claude-opus-5-20250219",
+          modelSnapshot: "claude-sonnet-5-5",
         },
       ],
     };
@@ -1206,15 +1208,24 @@ describe("buildResolvedRoutePlan: the materiality judge step", () => {
     const routingConfig: RoutingConfig = {
       mappings: [
         {
-          logical: "opus",
+          logical: "sonnet",
           backend: "claude-code",
           provider: "anthropic",
           disabled: true,
         },
       ],
     };
+    // A haiku hunter keeps the plan routable, so only the judge's disabled
+    // sonnet route is exercised (hunters share the alias by default).
+    const haikuAgents = [
+      { key: "reliability", role: "hunter", model: "haiku" },
+    ];
     expect(() =>
-      buildResolvedRoutePlan({ agents, routingConfig, materiality: true }),
+      buildResolvedRoutePlan({
+        agents: haikuAgents,
+        routingConfig,
+        materiality: true,
+      }),
     ).not.toThrow();
     expect(resolveMaterialityJudgeRoute(routingConfig)).toBeUndefined();
   });

@@ -24,7 +24,7 @@ describe("pipelineMaterialityInput (odd/tasks/materiality-gate.md S2)", () => {
 describe("buildCliRoutePlan: the materiality judge key (S14)", () => {
   const params = {
     spec: defaultReviewSpec(),
-    options: { model: "sonnet", scout: false } as CliOptions,
+    options: { model: "opus", scout: false } as CliOptions,
     agentFiles: new Map(),
     summary: { enabled: false },
   };
@@ -43,13 +43,13 @@ describe("buildCliRoutePlan: the materiality judge key (S14)", () => {
     expect(keys(off)).toContain("consolidate");
   });
 
-  test("enabled: the judge key on claude-code, opus despite --model sonnet", async () => {
+  test("enabled: the judge key on claude-code, sonnet despite --model opus", async () => {
     const plan = await buildCliRoutePlan({
       ...params,
       materialityEnabled: true,
     });
     const judge = plan.steps.find((s) => s.stepKey === MATERIALITY_STEP_KEY);
     expect(judge?.route.backend).toBe("claude-code");
-    expect(judge?.route.modelSnapshot).toBe("opus");
+    expect(judge?.route.modelSnapshot).toBe("sonnet");
   });
 });
