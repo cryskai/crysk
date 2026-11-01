@@ -2986,6 +2986,10 @@ export async function postInlineFindings(input: {
   force?: boolean;
   // The `post_min_severity` config key (pr/post-floor.ts). Absent posts all.
   postMinSeverity?: PostMinSeverity;
+  // The prior ids this run's gate count released through a materiality
+  // demotion (rereview/state.ts materialityReleasedIds). The state merge
+  // re-tiers them advisory. Absent releases nothing.
+  materialityReleasedIds?: readonly string[];
 }): Promise<InlinePostOutcome> {
   const { operatorRoot, pr, headSha, doc, webUrl, spawnFn } = input;
   const ghTimeoutMs = input.ghTimeoutMs ?? COLLAPSE_GH_TIMEOUT_MS;
@@ -3168,6 +3172,9 @@ export async function postInlineFindings(input: {
             ...(framing.resolved_ids ?? []),
             ...(framing.worsened ?? []).map((w) => w.priorId),
           ],
+          ...(input.materialityReleasedIds === undefined
+            ? {}
+            : { releasedIds: input.materialityReleasedIds }),
           fresh: freshFindings,
           stateBudget,
         });
@@ -3634,6 +3641,7 @@ export async function postInlineIfEligible(input: {
   // Forwarded to postInlineFindings: a forced run leaves the summary counter alone.
   force?: boolean;
   postMinSeverity?: PostMinSeverity;
+  materialityReleasedIds?: readonly string[];
 }): Promise<InlinePostOutcome | null> {
   if (input.sessionFailed) {
     log(input.skippedReason);

@@ -2535,6 +2535,78 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
     ]);
   });
 
+  // B1 from the verifier: with post_min_severity "blocking" the demoted finding
+  // is hidden, so the merge never sees it. The released id must still re-tier.
+  for (const [label, postMinSeverity, claim] of [
+    ["no posting floor", undefined, "demoted now"],
+    [
+      "post_min_severity blocking hides it",
+      "blocking",
+      "blocking on the earlier head",
+    ],
+  ] as const) {
+    test(`a released blocking prior turns advisory in the state, and review 3 no longer counts it (${label})`, async () => {
+      const prior = stateFinding({
+        id: "R001",
+        sev: "CRITICAL",
+        tier: "blocking",
+        channel: "inline",
+        locs: ["src/a.ts:10"],
+        claim: "blocking on the earlier head",
+      });
+      const { spawnFn, calls } = reviewScript();
+      await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({
+          findings: [
+            finding({
+              id: "F001",
+              path: "src/a.ts",
+              line: 10,
+              tier: "advisory",
+              severity: "CRITICAL",
+              claim: "demoted now",
+              materiality: {
+                label: "immaterial",
+                reason: "needs a pathological input",
+              },
+            }),
+          ],
+        }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+        rereview: reviewProvenance([{ ...prior, status: "carried" }]),
+        rereviewPriors: [],
+        materialityReleasedIds: ["R001"],
+        ...(postMinSeverity === undefined ? {} : { postMinSeverity }),
+      });
+      const state = summaryState(calls);
+      expect(state?.findings.map((f) => [f.id, f.tier, f.claim])).toEqual([
+        ["R001", "advisory", claim],
+      ]);
+      expect(state?.hw).toBe(1);
+
+      // Review 3: a same-head forced re-review with no survivors.
+      const priors = priorsFromStateFindings(state?.findings ?? []);
+      const ctx = {
+        case: "C" as const,
+        deletedFiles: new Set<string>(),
+        renameMap: new Map<string, string>(),
+        touched: () => false,
+        summaryUpdatedAt: null,
+      };
+      const assembled = assembleLive({
+        settled: priors.map((p) => classifyPrior(p, ctx)),
+        priors,
+        verifyVerdicts: new Map(),
+      });
+      expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(0);
+    });
+  }
+
   test("S3 — a fresh row's locs use the line the comment was posted at, not findings.json's", async () => {
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({

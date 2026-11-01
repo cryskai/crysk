@@ -60,6 +60,8 @@ export async function postFindingsIfEnabled(input: {
   force?: boolean;
   // The `post_min_severity` config key (pr/post-floor.ts). Absent posts all.
   postMinSeverity?: PostMinSeverity;
+  // Forwarded to the state merge (pr.ts postInlineFindings).
+  materialityReleasedIds?: readonly string[];
 }): Promise<PostingStageResult> {
   if (!input.postEnabled) {
     return { posted: null, postedWebUrl: undefined };
@@ -87,6 +89,7 @@ export async function postFindingsIfEnabled(input: {
     ciMode: input.ciMode,
     force: input.force,
     postMinSeverity: input.postMinSeverity,
+    materialityReleasedIds: input.materialityReleasedIds,
   });
   if (posted) {
     input.onDelivered?.();

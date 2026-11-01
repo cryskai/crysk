@@ -117,6 +117,114 @@ describe("S2 — a fresh survivor that pairs updates its row in place", () => {
   });
 });
 
+// A fresh survivor the materiality gate demoted from blocking.
+function demotedFresh(
+  line: number,
+  over: Partial<FreshStateFinding> = {},
+): FreshStateFinding {
+  return fresh(line, "advisory", {
+    severity: "CRITICAL",
+    materiality: { label: "immaterial", reason: "needs a pathological input" },
+    ...over,
+  });
+}
+
+describe("releasedIds — the rows the gate count released are re-tiered advisory", () => {
+  test("pairBlockingSurvivors alone never pairs a demoted survivor: the count decides releases", () => {
+    expect(
+      pairBlockingSurvivors(
+        [demotedFresh(10)],
+        [{ tier: "blocking", locs: ["src/app.ts:10"] }],
+      ),
+    ).toEqual([]);
+  });
+
+  test("a released row keeps its id, turns advisory, takes the demoted survivor's claim, and hw does not move", () => {
+    const merged = merge({
+      live: [live("R001", "carried")],
+      releasedIds: ["R001"],
+      fresh: [demotedFresh(11, { claim: "current claim" })],
+    });
+    expect(merged.rows.map((r) => [r.id, r.tier, r.claim])).toEqual([
+      ["R001", "advisory", "current claim"],
+    ]);
+    expect(merged.hw).toBe(1);
+  });
+
+  test("a released row the posting floor hid still turns advisory and keeps what it said", () => {
+    const merged = merge({
+      live: [live("R001", "carried", { claim: "said earlier" })],
+      releasedIds: ["R001"],
+      fresh: [],
+    });
+    expect(merged.rows.map((r) => [r.id, r.tier, r.claim])).toEqual([
+      ["R001", "advisory", "said earlier"],
+    ]);
+  });
+
+  test("a released suppressed row keeps its sev and turns advisory", () => {
+    const merged = merge({
+      live: [live("R001", "suppressed", { sev: "BLOCKER" })],
+      releasedIds: ["R001"],
+      fresh: [demotedFresh(10)],
+    });
+    expect(merged.rows[0]).toMatchObject({
+      id: "R001",
+      sev: "BLOCKER",
+      tier: "advisory",
+      status: "suppressed",
+    });
+  });
+
+  test("a released id on an unrecoverable row leaves it unrecoverable", () => {
+    const merged = merge({
+      live: [live("R001", "carried", { tier: "unrecoverable" })],
+      releasedIds: ["R001"],
+      fresh: [],
+    });
+    expect(merged.rows.map((r) => [r.id, r.tier])).toEqual([
+      ["R001", "unrecoverable"],
+    ]);
+  });
+
+  test("without releasedIds a demoted survivor leaves the blocking row alone and appends (fail closed)", () => {
+    const merged = merge({
+      live: [live("R001", "carried")],
+      fresh: [demotedFresh(10)],
+    });
+    expect(merged.rows.map((r) => [r.id, r.tier])).toEqual([
+      ["R001", "blocking"],
+      ["R002", "advisory"],
+    ]);
+  });
+
+  test("the release applies to a same-head re-post's earlier rows too", () => {
+    const previous = {
+      findings: [
+        stateFinding({
+          id: "R001",
+          sev: "CRITICAL",
+          tier: "blocking",
+          channel: "inline",
+          locs: ["src/app.ts:10"],
+          claim: "earlier",
+        }),
+      ],
+      hw: 1,
+    };
+    const merged = merge({
+      live: [],
+      previous,
+      previousHead: HEAD,
+      releasedIds: ["R001"],
+      fresh: [],
+    });
+    expect(merged.rows.map((r) => [r.id, r.tier])).toEqual([
+      ["R001", "advisory"],
+    ]);
+  });
+});
+
 describe("S2 — an unpaired fresh survivor appends with the next id", () => {
   test("a fresh advisory near a blocking prior appends and the blocking row stays", () => {
     const merged = merge({
