@@ -297,6 +297,13 @@ describe("unresolvedBlockingCount — a materiality-demoted survivor releases it
     expect(unresolvedBlockingCount([demoted(10)], rows)).toBe(1);
   });
 
+  test("a prior whose claim is blank is never released: the codebase writes an unknown claim as an empty string", () => {
+    for (const claim of ["", "   "]) {
+      const rows = [row("R001", { claim })];
+      expect(unresolvedBlockingCount([demoted(10)], rows)).toBe(1);
+    }
+  });
+
   test("blocking survivors pair first, so a demoted survivor cannot take the row an unrecoverable prior relies on", () => {
     // The blocking survivor matches both rows and prefers the blocking one. If
     // the demoted survivor went first it would take that row, push the

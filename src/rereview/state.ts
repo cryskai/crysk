@@ -529,7 +529,7 @@ export interface GateRow {
   status: GateStatus;
   // The prior's claim, read only by the materiality release: a prior the
   // materiality gate's safety guard protects is never released. Absent fails
-  // closed, the prior cannot be released.
+  // closed, the prior cannot be released, and so does a blank one.
   claim?: string;
 }
 
@@ -663,9 +663,14 @@ function gatePairing(
 // safety-protected finding, but it reads only the survivor. The 5-line window
 // can pair that survivor with a different, protected prior, and releasing it
 // would turn the gate green on a finding the guard exists to keep blocking.
+// A blank claim counts as unknown: the badge reader writes an unrecovered
+// claim as "" (rereview/prepare.ts), and the guard cannot read safety content
+// that is not there.
 function isReleasable(row: GateRow | undefined): boolean {
-  if (row?.claim === undefined) return false;
-  const claim = row.claim;
+  const claim = row?.claim;
+  if (row === undefined || claim === undefined || claim.trim().length === 0) {
+    return false;
+  }
   const paths = [...identityFromLocs(row.locs).keys()];
   if (paths.length === 0) return !isSafetyProtected({ claim, path: "" });
   return paths.every((path) => !isSafetyProtected({ claim, path }));
