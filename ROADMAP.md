@@ -117,6 +117,11 @@ control, plus the incident eval:
    per review (half of reviews have none, max 6); the judge calls 65 of 185 immaterial (35%), more
    than half of all measured noise; about $0.011 per review on average and ~10 s on reviews that
    have any. Hiding them never touches the gate. This is a pipeline change, not a prompt change.
+   **Not now (2026-11-02): small impact.** It would hide about one noisy comment every four reviews,
+   WARNING advisories never block or lengthen the loop, and the judge calls 65% of them material, so
+   a wrong call hides a useful one. A repo that wants silence already has `post_min_severity:
+   blocking` at no cost. Revisit once the blocking materiality gate has demoted findings in
+   production: it has demoted none since it went live (#449).
 5. **Configurable strictness:** one setting decides what posts inline, what goes to the summary and
    what blocks the gate. **Partly done:** `post_min_severity` (#445) decides what posts.
 6. **Owner-written review guide per repo** (Anthropic): a `REVIEW.md` that says what counts as a
