@@ -92,7 +92,15 @@ Anthropic's "Solving code review at Anthropic" (claude.dev/blog, 2026-10-15) and
 - **Clean-PR arm:** PRs with no known bug, to count pure false positives. **Proxy measured
   (2026-11-01):** small and docs-only PRs are quiet (19 of 21 reviews of diffs of 100 lines or fewer
   had no blocking finding), so a dedicated arm is not urgent.
-- **Loop metrics:** rounds to a green gate, and time from PR open to green.
+- **Loop metrics:** rounds to a green gate, and time from PR open to green. **Done** (#455), measured
+  on PRs reviewed by v0.3.0 or later only. Most PRs are fast: half or more reach green on the first
+  review, and time to green has a p50 of about 0.1 h. The cost is in a tail. On musive (n=18), 23% of
+  PRs needed 3 or more fix rounds and 22% ended red. On this repo (n=29), no PR needed more than 2 fix
+  rounds, and the p90 is 0.6 h. The review budget (2 automatic reviews here, 3 on musive) was used up on
+  14–22% of PRs, so the tail is a floor set by the cap, not the natural length of the loop. A review
+  run takes about 3–5 min, and the musive p90 comes from fix time, not engine time. The samples are
+  small: track the tail (3+ fix rounds, ended red) rather than the medians, which are already at the
+  floor.
 
 **Then the changes**, one variable each, measured against the Martian 50 baseline with a same-session
 control, plus the incident eval:
