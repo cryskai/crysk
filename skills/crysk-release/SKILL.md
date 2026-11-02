@@ -124,20 +124,36 @@ git log --oneline -1                                   # must be the dev → mai
 bun install --frozen-lockfile && bun run build         # the tarball ships dist/
 npm whoami                                             # E401: ask the maintainer to run `! npm login`
 npm publish --access public                            # prerelease: add --tag next
-until [ "$(curl -s -o /dev/null -w '%{http_code}' https://registry.npmjs.org/crysk/$V)" = 200 ]; do sleep 30; done
-npm view crysk dist-tags --prefer-online               # latest: $V (can lag ~10 min; never publish twice)
 ```
 
-An `E404` on `PUT` means missing credentials, not a missing package.
+**If the publish fails, stop here.** Nothing is tagged yet, so the release can be retried cleanly. An
+`E404` on `PUT` means missing credentials, not a missing package.
+
+Only after a successful publish, wait for the registry, for at most 15 minutes. Run this in the
+background, because a foreground `sleep` may be blocked:
+
+```bash
+for i in $(seq 1 30); do
+  [ "$(curl -s -o /dev/null -w '%{http_code}' https://registry.npmjs.org/crysk/$V)" = 200 ] && echo "crysk@$V is live" && break
+  sleep 30
+done
+npm view crysk dist-tags --prefer-online               # latest: $V
+```
+
+If it is still missing after 15 minutes, look for `PUT ... 202` in `~/.npm/_logs/*-debug-0.log`. A 202
+means the registry accepted the upload and is still processing it. **Never publish twice.**
 
 ### 9. Tag and push
 
 ```bash
-git tag -a v$V -m "Release v$V"
-git tag -fa v0 -m "Release v0 (points to v$V)"
-git push origin v$V
-git push origin v0 --force
+git tag -a v$V -m "Release v$V" \
+  && git tag -fa v0 -m "Release v0 (points to v$V)" \
+  && git push origin v$V \
+  && git push origin v0 --force
 ```
+
+The `&&` chain matters: if `v$V` fails to push, `v0` must not move. Workflows that use `@v0` would
+otherwise run code that has no release.
 
 The tag starts `release.yml`. It runs `verify-version`, then four binary builds (each runs the suite and
 the compiled smoke), then the GitHub Release (`make_latest: true`), then `mirror-legacy`, which copies
