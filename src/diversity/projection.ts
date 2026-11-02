@@ -35,6 +35,7 @@ export function projectAdjudicationToFindings(
         severity: canonical.severity,
         evidence_class: canonical.evidenceClass,
         refuter_verdict: refuterVerdict,
+        causal_disposition: canonical.causalDisposition,
       }),
       hops_used: canonical.hopsUsed,
       hop_trail: canonical.hopTrail,

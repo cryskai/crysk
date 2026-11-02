@@ -1293,6 +1293,16 @@ function tierExplanationLines(finding: Finding): string[] {
         materialityReason(finding.materiality.reason),
     ];
   }
+  // #457: a finding the PR did not cause is advisory whatever the refuter
+  // said, so the refuter text would explain nothing about its tier.
+  if (
+    finding.causal_disposition === "pre-existing" ||
+    finding.causal_disposition === "base-only"
+  ) {
+    return [
+      "⚖️ Advisory — this PR did not introduce it, so it does not block the gate",
+    ];
+  }
   // `not_submitted` never reached the refuter, so "the refuter returned" it
   // would be false, and printing the engine's word here would contradict the
   // header, which says `refuter: unchecked` (refuterLabel).

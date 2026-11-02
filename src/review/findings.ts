@@ -593,7 +593,10 @@ export function validateFindingsDocument(candidate: unknown): FindingsDocument {
 // check was cut short before the finding was ever submitted (see the
 // `refuterCutShort` option below).
 export function deriveTier(
-  finding: Pick<Finding, "severity" | "evidence_class" | "refuter_verdict">,
+  finding: Pick<
+    Finding,
+    "severity" | "evidence_class" | "refuter_verdict" | "causal_disposition"
+  >,
   options: {
     // Whether a refuter check this finding was ENTITLED TO never got to
     // submit its verdict. NOT a synonym for "the run was truncated": the
@@ -612,6 +615,18 @@ export function deriveTier(
   const isBlockerClass =
     finding.severity === "BLOCKER" || finding.severity === "CRITICAL";
   if (!isBlockerClass) return "advisory";
+  // #457: a defect this PR did not cause never blocks this PR. The tier gates
+  // the PR, and a triage reply never lowers the blocking count (S7), so a
+  // pre-existing blocker could only be cleared by fixing code the PR does not
+  // own, or by an override; on a v0.3.0 review it held the gate red until the
+  // PR merged over it. Only the two dispositions that say "not this PR" demote:
+  // `worsened` and `behavior-activated` are the PR's doing, and `unknown`
+  // causality is not evidence of innocence, so all three still block.
+  if (
+    finding.causal_disposition === "pre-existing" ||
+    finding.causal_disposition === "base-only"
+  )
+    return "advisory";
   if (finding.evidence_class === "insufficient") return "advisory";
   // Ordered BEFORE the deterministic short-circuit on purpose. A verdict that
   // could not outrank `deterministic` would be inert exactly where it is

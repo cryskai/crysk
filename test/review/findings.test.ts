@@ -454,10 +454,13 @@ describe("tier derivation (full table)", () => {
   // The options element is LAST and optional so every case predating the
   // refuter-cut-short axis reads exactly as it did — an omitted element is the
   // default (`refuterCutShort: false`), which is also `deriveTier`'s own.
+  // Every case here predates the causal axis and is a finding the PR itself
+  // introduced; the loop below supplies that disposition, and the causal cases
+  // live in their own table after this one.
   const cases: Array<
     [
       string,
-      Parameters<typeof deriveTier>[0],
+      Omit<Parameters<typeof deriveTier>[0], "causal_disposition">,
       "blocking" | "advisory",
       Parameters<typeof deriveTier>[1]?,
     ]
@@ -674,7 +677,70 @@ describe("tier derivation (full table)", () => {
 
   for (const [name, input, expected, options] of cases) {
     test(name, () => {
-      expect(deriveTier(input, options)).toBe(expected);
+      expect(
+        deriveTier({ ...input, causal_disposition: "introduced" }, options),
+      ).toBe(expected);
+    });
+  }
+});
+
+describe("tier derivation (causal disposition, #457)", () => {
+  // A finding the PR did not cause must not hold that PR's gate red: a triage
+  // reply never lowers the blocking count (S7), so a pre-existing blocker
+  // could only be cleared by fixing code the PR does not own, or an override.
+  const corroboratedCritical = {
+    severity: "CRITICAL",
+    evidence_class: "inferential",
+    refuter_verdict: "corroborated",
+  } as const;
+  const deterministicBlocker = {
+    severity: "BLOCKER",
+    evidence_class: "deterministic",
+    refuter_verdict: "not_submitted",
+  } as const;
+  const cases: Array<
+    [string, Parameters<typeof deriveTier>[0], "blocking" | "advisory"]
+  > = [
+    [
+      "a corroborated CRITICAL the PR did not cause is advisory",
+      { ...corroboratedCritical, causal_disposition: "pre-existing" },
+      "advisory",
+    ],
+    [
+      "a deterministic BLOCKER the PR did not cause is advisory",
+      { ...deterministicBlocker, causal_disposition: "pre-existing" },
+      "advisory",
+    ],
+    [
+      "a base-only BLOCKER is advisory",
+      { ...deterministicBlocker, causal_disposition: "base-only" },
+      "advisory",
+    ],
+    [
+      "a corroborated CRITICAL the PR introduced still blocks",
+      { ...corroboratedCritical, causal_disposition: "introduced" },
+      "blocking",
+    ],
+    [
+      "a defect the PR worsened still blocks",
+      { ...corroboratedCritical, causal_disposition: "worsened" },
+      "blocking",
+    ],
+    [
+      "a defect the PR activated still blocks",
+      { ...corroboratedCritical, causal_disposition: "behavior-activated" },
+      "blocking",
+    ],
+    [
+      "an unknown disposition still blocks: unknown causality is not a demotion",
+      { ...deterministicBlocker, causal_disposition: "unknown" },
+      "blocking",
+    ],
+  ];
+
+  for (const [name, input, expected] of cases) {
+    test(name, () => {
+      expect(deriveTier(input)).toBe(expected);
     });
   }
 });
