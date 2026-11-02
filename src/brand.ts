@@ -124,20 +124,21 @@ export function commandHint(command: string, quote = "`"): string {
   );
 }
 
-// Commit status contexts. The gate is a required check in users' branch
-// protection, which names `pr-hero`; a head that stops getting that context
-// blocks forever. So for one version every status is written on BOTH names, the
-// new one first, and every reader treats the two as one gate. The version that
-// drops the legacy name deletes LEGACY_STATUS_CONTEXT and the helpers below.
+// Commit status contexts. Every status is written on the crysk name only (#457
+// ended the dual write that kept the legacy `pr-hero` context alive, so a branch
+// protection that still requires `pr-hero` must switch to `crysk`). Readers still
+// treat both names as one gate: a head reviewed before that change, or by an older
+// action, carries only `pr-hero` rows, and those must keep counting. The version
+// that stops reading the legacy name deletes LEGACY_STATUS_CONTEXT and the helpers below.
 export const STATUS_CONTEXT = "crysk";
 const LEGACY_STATUS_CONTEXT = "pr-hero";
 
 // The context of a run that cannot move the gate: a local `review --pr` and the
-// watcher. Its legacy form is `pr-hero/local`, derived the same way.
+// watcher. Its legacy form, still read, is `pr-hero/local`, derived the same way.
 export const LOCAL_STATUS_CONTEXT = `${STATUS_CONTEXT}/local` as const;
 
-// Both contexts a status written on `context` is published on, new name first.
-// `context` is always a crysk context: a request is built in the new form, and the
+// Both names a READER accepts for `context`, new name first. Never a list to write:
+// a status is posted on `context` alone. `context` is always a crysk context, and the
 // legacy form is derived from it here, as the marker and command helpers do.
 export function statusContextForms(context: string): string[] {
   if (context !== STATUS_CONTEXT && !context.startsWith(`${STATUS_CONTEXT}/`)) {
@@ -156,7 +157,8 @@ export function isStatusContext(actual: string, context: string): boolean {
 }
 
 // For picking between two rows with the same time: the legacy name loses to the new
-// one, because the pair a run writes carries identical content on both.
+// one, so the answer never depends on the order of the list. (A pair with one time is
+// what a run before #457 wrote, with identical content on both names.)
 export function isLegacyStatusContext(context: string): boolean {
   return (
     context === LEGACY_STATUS_CONTEXT ||

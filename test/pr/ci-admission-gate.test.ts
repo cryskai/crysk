@@ -1383,8 +1383,8 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
   });
 
   // Every status write this run made: the POST to the statuses endpoint.
-  // Every status goes out twice, crysk then the legacy pr-hero (postCommitStatus). This is the
-  // logical writes, the crysk side; legacyStatusWrites is the twin of each.
+  // statusWrites is the crysk side; legacyStatusWrites proves the legacy pr-hero name stays
+  // unwritten (postCommitStatus posts the crysk context alone).
   function allStatusPosts(calls: string[][]): string[][] {
     return calls.filter((argv) =>
       argv.some((token) => token.startsWith("repos/{owner}/{repo}/statuses/")),
@@ -1453,12 +1453,7 @@ describe("evaluateCiAdmissionGate — a gate-mode admission skip carries the rev
     expect(writes[0]).toContain(`repos/{owner}/{repo}/statuses/${HEAD_B}`);
     expect(writes[0]).toContain("state=failure");
     expect(writes[0]).toContain("context=crysk");
-    // The legacy pr-hero twin carries the same state, description and target.
-    const twins = legacyStatusWrites(calls);
-    expect(twins).toHaveLength(1);
-    expect(twins[0]?.filter((token) => token !== "context=pr-hero")).toEqual(
-      writes[0]?.filter((token) => token !== "context=crysk"),
-    );
+    expect(legacyStatusWrites(calls)).toEqual([]);
     expect(writes[0]).toContain(
       "description=crysk: 2 blocking finding(s) carried from aaaaaaa — fix and push, or /pr-hero override",
     );

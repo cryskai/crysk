@@ -247,7 +247,7 @@ export async function settleCommitStatusAndLedger(input: {
 }): Promise<void> {
   // Only the gate's own context is graded (T3 S7): any other context is
   // advisory, so a run asked for gate without a `--ci` context still cannot
-  // write a verdict onto pr-hero. resolveCiPosture keeps the pair consistent in
+  // write a verdict onto the gate. resolveCiPosture keeps the pair consistent in
   // production; this keeps the write safe if they ever diverge.
   const effectiveMode: CiMode =
     input.statusContext === COMMIT_STATUS_CONTEXT ? input.ciMode : "advisory";

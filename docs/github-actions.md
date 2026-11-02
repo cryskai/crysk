@@ -19,7 +19,7 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    Homebrew) and to run `gh auth login`; the workflow is written either way. It reviews every push to a pull request, answers a
    `/crysk review` comment (see [Re-review on demand](#re-review-on-demand)), and answers a
    `/crysk override` comment (see [Overriding a red gate](#overriding-a-red-gate)). Do **not** copy this
-   repository's own `.github/workflows/pr-hero.yml` (the pre-rename file name, kept here): that file is generated with
+   repository's own `.github/workflows/crysk.yml`: that file is generated with
    `OWN_CI_WORKFLOW_OPTIONS` so this repo can dogfood the checkout (`uses: ./`,
    `max-changed-lines: 5000`, and a step that pins the pull request head on a comment run).
    `test/packaging.test.ts` asserts each file against its own generator options; it does **not** assert
@@ -33,7 +33,7 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    [`PRH-GOTCHAS-MISSING`](#prh-gotchas-missing).
 4. **Commit `.crysk/` to the default branch.** Comment-triggered runs read the base branch, so the file
    must be there, not only on your feature branch.
-5. **Require the check.** In branch protection, require the `crysk` status check (the gate); `pr-hero` is still posted for one version, so a repository that already requires it keeps working while you switch. Do not require the
+5. **Require the check.** In branch protection, require the `crysk` status check (the gate). The legacy `pr-hero` status is no longer posted, so a repository that still requires it is blocked until the rule moves to `crysk`. Do not require the
    `review` job, which stays green even when it finds blocking issues. A private repository on GitHub Free
    cannot require status checks (GitHub returns HTTP 403), so there the gate is advisory in practice.
 6. **Open a pull request** from a branch in this repository (not a fork). Crysk comments inline, posts
@@ -554,7 +554,7 @@ Re-scaffold with `crysk ci init --force` to switch to the comment trigger. It re
 the review workflow only (`pr-hero.yml` or `crysk.yml`, whichever the repository has) and leaves
 `pr-hero-force.yml` in place; delete that file yourself once the new workflow is on the default branch.
 
-In this repository, a comment run reviews with the pull request's own engine: `pr-hero.yml` is
+In this repository, a comment run reviews with the pull request's own engine: `crysk.yml` is
 generated with `OWN_CI_WORKFLOW_OPTIONS`, so on a comment a first step resolves the PR head commit and
 checkout pins that commit before `uses: ./`. A comment run starts on the default branch, so without the
 pin it would run the default branch's engine instead of the one under review. Consumer workflows run
@@ -603,11 +603,11 @@ short policy hash.
 
 ## Gate mode: the status is the check
 
-The `crysk` commit status is the check you require in branch protection. For one version every status is
-also written on the legacy `pr-hero` context, with the same state, description and link, so a repository that
-requires `pr-hero` is not blocked while it adds `crysk`; then `pr-hero` is dropped. Readers (the admission
-gate, `crysk status`, the override check) treat the two as one gate and take the newest row across both,
-so an override posted by an older action only on `pr-hero` still wins. Descriptions are written `crysk: …`
+The `crysk` commit status is the check you require in branch protection. The legacy `pr-hero` context is
+no longer written, so a repository that still requires `pr-hero` is blocked until the rule moves to `crysk`.
+Readers (the admission gate, `crysk status`, the override check) still treat the two as one gate and take the
+newest row across both, so a head reviewed earlier keeps its verdict, and an override posted by an older action
+only on `pr-hero` still wins. Descriptions are written `crysk: …`
 and read in both spellings. The job's exit code does not
 carry the review's findings: a finished review exits `0` even when it finds blocking-tier issues. Findings
 are published as comments and a summary, and the commit status decides the gate.
@@ -761,8 +761,8 @@ posts no status, so the head stays `pending` until a `/crysk review` comment for
 status again. The pending status, written when a review starts, is best-effort in both modes.
 
 **Local runs and the watcher post on `crysk/local`.** Only an explicit `--ci` run writes the `crysk`
-status (and its legacy `pr-hero` twin), which is the required check. A `crysk review --pr` you run locally, and each review that
-`crysk watch` starts, post advisory statuses on `crysk/local` (and `pr-hero/local`) instead, so they cannot overwrite a red gate
+status, which is the required check. A `crysk review --pr` you run locally, and each review that
+`crysk watch` starts, post advisory statuses on `crysk/local` instead, so they cannot overwrite a red gate
 on the same head. Only the `--ci` flag makes a run post to the gate; `CI=1` in your shell does not. The watcher yields
 to a review in flight on either context, and it settles only its own leftover pending, on `crysk/local`. A `--ci`
 run stands down only for a pending on `crysk` (or `pr-hero`), because only it writes those contexts, so a local pending never

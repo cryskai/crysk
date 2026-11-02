@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Crysk no longer writes the legacy `pr-hero` commit status, only `crysk`.** A branch protection or ruleset
+  that still requires `pr-hero` must switch to `crysk`, or its pull requests stay blocked. Older `pr-hero`
+  statuses are still read, so a head reviewed before this change keeps its verdict.
+- **A finding the PR did not introduce no longer blocks it.** A `pre-existing` or `base-only` finding is posted
+  as advisory, unless it touches auth, secrets, isolation or data loss, which keep blocking. `worsened`,
+  `behavior-activated` and `unknown` still block.
+
 ### Added
 - **`materiality_gate` demotes immaterial blocking findings to advisory (opt-in, off by default).** When
   `true`, an extra isolated judge checks each blocking finding against Crysk's posting policy, and a finding
