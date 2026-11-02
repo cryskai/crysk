@@ -118,7 +118,7 @@ Crysk from: that single step is what moves a run from quota to invoice.
 # Option A: Standalone binary (macOS / Linux, bundles its own Bun — still needs claude and git)
 curl -fsSL https://raw.githubusercontent.com/cryskai/crysk/main/install.sh | bash
 
-# Option B: Global npm install (brings Bun 1.3.14 as an optional dependency, or uses
+# Option B: Global npm install (brings Bun 1.4.4 as an optional dependency, or uses
 # the Bun >= 1.3 on PATH when npm skips optional dependencies)
 npm install -g crysk
 

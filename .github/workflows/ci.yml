@@ -38,8 +38,8 @@ jobs:
         with:
           # Pinned, not `latest`: a runtime that changes under you turns an
           # unrelated upstream release into a red build on an innocent PR.
-          # Matches action.yml's own pin.
-          bun-version: '1.3.14'
+          # The one pin is package.json's `packageManager`, which action.yml reads too.
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

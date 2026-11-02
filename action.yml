@@ -95,10 +95,10 @@ runs:
       uses: oven-sh/setup-bun@v2
       with:
         # Pinned, not `latest`: a published Action's toolchain should be
-        # reproducible run to run, not a moving target. Matches this repo's
-        # own engines constraint (package.json: "bun": ">=1.3.0") and the
-        # version this repo is developed and tested against.
-        bun-version: '1.3.14'
+        # reproducible run to run, not a moving target. The one pin is
+        # package.json's `packageManager`; read from the Action's own copy,
+        # never the caller's repository, which has its own package.json.
+        bun-version-file: ${{ github.action_path }}/package.json
 
     # The trigger decides whether this run reviews at all, and it runs FIRST,
     # before `bun install`, so an ignored comment or a fork PR costs seconds
