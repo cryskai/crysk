@@ -10,6 +10,7 @@ import {
 } from "../../src/transports/opencode-client";
 import type { OpenCodeTransportClock } from "../../src/transports/opencode-sdk";
 import { OpenCodeSdkTransport } from "../../src/transports/opencode-sdk";
+import { flush } from "../support/flush";
 
 // Issue #124. `message.part.delta` filters on `field === "text"` — the FIELD
 // NAME — and the SDK gives `ReasoningPart` a member literally called `text`,
@@ -279,10 +280,6 @@ function makeRequest(): TransportRequest {
       verifiedBinaryPath: "/usr/bin/true",
     },
   };
-}
-
-async function flush(): Promise<void> {
-  for (let i = 0; i < 50; i += 1) await Promise.resolve();
 }
 
 async function runAttempt(events: Array<Record<string, unknown>>) {

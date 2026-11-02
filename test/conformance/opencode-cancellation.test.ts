@@ -14,6 +14,7 @@ import {
   OpenCodeSdkTransport,
   type OpenCodeTransportClock,
 } from "../../src/transports/opencode-sdk";
+import { flush } from "../support/flush";
 
 const request: TransportRequest = {
   sessionId: "local",
@@ -41,9 +42,6 @@ const request: TransportRequest = {
   },
 };
 const sink: AsyncEventSink = { push: async () => "accepted", close() {} };
-async function flush() {
-  for (let i = 0; i < 60; i++) await Promise.resolve();
-}
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => {

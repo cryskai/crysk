@@ -13,6 +13,7 @@ import type {
   OpenCodeTransportClock,
 } from "../../src/transports/opencode-sdk";
 import { OpenCodeSdkTransport } from "../../src/transports/opencode-sdk";
+import { flush } from "../support/flush";
 
 // Issue #132: the poll observer can win §197's terminal slot while the stream
 // is still delivering the turn's answer text, and the attempt then reports
@@ -62,10 +63,6 @@ class ManualClock implements OpenCodeTransportClock {
     const fns = this.pending.splice(0).map((entry) => entry.fn);
     for (const fn of fns) fn();
   }
-}
-
-async function flush(): Promise<void> {
-  for (let i = 0; i < 25; i += 1) await Promise.resolve();
 }
 
 class RecordingSink implements AsyncEventSink {
