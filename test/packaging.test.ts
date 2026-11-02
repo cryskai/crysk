@@ -47,6 +47,7 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.files).not.toContain("test");
     expect(pkg.files).not.toContain("openspec");
     expect(pkg.files).not.toContain("skills/martian-bench");
+    expect(pkg.files).not.toContain("skills/crysk-release");
     expect(pkg.scripts.build).toBeDefined();
   });
 
