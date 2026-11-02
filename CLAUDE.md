@@ -87,6 +87,7 @@ bun scripts/sandbox.ts init --ref <ref> [--route claude|opencode:<modelSnapshot>
 - `skills/crysk-pr/SKILL.md` — open or update a PR with a structured template and auto-subscribe to the pr-hero review loop.
 - `skills/crysk-loop/SKILL.md` — answer posted `<!-- pr-hero-finding` comments on a PR you authored.
 - `skills/crysk-ci-setup/SKILL.md` — scaffold GitHub Actions review workflow and configure repository secrets.
+- `skills/crysk-release/SKILL.md` — cut a release step by step (changelog audit, five-file version bump, release PR, dev → main, manual npm publish, tags, verification). Maintainer-only, not shipped; `docs/release-runbook.md` stays the long reference.
 
 `refuter-probe` is the FIRST gate for any refuter prompt change (ROADMAP A2): it plants claims whose
 correct verdict is known and asserts all four outcomes — `corroborated`, `refuted` (adjacent and 3-hop),
