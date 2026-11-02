@@ -21,13 +21,14 @@ import {
   type RecoveredSeverity,
   SEVERITY_UNRECOVERABLE,
 } from "#rereview/classify";
-import type {
-  Finding,
-  FindingsDocument,
-  RefuterVerdict,
-  RunStatus,
-  Severity,
-  Tier,
+import {
+  type Finding,
+  type FindingsDocument,
+  isCausallyExempt,
+  type RefuterVerdict,
+  type RunStatus,
+  type Severity,
+  type Tier,
 } from "#review/findings";
 import {
   clusterByRootCause,
@@ -1295,10 +1296,7 @@ function tierExplanationLines(finding: Finding): string[] {
   }
   // #457: a finding the PR did not cause is advisory whatever the refuter
   // said, so the refuter text would explain nothing about its tier.
-  if (
-    finding.causal_disposition === "pre-existing" ||
-    finding.causal_disposition === "base-only"
-  ) {
+  if (isCausallyExempt(finding)) {
     return [
       "⚖️ Advisory — this PR did not introduce it, so it does not block the gate",
     ];

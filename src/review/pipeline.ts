@@ -3796,6 +3796,8 @@ function tierFindings(
           evidence_class: survivor.evidence_class,
           refuter_verdict: verdict,
           causal_disposition: survivor.causal_disposition,
+          claim: survivor.claim,
+          path: survivor.path,
         },
         // The conjunction is computed HERE, and both conjuncts are the same
         // kind of trap one level apart.

@@ -594,7 +594,8 @@ PR makes it eligible again on the next tick, because the gate is recomputed ever
   report says so itself. An advisory report reads *assistant report, not a merge gate; every line is a claim to
   verify.* A CI report in gate mode backs the `crysk` commit status, the required check: a blocking finding
   sets that status to failure. A finding the PR did not introduce (`pre-existing` or `base-only`) is
-  reported as advisory and never blocks it.
+  reported as advisory and does not block it, unless it touches auth, secrets, isolation or data loss,
+  which keep blocking.
 
 ## Isolation model
 

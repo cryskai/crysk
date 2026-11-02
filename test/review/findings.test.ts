@@ -460,7 +460,10 @@ describe("tier derivation (full table)", () => {
   const cases: Array<
     [
       string,
-      Omit<Parameters<typeof deriveTier>[0], "causal_disposition">,
+      Omit<
+        Parameters<typeof deriveTier>[0],
+        "causal_disposition" | "claim" | "path"
+      >,
       "blocking" | "advisory",
       Parameters<typeof deriveTier>[1]?,
     ]
@@ -678,7 +681,15 @@ describe("tier derivation (full table)", () => {
   for (const [name, input, expected, options] of cases) {
     test(name, () => {
       expect(
-        deriveTier({ ...input, causal_disposition: "introduced" }, options),
+        deriveTier(
+          {
+            ...input,
+            causal_disposition: "introduced",
+            claim: "the cached width is scaled twice",
+            path: "src/app.ts",
+          },
+          options,
+        ),
       ).toBe(expected);
     });
   }
@@ -688,12 +699,18 @@ describe("tier derivation (causal disposition, #457)", () => {
   // A finding the PR did not cause must not hold that PR's gate red: a triage
   // reply never lowers the blocking count (S7), so a pre-existing blocker
   // could only be cleared by fixing code the PR does not own, or an override.
+  const plain = {
+    claim: "the cached width is scaled twice",
+    path: "src/app.ts",
+  } as const;
   const corroboratedCritical = {
+    ...plain,
     severity: "CRITICAL",
     evidence_class: "inferential",
     refuter_verdict: "corroborated",
   } as const;
   const deterministicBlocker = {
+    ...plain,
     severity: "BLOCKER",
     evidence_class: "deterministic",
     refuter_verdict: "not_submitted",
@@ -729,6 +746,24 @@ describe("tier derivation (causal disposition, #457)", () => {
     [
       "a defect the PR activated still blocks",
       { ...corroboratedCritical, causal_disposition: "behavior-activated" },
+      "blocking",
+    ],
+    [
+      "a pre-existing finding the safety guard protects still blocks (claim)",
+      {
+        ...corroboratedCritical,
+        claim: "the session token is written to the log",
+        causal_disposition: "pre-existing",
+      },
+      "blocking",
+    ],
+    [
+      "a pre-existing finding the safety guard protects still blocks (path)",
+      {
+        ...deterministicBlocker,
+        path: "src/security/credential-broker.ts",
+        causal_disposition: "base-only",
+      },
       "blocking",
     ],
     [
