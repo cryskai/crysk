@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A finding the PR did not introduce no longer blocks it.** A `pre-existing` or `base-only` finding is posted
   as advisory, unless it touches auth, secrets, isolation or data loss, which keep blocking. `worsened`,
   `behavior-activated` and `unknown` still block.
+- **The `crysk-loop` skill now fixes the class, not just the site.** Before replying `applied`, the agent names
+  the defect class, sweeps the PR's own diff and its fix for other instances, fixes the ones the PR introduced
+  in the same push, and says in the reply what it swept. Most findings after the first review were bugs of the
+  same class written by the previous fix. `crysk setup` updates installed copies; a locally edited copy needs `crysk upgrade`.
 
 ### Added
 - **`materiality_gate` demotes immaterial blocking findings to advisory (opt-in, off by default).** When
