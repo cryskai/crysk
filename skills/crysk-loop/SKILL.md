@@ -337,7 +337,10 @@ review round, or ships unverified once the review budget is used up. So before y
 
 1. **Name the class in one sentence.** Name the rule the finding showed broken, not the line:
    "a caller reads the cache before the refresh settles", not "line 42 lacks a guard".
-2. **Sweep the PR for it.** Check every hunk in `git diff origin/<base-branch>...HEAD` (the PR's base branch) plus your uncommitted fix.
+2. **Sweep the PR for it.** Check every hunk in `gh pr diff <n>` (GitHub's own diff of the PR, so
+   no local base ref can be stale or missing) plus everything you changed since the reviewed head:
+   `git diff <head>`, with `head` from `crysk status`, covers unpushed commits and the working tree.
+   If you cannot get the PR diff, say so in the reply and do not claim a sweep.
    Search by shape (the same call, field, guard, state change or fallback), not only by the
    identifier the finding named. Fix every instance this PR introduced in the same push, each with
    a test that fails without its fix.
