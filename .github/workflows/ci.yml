@@ -3,7 +3,7 @@
 # pull request and every merge to main was verified by whoever remembered to
 # run the gates by hand.
 #
-# Not to be confused with pr-hero.yml, which runs the *reviewer* on a PR.
+# Not to be confused with crysk.yml, which runs the *reviewer* on a PR.
 # That one reads the diff and comments; this one proves the code still works.
 name: CI
 

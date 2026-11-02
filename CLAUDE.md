@@ -41,7 +41,7 @@ been burned by a manual match that inflated a score by 50%.
 ## Branch and PR workflow (mandatory since 2026-08-26)
 
 Every slice lands through a feature branch and a pull request targeting `dev` —
-never push directly to `dev`. This is deliberate dogfooding: `pr-hero.yml` runs this
+never push directly to `dev`. This is deliberate dogfooding: `crysk.yml` runs this
 engine's own review on every PR, so each slice gets self-reviewed by pr-hero
 before it merges.
 
