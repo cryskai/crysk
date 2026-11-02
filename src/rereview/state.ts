@@ -19,7 +19,12 @@ import {
   identityFromFinding,
   identityFromLocs,
 } from "#rereview/identity";
-import type { Finding, Severity } from "#review/findings";
+import {
+  deriveTier,
+  type Finding,
+  isCausallyExempt,
+  type Severity,
+} from "#review/findings";
 import { isSafetyProtected } from "#review/materiality-gate";
 import { findMarker, MARKER_BRAND_PATTERN, MARKER_OPEN } from "../brand";
 import {
@@ -533,17 +538,65 @@ export interface GateRow {
   claim?: string;
 }
 
+// The causal fields are optional so a caller that only has identity and tier
+// still counts correctly: a survivor without them is never causally demoted, so
+// it releases nothing (fail closed). doc.findings carries all of them.
 export type GateSurvivor = Pick<
   Finding,
   "path" | "line" | "proof_refs" | "tier" | "materiality"
->;
+> &
+  Partial<
+    Pick<
+      Finding,
+      | "severity"
+      | "evidence_class"
+      | "refuter_verdict"
+      | "causal_disposition"
+      | "claim"
+    >
+  >;
 
-// A survivor the materiality gate demoted from blocking (review/materiality-gate.ts):
-// advisory now, carrying the judge's immaterial verdict. It is the one advisory
-// survivor that pairs, and only with a blocking row (see the note above GateRow).
-function isMaterialityDemoted(survivor: GateSurvivor): boolean {
+// A survivor demoted from blocking: advisory now, and blocking but for one
+// rule. Either the materiality gate's immaterial verdict
+// (review/materiality-gate.ts), or #457's causal rule: the PR did not cause it.
+// These are the only advisory survivors that pair, and only with a blocking row
+// (see the note above GateRow). The causal case asks deriveTier what the
+// finding would be as `introduced`, so a pre-existing finding that would have
+// been advisory anyway (an unrefuted inferential one) releases nothing. A
+// `not_submitted` survivor never counts as demoted: on a run the ceiling cut
+// short, deriveTier demoted it for the missing check (refuterCutShort), which
+// this row cannot see, so the recompute would call it blocking and release a
+// prior it never earned. Failing closed costs one prior staying counted.
+function isDemotedFromBlocking(survivor: GateSurvivor): boolean {
+  if (survivor.tier !== "advisory") return false;
+  if (survivor.materiality?.label === "immaterial") return true;
+  const {
+    severity,
+    evidence_class,
+    refuter_verdict,
+    causal_disposition,
+    claim,
+  } = survivor;
+  if (
+    severity === undefined ||
+    evidence_class === undefined ||
+    refuter_verdict === undefined ||
+    refuter_verdict === "not_submitted" ||
+    causal_disposition === undefined ||
+    claim === undefined
+  )
+    return false;
+  const finding = {
+    severity,
+    evidence_class,
+    refuter_verdict,
+    causal_disposition,
+    claim,
+    path: survivor.path,
+  };
   return (
-    survivor.tier === "advisory" && survivor.materiality?.label === "immaterial"
+    isCausallyExempt(finding) &&
+    deriveTier({ ...finding, causal_disposition: "introduced" }) === "blocking"
   );
 }
 
@@ -652,7 +705,7 @@ function gatePairing(
       survivors,
       open,
       taken,
-      (survivor) => (isMaterialityDemoted(survivor) ? ["blocking"] : null),
+      (survivor) => (isDemotedFromBlocking(survivor) ? ["blocking"] : null),
       (i) => isReleasable(open[i]),
     ).map((p) => p.row),
   );

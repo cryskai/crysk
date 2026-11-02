@@ -2,7 +2,8 @@
 // duplicates, renumber survivors. Deterministic — same input, same output.
 
 import type { DraftFinding } from "./drafts";
-import type { Severity } from "./findings";
+import { isNotCausedByPr, type Severity } from "./findings";
+import { isSafetyProtected } from "./materiality-gate";
 
 // A survivor is a draft whose id has been renumbered to the canonical
 // F001, F002, … sequence (and, for a cross-category winner, whose proof_refs
@@ -314,14 +315,53 @@ export function mergeAndDedupe(drafts: DraftFinding[]): {
   // Folded survivors are new objects; winnerOf chains still point at the
   // original winner, so renumbering has to key on that original.
   const originalOf = new Map<DraftFinding, DraftFinding>();
+  // #457: the tier now reads causal_disposition, so a merged group must not
+  // take its winner's word for it alone. Every draft that ends in a winner, in
+  // either pass, is a witness: when the winner says the PR did not cause the
+  // defect but any merged draft says it did (introduced, worsened, activated,
+  // or unknown), the survivor keeps that draft's disposition. One hunter's
+  // "pre-existing" must not clear a defect another hunter traced to this PR.
+  const mergedInto = new Map<DraftFinding, DraftFinding[]>();
+  for (const draft of drafts) {
+    let root = draft;
+    for (let next = winnerOf.get(root); next !== undefined && next !== root; ) {
+      root = next;
+      next = winnerOf.get(root);
+    }
+    if (root === draft) continue;
+    const members = mergedInto.get(root);
+    if (members) members.push(draft);
+    else mergedInto.set(root, [draft]);
+  }
+  // The safety guard reads only the survivor's own claim and path, and the
+  // winner's wording is all a survivor keeps. When a merged draft the guard
+  // protects (auth, secrets, data loss) folds into a winner whose wording it
+  // does not protect, the group cannot vouch that the PR is innocent: the
+  // survivor's disposition becomes `unknown`, which keeps it blocking. Never
+  // `introduced`, which no hunter said.
+  const blamingDisposition = (winner: DraftFinding) => {
+    if (!isNotCausedByPr(winner.causal_disposition)) return undefined;
+    const members = mergedInto.get(winner) ?? [];
+    const blamer = members.find(
+      (member) => !isNotCausedByPr(member.causal_disposition),
+    );
+    if (blamer !== undefined) return blamer.causal_disposition;
+    const lostSafety =
+      !isSafetyProtected(winner) &&
+      members.some((member) => isSafetyProtected(member));
+    return lostSafety ? ("unknown" as const) : undefined;
+  };
   for (const draft of pass1) {
     const winner = clusterWinnerOf.get(draft) as DraftFinding;
     if (emittedWinners.has(winner)) continue;
     emittedWinners.add(winner);
     const losers = foldedInto.get(winner) as DraftFinding[];
+    const blame = blamingDisposition(winner);
     if (losers.length === 0) {
-      survivorsRaw.push(winner);
-      originalOf.set(winner, winner);
+      const survivor =
+        blame === undefined ? winner : { ...winner, causal_disposition: blame };
+      survivorsRaw.push(survivor);
+      originalOf.set(survivor, winner);
       continue;
     }
     const foldedRefs = [...winner.proof_refs];
@@ -330,7 +370,11 @@ export function mergeAndDedupe(drafts: DraftFinding[]): {
         if (!foldedRefs.includes(ref)) foldedRefs.push(ref);
       }
     }
-    const folded = { ...winner, proof_refs: foldedRefs };
+    const folded = {
+      ...winner,
+      proof_refs: foldedRefs,
+      ...(blame === undefined ? {} : { causal_disposition: blame }),
+    };
     survivorsRaw.push(folded);
     originalOf.set(folded, winner);
   }

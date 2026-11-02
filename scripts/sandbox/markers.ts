@@ -42,9 +42,8 @@ export const OVERRIDE_MARKER_PREFIX = `${MARKER_OPEN}override`;
 // The commit status context the publisher writes (src/ci/publish.ts), brand's one literal.
 export const STATUS_CONTEXT = BRAND_STATUS_CONTEXT;
 
-// The gate's row among a commit's statuses. The publisher writes the gate on `crysk` and, for
-// one version, on the legacy `pr-hero` too, and a sandbox run on an older ref writes only
-// `pr-hero`: the newest row across both names is the gate, as every product reader takes it.
+// The gate's row among a commit's statuses. The publisher writes the gate on `crysk`, a ref from before #457 also
+// wrote the legacy `pr-hero`, and a sandbox run on an older ref writes only `pr-hero`: the newest row across both names is the gate, as every product reader takes it.
 // A tie goes to the crysk row. A row without a time sorts as the oldest.
 export function gateStatusOf<
   T extends { context: string; created_at?: string },

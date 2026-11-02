@@ -982,8 +982,8 @@ export function prHtmlUrl(
 // The newest row of one context by created_at, across both of its names (crysk and the legacy
 // pr-hero): an override an older action posted only on `pr-hero` is the gate when it is newer
 // than this version's `crysk` verdict. A tie within one name goes to the later row in the list
-// (`>=`); a tie across the names goes to the crysk row, because the pair a run writes has one
-// content on both and the answer must not depend on the order of the list.
+// (`>=`); a tie across the names goes to the crysk row, because the pair a run before #457
+// wrote has one content on both and the answer must not depend on the order of the list.
 export function latestStatusInContext(
   statuses: readonly CommitStatusFact[],
   context: CommitStatusContext,

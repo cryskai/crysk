@@ -71,7 +71,6 @@ import {
   LEGACY_ADMISSION_CHECK_RUN_NAME,
   LEGACY_WORKFLOW_FILE_NAME,
   matchMarkerPrefix,
-  statusContextForms,
   WORKFLOW_FILE_NAME,
 } from "../brand";
 import { CliError } from "../errors";
@@ -426,16 +425,12 @@ export async function ghRepoNameWithOwner(
 // `crysk/local` from every other run, so the POST can never pick a context
 // the caller did not choose.
 //
-// WHY two POSTs: for one version every status is also written on the legacy
-// `pr-hero` name (`pr-hero/local` for a local run). Users have `pr-hero` as a
-// required check in branch protection, and a head that stops getting it blocks
-// every PR until they add `crysk`. Both POSTs carry one state, one description
-// and one target. They start together, crysk first, so the cancellation settle
-// (which runs inside a signal handler racing a SIGKILL) spends one short
-// window, not two. A failed POST never skips the other: the required check may
-// be either name, so the call still throws if either failed, and the caller's
-// own handling (fail-soft or fail-loud) applies exactly as it did to one POST.
-// Resolves with the created_at of the crysk row, the context the CLI reads back.
+// WHY one POST: since #457 a status is written on its crysk context alone, never
+// on the legacy `pr-hero` name (`pr-hero/local` for a local run). Readers still
+// take a `pr-hero` row as the same gate (isStatusContext), so a head reviewed
+// before that change keeps its verdict, but a branch protection that requires
+// `pr-hero` must switch to `crysk`. Resolves with the created_at of the row the
+// POST created, the one the CLI reads back.
 export async function postCommitStatus(
   operatorRoot: string,
   sha: string,
@@ -451,25 +446,10 @@ export async function postCommitStatus(
       `commit status: head sha is not a full 40-char id: ${sha.slice(0, 16)}`,
     );
   }
-  const results = await Promise.allSettled(
-    statusContextForms(status.context).map((context) =>
-      postCommitStatusOn(
-        operatorRoot,
-        sha,
-        { ...status, context },
-        spawnFn,
-        options,
-      ),
-    ),
-  );
-  for (const result of results) {
-    if (result.status === "rejected") throw result.reason;
-  }
-  const [crysk] = results;
-  return crysk?.status === "fulfilled" ? crysk.value : undefined;
+  return postCommitStatusOn(operatorRoot, sha, status, spawnFn, options);
 }
 
-// One POST of a status on one context, with the retry.
+// The POST of a status on its context, with the retry.
 async function postCommitStatusOn(
   operatorRoot: string,
   sha: string,

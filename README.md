@@ -17,7 +17,7 @@ green.
 > **Renamed from pr-hero.** Crysk used to be `pr-hero`. The package is now `crysk` (`npm install -g crysk`,
 > `npx -y crysk`), and the `pr-hero` command stays as an alias for one version. What an install made under the
 > old name wrote is still read for one version: `/pr-hero …` comments, `PRHERO_*` variables, `<!-- pr-hero-…`
-> markers, the `pr-hero` status check, `~/.prhero`, `.prhero/` and `.prheroignore`. A workflow file scaffolded
+> markers, `pr-hero` commit statuses (read, no longer written), `~/.prhero`, `.prhero/` and `.prheroignore`. A workflow file scaffolded
 > before the rename only answers `/pr-hero …`: re-run `crysk ci init --force` for it to accept `/crysk …` too.
 > The repository moved to `cryskai/crysk` and new workflows use `uses: cryskai/crysk@v0`. `juanmaagd/pr-hero` stays as a mirror with the same tags and releases, so a workflow that still says `uses: juanmaagd/pr-hero@v0` keeps working.
 
@@ -62,7 +62,7 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
 3. **Merge the workflow and `.crysk/` into the default branch.** A comment-triggered run
    (`/crysk review`) reads both from the base branch, so it starts nothing until the workflow is
    there, and fails `PRH-GOTCHAS-MISSING` until `.crysk/` is.
-   Then require the `crysk` status check in branch protection (`pr-hero` is still posted for one version) if you want it to block merges.
+   Then require the `crysk` status check in branch protection if you want it to block merges. The legacy `pr-hero` status is no longer posted, so a rule that requires it must move to `crysk`.
 
 4. **Open pull requests as usual.** Every new PR gets a review posted as PR comments; later pushes
    follow the level you chose (balanced re-reviews a push only when it is risky or the last pass
@@ -391,7 +391,7 @@ Reviews launch two ways: **by hand**, or through the opt-in local watcher (`crys
 | Manual CLI (`review`, `--pr`, `--post`) | **Available now** — this README. |
 | Auto-trigger on new PRs / new pushes (local watcher) | **Available now** — `crysk watch`, below. Deliberately opt-in: every review spends real money, so nothing fires until you `watch add` a repo AND `watch install` the agent. |
 | CI mode (GitHub Actions) | **Available now** — official `action.yml` at the repo root, canonical `.github/workflows/crysk.yml` (a repo that already has `pr-hero.yml` keeps it), full setup in [`docs/github-actions.md`](docs/github-actions.md). The commit-status gate (`mode: gate`, the default; `mode: advisory` opts out), exit 0 on findings, the size/budget gates, and `crysk setup --ci` scaffolding all apply. |
-| Required status check that blocks merges | **Available in CI** — the `crysk` commit status is the check (`mode: gate`, the default; `pr-hero` is still posted for one version). Require it in branch protection. Fail-closed for a head with no run stays deferred. |
+| Required status check that blocks merges | **Available in CI** — the `crysk` commit status is the check (`mode: gate`, the default). The legacy `pr-hero` status is no longer posted. Require it in branch protection. Fail-closed for a head with no run stays deferred. |
 
 ## Watching PRs automatically — `crysk watch`
 
@@ -593,7 +593,9 @@ PR makes it eligible again on the next tick, because the gate is recomputed ever
 - Verify what it reports. Findings are claims with cited code, tiered by deterministic rules — the
   report says so itself. An advisory report reads *assistant report, not a merge gate; every line is a claim to
   verify.* A CI report in gate mode backs the `crysk` commit status, the required check: a blocking finding
-  sets that status to failure.
+  sets that status to failure. A finding the PR did not introduce (`pre-existing` or `base-only`) is
+  reported as advisory and does not block it, unless it touches auth, secrets, isolation or data loss,
+  which keep blocking.
 
 ## Isolation model
 

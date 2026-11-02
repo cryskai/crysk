@@ -85,8 +85,8 @@ export function classifyStatus(status: RawStatus): GateEvent {
   }
 }
 
-// After the rename the gate is posted under both contexts with the same
-// verdict; counting both would double every review. A PR that has any
+// Between the rename and #457 the gate was posted under both contexts with the
+// same verdict; counting both would double every review. A PR that has any
 // `crysk` status is read from that context alone, an older one from `pr-hero`.
 //
 // A status belongs to the commit, not the PR. A release PR (dev → main) lists

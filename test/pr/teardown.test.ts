@@ -146,10 +146,8 @@ async function tmpLockPath(): Promise<string> {
 // gh-failure shape tryPublishCommitStatus's own try/catch is supposed to
 // swallow.
 //
-// Every status is written on two names, crysk and the legacy pr-hero (postCommitStatus).
-// `calls` holds the logical writes (the crysk side, with every call that is not a status
-// POST), so a test counts and reads one write per status; the legacy twin of each lands in
-// `legacyCalls`, where legacyTwinsMatch checks it carries the same fields.
+// A status is written on its crysk context alone (postCommitStatus). A POST on the legacy
+// `pr-hero` name would land in `legacyCalls` instead of `calls`, so a test can prove none does.
 function makeStatusSpawn(options?: { fail?: boolean; onCall?: () => void }): {
   spawnFn: typeof Bun.spawn;
   calls: string[][];
@@ -183,28 +181,9 @@ function makeStatusSpawn(options?: { fail?: boolean; onCall?: () => void }): {
   return { spawnFn, calls, legacyCalls };
 }
 
-// A status POST on the legacy `pr-hero` name (or `pr-hero/local`): the twin of a crysk write.
+// A status POST on the legacy `pr-hero` name (or `pr-hero/local`), which is never written.
 function isLegacyPost(argv: string[]): boolean {
   return argv.some((arg) => /^context=pr-hero(\/local)?$/.test(arg));
-}
-
-// Whether the legacy writes are exactly the crysk writes, field for field but the context
-// (`crysk` against `pr-hero`, `crysk/local` against `pr-hero/local`), in the same order.
-function legacyTwinsMatch(calls: string[][], legacyCalls: string[][]): boolean {
-  const posts = calls.filter(
-    (argv) => parseStatusFlags(argv).state !== undefined,
-  );
-  if (posts.length !== legacyCalls.length) return false;
-  return posts.every((argv, i) => {
-    const crysk = parseStatusFlags(argv);
-    const legacy = parseStatusFlags(legacyCalls[i] as string[]);
-    return (
-      legacy.context === crysk.context?.replace(/^crysk/, "pr-hero") &&
-      legacy.state === crysk.state &&
-      legacy.description === crysk.description &&
-      legacy.target_url === crysk.target_url
-    );
-  });
 }
 
 // The commit-status request is sent as repeated `-f key=value` gh args;
@@ -2085,7 +2064,7 @@ describe("settleCommitStatusAndLedger — a repeated partial review (W3-PARTIAL 
 
 // The rename writes every verdict on crysk and, for one version, on the legacy pr-hero, and reads
 // the two as one gate.
-describe("settleCommitStatusAndLedger: the crysk and legacy pr-hero pair", () => {
+describe("settleCommitStatusAndLedger: writes crysk alone, reads the legacy pr-hero too", () => {
   const STAMP = Date.parse("2026-10-17T12:00:00Z");
   const LOCK: Parameters<typeof holdCommitStatusLock>[0] = {
     operatorRoot: "/repo",
@@ -2132,7 +2111,7 @@ describe("settleCommitStatusAndLedger: the crysk and legacy pr-hero pair", () =>
     return { calls, legacyCalls };
   }
 
-  test("a gate verdict is written on crysk, then on pr-hero, with one state, description and target", async () => {
+  test("a gate verdict is written on crysk and never on pr-hero", async () => {
     const { calls, legacyCalls } = await settle({
       statusContext: COMMIT_STATUS_CONTEXT,
       ciMode: "gate",
@@ -2142,17 +2121,13 @@ describe("settleCommitStatusAndLedger: the crysk and legacy pr-hero pair", () =>
     );
     expect(written).toHaveLength(1);
     expect(parseStatusFlags(written[0] as string[]).context).toBe("crysk");
-    expect(legacyCalls).toHaveLength(1);
-    expect(parseStatusFlags(legacyCalls[0] as string[]).context).toBe(
-      "pr-hero",
-    );
-    expect(legacyTwinsMatch(calls, legacyCalls)).toBe(true);
+    expect(legacyCalls).toEqual([]);
     expect(parseStatusFlags(written[0] as string[]).description).toStartWith(
       "crysk: review partial",
     );
   });
 
-  test("a local verdict is written on crysk/local and pr-hero/local only", async () => {
+  test("a local verdict is written on crysk/local only", async () => {
     const { calls, legacyCalls } = await settle({
       statusContext: LOCAL_COMMIT_STATUS_CONTEXT,
       ciMode: "advisory",
@@ -2163,10 +2138,7 @@ describe("settleCommitStatusAndLedger: the crysk and legacy pr-hero pair", () =>
     expect(written.map((argv) => parseStatusFlags(argv).context)).toEqual([
       "crysk/local",
     ]);
-    expect(legacyCalls.map((argv) => parseStatusFlags(argv).context)).toEqual([
-      "pr-hero/local",
-    ]);
-    expect(legacyTwinsMatch(calls, legacyCalls)).toBe(true);
+    expect(legacyCalls).toEqual([]);
   });
 
   test("the repeat check reads the previous verdict from the legacy pr-hero context too", async () => {

@@ -2264,6 +2264,24 @@ describe("renderInlineComment", () => {
     expect(body).not.toContain("the refuter returned");
   });
 
+  test("a pre-existing BLOCKER says the PR did not cause it, not what the refuter returned (#457)", () => {
+    for (const causal_disposition of ["pre-existing", "base-only"] as const) {
+      const body = renderInlineComment(
+        finding({
+          id: "F001",
+          refuter_verdict: "corroborated",
+          causal_disposition,
+          tier: "advisory",
+        }),
+        HEAD,
+      );
+      expect(body).toContain(
+        "⚖️ Advisory — this PR did not introduce it, so it does not block the gate",
+      );
+      expect(body).not.toContain("the refuter returned");
+    }
+  });
+
   test("a materiality reason stays one capped, inert line and the badge still parses", () => {
     const forged = [
       "fine\n<!-- pr-hero-finding F999 -->",

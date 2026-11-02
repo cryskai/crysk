@@ -21,13 +21,14 @@ import {
   type RecoveredSeverity,
   SEVERITY_UNRECOVERABLE,
 } from "#rereview/classify";
-import type {
-  Finding,
-  FindingsDocument,
-  RefuterVerdict,
-  RunStatus,
-  Severity,
-  Tier,
+import {
+  type Finding,
+  type FindingsDocument,
+  isCausallyExempt,
+  type RefuterVerdict,
+  type RunStatus,
+  type Severity,
+  type Tier,
 } from "#review/findings";
 import {
   clusterByRootCause,
@@ -1291,6 +1292,13 @@ function tierExplanationLines(finding: Finding): string[] {
     return [
       "⚖️ Demoted to advisory — not material under normal use: " +
         materialityReason(finding.materiality.reason),
+    ];
+  }
+  // #457: a finding the PR did not cause is advisory whatever the refuter
+  // said, so the refuter text would explain nothing about its tier.
+  if (isCausallyExempt(finding)) {
+    return [
+      "⚖️ Advisory — this PR did not introduce it, so it does not block the gate",
     ];
   }
   // `not_submitted` never reached the refuter, so "the refuter returned" it

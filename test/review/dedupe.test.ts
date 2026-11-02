@@ -130,6 +130,73 @@ describe("pass 1 — dedupe_key groups", () => {
   });
 });
 
+describe("pass 1 — a folded group keeps a disposition that blames the PR (#457)", () => {
+  test("a pre-existing winner takes the introduced disposition a folded member reported", () => {
+    const winner = draft({
+      id: "R1",
+      severity: "CRITICAL",
+      causal_disposition: "pre-existing",
+    });
+    const loser = draft({
+      id: "R2",
+      severity: "WARNING",
+      causal_disposition: "introduced",
+    });
+    const { survivors } = mergeAndDedupe([winner, loser]);
+    expect(survivors).toHaveLength(1);
+    expect(survivors[0]?.severity).toBe("CRITICAL");
+    expect(survivors[0]?.causal_disposition).toBe("introduced");
+  });
+
+  test("a group where every member says pre-existing stays pre-existing", () => {
+    const winner = draft({
+      id: "R1",
+      severity: "CRITICAL",
+      causal_disposition: "pre-existing",
+    });
+    const loser = draft({
+      id: "R2",
+      severity: "WARNING",
+      causal_disposition: "base-only",
+    });
+    const { survivors } = mergeAndDedupe([winner, loser]);
+    expect(survivors[0]?.causal_disposition).toBe("pre-existing");
+  });
+
+  test("a protected member folded into an unprotected pre-existing winner leaves the survivor unknown", () => {
+    const winner = draft({
+      id: "R1",
+      severity: "CRITICAL",
+      causal_disposition: "pre-existing",
+    });
+    const loser = draft({
+      id: "R2",
+      severity: "WARNING",
+      causal_disposition: "pre-existing",
+      claim: `${DEFAULT_CLAIM} and the session token is written to the log`,
+    });
+    const { survivors } = mergeAndDedupe([winner, loser]);
+    expect(survivors).toHaveLength(1);
+    expect(survivors[0]?.claim).toBe(winner.claim);
+    expect(survivors[0]?.causal_disposition).toBe("unknown");
+  });
+
+  test("an introduced winner keeps its own disposition", () => {
+    const winner = draft({
+      id: "R1",
+      severity: "CRITICAL",
+      causal_disposition: "worsened",
+    });
+    const loser = draft({
+      id: "R2",
+      severity: "WARNING",
+      causal_disposition: "pre-existing",
+    });
+    const { survivors } = mergeAndDedupe([winner, loser]);
+    expect(survivors[0]?.causal_disposition).toBe("worsened");
+  });
+});
+
 describe("pass 2 — cross-category collapse on path", () => {
   test("collapses when both carry a symbol; winner keeps its category and folds refs uniquely", () => {
     const winner = draft({

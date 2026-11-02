@@ -219,6 +219,81 @@ function demoted(line: number, path = "src/app.ts"): GateSurvivor {
   };
 }
 
+// A survivor #457's causal rule demoted: CRITICAL and corroborated, so it would
+// block as introduced, but the PR did not cause it.
+function causallyDemoted(
+  line: number,
+  over: Partial<GateSurvivor> = {},
+): GateSurvivor {
+  return {
+    ...survivor(line, "advisory"),
+    severity: "CRITICAL",
+    evidence_class: "inferential",
+    refuter_verdict: "corroborated",
+    causal_disposition: "pre-existing",
+    claim: "the cached width is scaled twice",
+    ...over,
+  };
+}
+
+describe("unresolvedBlockingCount — a causally demoted survivor releases its blocking prior (#457)", () => {
+  test("a blocking prior re-found as pre-existing no longer counts", () => {
+    expect(
+      unresolvedBlockingCount(
+        [causallyDemoted(10)],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(0);
+  });
+
+  test("a pre-existing survivor that would not have blocked anyway releases nothing", () => {
+    expect(
+      unresolvedBlockingCount(
+        [causallyDemoted(10, { refuter_verdict: "not_submitted" })],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(1);
+  });
+
+  test("a not_submitted survivor releases nothing: a cut-short run may have demoted it already", () => {
+    expect(
+      unresolvedBlockingCount(
+        [
+          causallyDemoted(10, {
+            severity: "BLOCKER",
+            evidence_class: "deterministic",
+            refuter_verdict: "not_submitted",
+          }),
+        ],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(1);
+  });
+
+  test("a survivor without its causal fields releases nothing (fail closed)", () => {
+    expect(
+      unresolvedBlockingCount(
+        [survivor(10, "advisory")],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(1);
+  });
+
+  test("a protected prior is never released by a causal demotion", () => {
+    expect(
+      unresolvedBlockingCount(
+        [causallyDemoted(10)],
+        [
+          row("R001", {
+            status: "carried",
+            claim: "the session token is written to the log",
+          }),
+        ],
+      ),
+    ).toBe(1);
+  });
+});
+
 describe("unresolvedBlockingCount — a materiality-demoted survivor releases its blocking prior", () => {
   test("a blocking prior re-found and demoted by the materiality gate no longer counts", () => {
     expect(
