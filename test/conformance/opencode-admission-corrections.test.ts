@@ -10,6 +10,7 @@ import {
   observeOpenCodeExecutable,
   qualifyOpenCodeServer,
 } from "../../src/transports/opencode-admission";
+import { flush } from "../support/flush";
 
 const identity = {
   sdkVersion: "1.18.25",
@@ -386,7 +387,7 @@ test.each(["valid", "wrong-version", "missing-doc", "wrong-cwd"])(
         return;
       }
       const session = await create;
-      for (let i = 0; i < 30; i++) await Promise.resolve();
+      await flush();
       const result = await client.pollStatus(session);
       expect(promptId).toMatch(/^msg/);
       expect(result.kind).toBe("terminal");

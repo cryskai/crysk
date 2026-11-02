@@ -10,6 +10,7 @@ import {
 } from "../../src/transports/opencode-client";
 import type { OpenCodeTransportClock } from "../../src/transports/opencode-sdk";
 import { OpenCodeSdkTransport } from "../../src/transports/opencode-sdk";
+import { flush } from "../support/flush";
 
 // The defect class PR #123 named and then only half-closed. Under the SDK's
 // default `ThrowOnError = false` an API-level failure RESOLVES with
@@ -51,10 +52,6 @@ class RecordingSink implements AsyncEventSink {
   }
 
   close(): void {}
-}
-
-async function flush(): Promise<void> {
-  for (let i = 0; i < 25; i += 1) await Promise.resolve();
 }
 
 // Pre-fix both scenarios hang rather than fail, so every assertion here is

@@ -37,6 +37,7 @@ import {
   formatPermissionRejectFailureDetail,
   OpenCodeSdkTransport,
 } from "../../src/transports/opencode-sdk";
+import { flush } from "../support/flush";
 
 // §13 line 740: SDK conformance must distinguish a confirmed abort from
 // unknown_may_continue without claiming remote cost ended, and §13 line 746
@@ -68,10 +69,6 @@ class ManualClock implements OpenCodeTransportClock {
     const fns = this.pending.splice(0).map((entry) => entry.fn);
     for (const fn of fns) fn();
   }
-}
-
-async function flush(): Promise<void> {
-  for (let i = 0; i < 25; i += 1) await Promise.resolve();
 }
 
 async function advance(clock: ManualClock, passes: number): Promise<void> {

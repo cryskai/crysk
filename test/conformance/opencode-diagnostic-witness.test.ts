@@ -15,6 +15,7 @@ import type {
   OpenCodeTransportClock,
 } from "../../src/transports/opencode-sdk";
 import { OpenCodeSdkTransport } from "../../src/transports/opencode-sdk";
+import { flush } from "../support/flush";
 
 // Issue #126: `stderrTail` is the classification WITNESS — its declared
 // meaning is "what the provider said". The transport already excludes
@@ -68,10 +69,6 @@ class ManualClock implements OpenCodeTransportClock {
     const fns = this.pending.splice(0).map((entry) => entry.fn);
     for (const fn of fns) fn();
   }
-}
-
-async function flush(): Promise<void> {
-  for (let i = 0; i < 25; i += 1) await Promise.resolve();
 }
 
 async function advance(clock: ManualClock, passes: number): Promise<void> {
