@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-03
+
 ### Changed
 - **Crysk no longer writes the legacy `pr-hero` commit status, only `crysk`.** A branch protection or ruleset
   that still requires `pr-hero` must switch to `crysk`, or its pull requests stay blocked. Older `pr-hero`
@@ -18,19 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the defect class, sweeps the PR's own diff and its fix for other instances, fixes the ones the PR introduced
   in the same push, and says in the reply what it swept. Most findings after the first review were bugs of the
   same class written by the previous fix. `crysk setup` updates installed copies; a locally edited copy needs `crysk upgrade`.
+- **The GitHub Action runs on Bun 1.4.4**, read from `packageManager` in Crysk's own `package.json`, so the
+  action and the release builds use one pinned version.
 
 ### Added
 - **`materiality_gate` demotes immaterial blocking findings to advisory (opt-in, off by default).** When
   `true`, an extra isolated judge checks each blocking finding against Crysk's posting policy, and a finding
   judged not material under normal use is posted as advisory instead of blocking. Findings about security,
   credentials or data loss are never demoted. It adds one judge call per blocking finding and runs on the
-  Claude route only; other routes leave findings blocking. Known limitation: on a re-review, a finding that
-  was blocking on an earlier head still counts toward the gate.
+  Claude route only; other routes leave findings blocking. On a re-review, a finding that was blocking on an
+  earlier head and is now demoted stops counting toward the gate.
 - **`post_min_severity` sets the lowest finding a PR review posts.** `suggestion` posts everything (the
   default when unset), `warning` hides advisory suggestions, and `blocking` hides every advisory finding. A
   blocking finding always posts. Hidden findings get no inline or Outside Diff comment, and the summary says
   how many were held back. The gate and local reports still count every finding; re-review admission
   scores only the posted ones. `setup --ci` writes the recommended `warning` when the repo config has no value, and never replaces one.
+
+### Fixed
+- **A PR whose every changed file is excluded no longer fails the CI review.** It ends as a green no-op that
+  says there is nothing to review, and spends no review attempt. Lockfile-only PRs hit this every time.
 
 ## [0.3.1] - 2026-10-31
 
@@ -617,7 +625,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/cryskai/crysk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/cryskai/crysk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/cryskai/crysk/compare/v0.2.6...v0.3.0
 [0.2.6]: https://github.com/juanmaagd/pr-hero/compare/v0.2.4...v0.2.6
