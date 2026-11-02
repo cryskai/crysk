@@ -3,6 +3,7 @@
 
 import type { DraftFinding } from "./drafts";
 import { isNotCausedByPr, type Severity } from "./findings";
+import { isSafetyProtected } from "./materiality-gate";
 
 // A survivor is a draft whose id has been renumbered to the canonical
 // F001, F002, … sequence (and, for a cross-category winner, whose proof_refs
@@ -332,12 +333,24 @@ export function mergeAndDedupe(drafts: DraftFinding[]): {
     if (members) members.push(draft);
     else mergedInto.set(root, [draft]);
   }
-  const blamingDisposition = (winner: DraftFinding) =>
-    isNotCausedByPr(winner.causal_disposition)
-      ? (mergedInto.get(winner) ?? []).find(
-          (member) => !isNotCausedByPr(member.causal_disposition),
-        )?.causal_disposition
-      : undefined;
+  // The safety guard reads only the survivor's own claim and path, and the
+  // winner's wording is all a survivor keeps. When a merged draft the guard
+  // protects (auth, secrets, data loss) folds into a winner whose wording it
+  // does not protect, the group cannot vouch that the PR is innocent: the
+  // survivor's disposition becomes `unknown`, which keeps it blocking. Never
+  // `introduced`, which no hunter said.
+  const blamingDisposition = (winner: DraftFinding) => {
+    if (!isNotCausedByPr(winner.causal_disposition)) return undefined;
+    const members = mergedInto.get(winner) ?? [];
+    const blamer = members.find(
+      (member) => !isNotCausedByPr(member.causal_disposition),
+    );
+    if (blamer !== undefined) return blamer.causal_disposition;
+    const lostSafety =
+      !isSafetyProtected(winner) &&
+      members.some((member) => isSafetyProtected(member));
+    return lostSafety ? ("unknown" as const) : undefined;
+  };
   for (const draft of pass1) {
     const winner = clusterWinnerOf.get(draft) as DraftFinding;
     if (emittedWinners.has(winner)) continue;

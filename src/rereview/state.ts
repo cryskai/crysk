@@ -562,7 +562,11 @@ export type GateSurvivor = Pick<
 // These are the only advisory survivors that pair, and only with a blocking row
 // (see the note above GateRow). The causal case asks deriveTier what the
 // finding would be as `introduced`, so a pre-existing finding that would have
-// been advisory anyway (an unrefuted inferential one) releases nothing.
+// been advisory anyway (an unrefuted inferential one) releases nothing. A
+// `not_submitted` survivor never counts as demoted: on a run the ceiling cut
+// short, deriveTier demoted it for the missing check (refuterCutShort), which
+// this row cannot see, so the recompute would call it blocking and release a
+// prior it never earned. Failing closed costs one prior staying counted.
 function isDemotedFromBlocking(survivor: GateSurvivor): boolean {
   if (survivor.tier !== "advisory") return false;
   if (survivor.materiality?.label === "immaterial") return true;
@@ -577,6 +581,7 @@ function isDemotedFromBlocking(survivor: GateSurvivor): boolean {
     severity === undefined ||
     evidence_class === undefined ||
     refuter_verdict === undefined ||
+    refuter_verdict === "not_submitted" ||
     causal_disposition === undefined ||
     claim === undefined
   )

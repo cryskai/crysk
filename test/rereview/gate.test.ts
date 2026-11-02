@@ -255,6 +255,21 @@ describe("unresolvedBlockingCount — a causally demoted survivor releases its b
     ).toBe(1);
   });
 
+  test("a not_submitted survivor releases nothing: a cut-short run may have demoted it already", () => {
+    expect(
+      unresolvedBlockingCount(
+        [
+          causallyDemoted(10, {
+            severity: "BLOCKER",
+            evidence_class: "deterministic",
+            refuter_verdict: "not_submitted",
+          }),
+        ],
+        [row("R001", { status: "carried" })],
+      ),
+    ).toBe(1);
+  });
+
   test("a survivor without its causal fields releases nothing (fail closed)", () => {
     expect(
       unresolvedBlockingCount(

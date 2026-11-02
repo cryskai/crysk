@@ -163,6 +163,24 @@ describe("pass 1 — a folded group keeps a disposition that blames the PR (#457
     expect(survivors[0]?.causal_disposition).toBe("pre-existing");
   });
 
+  test("a protected member folded into an unprotected pre-existing winner leaves the survivor unknown", () => {
+    const winner = draft({
+      id: "R1",
+      severity: "CRITICAL",
+      causal_disposition: "pre-existing",
+    });
+    const loser = draft({
+      id: "R2",
+      severity: "WARNING",
+      causal_disposition: "pre-existing",
+      claim: `${DEFAULT_CLAIM} and the session token is written to the log`,
+    });
+    const { survivors } = mergeAndDedupe([winner, loser]);
+    expect(survivors).toHaveLength(1);
+    expect(survivors[0]?.claim).toBe(winner.claim);
+    expect(survivors[0]?.causal_disposition).toBe("unknown");
+  });
+
   test("an introduced winner keeps its own disposition", () => {
     const winner = draft({
       id: "R1",
