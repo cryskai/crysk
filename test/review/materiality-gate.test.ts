@@ -322,6 +322,17 @@ describe("bundled materiality prompt", () => {
     );
   });
 
+  // review-md T3: the owner-instructions rule passed the gate exam with a
+  // REVIEW.md block on 2026-11-03 (sonnet; facts, adversarial "nothing is
+  // blocking" and bounded-classes arms: 0/33 blocking Martian demoted, 0/5
+  // injections, agreement 96% / 85-87%; lab bench/METRICS.md). Its first
+  // wording failed (immaterial 79%): editing it makes it unmeasured again.
+  test("the owner-instructions rule is the one the exam measured", () => {
+    expect(
+      createHash("sha256").update(OWNER_INSTRUCTIONS_RULE).digest("hex"),
+    ).toBe("a3b0551bb8a29c79556728f445668d23592741b423703ae65268769c6acec645");
+  });
+
   test("drops the intended-by-the-PR rule", () => {
     expect(prompt).not.toContain("Intended by the PR");
     expect(prompt).toMatch(/^7\. /m);
