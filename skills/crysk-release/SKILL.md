@@ -112,37 +112,55 @@ gh pr create -R cryskai/crysk --base main --head dev --title "chore: promote dev
   --body "Release v$V. See CHANGELOG.md."
 ```
 
-Wait for the checks, then merge with `--merge`.
-
-The `crysk` gate on this PR is usually red: the whole diff since the last release is over the size
+Wait for the checks. The `crysk` gate on this PR is usually red: the whole diff since the last release is over the size
 gate, so no review runs. Every change in it was already reviewed in its own PR into `dev`. Only the
 `Test, typecheck & lint` check is required on `main`. Ask the maintainer how to close it. Their usual
 choice is `/crysk override`, posted only on their explicit instruction. The comment must be exactly
 `/crysk override` and nothing else: with any extra text, the workflow says "This comment is not a
 crysk command" and does nothing.
 
+Once the gate is settled the way the maintainer chose, merge with `--merge`, then go to step 8.
+
 ### 8. Publish to npm by hand, before any tag
 
-`release.yml` skips npm because there is no `NPM_TOKEN`. Publish from the release commit on `main`:
+`release.yml` skips npm because there is no `NPM_TOKEN`. Build the release commit on `main` first,
+because both paths below need it:
 
 ```bash
 git switch main && git pull --ff-only origin main
 git log --oneline -1                                   # must be the dev → main merge for v$V
 bun install --frozen-lockfile && bun run build         # the tarball ships dist/
+npm view crysk@$V version --prefer-online              # prints $V if already published; E404 if not
+```
+
+Then take exactly one path.
+
+**8a. Already published** (the maintainer may publish by hand). Do not publish again. Check that the
+package on npm is byte-identical to a local pack of the release commit, `dist/` included:
+
+```bash
+npm pack --pack-destination "$SCRATCH" --silent
+mkdir "$SCRATCH/local" "$SCRATCH/npm"
+tar xzf "$SCRATCH/crysk-$V.tgz" -C "$SCRATCH/local"
+(cd "$SCRATCH/npm" && npm pack crysk@$V --silent && tar xzf crysk-$V.tgz)
+diff -rq "$SCRATCH/local/package" "$SCRATCH/npm/package"   # must print nothing
+```
+
+If the diff prints anything, the package does not match the release commit: stop and tell the
+maintainer. If it prints nothing, go to step 9. The npm-side checks in step 10 still apply.
+
+**8b. Not published yet.**
+
+```bash
 npm whoami                                             # E401: ask the maintainer to run `! npm login`
 npm publish --access public                            # prerelease: add --tag next
 ```
 
-If the maintainer already published by hand, do not publish again. Check what was published:
-`npm view crysk@$V gitHead`, then `git diff --stat <gitHead> origin/main`. That diff may only touch
-files that do not ship, such as this skill. Anything else in the `files` list of `package.json` (`src/`, `prompts/`, the shipped skills, `config/`) or
-`package.json` means the package differs from the release commit: stop and tell the maintainer.
-
-**If the publish fails, stop here.** Nothing is tagged yet, so the release can be retried cleanly. An
+If the publish fails, stop here. Nothing is tagged yet, so the release can be retried cleanly. An
 `E404` on `PUT` means missing credentials, not a missing package.
 
-Only after a successful publish, wait for the registry, for at most 15 minutes. Run this in the
-background, because a foreground `sleep` may be blocked:
+After a successful publish, wait for the registry for at most 15 minutes. Run this in the background,
+because a foreground `sleep` may be blocked:
 
 ```bash
 for i in $(seq 1 30); do
@@ -153,7 +171,8 @@ npm view crysk dist-tags --prefer-online               # latest: $V
 ```
 
 If it is still missing after 15 minutes, look for `PUT ... 202` in `~/.npm/_logs/*-debug-0.log`. A 202
-means the registry accepted the upload and is still processing it. **Never publish twice.**
+means the registry accepted the upload and is still processing it. Never publish twice. Once it is
+live, go to step 9.
 
 ### 9. Tag and push
 
