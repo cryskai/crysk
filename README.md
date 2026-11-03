@@ -305,8 +305,10 @@ which is a different thing from a committed file asking on your behalf. `--agent
 Repo-specific facts the hunters must know (fragile invariants, deliberate oddities, past incidents),
 in a root `REVIEW.md` — the file name Claude Code Review reads. Without one, Crysk reads
 `.crysk/gotchas.md` (or the legacy `.prhero/gotchas.md`); when both exist, `REVIEW.md` wins and
-the run and `crysk doctor` say `gotchas.md ignored: REVIEW.md takes precedence`. Today the file
-reaches the hunters as facts; it does not filter findings.
+the run and `crysk doctor` say `gotchas.md ignored: REVIEW.md takes precedence`. The hunters and
+the refuter read the file as facts about the codebase (the refuter still needs code to refute a
+claim). With `materiality_gate` on, the materiality judge also applies its "what counts as blocking"
+and "do not report" rules to blocking findings; nothing filters advisory findings by it.
 
 **Optional, but a file that exists must be real** — not merely non-empty. With neither file the
 review runs on the default guidance and `doctor` reports it as degraded. The file `init`/`setup`

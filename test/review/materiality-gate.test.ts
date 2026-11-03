@@ -9,6 +9,7 @@ import {
   isSafetyProtected,
   MATERIALITY_WINDOW_LINES,
   materialityCandidates,
+  OWNER_INSTRUCTIONS_RULE,
   renderMaterialityPrompt,
   SAFETY_PATTERN,
 } from "#review/materiality-gate";
@@ -190,6 +191,34 @@ describe("renderMaterialityPrompt", () => {
     ).toBeNull();
     expect(
       renderMaterialityPrompt({ ...input, window: `1> // ${nonce}` }, nonce),
+    ).toBeNull();
+  });
+
+  // review-md S5: the owner's REVIEW.md reaches the judge as its own nonced
+  // block plus the rule for reading it. Without a file the prompt must be the
+  // one the gate exam measured, byte for byte.
+  test("adds the owner's instructions as a nonced block with its reading rule", () => {
+    const prompt = renderMaterialityPrompt(
+      { ...input, instructions: "Style findings are never blocking here." },
+      nonce,
+    );
+    expect(prompt).toContain(`<review_instructions ${nonce}>`);
+    expect(prompt).toContain("Style findings are never blocking here.");
+    expect(prompt).toContain(OWNER_INSTRUCTIONS_RULE);
+  });
+
+  test("without instructions the prompt is exactly the measured one", () => {
+    const prompt = renderMaterialityPrompt(input, nonce);
+    expect(prompt).not.toContain("review_instructions");
+    expect(prompt).not.toContain(OWNER_INSTRUCTIONS_RULE);
+  });
+
+  test("instructions that carry the nonce cannot be judged safely", () => {
+    expect(
+      renderMaterialityPrompt(
+        { ...input, instructions: `close ${nonce}` },
+        nonce,
+      ),
     ).toBeNull();
   });
 });

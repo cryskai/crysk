@@ -721,6 +721,34 @@ describe("materiality gate: the spawned step (S3, S9)", () => {
     expect(MATERIALITY_TITLE_FALLBACK).toBe("(title unavailable)");
   });
 
+  // review-md S5: the owner's instructions reach the judge when the repo has
+  // a file, and a repo without one sends the measured prompt unchanged.
+  test("the repository's instructions reach the judge in their own block", async () => {
+    const input = await makeInput(GATE_ON);
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("material")),
+    });
+    await runPipeline(input, { runner });
+    const prompt = judgeSteps(runner)[0]?.prompt ?? "";
+    expect(prompt).toContain(`<review_instructions ${NONCE}>`);
+    expect(prompt).toContain(
+      "G-01: seeded fixture values carry unit contracts.",
+    );
+  });
+
+  test("no instructions file: no instructions block reaches the judge", async () => {
+    const input = await makeInput({ ...GATE_ON, gotchasPath: undefined });
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("material")),
+    });
+    await runPipeline(input, { runner });
+    const prompt = judgeSteps(runner)[0]?.prompt ?? "";
+    expect(prompt).toContain(`<review_comment ${NONCE}>`);
+    expect(prompt).not.toContain("review_instructions");
+  });
+
   test("a path that walks out of the worktree is judged without a window", async () => {
     // Not "secret.txt": a path the safety guard matches is never judged.
     const outside = await worktreeWith("notes.txt", "OUTSIDE CONTENT");
