@@ -3667,6 +3667,8 @@ describe("C4 runtime-safety preamble", () => {
     for (const file of written) {
       const text = await Bun.file(path.join(stepsDir, file)).text();
       expect(text.startsWith(RUNTIME_PREAMBLE)).toBe(true);
+      // An anchor left unrendered reaches the model as literal template text.
+      expect(text).not.toContain("{{");
     }
   });
 
