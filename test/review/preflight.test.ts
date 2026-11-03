@@ -2367,13 +2367,17 @@ describe("GOTCHAS_TEMPLATE carries the marker it is judged by", () => {
 });
 
 describe("gotchasErrorMessage distinguishes the two reasons", () => {
-  test("'empty' offers the template AND says to delete its marker line", () => {
+  test("'empty' for a path naming no file offers the template AND says to delete its marker line", () => {
     // The trap this test exists for: the message embeds GOTCHAS_TEMPLATE
     // verbatim under "Create it with something like:", and that template now
     // carries a marker whose presence is itself a refusal. A reader who
     // copies it and stops has produced a file pr-hero still rejects, so the
     // message has to say the last step out loud.
-    const message = gotchasErrorMessage("/repo/.crysk/gotchas.md", "empty");
+    const message = gotchasErrorMessage(
+      "/repo/.crysk/gotchas.md",
+      "empty",
+      false,
+    );
     expect(message).toContain("/repo/.crysk/gotchas.md");
     expect(message).toContain("Create it with something like:");
     expect(message).toContain(GOTCHAS_TEMPLATE);
@@ -2381,10 +2385,22 @@ describe("gotchasErrorMessage distinguishes the two reasons", () => {
     expect(message.toLowerCase()).toContain("delete");
   });
 
+  // S3: an empty REVIEW.md exists, so telling its owner to create a gotchas
+  // file is the "message asserting a state nobody checked" defect again. The
+  // way out is real content or no file at all.
+  test("'empty' for a file that exists names it, offers no template, and offers deleting it", () => {
+    const message = gotchasErrorMessage("/repo/REVIEW.md", "empty", true);
+    expect(message).toContain("/repo/REVIEW.md");
+    expect(message).not.toContain("Create it with something like:");
+    expect(message).not.toContain(GOTCHAS_TEMPLATE);
+    expect(message).toContain("or delete it");
+  });
+
   test("'placeholder' does not tell you to create a file that already exists", () => {
     const message = gotchasErrorMessage(
       "/repo/.crysk/gotchas.md",
       "placeholder",
+      true,
     );
     expect(message).toContain("/repo/.crysk/gotchas.md");
     expect(message).toContain(GOTCHAS_PLACEHOLDER_MARKER);
@@ -2393,8 +2409,8 @@ describe("gotchasErrorMessage distinguishes the two reasons", () => {
   });
 
   test("the two reasons do not render the same message", () => {
-    expect(gotchasErrorMessage("/p/g.md", "empty")).not.toBe(
-      gotchasErrorMessage("/p/g.md", "placeholder"),
+    expect(gotchasErrorMessage("/p/g.md", "empty", true)).not.toBe(
+      gotchasErrorMessage("/p/g.md", "placeholder", true),
     );
   });
 });

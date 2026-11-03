@@ -454,7 +454,7 @@ export async function runDoctor(
         name: "gotchas",
         severity: "degraded",
         message: `No review instructions (${REVIEW_MD_FILE_NAME} or ${repoDirName}/gotchas.md): reviews run with the default guidance only`,
-        hint: `Add a ${REVIEW_MD_FILE_NAME} at the repository root with what counts as a failure here, what not to report, and the invariants the diff does not show.`,
+        hint: `Add a ${REVIEW_MD_FILE_NAME} at the repository root with the facts the diff does not show: deliberate oddities, invariants enforced elsewhere, conventions a newcomer would break.`,
       });
     } else {
       const label = path.relative(repoDir, instructions.path);

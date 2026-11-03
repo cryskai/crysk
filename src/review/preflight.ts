@@ -3600,22 +3600,27 @@ export function initGotchasInstructions(
 // REVIEW.md nor a gotchas file (odd/tasks/review-md.md S3). Said out loud so
 // the block is never an unexplained empty tag a model could read as truncation.
 export const NO_REVIEW_INSTRUCTIONS =
-  "This repository provides no review instructions (no REVIEW.md or gotchas file). Apply the general guidance in this prompt.";
+  "This repository provides no review instructions (no REVIEW.md or gotchas file).";
 
 // The pipeline treats unusable gotchas as a fail-loud abort and returns a
 // zero-cost partial run. Correct, but a bare "partial, 0 findings" tells the
-// user nothing — so the CLI checks first and explains.
+// user nothing — so the CLI checks first and explains. `present` splits the
+// "empty" reason: a file that exists (REVIEW.md or gotchas) is told to hold
+// real content or go away; only a path naming no file — an explicit
+// `--gotchas` typo, since the resolver never returns an absent default — gets
+// the template to create one.
 export function gotchasErrorMessage(
   gotchasPath: string,
   reason: GotchasUnusableReason,
+  present: boolean,
 ): string {
   const why = [
     "Review instructions (REVIEW.md, or the older gotchas file) are the",
-    "repo-specific facts and rules a hunter cannot infer from the diff —",
-    "deliberate oddities, invariants enforced elsewhere, what counts as a",
-    "failure here. They are injected verbatim into every hunter's system",
-    "prompt. A repo may have no such file at all, but one that exists must",
-    "hold real content.",
+    "repo-specific facts a hunter cannot infer from the diff — deliberate",
+    "oddities, invariants enforced elsewhere, conventions worth more than",
+    "they look. They are injected verbatim into every hunter's system prompt.",
+    "A repo may have no such file at all, but one that exists must hold real",
+    "content.",
   ];
   if (reason === "placeholder") {
     return [
@@ -3630,6 +3635,18 @@ export function gotchasErrorMessage(
       "",
       "Replace the placeholder lines with facts about THIS repo, and delete",
       "the marker line at the top if it is still there.",
+    ].join("\n");
+  }
+  if (present) {
+    return [
+      `empty review instructions file: ${gotchasPath}`,
+      "",
+      ...why,
+      "An empty file makes the whole review a zero-cost no-op that LOOKS like a",
+      "clean result.",
+      "",
+      "Write facts and rules about THIS repo into it, or delete it to review",
+      "with the default guidance only.",
     ].join("\n");
   }
   return [

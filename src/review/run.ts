@@ -205,12 +205,13 @@ export async function validateGotchas(
 ): Promise<void> {
   if (gotchasPath === undefined) return;
   const file = Bun.file(gotchasPath);
-  const gotchas = (await file.exists()) ? await file.text() : "";
+  const present = await file.exists();
+  const gotchas = present ? await file.text() : "";
   const unusable = gotchasUnusableReason(gotchas);
   if (unusable !== undefined) {
     // The class carries the gate's reason into cli.json (T2d-1). Both reasons render
     // the one gotchas code today; the reason stays on the record for that reason only.
-    throw new CliError(gotchasErrorMessage(gotchasPath, unusable), {
+    throw new CliError(gotchasErrorMessage(gotchasPath, unusable, present), {
       cls: { kind: "gotchas", reason: unusable },
     });
   }
