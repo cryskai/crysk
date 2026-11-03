@@ -663,6 +663,98 @@ describe("postInlineFindings — step-14 ordering", () => {
   });
 });
 
+describe("postInlineFindings — post_min_severity", () => {
+  // The floor is a posting filter: a finding below it gets no inline comment
+  // and no Outside Diff entry, and the summary counts it in one line. Its
+  // absence from droppedFindingIds is the point: it was held back, not lost.
+  test("findings below the floor are never posted and are counted in the summary", async () => {
+    const findings = [
+      finding({ id: "F001", path: "src/a.ts", line: 10 }),
+      finding({
+        id: "F002",
+        path: "src/a.ts",
+        line: 12,
+        severity: "WARNING",
+        tier: "advisory",
+      }),
+      finding({
+        id: "F003",
+        path: "src/never.ts",
+        line: 1,
+        severity: "SUGGESTION",
+        tier: "advisory",
+      }),
+    ];
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      postMinSeverity: "blocking",
+    });
+    expect(outcome.reviewFindingCount).toBe(1);
+    expect(outcome.outsideDiffCount).toBe(0);
+    expect(outcome.droppedFindingIds).toEqual([]);
+    const review = calls.find((c) =>
+      c.argv.join(" ").includes("pulls/42/reviews"),
+    );
+    expect(review?.stdin).toContain("line=10 ");
+    expect(review?.stdin).not.toContain("line=12 ");
+    const bodies = summaryStdins(calls);
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body).toContain(
+        "2 advisory findings not posted (`post_min_severity: blocking`).",
+      );
+      expect(body).not.toContain("src/never.ts");
+      expect(body).not.toContain("Comments Outside Diff");
+      // Admission scores what was posted, so a hidden finding never spends a
+      // re-review. The state block already holds posted rows only; the
+      // admission block must agree with it.
+      const admission = parseCiAdmissionBlock(body);
+      expect(admission?.blocking).toBe(1);
+      expect(admission?.advisory).toBe(0);
+    }
+  });
+
+  test("without a floor every finding posts, as before", async () => {
+    const findings = [
+      finding({ id: "F001", path: "src/a.ts", line: 10 }),
+      finding({
+        id: "F002",
+        path: "src/a.ts",
+        line: 12,
+        severity: "SUGGESTION",
+        tier: "advisory",
+      }),
+    ];
+    const { spawnFn, calls } = makeFakeGh([
+      ...emptyCommentScript(),
+      { match: ["pulls/42/reviews"], response: { stdout: "" } },
+    ]);
+    const outcome = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(outcome.reviewFindingCount).toBe(2);
+    expect(summaryStdins(calls).some((b) => b.includes("not posted"))).toBe(
+      false,
+    );
+  });
+});
+
 describe("postInlineFindings — the 422 recovery never drops a finding", () => {
   // Mirrors verify-report-pr2 (#3296)'s CRIT-1 repro at THIS composition
   // layer: a prior comment already claimed by a PERSISTING finding must not
@@ -2054,6 +2146,33 @@ describe("postInlineFindings — re-review closing comment", () => {
     ]);
   }
 
+  test("a re-review whose only finding is below post_min_severity does not claim kept findings", async () => {
+    const { spawnFn, calls } = rereviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({
+            id: "F001",
+            path: "src/a.ts",
+            line: 10,
+            severity: "SUGGESTION",
+            tier: "advisory",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      postMinSeverity: "warning",
+    });
+    const body = closingPosts(calls)[0]?.stdin ?? "";
+    expect(body).not.toContain("findings already on the PR were kept");
+    expect(body).toContain("No findings in this pass.");
+  });
+
   test("a clean re-review posts one closing comment after the summary PATCH", async () => {
     const { spawnFn, calls } = rereviewScript();
     const outcome = await postInlineFindings({
@@ -2300,6 +2419,37 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
     return parseStateBlock(bodies[bodies.length - 1] ?? "");
   }
 
+  test("a re-review's Δ new count leaves out findings below post_min_severity", async () => {
+    const { spawnFn, calls } = reviewScript();
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({ id: "F001", path: "src/a.ts", line: 10 }),
+          finding({
+            id: "F002",
+            path: "src/a.ts",
+            line: 12,
+            severity: "SUGGESTION",
+            tier: "advisory",
+          }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+      rereview: reviewProvenance([]),
+      rereviewPriors: [],
+      postMinSeverity: "warning",
+    });
+    const bodies = summaryStdins(calls);
+    const last = bodies[bodies.length - 1] ?? "";
+    expect(last).toContain("· 1 new");
+    expect(last).not.toContain("· 2 new");
+  });
+
   test("S1 — review 2's fresh blocking finding is in the state, and review 3 still counts it", async () => {
     const { spawnFn, calls } = reviewScript();
     await postInlineFindings({
@@ -2384,6 +2534,79 @@ describe("postInlineFindings — the state block carries a re-review's fresh fin
       ["R002", "fresh blocker"],
     ]);
   });
+
+  // B1 from the verifier: with post_min_severity "blocking" the demoted finding
+  // is hidden, so the merge never sees it. The released id must still re-tier.
+  for (const [label, postMinSeverity, claim] of [
+    ["no posting floor", undefined, "demoted now"],
+    [
+      "post_min_severity blocking hides it",
+      "blocking",
+      "blocking on the earlier head",
+    ],
+  ] as const) {
+    test(`a released blocking prior turns advisory in the state, and review 3 no longer counts it (${label})`, async () => {
+      const prior = stateFinding({
+        id: "R001",
+        sev: "CRITICAL",
+        tier: "blocking",
+        channel: "inline",
+        locs: ["src/a.ts:10"],
+        claim: "blocking on the earlier head",
+      });
+      const { spawnFn, calls } = reviewScript();
+      await postInlineFindings({
+        operatorRoot: OPERATOR_ROOT,
+        pr: 42,
+        headSha: HEAD,
+        doc: doc({
+          findings: [
+            finding({
+              id: "F001",
+              path: "src/a.ts",
+              line: 10,
+              tier: "advisory",
+              severity: "CRITICAL",
+              claim: "demoted now",
+              materiality: {
+                label: "immaterial",
+                reason: "needs a pathological input",
+              },
+            }),
+          ],
+        }),
+        diffPatch: diffAddingLines("src/a.ts", 20),
+        webUrl: undefined,
+        spawnFn,
+        rereview: reviewProvenance([{ ...prior, status: "carried" }], {
+          materiality_released_ids: ["R001"],
+        }),
+        rereviewPriors: [],
+        ...(postMinSeverity === undefined ? {} : { postMinSeverity }),
+      });
+      const state = summaryState(calls);
+      expect(state?.findings.map((f) => [f.id, f.tier, f.claim])).toEqual([
+        ["R001", "advisory", claim],
+      ]);
+      expect(state?.hw).toBe(1);
+
+      // Review 3: a same-head forced re-review with no survivors.
+      const priors = priorsFromStateFindings(state?.findings ?? []);
+      const ctx = {
+        case: "C" as const,
+        deletedFiles: new Set<string>(),
+        renameMap: new Map<string, string>(),
+        touched: () => false,
+        summaryUpdatedAt: null,
+      };
+      const assembled = assembleLive({
+        settled: priors.map((p) => classifyPrior(p, ctx)),
+        priors,
+        verifyVerdicts: new Map(),
+      });
+      expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(0);
+    });
+  }
 
   test("S3 — a fresh row's locs use the line the comment was posted at, not findings.json's", async () => {
     const { spawnFn, calls } = reviewScript();

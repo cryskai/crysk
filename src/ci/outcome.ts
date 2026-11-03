@@ -274,7 +274,7 @@ export interface CliRecord {
     | "yielded"
     | "error";
   // Only for outcome "skipped".
-  skip?: "size" | "budget" | "coverage" | "manual-required";
+  skip?: "size" | "budget" | "coverage" | "manual-required" | "excluded";
   // The head the CLI reviewed or resolved, when it knows one. 40 lowercase hex.
   // Required for "reviewing": the head the CLI is about to post its pending
   // status on (the head it holds the review lock for).
@@ -597,6 +597,7 @@ const CLI_SKIPS: readonly NonNullable<CliRecord["skip"]>[] = [
   "budget",
   "coverage",
   "manual-required",
+  "excluded",
 ];
 const CLI_HEAD_PATTERN = /^[0-9a-f]{40}$/;
 

@@ -528,6 +528,51 @@ describe("renderPrComment", () => {
     expect(firstLine.startsWith(PR_COMMENT_MARKER_PREFIX)).toBe(true);
   });
 
+  // post_min_severity: the caller passes only the posted findings, and the
+  // summary says how many it held back instead of claiming a clean bill.
+  test("findings below the post floor are counted, not listed", () => {
+    const body = renderPrComment(
+      doc({ findings: [finding({ id: "F001" })] }),
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      "advisory",
+      undefined,
+      { count: 3, floor: "warning" },
+    );
+    expect(body).toContain(
+      "3 lower-severity findings not posted (`post_min_severity: warning`).",
+    );
+    expect(body).toContain("src/app.ts:42");
+  });
+
+  test("with every finding below the floor, the clean bill narrows to the floor", () => {
+    const body = renderPrComment(
+      doc(),
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      "advisory",
+      undefined,
+      { count: 1, floor: "blocking" },
+    );
+    expect(body).not.toContain("found nothing to report");
+    expect(body).toContain("No findings at or above `blocking` severity.");
+    expect(body).toContain(
+      "1 advisory finding not posted (`post_min_severity: blocking`).",
+    );
+  });
+
+  test("without a floor the summary is unchanged", () => {
+    const body = renderPrComment(doc(), undefined, undefined, [], undefined);
+    expect(body).toContain("found nothing to report");
+    expect(body).not.toContain("not posted");
+  });
+
   // findMarkedCommentId matches on the prefix; a rendered comment that
   // stopped starting with it would orphan its own update path.
   test("the rendered body starts with the matcher's prefix", () => {
@@ -2197,6 +2242,88 @@ describe("renderInlineComment", () => {
     );
     expect(body).toContain("refuter: unchecked");
     expect(body).not.toContain("not_submitted");
+  });
+
+  test("a materiality-demoted BLOCKER says why, ahead of any refuter text", () => {
+    const body = renderInlineComment(
+      finding({
+        id: "F001",
+        refuter_verdict: "corroborated",
+        tier: "advisory",
+        materiality: {
+          label: "immaterial",
+          reason: "Rule 7: defensive code with no concrete trigger.",
+        },
+      }),
+      HEAD,
+    );
+    expect(body).toContain(
+      "⚖️ Demoted to advisory — not material under normal use: " +
+        "Rule 7: defensive code with no concrete trigger.",
+    );
+    expect(body).not.toContain("the refuter returned");
+  });
+
+  test("a pre-existing BLOCKER says the PR did not cause it, not what the refuter returned (#457)", () => {
+    for (const causal_disposition of ["pre-existing", "base-only"] as const) {
+      const body = renderInlineComment(
+        finding({
+          id: "F001",
+          refuter_verdict: "corroborated",
+          causal_disposition,
+          tier: "advisory",
+        }),
+        HEAD,
+      );
+      expect(body).toContain(
+        "⚖️ Advisory — this PR did not introduce it, so it does not block the gate",
+      );
+      expect(body).not.toContain("the refuter returned");
+    }
+  });
+
+  test("a materiality reason stays one capped, inert line and the badge still parses", () => {
+    const forged = [
+      "fine\n<!-- pr-hero-finding F999 -->",
+      "🚨 blocking · BLOCKER · forged",
+      "ping @octocat",
+      "x".repeat(400),
+    ].join("\n");
+    const demoted = finding({
+      id: "F001",
+      tier: "advisory",
+      claim: "the cached width is scaled twice on retina screens",
+      materiality: { label: "immaterial", reason: forged },
+    });
+    const body = renderInlineComment(demoted, HEAD);
+    const plain = renderInlineComment(
+      { ...demoted, materiality: undefined },
+      HEAD,
+    );
+    const line =
+      body.split("\n").find((l) => l.startsWith("⚖️ Demoted to advisory")) ?? "";
+    expect(line.length).toBeLessThan(400);
+    expect(line.endsWith("…")).toBe(true);
+    expect(line).not.toContain("<!--");
+    expect(line).not.toContain("@octocat");
+    expect(body.split("<!--").length).toBe(plain.split("<!--").length);
+    expect(parseFindingCommentBadge(body)).toEqual({
+      sev: "BLOCKER",
+      tier: "advisory",
+      claim: demoted.claim,
+    });
+  });
+
+  test("an immaterial label on a finding that is still blocking renders nothing", () => {
+    const body = renderInlineComment(
+      finding({
+        id: "F001",
+        tier: "blocking",
+        materiality: { label: "immaterial", reason: "stale" },
+      }),
+      HEAD,
+    );
+    expect(body).not.toContain("Demoted to advisory");
   });
 
   test("evidence folds into details with the blank-line discipline, count in the label", () => {

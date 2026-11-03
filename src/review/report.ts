@@ -9,6 +9,7 @@
 
 import { listPaths } from "#git/refs";
 import type { ResolvedModelRoute, ResolvedStepRoute } from "#model/routing";
+import type { PostMinSeverity } from "#pr/post-floor";
 import {
   type CiMode,
   findingMarker,
@@ -20,13 +21,14 @@ import {
   type RecoveredSeverity,
   SEVERITY_UNRECOVERABLE,
 } from "#rereview/classify";
-import type {
-  Finding,
-  FindingsDocument,
-  RefuterVerdict,
-  RunStatus,
-  Severity,
-  Tier,
+import {
+  type Finding,
+  type FindingsDocument,
+  isCausallyExempt,
+  type RefuterVerdict,
+  type RunStatus,
+  type Severity,
+  type Tier,
 } from "#review/findings";
 import {
   clusterByRootCause,
@@ -726,6 +728,9 @@ export function renderPrComment(
   // compacts from the last entry backwards, one entry at a time, until the
   // body fits. Omitted or past the end, the section is byte-identical.
   compactFrom?: number,
+  // Findings below `post_min_severity` (pr/post-floor.ts): left out of `doc`
+  // by the caller, counted here in one line so the summary says they exist.
+  notPosted?: { count: number; floor: PostMinSeverity },
 ): string {
   // Normalize away one trailing slash so `gh repo view` output and a
   // hand-typed URL build the same links.
@@ -875,10 +880,21 @@ export function renderPrComment(
     // Item 7 C7: zero new findings is also not a clean bill when priors
     // remain live (carried / unconfirmed / deferred / suppressed) or this
     // run returned / re-tiered a prior. MatchResult.resolved cannot say so.
-    out.push(cleanBillLine(doc.run_status, delta?.rereview));
+    const cleanBill = cleanBillLine(doc.run_status, delta?.rereview);
+    // The ✅ claims nothing was found. With findings held back by the floor
+    // that claim is false, so it narrows to what the floor let through.
+    out.push(
+      notPosted !== undefined && cleanBill === CLEAN_BILL
+        ? `No findings at or above ${code(notPosted.floor)} severity.`
+        : cleanBill,
+    );
     out.push("");
   } else {
     out.push(...findingIndexLines(doc.findings, commentUrlByFindingId));
+    out.push("");
+  }
+  if (notPosted !== undefined) {
+    out.push(notPostedLine(notPosted));
     out.push("");
   }
   out.push(...liveFindingLines(delta?.rereview));
@@ -1058,7 +1074,21 @@ function cleanBillLine(
   if (!rereviewIsClean(rereview) && rereview !== undefined) {
     return `No new findings this delta. Live: ${liveBits(rereview).join(" · ")}.`;
   }
-  return "✅ Crysk reviewed this PR and found nothing to report.";
+  return CLEAN_BILL;
+}
+
+const CLEAN_BILL = "✅ Crysk reviewed this PR and found nothing to report.";
+
+function notPostedLine(notPosted: {
+  count: number;
+  floor: PostMinSeverity;
+}): string {
+  const noun = notPosted.count === 1 ? "finding" : "findings";
+  const what = notPosted.floor === "blocking" ? "advisory" : "lower-severity";
+  return (
+    `${notPosted.count} ${what} ${noun} not posted ` +
+    `(${code(`post_min_severity: ${notPosted.floor}`)}).`
+  );
 }
 
 function deltaLine(delta: PrCommentDelta): string {
@@ -1255,6 +1285,22 @@ function tierExplanationLines(finding: Finding): string[] {
   const isBlockerClass =
     finding.severity === "BLOCKER" || finding.severity === "CRITICAL";
   if (!isBlockerClass || finding.tier !== "advisory") return [];
+  // FIRST, ahead of the refuter text: a finding the materiality gate demoted
+  // may carry a `corroborated` verdict, and "the refuter returned
+  // corroborated" would explain nothing about why it is advisory.
+  if (finding.materiality?.label === "immaterial") {
+    return [
+      "⚖️ Demoted to advisory — not material under normal use: " +
+        materialityReason(finding.materiality.reason),
+    ];
+  }
+  // #457: a finding the PR did not cause is advisory whatever the refuter
+  // said, so the refuter text would explain nothing about its tier.
+  if (isCausallyExempt(finding)) {
+    return [
+      "⚖️ Advisory — this PR did not introduce it, so it does not block the gate",
+    ];
+  }
   // `not_submitted` never reached the refuter, so "the refuter returned" it
   // would be false, and printing the engine's word here would contradict the
   // header, which says `refuter: unchecked` (refuterLabel).
@@ -1276,6 +1322,23 @@ function tierExplanationLines(finding: Finding): string[] {
     lines.push("   (real, but no live trigger today)");
   }
   return lines;
+}
+
+// The judge's reason is model text written about author-controlled input,
+// and it is posted. One line (a newline would end the list item and could
+// start a forged header line), capped, with HTML comment delimiters broken so
+// it can never open or close a marker the comment parsers read, and `@`
+// defused so it cannot notify anyone.
+const MATERIALITY_REASON_MAX = 280;
+
+function materialityReason(reason: string): string {
+  const flat = oneLine(reason)
+    .replaceAll("<!--", "<!‐‐")
+    .replaceAll("-->", "‐‐>")
+    .replaceAll("@", "@\u200b");
+  return flat.length <= MATERIALITY_REASON_MAX
+    ? flat
+    : `${flat.slice(0, MATERIALITY_REASON_MAX - 1).trimEnd()}…`;
 }
 
 // Item "Prompt to fix with AI" (Juanma's PR #2 feedback): a copy-pasteable
@@ -1741,7 +1804,7 @@ function commentDisclaimer(ciMode: CiMode): string {
 // Hunter-authored text lands inside code spans and list items. A stray
 // backtick in a path or proof_ref would break out of its span and mangle
 // every line after it, so spans are built here and never by hand.
-function code(text: string): string {
+export function code(text: string): string {
   return `\`${oneLine(text).replaceAll("`", "'")}\``;
 }
 

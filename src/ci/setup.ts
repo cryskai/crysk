@@ -12,8 +12,7 @@
 // caller points it at (via `crysk setup --ci` / `crysk ci init`); a repo that
 // already has the pre-rename `pr-hero.yml` keeps that file, updated in place.
 // Pillar 3 Phase 5 (tasks.md 5.2) reuses this SAME function to produce this
-// repo's own canonical example workflow (which stays at `pr-hero.yml`: this
-// repo is the existing-repo case), rather than
+// repo's own canonical example workflow (at `crysk.yml`), rather than
 // hand-authoring a second copy that could silently drift from what every
 // caller of `setup --ci` actually gets — test/packaging.test.ts asserts the
 // committed file's bytes equal generateCiWorkflowTemplate()'s output exactly.

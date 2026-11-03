@@ -48,6 +48,7 @@ import {
   preflightAgentsDir,
   resolveAgentsDir,
   resolveAgentsDirSetting,
+  resolveMaterialityGate,
   resolveMaxConcurrentSteps,
   resolveMaxVerificationSteps,
   resolvePost,
@@ -345,6 +346,52 @@ describe("parseArgs", () => {
     expect(() => parseLocalConfig('{"scout":{"enabled":true}}')).toThrow(
       "scout must be a boolean",
     );
+  });
+
+  test("the config file admits materiality_gate as an optional boolean", () => {
+    expect(parseLocalConfig('{"materiality_gate": true}')).toEqual({
+      materiality_gate: true,
+    });
+    expect(parseLocalConfig('{"materiality_gate": false}')).toEqual({
+      materiality_gate: false,
+    });
+    expect(parseLocalConfig("{}")).toEqual({});
+    expect(parseGlobalConfig('{"materiality_gate": true}')).toEqual({
+      materiality_gate: true,
+    });
+    expect(
+      messageOf(() => parseLocalConfig('{"materiality_gate": "yes"}')),
+    ).toBe(".crysk/config.json materiality_gate must be a boolean");
+    // The neighbouring boolean key still parses beside it.
+    expect(
+      parseLocalConfig('{"scout": true, "materiality_gate": false}'),
+    ).toEqual({ scout: true, materiality_gate: false });
+  });
+
+  test("the config file admits post_min_severity and rejects other values", () => {
+    for (const value of ["suggestion", "warning", "blocking"] as const) {
+      expect(parseLocalConfig(`{"post_min_severity": "${value}"}`)).toEqual({
+        post_min_severity: value,
+      });
+    }
+    expect(() => parseLocalConfig('{"post_min_severity": "critical"}')).toThrow(
+      "post_min_severity must be one of: suggestion, warning, blocking",
+    );
+    expect(() => parseLocalConfig('{"post_min_severity": 1}')).toThrow(
+      "post_min_severity must be one of",
+    );
+  });
+
+  test("a repo post_min_severity overrides the global one in either direction", () => {
+    const merged = mergeConfig(
+      { post_min_severity: "blocking" },
+      { post_min_severity: "suggestion" },
+    );
+    expect(merged.effective.post_min_severity).toBe("suggestion");
+    expect(merged.sources.post_min_severity).toBe("repo");
+    const globalOnly = mergeConfig({ post_min_severity: "warning" }, {});
+    expect(globalOnly.effective.post_min_severity).toBe("warning");
+    expect(globalOnly.sources.post_min_severity).toBe("global");
   });
 
   test("--scout-model never swallows the following flag", () => {
@@ -1316,6 +1363,12 @@ describe("resolveScout & resolvePost", () => {
     expect(resolvePost({}, { post: false })).toBe(false);
     expect(resolvePost({}, {})).toBe(false);
   });
+
+  test("resolveMaterialityGate: the merged config decides, absent means off", () => {
+    expect(resolveMaterialityGate({ materiality_gate: true })).toBe(true);
+    expect(resolveMaterialityGate({ materiality_gate: false })).toBe(false);
+    expect(resolveMaterialityGate({})).toBe(false);
+  });
 });
 
 // The exact message a rejection produced. `toThrow(string)` matches a
@@ -1344,12 +1397,14 @@ const PRE_C5_LOCAL_KEYS = [
   "ci_review_policy",
   "ci_trusted_actors",
   "default_base",
+  "materiality_gate",
   "max_changed_files",
   "max_changed_lines",
   "max_concurrent_steps",
   "max_verification_steps",
   "parity_trigger_paths",
   "post",
+  "post_min_severity",
   "scout",
   "summary",
   "suspicion_priors",
@@ -1373,7 +1428,9 @@ describe("CONFIG_DIRECTION", () => {
       max_changed_lines: 1500,
       max_changed_files: 150,
       scout: false,
+      materiality_gate: false,
       post: false,
+      post_min_severity: "warning",
       ci_review_policy: "risk_aware",
       ci_max_attempts: 2,
       ci_max_reviews: 2,
@@ -1412,7 +1469,9 @@ describe("CONFIG_DIRECTION", () => {
       max_changed_lines: "capped",
       max_changed_files: "capped",
       scout: "capped",
+      materiality_gate: "capped",
       post: "capped",
+      post_min_severity: "person",
       ci_review_policy: "repo",
       ci_max_attempts: "repo",
       ci_max_reviews: "repo",
@@ -1453,6 +1512,7 @@ describe("parseGlobalConfig", () => {
       summary: { enabled: false, model: "opus" },
       max_verification_steps: 2,
       scout: false,
+      materiality_gate: false,
       post: true,
     };
     expect(parseGlobalConfig(JSON.stringify(admitted))).toEqual(admitted);
@@ -1491,6 +1551,7 @@ describe("parseGlobalConfig", () => {
       ],
       ['{"scout": "yes"}', "scout must be a boolean"],
       ['{"post": 1}', "post must be a boolean"],
+      ['{"materiality_gate": 1}', "materiality_gate must be a boolean"],
     ];
     for (const [raw, tail] of cases) {
       expect(messageOf(() => parseGlobalConfig(raw))).toBe(
@@ -1761,9 +1822,9 @@ describe("mergeConfig", () => {
     expect(enabled(undefined, undefined).effective.summary).toBeUndefined();
   });
 
-  test("scout and post are folded with boolean AND (capped)", () => {
+  test("scout, post and materiality_gate are folded with boolean AND (capped)", () => {
     const mergeBool = (
-      key: "scout" | "post",
+      key: "scout" | "post" | "materiality_gate",
       global?: boolean,
       repo?: boolean,
     ) =>
@@ -1772,7 +1833,7 @@ describe("mergeConfig", () => {
         repo === undefined ? {} : layer({ [key]: repo }),
       );
 
-    for (const key of ["scout", "post"] as const) {
+    for (const key of ["scout", "post", "materiality_gate"] as const) {
       // Both true -> repo true
       const tt = mergeBool(key, true, true);
       expect(tt.effective[key]).toBe(true);
@@ -1911,7 +1972,9 @@ describe("mergeConfig", () => {
       max_changed_lines: "default",
       max_changed_files: "default",
       scout: "default",
+      materiality_gate: "default",
       post: "default",
+      post_min_severity: "default",
       ci_review_policy: "default",
       ci_max_attempts: "default",
       ci_max_reviews: "default",

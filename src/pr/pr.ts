@@ -71,7 +71,6 @@ import {
   LEGACY_ADMISSION_CHECK_RUN_NAME,
   LEGACY_WORKFLOW_FILE_NAME,
   matchMarkerPrefix,
-  statusContextForms,
   WORKFLOW_FILE_NAME,
 } from "../brand";
 import { CliError } from "../errors";
@@ -85,6 +84,7 @@ import {
   parseHunkAnchors,
   resolvePostLine,
 } from "./inline";
+import { isBelowPostFloor, type PostMinSeverity } from "./post-floor";
 import {
   type CiMode,
   COMMIT_STATUS_TIMEOUT_MS,
@@ -425,16 +425,12 @@ export async function ghRepoNameWithOwner(
 // `crysk/local` from every other run, so the POST can never pick a context
 // the caller did not choose.
 //
-// WHY two POSTs: for one version every status is also written on the legacy
-// `pr-hero` name (`pr-hero/local` for a local run). Users have `pr-hero` as a
-// required check in branch protection, and a head that stops getting it blocks
-// every PR until they add `crysk`. Both POSTs carry one state, one description
-// and one target. They start together, crysk first, so the cancellation settle
-// (which runs inside a signal handler racing a SIGKILL) spends one short
-// window, not two. A failed POST never skips the other: the required check may
-// be either name, so the call still throws if either failed, and the caller's
-// own handling (fail-soft or fail-loud) applies exactly as it did to one POST.
-// Resolves with the created_at of the crysk row, the context the CLI reads back.
+// WHY one POST: since #457 a status is written on its crysk context alone, never
+// on the legacy `pr-hero` name (`pr-hero/local` for a local run). Readers still
+// take a `pr-hero` row as the same gate (isStatusContext), so a head reviewed
+// before that change keeps its verdict, but a branch protection that requires
+// `pr-hero` must switch to `crysk`. Resolves with the created_at of the row the
+// POST created, the one the CLI reads back.
 export async function postCommitStatus(
   operatorRoot: string,
   sha: string,
@@ -450,25 +446,10 @@ export async function postCommitStatus(
       `commit status: head sha is not a full 40-char id: ${sha.slice(0, 16)}`,
     );
   }
-  const results = await Promise.allSettled(
-    statusContextForms(status.context).map((context) =>
-      postCommitStatusOn(
-        operatorRoot,
-        sha,
-        { ...status, context },
-        spawnFn,
-        options,
-      ),
-    ),
-  );
-  for (const result of results) {
-    if (result.status === "rejected") throw result.reason;
-  }
-  const [crysk] = results;
-  return crysk?.status === "fulfilled" ? crysk.value : undefined;
+  return postCommitStatusOn(operatorRoot, sha, status, spawnFn, options);
 }
 
-// One POST of a status on one context, with the retry.
+// The POST of a status on its context, with the retry.
 async function postCommitStatusOn(
   operatorRoot: string,
   sha: string,
@@ -2730,6 +2711,7 @@ export async function resolveInlinePostPlan(input: {
   doc: FindingsDocument;
   diffPatch: string;
   spawnFn?: typeof Bun.spawn;
+  postMinSeverity?: PostMinSeverity;
 }): Promise<{
   plan: PostPlan;
   previousHeadSha: string | undefined;
@@ -2787,6 +2769,11 @@ export async function resolveInlinePostPlan(input: {
     anchors,
     posted,
     headSha: input.headSha,
+    hiddenIds: new Set(
+      input.doc.findings
+        .filter((f) => isBelowPostFloor(f, input.postMinSeverity))
+        .map((f) => f.id),
+    ),
   });
   return {
     plan,
@@ -2977,6 +2964,8 @@ export async function postInlineFindings(input: {
   // The run was a comment-triggered (forced) run. It leaves the summary counter
   // where it was: the budget bounds automatic reviews (see nextStateReviewCount).
   force?: boolean;
+  // The `post_min_severity` config key (pr/post-floor.ts). Absent posts all.
+  postMinSeverity?: PostMinSeverity;
 }): Promise<InlinePostOutcome> {
   const { operatorRoot, pr, headSha, doc, webUrl, spawnFn } = input;
   const ghTimeoutMs = input.ghTimeoutMs ?? COLLAPSE_GH_TIMEOUT_MS;
@@ -3055,6 +3044,19 @@ export async function postInlineFindings(input: {
   }
   if (priorSummaryVanished) log(vanishedPriorSummaryDegradedMessage(pr));
 
+  // The summary and the state block describe what was POSTED. Findings below
+  // `post_min_severity` have no comment, so they are left out of both and
+  // counted in one summary line instead; a state row would otherwise claim an
+  // inline comment that does not exist. The re-review Δ `new` count and the
+  // admission block below count `postedDoc` too, so the summary never counts a
+  // finding it does not show, a re-review scores the same findings the first
+  // review did, and a hidden finding never spends a re-review. The gate is
+  // unaffected: the floor never hides a blocking finding.
+  const hiddenIds = new Set(plan.notPosted.map((f) => f.id));
+  const postedDoc: FindingsDocument =
+    hiddenIds.size === 0
+      ? doc
+      : { ...doc, findings: doc.findings.filter((f) => !hiddenIds.has(f.id)) };
   // Every re-review-framed surface reads off THIS, never `input.rereview`
   // directly — the delta overlay, the `Still live:` list it carries, and the
   // state block appended after the report marker. The collapse loop at the
@@ -3067,7 +3069,7 @@ export async function postInlineFindings(input: {
   const rereviewDelta =
     framing === undefined
       ? undefined
-      : rereviewDeltaFromProvenance(framing, doc.findings.length);
+      : rereviewDeltaFromProvenance(framing, postedDoc.findings.length);
   const overlayDelta = (delta: PrCommentDelta): PrCommentDelta =>
     rereviewDelta === undefined ? delta : { ...delta, rereview: rereviewDelta };
   const byId = new Map(doc.findings.map((f) => [f.id, f]));
@@ -3104,7 +3106,11 @@ export async function postInlineFindings(input: {
     )
       ? "outside"
       : "inline";
-  const freshFindings: FreshStateFinding[] = doc.findings.map((f) => ({
+  const notPosted =
+    hiddenIds.size === 0 || input.postMinSeverity === undefined
+      ? undefined
+      : { count: hiddenIds.size, floor: input.postMinSeverity };
+  const freshFindings: FreshStateFinding[] = postedDoc.findings.map((f) => ({
     path: f.path,
     line: lineById.get(f.id) ?? f.line,
     proof_refs: f.proof_refs,
@@ -3114,13 +3120,15 @@ export async function postInlineFindings(input: {
     channel: freshChannel(f.id),
   }));
   const referenceBody = renderPrComment(
-    doc,
+    postedDoc,
     webUrl,
     overlayDelta({ ...plan.delta, previousHeadSha }),
     plannedOutsideDiff,
     undefined,
     undefined,
     input.ciMode,
+    undefined,
+    notPosted,
   );
   // WHY one merge function for both writes: the S1 re-merge reruns it with a
   // PATCH-sized budget and the SAME inputs, so the kept ids and hw cannot
@@ -3140,6 +3148,12 @@ export async function postInlineFindings(input: {
             ...(framing.resolved_ids ?? []),
             ...(framing.worsened ?? []).map((w) => w.priorId),
           ],
+          // The priors this run's gate count released through a materiality
+          // demotion, recorded on the rereview block by the pipeline, so the
+          // state the next run reads agrees with this run's count.
+          ...(input.rereview?.materiality_released_ids === undefined
+            ? {}
+            : { releasedIds: input.rereview.materiality_released_ids }),
           fresh: freshFindings,
           stateBudget,
         });
@@ -3154,7 +3168,7 @@ export async function postInlineFindings(input: {
     compactFrom?: number,
   ): string => {
     const body = renderPrComment(
-      doc,
+      postedDoc,
       webUrl,
       overlayDelta(delta),
       outside,
@@ -3162,6 +3176,7 @@ export async function postInlineFindings(input: {
       urls,
       input.ciMode,
       compactFrom,
+      notPosted,
     );
     // WHY the admission block is written on BOTH paths: its `reviews` is the
     // only count a summary keeps when the count is 0. renderStateBlock omits 0
@@ -3172,7 +3187,7 @@ export async function postInlineFindings(input: {
     // priorScoreForAdmission), and the first-review path already writes them
     // this way.
     const counts = tierCountsFromFindings(
-      canonicalAdmissionFindings(doc.findings),
+      canonicalAdmissionFindings(postedDoc.findings),
     );
     const admissionBlock = renderCiAdmissionBlock(
       doc.head_sha,
@@ -3469,7 +3484,7 @@ export async function postInlineFindings(input: {
           headSha,
           delta: overlayDelta(delta),
           newPosted: reachedIds.size,
-          totalFindings: doc.findings.length,
+          totalFindings: postedDoc.findings.length,
           runStatus: doc.run_status,
           summaryUrl:
             webUrl === undefined
@@ -3604,6 +3619,7 @@ export async function postInlineIfEligible(input: {
   ciMode?: CiMode;
   // Forwarded to postInlineFindings: a forced run leaves the summary counter alone.
   force?: boolean;
+  postMinSeverity?: PostMinSeverity;
 }): Promise<InlinePostOutcome | null> {
   if (input.sessionFailed) {
     log(input.skippedReason);

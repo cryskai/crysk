@@ -19,7 +19,13 @@ import {
   identityFromFinding,
   identityFromLocs,
 } from "#rereview/identity";
-import type { Finding, Severity } from "#review/findings";
+import {
+  deriveTier,
+  type Finding,
+  isCausallyExempt,
+  type Severity,
+} from "#review/findings";
+import { isSafetyProtected } from "#review/materiality-gate";
 import { findMarker, MARKER_BRAND_PATTERN, MARKER_OPEN } from "../brand";
 import {
   type FindingChannel,
@@ -407,6 +413,7 @@ export function assembleLive(input: {
         tier: gatePrior.tier,
         locs: row.locs,
         status,
+        claim: gatePrior.claim,
       });
     }
     // Only a triage-driven settlement persists, as `carried`: the author's
@@ -473,9 +480,22 @@ export function assembleLive(input: {
 //   - verified-gone: the verifier refuted the finding, or every file it names
 //     was deleted (classifyPrior settles that as verified-gone).
 //   - ci-dismissed: the author's latest dismissal, upheld by the CI adjudicator (src/triage/adjudication.ts, D5).
-// Nothing this run concludes about a prior lowers it. An advisory survivor at a
-// blocking prior's spot does not clear that prior: identity matching is a
-// 5-line window, so a different issue can sit there, and the gate fails closed.
+//   - a materiality demotion: this run re-found the finding as blocking and the
+//     materiality gate judged it immaterial (review/materiality-gate.ts). The
+//     demoted survivor pairs with one blocking row at its spot and releases it,
+//     and the state merge re-tiers that row advisory (materialityReleasedIds).
+//     This carries the same identity risk a blocking survivor already accepts:
+//     the survivor was blocking on its own merits before the judge spoke. The
+//     gate tracks the current verdict, so a judge that flips back to material
+//     on a later head blocks again. One exception keeps the materiality gate's
+//     safety guard whole: the guard reads the survivor's claim, and the window
+//     can pair it with a different issue, so a prior whose own claim or path
+//     the guard protects (auth, secrets, data loss), or whose claim is unknown,
+//     is never released.
+// Nothing else this run concludes about a prior lowers it. A plain advisory
+// survivor at a blocking prior's spot does not clear that prior: identity
+// matching is a 5-line window, so a different issue can sit there, and the
+// gate fails closed.
 // A real fix leaves the count when the re-review VERIFIES it gone, and
 // `/pr-hero override` covers a team that accepts the finding.
 // A self-asserted triage tag never leaves the count (S7). `misclassified`
@@ -488,33 +508,97 @@ export function assembleLive(input: {
 // Dedupe key. Two rules, both stated so a reader can check them:
 //   - a gate row is one prior, keyed by its id (R###). A duplicate row for the
 //     same id counts once;
-//   - only a BLOCKING survivor pairs, and it pairs with at most one gate row, by
+//   - a BLOCKING survivor pairs with at most one gate row, by
 //     the identity the worsening step already uses (identityFromLocs of the
 //     prior against identityFromFinding of the survivor). It takes the first
 //     unpaired match in PAIR_PREFERENCE order: a blocking row, an unrecoverable
 //     row, then an advisory row. A paired row is carried by its survivor and not
-//     counted again; a blocking survivor counts by its own tier. An advisory
-//     survivor never pairs, so it cannot remove a blocking prior from the count.
+//     counted again; a blocking survivor counts by its own tier. A
+//     materiality-demoted survivor then pairs with at most one still-unpaired
+//     blocking row, never an unrecoverable or advisory one, releases it, and
+//     counts nothing itself (gatePairing). Any other advisory survivor never
+//     pairs, so it cannot remove a blocking prior from the count.
 // One-to-one is the fail-closed choice: two priors at one spot and one survivor
 // count as two, because the survivor can be only one of them.
 //
 // Unrecoverable tiers ARE counted, as blocking. A prior whose tier could not be
 // read back is unclassified, and the fail-visible rule (classify.ts) and S7 both
 // forbid a green gate on a finding we cannot classify. Only a verifier verdict or
-// a deleted file lowers such a row, and an advisory survivor at the same spot
-// does not pair with it.
+// a deleted file lowers such a row, and no advisory survivor at the same spot,
+// demoted or not, pairs with it.
 
 export interface GateRow {
   id: string;
   tier: RecoveredTier;
   locs: readonly string[];
   status: GateStatus;
+  // The prior's claim, read only by the materiality release: a prior the
+  // materiality gate's safety guard protects is never released. Absent fails
+  // closed, the prior cannot be released, and so does a blank one.
+  claim?: string;
 }
 
+// The causal fields are optional so a caller that only has identity and tier
+// still counts correctly: a survivor without them is never causally demoted, so
+// it releases nothing (fail closed). doc.findings carries all of them.
 export type GateSurvivor = Pick<
   Finding,
-  "path" | "line" | "proof_refs" | "tier"
->;
+  "path" | "line" | "proof_refs" | "tier" | "materiality"
+> &
+  Partial<
+    Pick<
+      Finding,
+      | "severity"
+      | "evidence_class"
+      | "refuter_verdict"
+      | "causal_disposition"
+      | "claim"
+    >
+  >;
+
+// A survivor demoted from blocking: advisory now, and blocking but for one
+// rule. Either the materiality gate's immaterial verdict
+// (review/materiality-gate.ts), or #457's causal rule: the PR did not cause it.
+// These are the only advisory survivors that pair, and only with a blocking row
+// (see the note above GateRow). The causal case asks deriveTier what the
+// finding would be as `introduced`, so a pre-existing finding that would have
+// been advisory anyway (an unrefuted inferential one) releases nothing. A
+// `not_submitted` survivor never counts as demoted: on a run the ceiling cut
+// short, deriveTier demoted it for the missing check (refuterCutShort), which
+// this row cannot see, so the recompute would call it blocking and release a
+// prior it never earned. Failing closed costs one prior staying counted.
+function isDemotedFromBlocking(survivor: GateSurvivor): boolean {
+  if (survivor.tier !== "advisory") return false;
+  if (survivor.materiality?.label === "immaterial") return true;
+  const {
+    severity,
+    evidence_class,
+    refuter_verdict,
+    causal_disposition,
+    claim,
+  } = survivor;
+  if (
+    severity === undefined ||
+    evidence_class === undefined ||
+    refuter_verdict === undefined ||
+    refuter_verdict === "not_submitted" ||
+    causal_disposition === undefined ||
+    claim === undefined
+  )
+    return false;
+  const finding = {
+    severity,
+    evidence_class,
+    refuter_verdict,
+    causal_disposition,
+    claim,
+    path: survivor.path,
+  };
+  return (
+    isCausallyExempt(finding) &&
+    deriveTier({ ...finding, causal_disposition: "introduced" }) === "blocking"
+  );
+}
 
 // The order a blocking survivor pairs with a prior: its own tier first, then the
 // unclassified tier, then advisory. The advisory row never changes the count,
@@ -537,22 +621,37 @@ export function pairBlockingSurvivors(
   survivors: readonly GateSurvivor[],
   rows: readonly { tier: RecoveredTier; locs: readonly string[] }[],
 ): SurvivorPair[] {
+  return pairInto(survivors, rows, new Set<number>(), (survivor) =>
+    survivor.tier === "blocking" ? PAIR_PREFERENCE : null,
+  );
+}
+
+// Pairs each survivor that `preferenceOf` admits with the first row, in its
+// preference order, that is not in `paired`, that `rowAllowed` admits, and
+// whose identity matches. Adds every row it takes to `paired`.
+function pairInto(
+  survivors: readonly GateSurvivor[],
+  rows: readonly { tier: RecoveredTier; locs: readonly string[] }[],
+  paired: Set<number>,
+  preferenceOf: (survivor: GateSurvivor) => readonly RecoveredTier[] | null,
+  rowAllowed: (row: number) => boolean = () => true,
+): SurvivorPair[] {
   const identities = rows.map((row) => identityFromLocs(row.locs));
-  const paired = new Set<number>();
   const pairs: SurvivorPair[] = [];
   survivors.forEach((survivor, s) => {
-    // An advisory survivor never pairs: it cannot clear a blocking prior.
-    if (survivor.tier !== "blocking") return;
+    const preference = preferenceOf(survivor);
+    if (preference === null) return;
     const survivorIdentity = identityFromFinding({
       path: survivor.path,
       line: survivor.line,
       proof_refs: survivor.proof_refs,
     });
-    for (const tier of PAIR_PREFERENCE) {
+    for (const tier of preference) {
       const pick = rows.findIndex(
         (row, i) =>
           !paired.has(i) &&
           row.tier === tier &&
+          rowAllowed(i) &&
           identitiesMatch(identities[i] ?? new Map(), survivorIdentity),
       );
       if (pick !== -1) {
@@ -565,14 +664,25 @@ export function pairBlockingSurvivors(
   return pairs;
 }
 
-export function unresolvedBlockingCount(
+interface GatePairing {
+  open: GateRow[];
+  // Open rows a blocking survivor carries: counted once, by the survivor.
+  carried: Set<number>;
+  // Open blocking rows a materiality-demoted survivor released: not counted.
+  released: Set<number>;
+}
+
+// The count's pairing, shared by the gate count and the ids handed to the
+// state merge (materialityReleasedIds), so the two cannot disagree.
+//
+// WHY blocking survivors pair first: a blocking survivor that matches both a
+// blocking and an unrecoverable row takes the blocking one. A demoted survivor
+// that went first could take that row, push the blocking survivor onto the
+// unrecoverable row, and lower the count by one.
+function gatePairing(
   survivors: readonly GateSurvivor[],
   rows: readonly GateRow[],
-): number {
-  const blockingSurvivors = survivors.filter(
-    (survivor) => survivor.tier === "blocking",
-  ).length;
-
+): GatePairing {
   // One entry per prior id, and verified-gone never enters the count.
   const seen = new Set<string>();
   const open: GateRow[] = [];
@@ -584,20 +694,76 @@ export function unresolvedBlockingCount(
     seen.add(row.id);
     open.push(row);
   }
-
-  const paired = new Set(
-    pairBlockingSurvivors(survivors, open).map((p) => p.row),
+  const taken = new Set<number>();
+  const carried = new Set(
+    pairInto(survivors, open, taken, (survivor) =>
+      survivor.tier === "blocking" ? PAIR_PREFERENCE : null,
+    ).map((p) => p.row),
   );
+  const released = new Set(
+    pairInto(
+      survivors,
+      open,
+      taken,
+      (survivor) => (isDemotedFromBlocking(survivor) ? ["blocking"] : null),
+      (i) => isReleasable(open[i]),
+    ).map((p) => p.row),
+  );
+  return { open, carried, released };
+}
+
+// WHY the guard runs on the prior too: applyMaterialityVerdicts never demotes a
+// safety-protected finding, but it reads only the survivor. The 5-line window
+// can pair that survivor with a different, protected prior, and releasing it
+// would turn the gate green on a finding the guard exists to keep blocking.
+// A blank claim counts as unknown: the badge reader writes an unrecovered
+// claim as "" (rereview/prepare.ts), and the guard cannot read safety content
+// that is not there.
+function isReleasable(row: GateRow | undefined): boolean {
+  const claim = row?.claim;
+  if (row === undefined || claim === undefined || claim.trim().length === 0) {
+    return false;
+  }
+  const paths = [...identityFromLocs(row.locs).keys()];
+  if (paths.length === 0) return !isSafetyProtected({ claim, path: "" });
+  return paths.every((path) => !isSafetyProtected({ claim, path }));
+}
+
+export function unresolvedBlockingCount(
+  survivors: readonly GateSurvivor[],
+  rows: readonly GateRow[],
+): number {
+  const blockingSurvivors = survivors.filter(
+    (survivor) => survivor.tier === "blocking",
+  ).length;
+  const { open, carried, released } = gatePairing(survivors, rows);
 
   // WHY unrecoverable counts: fail closed, see the note above the GateRow type.
   // Counting only "blocking" would let an unreadable tier turn the gate green.
   let unpairedBlocking = 0;
   for (let i = 0; i < open.length; i++) {
-    if (paired.has(i)) continue;
+    if (carried.has(i) || released.has(i)) continue;
     const tier = open[i]?.tier;
     if (tier === "blocking" || tier === TIER_UNRECOVERABLE) unpairedBlocking++;
   }
   return blockingSurvivors + unpairedBlocking;
+}
+
+// The prior ids a materiality demotion released from the count above. The
+// state merge re-tiers exactly these rows to advisory (MergeStateInput's
+// `releasedIds`), so the state block the next run reads agrees with this
+// run's count. WHY ids, not a second pairing in the merge: the merge sees other
+// rows (live, not gate rows) and other survivors (posted only, after the
+// posting floor), so pairing again there can release a different row.
+export function materialityReleasedIds(
+  survivors: readonly GateSurvivor[],
+  rows: readonly GateRow[],
+): string[] {
+  const { open, released } = gatePairing(survivors, rows);
+  return [...released].flatMap((i) => {
+    const row = open[i];
+    return row === undefined ? [] : [row.id];
+  });
 }
 
 // The state merge (S1, S2, S6, S7). Pure. The live priors of this run, plus the
@@ -628,6 +794,11 @@ export interface MergeStateInput {
   // of the same head (a retried PATCH, a re-run of the post step) must find the
   // rows it already wrote, or each retry appends them again with a new id.
   previousHead?: string | null;
+  // The prior ids this run's gate count released through a materiality
+  // demotion (materialityReleasedIds). Each such blocking row is re-tiered to
+  // advisory before pairing, so the next run's count agrees with this one.
+  // Absent releases nothing: the rows stay blocking, the fail-closed side.
+  releasedIds?: readonly string[];
   fresh: readonly FreshStateFinding[];
   stateBudget: number;
 }
@@ -673,6 +844,16 @@ export function mergeStateFindings(input: MergeStateInput): MergedState {
     for (const row of input.previous?.findings ?? []) {
       if (held.has(row.id)) continue;
       rows.push({ ...row, status: "unconfirmed" });
+    }
+  }
+  // The release lands BEFORE pairing, so the demoted survivor (advisory now)
+  // re-pairs with its re-tiered row in the advisory pass below and updates its
+  // locs and claim, instead of appending beside it. Only the tier changes here:
+  // a released row the posting floor hid keeps the rest of what it said.
+  const released = new Set(input.releasedIds ?? []);
+  for (const [i, row] of rows.entries()) {
+    if (row.tier === "blocking" && released.has(row.id)) {
+      rows[i] = { ...row, tier: "advisory" };
     }
   }
   const touched = new Set<string>();

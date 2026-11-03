@@ -32,7 +32,12 @@ import {
 } from "../transport-registry";
 import type { OpenCodeSdkLike } from "../transports/opencode-client";
 import { DEFAULT_CONSOLIDATE_MODEL, DEFAULT_SCOUT_MODEL } from "./pipeline";
-import type { CliOptions, SummarySettings } from "./preflight";
+import {
+  type CliOptions,
+  type ConfigLayer,
+  resolveMaterialityGate,
+  type SummarySettings,
+} from "./preflight";
 import { type ParsedAgent, parseAgentFile } from "./prompt-set";
 import type { ReviewSpec } from "./spec";
 
@@ -85,6 +90,23 @@ export function pipelineConsolidateInput(): {
   };
 }
 
+// The materiality gate (odd/tasks/materiality-gate.md) is ENGINE-owned like
+// the consolidation pass but OFF by default: it is config-only
+// (`materiality_gate`), and absent means today's pipeline, byte for byte. The
+// judge's model is pinned inside the pipeline, so nothing but the prompt path
+// travels here.
+export function pipelineMaterialityInput(
+  config: Pick<ConfigLayer, "materiality_gate">,
+): { materiality: { promptPath: string } } | Record<string, never> {
+  return resolveMaterialityGate(config)
+    ? {
+        materiality: {
+          promptPath: resolveEngineAssets().materialityPromptPath,
+        },
+      }
+    : {};
+}
+
 export async function buildCliRoutePlan(params: {
   spec: ReviewSpec;
   options: CliOptions;
@@ -97,6 +119,9 @@ export async function buildCliRoutePlan(params: {
   // that skips discovery passes false, the scout's condition, so the plan
   // never carries a route for a step that will not run.
   consolidateEnabled?: boolean;
+  // Defaults OFF, unlike consolidation: the gate is opt-in, and a judge key in
+  // the plan changes its fingerprint, so absent must mean today's plan.
+  materialityEnabled?: boolean;
 }): Promise<ResolvedRoutePlan> {
   const summarizerEnabled = params.summarizerEnabled ?? params.summary.enabled;
   const scoutEnabled = params.scoutEnabled ?? params.options.scout;
@@ -164,6 +189,9 @@ export async function buildCliRoutePlan(params: {
             defaultModel: DEFAULT_CONSOLIDATE_MODEL,
           },
         }
+      : {}),
+    ...(params.materialityEnabled === true
+      ? { materiality: true as const }
       : {}),
   });
 }

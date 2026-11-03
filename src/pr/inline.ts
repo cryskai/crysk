@@ -374,6 +374,12 @@ export interface PostPlan {
   issueComments: PostableFinding[];
   persisting: FindingMatch[];
   resolved: PostedFindingComment[];
+  // Unmatched findings below `post_min_severity` (pr/post-floor.ts): never
+  // posted, counted in the summary instead. Taken out AFTER matching on
+  // purpose: dropped before it, a still-live advisory comment from an earlier
+  // head would land in `resolved` and read as fixed. A hidden finding that
+  // matches an earlier comment stays in `persisting`.
+  notPosted: PostableFinding[];
   // From the matcher, not a stored count (design D5): persist = matched,
   // new = reviewComments.length + issueComments.length, resolved = prior
   // comments with nothing matched to them.
@@ -386,6 +392,8 @@ export function buildPostPlan(input: {
   posted: PostedFindingComment[];
   headSha: string;
   window?: number;
+  // Ids of the findings below `post_min_severity`. Absent posts everything.
+  hiddenIds?: ReadonlySet<string>;
 }): PostPlan {
   // Resolve post lines BEFORE matching: a re-anchored finding (544 → 938)
   // has to compare against a prior comment stored at 938, or a re-run on
@@ -405,7 +413,12 @@ export function buildPostPlan(input: {
   });
   const reviewComments: PostableFinding[] = [];
   const issueComments: PostableFinding[] = [];
+  const notPosted: PostableFinding[] = [];
   for (const finding of match.fresh) {
+    if (input.hiddenIds?.has(finding.id) === true) {
+      notPosted.push(finding);
+      continue;
+    }
     const anchorability = classifyAnchorability(finding, input.anchors);
     if (anchorability === "anchorable") reviewComments.push(finding);
     else issueComments.push(finding);
@@ -415,9 +428,10 @@ export function buildPostPlan(input: {
     issueComments,
     persisting: match.persist,
     resolved: match.resolved,
+    notPosted,
     delta: {
       resolved: match.resolved.length,
-      new: match.fresh.length,
+      new: reviewComments.length + issueComments.length,
       persist: match.persist.length,
     },
   };

@@ -1,0 +1,155 @@
+{
+  "_note": "Immaterial anchors for the materiality judge exam (src/compare/materiality.ts). Each claim is written to be TRUE but not worth posting. Planted because no externally labelled immaterial set exists. Written after the judge rubric was fixed; do not edit once a score is recorded against them.",
+  "anchors": [
+    {
+      "id": "precondition-clock-rollback",
+      "prTitle": "Add session expiry banner",
+      "claim": "In `src/session/expiry.ts:42`, `remainingMs` is computed as `expiresAt - Date.now()`. If the host's system clock is moved backwards by more than the session length while the tab is open, `remainingMs` exceeds the configured lifetime and the banner shows a countdown longer than 24 hours."
+    },
+    {
+      "id": "precondition-int-overflow-counter",
+      "prTitle": "Track number of saved drafts per user",
+      "claim": "`draftCount` in `DraftStats` is a 32-bit integer column. A user who saves more than 2,147,483,647 drafts would overflow it, and the stats page would then display a negative number."
+    },
+    {
+      "id": "precondition-unicode-filename",
+      "prTitle": "Show uploaded file name in the toast",
+      "claim": "The toast truncates `file.name` with `.slice(0, 40)`. A file name made entirely of 4-byte emoji whose 40th code unit falls in the middle of a surrogate pair would render one replacement character at the end of the toast text."
+    },
+    {
+      "id": "precondition-leap-second",
+      "prTitle": "Format meeting durations as h:mm",
+      "claim": "`formatDuration` assumes every minute has 60 seconds. A meeting that spans an inserted leap second would be displayed as one second shorter than its true wall-clock length."
+    },
+    {
+      "id": "precondition-env-missing-in-prod",
+      "prTitle": "Read the support email from config",
+      "claim": "`SUPPORT_EMAIL` falls back to `undefined` when the variable is unset. The deploy manifest in this repo always sets it and the app refuses to boot without the shared config bundle, but if someone started the server by hand with an empty environment, the footer link would read `mailto:undefined`."
+    },
+    {
+      "id": "precondition-cosmic-ray",
+      "prTitle": "Cache computed avatar colors",
+      "claim": "The avatar color cache stores the hue as a JS number and never re-validates it. If a memory bit flip changed the cached value, the avatar would show a different color until the page is reloaded."
+    },
+    {
+      "id": "precondition-year-10000",
+      "prTitle": "Add date column to the invoices export",
+      "claim": "The CSV export formats dates with `toISOString().slice(0, 10)`. For invoices dated after the year 9999 the ISO string gains a sign and extra digits, so the slice would cut the date incorrectly."
+    },
+    {
+      "id": "precondition-concurrent-admins",
+      "prTitle": "Let the workspace owner rename the workspace",
+      "claim": "Renaming the workspace is a read-modify-write without a version check. If the single workspace owner submitted two renames from two browsers within the same millisecond, the last write would win and the first name would be lost."
+    },
+    {
+      "id": "precondition-huge-locale-list",
+      "prTitle": "Add a locale picker to settings",
+      "claim": "The locale dropdown renders every entry of `SUPPORTED_LOCALES` without virtualization. If the list grew past roughly 50,000 locales, opening the dropdown would take noticeably long on low-end phones. The list currently has 12 entries."
+    },
+    {
+      "id": "precondition-negative-quantity-ui",
+      "prTitle": "Show line totals in the cart",
+      "claim": "`lineTotal = price * quantity` does not guard against a negative quantity. The quantity input is a stepper with `min=1`, and the API rejects quantities below 1, but a negative value injected straight into component state would display a negative total."
+    },
+    {
+      "id": "style-variable-name",
+      "prTitle": "Add pagination to the audit log",
+      "claim": "In `AuditLogTable`, the variable `res` holds the paginated response. A more descriptive name such as `auditPage` would make the intent clearer to future readers."
+    },
+    {
+      "id": "style-import-order",
+      "prTitle": "Extract the price formatter into a helper",
+      "claim": "In `src/billing/format.ts`, the relative import of `./currency` appears before the import of `date-fns`. Most files in this package list third-party imports first."
+    },
+    {
+      "id": "style-ternary",
+      "prTitle": "Show a badge for verified users",
+      "claim": "`const label = isVerified ? 'Verified' : null` could be written with `&&` inside the JSX instead of a separate constant. Both produce the same rendered output."
+    },
+    {
+      "id": "style-comment-typo",
+      "prTitle": "Retry webhook delivery once",
+      "claim": "The comment above `deliverWebhook` says \"recieve\" instead of \"receive\"."
+    },
+    {
+      "id": "style-early-return",
+      "prTitle": "Validate team names before saving",
+      "claim": "`validateTeamName` nests its checks in an `if/else` chain three levels deep. Rewriting it with early returns would read more linearly; behavior would be identical."
+    },
+    {
+      "id": "style-magic-number",
+      "prTitle": "Debounce the search box",
+      "claim": "The debounce delay is written inline as `300`. Extracting it to a named constant like `SEARCH_DEBOUNCE_MS` would document what the number means."
+    },
+    {
+      "id": "style-test-name",
+      "prTitle": "Add tests for the slug helper",
+      "claim": "The test titled `works` in `slug.test.ts` asserts that spaces become dashes. A title describing that behavior would make failures easier to read in CI output."
+    },
+    {
+      "id": "style-trailing-comma",
+      "prTitle": "Add a German translation file",
+      "claim": "The last entry of the `de` object in `locales/de.ts` has no trailing comma, while the other locale files use one. Formatting only; the object is identical."
+    },
+    {
+      "id": "hardening-try-catch-pure",
+      "prTitle": "Compute reading time for blog posts",
+      "claim": "`readingTime(text)` splits on whitespace and divides by 200. Consider wrapping the body in a try/catch so that any unexpected error does not propagate to the caller."
+    },
+    {
+      "id": "hardening-null-check-typed",
+      "prTitle": "Show the author's display name on posts",
+      "claim": "`post.author.displayName` is read without a null check. The `Post` type declares `author` as required, the query uses an inner join, and the column is `NOT NULL`, but an extra optional chain would be more defensive."
+    },
+    {
+      "id": "hardening-validate-constant",
+      "prTitle": "Add a page size constant for lists",
+      "claim": "`PAGE_SIZE` is a hard-coded constant of 25 and is never validated before being used in `LIMIT`. Adding a runtime check that it is a positive integer would guard against future misconfiguration."
+    },
+    {
+      "id": "hardening-timeout-local-fn",
+      "prTitle": "Sort tags alphabetically in the sidebar",
+      "claim": "Sorting the sidebar tags has no timeout. Adding one would protect the render if sorting ever took unexpectedly long. Users have at most a few dozen tags."
+    },
+    {
+      "id": "hardening-log-more",
+      "prTitle": "Delete expired password reset tokens nightly",
+      "claim": "The cleanup job logs the number of deleted tokens but not their ids. Logging each id would give more detail if someone ever needed to audit a specific deletion."
+    },
+    {
+      "id": "hardening-freeze-object",
+      "prTitle": "Define the default notification preferences",
+      "claim": "`DEFAULT_PREFS` is exported as a plain object. Calling `Object.freeze` on it would prevent accidental mutation; no code in the repo currently writes to it."
+    },
+    {
+      "id": "hardening-retry-idempotent-read",
+      "prTitle": "Load feature flags at startup",
+      "claim": "Fetching feature flags at startup makes a single attempt. Consider adding retries with exponential backoff. The loader already falls back to the bundled defaults on any failure and re-fetches every 60 seconds."
+    },
+    {
+      "id": "perf-regex-once",
+      "prTitle": "Highlight @mentions in comments",
+      "claim": "The mention regex is compiled inside `highlightMentions` on each call instead of once at module level. Comments are rendered a few at a time, so the cost is a few microseconds per comment."
+    },
+    {
+      "id": "perf-spread-copy",
+      "prTitle": "Add a 'mark all read' button",
+      "claim": "`markAllRead` builds the updated list with `[...items].map(...)`, which copies the array once more than needed. The notification list is capped at 50 items."
+    },
+    {
+      "id": "perf-two-loops",
+      "prTitle": "Show counts of open and closed tickets",
+      "claim": "The component filters the ticket array twice, once for open and once for closed, instead of counting both in a single pass. The array holds the current page of 20 tickets."
+    },
+    {
+      "id": "perf-string-concat",
+      "prTitle": "Build the breadcrumb label",
+      "claim": "The breadcrumb label is built with repeated `+=` string concatenation in a loop. Using an array and `join` would avoid intermediate strings; breadcrumbs have at most five segments."
+    },
+    {
+      "id": "perf-extra-render",
+      "prTitle": "Add a character counter to the bio field",
+      "claim": "The character counter stores the count in its own `useState`, causing one extra render per keystroke in a component with no children. Deriving it from the text value would avoid that render."
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import {
 } from "../../src/transports/opencode-client";
 import type { OpenCodeTransportClock } from "../../src/transports/opencode-sdk";
 import { OpenCodeSdkTransport } from "../../src/transports/opencode-sdk";
+import { flush } from "../support/flush";
 
 // Issue #127. OpenCode creates ONE assistant message PER STEP, and every one
 // of them carries its own `time.completed`. Instrumented on the live provider
@@ -387,10 +388,6 @@ function makeRequest(): TransportRequest {
       verifiedBinaryPath: "/usr/bin/true",
     },
   };
-}
-
-async function flush(): Promise<void> {
-  for (let i = 0; i < 25; i += 1) await Promise.resolve();
 }
 
 interface Attempt {

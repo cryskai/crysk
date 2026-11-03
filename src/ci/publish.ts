@@ -56,7 +56,6 @@ import {
   MARKER_OPEN,
   matchMarkerPrefix,
   STATUS_CONTEXT,
-  statusContextForms,
 } from "../brand";
 import type {
   CliRecord,
@@ -616,11 +615,11 @@ function workflowCommand(
   return `::${command} title=crysk::${escaped}\n`;
 }
 
-// The status write, on BOTH names of its context: the new one, then the legacy `pr-hero` one
-// (statusContextForms). Users have `pr-hero` as a required check in branch protection, and a
-// head that stops getting it blocks every PR, so the publisher keeps writing it for one version.
-// A failed write never skips the other: the required check may be either name. The first
-// failure is the one reported, so the renderer sees the same answer a single write gave.
+// The status write: one POST on `status.context`, the crysk name, retried once unless
+// `attempts` is 1. Since #457 the legacy `pr-hero` context is never written, only read
+// (isStatusContext), so a branch protection that still requires `pr-hero` must switch to
+// `crysk`. Returns the failure's HTTP status when gh printed one, so the renderer can pick
+// the permission or the server wording.
 function postStatus(
   deps: PublishDeps,
   repository: string,
@@ -628,39 +627,13 @@ function postStatus(
   status: StatusPost,
   attempts = 2,
 ): { ok: true } | { ok: false; httpStatus: number | undefined } {
-  let failure: { ok: false; httpStatus: number | undefined } | undefined;
-  for (const context of statusContextForms(status.context)) {
-    const posted = postStatusOn(
-      deps,
-      repository,
-      headSha,
-      status,
-      context,
-      attempts,
-    );
-    if (!posted.ok) failure ??= posted;
-  }
-  return failure ?? { ok: true };
-}
-
-// One write on one context, retried once unless `attempts` is 1. Returns the failure's HTTP
-// status when gh printed one, so the renderer can pick the permission or the server
-// wording.
-function postStatusOn(
-  deps: PublishDeps,
-  repository: string,
-  headSha: string,
-  status: StatusPost,
-  context: string,
-  attempts: number,
-): { ok: true } | { ok: false; httpStatus: number | undefined } {
   const args = [
     "api",
     `repos/${repository}/statuses/${headSha}`,
     "-f",
     `state=${status.state}`,
     "-f",
-    `context=${context}`,
+    `context=${status.context}`,
     "-f",
     `description=${status.description}`,
     "-f",
@@ -1112,13 +1085,15 @@ function parseStatusRow(line: string): HeadStatusRow | undefined {
 // The head's newest pr-hero status, as the three states the table needs. The newest row is
 // picked by its time, not by its place in the answer. A failed read, no pr-hero row, or a
 // state the table does not name is unknown, which the table answers with the status.
-// Copies the verdict of a half-landed pair onto the name that missed it (strandedStatusPair).
-// The stuck name may be the repository's required check, and the readers below take the
-// newest row across both names, so nothing else would ever settle it. Only the stuck name
-// is written: the verdict, which may be a human's override, is never replaced. A failed
-// copy is a warning, and the run goes on as it would have. Returns the verdict whenever
-// the pair is stranded, copied or not: it, not the stuck pending row, is the gate's state,
-// and the readers' newest-row pick could still choose the stuck row on a same-second tie.
+// Copies the verdict of a stranded pair onto crysk when crysk is the name that missed it
+// (strandedStatusPair): a crysk pending behind a later pr-hero verdict an older action or a
+// run before #457 wrote. crysk is the required check, and the readers below take the newest
+// row across both names, so nothing else would ever settle it. Only crysk is written: the
+// verdict, which may be a human's override, is never replaced, and a stuck legacy `pr-hero`
+// row is left as it is, because the legacy name is never written since #457. A failed copy is
+// a warning, and the run goes on as it would have. Returns the verdict whenever the pair is
+// stranded, copied or not: it, not the stuck pending row, is the gate's state, and the
+// readers' newest-row pick could still choose the stuck row on a same-second tie.
 function repairStrandedPair(
   deps: PublishDeps,
   repo: string,
@@ -1127,6 +1102,7 @@ function repairStrandedPair(
 ): HeadStatusRow | undefined {
   const pair = strandedStatusPair(statuses, STATUS_CONTEXT);
   if (pair === undefined) return undefined;
+  if (pair.stranded.context !== STATUS_CONTEXT) return pair.verdict;
   const state = pair.verdict.state;
   const description = pair.verdict.description;
   // A verdict this step cannot reproduce faithfully is not copied: a blank description
@@ -1138,19 +1114,12 @@ function repairStrandedPair(
   ) {
     return pair.verdict;
   }
-  const posted = postStatusOn(
-    deps,
-    repo,
-    sha,
-    {
-      state,
-      context: STATUS_CONTEXT,
-      description,
-      targetUrl: pair.verdict.targetUrl ?? actionsRunUrl(deps.env) ?? "",
-    },
-    pair.stranded.context,
-    2,
-  );
+  const posted = postStatus(deps, repo, sha, {
+    state,
+    context: STATUS_CONTEXT,
+    description,
+    targetUrl: pair.verdict.targetUrl ?? actionsRunUrl(deps.env) ?? "",
+  });
   deps.stdout(
     posted.ok
       ? workflowCommand(
@@ -1237,30 +1206,19 @@ function overrideDescription(actor: string): string {
 // an override the status never received would be a false record.
 function overrideCommentBody(
   plan: Extract<Publication, { kind: "override" }>,
-  landed: readonly string[],
+  landed: boolean,
   at: Date,
 ): string {
   const when = `${at.toISOString().slice(0, 16).replace("T", " ")} UTC`;
   const marker = `${MARKER_OPEN}override head=${plan.headSha ?? "unknown"} run=${plan.runId} attempt=${plan.runAttempt} -->`;
-  if (landed.length > 0 && plan.headSha !== undefined) {
-    // Name exactly the contexts that were written: a branch protection that requires the
-    // other one is still blocked, and this comment is never cleaned up (#435 F001).
-    const names = landed.map((context) => `\`${context}\``).join(" and ");
-    const missed = statusContextForms(STATUS_CONTEXT).filter(
-      (context) => !landed.includes(context),
-    );
-    const missedNote =
-      missed.length === 0
-        ? ""
-        : ` The ${missed.map((context) => `\`${context}\``).join(" and ")} status could not be written, so a rule that requires it is still blocked: comment ${commandHint(OVERRIDE_COMMAND)} again to retry.`;
+  if (landed && plan.headSha !== undefined) {
+    // Names the one context written: since #457 an override posts `crysk` alone, and this
+    // comment is never cleaned up, so it must not claim a legacy `pr-hero` status.
     return [
       marker,
       "",
-      (landed.includes(STATUS_CONTEXT)
-        ? `Crysk's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. `
-        : `@${plan.actor}'s override of Crysk's gate on head \`${plan.headSha}\` at ${when} landed only in part. `) +
-        `The ${names} status${landed.length > 1 ? "es" : ""} on that head ${landed.length > 1 ? "are" : "is"} now success, with no review of this head.` +
-        missedNote +
+      `Crysk's gate was overridden by @${plan.actor} on head \`${plan.headSha}\` at ${when}. ` +
+        `The \`${STATUS_CONTEXT}\` status on that head is now success, with no review of this head.` +
         ` A new push or a later ${commandHint(REVIEW_COMMAND)} on this head replaces it.`,
     ].join("\n");
   }
@@ -1283,41 +1241,26 @@ function publishOverride(
   deps: PublishDeps,
   plan: Extract<Publication, { kind: "override" }>,
 ): number {
-  const landed: string[] = [];
+  let landed = false;
   let exitCode = 0;
   if (plan.headSha !== undefined) {
-    // Each context is written on its own (postStatus would fold the pair into one answer):
-    // when one lands and the other fails, the head IS overridden on the one that landed, and
-    // the permanent audit comment must say so (#434 F001). The failed half is still reported.
-    let failure: { ok: false; httpStatus: number | undefined } | undefined;
-    for (const context of statusContextForms(STATUS_CONTEXT)) {
-      const posted = postStatusOn(
-        deps,
-        plan.repository,
-        plan.headSha,
-        {
-          state: "success",
-          context: STATUS_CONTEXT,
-          description: overrideDescription(plan.actor),
-          targetUrl: plan.runUrl,
-        },
-        context,
-        2,
-      );
-      if (posted.ok) landed.push(context);
-      else failure ??= posted;
-    }
-    if (landed.includes(STATUS_CONTEXT)) {
+    // One write, on crysk alone (#457): the legacy `pr-hero` context is no longer posted.
+    const posted = postStatus(deps, plan.repository, plan.headSha, {
+      state: "success",
+      context: STATUS_CONTEXT,
+      description: overrideDescription(plan.actor),
+      targetUrl: plan.runUrl,
+    });
+    landed = posted.ok;
+    if (posted.ok) {
       // WHY here, right after the success and before the audit comment: the crysk gate is
-      // green now, so an earlier run's outcome comment contradicts it. When only the legacy
-      // pr-hero status landed, crysk is still red and that comment still explains why. The audit comment does not
-      // gate this cleanup, and its warnings never change the exit code (as for a review).
+      // green now, so an earlier run's outcome comment contradicts it. The audit comment does
+      // not gate this cleanup, and its warnings never change the exit code (as for a review).
       cleanupOlderOutcomes(deps, plan);
-    }
-    if (failure !== undefined) {
+    } else {
       reportStatusWriteFailure(
         deps,
-        failure.httpStatus,
+        posted.httpStatus,
         plan.runId,
         plan.runUrl,
       );
@@ -1327,11 +1270,9 @@ function publishOverride(
   deps.stdout(
     workflowCommand(
       "notice",
-      landed.includes(STATUS_CONTEXT)
+      landed
         ? `crysk gate overridden by @${plan.actor} on head ${plan.headSha}.`
-        : landed.length > 0
-          ? `crysk override by @${plan.actor} set only the ${landed.join(", ")} status on head ${plan.headSha}.`
-          : `crysk override by @${plan.actor} set no commit status.`,
+        : `crysk override by @${plan.actor} set no commit status.`,
     ),
   );
   const at = (deps.now ?? (() => new Date()))();

@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { discoveryHunters, resolvePrDiscovery } from "#pr/discovery";
+import {
+  AllExcludedError,
+  discoveryHunters,
+  resolvePrDiscovery,
+} from "#pr/discovery";
 import { skippedDiscoveryMessage } from "#rereview/plan";
+import { allExcludedMessage } from "#review/preflight";
 import type { AgentSpec } from "#review/spec";
 import { adjudicationMarker, CI_ADJUDICATOR_LOGIN } from "#triage/adjudication";
+import { CliError } from "../../src/errors";
 import { parseIgnoreFile } from "../../src/ignore-file";
 
 const HUNTER_A: AgentSpec = {
@@ -693,5 +699,61 @@ describe("resolvePrDiscovery — anchorPatch is the full PR diff (inline anchori
     expect(result.skipDiscovery).toBe(true);
     expect(result.effectiveDiff.patch).toBe("");
     expect(result.anchorPatch).toContain("src/session.ts");
+  });
+});
+
+// #317: a first review (case A) whose every changed file is excluded throws a
+// typed error, so the CI path can end it as a skip instead of exit 1. It stays
+// a CliError with the same message, so every other caller is unchanged.
+describe("resolvePrDiscovery — a first review with every file excluded (#317)", () => {
+  function excludingGit() {
+    return {
+      ...baseGit(),
+      runGit: (args: string[]) =>
+        Promise.resolve({
+          ok: true,
+          stdout:
+            "diff --git a/dist/bundle.js b/dist/bundle.js\n" +
+            "index 1111111..2222222 100644\n" +
+            "--- a/dist/bundle.js\n" +
+            "+++ b/dist/bundle.js\n" +
+            "@@ -1 +1 @@\n" +
+            "-old\n" +
+            "+new\n",
+          stderr: "",
+          args,
+        }),
+    };
+  }
+
+  test("throws AllExcludedError naming the excluded paths, with the existing message", async () => {
+    const run = resolvePrDiscovery({
+      diffFromSha: B,
+      headSha: H,
+      full: false,
+      baseRef: B,
+      headLabel: "PR #1 head",
+      isCi: true,
+      sizeGateOverrides: {},
+      config: { parity_trigger_paths: [], suspicion_priors: [] },
+      prIgnore: { rules: parseIgnoreFile("dist/**\n", "user"), found: true },
+      issueComments: [],
+      postedFindings: [],
+      reviewComments: [],
+      git: excludingGit(),
+      log: () => {},
+    });
+    const error = await run.then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(AllExcludedError);
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as AllExcludedError).droppedPaths).toEqual([
+      "dist/bundle.js",
+    ]);
+    expect((error as Error).message).toBe(
+      allExcludedMessage(["dist/bundle.js"]),
+    );
   });
 });

@@ -5,6 +5,7 @@
 // validates the assembled output and merges in the driver-owned run envelope
 // (schema_version, telemetry) before anything is written to a run dir.
 
+import { isSafetyProtected } from "./materiality-gate";
 import type { RootCauseSummary } from "./root-cause";
 
 export const SCHEMA_VERSION = "1.0.0";
@@ -82,6 +83,11 @@ export interface Finding {
   // this field still validates against the unchanged 1.0.0 schema on the lab
   // side and a document without it still validates here. No version bump.
   root_cause_id?: string;
+  // The materiality gate's verdict, present only on a finding it demoted from
+  // blocking to advisory. ADDITIVE and OPTIONAL, same precedent as
+  // `root_cause_id`: both validators are allowlists that never reject unknown
+  // keys, so the schema stays 1.0.0 and a document without it still validates.
+  materiality?: { label: "material" | "immaterial"; reason: string };
 }
 
 // Refuted findings are excluded from `findings[]` (scorer contract unchanged)
@@ -587,8 +593,41 @@ export function validateFindingsDocument(candidate: unknown): FindingsDocument {
 // positive `downgraded-latent` verdict, and also when an EXPECTED refuter
 // check was cut short before the finding was ever submitted (see the
 // `refuterCutShort` option below).
+// #457: the two dispositions that say "not this PR". `worsened` and
+// `behavior-activated` are the PR's doing, and `unknown` causality is not
+// evidence of innocence.
+export function isNotCausedByPr(
+  disposition: CausalDisposition | undefined,
+): boolean {
+  return disposition === "pre-existing" || disposition === "base-only";
+}
+
+// Whether the causal rule takes a finding out of the blocking tier. The label is
+// the hunter's own, never checked against the diff, so the materiality gate's
+// safety guard applies here too: a finding about auth, secrets, isolation or
+// data loss keeps blocking whatever disposition it carries, because a false
+// "pre-existing" there would clear a required check on exactly the class the
+// guard exists to keep red. Shared by deriveTier, the re-review release
+// (rereview/state.ts) and the inline comment's explanation (review/report.ts).
+export function isCausallyExempt(
+  finding: Pick<Finding, "causal_disposition" | "claim" | "path">,
+): boolean {
+  return (
+    isNotCausedByPr(finding.causal_disposition) &&
+    !isSafetyProtected({ claim: finding.claim, path: finding.path })
+  );
+}
+
 export function deriveTier(
-  finding: Pick<Finding, "severity" | "evidence_class" | "refuter_verdict">,
+  finding: Pick<
+    Finding,
+    | "severity"
+    | "evidence_class"
+    | "refuter_verdict"
+    | "causal_disposition"
+    | "claim"
+    | "path"
+  >,
   options: {
     // Whether a refuter check this finding was ENTITLED TO never got to
     // submit its verdict. NOT a synonym for "the run was truncated": the
@@ -607,6 +646,13 @@ export function deriveTier(
   const isBlockerClass =
     finding.severity === "BLOCKER" || finding.severity === "CRITICAL";
   if (!isBlockerClass) return "advisory";
+  // #457: a defect this PR did not cause never blocks this PR. The tier gates
+  // the PR, and a triage reply never lowers the blocking count (S7), so a
+  // pre-existing blocker could only be cleared by fixing code the PR does not
+  // own, or by an override; on a v0.3.0 review it held the gate red until the
+  // PR merged over it. isCausallyExempt says which dispositions count, and why a
+  // safety-protected finding is never exempt.
+  if (isCausallyExempt(finding)) return "advisory";
   if (finding.evidence_class === "insufficient") return "advisory";
   // Ordered BEFORE the deterministic short-circuit on purpose. A verdict that
   // could not outrank `deterministic` would be inert exactly where it is

@@ -31,10 +31,12 @@
 // multiple output keys written across several tool calls). An overwrite here
 // would silently destroy an earlier step's contribution to the same file.
 import { appendFile } from "node:fs/promises";
+import { listPaths } from "#git/refs";
 import type { CiMode } from "#pr/preflight";
 import type { Finding, Severity } from "#review/findings";
 import {
   blobUrl,
+  code,
   formatElapsed,
   type PrCommentDelta,
   severityEmoji,
@@ -155,6 +157,12 @@ interface CiSkipBudgetSummary {
   budgetUsd: number;
 }
 
+interface CiSkipExcludedSummary {
+  kind: "skipped-excluded";
+  prNumber: number;
+  excludedPaths: string[];
+}
+
 interface CiSkipCoverageSummary {
   kind: "skipped-coverage";
   prNumber: number;
@@ -198,6 +206,7 @@ export type CiSummaryData =
   | CiReviewSummary
   | CiSkipSizeSummary
   | CiSkipBudgetSummary
+  | CiSkipExcludedSummary
   | CiSkipCoverageSummary
   | CiManualRequiredSummary;
 
@@ -336,6 +345,24 @@ function skipBudgetLines(data: CiSkipBudgetSummary): string[] {
   ];
 }
 
+// #317: not a review held back but a diff with nothing in scope, so the heading
+// is a plain fact, not a warning, and the wording never says "found nothing":
+// nothing was looked at.
+function skipExcludedLines(data: CiSkipExcludedSummary): string[] {
+  return [
+    `### Crysk: nothing to review — PR #${data.prNumber}`,
+    "",
+    "**Reason:** every changed file is excluded from review by the ignore " +
+      "rules (`.cryskignore` and the shipped defaults).",
+    "",
+    // Capped like every other path list (listPaths), and each path through
+    // code(): the paths are the author's, and a backtick would break the span.
+    listPaths(data.excludedPaths.map(code)),
+    "",
+    "Nothing was spawned and nothing was spent.",
+  ];
+}
+
 function admissionMetricRows(
   data: CiSkipCoverageSummary | CiManualRequiredSummary,
 ): string[] {
@@ -466,11 +493,13 @@ export function renderStepSummary(
       ? skipSizeLines(data)
       : data.kind === "skipped-budget"
         ? skipBudgetLines(data)
-        : data.kind === "skipped-coverage"
-          ? skipCoverageLines(data)
-          : data.kind === "manual-required"
-            ? manualRequiredLines(data)
-            : reviewedLines(data);
+        : data.kind === "skipped-excluded"
+          ? skipExcludedLines(data)
+          : data.kind === "skipped-coverage"
+            ? skipCoverageLines(data)
+            : data.kind === "manual-required"
+              ? manualRequiredLines(data)
+              : reviewedLines(data);
   const out = [...body, "---", "", footerFor(ciMode)];
   return `${out.join("\n").trimEnd()}\n`;
 }

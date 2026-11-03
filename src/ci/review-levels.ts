@@ -8,6 +8,7 @@
 // keys it sets are always written to .crysk/config.json, so what a repo does
 // is visible in the file it versions, never inherited silently.
 
+import type { PostMinSeverity } from "#pr/post-floor";
 import { DEFAULT_SIZE_GATE } from "#review/size-gate";
 import { CI_DEFAULT_METERED_BUDGET_USD } from "./gates";
 import {
@@ -236,6 +237,12 @@ export interface ConfigPlan {
   remove: string[];
 }
 
+// What setup writes for `post_min_severity`. The engine's own default stays
+// "post everything", so a repo changes only when setup runs on it: a new repo,
+// or a re-run (`--force` included) on one whose config has no floor yet. Filled
+// only when absent, so a floor someone chose is never reset.
+export const RECOMMENDED_POST_MIN_SEVERITY: PostMinSeverity = "warning";
+
 export function configPlan(choices: CiSetupChoices): ConfigPlan {
   const { ignorePatterns: _ignored, ...advanced } = choices.advanced;
   const set: Record<string, unknown> = {};
@@ -251,6 +258,7 @@ export function configPlan(choices: CiSetupChoices): ConfigPlan {
   } else fillIfAbsent.push(levelKeys);
   if (choices.chosen.maxChangedLines) Object.assign(set, lineKeys);
   else fillIfAbsent.push(lineKeys);
+  fillIfAbsent.push({ post_min_severity: RECOMMENDED_POST_MIN_SEVERITY });
   // An advanced key is present only because someone gave it.
   for (const [key, value] of Object.entries(advanced)) {
     if (value !== undefined) set[key] = value;
@@ -303,8 +311,21 @@ export function renderChoicesSummary(
     `  observe only     ${a.ci_admission_observe_only === true ? "yes: skip decisions are logged, every push is reviewed" : "no"}`,
     `  trusted actors   ${a.ci_trusted_actors && a.ci_trusted_actors.length > 0 ? a.ci_trusted_actors.join(", ") : "none beyond the workflow actor"}`,
     `  size limit       ${"max_changed_lines" in kept ? `${JSON.stringify(kept.max_changed_lines)} changed lines (kept)` : choices.maxChangedLines === 0 ? "no changed-lines limit (0)" : `${choices.maxChangedLines} changed lines`}, ${a.max_changed_files === undefined ? "files resolved from how the review is paid" : `${a.max_changed_files} files`}`,
+    `  posting          ${postingLine(effective.post_min_severity)}`,
     `  exclusions       ${a.ignorePatterns && a.ignorePatterns.length > 0 ? `${a.ignorePatterns.join(", ")} (.cryskignore)` : "none added (.cryskignore)"}`,
     "Change them later in the repo config (.crysk/config.json, or .prhero/config.json in a repo set up before the rename) and the review workflow (.github/workflows/crysk.yml, or pr-hero.yml in a repo set up before the rename) (`npx -y crysk config` shows the effective values).",
   ];
   return lines;
+}
+
+// Read off the file as written, so a floor set by hand is reported as it stands.
+function postingLine(value: unknown): string {
+  if (value === "blocking") {
+    return "blocking findings only; advisory ones are counted in the summary (post_min_severity)";
+  }
+  if (value === "warning") {
+    return "every finding except advisory suggestions, which are counted in the summary (post_min_severity)";
+  }
+  if (value === "suggestion") return "every finding (post_min_severity)";
+  return "every finding (post_min_severity unset)";
 }

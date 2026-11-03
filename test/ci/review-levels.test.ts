@@ -111,7 +111,7 @@ describe("configPlan", () => {
         ci_blocking_weight: 3,
         ci_trusted_actors: ["bot"],
       },
-      fillIfAbsent: [],
+      fillIfAbsent: [{ post_min_severity: "warning" }],
       remove: ["ci_rereview_min_score", "ci_max_reviews"],
     });
   });
@@ -127,9 +127,29 @@ describe("configPlan", () => {
           max_verification_steps: 8,
         },
         { max_changed_lines: 4000 },
+        { post_min_severity: "warning" },
       ],
       remove: [],
     });
+  });
+});
+
+describe("renderChoicesSummary posting line", () => {
+  const posting = (effective: Record<string, unknown>) =>
+    renderChoicesSummary(defaultChoices(), {}, effective).find((line) =>
+      line.startsWith("  posting"),
+    );
+
+  test("reports the floor as written to the file", () => {
+    expect(posting({ post_min_severity: "warning" })).toBe(
+      "  posting          every finding except advisory suggestions, which are counted in the summary (post_min_severity)",
+    );
+    expect(posting({ post_min_severity: "blocking" })).toBe(
+      "  posting          blocking findings only; advisory ones are counted in the summary (post_min_severity)",
+    );
+    expect(posting({})).toBe(
+      "  posting          every finding (post_min_severity unset)",
+    );
   });
 });
 

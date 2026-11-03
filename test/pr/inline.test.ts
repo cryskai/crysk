@@ -571,6 +571,31 @@ describe("buildPostPlan", () => {
     expect(plan.resolved).toEqual([resolvedPosted]);
   });
 
+  test("findings below the post floor are matched but never posted fresh", () => {
+    const anchors = parseHunkAnchors(diffAddingLines("src/a.ts", 50));
+    const priorAdvisory = posted("src/a.ts", 20, { id: 7 });
+    const plan = buildPostPlan({
+      findings: [
+        finding("src/a.ts", 10, { id: "F1" }),
+        finding("src/a.ts", 20, { id: "F2", tier: "advisory" }),
+        finding("src/a.ts", 30, { id: "F3", tier: "advisory" }),
+        finding("src/gone.ts", 5, { id: "F4", tier: "advisory" }),
+      ],
+      anchors,
+      posted: [priorAdvisory],
+      headSha: HEAD,
+      hiddenIds: new Set(["F2", "F3", "F4"]),
+    });
+    expect(plan.reviewComments.map((f) => f.id)).toEqual(["F1"]);
+    expect(plan.issueComments).toEqual([]);
+    expect(plan.notPosted.map((f) => f.id)).toEqual(["F3", "F4"]);
+    // A hidden finding that matches an earlier comment persists rather than
+    // turning that comment into a false "resolved".
+    expect(plan.persisting.map((m) => m.finding.id)).toEqual(["F2"]);
+    expect(plan.resolved).toEqual([]);
+    expect(plan.delta).toEqual({ resolved: 0, new: 1, persist: 1 });
+  });
+
   test("first run: 0 resolved, K new, 0 persist", () => {
     const plan = buildPostPlan({
       findings: [finding("a.ts", 1), finding("b.ts", 2, { id: "F2" })],

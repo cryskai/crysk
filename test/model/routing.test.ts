@@ -6,6 +6,7 @@ import {
   computeRouteFingerprint,
   createResolvedRoutePlan,
   freezeRoutePlan,
+  MATERIALITY_STEP_KEY,
   ModelRoutingError,
   parseLogicalIdentity,
   type ResolvedModelRoute,
@@ -13,6 +14,7 @@ import {
   type ResolvedStepRoute,
   type RoutingConfig,
   resolveLogicalModel,
+  resolveMaterialityJudgeRoute,
   resolveModelRoute,
   resolveStepRoute,
   spawnModelForClaudeCli,
@@ -1124,5 +1126,126 @@ describe("buildResolvedRoutePlan: the consolidate step", () => {
     expect(consolidate?.backend).toBe("opencode");
     expect(consolidate?.modelSnapshot).toBe("claude-sonnet-5-20250219");
     expect(consolidate).toEqual(step(plan, "scout")?.route);
+  });
+});
+
+describe("buildResolvedRoutePlan: the materiality judge step", () => {
+  const agents = [{ key: "reliability", role: "hunter", model: "sonnet" }];
+  const step = (plan: ResolvedRoutePlan, key: string) =>
+    plan.steps.find((s) => s.stepKey === key);
+
+  test("a claude-code sonnet route is resolved for the judge when enabled", () => {
+    const plan = buildResolvedRoutePlan({
+      agents,
+      consolidate: { defaultModel: "sonnet" },
+      materiality: true,
+    });
+    const judge = step(plan, MATERIALITY_STEP_KEY);
+    expect(judge?.role).toBe("other");
+    expect(judge?.route.backend).toBe("claude-code");
+    expect(judge?.logicalIdentity).toBe(
+      resolveStepRoute({ stepKey: "x", role: "other", specModel: "sonnet" })
+        .logicalIdentity,
+    );
+  });
+
+  test("--model never moves the judge off sonnet", () => {
+    const plan = buildResolvedRoutePlan({
+      agents,
+      cliModel: "opus",
+      consolidate: { defaultModel: "sonnet" },
+      materiality: true,
+    });
+    expect(step(plan, MATERIALITY_STEP_KEY)?.logicalIdentity).not.toBe(
+      step(plan, "consolidate")?.logicalIdentity,
+    );
+    expect(step(plan, MATERIALITY_STEP_KEY)?.route.modelSnapshot).toBe(
+      "sonnet",
+    );
+  });
+
+  test("off: no judge key, and the plan's fingerprint is today's", () => {
+    const without = buildResolvedRoutePlan({
+      agents,
+      consolidate: { defaultModel: "sonnet" },
+    });
+    expect(step(without, MATERIALITY_STEP_KEY)).toBeUndefined();
+    const withJudge = buildResolvedRoutePlan({
+      agents,
+      consolidate: { defaultModel: "sonnet" },
+      materiality: true,
+    });
+    expect(withJudge.routeFingerprint).not.toBe(without.routeFingerprint);
+    expect(
+      buildResolvedRoutePlan({
+        agents,
+        consolidate: { defaultModel: "sonnet" },
+      }).routeFingerprint,
+    ).toBe(without.routeFingerprint);
+  });
+
+  test("sonnet routed to OpenCode leaves the judge out of the plan", () => {
+    const routingConfig: RoutingConfig = {
+      mappings: [
+        {
+          logical: "sonnet",
+          backend: "opencode",
+          provider: "anthropic",
+          modelSnapshot: "claude-sonnet-5-5",
+        },
+      ],
+    };
+    const plan = buildResolvedRoutePlan({
+      agents,
+      routingConfig,
+      materiality: true,
+    });
+    expect(step(plan, MATERIALITY_STEP_KEY)).toBeUndefined();
+    expect(resolveMaterialityJudgeRoute(routingConfig)).toBeUndefined();
+  });
+
+  test("a claude-code judge route behind a non-direct gateway is not the measured judge", () => {
+    const routingConfig: RoutingConfig = {
+      mappings: [
+        {
+          logical: "sonnet",
+          backend: "claude-code",
+          provider: "anthropic",
+          gateway: "openrouter",
+          modelSnapshot: "other/model",
+        },
+      ],
+    };
+    expect(resolveMaterialityJudgeRoute(routingConfig)).toBeUndefined();
+    // The default route still qualifies.
+    expect(resolveMaterialityJudgeRoute(undefined)?.route.backend).toBe(
+      "claude-code",
+    );
+  });
+
+  test("a judge route that cannot resolve stands the judge down, never throws", () => {
+    const routingConfig: RoutingConfig = {
+      mappings: [
+        {
+          logical: "sonnet",
+          backend: "claude-code",
+          provider: "anthropic",
+          disabled: true,
+        },
+      ],
+    };
+    // A haiku hunter keeps the plan routable, so only the judge's disabled
+    // sonnet route is exercised (hunters share the alias by default).
+    const haikuAgents = [
+      { key: "reliability", role: "hunter", model: "haiku" },
+    ];
+    expect(() =>
+      buildResolvedRoutePlan({
+        agents: haikuAgents,
+        routingConfig,
+        materiality: true,
+      }),
+    ).not.toThrow();
+    expect(resolveMaterialityJudgeRoute(routingConfig)).toBeUndefined();
   });
 });

@@ -126,16 +126,17 @@ export function overrideActorOf(description: string): string | null {
 // as preflight.ts's latestStatusInContext except on a tie, where that one takes the later row
 // (`>=`). This module cannot import it. The publisher's reads use this one too.
 //
-// WHY one context means two names: for one version the gate is written on `crysk` and on the
-// legacy `pr-hero`, and an older action still writes only `pr-hero`. The newest row across both
-// names is the gate, so an override posted by an older action still beats a newer-version
-// verdict that is older than it. Two rows with the same time are a pair one run wrote, with
-// identical content, so either would do; the crysk row is taken so the answer never depends
-// on the order of the list.
-// A half-landed pair. Every write posts both names, so a name whose newest row is still
-// pending while the other name holds a later settled row missed that write. The settled
-// row is the verdict (a finished review, or a human's override), and the stuck name is
-// what a repair copies it onto. Undefined when the two names agree.
+// WHY one context means two names: since #457 the gate is written on `crysk` alone, but a head
+// reviewed before that change carries rows on the legacy `pr-hero` too, and an older action
+// still writes only `pr-hero`. The newest row across both names is the gate, so an override
+// posted by an older action still beats a newer-version verdict that is older than it. Two
+// rows with the same time are a pair a run before #457 wrote, with identical content, so
+// either would do; the crysk row is taken so the answer never depends on the order of the list.
+// A stranded pair: a name whose newest row is still pending while the other name holds a later
+// settled row. It comes from a pair a run before #457 half-landed, or from an older action's
+// `pr-hero` verdict over this version's `crysk` pending. The settled row is the verdict (a
+// finished review, or a human's override). A repair copies it onto a stuck `crysk` only: the
+// legacy name is never written. Undefined when the two names agree.
 export function strandedStatusPair<T extends OverrideStatusFact>(
   statuses: readonly T[],
   context: string,

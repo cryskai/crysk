@@ -24,7 +24,7 @@ import {
   hunterFailureRecords,
   writeCliRecord,
 } from "#ci/cli-record";
-import { planCiSizeSkip } from "#ci/gates";
+import { planCiExcludedSkip, planCiSizeSkip } from "#ci/gates";
 import { withCiWorkflowGroup } from "#ci/reporter";
 import { RECHECK_COMMAND, REVIEW_COMMAND } from "#ci/trigger";
 import { pipelineConfigInput } from "#config/config";
@@ -51,7 +51,11 @@ import {
   recordCiConfigErrorSkip,
   yieldToInFlightReview,
 } from "#pr/ci-admission-gate";
-import { discoveryHunters, resolvePrDiscovery } from "#pr/discovery";
+import {
+  AllExcludedError,
+  discoveryHunters,
+  resolvePrDiscovery,
+} from "#pr/discovery";
 import type { InlinePostOutcome } from "#pr/inline";
 import { resolvePrPlanAndConfirm } from "#pr/plan";
 import {
@@ -91,6 +95,7 @@ import {
 import { estimateCost } from "#review/report";
 import {
   pipelineConsolidateInput,
+  pipelineMaterialityInput,
   pipelineScoutInput,
   pipelineSummarizerInput,
 } from "#review/route-preflight";
@@ -484,6 +489,58 @@ export async function reviewPr(
       fetchPostedFindingComments(operatorRoot, prNumber),
       fetchPrReviewComments(operatorRoot, prNumber),
     ]);
+    let discovery: Awaited<ReturnType<typeof resolvePrDiscovery>>;
+    try {
+      discovery = await resolvePrDiscovery({
+        diffFromSha,
+        headSha,
+        full: options.full,
+        adjudicate: options.adjudicate === true,
+        baseRef: target.baseRef,
+        headLabel,
+        isCi,
+        sizeGateOverrides,
+        config,
+        prIgnore,
+        issueComments,
+        postedFindings,
+        reviewComments,
+        git: {
+          commitExists: (sha) => gitCommitExists(gitDirOwner, sha),
+          isAncestor: (ancestor, descendant) =>
+            gitIsAncestor(gitDirOwner, ancestor, descendant),
+          nameOnly: (from, to) => gitNameOnly(gitDirOwner, from, to),
+          nameStatus: (from, to) => gitNameStatus(gitDirOwner, from, to),
+          runGit: (args) => git(gitDirOwner, args),
+        },
+        log,
+      });
+    } catch (error) {
+      // #317: a first review whose every changed file is excluded has nothing
+      // to review. In CI that is a finished no-op, so it ends as a skip: exit 0,
+      // a green gate, an unspent attempt, and no PR comment. Outside CI the
+      // error stays the one-line exit 1 it has always been.
+      if (!(isCi && error instanceof AllExcludedError)) throw error;
+      await settleCiGateSkip(
+        ciAdmissionLedger,
+        "every changed file is excluded from review",
+      );
+      return await publishCiSkip({
+        operatorRoot,
+        prNumber,
+        post: options.post === true,
+        isCi,
+        stepSummaryFlag: options.stepSummary,
+        plan: planCiExcludedSkip({
+          prNumber,
+          excludedPaths: error.droppedPaths,
+          ciMode,
+        }),
+        noticeMessage: error.message,
+        ciMode,
+        headSha,
+      });
+    }
     const {
       prepared,
       skipDiscovery,
@@ -498,30 +555,7 @@ export async function reviewPr(
       phaseB,
       diffStat,
       sizeGate,
-    } = await resolvePrDiscovery({
-      diffFromSha,
-      headSha,
-      full: options.full,
-      adjudicate: options.adjudicate === true,
-      baseRef: target.baseRef,
-      headLabel,
-      isCi,
-      sizeGateOverrides,
-      config,
-      prIgnore,
-      issueComments,
-      postedFindings,
-      reviewComments,
-      git: {
-        commitExists: (sha) => gitCommitExists(gitDirOwner, sha),
-        isAncestor: (ancestor, descendant) =>
-          gitIsAncestor(gitDirOwner, ancestor, descendant),
-        nameOnly: (from, to) => gitNameOnly(gitDirOwner, from, to),
-        nameStatus: (from, to) => gitNameStatus(gitDirOwner, from, to),
-        runGit: (args) => git(gitDirOwner, args),
-      },
-      log,
-    });
+    } = discovery;
 
     // 5b(CI) — the assistant-posture branch, BEFORE applySizeGate: outside
     // CI, a hard skip in non-interactive mode THROWS a CliError (see
@@ -797,6 +831,10 @@ export async function reviewPr(
               ...(skipDiscovery ? {} : pipelineSummarizerInput(summary)),
               ...(skipDiscovery ? {} : pipelineScoutInput(options)),
               ...(skipDiscovery ? {} : pipelineConsolidateInput()),
+              // Gated on skipDiscovery like consolidation: an empty-delta
+              // re-review posts no new findings, so there is nothing to judge.
+              ...(skipDiscovery ? {} : pipelineMaterialityInput(config)),
+              prTitle: target.title,
               ...(resolveSharedPrefix(options) ? { sharedPrefix: true } : {}),
               // NOT gated on skipDiscovery: an empty-delta re-review still
               // classifies and verifies against this config, and a run whose
@@ -871,6 +909,7 @@ export async function reviewPr(
         worktreePath,
         isCi,
         ciMode,
+        postMinSeverity: config.post_min_severity,
         estimate,
         freeRoute,
         ciAdmissionLedger,

@@ -2571,6 +2571,7 @@ describe("assembly", () => {
         max_changed_files: "default" as const,
         scout: "default" as const,
         post: "default" as const,
+        post_min_severity: "default" as const,
         ci_review_policy: "default" as const,
         ci_max_attempts: "default" as const,
         ci_max_reviews: "default" as const,
@@ -2579,6 +2580,7 @@ describe("assembly", () => {
         ci_advisory_weight: "default" as const,
         ci_trusted_actors: "repo" as const,
         ci_admission_observe_only: "default" as const,
+        materiality_gate: "default" as const,
       },
       global_present: true,
     };

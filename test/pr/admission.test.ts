@@ -15,7 +15,7 @@ import {
   admissionRecordFingerprint,
   serializeAdmissionRecord,
 } from "#ci/admission-ledger";
-import { ciGateSkipOutputs } from "#ci/gates";
+import { ciGateSkipOutputs, planCiExcludedSkip } from "#ci/gates";
 import { CLI_RECORD_FILE, parseCliRecord } from "#ci/outcome";
 import {
   ciReviewPolicyHash,
@@ -218,13 +218,14 @@ describe("publishCiSkip: the outcome record", () => {
   const SKIP_CASES: ReadonlyArray<
     [
       Parameters<typeof ciGateSkipOutputs>[0],
-      "size" | "budget" | "coverage" | "manual-required",
+      "size" | "budget" | "coverage" | "manual-required" | "excluded",
     ]
   > = [
     ["skipped-size", "size"],
     ["skipped-budget", "budget"],
     ["skipped-coverage", "coverage"],
     ["manual-required", "manual-required"],
+    ["skipped-excluded", "excluded"],
   ];
 
   function planFor(status: Parameters<typeof ciGateSkipOutputs>[0]) {
@@ -398,6 +399,56 @@ describe("publishCiSkip: the outcome record", () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]?.state).toBe("failure");
       expect(calls[0]?.description).toContain("CI budget");
+    });
+
+    // #317: every changed file is excluded, so there is nothing to review.
+    // That is a finished no-op, not a failure: the gate reads green.
+    test("an all-excluded skip in gate mode posts success saying there is nothing to review", async () => {
+      const calls: StatusCall[] = [];
+      const code = await publishCiSkip(
+        gateInput("skipped-excluded", recordingStatus(calls)),
+      );
+      expect(code).toBe(0);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.sha).toBe(STATUS_HEAD);
+      expect(calls[0]?.state).toBe("success");
+      expect(calls[0]?.description).toContain("nothing to review");
+      expect(calls[0]?.description).toContain("excluded");
+    });
+
+    test("the all-excluded success is not a review verdict, so a later carry never stops on it", async () => {
+      const calls: StatusCall[] = [];
+      await publishCiSkip(
+        gateInput("skipped-excluded", recordingStatus(calls)),
+      );
+      const written = calls[0];
+      expect(written).toBeDefined();
+      expect(
+        isReviewVerdictStatus({
+          state: written?.state ?? "",
+          description: written?.description ?? "",
+        }),
+      ).toBe(false);
+    });
+
+    test("an all-excluded skip posts no PR comment, even with --post", async () => {
+      const calls: StatusCall[] = [];
+      const reposts: string[] = [];
+      await publishCiSkip({
+        ...gateInput("skipped-excluded", recordingStatus(calls)),
+        post: true,
+        plan: planCiExcludedSkip({
+          prNumber: PR,
+          excludedPaths: ["package-lock.json"],
+          ciMode: "gate",
+        }),
+        repost: async (input) => {
+          reposts.push(input.body);
+          return { commentId: 1, deletedIds: [] };
+        },
+      });
+      expect(reposts).toEqual([]);
+      expect(calls[0]?.state).toBe("success");
     });
 
     test("advisory mode posts no skip status, as today", async () => {

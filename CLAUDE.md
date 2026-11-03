@@ -41,7 +41,7 @@ been burned by a manual match that inflated a score by 50%.
 ## Branch and PR workflow (mandatory since 2026-08-26)
 
 Every slice lands through a feature branch and a pull request targeting `dev` —
-never push directly to `dev`. This is deliberate dogfooding: `pr-hero.yml` runs this
+never push directly to `dev`. This is deliberate dogfooding: `crysk.yml` runs this
 engine's own review on every PR, so each slice gets self-reviewed by pr-hero
 before it merges.
 
@@ -73,6 +73,9 @@ bun run scripts/m6.ts score  # $0: the floor table, re-runnable from artifacts f
 bun run scripts/m6.ts run    # LIVE and the big one: 56 serial reviews, ~$174-374, ~4h44m
 bun run scripts/martian-cal.ts plan|check|run|score   # Martian Cal.com slice (never --pr)
 bun run scripts/martian-judge.ts     # LIVE: Martian Surface A judge on existing runs
+bun run scripts/materiality-probe.ts plan|run|score   # materiality judge exam on known-answer anchors (plan/score $0, run LIVE, 176 opus spawns)
+bun run scripts/noise-baseline.ts plan|run|report      # share of posted store findings the materiality judge calls immaterial (plan/report $0, run LIVE; output stays outside the repo)
+bun run scripts/loop-metrics.ts fetch --repo <o/r> [--since <date>] && bun run scripts/loop-metrics.ts report <raw.json> [--base dev]   # $0: rounds and time to a green gate, from GitHub commit statuses (output stays outside the repo)
 bun scripts/sandbox.ts run <scenario...> --ref <ref>   # LIVE in juanmaagd/pr-hero-sandbox, on the route init set (claude: subscription quota, $0 cash)
 bun scripts/sandbox.ts init --ref <ref> [--route claude|opencode:<modelSnapshot>]   # route defaults to claude
 ```
@@ -84,6 +87,7 @@ bun scripts/sandbox.ts init --ref <ref> [--route claude|opencode:<modelSnapshot>
 - `skills/crysk-pr/SKILL.md` — open or update a PR with a structured template and auto-subscribe to the pr-hero review loop.
 - `skills/crysk-loop/SKILL.md` — answer posted `<!-- pr-hero-finding` comments on a PR you authored.
 - `skills/crysk-ci-setup/SKILL.md` — scaffold GitHub Actions review workflow and configure repository secrets.
+- `skills/crysk-release/SKILL.md` — cut a release step by step (changelog audit, five-file version bump, release PR, dev → main, manual npm publish, tags, verification). Maintainer-only, not shipped; `docs/release-runbook.md` stays the long reference.
 
 `refuter-probe` is the FIRST gate for any refuter prompt change (ROADMAP A2): it plants claims whose
 correct verdict is known and asserts all four outcomes — `corroborated`, `refuted` (adjacent and 3-hop),

@@ -43,6 +43,7 @@ import {
 import { publishCiReviewIfEligible } from "#pr/ci-publish";
 import type { PrDiscoveryResult } from "#pr/discovery";
 import { type InlinePostOutcome, postingExitCode } from "#pr/inline";
+import type { PostMinSeverity } from "#pr/post-floor";
 import { type PostingStageResult, postFindingsIfEnabled } from "#pr/posting";
 import type { CiMode } from "#pr/preflight";
 import { unresolvedBlockingCount } from "#rereview/state";
@@ -90,6 +91,8 @@ export interface PublishRunOutcomeInput {
   // The run's one resolved CI mode (resolveCiMode, reviewPr). The report, the
   // summary comment and the step summary all name it; nothing re-resolves it.
   ciMode: CiMode;
+  // The `post_min_severity` config key. Only the PR comments read it.
+  postMinSeverity?: PostMinSeverity;
   estimate: ReturnType<typeof estimateCost>;
   // W3-FOOTER: the plan's free-route count. Absent means no free share, and the
   // footer keeps its subscription wording.
@@ -227,6 +230,7 @@ export async function publishRunOutcome(
         delivered = true;
       },
       ciMode: input.ciMode,
+      postMinSeverity: input.postMinSeverity,
     });
   } catch (error) {
     if (!delivered) {

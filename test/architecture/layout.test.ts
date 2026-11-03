@@ -120,7 +120,14 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
   },
   {
     domain: "compare",
-    files: ["compare", "floor-test", "martian-adapter"],
+    files: [
+      "compare",
+      "floor-test",
+      "loop",
+      "martian-adapter",
+      "materiality",
+      "noise",
+    ],
   },
   {
     domain: "review",
@@ -131,6 +138,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "drafts",
       "findings",
       "findings-conformance",
+      "materiality-gate",
       "pipeline",
       "preflight",
       "prompt-set",
@@ -157,6 +165,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "inline",
       "plan",
       "pr",
+      "post-floor",
       "posting",
       "pr-status",
       "preflight",

@@ -1869,8 +1869,8 @@ describe("postCommitStatus", () => {
       context: COMMIT_STATUS_CONTEXT,
     });
     await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn);
-    // One POST per name of the context (crysk, then the legacy pr-hero).
-    expect(calls).toHaveLength(2);
+    // One POST, on the crysk context alone: the legacy pr-hero name is never written.
+    expect(calls).toHaveLength(1);
     const argv = calls[0]?.argv ?? [];
     expect(argv).toContain("--method");
     expect(argv).toContain("POST");
@@ -1883,8 +1883,8 @@ describe("postCommitStatus", () => {
   });
 
   // T3 S7: the POST carries the context the request was built with, never a
-  // constant. A local run's status must land on crysk/local (and its legacy
-  // pr-hero/local), so the gate's context is named only by a CI run's request.
+  // constant. A local run's status must land on crysk/local, so the gate's
+  // context is named only by a CI run's request.
   test("POSTs the request's own context: a local request never names the gate", async () => {
     const { spawnFn, calls } = makeFakeGh([
       {
@@ -1952,8 +1952,8 @@ describe("postCommitStatus", () => {
         spawnFn,
       ),
     ).rejects.toThrow(/commit status pending/);
-    // Two attempts on each of the two names.
-    expect(calls).toHaveLength(4);
+    // Two attempts, on the one name.
+    expect(calls).toHaveLength(2);
   });
 
   test("an abbreviated sha never reaches gh", async () => {
@@ -1978,10 +1978,10 @@ describe("postCommitStatus", () => {
 // The rename publishes every status on BOTH names for one version: users keep `pr-hero`
 // as a required check in branch protection, and a head that stops getting that context
 // blocks forever. The pair carries one state, one description and one target.
-describe("postCommitStatus publishes the crysk context and the legacy pr-hero one", () => {
+describe("postCommitStatus publishes the crysk context alone", () => {
   // Keys a scripted answer off the exact `context=` argv element, so `crysk` never
   // matches `crysk/local` the way a substring match would.
-  function pairFake(answers: Record<string, ScriptedResponse> = {}): {
+  function contextFake(answers: Record<string, ScriptedResponse> = {}): {
     spawnFn: typeof Bun.spawn;
     calls: string[][];
     contexts: () => string[];
@@ -2023,8 +2023,8 @@ describe("postCommitStatus publishes the crysk context and the legacy pr-hero on
   const field = (argv: string[], name: string) =>
     argv.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
 
-  test("a gate write POSTs crysk first, then pr-hero, with the same state, description and target_url", async () => {
-    const { spawnFn, calls, contexts } = pairFake();
+  test("a gate write POSTs crysk once and never pr-hero", async () => {
+    const { spawnFn, calls, contexts } = contextFake();
     await postCommitStatus(
       OPERATOR_ROOT,
       HEAD,
@@ -2036,21 +2036,20 @@ describe("postCommitStatus publishes the crysk context and the legacy pr-hero on
       },
       spawnFn,
     );
-    expect(contexts()).toEqual(["crysk", "pr-hero"]);
-    for (const argv of calls) {
-      expect(argv.join(" ")).toContain(`repos/{owner}/{repo}/statuses/${HEAD}`);
-      expect(field(argv, "state")).toBe("failure");
-      expect(field(argv, "description")).toBe(
-        "crysk: 2 blocking finding(s) — fix and push",
-      );
-      expect(field(argv, "target_url")).toBe(
-        "https://github.com/org/repo/pull/7",
-      );
-    }
+    expect(contexts()).toEqual(["crysk"]);
+    const argv = calls[0] as string[];
+    expect(argv.join(" ")).toContain(`repos/{owner}/{repo}/statuses/${HEAD}`);
+    expect(field(argv, "state")).toBe("failure");
+    expect(field(argv, "description")).toBe(
+      "crysk: 2 blocking finding(s) — fix and push",
+    );
+    expect(field(argv, "target_url")).toBe(
+      "https://github.com/org/repo/pull/7",
+    );
   });
 
-  test("a local write POSTs the crysk/local and pr-hero/local pair, and never a gate context", async () => {
-    const { spawnFn, contexts } = pairFake();
+  test("a local write POSTs crysk/local once, never pr-hero/local or a gate context", async () => {
+    const { spawnFn, contexts } = contextFake();
     await postCommitStatus(
       OPERATOR_ROOT,
       HEAD,
@@ -2062,13 +2061,12 @@ describe("postCommitStatus publishes the crysk context and the legacy pr-hero on
       }),
       spawnFn,
     );
-    expect(contexts()).toEqual(["crysk/local", "pr-hero/local"]);
+    expect(contexts()).toEqual(["crysk/local"]);
   });
 
-  test("resolves with the created_at of the crysk row", async () => {
-    const { spawnFn } = pairFake({
+  test("resolves with the created_at of the row it created", async () => {
+    const { spawnFn } = contextFake({
       crysk: { stdout: '{"created_at":"2026-10-29T10:00:00Z"}' },
-      "pr-hero": { stdout: '{"created_at":"2026-10-29T10:00:01Z"}' },
     });
     expect(
       await postCommitStatus(
@@ -2085,8 +2083,8 @@ describe("postCommitStatus publishes the crysk context and the legacy pr-hero on
     ).toBe("2026-10-29T10:00:00Z");
   });
 
-  test("a failed crysk POST still attempts pr-hero, then throws the same CliError", async () => {
-    const { spawnFn, contexts } = pairFake({
+  test("a failed crysk POST retries once, then throws the same CliError", async () => {
+    const { spawnFn, contexts } = contextFake({
       crysk: { stderr: "HTTP 500", exitCode: 1 },
     });
     await expect(
@@ -2102,34 +2100,11 @@ describe("postCommitStatus publishes the crysk context and the legacy pr-hero on
         spawnFn,
       ),
     ).rejects.toThrow(/commit status error.*HTTP 500/);
-    // crysk: two attempts, pr-hero: one that landed.
-    expect(contexts().filter((c) => c === "crysk")).toHaveLength(2);
-    expect(contexts().filter((c) => c === "pr-hero")).toHaveLength(1);
+    expect(contexts()).toEqual(["crysk", "crysk"]);
   });
 
-  test("a failed pr-hero POST throws even though crysk landed: the required check is the one that failed", async () => {
-    const { spawnFn, contexts } = pairFake({
-      "pr-hero": { stderr: "HTTP 403", exitCode: 1 },
-    });
-    await expect(
-      postCommitStatus(
-        OPERATOR_ROOT,
-        HEAD,
-        commitStatusRequest({
-          phase: "error",
-          posted: false,
-          targetUrl: undefined,
-          context: COMMIT_STATUS_CONTEXT,
-        }),
-        spawnFn,
-      ),
-    ).rejects.toThrow(/commit status error.*HTTP 403/);
-    expect(contexts().filter((c) => c === "crysk")).toHaveLength(1);
-    expect(contexts().filter((c) => c === "pr-hero")).toHaveLength(2);
-  });
-
-  test("the cancellation settle writes both contexts in one short window: one attempt each", async () => {
-    const { spawnFn, contexts } = pairFake();
+  test("the cancellation settle writes crysk once, in one short window", async () => {
+    const { spawnFn, contexts } = contextFake();
     await postCommitStatus(
       OPERATOR_ROOT,
       HEAD,
@@ -2142,7 +2117,7 @@ describe("postCommitStatus publishes the crysk context and the legacy pr-hero on
       spawnFn,
       { attempts: 1, timeoutMs: CANCELLATION_COMMIT_STATUS_TIMEOUT_MS },
     );
-    expect(contexts()).toEqual(["crysk", "pr-hero"]);
+    expect(contexts()).toEqual(["crysk"]);
   });
 });
 
@@ -2189,12 +2164,10 @@ describe("postCommitStatus bounds", () => {
     expect(timeouts).toEqual([
       COMMIT_STATUS_TIMEOUT_MS,
       COMMIT_STATUS_TIMEOUT_MS,
-      COMMIT_STATUS_TIMEOUT_MS,
-      COMMIT_STATUS_TIMEOUT_MS,
     ]);
   });
 
-  test("the cancellation settle is one attempt per name at the short bound", async () => {
+  test("the cancellation settle is one attempt at the short bound", async () => {
     const { spawnFn, timeouts } = makeTimeoutRecordingGh(1);
     await expect(
       postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn, {
@@ -2202,19 +2175,16 @@ describe("postCommitStatus bounds", () => {
         timeoutMs: CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
       }),
     ).rejects.toThrow(/commit status error/);
-    expect(timeouts).toEqual([
-      CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
-      CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
-    ]);
+    expect(timeouts).toEqual([CANCELLATION_COMMIT_STATUS_TIMEOUT_MS]);
   });
 
-  test("a successful cancellation settle spends one call per name", async () => {
+  test("a successful cancellation settle spends one call", async () => {
     const { spawnFn, timeouts } = makeTimeoutRecordingGh(0);
     await postCommitStatus(OPERATOR_ROOT, HEAD, request, spawnFn, {
       attempts: 1,
       timeoutMs: CANCELLATION_COMMIT_STATUS_TIMEOUT_MS,
     });
-    expect(timeouts).toHaveLength(2);
+    expect(timeouts).toHaveLength(1);
   });
 });
 

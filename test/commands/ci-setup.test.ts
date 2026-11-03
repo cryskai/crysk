@@ -237,6 +237,7 @@ describe("setup --ci review choices (CLI)", () => {
         ci_rereview_min_score: 4,
         max_verification_steps: 8,
         max_changed_lines: 4000,
+        post_min_severity: "warning",
       });
       expect(r.output).toContain("defaults: nobody chose them");
     } finally {
@@ -264,6 +265,7 @@ describe("setup --ci review choices (CLI)", () => {
         ci_max_attempts: 4,
         max_verification_steps: 8,
         max_changed_lines: 2500,
+        post_min_severity: "warning",
       });
       expect(r.output).not.toContain("nobody chose");
       expect(r.output).toContain(
@@ -298,6 +300,7 @@ describe("setup --ci review choices (CLI)", () => {
         ci_max_attempts: 1,
         max_verification_steps: 8,
         max_changed_lines: 4000,
+        post_min_severity: "warning",
       });
     } finally {
       await rm(r.dir, { recursive: true, force: true });
@@ -339,7 +342,12 @@ describe("setup --ci review choices (CLI)", () => {
     try {
       expect(r.code).toBe(0);
       expect(r.workflow).not.toBe("old\n");
-      expect(r.config).toEqual(tuned);
+      // Tuned keys survive; only the absent posting floor is filled in.
+      expect(r.config).toEqual({ ...tuned, post_min_severity: "warning" });
+      // The re-run says so: the posting line reports the floor it just wrote.
+      expect(r.output).toContain(
+        "posting          every finding except advisory suggestions",
+      );
       expect(r.output).toContain("Kept existing");
       expect(r.output).toContain("ci_max_attempts");
     } finally {
@@ -375,6 +383,21 @@ describe("setup --ci review choices (CLI)", () => {
       expect(r.code).toBe(0);
       expect(r.workflow).toContain("max-changed-lines: 8000\n");
       expect(r.output).toContain("Kept the workflow's max-changed-lines: 8000");
+    } finally {
+      await rm(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an existing post_min_severity is never replaced by the recommended one", async () => {
+    const r = await runSetup(["--level", "minimal"], async (dir) => {
+      await Bun.write(
+        path.join(dir, ".crysk", "config.json"),
+        JSON.stringify({ post_min_severity: "suggestion" }),
+      );
+    });
+    try {
+      expect(r.code).toBe(0);
+      expect(r.config).toMatchObject({ post_min_severity: "suggestion" });
     } finally {
       await rm(r.dir, { recursive: true, force: true });
     }

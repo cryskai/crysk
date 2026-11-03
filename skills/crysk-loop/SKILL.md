@@ -239,7 +239,7 @@ current head:
    it is already answered for this code.
 3. **Judge the finding against the repository, then pick exactly one tag**: `applied`,
    `dismissed`, `deferred`, or `misclassified` (table below). The comment is a claim, not a
-   task. You may reject it. Before touching code, replying, or applying fixes, evaluate whether the cluster of findings indicates a flawed integration or broken design (### C) rather than isolated defects — if so, halt the loop and report the diagnosis without posting replies or patching. When you confirm the defect is real, isolated, and in scope (`applied`), make the fix in the working tree now (and run the relevant tests), before posting the `applied` reply; **do not `git push` until you have replied to every finding on this head** (step 6).
+   task. You may reject it. Before touching code, replying, or applying fixes, evaluate whether the cluster of findings indicates a flawed integration or broken design (### C) rather than isolated defects — if so, halt the loop and report the diagnosis without posting replies or patching. When you confirm the defect is real, isolated, and in scope (`applied`), make the fix in the working tree now, sweep its class across the PR ("Fix the class, not the site" under `applied`), and run the relevant tests, before posting the `applied` reply; **do not `git push` until you have replied to every finding on this head** (step 6).
 4. **For `dismissed`, `deferred`, and `misclassified`**: spawn the isolated adjudicator (see
    "The adjudicator spawn" below) and include its verdict in your reply. `applied` never spawns
    one.
@@ -313,7 +313,7 @@ thread. A legacy top-level finding (no review thread) cannot be cleared by a dis
 
 | tag | what it claims | what it must supply |
 |---|---|---|
-| `applied` | Fixed in this PR. | Nothing else — the re-review verifies it independently, so it pays no adjudicator. |
+| `applied` | Fixed in this PR, with every instance of its class this PR introduced. | The class and the sites you swept. No adjudicator: the re-review verifies the fix. |
 | `dismissed` | The finding is wrong. | POSITIVE DISPROOF WITH CITED CODE. "I did it on purpose" is not evidence; "this line already covers it, here" is. |
 | `deferred` | The finding is right, but fixing it is out of this PR's scope. | Reasoning that says why, and what you are doing instead. A GitHub issue number is optional (`--issue`) — do not invent a tracking issue just to satisfy the tag. |
 | `misclassified` | The finding is real, but Crysk typed it wrong (severity, tier, or `causal_disposition`). | Name which field is wrong and why. This is the highest-value signal the loop produces — it points at a hunter/refuter defect, not a repository one. |
@@ -324,9 +324,35 @@ split the difference.
 
 ### `applied`
 
-Only after you independently confirmed the defect in the repository and fixed it in this PR.
-Then reply. Do not restate the diff; a one-line pointer (commit sha or file) is enough. No
-adjudicator. If you have not confirmed it, this is the wrong tag.
+Only after you independently confirmed the defect in the repository, fixed it in this PR, and
+swept its class (below). Then reply. Do not restate the diff: a one-line pointer (commit sha or
+file) plus the class and the sites you swept is enough. No adjudicator. If you have not confirmed
+it, this is the wrong tag.
+
+#### Fix the class, not the site
+
+Most findings after the first review are bugs written by the previous round's fix, and more than
+half repeat the defect class of a finding already fixed, at another site. Each one costs another
+review round, or ships unverified once the review budget is used up. So before you reply `applied`:
+
+1. **Name the class in one sentence.** Name the rule the finding showed broken, not the line:
+   "a caller reads the cache before the refresh settles", not "line 42 lacks a guard".
+2. **Sweep the PR for it.** Check every hunk in `gh pr diff <n>` (GitHub's own diff of the PR, so
+   no local base ref can be stale or missing) plus everything you changed since the reviewed head:
+   `git diff <head>`, with `head` from `crysk status`, covers unpushed commits and the working tree.
+   If you cannot get the PR diff, say so in the reply and do not claim a sweep.
+   Search by shape (the same call, field, guard, state change or fallback), not only by the
+   identifier the finding named. Fix every instance this PR introduced in the same push, each with
+   a test that fails without its fix.
+3. **Re-read your own fix as the next reviewer will.** The next round hunts the code you just wrote:
+   new branches, early returns, fallbacks, and every caller that now sees a different value. Check
+   each against the same class before you push.
+4. **Leave instances the PR did not introduce alone.** Instances outside the diff are pre-existing:
+   fixing them here grows the delta the next round reviews. Name them in the reply instead.
+5. **Say what you swept.** End the reply with one line: the class, then how many sites you checked
+   and how many you fixed.
+
+Several findings on one head that share a class are one sweep, not several.
 
 ### `dismissed`
 
@@ -449,6 +475,7 @@ The posted body looks like this (driver-owned; shown so you know what a human wi
 ✅ **APPLIED** · agent
 
 Fixed in this PR — see 3f9a2c1: `parseConfig` now validates `retries` before use.
+Class: a config value used before validation. Swept 4 reads of parsed config in this PR, fixed 2 (`retries`, `timeout_ms`).
 ```
 
 `--body-file` for that reply is only the last paragraph.
