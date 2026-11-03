@@ -59,9 +59,9 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    `ANTHROPIC_API_KEY` (pay as you go). Without an agent, run the same
    commands yourself and follow the [Quick path](docs/github-actions.md#quick-path).
 
-3. **Merge the workflow and `.crysk/` into the default branch.** A comment-triggered run
-   (`/crysk review`) reads both from the base branch, so it starts nothing until the workflow is
-   there, and fails `PRH-GOTCHAS-MISSING` until `.crysk/` is.
+3. **Merge the workflow, `.crysk/` and `REVIEW.md` into the default branch.** A comment-triggered run
+   (`/crysk review`) reads them from the base branch, so it starts nothing until the workflow is
+   there, and reviews without your instructions until `REVIEW.md` (or `.crysk/gotchas.md`) is.
    Then require the `crysk` status check in branch protection if you want it to block merges. The legacy `pr-hero` status is no longer posted, so a rule that requires it must move to `crysk`.
 
 4. **Open pull requests as usual.** Every new PR gets a review posted as PR comments; later pushes

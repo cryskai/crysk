@@ -49,6 +49,7 @@ import {
   computeDiffStatAndSizeGate,
   enforceCapabilityGate,
   loadRunConfig,
+  NO_INSTRUCTIONS_NOTICE,
   prepareRunnerForRoute,
   resolveParityFires,
   resolvePipelineRoute,
@@ -167,6 +168,7 @@ export async function review(options: CliOptions): Promise<number> {
   if (instructions.shadowed !== undefined) {
     log(shadowedGotchasNotice(instructions.shadowed));
   }
+  if (instructions.path === undefined) log(NO_INSTRUCTIONS_NOTICE);
   const gotchasPath = instructions.path;
   await validateGotchas(gotchasPath);
 

@@ -49,6 +49,7 @@ import type { estimateCost } from "#review/report";
 import {
   type LoadedRunConfig,
   loadRunConfig,
+  NO_INSTRUCTIONS_NOTICE,
   resolvePromptSet,
   resolveReviewInstructions,
   shadowedGotchasNotice,
@@ -222,8 +223,13 @@ export async function resolvePrPromptSetAndBudget(params: {
     params.options.gotchas,
     params.operatorRoot,
   );
-  if (instructions.shadowed !== undefined) {
-    const notice = shadowedGotchasNotice(instructions.shadowed);
+  const notice =
+    instructions.shadowed !== undefined
+      ? shadowedGotchasNotice(instructions.shadowed)
+      : instructions.path === undefined
+        ? NO_INSTRUCTIONS_NOTICE
+        : undefined;
+  if (notice !== undefined) {
     log(params.isCi ? formatWorkflowCommand("notice", notice) : notice);
   }
   const gotchasPath = instructions.path;

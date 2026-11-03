@@ -195,6 +195,11 @@ export function shadowedGotchasNotice(shadowed: string): string {
   return `${path.basename(shadowed)} ignored: ${REVIEW_MD_FILE_NAME} takes precedence (${shadowed})`;
 }
 
+// What every shell prints when the repo has no instructions file: the run
+// still spends, so the absence must not be silent (a misnamed `review.md` or a
+// file missing from the default branch would otherwise look like a normal run).
+export const NO_INSTRUCTIONS_NOTICE = `no review instructions found (${REVIEW_MD_FILE_NAME} or .crysk/gotchas.md): reviewing with the default guidance only`;
+
 // Byte-identical instructions read + validation in both orchestrators. Neither
 // caller reads the text afterward (only the path goes on to the pipeline), so
 // this validates and returns nothing. No path is the opt-out (S3) and passes;
