@@ -114,6 +114,13 @@ gh pr create -R cryskai/crysk --base main --head dev --title "chore: promote dev
 
 Wait for the checks, then merge with `--merge`.
 
+The `crysk` gate on this PR is usually red: the whole diff since the last release is over the size
+gate, so no review runs. Every change in it was already reviewed in its own PR into `dev`. Only the
+`Test, typecheck & lint` check is required on `main`. Ask the maintainer how to close it. Their usual
+choice is `/crysk override`, posted only on their explicit instruction. The comment must be exactly
+`/crysk override` and nothing else: with any extra text, the workflow says "This comment is not a
+crysk command" and does nothing.
+
 ### 8. Publish to npm by hand, before any tag
 
 `release.yml` skips npm because there is no `NPM_TOKEN`. Publish from the release commit on `main`:
@@ -125,6 +132,11 @@ bun install --frozen-lockfile && bun run build         # the tarball ships dist/
 npm whoami                                             # E401: ask the maintainer to run `! npm login`
 npm publish --access public                            # prerelease: add --tag next
 ```
+
+If the maintainer already published by hand, do not publish again. Check what was published:
+`npm view crysk@$V gitHead`, then `git diff --stat <gitHead> origin/main`. That diff may only touch
+files that do not ship, such as this skill. Anything else in the `files` list of `package.json` (`src/`, `prompts/`, the shipped skills, `config/`) or
+`package.json` means the package differs from the release commit: stop and tell the maintainer.
 
 **If the publish fails, stop here.** Nothing is tagged yet, so the release can be retried cleanly. An
 `E404` on `PUT` means missing credentials, not a missing package.
