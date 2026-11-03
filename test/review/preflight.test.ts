@@ -46,6 +46,7 @@ import {
   parseNumstatFiles,
   parseRoutingConfig,
   preflightAgentsDir,
+  REVIEW_MD_TEMPLATE,
   resolveAgentsDir,
   resolveAgentsDirSetting,
   resolveMaterialityGate,
@@ -2332,6 +2333,26 @@ describe("gotchasUnusableReason", () => {
     expect(gotchasUnusableReason(text)).toBe("placeholder");
   });
 
+  // S3: the REVIEW.md `init` and `setup` write now. Unregistered, a copy with
+  // its marker line deleted would reach every hunter as real instructions.
+  test("the REVIEW.md scaffold is a placeholder, with or without its marker line", () => {
+    expect(gotchasUnusableReason(REVIEW_MD_TEMPLATE)).toBe("placeholder");
+    const text = REVIEW_MD_TEMPLATE.split("\n")
+      .filter((l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER))
+      .join("\n");
+    expect(gotchasUnusableReason(text)).toBe("placeholder");
+  });
+
+  test("a REVIEW.md that keeps the scaffold headings but adds one real line passes", () => {
+    const text = REVIEW_MD_TEMPLATE.split("\n")
+      .filter(
+        (l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER) && !l.includes("<"),
+      )
+      .concat("- billing: refunds are idempotent by request id")
+      .join("\n");
+    expect(gotchasUnusableReason(text)).toBeUndefined();
+  });
+
   test("an earlier release's setup fallback with its marker line deleted is still a placeholder", () => {
     // The exact bytes `pr-hero setup` wrote before 60c28c6, minus the marker.
     const retired =
@@ -2367,13 +2388,17 @@ describe("GOTCHAS_TEMPLATE carries the marker it is judged by", () => {
 });
 
 describe("gotchasErrorMessage distinguishes the two reasons", () => {
-  test("'empty' offers the template AND says to delete its marker line", () => {
+  test("'empty' for a path naming no file offers the template AND says to delete its marker line", () => {
     // The trap this test exists for: the message embeds GOTCHAS_TEMPLATE
     // verbatim under "Create it with something like:", and that template now
     // carries a marker whose presence is itself a refusal. A reader who
     // copies it and stops has produced a file pr-hero still rejects, so the
     // message has to say the last step out loud.
-    const message = gotchasErrorMessage("/repo/.crysk/gotchas.md", "empty");
+    const message = gotchasErrorMessage(
+      "/repo/.crysk/gotchas.md",
+      "empty",
+      false,
+    );
     expect(message).toContain("/repo/.crysk/gotchas.md");
     expect(message).toContain("Create it with something like:");
     expect(message).toContain(GOTCHAS_TEMPLATE);
@@ -2381,10 +2406,22 @@ describe("gotchasErrorMessage distinguishes the two reasons", () => {
     expect(message.toLowerCase()).toContain("delete");
   });
 
+  // S3: an empty REVIEW.md exists, so telling its owner to create a gotchas
+  // file is the "message asserting a state nobody checked" defect again. The
+  // way out is real content or no file at all.
+  test("'empty' for a file that exists names it, offers no template, and offers deleting it", () => {
+    const message = gotchasErrorMessage("/repo/REVIEW.md", "empty", true);
+    expect(message).toContain("/repo/REVIEW.md");
+    expect(message).not.toContain("Create it with something like:");
+    expect(message).not.toContain(GOTCHAS_TEMPLATE);
+    expect(message).toContain("or delete it");
+  });
+
   test("'placeholder' does not tell you to create a file that already exists", () => {
     const message = gotchasErrorMessage(
       "/repo/.crysk/gotchas.md",
       "placeholder",
+      true,
     );
     expect(message).toContain("/repo/.crysk/gotchas.md");
     expect(message).toContain(GOTCHAS_PLACEHOLDER_MARKER);
@@ -2393,8 +2430,8 @@ describe("gotchasErrorMessage distinguishes the two reasons", () => {
   });
 
   test("the two reasons do not render the same message", () => {
-    expect(gotchasErrorMessage("/p/g.md", "empty")).not.toBe(
-      gotchasErrorMessage("/p/g.md", "placeholder"),
+    expect(gotchasErrorMessage("/p/g.md", "empty", true)).not.toBe(
+      gotchasErrorMessage("/p/g.md", "placeholder", true),
     );
   });
 });
@@ -2415,24 +2452,30 @@ describe("gotchasErrorMessage distinguishes the two reasons", () => {
 // ---------------------------------------------------------------------------
 
 describe("initGotchasInstructions — only claims what the run did", () => {
-  const wrote = initGotchasInstructions({ written: true }).join("\n");
+  const wrote = initGotchasInstructions({ written: true }, "REVIEW.md").join(
+    "\n",
+  );
 
   test("a file this run WROTE gets the two-step scaffold instruction", () => {
-    // Safe here and only here: `init` wrote GOTCHAS_TEMPLATE, so the
+    // Safe here and only here: `init` wrote REVIEW_MD_TEMPLATE, so the
     // `<subsystem>` lines and the marker line are both genuinely in the file.
+    expect(wrote).toContain("REVIEW.md");
     expect(wrote).toContain("<subsystem>");
     expect(wrote).toContain(GOTCHAS_PLACEHOLDER_MARKER);
     expect(wrote.toLowerCase()).toContain("delete");
     // The claim has to be true of the bytes actually written.
-    expect(GOTCHAS_TEMPLATE).toContain("<subsystem>");
-    expect(gotchasUnusableReason(GOTCHAS_TEMPLATE)).toBe("placeholder");
+    expect(REVIEW_MD_TEMPLATE).toContain("<subsystem>");
+    expect(gotchasUnusableReason(REVIEW_MD_TEMPLATE)).toBe("placeholder");
   });
 
   test("a KEPT file that passes the gate is not accused of anything", () => {
     const contents =
       "# Repo gotchas\n\n- billing: a subscription run files notional, not cash.\n";
     expect(gotchasUnusableReason(contents)).toBeUndefined();
-    const lines = initGotchasInstructions({ written: false, contents });
+    const lines = initGotchasInstructions(
+      { written: false, contents },
+      ".crysk/gotchas.md",
+    );
     const text = lines.join("\n");
 
     // Nothing about placeholders, nothing about a marker to delete, and no
@@ -2452,9 +2495,10 @@ describe("initGotchasInstructions — only claims what the run did", () => {
     // same defect one layer down.
     const contents = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero invariants defined during onboarding -->\n\n# Repository Gotchas & Invariants\n`;
     expect(gotchasUnusableReason(contents)).toBe("placeholder");
-    const text = initGotchasInstructions({ written: false, contents }).join(
-      "\n",
-    );
+    const text = initGotchasInstructions(
+      { written: false, contents },
+      ".crysk/gotchas.md",
+    ).join("\n");
 
     expect(text).toContain(GOTCHAS_PLACEHOLDER_MARKER);
     expect(text.toLowerCase()).toContain("delete");
@@ -2467,9 +2511,10 @@ describe("initGotchasInstructions — only claims what the run did", () => {
   test("a KEPT file that is empty is told it is empty — there is no marker to delete", () => {
     const contents = "   \n\t\n";
     expect(gotchasUnusableReason(contents)).toBe("empty");
-    const text = initGotchasInstructions({ written: false, contents }).join(
-      "\n",
-    );
+    const text = initGotchasInstructions(
+      { written: false, contents },
+      "REVIEW.md",
+    ).join("\n");
 
     expect(text.toLowerCase()).toContain("empty");
     expect(text).not.toContain(GOTCHAS_PLACEHOLDER_MARKER);
@@ -2479,15 +2524,21 @@ describe("initGotchasInstructions — only claims what the run did", () => {
   test("the four outcomes do not render the same block", () => {
     const rendered = [
       wrote,
-      initGotchasInstructions({
-        written: false,
-        contents: "- a real one\n",
-      }).join("\n"),
-      initGotchasInstructions({
-        written: false,
-        contents: `<!-- ${GOTCHAS_PLACEHOLDER_MARKER} -->\n`,
-      }).join("\n"),
-      initGotchasInstructions({ written: false, contents: "" }).join("\n"),
+      initGotchasInstructions(
+        { written: false, contents: "- a real one\n" },
+        "REVIEW.md",
+      ).join("\n"),
+      initGotchasInstructions(
+        {
+          written: false,
+          contents: `<!-- ${GOTCHAS_PLACEHOLDER_MARKER} -->\n`,
+        },
+        "REVIEW.md",
+      ).join("\n"),
+      initGotchasInstructions(
+        { written: false, contents: "" },
+        "REVIEW.md",
+      ).join("\n"),
     ];
     expect(new Set(rendered).size).toBe(4);
   });
@@ -2498,7 +2549,7 @@ describe("initGotchasInstructions — only claims what the run did", () => {
       { written: false as const, contents: "- real\n" },
       { written: false as const, contents: "" },
     ]) {
-      for (const line of initGotchasInstructions(outcome)) {
+      for (const line of initGotchasInstructions(outcome, "REVIEW.md")) {
         expect(line).not.toContain("\x1b");
       }
     }

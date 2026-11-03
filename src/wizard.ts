@@ -5,8 +5,9 @@ import {
   GOTCHAS_PLACEHOLDER_MARKER,
   initConfigTemplate,
   initGitReminder,
-  SETUP_GOTCHAS_FALLBACK,
+  REVIEW_MD_TEMPLATE,
 } from "#review/preflight";
+import { REVIEW_MD_FILE_NAME, resolveReviewInstructions } from "#review/run";
 import {
   type AgentEnvDetection,
   detectAgentEnvironments,
@@ -82,6 +83,11 @@ export interface WizardState {
   // The directory step 4 wrote into (.crysk, or a legacy .prhero updated in
   // place), so the closing advice names a path that exists.
   repoDirName?: string;
+  // The instructions file step 4 scaffolded or found (repo-relative), and
+  // whether this run wrote a root REVIEW.md — which the git reminder must
+  // name, since it is untracked outside the config dir.
+  instructionsFile?: string;
+  reviewMdWritten?: boolean;
   // "this run wrote the PLACEHOLDER gotchas file" — the no-entries fallback
   // branch, the only one that emits GOTCHAS_PLACEHOLDER_MARKER. Writing
   // `gotchas.md` is not enough: with entries collected, the file written is
@@ -620,7 +626,16 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
 
       const repoDir = resolveRepoDir(cwd, exists);
       const configPath = path.join(repoDir, "config.json");
-      const gotchasPath = path.join(repoDir, "gotchas.md");
+      // REVIEW.md at the root unless the repo already has instructions: an
+      // existing gotchas file is the user's work, and a REVIEW.md written
+      // beside it would shadow it (odd/tasks/review-md.md S2/S7).
+      const existingInstructions = resolveReviewInstructions(
+        undefined,
+        cwd,
+        exists,
+      );
+      const gotchasPath =
+        existingInstructions.path ?? path.join(cwd, REVIEW_MD_FILE_NAME);
 
       const isGit = await exec(["git", "rev-parse", "--is-inside-work-tree"], {
         cwd,
@@ -633,6 +648,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       // one. These start false and are set by the branch that actually writes.
       let workspaceFilesWritten = false;
       let placeholderGotchasWritten = false;
+      let reviewMdWritten = false;
 
       if (isRepo) {
         // 1. Write <repo dir>/config.json if not present
@@ -644,15 +660,15 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           workspaceFilesWritten = true;
         }
 
-        // 2. Write <repo dir>/gotchas.md if not present
+        // 2. Write the root REVIEW.md if the repo has no instructions yet
         if (!exists(gotchasPath)) {
           let gotchasContent: string;
           if (state.gotchas.entries && state.gotchas.entries.length > 0) {
-            gotchasContent = `# Repository Gotchas & Invariants\n\n${state.gotchas.entries.map((e) => `- ${e}`).join("\n")}\n`;
+            gotchasContent = `# Review instructions\n\n${state.gotchas.entries.map((e) => `- ${e}`).join("\n")}\n`;
           } else {
             // Shared with the gotchas gate (preflight.ts), so the gate still
             // recognises this scaffold after its marker line is deleted.
-            gotchasContent = SETUP_GOTCHAS_FALLBACK;
+            gotchasContent = REVIEW_MD_TEMPLATE;
             // Set HERE, in the branch that emits the marker, and nowhere
             // else: it is the marker that makes step 5's placeholder warning
             // true, so the flag is set by the code that writes the marker.
@@ -660,6 +676,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
           }
           await writeFile(gotchasPath, gotchasContent);
           workspaceFilesWritten = true;
+          reviewMdWritten = existingInstructions.path === undefined;
         }
       }
 
@@ -675,6 +692,9 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       let workspaceCommitted = false;
       if (isRepo && state.commitChoice === "commit") {
         await exec(["git", "add", path.basename(repoDir)], { cwd });
+        if (exists(path.join(cwd, REVIEW_MD_FILE_NAME))) {
+          await exec(["git", "add", REVIEW_MD_FILE_NAME], { cwd });
+        }
         const commitRes = await exec(
           [
             "git",
@@ -699,6 +719,8 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
       return {
         workspaceFilesWritten,
         repoDirName: path.basename(repoDir),
+        instructionsFile: path.relative(cwd, gotchasPath),
+        reviewMdWritten,
         placeholderGotchasWritten,
         setupStateWritten: true,
         workspaceCommitted,
@@ -710,10 +732,12 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
     ): string[] {
       const lines: string[] = [];
       const bold = (s: string) => (opts.styles ? `\x1b[1m${s}\x1b[0m` : s);
-      lines.push(bold("Step 4/5: Workspace Configuration & Gotchas"));
+      lines.push(
+        bold("Step 4/5: Workspace Configuration & Review Instructions"),
+      );
       lines.push("");
       lines.push(
-        "  Scaffolding config.json and gotchas.md in .crysk/ (or the .prhero/ the repo already has)",
+        "  Scaffolding config.json in .crysk/ (or the .prhero/ the repo already has) and a REVIEW.md, unless the repo already has review instructions",
       );
       return lines;
     },
@@ -798,7 +822,9 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         lines.push("");
       }
       if (needsGitStep) {
-        lines.push(`  ${initGitReminder(repoDirName)}`);
+        lines.push(
+          `  ${initGitReminder(repoDirName, state.reviewMdWritten === true)}`,
+        );
         lines.push("");
       }
       if (needsGotchasStep) {
@@ -813,7 +839,7 @@ export const WIZARD_STEPS: readonly WizardStepDescriptor[] = [
         // which is the same untestable-by-design trap this slice exists to
         // remove.
         lines.push(
-          `  Write REAL gotchas in ${repoDirName}/gotchas.md — the one just ` +
+          `  Write REAL review instructions in ${state.instructionsFile ?? REVIEW_MD_FILE_NAME} — the one just ` +
             "scaffolded is a placeholder, and Crysk refuses to review " +
             `while its \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line is there.`,
         );

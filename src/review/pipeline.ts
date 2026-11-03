@@ -178,7 +178,11 @@ import { type SessionUsage, sumUsage, zeroUsage } from "../usage";
 // preflight and not a runtime dependency on it (the same seam review/size-gate.ts
 // already uses for NumstatFile).
 import type { ConfigSources, LocalConfig } from "./preflight";
-import { agentFilePath, gotchasUnusableReason } from "./preflight";
+import {
+  agentFilePath,
+  gotchasUnusableReason,
+  NO_REVIEW_INSTRUCTIONS,
+} from "./preflight";
 import {
   capScoutLeads,
   renderLeadsBlock,
@@ -222,7 +226,10 @@ export interface PipelineInput {
     ref?: string;
     found: boolean;
   };
-  gotchasPath: string;
+  // Undefined: the repo has no REVIEW.md or gotchas file, and the review runs
+  // with NO_REVIEW_INSTRUCTIONS in the block (odd/tasks/review-md.md S3). A
+  // path whose file is missing still reads as empty and aborts below.
+  gotchasPath?: string;
   agentsDir: string;
   // Logical agent filename -> readable path, present only when the prompt set
   // is the compiled binary's BUNDLED one, where every prompt is embedded at a
@@ -1470,12 +1477,14 @@ async function execute(
   deps: PipelineDeps,
   state: RunState,
 ): Promise<PipelineResult> {
-  // Step 2 — gotchas fail-loud. Gotchas that are missing, empty, or still the
-  // untouched scaffold are a deliberate, visible failure signal: run_status
-  // "partial" with zero findings is distinguishable from a legitimate
-  // "hunters ran, found nothing" complete run. Never silently proceed as if
-  // gotchas were simply empty — no step is spawned. sessionFailed stays
-  // false: no hunter FAILED, none ever ran.
+  // Step 2 — gotchas fail-loud. A review-instructions file (REVIEW.md or
+  // gotchas) that is missing, empty, or still the untouched scaffold is a
+  // deliberate, visible failure signal: run_status "partial" with zero findings
+  // is distinguishable from a legitimate "hunters ran, found nothing" complete
+  // run. Never silently proceed as if it were simply empty — no step is
+  // spawned. sessionFailed stays false: no hunter FAILED, none ever ran. No
+  // path at all is different: the repo has no such file, which is an opt-out,
+  // not an unfinished setup, and the hunters get NO_REVIEW_INSTRUCTIONS.
   //
   // The scaffold arm is not a nicety: `gotchas.trim().length === 0` passed
   // every file `init`/`setup` writes, so the run this abort exists to prevent
@@ -1483,8 +1492,11 @@ async function execute(
   // reporting clean — was the DEFAULT outcome right after onboarding.
   // `gotchasUnusableReason` is shared with the CLI and doctor so the four
   // gates cannot drift apart again.
-  const gotchasFile = Bun.file(input.gotchasPath);
-  const gotchas = (await gotchasFile.exists()) ? await gotchasFile.text() : "";
+  let gotchas = NO_REVIEW_INSTRUCTIONS;
+  if (input.gotchasPath !== undefined) {
+    const gotchasFile = Bun.file(input.gotchasPath);
+    gotchas = (await gotchasFile.exists()) ? await gotchasFile.text() : "";
+  }
   if (gotchasUnusableReason(gotchas) !== undefined) {
     // The plan is still written, and that is not tidiness — `writePipelinePlan`
     // is the ONLY caller of `fillRereviewProvenance`, and that is the only

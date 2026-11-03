@@ -14,6 +14,7 @@
 // registerActiveRun and the try/finally around runPipeline stay call-site
 // owned: their POSITION differs between the orchestrators, not their data.
 
+import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   type EffectiveConfig,
@@ -154,33 +155,68 @@ export function assertDistinctRange(baseSha: string, headSha: string): void {
   }
 }
 
-// The gotchas file path: an explicit `--gotchas` flag always wins (resolved
-// against cwd, exactly like path.resolve did inline); otherwise it is
-// `<root>/.crysk/gotchas.md` (or the legacy `.prhero/`). `root` is the caller's own root — repoRoot in
-// review(), operatorRoot in reviewPr(), repoDir in doctor.ts's default-branch
-// check — never resolved here, so this stays agnostic of which mode called
-// it.
-export function resolveGotchasPath(
-  flag: string | undefined,
-  root: string,
-  exists?: (p: string) => boolean,
-): string {
-  return flag !== undefined
-    ? path.resolve(flag)
-    : path.join(resolveRepoDir(root, exists), "gotchas.md");
+// The repository's review instructions (odd/tasks/review-md.md S2/S3). An
+// explicit `--gotchas` flag always wins (resolved against cwd). Otherwise a
+// root `REVIEW.md` — the format Claude Code Review reads — and only when it is
+// absent `<root>/.crysk/gotchas.md` (or the legacy `.prhero/`). One file is
+// effective, never both: a present REVIEW.md that is empty or still a scaffold
+// is refused, it does not fall through to gotchas.md (the same rule the ignore
+// file keeps, git.ts readBaseRefIgnoreRules). `shadowed` names a gotchas file
+// REVIEW.md overrides, so the shells can say it is ignored instead of the
+// hunters silently losing it. `path: undefined` means neither file exists:
+// the review runs with the default guidance only. `root` is the caller's own
+// root — repoRoot in review(), operatorRoot in reviewPr(), repoDir in
+// doctor.ts — never resolved here.
+export const REVIEW_MD_FILE_NAME = "REVIEW.md";
+
+export interface ReviewInstructions {
+  path: string | undefined;
+  shadowed?: string;
 }
 
-// Byte-identical gotchas read + validation in both orchestrators. Neither
-// caller reads the text afterward (only `gotchasPath` goes on to the
-// pipeline), so this validates and returns nothing.
-export async function validateGotchas(gotchasPath: string): Promise<void> {
+export function resolveReviewInstructions(
+  flag: string | undefined,
+  root: string,
+  exists: (p: string) => boolean = existsSync,
+): ReviewInstructions {
+  if (flag !== undefined) return { path: path.resolve(flag) };
+  const reviewMd = path.join(root, REVIEW_MD_FILE_NAME);
+  const gotchas = path.join(resolveRepoDir(root, exists), "gotchas.md");
+  if (exists(reviewMd)) {
+    return exists(gotchas)
+      ? { path: reviewMd, shadowed: gotchas }
+      : { path: reviewMd };
+  }
+  return { path: exists(gotchas) ? gotchas : undefined };
+}
+
+// The one line every shell prints when REVIEW.md shadows a gotchas file.
+export function shadowedGotchasNotice(shadowed: string): string {
+  return `${path.basename(shadowed)} ignored: ${REVIEW_MD_FILE_NAME} takes precedence (${shadowed})`;
+}
+
+// What every shell prints when the repo has no instructions file: the run
+// still spends, so the absence must not be silent (a misnamed `review.md` or a
+// file missing from the default branch would otherwise look like a normal run).
+export const NO_INSTRUCTIONS_NOTICE = `no review instructions found (${REVIEW_MD_FILE_NAME} or .crysk/gotchas.md): reviewing with the default guidance only`;
+
+// Byte-identical instructions read + validation in both orchestrators. Neither
+// caller reads the text afterward (only the path goes on to the pipeline), so
+// this validates and returns nothing. No path is the opt-out (S3) and passes;
+// a path whose file is missing — only an explicit `--gotchas` can name one —
+// reads as empty and is refused, as it always was.
+export async function validateGotchas(
+  gotchasPath: string | undefined,
+): Promise<void> {
+  if (gotchasPath === undefined) return;
   const file = Bun.file(gotchasPath);
-  const gotchas = (await file.exists()) ? await file.text() : "";
+  const present = await file.exists();
+  const gotchas = present ? await file.text() : "";
   const unusable = gotchasUnusableReason(gotchas);
   if (unusable !== undefined) {
     // The class carries the gate's reason into cli.json (T2d-1). Both reasons render
     // the one gotchas code today; the reason stays on the record for that reason only.
-    throw new CliError(gotchasErrorMessage(gotchasPath, unusable), {
+    throw new CliError(gotchasErrorMessage(gotchasPath, unusable, present), {
       cls: { kind: "gotchas", reason: unusable },
     });
   }

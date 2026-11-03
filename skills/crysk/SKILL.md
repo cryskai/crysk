@@ -1,6 +1,6 @@
 ---
 name: crysk
-description: "Trigger: use or configure Crysk locally — change the review model or backend (routing, OpenCode, DeepSeek, custom model), effort, credentials, config.json keys, gotchas.md, .cryskignore, size gate, run a review, `crysk watch/gc`, `crysk doctor/config`. Not CI (crysk-ci-setup) and not answering findings (crysk-loop)."
+description: "Trigger: use or configure Crysk locally — change the review model or backend (routing, OpenCode, DeepSeek, custom model), effort, credentials, config.json keys, REVIEW.md / gotchas.md, .cryskignore, size gate, run a review, `crysk watch/gc`, `crysk doctor/config`. Not CI (crysk-ci-setup) and not answering findings (crysk-loop)."
 license: Apache-2.0
 metadata:
   author: juanmaagd
@@ -11,7 +11,7 @@ metadata:
 
 Load when the user wants to **operate or configure Crysk on their machine or repo**:
 - Change which model or backend reviews run on (a custom model, OpenCode, DeepSeek, a pinned snapshot).
-- Tune effort, caps, the size gate, `.cryskignore`, `gotchas.md`, or any `config.json` key.
+- Tune effort, caps, the size gate, `.cryskignore`, `REVIEW.md` / `gotchas.md`, or any `config.json` key.
 - Run a review (local branch or `--pr <n>`), understand its cost, or read its artifacts.
 - Set up the watcher (`crysk watch`) or worktree GC (`crysk gc`).
 - Diagnose a broken install or a refused run (`crysk doctor`, `crysk config`).
@@ -59,7 +59,7 @@ If Crysk is not on `PATH`, run every command as `npx -y crysk <command>` (Node i
 
 **Caps, size gate, exclusions** — [config.json keys](https://github.com/cryskai/crysk/blob/main/README.md#configjson-keys), [size gate](https://github.com/cryskai/crysk/blob/main/README.md#the-size-gate--a-cost-gate-not-a-quality-gate), [.cryskignore](https://github.com/cryskai/crysk/blob/main/README.md#cryskignore--repo-defined-exclusions): `max_changed_lines`/`max_changed_files` skip oversized diffs (a cost gate, not a quality one); `max_concurrent_steps` keeps the fan-out under a provider's rate limit; `max_verification_steps` (default `8`, `0` pauses) caps how many prior open findings a re-review spawns verifier steps for. `post_min_severity` (`suggestion` | `warning` | `blocking`, unset posts everything; `setup --ci` writes `warning`) is the lowest finding a PR review posts: hidden findings get no comment and the summary counts them, the gate is unchanged (a blocking finding always posts), and re-review admission scores only what was posted. Only the repo-root `.cryskignore` is read, and matching is case-sensitive.
 
-**gotchas.md** — [gotchas.md](https://github.com/cryskai/crysk/blob/main/README.md#gotchasmd): required and must be real. Read the code and write the actual traps, then delete the `human-attention-required` marker line, or `review` and `doctor` refuse it.
+**REVIEW.md / gotchas.md** — [REVIEW.md and gotchas.md](https://github.com/cryskai/crysk/blob/main/README.md#reviewmd-and-gotchasmd): optional; a root `REVIEW.md` wins over `.crysk/gotchas.md`. A file that exists must be real: read the code and write the actual traps, then delete the `human-attention-required` marker line, or `review` and `doctor` refuse it. With neither file the review runs on the default guidance.
 
 **Running a review** — [Commands](https://github.com/cryskai/crysk/blob/main/README.md#commands): `.crysk/` must be committed or gitignored (clean-tree gate). Expect roughly $2–5 and ~10 minutes per typical PR; the printed band ignores billing mode. Artifacts land in `~/.crysk/repos/<origin>/runs/<run>/`. To check or wait on a PR's CI review state deterministically ($0, via `gh`), run `pr-hero status --pr <n> [--wait] [--json]`.
 

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A root `REVIEW.md` is the repository's review instructions, with `.crysk/gotchas.md` as the fallback.**
+  It uses the file name Claude Code Review reads. When both exist, `REVIEW.md` wins, and the run and
+  `crysk doctor` say `gotchas.md ignored: REVIEW.md takes precedence`. An empty `REVIEW.md` is refused; it
+  never falls through to `gotchas.md`. The file reaches the hunters as facts about the codebase, as gotchas
+  always did; it does not filter findings yet. `crysk init` and `crysk setup` now scaffold `REVIEW.md` when
+  the repo has no review instructions, and never write one beside an existing `gotchas.md`.
+
+### Changed
+- **Review instructions are optional.** A repo with neither `REVIEW.md` nor a gotchas file is reviewed with
+  the default guidance instead of being refused, so a CI run that used to stop at `PRH-GOTCHAS-MISSING` for
+  free now runs a review and spends. `crysk doctor` reports the missing file as degraded, not blocking. A file
+  that exists but is empty or still the scaffold is refused exactly as before, and so is a `--gotchas` path
+  to a file that does not exist. `PRH-GOTCHAS-MISSING` keeps its code; its text now names both files and
+  offers deleting the file.
+
 ## [0.3.2] - 2026-11-03
 
 ### Changed

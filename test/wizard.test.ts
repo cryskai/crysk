@@ -126,20 +126,21 @@ describe("Wizard state machine & steps", () => {
       // Crucial invariant: never touches ~/.crysk/config.json
       expect(written["/home/user/.crysk/config.json"]).toBeUndefined();
 
-      // Verify skipped gotchas marker
-      const gotchasRaw = written["/repo/.crysk/gotchas.md"];
+      // Verify the scaffolded REVIEW.md carries the marker
+      const gotchasRaw = written["/repo/REVIEW.md"];
       expect(gotchasRaw).toBeDefined();
-      expect(gotchasRaw).toContain(
-        "<!-- human-attention-required: zero invariants defined during onboarding -->",
-      );
+      expect(gotchasRaw).toContain(GOTCHAS_PLACEHOLDER_MARKER);
+      expect(written["/repo/.crysk/gotchas.md"]).toBeUndefined();
       // The loop that matters, closed on the ACTUAL bytes rather than on a
       // literal retyped into another test file: what `setup` writes here is
       // what `review`, the pipeline and `doctor` all refuse. `runWizard`
       // dispatches no reducer actions, so `gotchas.entries` is always empty
       // and this file is what `pr-hero setup` produces WHENEVER it writes one
       // — which, since neither write overwrites, is only in a repo that had
-      // no `.crysk/gotchas.md` yet.
+      // no review instructions yet.
       expect(gotchasUnusableReason(gotchasRaw)).toBe("placeholder");
+      expect(result?.reviewMdWritten).toBe(true);
+      expect(result?.instructionsFile).toBe("REVIEW.md");
       // ...and the flag step 5 reads before warning about that file agrees
       // with the bytes just asserted.
       expect(result?.placeholderGotchasWritten).toBe(true);
@@ -220,11 +221,12 @@ describe("Wizard state machine & steps", () => {
       // reachable endings are asserted through `runWizardSteps` further down.
       expect(result?.placeholderGotchasWritten).toBe(false);
       expect(result?.workspaceFilesWritten).toBe(true);
-      expect(written["/repo/.crysk/gotchas.md"]).not.toContain(
+      expect(written["/repo/REVIEW.md"]).not.toContain(
         GOTCHAS_PLACEHOLDER_MARKER,
       );
 
       expect(executed).toContainEqual(["git", "add", ".crysk"]);
+      expect(executed).toContainEqual(["git", "add", "REVIEW.md"]);
       expect(executed).toContainEqual([
         "git",
         "commit",
@@ -737,14 +739,12 @@ describe("verification step — the ending matches what the run actually did", (
     const { lines, files } = await verificationLines({ isRepo: true });
     const text = lines.join("\n");
     // Precondition, asserted rather than assumed: the run really did write a
-    // placeholder gotchas file, which is what makes both halves TRUE here.
+    // placeholder REVIEW.md, which is what makes both halves TRUE here.
     expect(files["/repo/.crysk/config.json"]).toBeDefined();
-    expect(gotchasUnusableReason(files["/repo/.crysk/gotchas.md"])).toBe(
-      "placeholder",
-    );
+    expect(gotchasUnusableReason(files["/repo/REVIEW.md"])).toBe("placeholder");
 
-    expect(text).toContain(initGitReminder());
-    expect(text).toContain(".crysk/gotchas.md");
+    expect(text).toContain(initGitReminder(".crysk", true));
+    expect(text).toContain("Write REAL review instructions in REVIEW.md");
     expect(text).toContain(GOTCHAS_PLACEHOLDER_MARKER);
   });
 
@@ -793,6 +793,8 @@ describe("verification step — the ending matches what the run actually did", (
     // be making is false in both directions.
     expect(files["/repo/.crysk/gotchas.md"]).toBe(REAL_GOTCHAS);
     expect(gotchasUnusableReason(REAL_GOTCHAS)).toBeUndefined();
+    // A REVIEW.md scaffold here would shadow the real gotchas and be refused.
+    expect(files["/repo/REVIEW.md"]).toBeUndefined();
 
     expect(text).not.toContain(initGitReminder());
     expect(text).not.toContain(GOTCHAS_PLACEHOLDER_MARKER);
@@ -811,10 +813,9 @@ describe("verification step — the ending matches what the run actually did", (
       },
     });
     const text = lines.join("\n");
-    expect(files["/repo/.prhero/gotchas.md"]).toBeDefined();
-    expect(files["/repo/.crysk/gotchas.md"]).toBeUndefined();
-    expect(text).toContain(".prhero/gotchas.md");
-    expect(text).toContain(initGitReminder(".prhero"));
+    expect(files["/repo/REVIEW.md"]).toBeDefined();
+    expect(files["/repo/.crysk/config.json"]).toBeUndefined();
+    expect(text).toContain(initGitReminder(".prhero", true));
     expect(text).not.toContain(".crysk");
   });
 
