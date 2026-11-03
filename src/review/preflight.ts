@@ -3558,6 +3558,25 @@ export function gotchasUnusableReason(
   return undefined;
 }
 
+// The owner text the materiality judge reads as POLICY, minus the template's
+// placeholder bullets (PR #464 F001). A file that passes the gate can still
+// keep one — the "Not blocking here" placeholder above all, which names the
+// demotable classes and would read as the owner opting them out. Only the
+// `- <…>` lines our scaffolds wrote are dropped: the headings stay, because a
+// real "- style findings" line means nothing to the judge without its
+// "## Not blocking here" heading. A file with no placeholder is sent as
+// written, so the measured exam arms are unchanged. Facts-only readers
+// (hunters, refuter) still get the file as written.
+export function withoutScaffoldLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !(trimmed.startsWith("- <") && SCAFFOLD_BODY_LINES.has(trimmed));
+    })
+    .join("\n");
+}
+
 // `pr-hero init`'s closing instruction block, as data.
 //
 // WHY it is a function of the outcome rather than a constant: `init` never
@@ -3596,6 +3615,10 @@ export function initGotchasInstructions(
       `Then edit ${file} — two steps, both required:`,
       "  1. replace the <subsystem> lines with facts about this repo",
       `  2. delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line at the top`,
+      "",
+      'The "Not blocking here" section is optional: fill it only if you turn on',
+      "`materiality_gate`, otherwise delete it. Its placeholder line is never sent",
+      "to the judge as policy.",
       "",
       "Crysk refuses to review while that marker is present. It is not " +
         "pedantry: the file above is non-empty, so without the marker a " +
