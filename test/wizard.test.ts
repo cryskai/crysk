@@ -793,6 +793,8 @@ describe("verification step — the ending matches what the run actually did", (
     // be making is false in both directions.
     expect(files["/repo/.crysk/gotchas.md"]).toBe(REAL_GOTCHAS);
     expect(gotchasUnusableReason(REAL_GOTCHAS)).toBeUndefined();
+    // A REVIEW.md scaffold here would shadow the real gotchas and be refused.
+    expect(files["/repo/REVIEW.md"]).toBeUndefined();
 
     expect(text).not.toContain(initGitReminder());
     expect(text).not.toContain(GOTCHAS_PLACEHOLDER_MARKER);

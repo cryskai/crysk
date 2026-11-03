@@ -161,10 +161,11 @@ cd /path/to/your-repo && crysk setup
 
 # 5. Track that scaffold, or ignore .crysk/. Local review refuses to run on a
 #    dirty tree, and an untracked .crysk/ or REVIEW.md is a dirty tree.
-git add .crysk REVIEW.md && git commit -m "chore: crysk config"
+git add .crysk && git add REVIEW.md   # REVIEW.md only if setup wrote one
+git commit -m "chore: crysk config"
 
 # 6. Replace the placeholder review instructions with real ones. Not paperwork — see below.
-$EDITOR REVIEW.md
+$EDITOR REVIEW.md   # or the .crysk/gotchas.md the repo already had
 
 # 7. Review the checked-out branch against its merge base.
 crysk review
