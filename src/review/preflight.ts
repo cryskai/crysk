@@ -3470,14 +3470,15 @@ verbatim into every hunter's system prompt, so keep them short and true.
 // What `init` and `setup` scaffold today (odd/tasks/review-md.md S7): a root
 // REVIEW.md, the file name Claude Code Review reads. Same marker, same
 // `<subsystem>` placeholder lines as GOTCHAS_TEMPLATE, so the gate below
-// recognises it by both signals. Facts only for now: the file reaches the
-// hunters alone until the refuter and the judge read it (T3), so a "do not
-// report" section here would promise a filter nothing applies.
+// recognises it by both signals. The facts sections reach the hunters and the
+// refuter; the "Not blocking here" section is read by the materiality judge,
+// which only runs with `materiality_gate` on, only on blocking findings, and
+// only for the bounded classes OWNER_INSTRUCTIONS_RULE names (S5).
 export const REVIEW_MD_TEMPLATE = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: delete THIS line once the instructions below are real — Crysk refuses to review while it is here. -->
 # Review instructions
 
-Facts a reviewer cannot infer from the diff alone. Crysk injects this file
-verbatim into every hunter's system prompt, so keep it short and true.
+Facts and rules a reviewer cannot infer from the diff alone. Crysk gives this
+file verbatim to every hunter and to the refuter, so keep it short and true.
 
 ## Looks wrong, is deliberate
 
@@ -3487,6 +3488,14 @@ verbatim into every hunter's system prompt, so keep it short and true.
 
 - <subsystem>: <the invariant that is enforced somewhere the diff does not show>
 - <subsystem>: <the naming/ownership rule a newcomer would violate>
+
+## Not blocking here
+
+- <style, naming, test-hygiene, generated-code or dev-script findings this repository does not want blocking or posted, and why>
+
+(This section is applied by the materiality judge, which runs only with
+\`materiality_gate\` on, only to blocking findings, and only to those classes:
+it never demotes a logic, correctness, data, contract or security finding.)
 `;
 
 // The fallback `pr-hero setup` wrote into `.crysk/gotchas.md` before setup
@@ -3506,6 +3515,9 @@ export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero 
 // setup fallback's sentence did, in 60c28c6.)
 const RETIRED_SCAFFOLD_LINES = [
   "(No invariants defined during onboarding. Edit this file with project failure modes.)",
+  // The first REVIEW_MD_TEMPLATE (b8c35d3), before its policy sections.
+  "Facts a reviewer cannot infer from the diff alone. Crysk injects this file",
+  "verbatim into every hunter's system prompt, so keep it short and true.",
 ];
 
 const SCAFFOLD_BODY_LINES = new Set([
@@ -3546,6 +3558,25 @@ export function gotchasUnusableReason(
   return undefined;
 }
 
+// The owner text the materiality judge reads as POLICY, minus the template's
+// placeholder bullets (PR #464 F001). A file that passes the gate can still
+// keep one — the "Not blocking here" placeholder above all, which names the
+// demotable classes and would read as the owner opting them out. Only the
+// `- <…>` lines our scaffolds wrote are dropped: the headings stay, because a
+// real "- style findings" line means nothing to the judge without its
+// "## Not blocking here" heading. A file with no placeholder is sent as
+// written, so the measured exam arms are unchanged. Facts-only readers
+// (hunters, refuter) still get the file as written.
+export function withoutScaffoldLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !(trimmed.startsWith("- <") && SCAFFOLD_BODY_LINES.has(trimmed));
+    })
+    .join("\n");
+}
+
 // `pr-hero init`'s closing instruction block, as data.
 //
 // WHY it is a function of the outcome rather than a constant: `init` never
@@ -3584,6 +3615,10 @@ export function initGotchasInstructions(
       `Then edit ${file} — two steps, both required:`,
       "  1. replace the <subsystem> lines with facts about this repo",
       `  2. delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line at the top`,
+      "",
+      'The "Not blocking here" section is optional: fill it only if you turn on',
+      "`materiality_gate`, otherwise delete it. Its placeholder line is never sent",
+      "to the judge as policy.",
       "",
       "Crysk refuses to review while that marker is present. It is not " +
         "pedantry: the file above is non-empty, so without the marker a " +

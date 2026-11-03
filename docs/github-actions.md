@@ -31,8 +31,10 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    ownership rule a newcomer would break. `npx -y crysk init` scaffolds one when the repo has no
    instructions yet: replace its placeholder lines and delete the `human-attention-required` marker
    line. A repo that already has `.crysk/gotchas.md` can keep it: without a `REVIEW.md`, Crysk reads
-   that instead. The file is injected into every hunter's prompt as facts about the codebase; it does
-   not yet filter findings. With neither file the review runs on the default guidance; a file that exists
+   that instead. The hunters and the refuter read the file as facts about the codebase; with
+   `materiality_gate` on, the materiality judge also applies its "Not blocking here" rules to blocking
+   findings, only for style, naming, test hygiene, generated code and dev scripts (never to logic,
+   correctness, data, contract or security findings). With neither file the review runs on the default guidance; a file that exists
    but is empty or still the scaffold fails the run with [`PRH-GOTCHAS-MISSING`](#prh-gotchas-missing).
 4. **Commit the file to the default branch.** Comment-triggered runs read the base branch, so the file
    must be there, not only on your feature branch.

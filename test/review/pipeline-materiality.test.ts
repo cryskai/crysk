@@ -16,6 +16,10 @@ import {
   type PipelineInput,
   runPipeline,
 } from "#review/pipeline";
+import {
+  GOTCHAS_PLACEHOLDER_MARKER,
+  REVIEW_MD_TEMPLATE,
+} from "#review/preflight";
 import type { StepResult, StepRunner, StepSpec } from "#review/step-runner";
 import { DefaultTransportRegistry } from "../../src/transport-registry";
 import type { SessionUsage } from "../../src/usage";
@@ -719,6 +723,59 @@ describe("materiality gate: the spawned step (S3, S9)", () => {
 
     expect(judgeSteps(runner)[0]?.prompt).toContain(MATERIALITY_TITLE_FALLBACK);
     expect(MATERIALITY_TITLE_FALLBACK).toBe("(title unavailable)");
+  });
+
+  // review-md S5: the owner's instructions reach the judge when the repo has
+  // a file, and a repo without one sends the measured prompt unchanged.
+  test("the repository's instructions reach the judge in their own block", async () => {
+    const input = await makeInput(GATE_ON);
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("material")),
+    });
+    await runPipeline(input, { runner });
+    const prompt = judgeSteps(runner)[0]?.prompt ?? "";
+    expect(prompt).toContain(`<review_instructions ${NONCE}>`);
+    expect(prompt).toContain(
+      "G-01: seeded fixture values carry unit contracts.",
+    );
+  });
+
+  test("no instructions file: no instructions block reaches the judge", async () => {
+    const input = await makeInput({ ...GATE_ON, gotchasPath: undefined });
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("material")),
+    });
+    await runPipeline(input, { runner });
+    const prompt = judgeSteps(runner)[0]?.prompt ?? "";
+    expect(prompt).toContain(`<review_comment ${NONCE}>`);
+    expect(prompt).not.toContain("review_instructions");
+  });
+
+  // PR #464 F001: a REVIEW.md filled in by following init's steps can keep the
+  // template's "Not blocking here" placeholder, which names the demotable
+  // classes. The judge must never read it as the owner's policy.
+  test("template placeholder bullets in a filled REVIEW.md never reach the judge", async () => {
+    const input = await makeInput(GATE_ON);
+    const real = "- billing: amounts are integer cents everywhere";
+    const filled = REVIEW_MD_TEMPLATE.split("\n")
+      .filter((l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER))
+      .concat(real)
+      .join("\n");
+    await Bun.write(input.gotchasPath ?? "", filled);
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("material")),
+    });
+    await runPipeline(input, { runner });
+    const prompt = judgeSteps(runner)[0]?.prompt ?? "";
+    expect(prompt).toContain(`<review_instructions ${NONCE}>`);
+    expect(prompt).toContain(real);
+    // The heading stays (a real line under it needs it); the placeholder goes.
+    expect(prompt).toContain("## Not blocking here");
+    expect(prompt).not.toContain("<style, naming");
+    expect(prompt).not.toContain("<subsystem>");
   });
 
   test("a path that walks out of the worktree is judged without a window", async () => {

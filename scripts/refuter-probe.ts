@@ -243,8 +243,9 @@ async function runOnce(arm: ProbeArm, replicate: number): Promise<Attempt> {
       hopBudget: 4,
       parityTriggerPaths: [],
       // Priors template into HUNTER bodies only, and this run's hunter is a
-      // fake that is never spawned; the refuter body carries no
-      // {{PRIORS}}/{{GOTCHAS}} anchors at all. Empty keeps that honest.
+      // fake that is never spawned. The refuter body anchors {{GOTCHAS}} (the
+      // repository facts, rendered from fixture.gotchasPath) but no
+      // {{PRIORS}}, so empty priors keep the probe honest.
       suspicionPriors: [],
       stepTimeoutMs: 10 * 60 * 1000,
       spec: PROBE_SPEC,

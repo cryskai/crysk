@@ -182,6 +182,7 @@ import {
   agentFilePath,
   gotchasUnusableReason,
   NO_REVIEW_INSTRUCTIONS,
+  withoutScaffoldLines,
 } from "./preflight";
 import {
   capScoutLeads,
@@ -1262,6 +1263,12 @@ interface RunState {
   // Optional only because the pipeline ceiling can fire before `execute` got
   // that far — a run that never selected a nonce also never composed a prompt.
   boundaryNonce?: string;
+  // The review-instructions text the hunters got (REVIEW.md, gotchas, or
+  // NO_REVIEW_INSTRUCTIONS), set beside the nonce. The refuter and verifier
+  // bodies render it into their `{{GOTCHAS}}` anchor as repository facts
+  // (odd/tasks/review-md.md S5): owner context for the counterexample hunt,
+  // never a posting policy — that belongs to the materiality judge.
+  reviewInstructions?: string;
   parityFired: boolean;
   hunterCount: number;
   hunterFailures: number;
@@ -1746,6 +1753,7 @@ async function execute(
       renderPriorsBlock(input.suspicionPriors),
     ]);
   state.boundaryNonce = boundaryNonce;
+  state.reviewInstructions = gotchas;
 
   const stepsDir = path.join(input.runDir, "steps");
 
@@ -2447,10 +2455,18 @@ async function runRefuter(
   // One shared body, written once: every step is the same agent asked about a
   // different finding.
   const systemPromptPath = path.join(options.stepsDir, "refuter.system.md");
-  // The refuter body carries no {{PRIORS}}/{{GOTCHAS}} anchors — written
-  // as-is under the preamble, same audit-artifact role as the hunter system
-  // prompts.
-  await writeSystemPrompt(systemPromptPath, agent.body);
+  // The refuter body may anchor `{{GOTCHAS}}` (the bundled one does): it is
+  // rendered with the same instructions text and nonce the hunters got. It
+  // carries no `{{PRIORS}}` — suspicion priors steer the hunt, not a verdict —
+  // so priors are passed empty. A body without anchors is written unchanged.
+  await writeSystemPrompt(
+    systemPromptPath,
+    renderAgentBody(agent.body, {
+      priors: [],
+      gotchas: state.reviewInstructions ?? NO_REVIEW_INSTRUCTIONS,
+      nonce: options.nonce,
+    }),
+  );
   const model = resolveModel(
     input,
     options.agent.model,
@@ -2673,7 +2689,15 @@ async function runVerify(
     agentPromptPath(input, options.agent.file),
   );
   const systemPromptPath = path.join(options.stepsDir, "verifier.system.md");
-  await writeSystemPrompt(systemPromptPath, agent.body);
+  // Same body as the refuter, so the same render (see runRefuter).
+  await writeSystemPrompt(
+    systemPromptPath,
+    renderAgentBody(agent.body, {
+      priors: [],
+      gotchas: state.reviewInstructions ?? NO_REVIEW_INSTRUCTIONS,
+      nonce: options.nonce,
+    }),
+  );
   const model = resolveModel(
     input,
     options.agent.model,
@@ -3658,6 +3682,13 @@ async function runMaterialityJudge(
       : MATERIALITY_TITLE_FALLBACK;
   const effort = defaultEffortForRole("other");
   const specs: Array<{ id: string; spec: StepSpec; meta: StepMeta }> = [];
+  // The owner's file as posting policy: placeholder lines from our template
+  // never reach the judge (withoutScaffoldLines, PR #464 F001).
+  const ownerPolicy =
+    state.reviewInstructions === undefined ||
+    state.reviewInstructions === NO_REVIEW_INSTRUCTIONS
+      ? ""
+      : withoutScaffoldLines(state.reviewInstructions);
   for (const finding of judge) {
     const prompt = renderMaterialityPrompt(
       {
@@ -3669,6 +3700,9 @@ async function runMaterialityJudge(
           finding.path,
           finding.line,
         ),
+        // No file, or nothing left once scaffold lines are dropped: no
+        // block, so the prompt stays the measured one.
+        ...(ownerPolicy.trim() === "" ? {} : { instructions: ownerPolicy }),
       },
       nonce,
     );

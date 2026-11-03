@@ -3667,6 +3667,8 @@ describe("C4 runtime-safety preamble", () => {
     for (const file of written) {
       const text = await Bun.file(path.join(stepsDir, file)).text();
       expect(text.startsWith(RUNTIME_PREAMBLE)).toBe(true);
+      // An anchor left unrendered reaches the model as literal template text.
+      expect(text).not.toContain("{{");
     }
   });
 
@@ -3718,6 +3720,56 @@ describe("C4 runtime-safety preamble", () => {
     ).text();
     expect(system).toContain("<gotchas d0d0cafe>");
     expect(system).toContain("<priors d0d0cafe>");
+  });
+
+  // review-md S5: the refuter gets the repository's instructions as facts,
+  // through the same `{{GOTCHAS}}` anchor and nonce the hunters use. A refuter
+  // body without the anchor (a lab prompt set) is written unchanged.
+  async function runRefuterWithBody(body: string) {
+    const agentsDir = await makeAgentsDir();
+    await Bun.write(
+      path.join(agentsDir, "review-refuter.md"),
+      [
+        "---",
+        "name: review-refuter",
+        "description: detached refuter",
+        "model: sonnet",
+        "tools: Read, Grep, Glob",
+        "---",
+        "",
+        body,
+        "",
+      ].join("\n"),
+    );
+    const input = await makeInput({ boundaryNonce: "d0d0cafe", agentsDir });
+    const runner = new FakeStepRunner({
+      "hunter-reliability": (spec) => ok(spec, { findings: [c4Blocker("R1")] }),
+      "hunter-resilience": (spec) => ok(spec, emptyDraft()),
+      refuter: (spec) =>
+        ok(spec, {
+          results: [
+            { finding_id: "F001", outcome: "corroborated", proof_refs: [] },
+          ],
+        }),
+    });
+    await runPipeline(input, { runner });
+    return Bun.file(
+      path.join(input.runDir, "steps", "refuter.system.md"),
+    ).text();
+  }
+
+  test("the refuter's {{GOTCHAS}} anchor carries the instructions in a nonced block", async () => {
+    const system = await runRefuterWithBody(
+      "## Repository facts\n\n{{GOTCHAS}}\n\nJudge the claim.",
+    );
+    expect(system).toContain(`<gotchas d0d0cafe>\n${GOTCHAS}`);
+    expect(system).not.toContain("{{GOTCHAS}}");
+  });
+
+  test("a refuter body without the anchor gets no instructions block", async () => {
+    const system = await runRefuterWithBody("Refute or corroborate.");
+    expect(system).not.toContain("<gotchas");
+    expect(system).toContain("Refute or corroborate.");
   });
 
   test("O-3.4 — the run's nonce is recorded in pipeline.json", async () => {
