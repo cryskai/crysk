@@ -273,7 +273,7 @@ describe("writeMcpConfig / validateGotchas (P2.2)", () => {
     });
     expect(
       (error as CliError).message.startsWith(
-        `gotchas file is still the scaffold nobody filled in: ${gotchasPath}`,
+        `review instructions file is still the scaffold nobody filled in: ${gotchasPath}`,
       ),
     ).toBe(true);
   });

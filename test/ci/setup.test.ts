@@ -1059,20 +1059,21 @@ describe("ci init next steps (CLI)", () => {
   });
 });
 
-// The first-PR walkthrough: a user who ran only `setup --ci` got a red PR
-// (PRH-GOTCHAS-MISSING) because nothing printed told them to run `init` and
-// write the gotchas. The init steps print only while the gotchas file is
-// absent or still the scaffold; a repo with real gotchas gets none of them.
-describe("ci init gotchas steps (CLI)", () => {
+// The first-PR walkthrough. Review instructions are optional (S3), so a repo
+// with none is recommended a REVIEW.md, not told it must write one. A file that
+// exists but is empty or still the scaffold turns the first PR red
+// (PRH-GOTCHAS-MISSING), so that one gets the fix steps; real instructions get
+// nothing.
+describe("ci init review-instructions steps (CLI)", () => {
   async function runInit(
-    gotchas: string | undefined,
+    files: Record<string, string> = {},
   ): Promise<{ output: string; code: number }> {
     const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-gotchas-"));
     try {
       Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
-      if (gotchas !== undefined) {
-        await mkdir(path.join(dir, ".crysk"), { recursive: true });
-        await writeFile(path.join(dir, ".crysk", "gotchas.md"), gotchas);
+      for (const [rel, contents] of Object.entries(files)) {
+        await mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+        await writeFile(path.join(dir, rel), contents);
       }
       const result = Bun.spawnSync(
         [
@@ -1092,39 +1093,52 @@ describe("ci init gotchas steps (CLI)", () => {
     }
   }
 
-  test("a repo without .crysk/gotchas.md is told to run init, write gotchas, and commit .crysk/ before opening the PR", async () => {
-    const { output, code } = await runInit(undefined);
+  test("a repo with no instructions file is recommended a REVIEW.md, as optional, before opening the PR", async () => {
+    const { output, code } = await runInit();
     expect(code).toBe(0);
-    expect(output).toContain("npx -y crysk init");
-    expect(output).toContain("human-attention-required");
-    expect(output).toContain("Commit .crysk/ to the default branch");
-    expect(output.indexOf("npx -y crysk init")).toBeLessThan(
+    expect(output).toContain("Optional, recommended: add a REVIEW.md");
+    expect(output).not.toContain("human-attention-required");
+    expect(output.indexOf("add a REVIEW.md")).toBeLessThan(
       output.indexOf("Open a pull request"),
     );
   });
 
-  test("a scaffold still carrying the marker gets the same init steps", async () => {
-    const { output } = await runInit(
-      "<!-- human-attention-required: delete -->\n# Repo gotchas\n",
+  test("a scaffold still carrying the marker gets the fix steps for that file", async () => {
+    const { output } = await runInit({
+      ".crysk/gotchas.md":
+        "<!-- human-attention-required: delete -->\n# Repo gotchas\n",
+    });
+    expect(output).toContain(
+      "Replace the placeholder lines in .crysk/gotchas.md",
     );
-    expect(output).toContain("npx -y crysk init");
     expect(output).toContain("human-attention-required");
-    expect(output).toContain("Commit .crysk/ to the default branch");
+    expect(output).toContain("Commit .crysk/gotchas.md to the default branch");
   });
 
-  test("a scaffold whose marker line was deleted gets the same init steps", async () => {
-    const { output } = await runInit(
-      "# Repo gotchas\n\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n",
-    );
-    expect(output).toContain("npx -y crysk init");
-    expect(output).toContain("Commit .crysk/ to the default branch");
+  test("a REVIEW.md scaffold whose marker line was deleted gets the fix steps naming REVIEW.md", async () => {
+    const { output } = await runInit({
+      "REVIEW.md":
+        "# Review instructions\n\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n",
+    });
+    expect(output).toContain("Replace the placeholder lines in REVIEW.md");
+    expect(output).toContain("Commit REVIEW.md to the default branch");
   });
 
-  test("real gotchas without the marker print no init steps, and still name the required check", async () => {
-    const { output } = await runInit(
-      "- auth: the token is refreshed by the proxy, not here\n",
-    );
-    expect(output).not.toContain("npx -y crysk init");
+  test("an empty REVIEW.md gets the fix steps, never falling through to a real gotchas file", async () => {
+    const { output } = await runInit({
+      "REVIEW.md": "",
+      ".crysk/gotchas.md": "- auth: the token is refreshed by the proxy\n",
+    });
+    expect(output).toContain("Replace the placeholder lines in REVIEW.md");
+  });
+
+  test("real gotchas without the marker print no instruction steps, and still name the required check", async () => {
+    const { output } = await runInit({
+      ".crysk/gotchas.md":
+        "- auth: the token is refreshed by the proxy, not here\n",
+    });
+    expect(output).not.toContain("Replace the placeholder lines");
+    expect(output).not.toContain("add a REVIEW.md");
     expect(output).not.toContain("human-attention-required");
     expect(output).toContain("require the `crysk` status check");
     expect(output).toContain("GitHub Free");
@@ -1136,7 +1150,7 @@ describe("ci init gotchas steps (CLI)", () => {
   });
 
   test("every repo is told to require the crysk status check, not the review job", async () => {
-    const { output } = await runInit(undefined);
+    const { output } = await runInit();
     expect(output).toContain(
       "require the `crysk` status check (not the `review` job; the legacy `pr-hero` status is still posted for one version, so an existing rule on `pr-hero` keeps working)",
     );
