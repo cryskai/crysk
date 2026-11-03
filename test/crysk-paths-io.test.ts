@@ -11,6 +11,7 @@ import path from "node:path";
 import { appendIgnorePatterns, materializeCiOpenCodeData } from "#ci/setup";
 import { loadGlobalConfigLayer } from "#config/config";
 import { gotchasUnusableReason } from "#review/preflight";
+import { NO_INSTRUCTIONS_NOTICE } from "#review/run";
 import { readLocalIgnoreRules } from "../src/ignore-read";
 
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
@@ -85,6 +86,41 @@ describe("init writes into the resolved repo dir", () => {
     ).toBe("{}\n");
     expect(existsSync(path.join(repo, ".crysk"))).toBe(false);
     expect(r.output).toContain(".prhero/");
+  });
+});
+
+// S3 + PR #463 F002: a repo with neither REVIEW.md nor a gotchas file is
+// reviewed, and the run says so — the absence must never look like a normal run.
+describe("review with no instructions file", () => {
+  test("runs (dry run, exit 0) and prints the no-instructions notice", async () => {
+    const repo = await makeRepo();
+    const home = path.join(scratch, "home");
+    await mkdir(home);
+    const git = (...args: string[]) =>
+      Bun.spawnSync(["git", ...args], { cwd: repo });
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    git("checkout", "-q", "-b", "main");
+    await writeFile(path.join(repo, "a.ts"), "export const a = 1;\n");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    git("checkout", "-q", "-b", "feat");
+    await writeFile(path.join(repo, "a.ts"), "export const a = 2;\n");
+    git("commit", "-qam", "change");
+    const r = runCli(
+      [
+        "review",
+        "--base",
+        "main",
+        "--dry-run",
+        "--out",
+        path.join(scratch, "out"),
+      ],
+      repo,
+      home,
+    );
+    expect(r.code).toBe(0);
+    expect(r.output).toContain(NO_INSTRUCTIONS_NOTICE);
   });
 });
 
