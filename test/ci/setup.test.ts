@@ -1109,7 +1109,7 @@ describe("ci init review-instructions steps (CLI)", () => {
         "<!-- human-attention-required: delete -->\n# Repo gotchas\n",
     });
     expect(output).toContain(
-      "Replace the placeholder lines in .crysk/gotchas.md",
+      "Write real facts about this repository into .crysk/gotchas.md",
     );
     expect(output).toContain("human-attention-required");
     expect(output).toContain("Commit .crysk/gotchas.md to the default branch");
@@ -1120,7 +1120,10 @@ describe("ci init review-instructions steps (CLI)", () => {
       "REVIEW.md":
         "# Review instructions\n\n- <subsystem>: <the naming/ownership rule a newcomer would violate>\n",
     });
-    expect(output).toContain("Replace the placeholder lines in REVIEW.md");
+    expect(output).toContain(
+      "Write real facts about this repository into REVIEW.md",
+    );
+    expect(output).toContain("or delete REVIEW.md");
     expect(output).toContain("Commit REVIEW.md to the default branch");
   });
 
@@ -1129,7 +1132,9 @@ describe("ci init review-instructions steps (CLI)", () => {
       "REVIEW.md": "",
       ".crysk/gotchas.md": "- auth: the token is refreshed by the proxy\n",
     });
-    expect(output).toContain("Replace the placeholder lines in REVIEW.md");
+    expect(output).toContain(
+      "Write real facts about this repository into REVIEW.md",
+    );
   });
 
   test("real gotchas without the marker print no instruction steps, and still name the required check", async () => {
@@ -1137,7 +1142,7 @@ describe("ci init review-instructions steps (CLI)", () => {
       ".crysk/gotchas.md":
         "- auth: the token is refreshed by the proxy, not here\n",
     });
-    expect(output).not.toContain("Replace the placeholder lines");
+    expect(output).not.toContain("Write real facts about this repository");
     expect(output).not.toContain("add a REVIEW.md");
     expect(output).not.toContain("human-attention-required");
     expect(output).toContain("require the `crysk` status check");

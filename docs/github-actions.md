@@ -359,7 +359,7 @@ credentials.
 So the generated workflow skips a fork's `pull_request` runs: they could never authenticate. To review
 a fork pull request, a user with write access comments `/crysk review` on it. That run is an
 `issue_comment` run in the base repository's context, with its secrets: the action fetches the fork's
-head commit and reviews it, while config and gotchas still come from the base checkout. A comment from
+head commit and reviews it, while config and review instructions (`REVIEW.md` or `.crysk/gotchas.md`) still come from the base checkout. A comment from
 a user without write access is refused, so nobody outside the repository can spend its credentials.
 If GitHub's API fails while checking that access (a 5xx, a rate limit, a timeout), the action retries
 once and then fails the run red, asking for the comment again: it never reviews unchecked, and never

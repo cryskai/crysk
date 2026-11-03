@@ -358,7 +358,7 @@ export async function ciSetupCommand(
     const text = await Bun.file(instructions.path).text();
     if (gotchasUnusableReason(text) !== undefined) {
       log(
-        `${next()} Replace the placeholder lines in ${label} with real facts about this repository, and delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line if it is there (or delete ${label}): Crysk refuses to review an empty or scaffold file`,
+        `${next()} Write real facts about this repository into ${label} (replace any placeholder lines and delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line if it is there), or delete ${label}: Crysk refuses to review an empty or scaffold file`,
       );
       log(
         `${next()} Commit ${label} to the default branch (comment-triggered runs read the base branch)`,

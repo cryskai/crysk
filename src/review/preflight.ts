@@ -315,7 +315,7 @@ Usage:
   crysk [options]          Open interactive terminal user interface (TTY)
   crysk menu [options]     Open interactive terminal user interface
   crysk review [options]   Review a branch (zero flags inside a configured repo)
-  crysk init [options]     Scaffold <repo>/.crysk/ (config.json + gotchas.md)
+  crysk init [options]     Scaffold <repo>/.crysk/config.json, and a root REVIEW.md when the repo has no review instructions
   crysk setup [options]    Run interactive onboarding wizard
   crysk setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
                              Scaffold .github/workflows/crysk.yml (or update
@@ -501,8 +501,10 @@ Options:
                       deferred. Not required — deferred is a tag plus
                       reasoning; the coding agent decides whether an issue
                       exists
-  --gotchas <file>    Repo gotchas file (default: <repo>/.crysk/gotchas.md);
-                      supply it from outside to review a tree you cannot dirty
+  --gotchas <file>    Review instructions file, overriding <repo>/REVIEW.md and
+                      <repo>/.crysk/gotchas.md (default: REVIEW.md, else
+                      gotchas.md, else none); supply it from outside to review
+                      a tree you cannot dirty
   --config <file>     Local config (default: <repo>/.crysk/config.json) with
                       agents_dir, default_base, parity_trigger_paths and
                       suspicion_priors, optional summary settings, and
@@ -3666,7 +3668,8 @@ export function gotchasErrorMessage(
       "placeholder text, and return a clean-LOOKING result.",
       "",
       "Replace the placeholder lines with facts about THIS repo, and delete",
-      "the marker line at the top if it is still there.",
+      "the marker line at the top if it is still there — or delete the file",
+      "to review with the default guidance only.",
     ].join("\n");
   }
   if (present) {

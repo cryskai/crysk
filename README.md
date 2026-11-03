@@ -315,6 +315,12 @@ hunter nothing, which buys a full-price review that reports clean. Replace the `
 with facts about your repo, then delete the marker line. Reviewing a tree you cannot write to?
 Supply a file from outside with `--gotchas <file>` (and `--config <file>`); it overrides both.
 
+**Where it is read from.** Local `crysk review` reads the working tree. `crysk review --pr` and the
+watcher read the operator checkout (`--repo`), never the PR worktree. In GitHub Actions it is the
+workflow's checkout: a `pull_request` run reads the PR merged onto its base, so a PR that edits the
+file is reviewed with its own edit; a `/crysk review` comment run on the generated workflow reads the
+default branch.
+
 ## Commands
 
 | Command | What it does |
@@ -447,7 +453,7 @@ plain JSON you may tune directly:
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `repos[].path` | — | Operator checkout of a repo to watch (its `.crysk/` config and gotchas are used, exactly like `review --pr`). Managed by `watch add`/`remove`. |
+| `repos[].path` | — | Operator checkout of a repo to watch (its `.crysk/` config and review instructions are used, exactly like `review --pr`). Managed by `watch add`/`remove`. |
 | `repos[].post` | `false` | Pass `--post` to the spawned review — publish each result as the PR's one marked comment. Managed by `watch add [--post]`. |
 | `repos[].on_push` | `false` | Re-review the repo's PRs on every new push. Default: one review per PR — see below. Managed by `watch add [--on-push]`. |
 | `daily_cap` | `5` | Global max reviews launched per local calendar day, across all repos. `0` pauses launching entirely. |
