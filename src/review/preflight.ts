@@ -3471,8 +3471,9 @@ verbatim into every hunter's system prompt, so keep them short and true.
 // REVIEW.md, the file name Claude Code Review reads. Same marker, same
 // `<subsystem>` placeholder lines as GOTCHAS_TEMPLATE, so the gate below
 // recognises it by both signals. The facts sections reach the hunters and the
-// refuter; the two policy sections are read by the materiality judge, which
-// only runs with `materiality_gate` on and only on blocking findings (S5).
+// refuter; the "Not blocking here" section is read by the materiality judge,
+// which only runs with `materiality_gate` on, only on blocking findings, and
+// only for the bounded classes OWNER_INSTRUCTIONS_RULE names (S5).
 export const REVIEW_MD_TEMPLATE = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: delete THIS line once the instructions below are real — Crysk refuses to review while it is here. -->
 # Review instructions
 
@@ -3488,16 +3489,13 @@ file verbatim to every hunter and to the refuter, so keep it short and true.
 - <subsystem>: <the invariant that is enforced somewhere the diff does not show>
 - <subsystem>: <the naming/ownership rule a newcomer would violate>
 
-## What counts as blocking here
+## Not blocking here
 
-- <the classes of finding that must block a merge in this repository>
+- <style, naming, test-hygiene, generated-code or dev-script findings this repository does not want blocking or posted, and why>
 
-## Do not report
-
-- <a class of finding this repository does not want posted, and why>
-
-(The two sections above are applied by the materiality judge, which runs only
-with \`materiality_gate\` on, and only to blocking findings.)
+(This section is applied by the materiality judge, which runs only with
+\`materiality_gate\` on, only to blocking findings, and only to those classes:
+it never demotes a logic, correctness, data, contract or security finding.)
 `;
 
 // The fallback `pr-hero setup` wrote into `.crysk/gotchas.md` before setup

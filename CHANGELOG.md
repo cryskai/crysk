@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It uses the file name Claude Code Review reads. When both exist, `REVIEW.md` wins, and the run and
   `crysk doctor` say `gotchas.md ignored: REVIEW.md takes precedence`. An empty `REVIEW.md` is refused; it
   never falls through to `gotchas.md`. The hunters and the refuter read it as facts about the codebase. With
-  `materiality_gate` on, the materiality judge also applies its "what counts as blocking here" and "do not
-  report" sections to blocking findings; findings about security, credentials or data loss are never
-  demoted. `crysk init` and `crysk setup` now scaffold `REVIEW.md` when
+  `materiality_gate` on, the materiality judge also applies its "Not blocking here" section to blocking
+  findings, only for style, naming, test hygiene, generated code and dev scripts; it never demotes a logic,
+  correctness, data, contract or security finding, even when the file says nothing is blocking. `crysk init` and `crysk setup` now scaffold `REVIEW.md` when
   the repo has no review instructions, and never write one beside an existing `gotchas.md`.
 
 ### Changed
