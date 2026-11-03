@@ -49,8 +49,9 @@ import type { estimateCost } from "#review/report";
 import {
   type LoadedRunConfig,
   loadRunConfig,
-  resolveGotchasPath,
   resolvePromptSet,
+  resolveReviewInstructions,
+  shadowedGotchasNotice,
 } from "#review/run";
 import type { SizeGateConfig } from "#review/size-gate";
 import type { ReviewSpec } from "#review/spec";
@@ -142,7 +143,8 @@ export interface ResolvedPrPromptSet {
   spec: ReviewSpec;
   agentFiles: Map<string, ParsedAgent>;
   promptSet: PromptSetIdentity;
-  gotchasPath: string;
+  // Undefined when the repo has no REVIEW.md or gotchas file (S3).
+  gotchasPath: string | undefined;
 }
 
 // Step 1's second half: the CI budget ceiling (+ its notices), then the
@@ -216,10 +218,15 @@ export async function resolvePrPromptSetAndBudget(params: {
     params.options,
     params.loaded,
   );
-  const gotchasPath = resolveGotchasPath(
+  const instructions = resolveReviewInstructions(
     params.options.gotchas,
     params.operatorRoot,
   );
+  if (instructions.shadowed !== undefined) {
+    const notice = shadowedGotchasNotice(instructions.shadowed);
+    log(params.isCi ? formatWorkflowCommand("notice", notice) : notice);
+  }
+  const gotchasPath = instructions.path;
   return {
     ciBudgetCeiling,
     ciSizeLimits,

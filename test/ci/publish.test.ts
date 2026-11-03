@@ -921,7 +921,7 @@ describe("decidePublication — the pure table", () => {
         expect(plan.rendered.code).toBe("PRH-GOTCHAS-MISSING");
         expect(plan.rendered.owner).toBe("config");
         expect(plan.rendered.summary.join("\n")).toContain(
-          "Your configuration: .crysk/gotchas.md is missing or still the scaffold",
+          "Your configuration: The review instructions file (REVIEW.md or .crysk/gotchas.md) is empty or still the scaffold",
         );
         expect(plan.status?.state).toBe("error");
         expect(plan.status?.description).toStartWith("PRH-GOTCHAS-MISSING");

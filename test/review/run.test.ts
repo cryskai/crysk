@@ -18,9 +18,9 @@ import {
   computeDiffStatAndSizeGate,
   EMPTY_MCP_CONFIG,
   prepareRunnerForRoute,
-  resolveGotchasPath,
   resolveParityFires,
   resolvePromptSet,
+  resolveReviewInstructions,
   selectActiveHunters,
   validateGotchas,
   writeMcpConfig,
@@ -44,25 +44,69 @@ describe("assertDistinctRange", () => {
   });
 });
 
-describe("resolveGotchasPath", () => {
-  test("--gotchas flag given: path.resolve() of the flag, root ignored", () => {
-    expect(resolveGotchasPath("./my-gotchas.md", "/repo/root")).toBe(
-      path.resolve("./my-gotchas.md"),
-    );
+describe("resolveReviewInstructions", () => {
+  const present =
+    (...paths: string[]) =>
+    (p: string) =>
+      paths.includes(p);
+
+  test("--gotchas flag given: path.resolve() of the flag, root and files ignored", () => {
+    expect(
+      resolveReviewInstructions(
+        "./my-gotchas.md",
+        "/repo/root",
+        present("/repo/root/REVIEW.md"),
+      ),
+    ).toEqual({ path: path.resolve("./my-gotchas.md") });
   });
 
-  test("no flag: <root>/.crysk/gotchas.md", () => {
-    expect(resolveGotchasPath(undefined, "/repo/root")).toBe(
-      path.join("/repo/root", ".crysk", "gotchas.md"),
-    );
+  test("REVIEW.md at the root wins over .crysk/gotchas.md, and names what it shadows", () => {
+    expect(
+      resolveReviewInstructions(
+        undefined,
+        "/repo/root",
+        present("/repo/root/REVIEW.md", "/repo/root/.crysk/gotchas.md"),
+      ),
+    ).toEqual({
+      path: "/repo/root/REVIEW.md",
+      shadowed: "/repo/root/.crysk/gotchas.md",
+    });
   });
 
-  test("works for each of the three roots this replaces (repoRoot / operatorRoot / repoDir)", () => {
-    for (const root of ["/repo/root", "/operator/root", "/some/repo/dir"]) {
-      expect(resolveGotchasPath(undefined, root)).toBe(
-        path.join(root, ".crysk", "gotchas.md"),
-      );
-    }
+  test("REVIEW.md alone: no shadowed file", () => {
+    expect(
+      resolveReviewInstructions(
+        undefined,
+        "/repo/root",
+        present("/repo/root/REVIEW.md"),
+      ),
+    ).toEqual({ path: "/repo/root/REVIEW.md" });
+  });
+
+  test("no REVIEW.md: falls back to .crysk/gotchas.md", () => {
+    expect(
+      resolveReviewInstructions(
+        undefined,
+        "/repo/root",
+        present("/repo/root/.crysk/gotchas.md"),
+      ),
+    ).toEqual({ path: "/repo/root/.crysk/gotchas.md" });
+  });
+
+  test("no REVIEW.md: falls back to the legacy .prhero/gotchas.md", () => {
+    expect(
+      resolveReviewInstructions(
+        undefined,
+        "/repo/root",
+        present("/repo/root/.prhero", "/repo/root/.prhero/gotchas.md"),
+      ),
+    ).toEqual({ path: "/repo/root/.prhero/gotchas.md" });
+  });
+
+  test("neither file: no path, so the review runs without instructions", () => {
+    expect(
+      resolveReviewInstructions(undefined, "/repo/root", present()),
+    ).toEqual({ path: undefined });
   });
 });
 
@@ -174,6 +218,10 @@ describe("writeMcpConfig / validateGotchas (P2.2)", () => {
     const gotchasPath = path.join(dir, "gotchas.md");
     await Bun.write(gotchasPath, "This repo always squashes on merge.");
     await expect(validateGotchas(gotchasPath)).resolves.toBeUndefined();
+  });
+
+  test("validateGotchas resolves when no instructions file exists at all (S3: optional)", async () => {
+    await expect(validateGotchas(undefined)).resolves.toBeUndefined();
   });
 
   test("validateGotchas throws CliError for a missing file (empty)", async () => {

@@ -25,13 +25,15 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
    `test/packaging.test.ts` asserts each file against its own generator options; it does **not** assert
    the two are byte-identical. The template wires quoted `routing` / `opencode-auth` inputs; empty
    values are absent, so Claude-only repos keep those lines.
-3. **Write the repository gotchas.** Run `npx -y crysk init` in a clone of your repo: it creates
-   `.crysk/config.json` and `.crysk/gotchas.md`. Replace the placeholder lines in `gotchas.md` with real
-   facts about your repository (a deliberate oddity that looks like a bug, an invariant enforced outside
-   the diff, an ownership rule a newcomer would break), then delete the `human-attention-required` marker
-   line. Gotchas are injected into every hunter's prompt; without them the run fails
-   [`PRH-GOTCHAS-MISSING`](#prh-gotchas-missing).
-4. **Commit `.crysk/` to the default branch.** Comment-triggered runs read the base branch, so the file
+3. **Write the repository review instructions (optional, recommended).** Put a `REVIEW.md` at the
+   repository root, the same file Claude Code Review reads: what counts as a failure here, what not to
+   report, and the facts a reviewer cannot infer from the diff (a deliberate oddity that looks like a bug,
+   an invariant enforced outside the diff, an ownership rule a newcomer would break). Without a
+   `REVIEW.md`, Crysk reads `.crysk/gotchas.md` (`npx -y crysk init` scaffolds one: replace its
+   placeholder lines and delete the `human-attention-required` marker line). The file is injected into
+   every hunter's prompt. With neither file the review runs on the default guidance; a file that exists
+   but is empty or still the scaffold fails the run with [`PRH-GOTCHAS-MISSING`](#prh-gotchas-missing).
+4. **Commit the file to the default branch.** Comment-triggered runs read the base branch, so the file
    must be there, not only on your feature branch.
 5. **Require the check.** In branch protection, require the `crysk` status check (the gate). The legacy `pr-hero` status is no longer posted, so a repository that still requires it is blocked until the rule moves to `crysk`. Do not require the
    `review` job, which stays green even when it finds blocking issues. A private repository on GitHub Free
@@ -1302,13 +1304,13 @@ crysk review --pr {pr} --dry-run
 
 **Owner:** your configuration
 
-**What:** .crysk/gotchas.md is missing or still the scaffold
+**What:** the review instructions file (REVIEW.md or .crysk/gotchas.md) is empty or still the scaffold
 
-**Why:** reviews need real repository facts to be accurate
+**Why:** a file that exists must hold real repository rules; with no file at all the review runs on the default guidance
 
 **Fix:**
 
-Run `npx -y crysk init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).
+Write real rules and facts about this repository into the file (REVIEW.md at the repository root, or .crysk/gotchas.md), delete the scaffold marker line if it is there, and commit it to the base branch (comment-triggered runs read the base branch). Or delete the file to review with the default guidance only.
 
 ### PRH-CONFIG-INVALID
 

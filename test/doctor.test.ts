@@ -204,11 +204,13 @@ describe("doctor tri-state evaluation", () => {
       expect(agentsCheck?.hint).toContain("bundled default");
     });
 
-    test("missing or empty gotchas.md in current repo is blocking", async () => {
+    test("an empty gotchas.md in the current repo is blocking", async () => {
       const report = await runDoctor({
         cwd: "/repo",
         home: "/home/user",
-        exists: (p) => p === "/home/user/.crysk/setup.json",
+        exists: (p) =>
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.crysk/setup.json",
         readFile: () => "   ", // empty
         checkToolsOptions: {
           which: () => "/bin/tool",
@@ -217,10 +219,28 @@ describe("doctor tri-state evaluation", () => {
         },
       });
 
-      expect(report.overall).toBe("blocking");
-      expect(report.exitCode).toBe(1);
       const gotchasCheck = report.checks.find((c) => c.name === "gotchas");
       expect(gotchasCheck?.severity).toBe("blocking");
+      expect(gotchasCheck?.message).toContain(".crysk/gotchas.md");
+    });
+
+    test("an empty REVIEW.md is blocking, and doctor names that file", async () => {
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) =>
+          p === "/repo/REVIEW.md" || p === "/home/user/.crysk/setup.json",
+        readFile: () => "",
+        checkToolsOptions: {
+          which: () => "/bin/tool",
+          exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      const gotchasCheck = report.checks.find((c) => c.name === "gotchas");
+      expect(gotchasCheck?.severity).toBe("blocking");
+      expect(gotchasCheck?.message).toContain("REVIEW.md");
     });
 
     // Without this, `doctor` and `review` disagree about the same file:
@@ -258,6 +278,50 @@ describe("doctor tri-state evaluation", () => {
   });
 
   describe("degraded cases (exitCode: 0 with hints)", () => {
+    // S3: no REVIEW.md and no gotchas file is an opt-out the review honours, so
+    // doctor must not call it blocking — that would be the doctor/review
+    // disagreement the scaffold test above guards against, the other way round.
+    test("no REVIEW.md and no gotchas.md is degraded, not blocking", async () => {
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) => p === "/home/user/.crysk/setup.json",
+        readFile: () => undefined,
+        checkToolsOptions: {
+          which: () => "/bin/tool",
+          exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      const gotchasCheck = report.checks.find((c) => c.name === "gotchas");
+      expect(gotchasCheck?.severity).toBe("degraded");
+      expect(gotchasCheck?.hint).toContain("REVIEW.md");
+    });
+
+    test("a real gotchas.md shadowed by REVIEW.md is degraded and says it is ignored", async () => {
+      const report = await runDoctor({
+        cwd: "/repo",
+        home: "/home/user",
+        exists: (p) =>
+          p === "/repo/REVIEW.md" ||
+          p === "/repo/.crysk/gotchas.md" ||
+          p === "/home/user/.crysk/setup.json",
+        readFile: () => "Payments are idempotent by request id.",
+        checkToolsOptions: {
+          which: () => "/bin/tool",
+          exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+          env: { ANTHROPIC_API_KEY: "sk-test" },
+        },
+      });
+
+      const gotchasCheck = report.checks.find((c) => c.name === "gotchas");
+      expect(gotchasCheck?.severity).toBe("degraded");
+      expect(gotchasCheck?.message).toContain(
+        "gotchas.md ignored: REVIEW.md takes precedence",
+      );
+    });
+
     test("gh missing is degraded, not blocking", async () => {
       const report = await runDoctor({
         cwd: "/repo",

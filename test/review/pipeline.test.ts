@@ -26,7 +26,7 @@ import {
   runPipeline,
   stepFailureReason,
 } from "#review/pipeline";
-import { GOTCHAS_TEMPLATE } from "#review/preflight";
+import { GOTCHAS_TEMPLATE, NO_REVIEW_INSTRUCTIONS } from "#review/preflight";
 import { writeMcpConfig } from "#review/run";
 import type { ScoutLead } from "#review/scout";
 import { defaultReviewSpec } from "#review/spec";
@@ -353,6 +353,25 @@ describe("gotchas fail-loud", () => {
     const result = await runPipeline(input, { runner });
     expect(result.skillOutput).toEqual(PARTIAL_EMPTY);
     expect(runner.specs.length).toBe(0);
+  });
+
+  // S3 (odd/tasks/review-md.md): a repo with neither REVIEW.md nor a gotchas
+  // file is an opt-out, not an unfinished setup. The shells pass no path, and
+  // the review runs with a block that says so — unlike an explicit path to a
+  // missing file, which the test above still refuses.
+  test("no instructions file at all (no path): hunters run, and their block says so", async () => {
+    const runner = new FakeStepRunner(HUNTERS_OK);
+    const input = await makeInput({ gotchasPath: undefined });
+    const result = await runPipeline(input, { runner });
+    expect(result.skillOutput.run_status).not.toBe("partial");
+    expect(result.noReviewerRan).toBe(false);
+    expect(runner.specs.some((s) => s.name === "hunter-reliability")).toBe(
+      true,
+    );
+    const system = await Bun.file(
+      path.join(input.runDir, "steps", "hunter-reliability.system.md"),
+    ).text();
+    expect(system).toContain(NO_REVIEW_INSTRUCTIONS);
   });
 
   // The hole the "empty" gate left open, and the reason it mattered: the file

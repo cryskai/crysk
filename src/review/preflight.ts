@@ -3596,6 +3596,12 @@ export function initGotchasInstructions(
   ];
 }
 
+// What the hunters' gotchas block holds when the repository has neither a
+// REVIEW.md nor a gotchas file (odd/tasks/review-md.md S3). Said out loud so
+// the block is never an unexplained empty tag a model could read as truncation.
+export const NO_REVIEW_INSTRUCTIONS =
+  "This repository provides no review instructions (no REVIEW.md or gotchas file). Apply the general guidance in this prompt.";
+
 // The pipeline treats unusable gotchas as a fail-loud abort and returns a
 // zero-cost partial run. Correct, but a bare "partial, 0 findings" tells the
 // user nothing — so the CLI checks first and explains.
@@ -3604,10 +3610,12 @@ export function gotchasErrorMessage(
   reason: GotchasUnusableReason,
 ): string {
   const why = [
-    "Gotchas are the repo-specific facts a hunter cannot infer from the diff",
-    "— deliberate oddities, invariants enforced elsewhere, conventions worth",
-    "more than they look. They are injected verbatim into every hunter's",
-    "system prompt, and the engine refuses to run without them.",
+    "Review instructions (REVIEW.md, or the older gotchas file) are the",
+    "repo-specific facts and rules a hunter cannot infer from the diff —",
+    "deliberate oddities, invariants enforced elsewhere, what counts as a",
+    "failure here. They are injected verbatim into every hunter's system",
+    "prompt. A repo may have no such file at all, but one that exists must",
+    "hold real content.",
   ];
   if (reason === "placeholder") {
     return [
