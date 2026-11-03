@@ -92,7 +92,7 @@ describe("init writes into the resolved repo dir", () => {
 // S3 + PR #463 F002: a repo with neither REVIEW.md nor a gotchas file is
 // reviewed, and the run says so — the absence must never look like a normal run.
 describe("review with no instructions file", () => {
-  test("runs (dry run, exit 0) and prints the no-instructions notice", async () => {
+  test("passes the instructions gate and prints the no-instructions notice", async () => {
     const repo = await makeRepo();
     const home = path.join(scratch, "home");
     await mkdir(home);
@@ -119,8 +119,13 @@ describe("review with no instructions file", () => {
       repo,
       home,
     );
-    expect(r.code).toBe(0);
+    // No exit-code assertion: a dry run still goes through runner admission,
+    // which needs a `claude` binary on PATH, and CI runners have none (rc 1,
+    // "claude binary not found on PATH"). What this test owns is the
+    // instructions gate: before S3 the same repo was refused here, before
+    // admission, and the run never said why it went ahead.
     expect(r.output).toContain(NO_INSTRUCTIONS_NOTICE);
+    expect(r.output).not.toContain("missing or empty gotchas file");
   });
 });
 
