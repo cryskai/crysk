@@ -38,6 +38,7 @@ import {
   type CommitStatusFact,
   clipStatusDescription,
   commitStatusRequest,
+  manualReviewHoldDescription,
   partialReviewAgainDescription,
   partialReviewDescription,
   prHtmlUrl,
@@ -318,7 +319,7 @@ export interface AdmissionStatusInput {
 }
 
 export interface AdmissionStatusDecision {
-  state: "success" | "failure";
+  state: "success" | "failure" | "pending";
   description: string;
 }
 
@@ -335,11 +336,19 @@ type CarriedReason = Exclude<AdmissionStatusReason, "same-head">;
 
 // Every rule that skips a review carries the last verdict the same way (budget-exhausted-carry S2): the
 // rule is respected, so no review runs, and the head reads what the last review decided. Same-head is the
-// one exception: that head's own status already exists.
+// one exception: that head's own status already exists. A capped rule holds a green (holdsForManualReview).
 function isCarriedReason(
   reason: AdmissionStatusReason,
 ): reason is CarriedReason {
   return reason !== "same-head";
+}
+
+// ROADMAP Stage 2 #12: the rules that cap automatic reviews. Under them no later push is reviewed on its
+// own, so carrying a green would let code no review read merge (measured: one PR merged green over 11
+// unreviewed commits).
+// The head waits for a manual review instead; a red still carries, since it already blocks.
+function holdsForManualReview(reason: CarriedReason): boolean {
+  return reason === "max-attempts-exhausted" || reason === "manual-only-policy";
 }
 
 // The readers below rewrite a legacy `pr-hero` lead into `crysk` first (canonicalStatusText), so the
@@ -601,6 +610,12 @@ export function admissionSkipDecision(
   const verdict = newestCarriedVerdict(input.carried.statuses);
   if (verdict === undefined) return failClosed(label);
   if (verdict.state === "success") {
+    if (holdsForManualReview(input.reason)) {
+      return {
+        state: "pending",
+        description: manualReviewHoldDescription(label),
+      };
+    }
     // A carried unverified green stays unverified: chaining it never turns it into a green a review earned.
     const answeredCount = answeredCountIn(verdict.description ?? "");
     return {
@@ -638,6 +653,12 @@ export function admissionSkipDecision(
     answered.blocking > 0 &&
     answered.blocking >= blocking
   ) {
+    if (holdsForManualReview(input.reason)) {
+      return {
+        state: "pending",
+        description: manualReviewHoldDescription(label),
+      };
+    }
     return {
       state: "success",
       description: unverifiedFixesDescription(

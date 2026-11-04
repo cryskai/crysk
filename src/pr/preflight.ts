@@ -1007,10 +1007,32 @@ export function latestStatusInContext(
   return latest;
 }
 
+// The pending a gate skip writes when a rule that caps automatic reviews (the budget is used up, or the
+// policy is manual_only) would otherwise carry a green no review saw (ROADMAP Stage 2 #12). It holds the
+// head until a human asks for a review or an override. `label` is the rule (ciReviewSkipLabel).
+export function manualReviewHoldDescription(label: string): string {
+  return clipStatusDescription(
+    `${STATUS_CONTEXT}: waiting for a manual review (${label}) — /pr-hero review verifies this head, or /pr-hero override`,
+  );
+}
+
+const MANUAL_REVIEW_HOLD = /^crysk: waiting for a manual review \(/;
+
+// Whether a pending status is the gate's hold, not a running review. No run holds it, so no in-flight
+// reader may wait on it: it lasts until a human acts, not until a run ends.
+export function isManualReviewHold(
+  status: Pick<CommitStatusFact, "state" | "description">,
+): boolean {
+  return (
+    status.state === "pending" &&
+    MANUAL_REVIEW_HOLD.test(status.description ?? "")
+  );
+}
+
 // Latest status for our context, by created_at — GitHub's list is usually
 // newest-first, but the watcher must not depend on that. A pending older
 // than the TTL is NOT in-flight: the process likely died, and the next tick
-// must be allowed to launch.
+// must be allowed to launch. A manual-review hold is never in flight.
 // In-flight in ANY of the given contexts: each context's own latest status is
 // judged, so a fresh pending on one never hides behind a settled one on another.
 // The default reads the gate alone, which is a `--ci` run's yield. A non-CI run
@@ -1024,6 +1046,7 @@ export function isInFlightCommitStatus(
   return contexts.some((context) => {
     const latest = latestStatusInContext(statuses, context);
     if (latest === null || latest.state !== "pending") return false;
+    if (isManualReviewHold(latest)) return false;
     const createdMs = Date.parse(latest.created_at);
     if (Number.isNaN(createdMs)) return false;
     return nowMs - createdMs < ttlMs;
