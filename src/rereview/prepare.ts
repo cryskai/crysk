@@ -623,14 +623,13 @@ export function priorsFromStateFindings(
 }
 
 // #206's fix: the fallback that runs whenever the previous summary's
-// `pr-hero-state` block cannot supply priors — missing, unparseable, or (the
-// ROUTINE case, not a rare one: a FIRST review never writes a state block at
-// all, see `postInlineFindings`'s `framing === undefined` branch in
-// src/pr/pr.ts) simply absent because this is the PR's second review. It
-// used to hardcode `sev: "WARNING"` / `tier: "advisory"` / `claim: ""` for
-// EVERY prior here — silently downgrading a live BLOCKER to a warning on
-// every second review of every PR, and collapsing every claim-less row onto
-// `claimFingerprint("")`'s shared constant.
+// `pr-hero-state` block cannot supply priors — missing or unparseable. Before
+// 2026-11-04 a FIRST review never wrote a state block, so this was the
+// routine path of every second review; summaries posted before then still
+// reach it. It used to hardcode `sev: "WARNING"` / `tier: "advisory"` /
+// `claim: ""` for EVERY prior here — silently downgrading a live BLOCKER to a
+// warning on every second review of every PR, and collapsing every claim-less
+// row onto `claimFingerprint("")`'s shared constant.
 //
 // `body` is the posted comment's raw text (the marker line alone carries no
 // sev/tier/claim — `findingMarker` signs only the claim's fingerprint, never

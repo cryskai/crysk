@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { runPostCommand } from "#commands/post";
 import { claimFingerprint } from "#pr/preflight";
+import { parseStateBlock } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import { CliUsageError } from "../../src/errors";
 
@@ -987,9 +988,10 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
     }
   });
 
-  test("a first review is untouched: no summary, no block, matcher delta stays", async () => {
-    // The regression boundary. `post --from` on a PR with no prior pr-hero
-    // comment is not a re-review and must keep rendering byte-identically.
+  test("a first review keeps its matcher delta and writes the state block crysk status reads", async () => {
+    // `post --from` on a PR with no prior crysk comment is not a re-review: no rereview framing. It still
+    // writes the state block, because an outside-diff finding's only machine-readable copy lives there:
+    // without it `crysk status` cannot see that finding at all (PR #472: 4 advisories, status 0).
     const { dir, cleanup } = await writeRereviewRunDir(null, {
       findings: [finding({ id: "F001", path: "src/a.ts", line: 10 })],
     });
@@ -1008,7 +1010,10 @@ describe("runPostCommand — post --from carries the re-review (F008)", () => {
       expect(exitCode).toBe(0);
       const body = summaryPatch(calls);
       expect(body).toContain("1 new · 0 persist");
-      expect(body).not.toContain("<!-- crysk-state ");
+      const state = parseStateBlock(body);
+      expect(state?.findings.map((f) => [f.id, f.locs])).toEqual([
+        ["R001", ["src/a.ts:10"]],
+      ]);
     } finally {
       await cleanup();
     }
