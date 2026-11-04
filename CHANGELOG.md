@@ -12,9 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `workflow_dispatch` and the `dispatch-id` input is non-empty, a new `Connect to Crysk` step exchanges the
   run's GitHub OIDC token (audience `crysk`) for a repo-scoped installation token, masks it, and the trigger,
   run, publish and cancel-settle steps use it in place of `github.token`. The platform URL is a constant in
-  the engine, never an input. Any failure (no `id-token: write`, HTTP 401, 403, 409 or 429, a network error)
+  the engine, never an input. Any failure (no `id-token: write`, HTTP 401, 403, 409 or 429, a network error,
+  a token that cannot be written to `GITHUB_OUTPUT`)
   turns the run red with the cause; platform mode never falls back to `github.token`. Standalone runs take
-  the same path as before.
+  the same path as before. The publish and cancel-settle steps run the exchange again for a fresh token, so a
+  long review's late posts never ride an installation token minted an hour earlier.
 
 ### Changed
 - **An exhausted review budget or `manual_only` no longer turns an unreviewed head green.** Under these two

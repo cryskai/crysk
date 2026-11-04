@@ -47,6 +47,40 @@ export interface PlatformTokenDeps {
   // Called with each secret as soon as it is known, before it is used or
   // returned, so the caller can emit `::add-mask::` ahead of any other write.
   mask: (secret: string) => void;
+  // Waits between OIDC attempts; tests inject a no-op.
+  sleep?: (ms: number) => Promise<void>;
+}
+
+// The OIDC GET is idempotent, so a blip (a thrown fetch, a timeout, a 5xx) is
+// retried; the platform POST below is NOT, because the platform answers 409 to
+// a second exchange of the same dispatch id.
+const OIDC_ATTEMPTS = 3;
+const OIDC_BACKOFF_MS = 1_000;
+
+async function fetchOidc(
+  deps: PlatformTokenDeps,
+  url: string,
+  requestToken: string,
+): Promise<Response> {
+  const sleep =
+    deps.sleep ??
+    ((ms: number) => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, ms);
+      return promise;
+    });
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await deps.fetch(url, {
+        headers: { Authorization: `bearer ${requestToken}` },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (response.status < 500 || attempt === OIDC_ATTEMPTS) return response;
+    } catch (error) {
+      if (attempt === OIDC_ATTEMPTS) throw error;
+    }
+    await sleep(OIDC_BACKOFF_MS * attempt);
+  }
 }
 
 // A token is written to $GITHUB_OUTPUT as `name=value`, so one that holds a
@@ -93,12 +127,10 @@ export async function exchangePlatformToken(
   const secrets: string[] = [requestToken];
 
   try {
-    const oidcResponse = await deps.fetch(
+    const oidcResponse = await fetchOidc(
+      deps,
       `${requestUrl}${requestUrl.includes("?") ? "&" : "?"}audience=${OIDC_AUDIENCE}`,
-      {
-        headers: { Authorization: `bearer ${requestToken}` },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      },
+      requestToken,
     );
     if (!oidcResponse.ok) {
       return failure(
@@ -186,23 +218,42 @@ export async function runPlatformConnect(
     );
     return 1;
   }
-  deps.appendOutput(`github-token=${result.githubToken}\n`);
+  // WHY a throw is an error and not a green step: the later steps read this
+  // output with `|| inputs.github-token`, so a token that was never written
+  // would silently post as github-actions[bot].
+  try {
+    deps.appendOutput(`github-token=${result.githubToken}\n`);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    deps.stdout(
+      `::error title=crysk::${escapeCommandData(`Crysk platform mode failed: the installation token could not be handed to the later steps: ${detail}`)}\n`,
+    );
+    return 1;
+  }
   return 0;
 }
 
+// Appends to the file the runner named in GITHUB_OUTPUT. Unset or empty is an
+// error, not a no-op: see runPlatformConnect.
+export function appendGithubOutput(
+  outputPath: string | undefined,
+  text: string,
+): void {
+  if (outputPath === undefined || outputPath === "") {
+    throw new Error("GITHUB_OUTPUT is not set");
+  }
+  appendFileSync(outputPath, text);
+}
+
 if (import.meta.main) {
-  const outputPath = process.env.GITHUB_OUTPUT;
   process.exit(
     await runPlatformConnect({
       fetch,
       env: process.env,
       baseUrl: PLATFORM_API_URL,
       stdout: (text) => process.stdout.write(text),
-      appendOutput: (text) => {
-        if (outputPath !== undefined && outputPath !== "") {
-          appendFileSync(outputPath, text);
-        }
-      },
+      appendOutput: (text) =>
+        appendGithubOutput(process.env.GITHUB_OUTPUT, text),
     }),
   );
 }

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  appendGithubOutput,
   exchangePlatformToken,
   PLATFORM_API_URL,
   runPlatformConnect,
@@ -143,7 +145,7 @@ describe("exchangePlatformToken", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("an OIDC endpoint failure fails without reaching the platform", async () => {
+  test("an OIDC endpoint that keeps failing is retried, then fails without reaching the platform", async () => {
     const { fn, calls } = fakeFetch(
       () => json(200, SUCCESS),
       () => json(500, { message: "boom" }),
@@ -153,10 +155,66 @@ describe("exchangePlatformToken", () => {
       env: ENV,
       baseUrl: BASE,
       mask: () => {},
+      sleep: async () => {},
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toContain("500");
+    expect(calls).toHaveLength(3);
     expect(calls.every((call) => !call.url.startsWith(BASE))).toBe(true);
+  });
+
+  test("a transient OIDC blip is retried and the exchange then succeeds, with one platform POST", async () => {
+    let oidcCalls = 0;
+    const { fn, calls } = fakeFetch(
+      () => json(200, SUCCESS),
+      () => {
+        oidcCalls++;
+        if (oidcCalls === 1) throw new Error("socket hang up");
+        if (oidcCalls === 2) return json(503, {});
+        return json(200, { value: OIDC_JWT });
+      },
+    );
+    const result = await exchangePlatformToken({
+      fetch: fn,
+      env: ENV,
+      baseUrl: BASE,
+      mask: () => {},
+      sleep: async () => {},
+    });
+    expect(result.ok).toBe(true);
+    expect(oidcCalls).toBe(3);
+    expect(calls.filter((call) => call.url.startsWith(BASE))).toHaveLength(1);
+  });
+
+  test("an OIDC client error is not retried", async () => {
+    const { fn, calls } = fakeFetch(
+      () => json(200, SUCCESS),
+      () => json(403, {}),
+    );
+    const result = await exchangePlatformToken({
+      fetch: fn,
+      env: ENV,
+      baseUrl: BASE,
+      mask: () => {},
+      sleep: async () => {},
+    });
+    expect(result.ok).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a platform failure is never retried: the dispatch id is single-use", async () => {
+    const { fn, calls } = fakeFetch(() =>
+      json(502, { message: "bad gateway" }),
+    );
+    const result = await exchangePlatformToken({
+      fetch: fn,
+      env: ENV,
+      baseUrl: BASE,
+      mask: () => {},
+      sleep: async () => {},
+    });
+    expect(result.ok).toBe(false);
+    expect(calls.filter((call) => call.url.startsWith(BASE))).toHaveLength(1);
   });
 
   test("an OIDC response without a value fails", async () => {
@@ -182,6 +240,7 @@ describe("exchangePlatformToken", () => {
       env: ENV,
       baseUrl: BASE,
       mask: () => {},
+      sleep: async () => {},
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).not.toContain(OIDC_REQUEST_TOKEN);
@@ -275,6 +334,45 @@ describe("runPlatformConnect", () => {
     expect(text).toContain("409");
     expect(text).not.toContain(GITHUB_TOKEN);
   });
+
+  test("a token that cannot be persisted is an error and exits 1, never a green step", async () => {
+    const events: string[] = [];
+    const { fn } = fakeFetch(() => json(200, SUCCESS));
+    const code = await runPlatformConnect({
+      fetch: fn,
+      env: ENV,
+      baseUrl: BASE,
+      stdout: (text) => events.push(text),
+      appendOutput: () => {
+        throw new Error("GITHUB_OUTPUT is not set");
+      },
+    });
+    expect(code).toBe(1);
+    const text = events.join("");
+    expect(text).toContain("::error");
+    expect(text).toContain("GITHUB_OUTPUT is not set");
+    expect(text.replace(`::add-mask::${GITHUB_TOKEN}`, "")).not.toContain(
+      GITHUB_TOKEN,
+    );
+  });
+});
+
+describe("appendGithubOutput", () => {
+  test.each([undefined, ""])(
+    "refuses to run when GITHUB_OUTPUT is %p",
+    (outputPath) => {
+      expect(() => appendGithubOutput(outputPath, "github-token=x\n")).toThrow(
+        /GITHUB_OUTPUT/,
+      );
+    },
+  );
+
+  test("appends to the file the runner named", () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), "platform-")), "o");
+    appendGithubOutput(file, "github-token=x\n");
+    appendGithubOutput(file, "other=y\n");
+    expect(readFileSync(file, "utf8")).toBe("github-token=x\nother=y\n");
+  });
 });
 
 describe("action.yml platform wiring", () => {
@@ -319,18 +417,58 @@ describe("action.yml platform wiring", () => {
     expect(JSON.stringify(step.env)).not.toMatch(/api\.crysk|https?:/);
   });
 
-  test("the four token-consuming steps fall back to inputs.github-token", () => {
+  test("the early token-consuming steps fall back to inputs.github-token", () => {
     const expr = expression(
       "steps.platform.outputs.github-token || inputs.github-token",
     );
     expect(find("trigger").env?.GH_TOKEN).toBe(expr);
     expect(find("run-crysk").env?.GITHUB_TOKEN).toBe(expr);
-    expect(find("publish").env?.GH_TOKEN).toBe(expr);
-    expect(find("cancel-settle").env?.GH_TOKEN).toBe(expr);
-    // No other step still reads the bare input.
+  });
+
+  test("the late steps prefer a freshly exchanged token", () => {
+    expect(find("publish").env?.GH_TOKEN).toBe(
+      expression(
+        "steps.platform-publish.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token",
+      ),
+    );
+    expect(find("cancel-settle").env?.GH_TOKEN).toBe(
+      expression(
+        "steps.platform-settle.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token",
+      ),
+    );
+    // No step reads the bare input.
     const bare = steps.filter((s) =>
       Object.values(s.env ?? {}).includes(expression("inputs.github-token")),
     );
     expect(bare).toEqual([]);
+  });
+
+  test("the refresh steps run the same exchange, after Run Crysk, only in platform mode", () => {
+    const run = steps.findIndex((s) => s.id === "run-crysk");
+    const platformMode =
+      "github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != ''";
+    for (const [id, consumer, gate] of [
+      ["platform-publish", "publish", "!cancelled()"],
+      ["platform-settle", "cancel-settle", "cancelled()"],
+    ] as const) {
+      const at = steps.findIndex((s) => s.id === id);
+      const step = steps[at] as Step;
+      expect(at).toBeGreaterThan(run);
+      expect(at).toBeLessThan(steps.findIndex((s) => s.id === consumer));
+      expect(step.run).toContain("src/ci/platform.ts");
+      expect(step.if).toContain(platformMode);
+      expect(step.if).toContain(gate);
+      expect(step.env?.CRYSK_DISPATCH_ID).toBe(
+        expression("github.event.inputs['dispatch-id']"),
+      );
+    }
+    // The publish refresh follows the publish gate, so it never runs for a run
+    // that publishes nothing.
+    expect(find("platform-publish").if).toContain(
+      "steps.trigger.outputs.publish == 'true'",
+    );
+    expect(find("platform-settle").if).toContain(
+      "steps.trigger.outputs.run == 'true'",
+    );
   });
 });

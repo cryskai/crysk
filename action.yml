@@ -291,6 +291,22 @@ runs:
         # record of the outcome, and the publish step reads it.
         bun "${{ github.action_path }}/bin/pr-hero.js" "$@"
 
+    # Refresh the Crysk token (platform mode only). The installation token from
+    # `Connect to Crysk` was minted before the trigger and lives about an hour,
+    # while Run Crysk may run for up to 75 minutes, so the late GitHub writes of
+    # this job (the publish step's status, comment and cleanup) take a freshly
+    # exchanged token instead: the same src/ci/platform.ts, the same masking,
+    # the same loud failure. Run Crysk's own early (pending status) and
+    # terminal posts run inside that one step and keep the token it started
+    # with: an action.yml step cannot swap its own env mid-run.
+    - name: Refresh the Crysk token
+      id: platform-publish
+      if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
+      shell: bash
+      env:
+        CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
+      run: bun "${{ github.action_path }}/src/ci/platform.ts"
+
     # Speaks for every outcome of a run (T2b, S3, T2c): no credential, a pull
     # request that cannot be resolved, a commenter permission that could not be
     # verified, a failed install step, and the review the CLI started. It reads
@@ -328,7 +344,7 @@ runs:
       if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.platform.outputs.github-token || inputs.github-token }}
+        GH_TOKEN: ${{ steps.platform-publish.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_RUN_ID: ${{ github.run_id }}
@@ -336,6 +352,18 @@ runs:
         # refused, since gh run rerun keeps the run id.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
+
+    # The same exchange again, for a run that was cancelled (see "Refresh the
+    # Crysk token" above): the settle's post must not ride a token minted at the
+    # start of a long run. A fresh OIDC token is a fresh identity, so the
+    # platform exchanges it again.
+    - name: Refresh the Crysk token (cancelled run)
+      id: platform-settle
+      if: ${{ cancelled() && steps.trigger.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
+      shell: bash
+      env:
+        CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
+      run: bun "${{ github.action_path }}/src/ci/platform.ts"
 
     # WHY a separate step: the publish step is !cancelled() on purpose (a
     # superseded run must not report a failure it never had), and a cancelled
@@ -348,7 +376,7 @@ runs:
       if: ${{ cancelled() && steps.trigger.outputs.run == 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.platform.outputs.github-token || inputs.github-token }}
+        GH_TOKEN: ${{ steps.platform-settle.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}
         # The run id builds the status's target URL. The lock is this run's

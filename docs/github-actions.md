@@ -363,7 +363,8 @@ In platform mode a `Connect to Crysk` step runs first, before the trigger:
 2. It sends that token to `https://api.crysk.dev/runs/token` with the dispatch id, and receives a
    repo-scoped installation token.
 3. It masks the tokens in the log and hands the installation token to the trigger, run, publish and
-   cancel-settle steps in place of `github.token`.
+   cancel-settle steps in place of `github.token`. The publish and cancel-settle steps take a freshly
+   exchanged token (see below).
 
 The platform URL is fixed in the engine. It is not an input and not an environment variable, because
 anyone with write access can dispatch with arbitrary inputs and the OIDC token must never go to a server
@@ -379,8 +380,22 @@ the cause, and no review runs:
 - **HTTP 409** — this dispatch's token was already exchanged; dispatch again.
 - **HTTP 429** — the platform rate-limited the exchange.
 - **Network or malformed reply** — the exchange could not complete.
+- **The token could not be handed on** — the step could not write `GITHUB_OUTPUT`; the run fails rather than
+  continue on `github.token`.
 
 The platform's own `message` is included in the error. No token is ever printed.
+
+Two limits follow from the posting identity and from the token's life:
+
+- **Who the gate trusts.** The answered-findings gate trusts a finding or summary only from
+  `github-actions[bot]`, the run's actor (`GITHUB_ACTOR`), or a login in `ci_trusted_actors`. In platform
+  mode the author is the Crysk App's bot, so that login MUST be the dispatching actor or be listed in
+  `ci_trusted_actors`; otherwise answers cannot unlock a carried red.
+- **The token's life.** GitHub App installation tokens last about an hour, and a review may run up to 75
+  minutes. So the publish step and the cancel-settle step do not reuse the first token: a `Refresh the Crysk
+  token` step runs the same exchange again right before each (a fresh OIDC token is a fresh identity), and
+  they prefer its result. The `Run Crysk` step itself keeps the token it started with, so a review that runs
+  past the hour can still fail its own terminal post; the publish step then reports it with the fresh token.
 
 ## Security considerations
 

@@ -858,7 +858,9 @@ describe("Packaging & distribution configuration", () => {
       // The publisher is gated on the publish output instead: it must also
       // run for the outcomes where the run never starts (T2b).
       const ungated = after
-        .filter((step) => step.id !== "publish")
+        .filter(
+          (step) => step.id !== "publish" && step.id !== "platform-publish",
+        )
         .filter(
           (step) =>
             !String(step.if ?? "").includes(
@@ -978,10 +980,14 @@ describe("Packaging & distribution configuration", () => {
       const upload = all.findIndex(
         (step) => step.name === "Upload Crysk run directory",
       );
-      expect(publish).toBe(run + 1);
+      // The platform refresh (platform mode only) sits between run and publish.
+      expect(all[run + 1]?.id).toBe("platform-publish");
+      expect(publish).toBe(run + 2);
       // The cancel settle (SB3) sits between publish and the upload, right after publish.
       const settle = all.findIndex((step) => step.id === "cancel-settle");
-      expect(settle).toBe(publish + 1);
+      // The cancelled-run refresh sits between publish and the settle.
+      expect(all[publish + 1]?.id).toBe("platform-settle");
+      expect(settle).toBe(publish + 2);
       expect(upload).toBe(settle + 1);
       const step = all[publish];
       // A cancelled job still reaches always() steps, so always() would publish
@@ -999,7 +1005,7 @@ describe("Packaging & distribution configuration", () => {
       const all = steps();
       const publish = all.findIndex((step) => step.id === "publish");
       const settle = all.findIndex((step) => step.id === "cancel-settle");
-      expect(settle).toBe(publish + 1);
+      expect(settle).toBe(publish + 2);
       const step = all[settle];
       expect(step?.if).toBe(
         `\${{ cancelled() && steps.trigger.outputs.run == 'true' }}`,
@@ -1011,7 +1017,7 @@ describe("Packaging & distribution configuration", () => {
       // Every value it reads is bound as the publish step binds it. It reads no
       // run attempt: its lock is the outcome directory the trigger cleared.
       for (const key of Object.keys(publishEnv)) {
-        if (key === "GITHUB_RUN_ATTEMPT") continue;
+        if (key === "GITHUB_RUN_ATTEMPT" || key === "GH_TOKEN") continue;
         expect(env?.[key]).toBe(publishEnv[key]);
       }
       expect(env?.GITHUB_RUN_ATTEMPT).toBeUndefined();
@@ -1026,7 +1032,7 @@ describe("Packaging & distribution configuration", () => {
       ].map((match) => match[0]);
       expect(expressions).toEqual([`\${{ github.action_path }}`]);
       expect(step?.env?.GH_TOKEN).toBe(
-        `\${{ steps.platform.outputs.github-token || inputs.github-token }}`,
+        `\${{ steps.platform-publish.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}`,
       );
       expect(step?.env?.GITHUB_REPOSITORY).toBe(`\${{ github.repository }}`);
       expect(step?.env?.GITHUB_RUN_ID).toBe(`\${{ github.run_id }}`);
