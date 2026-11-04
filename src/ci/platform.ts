@@ -222,7 +222,7 @@ export interface PlatformConnectDeps extends Omit<PlatformTokenDeps, "mask"> {
   appendOutput: (text: string) => void;
 }
 
-// The step's shell. Both tokens are masked BEFORE the output is written, and a
+// The step's shell. Every token is masked BEFORE the output is written, and a
 // failure writes no output at all: the later steps see no platform token and the
 // job is red, never silently on `github.token`.
 export async function runPlatformConnect(
@@ -243,6 +243,9 @@ export async function runPlatformConnect(
   // would silently post as github-actions[bot].
   try {
     deps.appendOutput(`github-token=${result.githubToken}\n`);
+    // The run token authenticates the report step (src/ci/platform-report.ts).
+    // Already masked by the exchange above, like the installation token.
+    deps.appendOutput(`run-token=${result.runToken}\n`);
     // Not a secret. Only a login the platform returned, so the engine's trust
     // set never learns one from anywhere else (see CRYSK_PLATFORM_ACTOR).
     if (result.githubActor !== undefined) {

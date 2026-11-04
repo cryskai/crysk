@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same path as before. The publish and cancel-settle steps run the exchange again for a fresh token, so a
   long review's late posts never ride an installation token minted an hour earlier. The gate also trusts the
   App login the platform returns (`github_actor`) as a poster of findings and summaries, in platform mode only.
+- **Platform mode: every finished run is reported to the Crysk platform.** The platform steps now also output
+  the masked `run-token`, and a new `Report to Crysk` step after `Publish Crysk outcome` POSTs the run's
+  outcome, PR number, shas, blocking and advisory counts, token and cost totals and per-agent usage to
+  `/runs/report`, so each run is recorded with its cost. The body is metadata only: no finding, claim,
+  summary or hop trail. Failed and skipped reviews are reported too (zero counts when no run directory was
+  written). A report failure is a `::warning::` and never turns the job red. Standalone runs are unchanged.
 
 ### Changed
 - **The GraphQL issue-comments fallback reports Bot authors as `<login>[bot]`**, as the REST path and the

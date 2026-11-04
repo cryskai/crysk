@@ -984,11 +984,13 @@ describe("Packaging & distribution configuration", () => {
       // The platform refresh (platform mode only) sits between run and publish.
       expect(all[run + 1]?.id).toBe("platform-publish");
       expect(publish).toBe(run + 2);
-      // The cancel settle (SB3) sits between publish and the upload, right after publish.
+      // The run report (platform mode only) follows publish directly.
+      expect(all[publish + 1]?.id).toBe("report");
+      // The cancel settle (SB3) sits between publish and the upload, after the report.
       const settle = all.findIndex((step) => step.id === "cancel-settle");
-      // The cancelled-run refresh sits between publish and the settle.
-      expect(all[publish + 1]?.id).toBe("platform-settle");
-      expect(settle).toBe(publish + 2);
+      // The cancelled-run refresh sits between the report and the settle.
+      expect(all[publish + 2]?.id).toBe("platform-settle");
+      expect(settle).toBe(publish + 3);
       expect(upload).toBe(settle + 1);
       const step = all[publish];
       // A cancelled job still reaches always() steps, so always() would publish
@@ -1006,7 +1008,7 @@ describe("Packaging & distribution configuration", () => {
       const all = steps();
       const publish = all.findIndex((step) => step.id === "publish");
       const settle = all.findIndex((step) => step.id === "cancel-settle");
-      expect(settle).toBe(publish + 2);
+      expect(settle).toBe(publish + 3);
       const step = all[settle];
       expect(step?.if).toBe(
         `\${{ cancelled() && steps.trigger.outputs.run == 'true' }}`,
@@ -1037,6 +1039,44 @@ describe("Packaging & distribution configuration", () => {
       );
       expect(step?.env?.GITHUB_REPOSITORY).toBe(`\${{ github.repository }}`);
       expect(step?.env?.GITHUB_RUN_ID).toBe(`\${{ github.run_id }}`);
+    });
+
+    // WHY: every platform run is recorded, so the report must follow failed and
+    // skipped reviews too, yet never a cancelled job or a standalone run.
+    test("the report step is platform-only, runs after a failed review, takes the newest run token and binds everything through env:", () => {
+      const step = steps().find((candidate) => candidate.id === "report");
+      expect(step?.name).toBe("Report to Crysk");
+      expect(step?.shell).toBe("bash");
+      expect(step?.run).toBe(
+        `bun "\${{ github.action_path }}/src/ci/platform-report.ts"`,
+      );
+      const condition = String(step?.if ?? "");
+      expect(condition).toContain("!cancelled()");
+      expect(condition).not.toContain("always()");
+      expect(condition).not.toContain("success()");
+      expect(condition).toContain("github.event_name == 'workflow_dispatch'");
+      expect(condition).toContain("github.event.inputs['dispatch-id'] != ''");
+      expect(condition).toContain("steps.platform.outputs.run-token != ''");
+      expect(condition).toContain(
+        "steps.platform-publish.outputs.run-token != ''",
+      );
+      expect(step?.env?.CRYSK_RUN_TOKEN).toBe(
+        `\${{ steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token }}`,
+      );
+      expect(step?.env?.CRYSK_OUTCOME).toBe(
+        `\${{ steps.run-crysk.outputs.status }}`,
+      );
+      expect(step?.env?.CRYSK_RUN_DIR).toBe(
+        `\${{ steps.run-crysk.outputs.run_dir }}`,
+      );
+      expect(step?.env?.TRIGGER_PR).toBe(`\${{ steps.trigger.outputs.pr }}`);
+      expect(step?.env?.TRIGGER_HEAD_SHA).toBe(
+        `\${{ steps.trigger.outputs.head_sha }}`,
+      );
+      const expressions = [
+        ...String(step?.run ?? "").matchAll(/\$\{\{[^}]*\}\}/g),
+      ].map((match) => match[0]);
+      expect(expressions).toEqual([`\${{ github.action_path }}`]);
     });
 
     // WHY: gh run rerun keeps the run id. The publisher compares the record's

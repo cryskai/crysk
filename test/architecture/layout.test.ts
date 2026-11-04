@@ -65,6 +65,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "outcome",
       "override",
       "platform",
+      "platform-report",
       "publish",
       "reporter",
       "review-admission",
