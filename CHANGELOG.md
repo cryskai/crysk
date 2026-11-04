@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-04
+
 ### Added
 - **A root `REVIEW.md` is the repository's review instructions, with `.crysk/gotchas.md` as the fallback.**
   It uses the file name Claude Code Review reads. When both exist, `REVIEW.md` wins, and the run and
@@ -643,7 +645,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/cryskai/crysk/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/cryskai/crysk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/cryskai/crysk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/cryskai/crysk/compare/v0.2.6...v0.3.0
