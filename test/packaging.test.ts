@@ -612,6 +612,8 @@ describe("Packaging & distribution configuration", () => {
       github: Record<string, string>;
       trigger: Record<string, string>;
       runner: Record<string, string>;
+      // Outputs of the materialize step the run step reads.
+      materialize?: Record<string, string>;
     }
     function resolveEnv(
       env: Record<string, string>,
@@ -643,6 +645,12 @@ describe("Packaging & distribution configuration", () => {
           )?.[1];
         if (fallback !== undefined) return input(fallback);
         if (expr === "steps.platform.outputs.github-actor") return "";
+        const materialized = /^steps\.materialize\.outputs\.([\w-]+)$/.exec(
+          expr,
+        )?.[1];
+        if (materialized !== undefined) {
+          return ctx.materialize?.[materialized] ?? "";
+        }
         throw new Error(`unsupported expression in an action.yml env: ${expr}`);
       };
       // A value may hold one expression or several, mixed with literal text
@@ -684,6 +692,8 @@ describe("Packaging & distribution configuration", () => {
       // The exit code the fake CLI returns, so the run step's handling of a
       // failed CLI can be observed. Zero unless a test says otherwise.
       cliExit = 0,
+      // What the materialize step reported (platform mode's `repo-config`).
+      materialize: Record<string, string> = {},
     ): Promise<{
       exitCode: number;
       trigger: Record<string, string>;
@@ -755,6 +765,7 @@ describe("Packaging & distribution configuration", () => {
           github,
           trigger,
           runner,
+          materialize,
         });
         const script = (runStep?.run ?? "").replaceAll(
           `\${{ github.action_path }}`,
@@ -831,6 +842,62 @@ describe("Packaging & distribution configuration", () => {
         );
       },
     );
+
+    // Platform mode: the setup step names a temp file holding the platform's
+    // repo layer ONLY for a checkout with no repo config of its own, and the
+    // run step hands it to the engine's `--config` (which repoints the repo
+    // layer and nothing else). Every other run passes no `--config` at all.
+    test("--config is passed only when the setup step named a repo layer file", async () => {
+      const without = await cliArgsFor({ "pr-number": "305" });
+      expect(without).not.toContain("--config");
+
+      const run = await runAction(
+        { ...CREDENTIAL, "pr-number": "305" },
+        dispatchContext,
+        offlineGh,
+        0,
+        {
+          "repo-config":
+            "/runner/temp/crysk-platform/platform-repo-config.json",
+        },
+      );
+      const args = run.args ?? [];
+      const at = args.indexOf("--config");
+      expect(at).toBeGreaterThan(-1);
+      expect(args[at + 1]).toBe(
+        "/runner/temp/crysk-platform/platform-repo-config.json",
+      );
+    });
+
+    test("the setup and run steps read the platform's files only through env bound to the connect step's outputs", () => {
+      const materialize = steps().find((step) => step.id === "materialize");
+      expect(materialize?.env?.CRYSK_PLATFORM_CONFIG_FILE).toBe(
+        `\${{ steps.platform.outputs.config-file }}`,
+      );
+      const run = steps().find((step) => step.id === "run-crysk");
+      expect(run?.env?.CRYSK_REPO_CONFIG).toBe(
+        `\${{ steps.materialize.outputs.repo-config }}`,
+      );
+      // Only the first connect step may leave the configuration; the refresh
+      // steps never bind the directory.
+      const connect = steps().find((step) => step.id === "platform");
+      expect(connect?.env?.CRYSK_PLATFORM_CONFIG_DIR).toBe(
+        `\${{ runner.temp }}/crysk-platform`,
+      );
+      for (const id of ["platform-publish", "platform-settle"]) {
+        const refresh = steps().find((step) => step.id === id);
+        expect(refresh?.env?.CRYSK_PLATFORM_CONFIG_DIR).toBeUndefined();
+      }
+    });
+
+    test("platform routing that names OpenCode installs the OpenCode CLI too", () => {
+      const install = steps().find(
+        (step) => step.name === "Install OpenCode CLI",
+      );
+      expect(String(install?.if)).toContain(
+        "steps.platform.outputs.routing-opencode == 'true'",
+      );
+    });
 
     // ---------------------------------------------------------------------
     // The trigger step (odd/tasks/agent-first-ci.md, T1/S1): credential

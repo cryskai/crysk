@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -389,6 +395,157 @@ describe("runPlatformConnect", () => {
     const text = events.join("");
     expect(text).toContain("::error");
     expect(text).toContain("GITHUB_OUTPUT is not set");
+    expect(text.replace(`::add-mask::${GITHUB_TOKEN}`, "")).not.toContain(
+      GITHUB_TOKEN,
+    );
+  });
+});
+
+describe("platform review configuration", () => {
+  const CONFIG = {
+    person: { max_changed_lines: 4000, scout: false },
+    repo: { default_base: "release" },
+  };
+
+  function connect(
+    body: unknown,
+    options: { configDir?: string } = {},
+  ): { events: string[]; run: () => Promise<number> } {
+    const events: string[] = [];
+    const { fn } = fakeFetch(() => json(200, { ...SUCCESS, config: body }));
+    return {
+      events,
+      run: () =>
+        runPlatformConnect({
+          fetch: fn,
+          env: ENV,
+          baseUrl: BASE,
+          stdout: (text) => events.push(`stdout:${text}`),
+          appendOutput: (text) => events.push(`output:${text}`),
+          ...options,
+        }),
+    };
+  }
+
+  async function exchange(body: unknown) {
+    const { fn } = fakeFetch(() => json(200, { ...SUCCESS, config: body }));
+    return await exchangePlatformToken({
+      fetch: fn,
+      env: ENV,
+      baseUrl: BASE,
+      mask: () => {},
+    });
+  }
+
+  test("a non-empty config is returned with the tokens", async () => {
+    expect(await exchange(CONFIG)).toEqual({
+      ok: true,
+      githubToken: GITHUB_TOKEN,
+      runToken: RUN_TOKEN,
+      config: CONFIG,
+    });
+  });
+
+  test("a layer left out is an empty layer", async () => {
+    const result = await exchange({ repo: { default_base: "x" } });
+    expect(result.ok && result.config).toEqual({
+      person: {},
+      repo: { default_base: "x" },
+    });
+  });
+
+  test.each([
+    ["absent", undefined],
+    ["null", null],
+    ["empty objects", { person: {}, repo: {} }],
+    ["an empty config", {}],
+  ])("%s means no configuration: the result carries none", async (_l, body) => {
+    const result = await exchange(body);
+    expect(result.ok).toBe(true);
+    expect(result).not.toHaveProperty("config");
+  });
+
+  test.each([
+    ["a string", "SENTINEL-CONFIG-1"],
+    ["an array", []],
+    ["a person that is not an object", { person: "SENTINEL-PERSON-2" }],
+    ["a repo that is an array", { repo: [] }],
+  ])("%s is a loud failure that leaks nothing", async (_l, body) => {
+    const result = await exchange(body);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toContain("config");
+    expect(result.message).not.toContain("SENTINEL");
+    expect(result.message).not.toContain(GITHUB_TOKEN);
+  });
+
+  test("the connect step leaves the config as a 0600 file and names it in an output after the tokens", async () => {
+    const dir = path.join(
+      mkdtempSync(path.join(tmpdir(), "platform-config-")),
+      "crysk-platform",
+    );
+    const h = connect(CONFIG, { configDir: dir });
+    expect(await h.run()).toBe(0);
+    const file = path.join(dir, "platform-config.json");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(CONFIG);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(h.events.filter((e) => e.startsWith("output:"))).toEqual([
+      `output:github-token=${GITHUB_TOKEN}\n`,
+      `output:run-token=${RUN_TOKEN}\n`,
+      `output:config-file=${file}\n`,
+    ]);
+    // The token never lands in the config file.
+    expect(readFileSync(file, "utf8")).not.toContain(GITHUB_TOKEN);
+  });
+
+  test("platform routing that names OpenCode is announced so the CLI gets installed", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "platform-config-"));
+    const h = connect(
+      { person: { routing: { default: { backend: "opencode" } } }, repo: {} },
+      { configDir: dir },
+    );
+    expect(await h.run()).toBe(0);
+    expect(h.events).toContain("output:routing-opencode=true\n");
+    const claude = connect(
+      { person: { routing: { default: { backend: "claude-code" } } } },
+      { configDir: dir },
+    );
+    expect(await claude.run()).toBe(0);
+    expect(claude.events.join("")).not.toContain("routing-opencode");
+  });
+
+  test.each([
+    ["absent", undefined],
+    ["empty objects", { person: {}, repo: {} }],
+  ])("%s config writes no file and no config output", async (_l, body) => {
+    const dir = path.join(
+      mkdtempSync(path.join(tmpdir(), "platform-config-")),
+      "crysk-platform",
+    );
+    const h = connect(body, { configDir: dir });
+    expect(await h.run()).toBe(0);
+    expect(existsSync(dir)).toBe(false);
+    expect(h.events.join("")).not.toContain("config-file");
+  });
+
+  test("a refresh step (no config directory) ignores the config in its response", async () => {
+    const h = connect(CONFIG);
+    expect(await h.run()).toBe(0);
+    expect(h.events.join("")).not.toContain("config-file");
+  });
+
+  test("a config that cannot be written is an error naming the file, writes no output and exits 1", async () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "platform-config-"));
+    // A file where the directory must go makes every write beneath it fail.
+    const blocker = path.join(parent, "blocker");
+    writeFileSync(blocker, "x");
+    const dir = path.join(blocker, "crysk-platform");
+    const h = connect(CONFIG, { configDir: dir });
+    expect(await h.run()).toBe(1);
+    expect(h.events.some((e) => e.startsWith("output:"))).toBe(false);
+    const text = h.events.join("");
+    expect(text).toContain("::error");
+    expect(text).toContain(path.join(dir, "platform-config.json"));
     expect(text.replace(`::add-mask::${GITHUB_TOKEN}`, "")).not.toContain(
       GITHUB_TOKEN,
     );
