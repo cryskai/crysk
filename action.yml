@@ -228,6 +228,9 @@ runs:
         # on a `pull_request_target`-triggered workflow; splicing it
         # straight into the script would be a command-injection hole.
         GITHUB_TOKEN: ${{ steps.platform.outputs.github-token || inputs.github-token }}
+        # The login the platform returned for the App's bot, empty in a
+        # standalone run: the answered-findings gate trusts it as a poster.
+        CRYSK_PLATFORM_ACTOR: ${{ steps.platform.outputs.github-actor }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}

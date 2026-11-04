@@ -202,7 +202,24 @@ describe("exchangePlatformToken", () => {
     expect(calls).toHaveLength(1);
   });
 
-  test("a platform failure is never retried: the dispatch id is single-use", async () => {
+  test("two exchanges in one run each request a NEW OIDC token from GitHub", async () => {
+    const { fn, calls } = fakeFetch(() => json(200, SUCCESS));
+    for (let i = 0; i < 2; i++) {
+      const result = await exchangePlatformToken({
+        fetch: fn,
+        env: ENV,
+        baseUrl: BASE,
+        mask: () => {},
+        sleep: async () => {},
+      });
+      expect(result.ok).toBe(true);
+    }
+    const oidcCalls = calls.filter((call) => call.url.startsWith(OIDC_URL));
+    expect(oidcCalls).toHaveLength(2);
+    expect(calls.filter((call) => call.url.startsWith(BASE))).toHaveLength(2);
+  });
+
+  test("a platform failure is never retried: the platform refuses a second exchange of one OIDC token", async () => {
     const { fn, calls } = fakeFetch(() =>
       json(502, { message: "bad gateway" }),
     );
@@ -307,6 +324,26 @@ describe("runPlatformConnect", () => {
         }),
     };
   }
+
+  test("a login the platform returned is written as github-actor, after the token", async () => {
+    const h = harness(() =>
+      json(200, { ...SUCCESS, github_actor: "crysk-dev[bot]" }),
+    );
+    expect(await h.run()).toBe(0);
+    const outputs = h.events.filter((e) => e.startsWith("output:"));
+    expect(outputs).toEqual([
+      `output:github-token=${GITHUB_TOKEN}\n`,
+      "output:github-actor=crysk-dev[bot]\n",
+    ]);
+  });
+
+  test("no login, or one that is not a plausible login, writes no github-actor", async () => {
+    for (const actor of [undefined, "", "a\nevil=1", "x y", 7]) {
+      const h = harness(() => json(200, { ...SUCCESS, github_actor: actor }));
+      expect(await h.run()).toBe(0);
+      expect(h.events.join("")).not.toContain("github-actor");
+    }
+  });
 
   test("masks both tokens before writing the output, then exits 0", async () => {
     const h = harness(() => json(200, SUCCESS));
@@ -469,6 +506,12 @@ describe("action.yml platform wiring", () => {
     );
     expect(find("platform-settle").if).toContain(
       "steps.trigger.outputs.run == 'true'",
+    );
+  });
+
+  test("Run Crysk hands the platform's actor login to the gate, from the platform step only", () => {
+    expect(find("run-crysk").env?.CRYSK_PLATFORM_ACTOR).toBe(
+      expression("steps.platform.outputs.github-actor"),
     );
   });
 });

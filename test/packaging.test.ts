@@ -642,6 +642,7 @@ describe("Packaging & distribution configuration", () => {
             expr,
           )?.[1];
         if (fallback !== undefined) return input(fallback);
+        if (expr === "steps.platform.outputs.github-actor") return "";
         throw new Error(`unsupported expression in an action.yml env: ${expr}`);
       };
       // A value may hold one expression or several, mixed with literal text

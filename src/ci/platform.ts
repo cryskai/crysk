@@ -31,11 +31,17 @@ const OIDC_AUDIENCE = "crysk";
 // job: this step runs first, before anything else.
 const REQUEST_TIMEOUT_MS = 30_000;
 
+// A GitHub login as the platform returns it (`crysk-dev[bot]`). It lands in a
+// trust set and in $GITHUB_OUTPUT, so nothing else is accepted.
+const SAFE_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\[bot\])?$/;
+
 const MISSING_OIDC =
   "The workflow did not grant `id-token: write`, so GitHub issued no OIDC token to this run. Add `id-token: write` to the workflow's `permissions:` and dispatch again.";
 
 export type PlatformTokenResult =
-  | { ok: true; githubToken: string; runToken: string }
+  // `githubActor` is the login the platform says posts as the App's bot. It is
+  // absent when the platform sent none or one that is not a plausible login.
+  | { ok: true; githubToken: string; runToken: string; githubActor?: string }
   // `message` names the HTTP status and the API's own `message` when there was
   // one. It never carries a token.
   | { ok: false; message: string };
@@ -52,8 +58,10 @@ export interface PlatformTokenDeps {
 }
 
 // The OIDC GET is idempotent, so a blip (a thrown fetch, a timeout, a 5xx) is
-// retried; the platform POST below is NOT, because the platform answers 409 to
-// a second exchange of the same dispatch id.
+// retried; the platform POST below is NOT: the platform refuses a second
+// exchange of the same OIDC token (HTTP 409, keyed on its jti). Every run of
+// this script asks GitHub for a NEW OIDC token, so a later step can exchange
+// again for a fresh installation token; a retry of the POST could not.
 const OIDC_ATTEMPTS = 3;
 const OIDC_BACKOFF_MS = 1_000;
 
@@ -164,8 +172,13 @@ export async function exchangePlatformToken(
     const body = (await response.json()) as {
       github_token?: unknown;
       run_token?: unknown;
+      github_actor?: unknown;
     };
-    const { github_token: githubToken, run_token: runToken } = body;
+    const {
+      github_token: githubToken,
+      run_token: runToken,
+      github_actor: actor,
+    } = body;
     // Mask whatever string arrived before judging it, so a malformed reply
     // still cannot leak a token into the log.
     for (const value of [githubToken, runToken]) {
@@ -182,7 +195,14 @@ export async function exchangePlatformToken(
         [...secrets, String(githubToken), String(runToken)],
       );
     }
-    return { ok: true, githubToken, runToken };
+    return {
+      ok: true,
+      githubToken,
+      runToken,
+      ...(typeof actor === "string" && SAFE_LOGIN.test(actor)
+        ? { githubActor: actor }
+        : {}),
+    };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return failure(
@@ -223,6 +243,11 @@ export async function runPlatformConnect(
   // would silently post as github-actions[bot].
   try {
     deps.appendOutput(`github-token=${result.githubToken}\n`);
+    // Not a secret. Only a login the platform returned, so the engine's trust
+    // set never learns one from anywhere else (see CRYSK_PLATFORM_ACTOR).
+    if (result.githubActor !== undefined) {
+      deps.appendOutput(`github-actor=${result.githubActor}\n`);
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     deps.stdout(

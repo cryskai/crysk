@@ -360,8 +360,8 @@ dispatch input `dispatch-id` is non-empty; the platform's workflow stub sets bot
 In platform mode a `Connect to Crysk` step runs first, before the trigger:
 
 1. It asks GitHub for the run's OIDC token with audience `crysk`.
-2. It sends that token to `https://api.crysk.dev/runs/token` with the dispatch id, and receives a
-   repo-scoped installation token.
+2. It sends that token to `https://api.crysk.dev/runs/token` with the dispatch id (recorded by the
+   platform), and receives a repo-scoped installation token and the login that token posts as.
 3. It masks the tokens in the log and hands the installation token to the trigger, run, publish and
    cancel-settle steps in place of `github.token`. The publish and cancel-settle steps take a freshly
    exchanged token (see below).
@@ -377,7 +377,9 @@ the cause, and no review runs:
 - **HTTP 401** — the token was not issued for audience `crysk`.
 - **HTTP 403** — the workflow is not the platform stub on the default branch, or the repository is not
   connected or not set up.
-- **HTTP 409** — this dispatch's token was already exchanged; dispatch again.
+- **HTTP 409** — this OIDC token was already exchanged. The platform keys the exchange on the OIDC token's
+  id, not on the dispatch id; each exchange needs a newly requested OIDC token, which the step always
+  asks GitHub for.
 - **HTTP 429** — the platform rate-limited the exchange.
 - **Network or malformed reply** — the exchange could not complete.
 - **The token could not be handed on** — the step could not write `GITHUB_OUTPUT`; the run fails rather than
@@ -385,17 +387,20 @@ the cause, and no review runs:
 
 The platform's own `message` is included in the error. No token is ever printed.
 
-Two limits follow from the posting identity and from the token's life:
+Two consequences follow from the posting identity and from the token's life:
 
 - **Who the gate trusts.** The answered-findings gate trusts a finding or summary only from
-  `github-actions[bot]`, the run's actor (`GITHUB_ACTOR`), or a login in `ci_trusted_actors`. In platform
-  mode the author is the Crysk App's bot, so that login MUST be the dispatching actor or be listed in
-  `ci_trusted_actors`; otherwise answers cannot unlock a carried red.
+  `github-actions[bot]`, the run's actor (`GITHUB_ACTOR`), a login in `ci_trusted_actors`, and, in platform
+  mode, the login the platform returned in the exchange reply (`github_actor`, the Crysk App's bot). The
+  step hands it to `Run Crysk` as `CRYSK_PLATFORM_ACTOR`; a standalone run never sets it, and a reply
+  without a plausible login adds nothing.
 - **The token's life.** GitHub App installation tokens last about an hour, and a review may run up to 75
   minutes. So the publish step and the cancel-settle step do not reuse the first token: a `Refresh the Crysk
-  token` step runs the same exchange again right before each (a fresh OIDC token is a fresh identity), and
-  they prefer its result. The `Run Crysk` step itself keeps the token it started with, so a review that runs
-  past the hour can still fail its own terminal post; the publish step then reports it with the fresh token.
+  token` step runs the same script again right before each. Every run of the script requests a NEW OIDC
+  token from GitHub, so the platform (which refuses a second exchange of the same OIDC token) exchanges it
+  again, and they prefer its result. The `Run Crysk` step itself keeps the token it started with, so a
+  review that runs past the hour can still fail its own terminal post; the publish step then reports it
+  with the fresh token.
 
 ## Security considerations
 

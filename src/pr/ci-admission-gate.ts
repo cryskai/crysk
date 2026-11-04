@@ -176,6 +176,7 @@ export async function evaluateCiAdmissionGate(input: {
     }
     const trustedActors = resolveCiTrustedActors({
       githubActor: process.env.GITHUB_ACTOR,
+      platformActor: process.env.CRYSK_PLATFORM_ACTOR,
       extra: config.ci_trusted_actors,
     });
     const allComments = [...reviewComments, ...issueComments];
