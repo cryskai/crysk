@@ -635,6 +635,13 @@ describe("Packaging & distribution configuration", () => {
         if (runner !== undefined) return ctx.runner[runner] ?? "";
         const output = /^steps\.trigger\.outputs\.(\w+)$/.exec(expr)?.[1];
         if (output !== undefined) return ctx.trigger[output] ?? "";
+        // Platform mode is off in every run this harness simulates, so the
+        // step's output is unset and the `||` falls through to the input.
+        const fallback =
+          /^steps\.platform\.outputs\.github-token \|\| inputs\.([\w-]+)$/.exec(
+            expr,
+          )?.[1];
+        if (fallback !== undefined) return input(fallback);
         throw new Error(`unsupported expression in an action.yml env: ${expr}`);
       };
       // A value may hold one expression or several, mixed with literal text
@@ -830,11 +837,14 @@ describe("Packaging & distribution configuration", () => {
     // action, so the calling workflow can be one short file.
     // ---------------------------------------------------------------------
 
-    test("the trigger runs right after Setup Bun, before anything is installed", () => {
+    test("the platform step, then the trigger, run right after Setup Bun, before anything is installed", () => {
       const all = steps();
       const setupBun = all.findIndex((step) => step.name === "Setup Bun");
       expect(setupBun).toBeGreaterThan(-1);
-      const trigger = all[setupBun + 1];
+      // Platform mode only: gated off for every standalone run, so the trigger
+      // is still the first step a standalone run executes after Setup Bun.
+      expect(all[setupBun + 1]?.id).toBe("platform");
+      const trigger = all[setupBun + 2];
       expect(trigger?.id).toBe("trigger");
       expect(trigger?.run).toContain("src/ci/trigger.ts");
     });
@@ -934,7 +944,9 @@ describe("Packaging & distribution configuration", () => {
     });
 
     test("the trigger has a token for its permission and head lookups", () => {
-      expect(triggerStep()?.env?.GH_TOKEN).toBe(`\${{ inputs.github-token }}`);
+      expect(triggerStep()?.env?.GH_TOKEN).toBe(
+        `\${{ steps.platform.outputs.github-token || inputs.github-token }}`,
+      );
     });
 
     // ---------------------------------------------------------------------
@@ -1013,7 +1025,9 @@ describe("Packaging & distribution configuration", () => {
         ...String(step?.run ?? "").matchAll(/\$\{\{[^}]*\}\}/g),
       ].map((match) => match[0]);
       expect(expressions).toEqual([`\${{ github.action_path }}`]);
-      expect(step?.env?.GH_TOKEN).toBe(`\${{ inputs.github-token }}`);
+      expect(step?.env?.GH_TOKEN).toBe(
+        `\${{ steps.platform.outputs.github-token || inputs.github-token }}`,
+      );
       expect(step?.env?.GITHUB_REPOSITORY).toBe(`\${{ github.repository }}`);
       expect(step?.env?.GITHUB_RUN_ID).toBe(`\${{ github.run_id }}`);
     });

@@ -349,6 +349,39 @@ The workflow token may also be unable to resolve review threads, even with `issu
 `Resource not accessible by integration` for that mutation, and the log says so once per run. The
 verified-gone reply is still posted, and the gate is unaffected: the thread stays open for a person to close.
 
+## Platform mode
+
+When the Crysk platform dispatches a run, the action posts as the Crysk App's bot instead of
+`github-actions[bot]`. Platform mode is on only when the event is `workflow_dispatch` **and** the
+dispatch input `dispatch-id` is non-empty; the platform's workflow stub sets both. Every other run is
+**standalone** and is unchanged: the step is skipped and the `github-token` input (default
+`github.token`) is used exactly as before.
+
+In platform mode a `Connect to Crysk` step runs first, before the trigger:
+
+1. It asks GitHub for the run's OIDC token with audience `crysk`.
+2. It sends that token to `https://api.crysk.dev/runs/token` with the dispatch id, and receives a
+   repo-scoped installation token.
+3. It masks the tokens in the log and hands the installation token to the trigger, run, publish and
+   cancel-settle steps in place of `github.token`.
+
+The platform URL is fixed in the engine. It is not an input and not an environment variable, because
+anyone with write access can dispatch with arbitrary inputs and the OIDC token must never go to a server
+they pick.
+
+Platform mode never falls back to `github.token`. Any failure turns the job red with an error that names
+the cause, and no review runs:
+
+- **No `id-token: write`** — the workflow's `permissions:` lacks it, so GitHub issues no OIDC token.
+- **HTTP 401** — the token was not issued for audience `crysk`.
+- **HTTP 403** — the workflow is not the platform stub on the default branch, or the repository is not
+  connected or not set up.
+- **HTTP 409** — this dispatch's token was already exchanged; dispatch again.
+- **HTTP 429** — the platform rate-limited the exchange.
+- **Network or malformed reply** — the exchange could not complete.
+
+The platform's own `message` is included in the error. No token is ever printed.
+
 ## Security considerations
 
 ### Fork pull requests
