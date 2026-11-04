@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the masked `run-token`, and a new `Report to Crysk` step after `Publish Crysk outcome` POSTs the run's
   outcome, PR number, shas, blocking and advisory counts, token and cost totals and per-agent usage to
   `/runs/report`, so each run is recorded with its cost. The body is metadata only: no finding, claim,
-  summary or hop trail. Failed and skipped reviews are reported too (zero counts when no run directory was
-  written). A report failure is a `::warning::` and never turns the job red. Standalone runs are unchanged.
+  summary or hop trail. Failed and skipped reviews are reported too (zero counts when the action
+  published no run directory). A report failure, including one while reading or shaping the run
+  directory, is a `::warning::` and never turns the job red. Standalone runs are unchanged.
 
 ### Changed
 - **The GraphQL issue-comments fallback reports Bot authors as `<login>[bot]`**, as the REST path and the

@@ -415,8 +415,10 @@ The report is metadata only: the action's `status` as `outcome`, the PR number, 
 run status, schema and engine versions, the model, the blocking and advisory counts, the token, cost
 and wall-time totals (`cost_is_floor` when the cost is a floor of known spend), and one row per agent (key,
 model, tokens, cost, duration, attempts, status). It never carries findings, claims, summary text, hop trails
-or any other text that can quote your code. A review that wrote no run directory (skipped, size-gated, failed
-before writing) is reported with zero counts and usage, from the head the trigger resolved; an empty status
+or any other text that can quote your code. A review whose run directory the action never published
+(skipped, size-gated, failed before writing, and the cases in the known gap under "Downloading the run
+directory": every hunter died, a fatal error, a cancelled job) is reported with zero counts and usage, even
+if the CLI wrote a `findings.json` that run, from the head the trigger resolved; an empty status
 is reported as `error`.
 
 The report never fails the job. A platform that is down, a rejected token (HTTP 401) or a rejected field

@@ -21,10 +21,15 @@
 //
 // WHY the run directory is read here: the report must also say what a review
 // that wrote nothing did (skipped, size-gated, failed before writing), so a
-// missing or unreadable directory is the zero report, not an error.
+// missing or unreadable directory is the zero report, not an error. The
+// `run_dir` output is empty for a run where every hunter died, a fatal error
+// and a cancelled job (action.yml "KNOWN GAP"), so those report zero counts
+// even when a findings.json was written.
 //
-// RUNS BEFORE NO INSTALL, like publish: every import is a builtin or a sibling
-// module that is itself free of package imports.
+// RUNS BEFORE NO INSTALL, like publish: every import is a builtin or a module
+// whose own import closure is package-free. test/ci/platform-report.test.ts
+// walks that closure, so a package import added anywhere in it fails a test
+// instead of failing the job at module load.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -177,10 +182,17 @@ function buildAgents(
 ): RunReportAgent[] {
   const models = stepModels(pipeline);
   const perAgent = doc.telemetry.per_agent ?? {};
-  return Object.entries(perAgent)
+  // validateFindingsDocument only checks that `telemetry` is an object, so a
+  // row that is not one is skipped instead of read.
+  return Object.entries(perAgent as Record<string, unknown>)
+    .filter(
+      (entry): entry is [string, Record<string, unknown>] =>
+        typeof entry[1] === "object" &&
+        entry[1] !== null &&
+        !Array.isArray(entry[1]),
+    )
     .slice(0, MAX_AGENTS)
-    .map(([key, value]) => {
-      const row = value as Record<string, unknown>;
+    .map(([key, row]) => {
       const model = modelOf(models, key);
       return {
         agent_key: key,
@@ -214,16 +226,28 @@ function stepModels(pipeline: unknown): Array<{ name: string; model: string }> {
 }
 
 // A hunter's step is `hunter-<key>`; a refuter, verifier or adjudicator fans
-// out one step per finding (`refuter-F001`) under one `per_agent` row.
+// out one step per finding (`refuter-F001`) under one `per_agent` row. Three
+// rows are keyed by something other than their steps' name: the summary row's
+// step is `summarizer`, the verifier's are `verify-<id>` and the adjudicator's
+// are `adjudicate-<id>` (pipeline.ts, rereview/verify.ts). Without the alias
+// those rows would go out with no model.
+const STEP_NAME_ALIASES: Readonly<Record<string, string>> = {
+  summary: "summarizer",
+  verifier: "verify",
+  adjudicator: "adjudicate",
+};
+
 function modelOf(
   steps: ReadonlyArray<{ name: string; model: string }>,
   key: string,
 ): string | undefined {
+  const stem = STEP_NAME_ALIASES[key] ?? key;
   return steps.find(
     (step) =>
       step.name === key ||
+      step.name === stem ||
       step.name === `hunter-${key}` ||
-      step.name.startsWith(`${key}-`),
+      step.name.startsWith(`${stem}-`),
   )?.model;
 }
 
@@ -324,35 +348,44 @@ export interface RunReportStepDeps {
 
 // The step's shell. ALWAYS 0: see the header.
 export async function runReportStep(deps: RunReportStepDeps): Promise<number> {
+  const runToken = deps.env.CRYSK_RUN_TOKEN ?? "";
   const warn = (message: string): void =>
     deps.stdout(
       `::warning title=crysk::${escapeCommandData(`Crysk run report not recorded: ${message}`)}\n`,
     );
-  const runToken = deps.env.CRYSK_RUN_TOKEN ?? "";
-  if (runToken === "") {
-    warn("no run token reached this step.");
-    return 0;
+  // The whole step, not only the request: a run directory this engine wrote is
+  // read and shaped here too, and a throw from either must still be a warning.
+  try {
+    if (runToken === "") {
+      warn("no run token reached this step.");
+      return 0;
+    }
+    const prNumber = Number(deps.env.TRIGGER_PR ?? "");
+    if (!Number.isInteger(prNumber) || prNumber <= 0) {
+      warn("the run resolved no pull request number.");
+      return 0;
+    }
+    const body = buildRunReport({
+      outcome: deps.env.CRYSK_OUTCOME ?? "",
+      prNumber,
+      triggerHeadSha: deps.env.TRIGGER_HEAD_SHA ?? "",
+      run: readRunDir(deps.env.CRYSK_RUN_DIR ?? "", deps.readText),
+    });
+    if (body === null) {
+      warn("the run resolved no head sha.");
+      return 0;
+    }
+    const result = await sendRunReport(
+      { fetch: deps.fetch, baseUrl: deps.baseUrl, runToken },
+      body,
+    );
+    if (!result.ok) warn(result.message);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    warn(
+      `the report could not be built: ${detail.split(runToken).join("***")}`,
+    );
   }
-  const prNumber = Number(deps.env.TRIGGER_PR ?? "");
-  if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    warn("the run resolved no pull request number.");
-    return 0;
-  }
-  const body = buildRunReport({
-    outcome: deps.env.CRYSK_OUTCOME ?? "",
-    prNumber,
-    triggerHeadSha: deps.env.TRIGGER_HEAD_SHA ?? "",
-    run: readRunDir(deps.env.CRYSK_RUN_DIR ?? "", deps.readText),
-  });
-  if (body === null) {
-    warn("the run resolved no head sha.");
-    return 0;
-  }
-  const result = await sendRunReport(
-    { fetch: deps.fetch, baseUrl: deps.baseUrl, runToken },
-    body,
-  );
-  if (!result.ok) warn(result.message);
   return 0;
 }
 

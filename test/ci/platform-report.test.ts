@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -159,6 +159,74 @@ describe("buildRunReport", () => {
         attempts: 1,
         status: "ok",
       },
+    ]);
+  });
+
+  test("the summary, verifier and adjudicator rows take the model of their differently named steps", () => {
+    const report = buildRunReport({
+      outcome: "reviewed",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: {
+        findings: {
+          ...FINDINGS,
+          telemetry: {
+            ...FINDINGS.telemetry,
+            per_agent: {
+              summary: { tokens_in: 1, tokens_out: 1, cost_usd_est: 0.1 },
+              verifier: { tokens_in: 2, tokens_out: 2, cost_usd_est: 0.2 },
+              adjudicator: { tokens_in: 3, tokens_out: 3, cost_usd_est: 0.3 },
+              scout: { tokens_in: 4, tokens_out: 4, cost_usd_est: 0.4 },
+              materiality: { tokens_in: 5, tokens_out: 5, cost_usd_est: 0.5 },
+            },
+          },
+        },
+        pipeline: {
+          steps: [
+            { name: "summarizer", model: "m-summary" },
+            { name: "verify-V001", model: "m-verify" },
+            { name: "adjudicate-F001", model: "m-adjudicate" },
+            { name: "scout", model: "m-scout" },
+            { name: "materiality-F001", model: "m-materiality" },
+          ],
+        },
+      },
+    });
+    expect(
+      Object.fromEntries(
+        (report?.agents ?? []).map((agent) => [agent.agent_key, agent.model]),
+      ),
+    ).toEqual({
+      summary: "m-summary",
+      verifier: "m-verify",
+      adjudicator: "m-adjudicate",
+      scout: "m-scout",
+      materiality: "m-materiality",
+    });
+  });
+
+  test("a per_agent row that is not an object is skipped, never read", () => {
+    const report = buildRunReport({
+      outcome: "reviewed",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: {
+        findings: {
+          ...FINDINGS,
+          telemetry: {
+            ...FINDINGS.telemetry,
+            per_agent: {
+              broken: null,
+              text: "x",
+              list: [1],
+              reliability: { tokens_in: 6, tokens_out: 1 },
+            },
+          },
+        },
+      },
+    });
+    expect(report?.agents.map((agent) => agent.agent_key)).toEqual([
+      "reliability",
     ]);
   });
 
@@ -425,6 +493,22 @@ describe("runReportStep", () => {
     });
   });
 
+  test("a throw while building the report is a warning that never carries the token", async () => {
+    const env = {
+      ...ENV,
+      get TRIGGER_HEAD_SHA(): string {
+        throw new Error(`boom ${RUN_TOKEN}`);
+      },
+    };
+    const r = run(env, () => json(200, {}));
+    expect(await r.code).toBe(0);
+    expect(r.calls).toHaveLength(0);
+    const text = r.out.join("");
+    expect(text).toStartWith("::warning");
+    expect(text).toContain("boom");
+    expect(text).not.toContain(RUN_TOKEN);
+  });
+
   test("a missing token, pr number or head warns and sends nothing", async () => {
     for (const patch of [
       { CRYSK_RUN_TOKEN: "" },
@@ -437,5 +521,74 @@ describe("runReportStep", () => {
       expect(r.calls).toHaveLength(0);
       expect(r.out.join("")).toContain("::warning");
     }
+  });
+});
+
+// The step runs before `bun install` when the action's `if` admits a publish-only
+// or install-failed run, so a package import anywhere in its static import
+// closure would fail the job at module load, outside every try/catch.
+describe("platform-report.ts runs before `bun install`", () => {
+  const ROOT = path.resolve(import.meta.dir, "../..");
+  const ENTRY = path.join(ROOT, "src/ci/platform-report.ts");
+  const subpaths: Record<string, string> = JSON.parse(
+    readFileSync(path.join(ROOT, "package.json"), "utf8"),
+  ).imports;
+  // `import type` and `export type` are erased before the module loads.
+  const IMPORT =
+    /^(import|export)\s+(type\s+)?(?:[\w*${}\s,]*?\s*from\s+)?"([^"]+)"/gm;
+
+  function resolveSpecifier(from: string, specifier: string): string | null {
+    if (specifier.startsWith(".")) {
+      return `${path.resolve(path.dirname(from), specifier)}.ts`;
+    }
+    if (specifier.startsWith("#")) {
+      for (const [pattern, target] of Object.entries(subpaths)) {
+        const prefix = pattern.replace("*", "");
+        if (specifier.startsWith(prefix)) {
+          return path.join(
+            ROOT,
+            target.replace("*", specifier.slice(prefix.length)),
+          );
+        }
+      }
+    }
+    return null;
+  }
+
+  function closure(): { files: Set<string>; offenders: string[] } {
+    const files = new Set<string>();
+    const offenders: string[] = [];
+    const pending = [ENTRY];
+    for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+      if (files.has(file)) continue;
+      files.add(file);
+      for (const match of readFileSync(file, "utf8").matchAll(IMPORT)) {
+        if (match[2] !== undefined) continue;
+        const specifier = match[3] ?? "";
+        if (/^(node:|bun$|bun:)/.test(specifier)) continue;
+        const resolved = resolveSpecifier(file, specifier);
+        if (resolved === null || !existsSync(resolved)) {
+          offenders.push(`${path.relative(ROOT, file)} imports "${specifier}"`);
+        } else {
+          pending.push(resolved);
+        }
+      }
+    }
+    return { files, offenders };
+  }
+
+  test("its import closure is builtins and in-repo modules only", () => {
+    const { files, offenders } = closure();
+    // The walk reaches the modules the finding named, so it is not vacuous.
+    for (const reached of [
+      "src/review/findings.ts",
+      "src/review/materiality-gate.ts",
+      "src/compare/materiality.ts",
+      "src/review/boundary.ts",
+      "src/security/evidence-redaction.ts",
+    ]) {
+      expect(files).toContain(path.join(ROOT, reached));
+    }
+    expect(offenders).toEqual([]);
   });
 });
