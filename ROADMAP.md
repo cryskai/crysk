@@ -188,8 +188,14 @@ control, plus the incident eval:
 12. **Greens no review saw** (found while closing #10): when a new head is skipped (budget used up,
     `max-attempts-exhausted`), it inherits the last verdict. A carried green stays green, and a carried
     red turns green once every blocking finding is answered, without verifying the fixes
-    (`src/pr/admission.ts:603-648`). So code no review read can merge on a green `crysk`. Open question:
-    keep the carry, or hold the head pending until a manual `/crysk review`.
+    (`src/pr/admission.ts:603-648`). So code no review read can merge on a green `crysk`. **Done for the
+    capped rules (2026-11-04):** since #442, 19 of 65 merged PRs here and on musive ended on a head no
+    review read. 11 were a maintainer's `/crysk stop`, and one merged green over 11 unreviewed commits
+    after the budget ran out. Under the budget used up or `manual_only`, a would-be green is now held
+    `pending` until a manual `/crysk review` or `/crysk override`; a red still carries. `/crysk stop`, a
+    low-risk or below-threshold delta and once per PR still carry a green. Open: the low-risk delta rule
+    treats agent skill `.md` files as low risk (3 such carried greens here), which #7's probe found carry
+    real blocking bugs.
 
 **Done when:** precision and the noise metric improve with H+C recall within noise of 52/66, rounds to
 green and time to green go down, and the new numbers are published.
