@@ -3689,6 +3689,11 @@ async function runMaterialityJudge(
     state.reviewInstructions === NO_REVIEW_INSTRUCTIONS
       ? ""
       : withoutScaffoldLines(state.reviewInstructions);
+  // Headings alone name no class: a file reduced to them (a renamed title over
+  // untouched placeholders) sends no block, so the prompt stays the measured one.
+  const hasPolicyLine = ownerPolicy
+    .split("\n")
+    .some((line) => line.trim() !== "" && !line.trim().startsWith("#"));
   for (const finding of judge) {
     const prompt = renderMaterialityPrompt(
       {
@@ -3702,7 +3707,7 @@ async function runMaterialityJudge(
         ),
         // No file, or nothing left once scaffold lines are dropped: no
         // block, so the prompt stays the measured one.
-        ...(ownerPolicy.trim() === "" ? {} : { instructions: ownerPolicy }),
+        ...(hasPolicyLine ? { instructions: ownerPolicy } : {}),
       },
       nonce,
     );
