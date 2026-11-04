@@ -182,7 +182,7 @@ import {
   agentFilePath,
   gotchasUnusableReason,
   NO_REVIEW_INSTRUCTIONS,
-  withoutScaffoldLines,
+  ownerPolicyText,
 } from "./preflight";
 import {
   capScoutLeads,
@@ -3682,18 +3682,13 @@ async function runMaterialityJudge(
       : MATERIALITY_TITLE_FALLBACK;
   const effort = defaultEffortForRole("other");
   const specs: Array<{ id: string; spec: StepSpec; meta: StepMeta }> = [];
-  // The owner's file as posting policy: placeholder lines from our template
-  // never reach the judge (withoutScaffoldLines, PR #464 F001).
+  // The owner's file as posting policy, or undefined when it holds nothing of
+  // the owner's own: template text never reaches the judge (ownerPolicyText).
   const ownerPolicy =
     state.reviewInstructions === undefined ||
     state.reviewInstructions === NO_REVIEW_INSTRUCTIONS
-      ? ""
-      : withoutScaffoldLines(state.reviewInstructions);
-  // Headings alone name no class: a file reduced to them (a renamed title over
-  // untouched placeholders) sends no block, so the prompt stays the measured one.
-  const hasPolicyLine = ownerPolicy
-    .split("\n")
-    .some((line) => line.trim() !== "" && !line.trim().startsWith("#"));
+      ? undefined
+      : ownerPolicyText(state.reviewInstructions);
   for (const finding of judge) {
     const prompt = renderMaterialityPrompt(
       {
@@ -3705,9 +3700,8 @@ async function runMaterialityJudge(
           finding.path,
           finding.line,
         ),
-        // No file, or nothing left once scaffold lines are dropped: no
-        // block, so the prompt stays the measured one.
-        ...(hasPolicyLine ? { instructions: ownerPolicy } : {}),
+        // No owner text: no block, so the prompt stays the measured one.
+        ...(ownerPolicy === undefined ? {} : { instructions: ownerPolicy }),
       },
       nonce,
     );

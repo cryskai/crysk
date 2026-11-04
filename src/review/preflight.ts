@@ -3558,23 +3558,32 @@ export function gotchasUnusableReason(
   return undefined;
 }
 
-// The owner text the materiality judge reads as POLICY, minus the template's
-// placeholder bullets (PR #464 F001). A file that passes the gate can still
-// keep one — the "Not blocking here" placeholder above all, which names the
-// demotable classes and would read as the owner opting them out. Only the
-// `- <…>` lines our scaffolds wrote are dropped: the headings stay, because a
-// real "- style findings" line means nothing to the judge without its
-// "## Not blocking here" heading. A file with no placeholder is sent as
+// The owner text the materiality judge reads as POLICY, or undefined when the
+// file holds no line of the owner's own (PR #464 F001, #465). A file that
+// passes the gate can still keep template text — the "Not blocking here"
+// placeholder above all, which names the demotable classes and would read as
+// the owner opting them out. So the `- <…>` placeholder bullets our scaffolds
+// wrote are dropped; headings and any other line stay, because a real
+// "- style findings" line means nothing without its "## Not blocking here"
+// heading. What is left is sent only when at least one line is neither a
+// heading nor a scaffold line: a renamed title over an untouched template is
+// all template, and sends nothing. A file with no placeholder is sent as
 // written, so the measured exam arms are unchanged. Facts-only readers
 // (hunters, refuter) still get the file as written.
-export function withoutScaffoldLines(text: string): string {
-  return text
-    .split("\n")
-    .filter((line) => {
-      const trimmed = line.trim();
-      return !(trimmed.startsWith("- <") && SCAFFOLD_BODY_LINES.has(trimmed));
-    })
-    .join("\n");
+export function ownerPolicyText(text: string): string | undefined {
+  const kept = text.split("\n").filter((line) => {
+    const trimmed = line.trim();
+    return !(trimmed.startsWith("- <") && SCAFFOLD_BODY_LINES.has(trimmed));
+  });
+  const ownLine = kept.some((line) => {
+    const trimmed = line.trim();
+    return (
+      trimmed !== "" &&
+      !trimmed.startsWith("#") &&
+      !SCAFFOLD_BODY_LINES.has(trimmed)
+    );
+  });
+  return ownLine ? kept.join("\n") : undefined;
 }
 
 // `pr-hero init`'s closing instruction block, as data.
