@@ -24,6 +24,7 @@ import {
   findMarkedCommentId,
   IN_FLIGHT_TTL_MS,
   isInFlightCommitStatus,
+  isManualReviewHold,
   latestStatusInContext,
   type ParsedFindingMarker,
   parseFindingMarker,
@@ -573,6 +574,17 @@ function decideNext(
     (a) => a.finding.blocking && a.finding.live_on_head,
   );
   if (gate.state === "pending") {
+    // Stage 2 #12: a capped rule (the budget used up, or manual_only) held the head instead of carrying a
+    // green no review saw. No run will review it on its own, so waiting is wrong, and so is a routine
+    // forced review: a human decides between verifying the head and merging it unverified.
+    if (
+      isManualReviewHold({ state: gate.state, description: gate.description })
+    ) {
+      return {
+        next_action: "override-or-fix",
+        reason: `No review read this head and no automatic review will (${gate.description}); comment ${commandHint(REVIEW_COMMAND, "")} to verify it, or ${commandHint(OVERRIDE_COMMAND, "")} to merge it unverified.`,
+      };
+    }
     if (gate.pending_in_flight) {
       return {
         next_action: "wait",

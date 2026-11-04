@@ -181,6 +181,21 @@ describe("buildPrStatus: next_action, first match wins", () => {
       state: "pending",
     },
     {
+      // Stage 2 #12: the gate's hold is no run, fresh or not; a human picks review or override.
+      name: "a fresh manual-review hold is not in flight: review or override",
+      input: input({
+        statuses: [
+          gate(
+            "pending",
+            "crysk: waiting for a manual review (review budget for this PR is used up) — /pr-hero review verifies this head, or /pr-hero override",
+            5,
+          ),
+        ],
+      }),
+      action: "override-or-fix",
+      state: "pending",
+    },
+    {
       name: "no pr-hero status on the head means review",
       input: input(),
       action: "review",

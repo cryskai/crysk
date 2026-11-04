@@ -387,7 +387,7 @@ export async function evaluateCiAdmissionGate(input: {
         advisoryCount: admissionVerdict.prior.advisory,
       });
       // S2: manual-required carries the last verdict like every other skip (publishCiSkip,
-      // admissionSkipDecision); a carried red with every blocking finding answered turns green, unverified.
+      // admissionSkipDecision), except a green: Stage 2 #12 holds it pending for a manual review.
       const plan = planCiReviewManualRequired({
         prNumber,
         verdict: admissionVerdict,

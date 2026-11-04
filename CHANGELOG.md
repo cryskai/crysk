@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **An exhausted review budget or `manual_only` no longer turns an unreviewed head green.** Under these two
+  rules no later push gets an automatic review, so a carried green (or answered findings unlocking a carried
+  red) let code no review read merge: one measured pull request merged green over 11 unreviewed commits. The
+  gate now holds such a head `pending` with `crysk: waiting for a manual review (<rule>) — /pr-hero review
+  verifies this head, or /pr-hero override`. A red still carries as a red. The hold is not a review in
+  flight: `crysk status` answers `override-or-fix` instead of `wait`, the next skip walks past it to the last
+  real verdict, and the loop metrics count it as not green. `/crysk stop`, a low-risk or below-threshold
+  delta, and once per PR still carry a green. A required `crysk` check now blocks merge on those heads until a
+  maintainer reviews or overrides them.
+
 ## [0.3.3] - 2026-11-04
 
 ### Added
