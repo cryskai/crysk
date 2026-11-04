@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to a file that does not exist. `PRH-GOTCHAS-MISSING` keeps its code; its text now names both files and
   offers deleting the file.
 
+### Fixed
+- **Review instructions and suspicion priors reach the agents verbatim.** A `$&`, `$$`, `` $` `` or `$'`
+  in a gotchas file or a prior's text used to be expanded as a replacement pattern when it was inserted
+  into the prompt, so `$$` came out as `$` and `$&` pasted the placeholder back in.
+
 ## [0.3.2] - 2026-11-03
 
 ### Changed
