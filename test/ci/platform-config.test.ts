@@ -272,6 +272,35 @@ describe("materializeCiOpenCodeData with a platform person layer", () => {
     expect(existsSync(personPath())).toBe(false);
   });
 
+  // A runner whose HOME outlives the job: an earlier run's personal file must
+  // not be read as this run's person layer when this run has nothing to write.
+  test("platform mode drops a personal file an earlier run left when nothing is to be written", async () => {
+    await run({
+      platformPerson: { max_changed_lines: 4000, routing: PLATFORM_ROUTING },
+    });
+    expect(existsSync(personPath())).toBe(true);
+    await run({ platformPerson: {} });
+    expect(existsSync(personPath())).toBe(false);
+    // Nothing there to drop is not an error.
+    await run({ platformPerson: {} });
+    expect(existsSync(personPath())).toBe(false);
+  });
+
+  test("platform mode rewrites, never merges into, the file an earlier run left", async () => {
+    await run({ platformPerson: { max_changed_lines: 4000, scout: true } });
+    await run({ platformPerson: { post_min_severity: "blocking" } });
+    expect(parseGlobalConfig(await readFile(personPath(), "utf8"))).toEqual({
+      post_min_severity: "blocking",
+    });
+  });
+
+  test("standalone leaves the personal file exactly as it was", async () => {
+    await run({ routing: INPUT_ROUTING });
+    const before = await readFile(personPath(), "utf8");
+    await run({});
+    expect(await readFile(personPath(), "utf8")).toBe(before);
+  });
+
   test("a key the person parser refuses fails loudly before anything is written, naming the key and not the value", async () => {
     const promise = run({
       platformPerson: { post_min_severity: "SENTINEL-LEVEL-77" },
@@ -369,7 +398,12 @@ describe("the engine's loader over what platform mode delivers", () => {
 describe("setup.ts in platform mode (real entry point)", () => {
   async function runSetup(
     platform: unknown | undefined,
-    options: { prepare?: () => Promise<void>; platformFile?: string } = {},
+    options: {
+      prepare?: () => Promise<void>;
+      platformFile?: string;
+      // The connect step ran (the presence boolean action.yml binds).
+      connected?: boolean;
+    } = {},
   ) {
     Bun.spawnSync(["git", "init", "-q"], { cwd: fixture.workspace });
     await options.prepare?.();
@@ -391,6 +425,7 @@ describe("setup.ts in platform mode (real entry point)", () => {
         CRYSK_OUTCOME_DIR: path.join(fixture.runnerTemp, "outcome"),
         GITHUB_OUTPUT: githubOutput,
         CRYSK_PLATFORM_CONFIG_FILE: platformFile,
+        CRYSK_PLATFORM_CONNECTED: options.connected === true ? "true" : "",
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -448,6 +483,56 @@ describe("setup.ts in platform mode (real entry point)", () => {
     expect(result.output).toBe("");
     expect(result.stderr).not.toContain("::notice::");
     expect(existsSync(prheroLayout(fixture.home).reviewConfigPath)).toBe(false);
+  });
+
+  // The stale-file case the connect step cannot announce: with no platform
+  // configuration there is no config file, so only the presence boolean says
+  // this run is connected.
+  test("a connected run with no platform config drops the personal file an earlier run left", async () => {
+    const personFile = prheroLayout(fixture.home).reviewConfigPath;
+    const stale = async () => {
+      await mkdir(path.dirname(personFile), { recursive: true });
+      await writeFile(personFile, JSON.stringify({ max_changed_lines: 4000 }));
+    };
+    const connected = await runSetup(undefined, {
+      connected: true,
+      prepare: stale,
+    });
+    expect(connected.exitCode).toBe(0);
+    expect(existsSync(personFile)).toBe(false);
+    // Standalone leaves a file it did not write alone.
+    const standalone = await runSetup(undefined, { prepare: stale });
+    expect(standalone.exitCode).toBe(0);
+    expect(existsSync(personFile)).toBe(true);
+  });
+
+  test.each([
+    ["the person layer sets post", { post: false }, {}, true],
+    ["the person layer sets post true", { post: true }, {}, true],
+    ["the delivered repo layer sets post", {}, { post: false }, true],
+    ["neither layer sets post", { scout: false }, { default_base: "x" }, false],
+  ])(
+    "post-from-platform is announced when %s",
+    async (_label, person, repo, announced) => {
+      const result = await runSetup({ person, repo });
+      expect(result.exitCode).toBe(0);
+      expect(result.output.includes("post-from-platform=true\n")).toBe(
+        announced,
+      );
+    },
+  );
+
+  test("a repo layer the checkout's own file replaces does not announce post", async () => {
+    const result = await runSetup(
+      { person: {}, repo: { post: false } },
+      {
+        prepare: async () => {
+          await writeRepoFile(".crysk", { max_changed_lines: 50 });
+        },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.output).not.toContain("post-from-platform");
   });
 
   test("an invalid repo layer fails the step with an ::error:: naming the key, never the value", async () => {

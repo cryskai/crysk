@@ -614,7 +614,11 @@ describe("Packaging & distribution configuration", () => {
       runner: Record<string, string>;
       // Outputs of the materialize step the run step reads.
       materialize?: Record<string, string>;
+      // Outputs of the platform connect step (empty in a standalone run).
+      platform?: Record<string, string>;
     }
+    const EFFECTIVE_OPENCODE_ROUTING =
+      "steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode'))";
     function resolveEnv(
       env: Record<string, string>,
       ctx: ActionContext,
@@ -645,6 +649,15 @@ describe("Packaging & distribution configuration", () => {
           )?.[1];
         if (fallback !== undefined) return input(fallback);
         if (expr === "steps.platform.outputs.github-actor") return "";
+        // The effective OpenCode routing: the platform's answer when it sent a
+        // routing (`true` or `false`), the input's otherwise.
+        if (expr === EFFECTIVE_OPENCODE_ROUTING) {
+          const platformRouting = ctx.platform?.["routing-opencode"] ?? "";
+          return String(
+            platformRouting === "true" ||
+              (platformRouting === "" && input("routing").includes("opencode")),
+          );
+        }
         const materialized = /^steps\.materialize\.outputs\.([\w-]+)$/.exec(
           expr,
         )?.[1];
@@ -869,6 +882,47 @@ describe("Packaging & distribution configuration", () => {
       );
     });
 
+    // An explicit CLI option outranks the config, and `--post` is passed by
+    // default, so a `post` the platform sets reaches the engine only when the
+    // run step leaves the flag out.
+    test.each([
+      ["the default input and no platform post", {}, {}, true],
+      ["the input off", { post: "false" }, {}, false],
+      [
+        "the default input and a platform post",
+        {},
+        { "post-from-platform": "true" },
+        false,
+      ],
+      [
+        "the input off and a platform post",
+        { post: "false" },
+        { "post-from-platform": "true" },
+        false,
+      ],
+    ])("--post with %s", async (_label, inputs, materialize, expectPost) => {
+      const run = await runAction(
+        { ...CREDENTIAL, "pr-number": "305", ...inputs },
+        dispatchContext,
+        offlineGh,
+        0,
+        materialize,
+      );
+      expect(run.args).toContain("--yes");
+      expect(run.args?.includes("--post")).toBe(expectPost);
+    });
+
+    test("the setup step is told only by presence that the connect step ran", () => {
+      const materialize = steps().find((step) => step.id === "materialize");
+      expect(materialize?.env?.CRYSK_PLATFORM_CONNECTED).toBe(
+        `\${{ steps.platform.outputs.github-token != '' }}`,
+      );
+      const run = steps().find((step) => step.id === "run-crysk");
+      expect(run?.env?.POST_FROM_PLATFORM).toBe(
+        `\${{ steps.materialize.outputs.post-from-platform }}`,
+      );
+    });
+
     test("the setup and run steps read the platform's files only through env bound to the connect step's outputs", () => {
       const materialize = steps().find((step) => step.id === "materialize");
       expect(materialize?.env?.CRYSK_PLATFORM_CONFIG_FILE).toBe(
@@ -890,14 +944,42 @@ describe("Packaging & distribution configuration", () => {
       }
     });
 
-    test("platform routing that names OpenCode installs the OpenCode CLI too", () => {
+    test("platform routing that names OpenCode installs the OpenCode CLI too, and platform routing that does not overrides the input", () => {
       const install = steps().find(
         (step) => step.name === "Install OpenCode CLI",
       );
-      expect(String(install?.if)).toContain(
-        "steps.platform.outputs.routing-opencode == 'true'",
+      // The same effective test the trigger step binds: the platform's answer
+      // when it sent a routing, the input's only when it sent none.
+      expect(String(install?.if)).toBe(
+        `\${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || ${EFFECTIVE_OPENCODE_ROUTING}) }}`,
       );
     });
+
+    test.each([
+      ["platform names OpenCode, input empty", "true", "", "true"],
+      [
+        "platform names OpenCode, input names it too",
+        "true",
+        "opencode",
+        "true",
+      ],
+      ["platform does not, input names OpenCode", "false", "opencode", "false"],
+      ["platform does not, input empty", "false", "", "false"],
+      ["no platform routing, input names OpenCode", "", "opencode", "true"],
+      ["no platform routing, input empty", "", "", "false"],
+    ])(
+      "the trigger's backend flag follows the platform's routing over the input: %s",
+      (_label, platformRouting, routing, expected) => {
+        const env = resolveEnv(triggerStep()?.env ?? {}, {
+          inputs: { routing },
+          github: {},
+          trigger: {},
+          runner: { temp: "/runner/temp" },
+          platform: { "routing-opencode": platformRouting },
+        });
+        expect(env.HAS_OPENCODE_ROUTING).toBe(expected);
+      },
+    );
 
     // ---------------------------------------------------------------------
     // The trigger step (odd/tasks/agent-first-ci.md, T1/S1): credential
@@ -1173,7 +1255,7 @@ describe("Packaging & distribution configuration", () => {
     test("the trigger learns only whether the routing names OpenCode, never the routing text", () => {
       const env = triggerStep()?.env ?? {};
       expect(env.HAS_OPENCODE_ROUTING).toBe(
-        `\${{ contains(inputs.routing, 'opencode') }}`,
+        `\${{ ${EFFECTIVE_OPENCODE_ROUTING} }}`,
       );
       expect(JSON.stringify(env)).not.toContain("inputs.routing }}");
     });

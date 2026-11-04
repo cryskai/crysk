@@ -118,6 +118,9 @@ export interface PlatformTokenDeps {
   mask: (secret: string) => void;
   // Waits between OIDC attempts; tests inject a no-op.
   sleep?: (ms: number) => Promise<void>;
+  // The refresh steps never use the configuration in their response, so they
+  // set this and a config of the wrong shape cannot turn a finished job red.
+  ignoreConfig?: boolean;
 }
 
 // The OIDC GET is idempotent, so a blip (a thrown fetch, a timeout, a 5xx) is
@@ -259,7 +262,10 @@ export async function exchangePlatformToken(
         [...secrets, String(githubToken), String(runToken)],
       );
     }
-    const config = parsePlatformConfig(body.config);
+    const config: ReturnType<typeof parsePlatformConfig> =
+      deps.ignoreConfig === true
+        ? { ok: true }
+        : parsePlatformConfig(body.config);
     if (!config.ok) {
       return failure(
         `The Crysk platform answered HTTP 200 with a malformed config: ${config.message}`,
@@ -315,6 +321,8 @@ export async function runPlatformConnect(
 ): Promise<number> {
   const result = await exchangePlatformToken({
     ...deps,
+    // Only the first connect step (it binds the config directory) uses it.
+    ignoreConfig: deps.configDir === undefined,
     mask: (secret) => deps.stdout(`::add-mask::${escapeCommandData(secret)}\n`),
   });
   if (!result.ok) {
@@ -358,13 +366,16 @@ export async function runPlatformConnect(
       deps.appendOutput(`config-file=${configFile}\n`);
       // The same test the OpenCode install step makes of the routing input
       // (`contains(inputs.routing, 'opencode')`): platform routing that names
-      // OpenCode needs the CLI installed too.
+      // OpenCode needs the CLI installed too. Present whenever the platform
+      // sent a routing, `false` included, because platform routing wins over
+      // the input: action.yml reads an empty output as "use the input's" and
+      // any value as the platform's answer, so a platform routing that does not
+      // name OpenCode overrides an input that does.
       const routing = result.config?.person.routing;
-      if (
-        routing !== undefined &&
-        JSON.stringify(routing).toLowerCase().includes("opencode")
-      ) {
-        deps.appendOutput("routing-opencode=true\n");
+      if (routing !== undefined) {
+        deps.appendOutput(
+          `routing-opencode=${JSON.stringify(routing).toLowerCase().includes("opencode")}\n`,
+        );
       }
     }
   } catch (error) {

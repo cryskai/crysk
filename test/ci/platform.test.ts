@@ -511,7 +511,15 @@ describe("platform review configuration", () => {
       { configDir: dir },
     );
     expect(await claude.run()).toBe(0);
-    expect(claude.events.join("")).not.toContain("routing-opencode");
+    // A platform routing that does not name OpenCode still answers, `false`, so
+    // it overrides an input routing that does.
+    expect(claude.events).toContain("output:routing-opencode=false\n");
+    const none = connect(
+      { person: { max_changed_lines: 10 } },
+      { configDir: dir },
+    );
+    expect(await none.run()).toBe(0);
+    expect(none.events.join("")).not.toContain("routing-opencode");
   });
 
   test.each([
@@ -532,6 +540,30 @@ describe("platform review configuration", () => {
     const h = connect(CONFIG);
     expect(await h.run()).toBe(0);
     expect(h.events.join("")).not.toContain("config-file");
+  });
+
+  test.each([
+    ["a string", "SENTINEL-CONFIG-1"],
+    ["a person that is not an object", { person: "SENTINEL-PERSON-2" }],
+  ])(
+    "a refresh step ignores a malformed config (%s): its response never turns the job red",
+    async (_l, body) => {
+      const h = connect(body);
+      expect(await h.run()).toBe(0);
+      const text = h.events.join("");
+      expect(text).not.toContain("::error");
+      expect(text).toContain(`output:github-token=${GITHUB_TOKEN}\n`);
+      expect(text).toContain(`output:run-token=${RUN_TOKEN}\n`);
+      expect(text).not.toContain("config-file");
+    },
+  );
+
+  test("the connect step still fails on a malformed config", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "platform-config-"));
+    const h = connect({ person: "SENTINEL-PERSON-2" }, { configDir: dir });
+    expect(await h.run()).toBe(1);
+    expect(h.events.some((e) => e.startsWith("output:"))).toBe(false);
+    expect(h.events.join("")).not.toContain("SENTINEL");
   });
 
   test("a config that cannot be written is an error naming the file, writes no output and exits 1", async () => {

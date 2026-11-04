@@ -657,8 +657,12 @@ export interface MaterializeCiOpenCodeDataOptions {
   opencodeAuth?: string;
   home?: string;
   env?: Readonly<Record<string, string | undefined>>;
-  // Platform mode: the person layer the Crysk platform returned. Written into
-  // the same personal file as `routing`; its own `routing` wins over the input.
+  // Platform mode: the person layer the Crysk platform returned (`{}` when it
+  // sent none). Written into the same personal file as `routing`; its own
+  // `routing` wins over the input. Present means platform mode, in which the
+  // personal file belongs to this run: a file an earlier run left behind is
+  // removed when nothing is to be written, so it can never be read as this run's
+  // person layer on a runner whose HOME outlives the job.
   platformPerson?: Record<string, unknown>;
 }
 
@@ -714,6 +718,7 @@ export async function materializeCiOpenCodeData(
 
   const routingRaw = options.routing ?? env.ROUTING_INPUT ?? "";
   const authRaw = options.opencodeAuth ?? env.OPENCODE_AUTH_INPUT ?? "";
+  const platformMode = options.platformPerson !== undefined;
   const platformPerson = options.platformPerson ?? {};
   // The input is parsed only when it is the one that will be written: a
   // routing the platform overrides is not this run's configuration.
@@ -789,6 +794,8 @@ export async function materializeCiOpenCodeData(
   if (Object.keys(personBody).length > 0) {
     await mkdir(path.dirname(personFile), { recursive: true });
     await writeFile(personFile, `${JSON.stringify(personBody, null, 2)}\n`);
+  } else if (platformMode) {
+    await rm(personFile, { force: true });
   }
 
   if (authBody !== undefined) {
@@ -815,12 +822,13 @@ function escapeCommandData(text: string): string {
 // Platform mode only (the connect step announced a config file): the repo layer
 // the platform sent reaches the run step as the `repo-config` output, which it
 // passes as `--config`, but ONLY when the checkout has no repo config of its own.
+// Returns whether the layer it delivered sets `post`.
 async function deliverPlatformRepo(
   deps: CiOpenCodeSetupDeps,
   platformFile: string,
   repo: Record<string, unknown>,
-): Promise<void> {
-  if (Object.keys(repo).length === 0) return;
+): Promise<boolean> {
+  if (Object.keys(repo).length === 0) return false;
   let root: string;
   try {
     root = await resolveRepoRoot(deps.cwd);
@@ -840,7 +848,9 @@ async function deliverPlatformRepo(
     );
   } else if (result.status === "written") {
     deps.appendOutput(`repo-config=${result.file}\n`);
+    return repo.post !== undefined;
   }
+  return false;
 }
 
 // WHY tmp then rename, the same as the trigger's record: the publisher reads the
@@ -871,13 +881,28 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
     const platformFile = deps.env.CRYSK_PLATFORM_CONFIG_FILE ?? "";
     const platform =
       platformFile === "" ? undefined : readPlatformConfig(platformFile);
+    // The connect step announces a config file only when the platform sent
+    // configuration, so a connected run with none is told apart by this
+    // presence boolean: it still owns the personal file (see the option).
+    const platformMode =
+      platform !== undefined || deps.env.CRYSK_PLATFORM_CONNECTED === "true";
     await materializeCiOpenCodeData({
       env: deps.env,
-      ...(platform === undefined ? {} : { platformPerson: platform.person }),
+      ...(platformMode ? { platformPerson: platform?.person ?? {} } : {}),
     });
+    // WHY the run step needs to know: it passes `--post` whenever the `post`
+    // input is true (the default), and an explicit CLI option outranks the
+    // config, so a `post` the platform set would never take effect.
+    let postFromPlatform = platform?.person.post !== undefined;
     if (platform !== undefined) {
-      await deliverPlatformRepo(deps, platformFile, platform.repo);
+      const repoPost = await deliverPlatformRepo(
+        deps,
+        platformFile,
+        platform.repo,
+      );
+      postFromPlatform ||= repoPost;
     }
+    if (postFromPlatform) deps.appendOutput("post-from-platform=true\n");
     return 0;
   } catch (error) {
     deps.stderr(

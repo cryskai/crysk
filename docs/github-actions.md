@@ -416,7 +416,13 @@ the engine's own parsers re-check them on the runner and stay the authority.
   action already writes `routing` to (`$HOME/.crysk/config.json`, or `$HOME/.prhero/config.json` when that
   is the one that exists). Its `routing` wins over the `routing` input and `CRYSK_ROUTING`; with no
   `routing` from the platform, the input keeps working exactly as before, beside the platform's other keys.
-  Platform routing that names `opencode` installs the OpenCode CLI, the same as the input does.
+  Platform routing that names `opencode` installs the OpenCode CLI, the same as the input does, and the
+  no-credentials message names OpenCode's credential for it; a platform routing that does not name `opencode`
+  overrides an input that does, for both. In platform mode the personal file belongs to the run: it is
+  rewritten from the platform's `person` layer and the routing input, and removed when both are empty, so a
+  file an earlier run left on a runner whose `HOME` outlives the job is never read as this run's layer.
+  A `post` the platform sets (in `person`, or in a `repo` layer that is delivered) applies: the run step then
+  leaves out `--post`, which would otherwise outrank the config, so the `post` input no longer forces it.
 - **`repo`** is used **only when the checked-out repository has no repo config file of its own** (the
   file the engine's repo reader opens: `.crysk/config.json`, or the pre-rename `.prhero/config.json`). It
   is then written to a `0600` temp file under the runner's temp directory, outside the workspace, and the
@@ -427,7 +433,8 @@ the engine's own parsers re-check them on the runner and stay the authority.
 A configuration that cannot be applied turns the job red and no review runs, because a review with the
 wrong limits is worse than no review: a malformed `config` in the reply, a value the engine's parser
 refuses, or a file that cannot be written. The error names the layer and the key or file, never a value
-and never a token. Standalone runs never reach any of this.
+and never a token. The refresh steps, which run after the review and never use the configuration, ignore
+the `config` in their response. Standalone runs never reach any of this.
 
 ### Run reports
 
