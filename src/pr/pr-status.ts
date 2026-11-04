@@ -612,11 +612,21 @@ function decideNext(
     };
   }
   if (gate.state === "success") {
+    // PR #472/#475: a finding that lives only in the summary (outside the diff) has no thread, so nothing
+    // can be owed on it, but a done that does not name it let the loop merge without reading it. Every
+    // done below carries this note.
+    const summaryOnly = analyzed.filter(
+      (a) => a.finding.comment_id === null,
+    ).length;
+    const summaryNote =
+      summaryOnly === 0
+        ? ""
+        : ` ${summaryOnly} finding(s) live only in the summary comment (outside the diff, no thread to reply in); read them there before merging.`;
     // An override is a human's unlock of the head, so it stays done whatever the findings say.
     if (gate.override.active) {
       return {
         next_action: "done",
-        reason: `The gate is green through an override by @${gate.override.by ?? "an unknown login"}; nothing is owed on this head.`,
+        reason: `The gate is green through an override by @${gate.override.by ?? "an unknown login"}; nothing is owed on this head.${summaryNote}`,
       };
     }
     // A partial review of this head (some reviewers failed) is not a finished review, and the
@@ -647,7 +657,7 @@ function decideNext(
     ) {
       return {
         next_action: "done",
-        reason: `The gate is green on answered findings no review verified (${gate.description}); the PR is ready to merge, or comment ${commandHint(REVIEW_COMMAND, "")} for another review.`,
+        reason: `The gate is green on answered findings no review verified (${gate.description}); the PR is ready to merge, or comment ${commandHint(REVIEW_COMMAND, "")} for another review.${summaryNote}`,
       };
     }
     // #317: no review ran, so the reason must not read as a review that passed.
@@ -660,18 +670,9 @@ function decideNext(
           "Every changed file on this head is excluded from review, so there was nothing to review; nothing is owed.",
       };
     }
-    // PR #472: a finding that lives only in the summary (outside the diff) has no thread, so nothing
-    // can be owed on it, but a done that does not name it let the loop merge without reading it.
-    const summaryOnly = analyzed.filter(
-      (a) => a.finding.comment_id === null,
-    ).length;
     return {
       next_action: "done",
-      reason:
-        "The review on this head passed the gate, and every finding on this head has a reply." +
-        (summaryOnly === 0
-          ? ""
-          : ` ${summaryOnly} finding(s) live only in the summary comment (outside the diff, no thread to reply in); read them there before merging.`),
+      reason: `The review on this head passed the gate, and every finding on this head has a reply.${summaryNote}`,
     };
   }
   // failure: the blocking findings on this head decide between triage, fix, and override.

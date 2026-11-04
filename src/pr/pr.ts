@@ -3136,10 +3136,18 @@ export async function postInlineFindings(input: {
   // WHY a first review writes the block too: an outside-diff finding has no
   // comment of its own, so the block is its only machine-readable copy. A
   // first review without one left `crysk status` blind to those findings
-  // (PR #472: four advisories, status read none). Only a re-review whose
-  // prior summary vanished stays state-less: its framing names threads that
-  // no longer exist (see priorSummaryVanished above).
-  const stateFramed = framing !== undefined || !priorSummaryVanished;
+  // (PR #472: four advisories, status read none).
+  // WHY not every post without framing (PR #475 R001): over another head's
+  // summary, a block holding only this run's findings would replace the
+  // marker recovery the next review relies on, so still-open findings of
+  // older heads would stop being priors. Such a post writes the block only
+  // as a same-head re-post, which carries the previous rows. A re-review
+  // whose prior summary vanished has its framing dropped and stays
+  // state-less: that framing names threads that no longer exist.
+  const stateFramed =
+    framing !== undefined ||
+    (input.rereview === undefined &&
+      (existingSummaryId === null || previousState?.headSha === doc.head_sha));
   const mergeStateWithBudget = (
     stateBudget: number,
   ): MergedState | undefined =>
