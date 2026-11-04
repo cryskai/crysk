@@ -666,8 +666,7 @@ function decideNext(
     ) {
       return {
         next_action: "done",
-        reason:
-          "Every changed file on this head is excluded from review, so there was nothing to review; nothing is owed.",
+        reason: `Every changed file on this head is excluded from review, so there was nothing to review; nothing is owed.${summaryNote}`,
       };
     }
     return {

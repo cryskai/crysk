@@ -1919,6 +1919,10 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
       "an unverified-fixes green",
       "crysk: 1 answered finding(s), fixes unverified (review budget for this PR is used up); carried from aaaaaaa",
     ],
+    [
+      "a nothing-to-review green",
+      "crysk: nothing to review — every changed file is excluded",
+    ],
   ])(
     "%s with a summary-only advisory names it in its done reason",
     (_name, description) => {
