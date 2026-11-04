@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`crysk status` sees a first review's outside-diff findings.** An outside-diff finding has no comment of its
   own; its only machine-readable copy is the summary's `crysk-state` block, and a first review wrote none. So
   `crysk status` reported no findings and `done` over open advisories, and routed a blocking one to "names no
-  live blocking finding". The first review now writes the block too. The next review reads its priors from
-  it instead of recovering them from comment markers.
+  live blocking finding". The first review now writes the block too, and a `done` over summary-only findings
+  says so in its reason ("N finding(s) live only in the summary comment"). The next review reads its priors
+  from the block instead of recovering them from comment markers.
 - **A long run of held pushes keeps its hold.** The hold names the commit whose verdict it held, and the next
   skip's walk jumps there, so a pull request with more than 20 commits since its last review no longer falls
   to a red "found no earlier verdict".

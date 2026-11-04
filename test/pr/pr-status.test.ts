@@ -1889,6 +1889,28 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
       1,
     );
   });
+
+  // PR #472: a first review's outside-diff advisories live only in the summary. A green gate is still
+  // done (no thread can carry a reply), but the reason must name them, or the loop merges unread.
+  test("a green gate with a summary-only advisory is done, and the reason names it", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", "review posted")],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM, "advisory", "src/c.ts:7"),
+            ]),
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+    expect(status.reason).toBe(
+      "The review on this head passed the gate, and every finding on this head has a reply. 1 finding(s) live only in the summary comment (outside the diff, no thread to reply in); read them there before merging.",
+    );
+  });
 });
 
 describe("shouldWaitPrStatus", () => {

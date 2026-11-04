@@ -660,10 +660,18 @@ function decideNext(
           "Every changed file on this head is excluded from review, so there was nothing to review; nothing is owed.",
       };
     }
+    // PR #472: a finding that lives only in the summary (outside the diff) has no thread, so nothing
+    // can be owed on it, but a done that does not name it let the loop merge without reading it.
+    const summaryOnly = analyzed.filter(
+      (a) => a.finding.comment_id === null,
+    ).length;
     return {
       next_action: "done",
       reason:
-        "The review on this head passed the gate, and every finding on this head has a reply.",
+        "The review on this head passed the gate, and every finding on this head has a reply." +
+        (summaryOnly === 0
+          ? ""
+          : ` ${summaryOnly} finding(s) live only in the summary comment (outside the diff, no thread to reply in); read them there before merging.`),
     };
   }
   // failure: the blocking findings on this head decide between triage, fix, and override.
