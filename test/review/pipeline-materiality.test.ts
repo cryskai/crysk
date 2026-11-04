@@ -778,6 +778,45 @@ describe("materiality gate: the spawned step (S3, S9)", () => {
     expect(prompt).not.toContain("<subsystem>");
   });
 
+  // T3 verifier A1: a renamed title over untouched placeholders passes the
+  // gate, and once the placeholders are dropped only headings are left. They
+  // name no class, so no block may reach the judge.
+  test("a file left with only headings for the judge sends no instructions block", async () => {
+    const input = await makeInput(GATE_ON);
+    await Bun.write(
+      input.gotchasPath ?? "",
+      "# Our rules\n\n## Not blocking here\n\n- <style, naming, test-hygiene, generated-code or dev-script findings this repository does not want blocking or posted, and why>\n",
+    );
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("material")),
+    });
+    await runPipeline(input, { runner });
+    const prompt = judgeSteps(runner)[0]?.prompt ?? "";
+    expect(prompt).toContain(`<review_comment ${NONCE}>`);
+    expect(prompt).not.toContain("review_instructions");
+  });
+
+  // #465 F001: the whole template with its marker deleted and its title
+  // renamed passes the gate. Its prose lines are not placeholders, but they
+  // are still ours, not the owner's: no block may reach the judge.
+  test("an untouched template under a renamed title sends no instructions block", async () => {
+    const input = await makeInput(GATE_ON);
+    const renamed = REVIEW_MD_TEMPLATE.split("\n")
+      .filter((l) => !l.includes(GOTCHAS_PLACEHOLDER_MARKER))
+      .map((l) => (l === "# Review instructions" ? "# Our rules" : l))
+      .join("\n");
+    await Bun.write(input.gotchasPath ?? "", renamed);
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("material")),
+    });
+    await runPipeline(input, { runner });
+    const prompt = judgeSteps(runner)[0]?.prompt ?? "";
+    expect(prompt).toContain(`<review_comment ${NONCE}>`);
+    expect(prompt).not.toContain("review_instructions");
+  });
+
   test("a path that walks out of the worktree is judged without a window", async () => {
     // Not "secret.txt": a path the safety guard matches is never judged.
     const outside = await worktreeWith("notes.txt", "OUTSIDE CONTENT");
