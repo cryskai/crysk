@@ -731,7 +731,7 @@ function decideNext(
         next_action: "fix",
         reason:
           open === 0 && unseen === 0
-            ? "Every live blocking finding is answered and a review rule skipped this head; push the fix. If a rule skips that push too, the gate reads the replies on it and can turn green, marked unverified; otherwise the review verifies it."
+            ? "Every live blocking finding is answered and a review rule skipped this head; push the fix. If a rule skips that push too, the gate reads the replies on it and can turn green, marked unverified, or, under a used-up budget or manual_only, hold the head for a manual review; otherwise the review verifies it."
             : `A live blocking finding is tagged applied, but ${open + unseen} blocking finding(s) are still open (deferred, misclassified, a dismissal not upheld, a reply at another head, or one this read cannot see), so replies alone will not unlock the carried red; push the fix, and answer or fix the rest.`,
       };
     }

@@ -1557,6 +1557,7 @@ describe("isInFlightCommitStatus", () => {
             created_at: fresh,
             description: manualReviewHoldDescription(
               "review budget for this PR is used up",
+              "a".repeat(40),
             ),
           },
         ],

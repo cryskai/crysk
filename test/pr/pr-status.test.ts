@@ -187,7 +187,7 @@ describe("buildPrStatus: next_action, first match wins", () => {
         statuses: [
           gate(
             "pending",
-            "crysk: waiting for a manual review (review budget for this PR is used up) — /pr-hero review verifies this head, or /pr-hero override",
+            "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /pr-hero review or /pr-hero override",
             5,
           ),
         ],

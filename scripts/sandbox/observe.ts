@@ -9,6 +9,7 @@
 // a guess.
 
 import { MARKER_OPEN, matchMarkerPrefix } from "../../src/brand";
+import { isManualReviewHold } from "../../src/pr/preflight";
 import {
   FINDING_MARKER_PREFIX,
   OUTCOME_MARKER_PREFIX,
@@ -505,7 +506,13 @@ export function invariantViolations(obs: Observation): string[] {
       "S7 violation: outcome comment on a head whose status is success",
     );
   }
-  if (status?.state === "pending" && obs.run?.status === "completed") {
+  // A manual-review hold (Stage 2 #12) is pending by design once the run ends: no run holds it, a human
+  // settles it with a review or an override.
+  if (
+    status?.state === "pending" &&
+    obs.run?.status === "completed" &&
+    !isManualReviewHold(status)
+  ) {
     violations.push(
       "S7 violation: status still pending after the run completed",
     );

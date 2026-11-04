@@ -15,13 +15,10 @@
 import { planCiReviewManualRequired } from "#ci/gates";
 import { CANCELLED_STATUS_DESCRIPTION } from "#ci/publish";
 import { ciReviewSkipLabel } from "#ci/review-admission";
-import {
-  carriedBlockingDescription,
-  carriedSuccessDescription,
-  unverifiedFixesDescription,
-} from "#pr/admission";
+import { carriedBlockingDescription } from "#pr/admission";
 import {
   blockingCommitStatusRequest,
+  manualReviewHoldDescription,
   skipCommitStatusRequest,
 } from "#pr/preflight";
 import { gotchasUnusableReason, parseLocalConfig } from "#review/preflight";
@@ -653,9 +650,9 @@ export class FakeGithub {
   }
 
   // budget-exhausted-carry: what a push past the budget leaves, built from the product's
-  // own texts. The notice is upserted under its marker; the status inherits the last
-  // reviewed head's verdict, and a red turns into the unverified green once every blocking
-  // finding on that head has, as its newest reply, `applied` naming that head (S3).
+  // own texts. The notice is upserted under its marker; a red carries, and a green, or a red
+  // whose every blocking finding on that head has, as its newest reply, `applied` naming that
+  // head (S3), is held pending for a manual review (Stage 2 #12).
   private budgetCarry(prNumber: number, sha: string, list: CommentRow[]) {
     const reviewed = this.reviewedHeadOf.get(prNumber) ?? sha;
     const reviews = this.reviewsOf.get(prNumber) ?? 0;
@@ -679,11 +676,12 @@ export class FakeGithub {
     }
     const label = ciReviewSkipLabel("max-attempts-exhausted");
     const inherited = this.statuses.get(reviewed);
+    const hold = {
+      state: "pending",
+      description: manualReviewHoldDescription(label, reviewed),
+    };
     if (inherited?.state !== "failure") {
-      this.statuses.set(sha, {
-        state: "success",
-        description: carriedSuccessDescription(label, reviewed),
-      });
+      this.statuses.set(sha, hold);
       return;
     }
     const inline = this.inlineOf(prNumber);
@@ -708,14 +706,7 @@ export class FakeGithub {
     this.statuses.set(
       sha,
       unlocked
-        ? {
-            state: "success",
-            description: unverifiedFixesDescription(
-              findings.length,
-              label,
-              reviewed,
-            ),
-          }
+        ? hold
         : {
             state: "failure",
             description: carriedBlockingDescription(findings.length, reviewed),
