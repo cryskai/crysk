@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   App login the platform returns (`github_actor`) as a poster of findings and summaries, in platform mode only.
 
 ### Changed
+- **The GraphQL issue-comments fallback reports Bot authors as `<login>[bot]`**, as the REST path and the
+  review-comments fallback already did. Before, a bot's comments read on that path (for example
+  `github-actions[bot]` summaries in standalone mode) arrived under the bare login, so exact-login trust
+  checks missed them; they now match in every mode.
+
+### Changed
 - **An exhausted review budget or `manual_only` no longer turns an unreviewed head green.** Under these two
   rules no later push gets an automatic review, so a carried green (or answered findings unlocking a carried
   red) let code no review read merge: one measured pull request merged green over 11 unreviewed commits. The
