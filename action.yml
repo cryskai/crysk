@@ -121,6 +121,10 @@ runs:
       shell: bash
       env:
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
+        # Where the platform's review configuration is left for the setup step:
+        # under the runner's temp directory, never the workspace. Bound here
+        # ONLY: the refresh steps below leave it unset, so they never touch it.
+        CRYSK_PLATFORM_CONFIG_DIR: ${{ runner.temp }}/crysk-platform
       run: bun "${{ github.action_path }}/src/ci/platform.ts"
 
     # The trigger decides whether this run reviews at all, and it runs FIRST,
@@ -169,8 +173,10 @@ runs:
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         # Presence only, never the routing text: whether the routing names
         # OpenCode, the same test the OpenCode install step makes. It names the
-        # backend of a no-credential outcome.
-        HAS_OPENCODE_ROUTING: ${{ contains(inputs.routing, 'opencode') }}
+        # backend of a no-credential outcome. In platform mode the platform's
+        # routing wins over the input: its output is `true` or `false` when the
+        # platform sent a routing, and empty otherwise (then the input decides).
+        HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode')) }}
         # The attempt of this run. A re-run keeps the run id, so the record names
         # the attempt, and the publisher orders a re-run's comments by it.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -201,6 +207,16 @@ runs:
       env:
         ROUTING_INPUT: ${{ inputs.routing }}
         OPENCODE_AUTH_INPUT: ${{ inputs.opencode-auth }}
+        # Platform mode only: the file the connect step left (empty in a
+        # standalone run, which then changes nothing). The step writes the
+        # platform's `person` layer to the personal config file, and its
+        # `repo` layer, only when the checkout has no repo config of its own,
+        # to a temp file it names in its `repo-config` output.
+        CRYSK_PLATFORM_CONFIG_FILE: ${{ steps.platform.outputs.config-file }}
+        # Presence only: whether the connect step ran, so a connected run with
+        # no platform configuration still owns the personal config file and
+        # drops what an earlier run left in it on a runner whose HOME persists.
+        CRYSK_PLATFORM_CONNECTED: ${{ steps.platform.outputs.github-token != '' }}
         # A malformed routing or auth input leaves setup.json here, so the publish
         # step names that input instead of reporting "an install step failed".
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
@@ -210,7 +226,7 @@ runs:
     # (install ≠ Run Crysk). Never unpinned. Digest verify of the official
     # installer is named, not built.
     - name: Install OpenCode CLI
-      if: ${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || contains(inputs.routing, 'opencode')) }}
+      if: ${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode'))) }}
       shell: bash
       run: |
         curl -fsSL https://opencode.ai/install | bash -s -- --version 1.18.30
@@ -232,6 +248,14 @@ runs:
         # standalone run: the answered-findings gate trusts it as a poster.
         CRYSK_PLATFORM_ACTOR: ${{ steps.platform.outputs.github-actor }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        # Platform mode only, and only for a checkout with no repo config of its
+        # own: the temp file holding the platform's repo layer, handed to the
+        # CLI's `--config` (which repoints the repo layer and nothing else).
+        CRYSK_REPO_CONFIG: ${{ steps.materialize.outputs.repo-config }}
+        # Platform mode only: `true` when the platform's configuration sets
+        # `post`. The run step then leaves `--post` out, because an explicit CLI
+        # option outranks the config and the platform's value would never apply.
+        POST_FROM_PLATFORM: ${{ steps.materialize.outputs.post-from-platform }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
         GITHUB_ACTIONS: 'true'
@@ -277,7 +301,7 @@ runs:
         # stays green. --yes skips the interactive confirmation prompt, which
         # has no TTY to run against here.
         set -- review --pr "$TRIGGER_PR" --ci --yes
-        if [ "$POST_INPUT" = "true" ]; then set -- "$@" --post; fi
+        if [ "$POST_INPUT" = "true" ] && [ "$POST_FROM_PLATFORM" != "true" ]; then set -- "$@" --post; fi
         if [ "$SCOUT_INPUT" = "true" ]; then set -- "$@" --scout; fi
         if [ "$STEP_SUMMARY_INPUT" = "false" ]; then set -- "$@" --no-step-summary; fi
         if [ -n "$MODEL_INPUT" ]; then set -- "$@" --model "$MODEL_INPUT"; fi
@@ -288,6 +312,7 @@ runs:
         if [ "$TRIGGER_FORCE" = "true" ]; then set -- "$@" --force; fi
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
         if [ "$TRIGGER_ADJUDICATE" = "true" ]; then set -- "$@" --adjudicate; fi
+        if [ -n "$CRYSK_REPO_CONFIG" ]; then set -- "$@" --config "$CRYSK_REPO_CONFIG"; fi
 
         # The CLI is the last command, so the job's result is exactly the CLI's.
         # Nothing here writes a marker after it: the CLI's cli.json is its own

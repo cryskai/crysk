@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   summary or hop trail. Failed and skipped reviews are reported too (zero counts when the action
   published no run directory). A report failure, including one while reading or shaping the run
   directory, is a `::warning::` and never turns the job red. Standalone runs are unchanged.
+- **Platform mode: the review configuration the Crysk platform holds is applied on the runner.** The token
+  exchange's `config: { person, repo }` now reaches the engine's own two-layer read. `person` is written to
+  the personal config file the action already writes `routing` to (its `routing` wins over the `routing`
+  input; without one the input keeps working), and `repo` is used only when the checkout has no
+  `.crysk/config.json` (or legacy `.prhero/config.json`) of its own, through the CLI's existing `--config`
+  override pointing at a temp file outside the workspace; a repository's own file wins whole and a
+  `::notice::` says so. Empty objects change nothing. A value the engine's parsers refuse, a malformed
+  `config`, or a file that cannot be written fails the run, naming the layer and the key or file, never a
+  value or a token. Standalone runs are unchanged. In platform mode the personal config file belongs to the
+  run (rewritten, or removed when there is nothing to write, so a runner whose `HOME` persists never reads an
+  earlier run's keys), a `post` the platform sets is applied (`--post` is left out, since the flag would
+  outrank the config), platform routing overrides the input for the OpenCode install and the no-credentials
+  backend alike, and the refresh steps ignore the `config` in their response.
 
 ### Changed
 - **The GraphQL issue-comments fallback reports Bot authors as `<login>[bot]`**, as the REST path and the

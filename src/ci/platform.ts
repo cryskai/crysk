@@ -19,7 +19,8 @@
 // WHY ONLY BUILTINS: like the trigger, this runs before `bun install`. Keep
 // every import `node:` or `bun`, and `fetch` is the runtime's own.
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 export const PLATFORM_API_URL = "https://api.crysk.dev";
 
@@ -38,10 +39,72 @@ const SAFE_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\[bot\])?$/;
 const MISSING_OIDC =
   "The workflow did not grant `id-token: write`, so GitHub issued no OIDC token to this run. Add `id-token: write` to the workflow's `permissions:` and dispatch again.";
 
+// The review configuration the platform holds for this repository, split by the
+// layer each key belongs to (the engine's CONFIG_DIRECTION): `person` is the
+// runner's personal config, `repo` the repository layer. The platform has
+// already validated the values; the engine's parsers stay the authority and
+// re-check them where they are applied (src/ci/platform-config.ts), because this
+// step runs before `bun install` and cannot import them.
+export interface PlatformConfig {
+  person: Record<string, unknown>;
+  repo: Record<string, unknown>;
+}
+
+// The file the connect step leaves under CRYSK_PLATFORM_CONFIG_DIR, and the
+// setup step reads. Written 0600 under the runner's temp directory, never in the
+// workspace.
+export const PLATFORM_CONFIG_FILE_NAME = "platform-config.json";
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// `config` as the token response carries it. Absent (an older platform) or two
+// empty objects is "no configuration": `config` is left out of the result, and
+// nothing downstream runs. A present value of the wrong shape is a failure, not
+// a silent skip: a review with the wrong limits is worse than no review.
+export function parsePlatformConfig(
+  value: unknown,
+): { ok: true; config?: PlatformConfig } | { ok: false; message: string } {
+  if (value === undefined || value === null) return { ok: true };
+  if (!isPlainObject(value)) {
+    return { ok: false, message: "`config` must be a JSON object." };
+  }
+  const layers: Record<"person" | "repo", Record<string, unknown>> = {
+    person: {},
+    repo: {},
+  };
+  for (const layer of ["person", "repo"] as const) {
+    const body = value[layer];
+    if (body === undefined || body === null) continue;
+    if (!isPlainObject(body)) {
+      return {
+        ok: false,
+        message: `\`config.${layer}\` must be a JSON object.`,
+      };
+    }
+    layers[layer] = body;
+  }
+  if (
+    Object.keys(layers.person).length === 0 &&
+    Object.keys(layers.repo).length === 0
+  ) {
+    return { ok: true };
+  }
+  return { ok: true, config: layers };
+}
+
 export type PlatformTokenResult =
   // `githubActor` is the login the platform says posts as the App's bot. It is
   // absent when the platform sent none or one that is not a plausible login.
-  | { ok: true; githubToken: string; runToken: string; githubActor?: string }
+  // `config` is absent when the platform sent none or only empty objects.
+  | {
+      ok: true;
+      githubToken: string;
+      runToken: string;
+      githubActor?: string;
+      config?: PlatformConfig;
+    }
   // `message` names the HTTP status and the API's own `message` when there was
   // one. It never carries a token.
   | { ok: false; message: string };
@@ -55,6 +118,9 @@ export interface PlatformTokenDeps {
   mask: (secret: string) => void;
   // Waits between OIDC attempts; tests inject a no-op.
   sleep?: (ms: number) => Promise<void>;
+  // The refresh steps never use the configuration in their response, so they
+  // set this and a config of the wrong shape cannot turn a finished job red.
+  ignoreConfig?: boolean;
 }
 
 // The OIDC GET is idempotent, so a blip (a thrown fetch, a timeout, a 5xx) is
@@ -173,6 +239,7 @@ export async function exchangePlatformToken(
       github_token?: unknown;
       run_token?: unknown;
       github_actor?: unknown;
+      config?: unknown;
     };
     const {
       github_token: githubToken,
@@ -195,6 +262,16 @@ export async function exchangePlatformToken(
         [...secrets, String(githubToken), String(runToken)],
       );
     }
+    const config: ReturnType<typeof parsePlatformConfig> =
+      deps.ignoreConfig === true
+        ? { ok: true }
+        : parsePlatformConfig(body.config);
+    if (!config.ok) {
+      return failure(
+        `The Crysk platform answered HTTP 200 with a malformed config: ${config.message}`,
+        [...secrets, githubToken, runToken],
+      );
+    }
     return {
       ok: true,
       githubToken,
@@ -202,6 +279,7 @@ export async function exchangePlatformToken(
       ...(typeof actor === "string" && SAFE_LOGIN.test(actor)
         ? { githubActor: actor }
         : {}),
+      ...(config.config === undefined ? {} : { config: config.config }),
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -220,6 +298,19 @@ function escapeCommandData(text: string): string {
 export interface PlatformConnectDeps extends Omit<PlatformTokenDeps, "mask"> {
   stdout: (text: string) => void;
   appendOutput: (text: string) => void;
+  // Where the review configuration is left for the setup step. Set by the first
+  // connect step only: the refresh steps run after the review and must not touch
+  // it, so they leave this unset and the config in their response is ignored.
+  configDir?: string;
+}
+
+// Hands the platform's review configuration to the setup step as a 0600 file
+// under the runner's temp directory (never the workspace). Returns the path.
+function writePlatformConfig(dir: string, config: PlatformConfig): string {
+  const file = path.join(dir, PLATFORM_CONFIG_FILE_NAME);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(file, `${JSON.stringify(config)}\n`, { mode: 0o600 });
+  return file;
 }
 
 // The step's shell. Every token is masked BEFORE the output is written, and a
@@ -230,6 +321,8 @@ export async function runPlatformConnect(
 ): Promise<number> {
   const result = await exchangePlatformToken({
     ...deps,
+    // Only the first connect step (it binds the config directory) uses it.
+    ignoreConfig: deps.configDir === undefined,
     mask: (secret) => deps.stdout(`::add-mask::${escapeCommandData(secret)}\n`),
   });
   if (!result.ok) {
@@ -237,6 +330,21 @@ export async function runPlatformConnect(
       `::error title=crysk::${escapeCommandData(`Crysk platform mode failed: ${result.message}`)}\n`,
     );
     return 1;
+  }
+  // WHY the config file is written before any output: a failure writes no
+  // output at all, so a run whose configuration could not be applied never
+  // looks connected. The failure names the file, never a value.
+  let configFile: string | undefined;
+  if (result.config !== undefined && deps.configDir !== undefined) {
+    try {
+      configFile = writePlatformConfig(deps.configDir, result.config);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      deps.stdout(
+        `::error title=crysk::${escapeCommandData(`Crysk platform mode failed: the review configuration could not be written to ${path.join(deps.configDir, PLATFORM_CONFIG_FILE_NAME)}: ${detail}`)}\n`,
+      );
+      return 1;
+    }
   }
   // WHY a throw is an error and not a green step: the later steps read this
   // output with `|| inputs.github-token`, so a token that was never written
@@ -250,6 +358,25 @@ export async function runPlatformConnect(
     // set never learns one from anywhere else (see CRYSK_PLATFORM_ACTOR).
     if (result.githubActor !== undefined) {
       deps.appendOutput(`github-actor=${result.githubActor}\n`);
+    }
+    // Present only when there is configuration to apply: the setup step and the
+    // run step are gated on it, so a standalone run (no platform step, no
+    // output) and an empty config both skip everything.
+    if (configFile !== undefined) {
+      deps.appendOutput(`config-file=${configFile}\n`);
+      // The same test the OpenCode install step makes of the routing input
+      // (`contains(inputs.routing, 'opencode')`): platform routing that names
+      // OpenCode needs the CLI installed too. Present whenever the platform
+      // sent a routing, `false` included, because platform routing wins over
+      // the input: action.yml reads an empty output as "use the input's" and
+      // any value as the platform's answer, so a platform routing that does not
+      // name OpenCode overrides an input that does.
+      const routing = result.config?.person.routing;
+      if (routing !== undefined) {
+        deps.appendOutput(
+          `routing-opencode=${JSON.stringify(routing).toLowerCase().includes("opencode")}\n`,
+        );
+      }
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -282,6 +409,10 @@ if (import.meta.main) {
       stdout: (text) => process.stdout.write(text),
       appendOutput: (text) =>
         appendGithubOutput(process.env.GITHUB_OUTPUT, text),
+      // Bound by the connect step only (action.yml), never by a refresh step.
+      ...(process.env.CRYSK_PLATFORM_CONFIG_DIR
+        ? { configDir: process.env.CRYSK_PLATFORM_CONFIG_DIR }
+        : {}),
     }),
   );
 }
