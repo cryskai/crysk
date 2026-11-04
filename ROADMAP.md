@@ -146,7 +146,18 @@ control, plus the incident eval:
    actually demoting a finding. Reading the file from the base branch instead of the PR checkout waits
    for the GitHub App (Stage 3).
 7. **Depth by risk** (Anthropic): the admission risk picks the hunter set and effort, not only review or
-   skip.
+   skip. **Parked (2026-11-04), worth doing later.** A $0.12 offline probe (lab ledger, "Jev as the
+   review-depth router") found:
+   - Jev ranks review depth better than diff size (Martian AUC 0.77 vs 0.66). Size thresholds learned on
+     our repos do not transfer: they would send 12 of 34 Martian PRs with a High/Critical bug to low.
+   - Jev's safe low bucket is narrow, and dropping hunters for it saves only ~3% of review tokens.
+   - Agent skill `.md` files carry real blocking bugs, so neither Jev nor a docs glob may treat them
+     as docs.
+
+   The bigger lever is effort per level, not the hunter set: on one musive PR, Sonnet `high` cost 70%
+   less per hunter than `xhigh` and ran ~3× faster, but found 3 of 4 known bugs. Next step, deferred
+   for cost: Sonnet `high` vs `xhigh` on Martian Cal.com 10 (19 H+C, `xhigh` 16/19), same session,
+   with replicates. `high` passes if it loses at most 1 H+C on average.
 8. **A shorter loop:**
    - a round cap (about 3), after which the author is asked to rethink rather than patch again
      (Anthropic; our own cap is 2 review rounds per PR today);
