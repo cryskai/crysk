@@ -33,7 +33,7 @@ measured number.
 | 0 | 0.2.5 | Ship what is merged | none (quiet release) |
 | 1 | 0.3.0 | Rebrand + launch | launch video, new site, benchmark story |
 | 2 | 0.4 | Quieter, faster reviews | update post with a new benchmark |
-| 3 | 0.5 | Platform: GitHub App, dashboard, token broker | product launch |
+| 3 | 0.5 | Platform: GitHub App, dashboard, ChatGPT subscription in CI | free beta, then product launch |
 | 4 | 1.0 | Model squads | update post: pick your models |
 
 Evals and hygiene run continuously alongside every stage (see the end of this file). Version numbers
@@ -171,46 +171,86 @@ green and time to green go down, and the new numbers are published.
 
 ## Stage 3 — Platform (0.5)
 
-The product: one place to configure everything and see the state of every review, kept cheap.
-Moved ahead of model squads on 2026-10-31: a squad that cannot run on the user's own subscription
-is half a feature, and subscriptions other than Claude's need this stage's backend (see the token
-broker below).
+The product: a hosted platform around the open-source engine. One place to configure reviews and
+see the state of every PR, kept cheap to run. The engine keeps working on its own, without the
+platform, exactly as it does today.
+Moved ahead of model squads on 2026-10-31: a ChatGPT subscription needs this stage's App to keep its
+rotating credential alive between runs.
 
-- **GitHub App:** one-click install and repo selection.
-- **Reviews keep running on the user's own CI runner**, with their model and their key or
-  subscription. The App and its hosted backend coordinate (webhooks, configuration, state); they do
-  not run reviews or pay for models. This keeps the "no extra cost on your plan" story and is the model
-  Pullfrog (github.com/pullfrog/pullfrog) runs in production. Decided 2026-10-31.
-- **Token broker:** a hosted store for subscription credentials whose refresh token rotates on every
-  use (ChatGPT/Codex today, possibly others). GitHub Actions secrets cannot hold them: a job cannot
-  write a secret back with its own token, so the stored chain goes stale after the first refresh.
-  - The action authenticates with a GitHub OIDC token (`id-token: write`), so no Crysk key sits in
-    the user's secrets.
-  - At run start the broker takes a per-credential lock, refreshes if needed and hands out a fresh
-    `auth.json`. The lock is required: two concurrent runs refreshing the same token break the chain.
-  - The action's `post:` hook, which runs even on cancel or timeout, writes a rotated token back.
-  - A credential OpenAI rejects is latched as dead and the user is told to re-run the login, instead
-    of retrying it on every run.
-  - Enrolment: `crysk auth codex` runs `codex login` against a temporary `CODEX_HOME` with
-    `cli_auth_credentials_store = "file"`, then uploads the result.
-  - Credentials are encrypted at rest. Holding third-party credentials raises the security bar for
-    the whole backend.
-- **Dashboard:** findings, triage, scores and cost per repo and per PR, on top of the existing store
-  and server (`src/store/`, `src/server/`).
-- **Persistent storage:** run history that survives CI runners (#157), backend and provider columns for
-  cost attribution (#139), home hardening (#35), observability (#23).
-- **Open question, answer before building the broker:** whether OpenAI's terms allow a ChatGPT
-  subscription to be used from CI automation.
+**Product decisions:**
+- **Reviews run on the user's own CI runner**, with their model and their key or subscription. The
+  platform coordinates; it does not run reviews or pay for models.
+- **The App manages reviews, not a workflow the user edits.** On install it opens a pull request with
+  a small stub workflow. From then on the backend turns webhooks into dispatches and decides the config
+  and the engine version. Reviews post as `crysk[bot]`.
+- **Crysk never holds a subscription credential.** Credentials live in the customer's repository
+  secrets.
+- **Config lives on the platform first.** The repo config file keeps working and, when it exists, wins
+  for that repo.
+- **Data:** the full repository never leaves the runner. By default the platform stores findings with
+  their code snippets, encrypted, with bounded retention. A metadata-only mode stores no code.
+- **The MVP (phases 1 and 2) ships as a free beta.**
 
-**Done when:** a team installs the App, reviews run on their runner, the dashboard shows their state,
-and a ChatGPT subscription credential survives consecutive and concurrent runs.
+### Phase 0 — Decisions (no code)
+
+- Provider terms for subscriptions in CI: answered, 2026-11-04.
+- Technical stack and hosting, with the monthly cost: answered, 2026-11-04.
+
+**Done when:** each question has a written answer with its source.
+
+### Phase 1 — Foundations
+
+- **Hosted backend.** The runner authenticates with a GitHub OIDC token, so no Crysk key sits in the
+  user's secrets.
+- **GitHub App:** one-click install, the stub's pull request, the bot identity, webhooks to dispatches.
+- **Updates without a workflow edit**, with a brake on the backend: release channels, staged rollout,
+  kill switch. The backend sends config as data, never code.
+- **Remote config**, with the precedence above.
+- **Every run is recorded** (#157), with cost attribution (#139).
+- **If the platform is down, reviews are delayed, not lost.**
+- Measured: the time the platform adds before a review starts.
+
+**Done when:** a repo installs the App, merges its pull request, gets reviews on its runner, and every
+run is recorded.
+
+### Phase 2 — Visible MVP
+
+- Sign-in with GitHub.
+- **Dashboard:** the list of PRs with their state; each PR opens its findings, triage and rounds. An
+  Insights tab shows noise, time to green, and cost per PR and per model.
+- **Credential setup:** API keys from the dashboard; a guided step for a Claude subscription token.
+- The data policy above, including metadata-only mode.
+
+**Done when:** a user sets up and follows their PRs without opening GitHub or a workflow file.
+
+### Phase 3 — Differentiators
+
+- **Project memory**, learned from triage outcomes and correctable in the UI. Announced only after an
+  A/B shows the same review is more precise with memory than without.
+- **ChatGPT subscription in CI**, connected from the dashboard, in private repositories.
+- **API and MCP for agents:** above all "what blocks this PR" and "re-review now".
+
+**Done when:** memory has a measured precision gain, and a ChatGPT subscription credential survives
+consecutive runs.
+
+### Later
+
+- Overflow to the user's API key when the subscription quota runs out; reviewing each PR with its
+  author's own credential.
+- Org-wide policies (one `REVIEW.md`, strictness, ignored paths) and notifications (Slack, email).
+- Per-repo "bugs caught before production"; real-traffic evals with consent; an incident eval fed by
+  reverts in connected repos.
+- Home hardening (#35), observability (#23), a security audit for larger teams.
+- Reviews on Crysk-hosted compute, with no workflow file.
+
+**Stage done when:** Phase 3's done-when holds and the beta has outside users.
 
 ## Stage 4 — Model squads (1.0)
 
 Presets the user picks with one setting, each with its own measured number, like today's Claude default:
 
 - **Claude** (default): Sonnet hunters, Opus refuter.
-- **OpenAI** models, on an API key or, through Stage 3's token broker, a ChatGPT subscription.
+- **OpenAI** models, on an API key or, through Stage 3's App, a ChatGPT subscription.
 - **Low-cost** models (the DeepSeek/GLM family already runs through OpenCode).
 - Mixed providers in one review (#195), reasoning effort across backends (#207), and the OpenCode
   coverage gaps (#142).
