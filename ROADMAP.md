@@ -107,8 +107,11 @@ Anthropic's "Solving code review at Anthropic" (claude.dev/blog, 2026-10-15) and
 control, plus the incident eval:
 
 1. **Standard severity and categories** (#394, informed by #395): Martian's Low/Medium/High/Critical
-   scale and its ten categories. Stage 1 of #394 maps without changing behaviour; stage 2 lets hunters
-   emit the standard directly. The findings schema is shared with the lab, so it is a coordinated bump.
+   scale and its ten categories. **Dropped (2026-11-04):** Martian never reads a tool's own labels, so
+   the rename cannot move the score. A coordinated schema bump with the lab is costly and risky. Over the
+   111 judged Martian 50 true positives, the 1:1 severity mapping agreed exactly with the golden on 43%,
+   and a 15→10 category table on 45%, below the 59% from labelling everything `bug`. Labels stay as they
+   are; see `docs/research/finding-taxonomy.md`.
 2. **Calibrated severity** (#19): today the hunter prompts forbid lowering severity, so two thirds of
    findings come out BLOCKER/CRITICAL and none SUGGESTION. Calibrate the criteria, not the temperature.
    **Parked by measurement (2026-11-01):** the blocking findings are real, so lowering severity would
