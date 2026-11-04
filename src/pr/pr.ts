@@ -1310,7 +1310,7 @@ const PR_ISSUE_COMMENTS_QUERY =
   "repository(owner:$repoOwner,name:$repoName){pullRequest(number:$number){" +
   "comments(first:100,after:$cursor){" +
   "pageInfo{endCursor hasNextPage}" +
-  "nodes{databaseId body createdAt updatedAt author{login}}}}}}";
+  "nodes{databaseId body createdAt updatedAt author{login __typename}}}}}}";
 
 const PR_REVIEW_COMMENTS_QUERY =
   "query($repoOwner:String!,$repoName:String!,$number:Int!,$cursor:String){" +
@@ -1609,7 +1609,7 @@ function issueCommentsFromNodes(nodes: unknown[]): {
     if (id === null) continue;
     comments.push({
       id,
-      user: graphqlLogin(record.author),
+      user: graphqlReviewLogin(record.author),
       body: typeof record.body === "string" ? record.body : "",
       ...(typeof record.createdAt === "string"
         ? { created_at: record.createdAt }
