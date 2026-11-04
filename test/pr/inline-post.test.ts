@@ -1405,6 +1405,36 @@ describe("postInlineFindings — previousHeadSha reaches the rendered summary", 
     // even with previousHeadSha wired to undefined.
     expect(summaryCall?.stdin).toContain(`Δ since \`${OLD_HEAD.slice(0, 8)}\``);
   });
+
+  // PR #475 R001: a post with no re-review framing over another head's summary writes no state block.
+  // A block holding only this run's findings would replace the marker recovery the next review relies
+  // on, so still-open findings from older heads (blocking ones included) would stop being priors.
+  test("no re-review framing over another head's summary: no state block, so markers stay the priors", async () => {
+    const priorSummary = `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`;
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: priorSummary }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    const bodies = calls
+      .map((c) => c.stdin ?? "")
+      .filter((b) => b.startsWith("<!-- crysk-report "));
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body).not.toContain("<!-- crysk-state ");
+  });
 });
 
 // WARN-5's other half: the fingerprint tie-break (design D3) depends on the

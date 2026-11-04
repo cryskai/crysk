@@ -1017,7 +1017,7 @@ describe("publishCiSkip: the outcome record", () => {
           expect(calls.map((c) => [c.state, c.description])).toEqual([
             [
               "pending",
-              `crysk: waiting for a manual review (${label}) — /pr-hero review verifies this head, or /pr-hero override`,
+              `crysk: waiting for a manual review (${label}); ${CARRIED_FROM} — /pr-hero review or /pr-hero override`,
             ],
           ]);
         },
@@ -1029,7 +1029,7 @@ describe("publishCiSkip: the outcome record", () => {
           [HELD]: [
             row(
               "pending",
-              "crysk: waiting for a manual review (review budget for this PR is used up) — /pr-hero review verifies this head, or /pr-hero override",
+              "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /pr-hero review or /pr-hero override",
               T1,
             ),
           ],
@@ -1049,6 +1049,36 @@ describe("publishCiSkip: the outcome record", () => {
         );
         expect(reads).toEqual([HELD, REVIEWED_HEAD]);
         expect(calls.map((c) => c.state)).toEqual(["failure"]);
+      });
+
+      // A hold names the commit whose verdict it held, so the walk jumps there: a PR with more commits
+      // since its last review than the walk's cap still finds that review instead of failing closed.
+      test("a hold points the walk at its carried commit, past the walk's cap", async () => {
+        const HOLD =
+          "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /pr-hero review or /pr-hero override";
+        const held = Array.from({ length: 25 }, (_, i) =>
+          (i + 1).toString(16).padStart(2, "0").repeat(20),
+        );
+        const bySha: Record<string, Row[]> = {
+          [REVIEWED_HEAD]: [row("success", "review posted", T1)],
+        };
+        bySha[held[held.length - 1] as string] = [row("pending", HOLD, T2)];
+        const reads: string[] = [];
+        const calls: StatusCall[] = [];
+        await publishCiSkip(
+          gateInput("manual-required", recordingStatus(calls), {
+            admission: admissionInput("max-attempts-exhausted"),
+            readStatuses: async (_root: string, sha: string) => {
+              reads.push(sha);
+              return bySha[sha] ?? [];
+            },
+            listCommits: async () => [REVIEWED_HEAD, ...held, STATUS_HEAD],
+          }),
+        );
+        expect(reads).toEqual([held[held.length - 1], REVIEWED_HEAD]);
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          ["pending", HOLD],
+        ]);
       });
 
       // Every rule that does not cap automatic reviews still carries a green.
@@ -1143,7 +1173,7 @@ describe("publishCiSkip: the outcome record", () => {
             expect(calls.map((c) => [c.state, c.description])).toEqual([
               [
                 "pending",
-                `crysk: waiting for a manual review (${label}) — /pr-hero review verifies this head, or /pr-hero override`,
+                `crysk: waiting for a manual review (${label}); ${CARRIED_FROM} — /pr-hero review or /pr-hero override`,
               ],
             ]);
           },

@@ -67,7 +67,7 @@ Materiality gate: `materiality_gate: true` (opt-in; setup never writes it) sends
 |---|---|
 | Review runs | Normal pipeline |
 | **Skipped** | Push did not justify spend (same head, low score, docs-only delta, etc.) — **not** “clean” |
-| **Automatic reviews done** | Budget exhausted or `manual_only` — the gate keeps the last verdict, answered findings turn a red green (marked unverified), and `/crysk review` runs another round |
+| **Automatic reviews done** | Budget exhausted or `manual_only` — a red verdict carries; a green one, or a red whose blocking findings are all answered, is held `pending` until `/crysk review` runs another round or `/crysk override` merges it unverified |
 
 Skipped and automatic-reviews-done posts include admission metadata in the step summary. The automatic-reviews-done
 comment explains the end of the budget by the repository's rules (policy, attempts used, last reviewed head) and how to

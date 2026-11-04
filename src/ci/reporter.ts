@@ -431,7 +431,7 @@ function manualRequiredLines(data: CiManualRequiredSummary): string[] {
   return [
     `### ⏹️ Crysk Review — Automatic Reviews Done — PR #${data.prNumber}`,
     "",
-    "**Reason:** no automatic review is left for this pull request; the gate keeps the last verdict.",
+    "**Reason:** no automatic review is left for this pull request; the gate keeps a red verdict and holds a green one `pending` for a manual review (`/crysk review` or `/crysk override`).",
     "",
     "| Metric | Value |",
     "| --- | --- |",

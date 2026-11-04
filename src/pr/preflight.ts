@@ -1009,14 +1009,20 @@ export function latestStatusInContext(
 
 // The pending a gate skip writes when a rule that caps automatic reviews (the budget is used up, or the
 // policy is manual_only) would otherwise carry a green no review saw (ROADMAP Stage 2 #12). It holds the
-// head until a human asks for a review or an override. `label` is the rule (ciReviewSkipLabel).
-export function manualReviewHoldDescription(label: string): string {
+// head until a human asks for a review or an override. `label` is the rule (ciReviewSkipLabel); `sha` is
+// the commit whose verdict it held, so the next skip's walk can jump there (heldVerdictSha).
+export function manualReviewHoldDescription(
+  label: string,
+  sha: string,
+): string {
   return clipStatusDescription(
-    `${STATUS_CONTEXT}: waiting for a manual review (${label}) — /pr-hero review verifies this head, or /pr-hero override`,
+    `${STATUS_CONTEXT}: waiting for a manual review (${label}); carried from ${sha.slice(0, 7)} — /pr-hero review or /pr-hero override`,
   );
 }
 
 const MANUAL_REVIEW_HOLD = /^crysk: waiting for a manual review \(/;
+const HELD_VERDICT =
+  /^crysk: waiting for a manual review \((.+)\); carried from ([0-9a-f]{7}) — /;
 
 // Whether a pending status is the gate's hold, not a running review. No run holds it, so no in-flight
 // reader may wait on it: it lasts until a human acts, not until a run ends.
@@ -1027,6 +1033,19 @@ export function isManualReviewHold(
     status.state === "pending" &&
     MANUAL_REVIEW_HOLD.test(status.description ?? "")
   );
+}
+
+// The short sha a hold names, or null. WHY the text is rebuilt: the builder above is the only authority on
+// a hold's exact text, so a description that only resembles one never redirects the carry's walk.
+export function heldVerdictSha(
+  status: Pick<CommitStatusFact, "state" | "description">,
+): string | null {
+  if (!isManualReviewHold(status)) return null;
+  const description = status.description ?? "";
+  const match = HELD_VERDICT.exec(description);
+  if (match === null) return null;
+  const [, label, sha] = match as unknown as [string, string, string];
+  return manualReviewHoldDescription(label, sha) === description ? sha : null;
 }
 
 // Latest status for our context, by created_at — GitHub's list is usually

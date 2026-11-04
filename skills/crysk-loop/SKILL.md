@@ -211,7 +211,7 @@ read that file instead.
        description): read that description and act on what it says; when it names nothing you can
        fix, ask a maintainer.
    - `done`: nothing is owed on this head. The gate passed (or an override unlocked it) and every
-     finding posted on this head has a reply. A `fixes unverified` green (the `reason` says no review
+     finding posted on this head has a reply. When `findings` lists rows with `comment_id: null` (the `reason` says they "live only in the summary comment"), they are outside-diff findings with no thread: read each one in the summary, fix what is real before you report the PR ready, and name the rest in your report. A `fixes unverified` green (the `reason` says no review
      verified it) is done too: report the PR ready to merge and say the fixes were not verified by a review. Before exiting, check whether `report.head && report.head !== head` (a green status carried over an unreviewed push under `once_per_pr`, `thresholded`, or `risk_aware`): if `git diff <report.head>..<head>` contains non-trivial logic or risky changes ("Requesting or suggesting another review" above), recommend `/crysk review` naming those changes; otherwise exit the loop and report that the PR is ready to merge.
 
    **Bound the forced runs.** `/crysk review` and `/crysk recheck` each run a full paid review

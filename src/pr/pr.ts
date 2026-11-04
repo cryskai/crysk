@@ -3133,27 +3133,42 @@ export async function postInlineFindings(input: {
   // WHY one merge function for both writes: the S1 re-merge reruns it with a
   // PATCH-sized budget and the SAME inputs, so the kept ids and hw cannot
   // drift between the POST and the PATCH.
+  // WHY a first review writes the block too: an outside-diff finding has no
+  // comment of its own, so the block is its only machine-readable copy. A
+  // first review without one left `crysk status` blind to those findings
+  // (PR #472: four advisories, status read none).
+  // WHY not every post without framing (PR #475 R001): over another head's
+  // summary, a block holding only this run's findings would replace the
+  // marker recovery the next review relies on, so still-open findings of
+  // older heads would stop being priors. Such a post writes the block only
+  // as a same-head re-post, which carries the previous rows. A re-review
+  // whose prior summary vanished has its framing dropped and stays
+  // state-less: that framing names threads that no longer exist.
+  const stateFramed =
+    framing !== undefined ||
+    (input.rereview === undefined &&
+      (existingSummaryId === null || previousState?.headSha === doc.head_sha));
   const mergeStateWithBudget = (
     stateBudget: number,
   ): MergedState | undefined =>
-    framing === undefined
+    !stateFramed
       ? undefined
       : mergeStateFindings({
           headSha: doc.head_sha,
           reviews: postedReviewCount,
-          live: framing.live,
+          live: framing?.live ?? [],
           previous: previousState,
           previousHead: previousState?.headSha ?? null,
           retiredIds: [
-            ...(framing.resolved_ids ?? []),
-            ...(framing.worsened ?? []).map((w) => w.priorId),
+            ...(framing?.resolved_ids ?? []),
+            ...(framing?.worsened ?? []).map((w) => w.priorId),
           ],
           // The priors this run's gate count released through a materiality
           // demotion, recorded on the rereview block by the pipeline, so the
           // state the next run reads agrees with this run's count.
-          ...(input.rereview?.materiality_released_ids === undefined
+          ...(framing?.materiality_released_ids === undefined
             ? {}
-            : { releasedIds: input.rereview.materiality_released_ids }),
+            : { releasedIds: framing.materiality_released_ids }),
           fresh: freshFindings,
           stateBudget,
         });
