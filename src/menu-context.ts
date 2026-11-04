@@ -120,7 +120,7 @@ export function getMenuOptions(
     items.push({
       id: "init",
       label: "Initialize repo",
-      desc: "Scaffold <repo>/.crysk/ config & gotchas",
+      desc: "Scaffold <repo>/.crysk/ config and a REVIEW.md",
       cliHint: "init",
       action: "init",
     });

@@ -49,12 +49,14 @@ import {
   computeDiffStatAndSizeGate,
   enforceCapabilityGate,
   loadRunConfig,
+  NO_INSTRUCTIONS_NOTICE,
   prepareRunnerForRoute,
-  resolveGotchasPath,
   resolveParityFires,
   resolvePipelineRoute,
   resolvePromptSet,
+  resolveReviewInstructions,
   selectActiveHunters,
+  shadowedGotchasNotice,
   validateGotchas,
   writeMcpConfig,
   writeRunFindings,
@@ -151,16 +153,23 @@ export async function review(options: CliOptions): Promise<number> {
   );
   const { dir: agentsDir, source: agentsDirSource } = agents;
 
-  // 7 — gotchas. Checked HERE rather than left to the pipeline's fail-loud
-  // abort: the pipeline is right to refuse, but all it can return is a
-  // zero-cost partial run, which reads like a clean review to a human.
+  // 7 — review instructions (REVIEW.md, else gotchas). Checked HERE rather
+  // than left to the pipeline's fail-loud abort: the pipeline is right to
+  // refuse, but all it can return is a zero-cost partial run, which reads like
+  // a clean review to a human. Neither file existing is allowed (the review
+  // runs with the default guidance); a present one must be real.
   //
   // `--gotchas` exists because requiring the file INSIDE the reviewed tree
   // makes two legitimate cases impossible: reviewing a historical commit (the
   // file would be an untracked addition, and the clean-tree gate rightly
   // refuses), and reviewing a repo you do not control. The gotchas describe
   // the repo, not the commit, so they do not belong to the checkout.
-  const gotchasPath = resolveGotchasPath(options.gotchas, repoRoot);
+  const instructions = resolveReviewInstructions(options.gotchas, repoRoot);
+  if (instructions.shadowed !== undefined) {
+    log(shadowedGotchasNotice(instructions.shadowed));
+  }
+  if (instructions.path === undefined) log(NO_INSTRUCTIONS_NOTICE);
+  const gotchasPath = instructions.path;
   await validateGotchas(gotchasPath);
 
   // 7.5 — `.prheroignore`, read from the WORKING TREE. Local review has no

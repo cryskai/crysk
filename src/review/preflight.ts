@@ -315,7 +315,7 @@ Usage:
   crysk [options]          Open interactive terminal user interface (TTY)
   crysk menu [options]     Open interactive terminal user interface
   crysk review [options]   Review a branch (zero flags inside a configured repo)
-  crysk init [options]     Scaffold <repo>/.crysk/ (config.json + gotchas.md)
+  crysk init [options]     Scaffold <repo>/.crysk/config.json, and a root REVIEW.md when the repo has no review instructions
   crysk setup [options]    Run interactive onboarding wizard
   crysk setup --ci [--force] [--level <l>] [--ci-mode <m>] [--billing <b>] [--budget-usd <n>]
                              Scaffold .github/workflows/crysk.yml (or update
@@ -501,8 +501,10 @@ Options:
                       deferred. Not required — deferred is a tag plus
                       reasoning; the coding agent decides whether an issue
                       exists
-  --gotchas <file>    Repo gotchas file (default: <repo>/.crysk/gotchas.md);
-                      supply it from outside to review a tree you cannot dirty
+  --gotchas <file>    Review instructions file, overriding <repo>/REVIEW.md and
+                      <repo>/.crysk/gotchas.md (default: REVIEW.md, else
+                      gotchas.md, else none); supply it from outside to review
+                      a tree you cannot dirty
   --config <file>     Local config (default: <repo>/.crysk/config.json) with
                       agents_dir, default_base, parity_trigger_paths and
                       suspicion_priors, optional summary settings, and
@@ -3419,11 +3421,17 @@ export function initConfigTemplate(input: InitTemplateInput): string {
 // dirty" has no way to connect the two.
 // `dirName` is the directory the command actually wrote into (an existing
 // legacy .prhero/ is updated in place), so the advice names a real path.
-export function initGitReminder(dirName: string = REPO_DIR_NAME): string {
+// `reviewMd`: init also wrote a root REVIEW.md. That one is never offered
+// .gitignore — CI reads it from the branch, so an ignored REVIEW.md is one no
+// pull request review ever sees.
+export function initGitReminder(
+  dirName: string = REPO_DIR_NAME,
+  reviewMd = false,
+): string {
   return (
-    `Now either commit ${dirName}/ or add it to .gitignore. Every review step ` +
+    `Now either commit ${dirName}/ or add it to .gitignore${reviewMd ? ", and commit REVIEW.md" : ""}. Every review step ` +
     "reads the checkout directly, so Crysk refuses to run on a dirty tree — " +
-    `and an untracked ${dirName}/ is exactly that.`
+    `and an untracked ${reviewMd ? `${dirName}/ or REVIEW.md` : `${dirName}/`} is exactly that.`
   );
 }
 
@@ -3459,9 +3467,40 @@ verbatim into every hunter's system prompt, so keep them short and true.
 - <subsystem>: <the naming/ownership rule a newcomer would violate>
 `;
 
-// `pr-hero setup`'s fallback scaffold (wizard.ts writes it when onboarding
-// collected zero invariants). It lives here, beside GOTCHAS_TEMPLATE, so the
-// gate below can recognise both scaffolds from one place.
+// What `init` and `setup` scaffold today (odd/tasks/review-md.md S7): a root
+// REVIEW.md, the file name Claude Code Review reads. Same marker, same
+// `<subsystem>` placeholder lines as GOTCHAS_TEMPLATE, so the gate below
+// recognises it by both signals. The facts sections reach the hunters and the
+// refuter; the "Not blocking here" section is read by the materiality judge,
+// which only runs with `materiality_gate` on, only on blocking findings, and
+// only for the bounded classes OWNER_INSTRUCTIONS_RULE names (S5).
+export const REVIEW_MD_TEMPLATE = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: delete THIS line once the instructions below are real — Crysk refuses to review while it is here. -->
+# Review instructions
+
+Facts and rules a reviewer cannot infer from the diff alone. Crysk gives this
+file verbatim to every hunter and to the refuter, so keep it short and true.
+
+## Looks wrong, is deliberate
+
+- <subsystem>: <the thing that looks like a bug but is deliberate, and why>
+
+## Always check
+
+- <subsystem>: <the invariant that is enforced somewhere the diff does not show>
+- <subsystem>: <the naming/ownership rule a newcomer would violate>
+
+## Not blocking here
+
+- <style, naming, test-hygiene, generated-code or dev-script findings this repository does not want blocking or posted, and why>
+
+(This section is applied by the materiality judge, which runs only with
+\`materiality_gate\` on, only to blocking findings, and only to those classes:
+it never demotes a logic, correctness, data, contract or security finding.)
+`;
+
+// The fallback `pr-hero setup` wrote into `.crysk/gotchas.md` before setup
+// scaffolded REVIEW.md. Nothing writes it any more; repos still have it
+// committed, so the gate below keeps recognising it.
 export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero invariants defined during onboarding -->\n\n# Repository Gotchas & Invariants\n\n(No invariants defined during onboarding. Replace this with your project's real failure modes, then delete the marker line at the top — Crysk refuses to review while it is there.)\n`;
 
 // Every non-blank line the two scaffolds write, minus the marker line. A file
@@ -3476,10 +3515,13 @@ export const SETUP_GOTCHAS_FALLBACK = `<!-- ${GOTCHAS_PLACEHOLDER_MARKER}: zero 
 // setup fallback's sentence did, in 60c28c6.)
 const RETIRED_SCAFFOLD_LINES = [
   "(No invariants defined during onboarding. Edit this file with project failure modes.)",
+  // The first REVIEW_MD_TEMPLATE (b8c35d3), before its policy sections.
+  "Facts a reviewer cannot infer from the diff alone. Crysk injects this file",
+  "verbatim into every hunter's system prompt, so keep it short and true.",
 ];
 
 const SCAFFOLD_BODY_LINES = new Set([
-  ...[GOTCHAS_TEMPLATE, SETUP_GOTCHAS_FALLBACK]
+  ...[GOTCHAS_TEMPLATE, SETUP_GOTCHAS_FALLBACK, REVIEW_MD_TEMPLATE]
     .flatMap((scaffold) => scaffold.split("\n"))
     .map((line) => line.trim())
     .filter(
@@ -3516,6 +3558,34 @@ export function gotchasUnusableReason(
   return undefined;
 }
 
+// The owner text the materiality judge reads as POLICY, or undefined when the
+// file holds no line of the owner's own (PR #464 F001, #465). A file that
+// passes the gate can still keep template text — the "Not blocking here"
+// placeholder above all, which names the demotable classes and would read as
+// the owner opting them out. So the `- <…>` placeholder bullets our scaffolds
+// wrote are dropped; headings and any other line stay, because a real
+// "- style findings" line means nothing without its "## Not blocking here"
+// heading. What is left is sent only when at least one line is neither a
+// heading nor a scaffold line: a renamed title over an untouched template is
+// all template, and sends nothing. A file with no placeholder is sent as
+// written, so the measured exam arms are unchanged. Facts-only readers
+// (hunters, refuter) still get the file as written.
+export function ownerPolicyText(text: string): string | undefined {
+  const kept = text.split("\n").filter((line) => {
+    const trimmed = line.trim();
+    return !(trimmed.startsWith("- <") && SCAFFOLD_BODY_LINES.has(trimmed));
+  });
+  const ownLine = kept.some((line) => {
+    const trimmed = line.trim();
+    return (
+      trimmed !== "" &&
+      !trimmed.startsWith("#") &&
+      !SCAFFOLD_BODY_LINES.has(trimmed)
+    );
+  });
+  return ownLine ? kept.join("\n") : undefined;
+}
+
 // `pr-hero init`'s closing instruction block, as data.
 //
 // WHY it is a function of the outcome rather than a constant: `init` never
@@ -3535,12 +3605,14 @@ export function gotchasUnusableReason(
 // The union is discriminated rather than a pair of optional fields on
 // purpose: there is no `{ written: true, contents }` to get wrong, and no
 // kept arm that forgot to pass the bytes.
+// `file` is the repo-relative path the block is about — `REVIEW.md` when this
+// run wrote it, or whichever instructions file `init` found and kept.
 export function initGotchasInstructions(
   outcome: { written: true } | { written: false; contents: string },
-  dirName: string = REPO_DIR_NAME,
+  file: string,
 ): string[] {
   if (outcome.written) {
-    // Safe ONLY on this arm: the file is GOTCHAS_TEMPLATE, so it really does
+    // Safe ONLY on this arm: the file is REVIEW_MD_TEMPLATE, so it really does
     // carry `<subsystem>` lines and the marker.
     //
     // "refuses to run without it" was true of an ABSENT file and false of the
@@ -3549,25 +3621,30 @@ export function initGotchasInstructions(
     // placeholders. The marker is what makes the old sentence true, so the
     // instruction has to name the marker.
     return [
-      `Then edit ${dirName}/gotchas.md — two steps, both required:`,
+      `Then edit ${file} — two steps, both required:`,
       "  1. replace the <subsystem> lines with facts about this repo",
       `  2. delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line at the top`,
+      "",
+      'The "Not blocking here" section is optional: fill it only if you turn on',
+      "`materiality_gate`, otherwise delete it. Its placeholder line is never sent",
+      "to the judge as policy.",
       "",
       "Crysk refuses to review while that marker is present. It is not " +
         "pedantry: the file above is non-empty, so without the marker a " +
         "review would bill in full for hunters primed with placeholder text " +
-        "and report a clean-LOOKING result.",
+        "and report a clean-LOOKING result. If you would rather not keep " +
+        "review instructions, delete the file instead.",
     ];
   }
 
   const reason = gotchasUnusableReason(outcome.contents);
   if (reason === "placeholder") {
     // NOT "replace the <subsystem> lines": a kept scaffold may be `pr-hero
-    // setup`'s fallback (wizard.ts), which carries the marker and has no
+    // setup`'s old fallback, which carries the marker and has no
     // `<subsystem>` lines at all. Naming them would be this same defect one
     // layer down.
     return [
-      `The ${dirName}/gotchas.md already on disk is still a scaffold: it carries ` +
+      `The ${file} already on disk is still a scaffold: it carries ` +
         `the \`${GOTCHAS_PLACEHOLDER_MARKER}\` marker line or nothing but the ` +
         "scaffold's own lines, and Crysk refuses to review it.",
       "",
@@ -3579,39 +3656,53 @@ export function initGotchasInstructions(
     // No marker in an empty file, so nothing to delete — saying otherwise
     // would send the reader looking for a line that is not there.
     return [
-      `The ${dirName}/gotchas.md already on disk is empty, and Crysk refuses ` +
-        "to review without gotchas: an empty file makes the whole review a " +
-        "zero-cost no-op that LOOKS like a clean result.",
+      `The ${file} already on disk is empty, and Crysk refuses to review ` +
+        "with it: an empty file makes the whole review a zero-cost no-op " +
+        "that LOOKS like a clean result.",
       "",
       "Write facts about THIS repo into it — the deliberate oddities, the " +
-        "invariants enforced somewhere the diff does not show.",
+        "invariants enforced somewhere the diff does not show — or delete it " +
+        "to review with the default guidance only.",
     ];
   }
   // Deliberately modest wording. The gate proves only that the file is
   // non-empty and marker-free; it does not prove the contents are good, so
   // this line reports the gate and claims nothing beyond it.
   return [
-    `The ${dirName}/gotchas.md already on disk passes the gotchas gate and will ` +
+    `The ${file} already on disk passes the review-instructions gate and will ` +
       "be used as-is.",
   ];
 }
 
+// What the hunters' gotchas block holds when the repository has neither a
+// REVIEW.md nor a gotchas file (odd/tasks/review-md.md S3). Said out loud so
+// the block is never an unexplained empty tag a model could read as truncation.
+export const NO_REVIEW_INSTRUCTIONS =
+  "This repository provides no review instructions (no REVIEW.md or gotchas file).";
+
 // The pipeline treats unusable gotchas as a fail-loud abort and returns a
 // zero-cost partial run. Correct, but a bare "partial, 0 findings" tells the
-// user nothing — so the CLI checks first and explains.
+// user nothing — so the CLI checks first and explains. `present` splits the
+// "empty" reason: a file that exists (REVIEW.md or gotchas) is told to hold
+// real content or go away; only a path naming no file — an explicit
+// `--gotchas` typo, since the resolver never returns an absent default — gets
+// the template to create one.
 export function gotchasErrorMessage(
   gotchasPath: string,
   reason: GotchasUnusableReason,
+  present: boolean,
 ): string {
   const why = [
-    "Gotchas are the repo-specific facts a hunter cannot infer from the diff",
-    "— deliberate oddities, invariants enforced elsewhere, conventions worth",
-    "more than they look. They are injected verbatim into every hunter's",
-    "system prompt, and the engine refuses to run without them.",
+    "Review instructions (REVIEW.md, or the older gotchas file) are the",
+    "repo-specific facts a hunter cannot infer from the diff — deliberate",
+    "oddities, invariants enforced elsewhere, conventions worth more than",
+    "they look. They are injected verbatim into every hunter's system prompt.",
+    "A repo may have no such file at all, but one that exists must hold real",
+    "content.",
   ];
   if (reason === "placeholder") {
     return [
-      `gotchas file is still the scaffold nobody filled in: ${gotchasPath}`,
+      `review instructions file is still the scaffold nobody filled in: ${gotchasPath}`,
       "",
       ...why,
       "",
@@ -3621,7 +3712,20 @@ export function gotchasErrorMessage(
       "placeholder text, and return a clean-LOOKING result.",
       "",
       "Replace the placeholder lines with facts about THIS repo, and delete",
-      "the marker line at the top if it is still there.",
+      "the marker line at the top if it is still there — or delete the file",
+      "to review with the default guidance only.",
+    ].join("\n");
+  }
+  if (present) {
+    return [
+      `empty review instructions file: ${gotchasPath}`,
+      "",
+      ...why,
+      "An empty file makes the whole review a zero-cost no-op that LOOKS like a",
+      "clean result.",
+      "",
+      "Write facts and rules about THIS repo into it, or delete it to review",
+      "with the default guidance only.",
     ].join("\n");
   }
   return [

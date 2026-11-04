@@ -178,7 +178,12 @@ import { type SessionUsage, sumUsage, zeroUsage } from "../usage";
 // preflight and not a runtime dependency on it (the same seam review/size-gate.ts
 // already uses for NumstatFile).
 import type { ConfigSources, LocalConfig } from "./preflight";
-import { agentFilePath, gotchasUnusableReason } from "./preflight";
+import {
+  agentFilePath,
+  gotchasUnusableReason,
+  NO_REVIEW_INSTRUCTIONS,
+  ownerPolicyText,
+} from "./preflight";
 import {
   capScoutLeads,
   renderLeadsBlock,
@@ -222,7 +227,10 @@ export interface PipelineInput {
     ref?: string;
     found: boolean;
   };
-  gotchasPath: string;
+  // Undefined: the repo has no REVIEW.md or gotchas file, and the review runs
+  // with NO_REVIEW_INSTRUCTIONS in the block (odd/tasks/review-md.md S3). A
+  // path whose file is missing still reads as empty and aborts below.
+  gotchasPath?: string;
   agentsDir: string;
   // Logical agent filename -> readable path, present only when the prompt set
   // is the compiled binary's BUNDLED one, where every prompt is embedded at a
@@ -1255,6 +1263,12 @@ interface RunState {
   // Optional only because the pipeline ceiling can fire before `execute` got
   // that far — a run that never selected a nonce also never composed a prompt.
   boundaryNonce?: string;
+  // The review-instructions text the hunters got (REVIEW.md, gotchas, or
+  // NO_REVIEW_INSTRUCTIONS), set beside the nonce. The refuter and verifier
+  // bodies render it into their `{{GOTCHAS}}` anchor as repository facts
+  // (odd/tasks/review-md.md S5): owner context for the counterexample hunt,
+  // never a posting policy — that belongs to the materiality judge.
+  reviewInstructions?: string;
   parityFired: boolean;
   hunterCount: number;
   hunterFailures: number;
@@ -1470,12 +1484,14 @@ async function execute(
   deps: PipelineDeps,
   state: RunState,
 ): Promise<PipelineResult> {
-  // Step 2 — gotchas fail-loud. Gotchas that are missing, empty, or still the
-  // untouched scaffold are a deliberate, visible failure signal: run_status
-  // "partial" with zero findings is distinguishable from a legitimate
-  // "hunters ran, found nothing" complete run. Never silently proceed as if
-  // gotchas were simply empty — no step is spawned. sessionFailed stays
-  // false: no hunter FAILED, none ever ran.
+  // Step 2 — gotchas fail-loud. A review-instructions file (REVIEW.md or
+  // gotchas) that is missing, empty, or still the untouched scaffold is a
+  // deliberate, visible failure signal: run_status "partial" with zero findings
+  // is distinguishable from a legitimate "hunters ran, found nothing" complete
+  // run. Never silently proceed as if it were simply empty — no step is
+  // spawned. sessionFailed stays false: no hunter FAILED, none ever ran. No
+  // path at all is different: the repo has no such file, which is an opt-out,
+  // not an unfinished setup, and the hunters get NO_REVIEW_INSTRUCTIONS.
   //
   // The scaffold arm is not a nicety: `gotchas.trim().length === 0` passed
   // every file `init`/`setup` writes, so the run this abort exists to prevent
@@ -1483,8 +1499,11 @@ async function execute(
   // reporting clean — was the DEFAULT outcome right after onboarding.
   // `gotchasUnusableReason` is shared with the CLI and doctor so the four
   // gates cannot drift apart again.
-  const gotchasFile = Bun.file(input.gotchasPath);
-  const gotchas = (await gotchasFile.exists()) ? await gotchasFile.text() : "";
+  let gotchas = NO_REVIEW_INSTRUCTIONS;
+  if (input.gotchasPath !== undefined) {
+    const gotchasFile = Bun.file(input.gotchasPath);
+    gotchas = (await gotchasFile.exists()) ? await gotchasFile.text() : "";
+  }
   if (gotchasUnusableReason(gotchas) !== undefined) {
     // The plan is still written, and that is not tidiness — `writePipelinePlan`
     // is the ONLY caller of `fillRereviewProvenance`, and that is the only
@@ -1734,6 +1753,7 @@ async function execute(
       renderPriorsBlock(input.suspicionPriors),
     ]);
   state.boundaryNonce = boundaryNonce;
+  state.reviewInstructions = gotchas;
 
   const stepsDir = path.join(input.runDir, "steps");
 
@@ -2435,10 +2455,18 @@ async function runRefuter(
   // One shared body, written once: every step is the same agent asked about a
   // different finding.
   const systemPromptPath = path.join(options.stepsDir, "refuter.system.md");
-  // The refuter body carries no {{PRIORS}}/{{GOTCHAS}} anchors — written
-  // as-is under the preamble, same audit-artifact role as the hunter system
-  // prompts.
-  await writeSystemPrompt(systemPromptPath, agent.body);
+  // The refuter body may anchor `{{GOTCHAS}}` (the bundled one does): it is
+  // rendered with the same instructions text and nonce the hunters got. It
+  // carries no `{{PRIORS}}` — suspicion priors steer the hunt, not a verdict —
+  // so priors are passed empty. A body without anchors is written unchanged.
+  await writeSystemPrompt(
+    systemPromptPath,
+    renderAgentBody(agent.body, {
+      priors: [],
+      gotchas: state.reviewInstructions ?? NO_REVIEW_INSTRUCTIONS,
+      nonce: options.nonce,
+    }),
+  );
   const model = resolveModel(
     input,
     options.agent.model,
@@ -2661,7 +2689,15 @@ async function runVerify(
     agentPromptPath(input, options.agent.file),
   );
   const systemPromptPath = path.join(options.stepsDir, "verifier.system.md");
-  await writeSystemPrompt(systemPromptPath, agent.body);
+  // Same body as the refuter, so the same render (see runRefuter).
+  await writeSystemPrompt(
+    systemPromptPath,
+    renderAgentBody(agent.body, {
+      priors: [],
+      gotchas: state.reviewInstructions ?? NO_REVIEW_INSTRUCTIONS,
+      nonce: options.nonce,
+    }),
+  );
   const model = resolveModel(
     input,
     options.agent.model,
@@ -3646,6 +3682,13 @@ async function runMaterialityJudge(
       : MATERIALITY_TITLE_FALLBACK;
   const effort = defaultEffortForRole("other");
   const specs: Array<{ id: string; spec: StepSpec; meta: StepMeta }> = [];
+  // The owner's file as posting policy, or undefined when it holds nothing of
+  // the owner's own: template text never reaches the judge (ownerPolicyText).
+  const ownerPolicy =
+    state.reviewInstructions === undefined ||
+    state.reviewInstructions === NO_REVIEW_INSTRUCTIONS
+      ? undefined
+      : ownerPolicyText(state.reviewInstructions);
   for (const finding of judge) {
     const prompt = renderMaterialityPrompt(
       {
@@ -3657,6 +3700,8 @@ async function runMaterialityJudge(
           finding.path,
           finding.line,
         ),
+        // No owner text: no block, so the prompt stays the measured one.
+        ...(ownerPolicy === undefined ? {} : { instructions: ownerPolicy }),
       },
       nonce,
     );

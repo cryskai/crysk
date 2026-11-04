@@ -13,7 +13,11 @@ import {
   localReviewSpec,
   resolveAgentsDirSetting,
 } from "#review/preflight";
-import { resolveGotchasPath } from "#review/run";
+import {
+  REVIEW_MD_FILE_NAME,
+  resolveReviewInstructions,
+  shadowedGotchasNotice,
+} from "#review/run";
 import {
   detectAgentEnvironments,
   inspectMcpRegistration,
@@ -437,39 +441,54 @@ export async function runDoctor(
     }
   }
 
-  // 3. Gotchas check (only when repo root is supplied or discovered)
+  // 3. Review instructions check: REVIEW.md, else gotchas (only when repo root
+  // is supplied or discovered). Same resolver and predicate the review gates
+  // use, and that is the point: a doctor that answers this question its own
+  // way eventually green-lights a file the very next command refuses, or
+  // blocks on an absence the review accepts, and the user then hunts for the
+  // problem somewhere it is not.
   if (repoDir) {
-    const gotchasPath = resolveGotchasPath(undefined, repoDir, exists);
-    const gotchasContent = exists(gotchasPath)
-      ? readFile(gotchasPath)
-      : undefined;
-    // Same predicate the review gates use, and that is the point: a doctor
-    // that answers this question its own way eventually green-lights a file
-    // the very next command refuses, and the user then hunts for the problem
-    // somewhere it is not.
-    const unusable = gotchasUnusableReason(gotchasContent ?? "");
-    if (unusable === "placeholder") {
+    const instructions = resolveReviewInstructions(undefined, repoDir, exists);
+    if (instructions.path === undefined) {
       checks.push({
         name: "gotchas",
-        severity: "blocking",
-        message: `Repository gotchas file (${repoDirName}/gotchas.md) is still the untouched scaffold`,
-        hint:
-          `Replace the placeholder lines with real repository invariants, and delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` ` +
-          "marker line at the top if it is still there — Crysk refuses to review the scaffold.",
-      });
-    } else if (unusable !== undefined) {
-      checks.push({
-        name: "gotchas",
-        severity: "blocking",
-        message: `Repository gotchas file (${repoDirName}/gotchas.md) is empty or missing`,
-        hint: `Create and populate ${repoDirName}/gotchas.md with repository-specific invariants and failure traps.`,
+        severity: "degraded",
+        message: `No review instructions (${REVIEW_MD_FILE_NAME} or ${repoDirName}/gotchas.md): reviews run with the default guidance only`,
+        hint: `Add a ${REVIEW_MD_FILE_NAME} at the repository root with the facts the diff does not show: deliberate oddities, invariants enforced elsewhere, conventions a newcomer would break.`,
       });
     } else {
-      checks.push({
-        name: "gotchas",
-        severity: "healthy",
-        message: `Repository gotchas present (${repoDirName}/gotchas.md)`,
-      });
+      const label = path.relative(repoDir, instructions.path);
+      const unusable = gotchasUnusableReason(readFile(instructions.path) ?? "");
+      if (unusable === "placeholder") {
+        checks.push({
+          name: "gotchas",
+          severity: "blocking",
+          message: `Repository review instructions (${label}) are still the untouched scaffold`,
+          hint:
+            `Replace the placeholder lines with real repository rules and invariants, and delete the \`${GOTCHAS_PLACEHOLDER_MARKER}\` ` +
+            "marker line at the top if it is still there — Crysk refuses to review the scaffold.",
+        });
+      } else if (unusable !== undefined) {
+        checks.push({
+          name: "gotchas",
+          severity: "blocking",
+          message: `Repository review instructions (${label}) are empty`,
+          hint: `Write repository-specific rules and invariants into ${label}, or delete it to review with the default guidance only.`,
+        });
+      } else if (instructions.shadowed !== undefined) {
+        checks.push({
+          name: "gotchas",
+          severity: "degraded",
+          message: shadowedGotchasNotice(instructions.shadowed),
+          hint: `Move what ${path.relative(repoDir, instructions.shadowed)} says into ${REVIEW_MD_FILE_NAME}, then delete it.`,
+        });
+      } else {
+        checks.push({
+          name: "gotchas",
+          severity: "healthy",
+          message: `Repository review instructions present (${label})`,
+        });
+      }
     }
   }
 

@@ -2282,20 +2282,6 @@ describe("parseCliRecord — the hunter_failures field", () => {
   });
 });
 
-// A first-time user reads only the Fix line; it must name the command that
-// creates .crysk/gotchas.md, or the user writes the file by hand in the wrong
-// place or never writes it at all.
-describe("PRH-GOTCHAS-MISSING fix names the init command", () => {
-  test("the fix starts by running `npx -y crysk init`, then the existing steps", () => {
-    const [[fix]] = fixListsOf(
-      entryOf("PRH-GOTCHAS-MISSING").variants.default.fixes,
-    );
-    expect(fix).toBe(
-      "Run `npx -y crysk init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
-    );
-  });
-});
-
 describe("PRH-HUNTERS-FAILED lead", () => {
   // WHY: the caller requests this code for a condition it observes directly
   // (the hunter set), so "Unclassified:" would blame pr-hero for nothing

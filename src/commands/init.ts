@@ -8,20 +8,23 @@ import { resolveBaseRef } from "#git/refs";
 import {
   BUNDLED_AGENTS_DIR_LABEL,
   type CliOptions,
-  GOTCHAS_TEMPLATE,
   initConfigTemplate,
   initGitReminder,
   initGotchasInstructions,
   initTemplateOmissions,
+  REVIEW_MD_TEMPLATE,
 } from "#review/preflight";
+import { REVIEW_MD_FILE_NAME, resolveReviewInstructions } from "#review/run";
 import { log } from "#ui/primitives";
 import { readBrandEnv } from "../brand";
 import { resolveRepoDir } from "../brand-paths";
 
 // `pr-hero init` — the other half of making `pr-hero review` a zero-flag
-// command. It writes the two files local mode looks for and nothing else, and
-// it never overwrites: a config or a gotchas file already on disk is the
-// user's work, and the whole value of gotchas is that a human wrote them.
+// command. It writes the repo config and, when the repo has no review
+// instructions yet, a root REVIEW.md scaffold — and it never overwrites: a
+// config or an instructions file already on disk is the user's work, and the
+// whole value of the instructions is that a human wrote them. An existing
+// `.crysk/gotchas.md` counts: writing a REVIEW.md beside it would shadow it.
 export async function init(options: CliOptions): Promise<number> {
   const repoRoot = await resolveRepoRoot(options.repo);
   const dir = resolveRepoDir(repoRoot);
@@ -65,12 +68,14 @@ export async function init(options: CliOptions): Promise<number> {
   // team file — the global layer is the operator's own, and scaffolding it
   // from inside a repo would be this command reaching outside its checkout.
   const repoConfigPath = path.join(dir, "config.json");
-  const gotchasPath = path.join(dir, "gotchas.md");
+  const existing = resolveReviewInstructions(undefined, repoRoot);
+  const instructionsPath =
+    existing.path ?? path.join(repoRoot, REVIEW_MD_FILE_NAME);
   const wrote: string[] = [];
   const kept: string[] = [];
   for (const [file, contents] of [
     [repoConfigPath, initConfigTemplate(templateInput)],
-    [gotchasPath, GOTCHAS_TEMPLATE],
+    [instructionsPath, REVIEW_MD_TEMPLATE],
   ] as const) {
     if (existsSync(file)) {
       kept.push(file);
@@ -111,15 +116,16 @@ export async function init(options: CliOptions): Promise<number> {
   // Unconditional on purpose, and NOT "consistency-fixed" below: this is
   // advice ("commit the config dir or ignore it"), true in every state this command
   // can leave the repo in. It asserts nothing about the contents of a file.
-  log(initGitReminder(path.basename(dir)));
+  const reviewMdWritten = wrote.includes(instructionsPath);
+  log(initGitReminder(path.basename(dir), reviewMdWritten));
   log();
   // The block that follows DOES assert file contents, and the write above is
   // skipped whenever the file already exists — so it is a function of which of
-  // `wrote`/`kept` the gotchas file landed in, never a constant. Printed
+  // `wrote`/`kept` the instructions file landed in, never a constant. Printed
   // unconditionally it told a repo with real gotchas to delete a marker line
   // that is not in its file. When the file was kept, the only honest source
   // for what to say about it is the gate itself, over the bytes on disk.
-  const gotchasOutcome = wrote.includes(gotchasPath)
+  const gotchasOutcome = reviewMdWritten
     ? ({ written: true } as const)
     : ({
         written: false,
@@ -127,12 +133,15 @@ export async function init(options: CliOptions): Promise<number> {
         // kept — and a read that loses that race must not turn `init` into a
         // crash. An empty read renders the "empty" arm, which is the correct
         // advice for a file that is no longer there.
-        contents: await Bun.file(gotchasPath)
+        contents: await Bun.file(instructionsPath)
           .text()
           .catch(() => ""),
       } as const);
-  const dirName = path.basename(dir);
-  for (const line of initGotchasInstructions(gotchasOutcome, dirName)) {
+  const instructionsLabel = path.relative(repoRoot, instructionsPath);
+  for (const line of initGotchasInstructions(
+    gotchasOutcome,
+    instructionsLabel,
+  )) {
     log(line);
   }
   return 0;

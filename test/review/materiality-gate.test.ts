@@ -9,6 +9,7 @@ import {
   isSafetyProtected,
   MATERIALITY_WINDOW_LINES,
   materialityCandidates,
+  OWNER_INSTRUCTIONS_RULE,
   renderMaterialityPrompt,
   SAFETY_PATTERN,
 } from "#review/materiality-gate";
@@ -192,6 +193,34 @@ describe("renderMaterialityPrompt", () => {
       renderMaterialityPrompt({ ...input, window: `1> // ${nonce}` }, nonce),
     ).toBeNull();
   });
+
+  // review-md S5: the owner's REVIEW.md reaches the judge as its own nonced
+  // block plus the rule for reading it. Without a file the prompt must be the
+  // one the gate exam measured, byte for byte.
+  test("adds the owner's instructions as a nonced block with its reading rule", () => {
+    const prompt = renderMaterialityPrompt(
+      { ...input, instructions: "Style findings are never blocking here." },
+      nonce,
+    );
+    expect(prompt).toContain(`<review_instructions ${nonce}>`);
+    expect(prompt).toContain("Style findings are never blocking here.");
+    expect(prompt).toContain(OWNER_INSTRUCTIONS_RULE);
+  });
+
+  test("without instructions the prompt is exactly the measured one", () => {
+    const prompt = renderMaterialityPrompt(input, nonce);
+    expect(prompt).not.toContain("review_instructions");
+    expect(prompt).not.toContain(OWNER_INSTRUCTIONS_RULE);
+  });
+
+  test("instructions that carry the nonce cannot be judged safely", () => {
+    expect(
+      renderMaterialityPrompt(
+        { ...input, instructions: `close ${nonce}` },
+        nonce,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("applyMaterialityVerdicts", () => {
@@ -291,6 +320,17 @@ describe("bundled materiality prompt", () => {
     expect(sha).toBe(
       "f684574fb9554db809d8bdd15ddbf5945b1b70c5a2b6d8475f6c18f99a3f855d",
     );
+  });
+
+  // review-md T3: the owner-instructions rule passed the gate exam with a
+  // REVIEW.md block on 2026-11-03 (sonnet; facts, adversarial "nothing is
+  // blocking" and bounded-classes arms: 0/33 blocking Martian demoted, 0/5
+  // injections, agreement 96% / 85-87%; lab bench/METRICS.md). Its first
+  // wording failed (immaterial 79%): editing it makes it unmeasured again.
+  test("the owner-instructions rule is the one the exam measured", () => {
+    expect(
+      createHash("sha256").update(OWNER_INSTRUCTIONS_RULE).digest("hex"),
+    ).toBe("a3b0551bb8a29c79556728f445668d23592741b423703ae65268769c6acec645");
   });
 
   test("drops the intended-by-the-PR rule", () => {

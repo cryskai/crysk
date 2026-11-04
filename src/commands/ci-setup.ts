@@ -21,6 +21,7 @@ import {
   GOTCHAS_PLACEHOLDER_MARKER,
   gotchasUnusableReason,
 } from "#review/preflight";
+import { REVIEW_MD_FILE_NAME, resolveReviewInstructions } from "#review/run";
 import { log } from "#ui/primitives";
 import {
   duplicateWorkflowProblem,
@@ -341,26 +342,28 @@ export async function ciSetupCommand(
           : "ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)"
     }`,
   );
-  // The first PR of a new repository goes red without gotchas: every hunter's
-  // prompt carries them, and PRH-GOTCHAS-MISSING refuses the review while the
-  // file is absent or still the scaffold. So the init steps print only then;
-  // a repo that already wrote real gotchas is not told to write them again.
-  // Asked through gotchasUnusableReason, the one gate the review itself uses,
-  // so a scaffold with no marker line gets the steps it will need.
-  const gotchasPath = path.join(resolveRepoDir(repoRoot), "gotchas.md");
-  const gotchas = (await Bun.file(gotchasPath).exists())
-    ? await Bun.file(gotchasPath).text()
-    : undefined;
-  if (gotchas === undefined || gotchasUnusableReason(gotchas) !== undefined) {
+  // Review instructions are optional (odd/tasks/review-md.md S3): with none
+  // the review runs on the default guidance, so a repo without a file gets a
+  // recommendation, not a required step. A file that exists but is empty or
+  // still the scaffold turns the first PR red (PRH-GOTCHAS-MISSING), so that
+  // one gets the fix steps. Asked through the resolver and the gate the review
+  // itself uses, so this advice cannot disagree with the run.
+  const instructions = resolveReviewInstructions(undefined, repoRoot);
+  if (instructions.path === undefined) {
     log(
-      `${next()} Run \`npx -y crysk init\` in a clone of the repository (it creates ${repoDirName}/gotchas.md; the config.json written above is kept as it is)`,
+      `${next()} Optional, recommended: add a ${REVIEW_MD_FILE_NAME} at the repository root with the facts a reviewer cannot infer from the diff (\`npx -y crysk init\` scaffolds one), and commit it to the default branch (comment-triggered runs read the base branch)`,
     );
-    log(
-      `${next()} Replace the placeholder lines in ${repoDirName}/gotchas.md with real facts about this repository, and delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line if it is there: Crysk refuses to review the scaffold`,
-    );
-    log(
-      `${next()} Commit ${repoDirName}/ to the default branch (comment-triggered runs read the base branch)`,
-    );
+  } else {
+    const label = path.relative(repoRoot, instructions.path);
+    const text = await Bun.file(instructions.path).text();
+    if (gotchasUnusableReason(text) !== undefined) {
+      log(
+        `${next()} Write real facts about this repository into ${label} (replace any placeholder lines and delete the ${GOTCHAS_PLACEHOLDER_MARKER} marker line if it is there), or delete ${label}: Crysk refuses to review an empty or scaffold file`,
+      );
+      log(
+        `${next()} Commit ${label} to the default branch (comment-triggered runs read the base branch)`,
+      );
+    }
   }
   // The check to require is `crysk` (the commit status, the gate), not the
   // `review` job, which stays green even when it finds blocking issues.

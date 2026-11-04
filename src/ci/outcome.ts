@@ -1506,13 +1506,13 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   "PRH-GOTCHAS-MISSING": {
     level: "error",
     owner: "config",
-    what: ".crysk/gotchas.md is missing or still the scaffold",
+    what: "the review instructions file (REVIEW.md or .crysk/gotchas.md) is empty or still the scaffold",
     variants: single(
-      "reviews need real repository facts to be accurate",
+      "a file that exists must hold real repository rules; with no file at all the review runs on the default guidance",
       [
-        "Run `npx -y crysk init` in a clone of the repository (it creates .crysk/config.json and .crysk/gotchas.md), then write real facts about this repository, delete the scaffold marker line if it is there, and commit the file to the base branch (comment-triggered runs read the base branch).",
+        "Write real rules and facts about this repository into the file (REVIEW.md at the repository root, or .crysk/gotchas.md), delete the scaffold marker line if it is there, and commit it to the base branch (comment-triggered runs read the base branch). Or delete the file to review with the default guidance only.",
       ],
-      "write real facts into .crysk/gotchas.md, remove the scaffold marker line if present, and commit it to the base branch",
+      "write real rules into REVIEW.md or .crysk/gotchas.md (remove the scaffold marker line if present) and commit it to the base branch, or delete the file",
     ),
   },
   "PRH-CONFIG-INVALID": {

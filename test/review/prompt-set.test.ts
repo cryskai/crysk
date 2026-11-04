@@ -18,6 +18,7 @@ import {
   parseAgentSource,
   promptSetFingerprint,
   promptSetIdentity,
+  renderAgentBody,
 } from "#review/prompt-set";
 
 async function setDir(
@@ -30,6 +31,26 @@ async function setDir(
   }
   return dir;
 }
+
+// PR #464 F002: the instructions text is the repo owner's (and, on a
+// pull_request run, the PR author's). String replacements read `$$`, `$&`,
+// `` $` `` and `$'` as patterns, which halved dollar-quoting and spliced the
+// body around the anchor into the block. The text must arrive verbatim.
+describe("renderAgentBody", () => {
+  test("inserts gotchas and priors text verbatim, `$` patterns included", () => {
+    const gotchas =
+      "SQL uses $$dollar quoting$$; $& and $' and $` stay as typed.";
+    const out = renderAgentBody("before\n{{GOTCHAS}}\nafter\n{{PRIORS}}", {
+      priors: [{ path: "src/$&.ts", weight: "high", reason: "$$ cost" }],
+      gotchas,
+      nonce: "abcd1234",
+    });
+    expect(out).toContain(`<gotchas abcd1234>\n${gotchas}`);
+    expect(out).toContain("- src/$&.ts (weight high): $$ cost");
+    expect(out).not.toContain("{{");
+    expect(out.split("before").length).toBe(2);
+  });
+});
 
 describe("promptSetFingerprint", () => {
   test("is stable for the same bytes and 16 hex chars wide", async () => {

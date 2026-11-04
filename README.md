@@ -53,15 +53,15 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    advanced settings (score weights, observe-only, trusted actors, files limit, exclusions). Then it runs
    `npx -y crysk setup --ci` with your answers (writes `.github/workflows/crysk.yml`, or updates an existing `pr-hero.yml` in place, and the
    level's keys in `.crysk/config.json`, and prints a summary) and `npx -y crysk init`
-   (writes `.crysk/gotchas.md`), writes the repository gotchas, and stores
+   (writes a `REVIEW.md` scaffold when the repo has no review instructions), writes the repository's review instructions, and stores
    one secret with `gh secret set`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription; `claude setup-token`
    prints it on any machine that has the Claude Code CLI, so this one does not need it) or
    `ANTHROPIC_API_KEY` (pay as you go). Without an agent, run the same
    commands yourself and follow the [Quick path](docs/github-actions.md#quick-path).
 
-3. **Merge the workflow and `.crysk/` into the default branch.** A comment-triggered run
-   (`/crysk review`) reads both from the base branch, so it starts nothing until the workflow is
-   there, and fails `PRH-GOTCHAS-MISSING` until `.crysk/` is.
+3. **Merge the workflow, `.crysk/` and `REVIEW.md` into the default branch.** A comment-triggered run
+   (`/crysk review`) reads them from the base branch, so it starts nothing until the workflow is
+   there, and reviews without your instructions until `REVIEW.md` (or `.crysk/gotchas.md`) is.
    Then require the `crysk` status check in branch protection if you want it to block merges. The legacy `pr-hero` status is no longer posted, so a rule that requires it must move to `crysk`.
 
 4. **Open pull requests as usual.** Every new PR gets a review posted as PR comments; later pushes
@@ -159,12 +159,13 @@ crysk doctor
 # 4. Skills + MCP registration, and — inside a git repo — scaffold .crysk/.
 cd /path/to/your-repo && crysk setup
 
-# 5. Track that scaffold, or ignore it. Local review refuses to run on a dirty
-#    tree, and an untracked .crysk/ is a dirty tree.
-git add .crysk && git commit -m "chore: crysk config"   # or: echo '.crysk/' >> .gitignore
+# 5. Track that scaffold, or ignore .crysk/. Local review refuses to run on a
+#    dirty tree, and an untracked .crysk/ or REVIEW.md is a dirty tree.
+git add .crysk && git add REVIEW.md   # REVIEW.md only if setup wrote one
+git commit -m "chore: crysk config"
 
-# 6. Replace the placeholder gotchas with real ones. Not paperwork — see below.
-$EDITOR .crysk/gotchas.md
+# 6. Replace the placeholder review instructions with real ones. Not paperwork — see below.
+$EDITOR REVIEW.md   # or the .crysk/gotchas.md the repo already had
 
 # 7. Review the checked-out branch against its merge base.
 crysk review
@@ -188,12 +189,13 @@ npx skills add cryskai/crysk                            # pick interactively
 npx skills add cryskai/crysk --skill crysk              # or crysk-pr, crysk-loop, crysk-ci-setup
 ```
 
-**On step 6.** `gotchas.md` is injected verbatim into every hunter's system prompt, and
+**On step 6.** `REVIEW.md` is injected verbatim into every hunter's system prompt, and
 what `setup`/`init` write there is a placeholder: `- <subsystem>: <the thing that looks
 like a bug but is deliberate, and why>`. A review that reads *that* is a review billed in
 full by hunters who know nothing about your repo, and it comes back looking clean. So
 Crysk refuses to run while the scaffold's `human-attention-required` marker line is
-still present. Write a handful of true lines, delete the marker.
+still present. Write a handful of true lines and delete the marker — or delete the file
+to review with the default guidance only.
 
 Other entry points, once the above works:
 
@@ -215,11 +217,11 @@ Four things go wrong when an agent runs the sequence above:
 1. **Step 2 is not optional, and not deferrable.** If each of your commands runs in its own
    shell, an `export PATH=...` in one does not reach the next. Either prepend the export to
    every Crysk invocation, or call the binary by absolute path: `~/.crysk/bin/crysk` (`~/.prhero/bin/pr-hero` on an install from before the rename).
-2. **Step 5 is yours.** `crysk setup` scaffolds `.crysk/` and neither commits nor
-   ignores it, so the next `crysk review` fails the clean-tree gate — on files `setup`
-   itself created. Commit them or add `.crysk/` to `.gitignore` before reviewing.
-3. **Write the gotchas yourself (step 6).** You have the repository in context, which makes
-   you the best gotchas author available. Read the code and write the real ones: the
+2. **Step 5 is yours.** `crysk setup` scaffolds `.crysk/` and `REVIEW.md` and neither commits
+   nor ignores them, so the next `crysk review` fails the clean-tree gate — on files `setup`
+   itself created. Commit them (or add `.crysk/` to `.gitignore`) before reviewing.
+3. **Write the review instructions yourself (step 6).** You have the repository in context, which
+   makes you the best author available. Read the code and write the real ones: the
    deliberate oddity that looks like a bug, the invariant enforced in a file the diff never
    shows, the ownership rule a newcomer would violate. Leaving the placeholder is not a
    softer option — the review is refused until you replace it and delete the
@@ -238,11 +240,13 @@ There are two config files, and the difference between them is *who they belong 
 | `~/.crysk/config.json` (or `~/.prhero/config.json` on an install from before the rename) | **yours**, across every repo on this machine | no — it is your machine |
 | `<repo>/.crysk/config.json` | **the team's** | yes, normally — it is shared through git |
 
-`crysk init` creates the repo file and `gotchas.md`, and never overwrites existing ones —
-`crysk setup` scaffolds the same two files when it runs inside a git repo, so a repo you set up
-needs no separate `init`. (Running `init` afterwards is harmless: it keeps what exists and reprints
-the git reminder.) Commit `.crysk/` or add it to `.gitignore` — an untracked one trips local
-mode's clean-tree gate.
+`crysk init` creates the repo file and, when the repo has no review instructions, a root
+`REVIEW.md`; it never overwrites existing files, and a repo that already has
+`.crysk/gotchas.md` keeps it and gets no `REVIEW.md` (one would shadow it). `crysk setup`
+scaffolds the same files when it runs inside a git repo, so a repo you set up needs no separate
+`init`. (Running `init` afterwards is harmless: it keeps what exists and reprints the git
+reminder.) Commit `.crysk/` (or add it to `.gitignore`) and `REVIEW.md` — an untracked one trips
+local mode's clean-tree gate.
 
 **Old directory names.** The directories used to be `~/.prhero/` and `<repo>/.prhero/`, and the ignore file
 `.prheroignore`. Those are still read, for one version, when the new name does not exist. Nothing is moved for
@@ -296,15 +300,31 @@ which is a different thing from a committed file asking on your behalf. `--agent
 `agents_dir` (then the repo file, then the global, then `CRYSK_AGENTS_DIR`, or `PRHERO_AGENTS_DIR` on an install from before the rename); `--base` overrides
 `default_base`; `--summary` / `--no-summary` and `--model` override the summary keys.
 
-### `gotchas.md`
+### `REVIEW.md` and `gotchas.md`
 
-Repo-specific traps the hunters must know (fragile invariants, deliberate oddities, past incidents).
-**Required, and it must be real** — not merely non-empty. The file `init`/`setup` scaffold carries a
-`human-attention-required` marker line, and `review` and `doctor` both refuse it by name: a
-placeholder passes any emptiness check while telling every hunter nothing, which buys a full-price
-review that reports clean. Replace the `<subsystem>` lines with facts about your repo, then delete
-the marker line. Reviewing a tree you cannot write to? Supply it from outside with
-`--gotchas <file>` (and `--config <file>`).
+Repo-specific facts the hunters must know (fragile invariants, deliberate oddities, past incidents),
+in a root `REVIEW.md` — the file name Claude Code Review reads. Without one, Crysk reads
+`.crysk/gotchas.md` (or the legacy `.prhero/gotchas.md`); when both exist, `REVIEW.md` wins and
+the run and `crysk doctor` say `gotchas.md ignored: REVIEW.md takes precedence`. The hunters and
+the refuter read the file as facts about the codebase (the refuter still needs code to refute a
+claim). With `materiality_gate` on, the materiality judge also applies its "Not blocking here" rules
+to blocking findings, but only for style, naming, test hygiene, generated code and dev scripts: it
+never demotes a logic, correctness, data, contract or security finding, whatever the file says.
+Nothing filters advisory findings by it.
+
+**Optional, but a file that exists must be real** — not merely non-empty. With neither file the
+review runs on the default guidance and `doctor` reports it as degraded. The file `init`/`setup`
+scaffold carries a `human-attention-required` marker line, and `review` and `doctor` both refuse it
+by name, as they refuse an empty file: a placeholder passes any emptiness check while telling every
+hunter nothing, which buys a full-price review that reports clean. Replace the `<subsystem>` lines
+with facts about your repo, then delete the marker line. Reviewing a tree you cannot write to?
+Supply a file from outside with `--gotchas <file>` (and `--config <file>`); it overrides both.
+
+**Where it is read from.** Local `crysk review` reads the working tree. `crysk review --pr` and the
+watcher read the operator checkout (`--repo`), never the PR worktree. In GitHub Actions it is the
+workflow's checkout: a `pull_request` run reads the PR merged onto its base, so a PR that edits the
+file is reviewed with its own edit; a `/crysk review` comment run on the generated workflow reads the
+default branch.
 
 ## Commands
 
@@ -315,7 +335,7 @@ the marker line. Reviewing a tree you cannot write to? Supply it from outside wi
 | `crysk review --pr [n]` | Review a GitHub PR: by number, or — bare, no number — the PR that belongs to the current branch (errors loudly if it has none). Resolves the range through `gh`, runs in a detached worktree with its own codegraph index, then records the result in the run's `findings.json`. |
 | `crysk review --pr <n> --post` | Same, then publish the report as **one** marked PR comment — re-runs update it in place, never stack. |
 | `crysk doctor` | Run diagnostic environment and dependency checks (git, claude auth, gh, codegraph, config). Works inside or outside a repository. |
-| `crysk setup` | Machine-level onboarding: skill synchronization and MCP registration — and, when run inside a git repo, it also scaffolds that repo's `.crysk/config.json` and `.crysk/gotchas.md`, so no separate `init` is needed there. Fully non-interactive. It does **not** commit or `.gitignore` what it scaffolds; do that yourself before reviewing. |
+| `crysk setup` | Machine-level onboarding: skill synchronization and MCP registration — and, when run inside a git repo, it also scaffolds that repo's `.crysk/config.json` and, when the repo has no review instructions, a root `REVIEW.md`, so no separate `init` is needed there. Fully non-interactive. It does **not** commit or `.gitignore` what it scaffolds; do that yourself before reviewing. |
 | `crysk activity [--kill <pid>]` | Inspect running reviews (with elapsed time, PID, repo/PR), watcher spend against daily cap, and completed run history. `--kill <pid>` safely terminates a running review. |
 | `crysk post --pr <n> --from <run-dir>` | Replay-publish a previous run's findings onto the PR (same plan as `--pr --post`). `--dry-run` previews at $0. |
 | `crysk triage reply --pr <n> --from <run-dir> --finding F00N --tag <tag> --body-file <path>` | Post one triage reply. The driver picks the parent from the posted `<!-- crysk-finding` marker (never path/line), renders the marker + badge, posts, and resolves the inline review thread. Reads `anchor.patch` (else `diff.patch`) from the run dir to remap post lines the same way `--post` does. `--body-file` is reasoning only. |
@@ -438,7 +458,7 @@ plain JSON you may tune directly:
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `repos[].path` | — | Operator checkout of a repo to watch (its `.crysk/` config and gotchas are used, exactly like `review --pr`). Managed by `watch add`/`remove`. |
+| `repos[].path` | — | Operator checkout of a repo to watch (its `.crysk/` config and review instructions are used, exactly like `review --pr`). Managed by `watch add`/`remove`. |
 | `repos[].post` | `false` | Pass `--post` to the spawned review — publish each result as the PR's one marked comment. Managed by `watch add [--post]`. |
 | `repos[].on_push` | `false` | Re-review the repo's PRs on every new push. Default: one review per PR — see below. Managed by `watch add [--on-push]`. |
 | `daily_cap` | `5` | Global max reviews launched per local calendar day, across all repos. `0` pauses launching entirely. |

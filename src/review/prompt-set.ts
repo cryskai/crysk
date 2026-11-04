@@ -113,19 +113,23 @@ export function renderPriorsBlock(priors: SuspicionPrior[]): string {
 // they are not — but because a uniform rule is enforceable and a rule with
 // exceptions is a rule someone forgets (§3.4). `nonce` is REQUIRED, so a future
 // caller cannot reach this substitution without one.
+// The replacements are FUNCTIONS, not strings: a string replacement treats
+// `$$`, `$&`, `` $` `` and `$'` as substitution patterns, so a gotchas or
+// REVIEW.md line with Postgres dollar-quoting would be halved, or splice the
+// body around the anchor into the block. A function's return is inserted as is.
 export function renderAgentBody(
   body: string,
   context: { priors: SuspicionPrior[]; gotchas: string; nonce: string },
 ): string {
+  const priors = wrapBlock(
+    "priors",
+    context.nonce,
+    renderPriorsBlock(context.priors),
+  );
+  const gotchas = wrapBlock("gotchas", context.nonce, context.gotchas);
   return body
-    .replaceAll(
-      "{{PRIORS}}",
-      wrapBlock("priors", context.nonce, renderPriorsBlock(context.priors)),
-    )
-    .replaceAll(
-      "{{GOTCHAS}}",
-      wrapBlock("gotchas", context.nonce, context.gotchas),
-    );
+    .replaceAll("{{PRIORS}}", () => priors)
+    .replaceAll("{{GOTCHAS}}", () => gotchas);
 }
 
 // The prompt set's identity, and the reason it exists is M6's central claim:
