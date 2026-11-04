@@ -7,6 +7,8 @@
 // "carried from <sha>" is a prior verdict copied to a new head (not a review),
 // "overridden" and "stopped by a maintainer" are a human ending the loop.
 
+import { isManualReviewHold } from "#pr/preflight";
+
 export interface RawStatus {
   createdAt: string;
   context: string;
@@ -58,7 +60,7 @@ export function classifyStatus(status: RawStatus): GateEvent {
     case "pending":
       // Since Stage 2 #12 a capped rule (budget used up, manual_only) holds the head pending until a
       // human acts. No run holds it, so it is not a review in flight: it is a head that is not green.
-      return /^crysk: waiting for a manual review \(/.test(d)
+      return isManualReviewHold({ state: status.state, description: d })
         ? "held"
         : "pending";
     case "error":
