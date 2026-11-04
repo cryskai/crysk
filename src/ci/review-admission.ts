@@ -167,15 +167,19 @@ export function ciReviewPolicyHash(policy: CiReviewPolicy): string {
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
 
-// GITHUB_ACTOR in Actions plus optional repo-config extras. Undefined when no
-// actor is known — callers treat that as "do not filter by author".
+// GITHUB_ACTOR in Actions, the login the Crysk platform returned in platform
+// mode (action.yml sets CRYSK_PLATFORM_ACTOR only from the platform step's
+// output, so it is empty in a standalone run), plus optional repo-config
+// extras. Undefined when no actor is known — callers treat that as "do not
+// filter by author".
 export function resolveCiTrustedActors(input: {
   githubActor?: string;
+  platformActor?: string;
   extra?: readonly string[];
 }): ReadonlySet<string> | undefined {
   const actors = new Set<string>();
-  if (input.githubActor !== undefined && input.githubActor.length > 0) {
-    actors.add(input.githubActor);
+  for (const login of [input.githubActor, input.platformActor]) {
+    if (login !== undefined && login.length > 0) actors.add(login);
   }
   for (const login of input.extra ?? []) {
     if (login.length > 0) actors.add(login);

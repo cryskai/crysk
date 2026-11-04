@@ -68,6 +68,7 @@ const GATE_ENV_KEYS = [
   "GITHUB_OUTPUT",
   "GITHUB_HEAD_REF",
   "GITHUB_ACTOR",
+  "CRYSK_PLATFORM_ACTOR",
   "GITHUB_WORKFLOW_REF",
 ] as const;
 type GateEnvKey = (typeof GATE_ENV_KEYS)[number];

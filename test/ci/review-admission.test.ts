@@ -817,6 +817,19 @@ describe("resolveCiTrustedActors", () => {
     expect(actors).toEqual(new Set(["pr-hero[bot]", "custom-bot"]));
   });
 
+  test("includes the login the platform returned, and nothing when it is empty", () => {
+    expect(
+      resolveCiTrustedActors({
+        githubActor: "crysk-dev[bot]",
+        platformActor: "crysk-dev[bot]",
+      }),
+    ).toEqual(new Set(["crysk-dev[bot]"]));
+    expect(
+      resolveCiTrustedActors({ githubActor: "dev", platformActor: "app[bot]" }),
+    ).toEqual(new Set(["dev", "app[bot]"]));
+    expect(resolveCiTrustedActors({ platformActor: "" })).toBeUndefined();
+  });
+
   test("returns undefined when no actors are configured", () => {
     expect(resolveCiTrustedActors({})).toBeUndefined();
   });

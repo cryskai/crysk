@@ -64,6 +64,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "gates",
       "outcome",
       "override",
+      "platform",
       "publish",
       "reporter",
       "review-admission",

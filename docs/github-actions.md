@@ -349,6 +349,59 @@ The workflow token may also be unable to resolve review threads, even with `issu
 `Resource not accessible by integration` for that mutation, and the log says so once per run. The
 verified-gone reply is still posted, and the gate is unaffected: the thread stays open for a person to close.
 
+## Platform mode
+
+When the Crysk platform dispatches a run, the action posts as the Crysk App's bot instead of
+`github-actions[bot]`. Platform mode is on only when the event is `workflow_dispatch` **and** the
+dispatch input `dispatch-id` is non-empty; the platform's workflow stub sets both. Every other run is
+**standalone** and is unchanged: the step is skipped and the `github-token` input (default
+`github.token`) is used exactly as before.
+
+In platform mode a `Connect to Crysk` step runs first, before the trigger:
+
+1. It asks GitHub for the run's OIDC token with audience `crysk`.
+2. It sends that token to `https://api.crysk.dev/runs/token` with the dispatch id (recorded by the
+   platform), and receives a repo-scoped installation token and the login that token posts as.
+3. It masks the tokens in the log and hands the installation token to the trigger, run, publish and
+   cancel-settle steps in place of `github.token`. The publish and cancel-settle steps take a freshly
+   exchanged token (see below).
+
+The platform URL is fixed in the engine. It is not an input and not an environment variable, because
+anyone with write access can dispatch with arbitrary inputs and the OIDC token must never go to a server
+they pick.
+
+Platform mode never falls back to `github.token`. Any failure turns the job red with an error that names
+the cause, and no review runs:
+
+- **No `id-token: write`** — the workflow's `permissions:` lacks it, so GitHub issues no OIDC token.
+- **HTTP 401** — the token was not issued for audience `crysk`.
+- **HTTP 403** — the workflow is not the platform stub on the default branch, or the repository is not
+  connected or not set up.
+- **HTTP 409** — this OIDC token was already exchanged. The platform keys the exchange on the OIDC token's
+  id, not on the dispatch id; each exchange needs a newly requested OIDC token, which the step always
+  asks GitHub for.
+- **HTTP 429** — the platform rate-limited the exchange.
+- **Network or malformed reply** — the exchange could not complete.
+- **The token could not be handed on** — the step could not write `GITHUB_OUTPUT`; the run fails rather than
+  continue on `github.token`.
+
+The platform's own `message` is included in the error. No token is ever printed.
+
+Two consequences follow from the posting identity and from the token's life:
+
+- **Who the gate trusts.** The answered-findings gate trusts a finding or summary only from
+  `github-actions[bot]`, the run's actor (`GITHUB_ACTOR`), a login in `ci_trusted_actors`, and, in platform
+  mode, the login the platform returned in the exchange reply (`github_actor`, the Crysk App's bot). The
+  step hands it to `Run Crysk` as `CRYSK_PLATFORM_ACTOR`; a standalone run never sets it, and a reply
+  without a plausible login adds nothing.
+- **The token's life.** GitHub App installation tokens last about an hour, and a review may run up to 75
+  minutes. So the publish step and the cancel-settle step do not reuse the first token: a `Refresh the Crysk
+  token` step runs the same script again right before each. Every run of the script requests a NEW OIDC
+  token from GitHub, so the platform (which refuses a second exchange of the same OIDC token) exchanges it
+  again, and they prefer its result. The `Run Crysk` step itself keeps the token it started with, so a
+  review that runs past the hour can still fail its own terminal post; the publish step then reports it
+  with the fresh token.
+
 ## Security considerations
 
 ### Fork pull requests

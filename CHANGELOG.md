@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Platform mode: a run the Crysk platform dispatched posts as the Crysk App's bot.** When the event is
+  `workflow_dispatch` and the `dispatch-id` input is non-empty, a new `Connect to Crysk` step exchanges the
+  run's GitHub OIDC token (audience `crysk`) for a repo-scoped installation token, masks it, and the trigger,
+  run, publish and cancel-settle steps use it in place of `github.token`. The platform URL is a constant in
+  the engine, never an input. Any failure (no `id-token: write`, HTTP 401, 403, 409 or 429, a network error,
+  a token that cannot be written to `GITHUB_OUTPUT`)
+  turns the run red with the cause; platform mode never falls back to `github.token`. Standalone runs take
+  the same path as before. The publish and cancel-settle steps run the exchange again for a fresh token, so a
+  long review's late posts never ride an installation token minted an hour earlier. The gate also trusts the
+  App login the platform returns (`github_actor`) as a poster of findings and summaries, in platform mode only.
+
+### Changed
+- **The GraphQL issue-comments fallback reports Bot authors as `<login>[bot]`**, as the REST path and the
+  review-comments fallback already did. Before, a bot's comments read on that path (for example
+  `github-actions[bot]` summaries in standalone mode) arrived under the bare login, so exact-login trust
+  checks missed them; they now match in every mode.
+
 ### Changed
 - **An exhausted review budget or `manual_only` no longer turns an unreviewed head green.** Under these two
   rules no later push gets an automatic review, so a carried green (or answered findings unlocking a carried
