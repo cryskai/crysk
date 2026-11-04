@@ -83,7 +83,8 @@ Anthropic's "Solving code review at Anthropic" (claude.dev/blog, 2026-10-15) and
 **First, the yardsticks** (built before any behaviour change, so every item below is measured):
 - **Real-incident eval:** PRs that were later reverted or fix-forwarded, with the bug site confirmed by
   someone who knows the code; rescored on every prompt, model or tool change. Lives in the private lab.
-  (Anthropic: "any incidents are now an eval".)
+  (Anthropic: "any incidents are now an eval".) **Parked (2026-11-03):** there are no collected cases
+  yet, and no one to confirm the bug sites.
 - **Noise metric:** per hunter, the share of findings triaged as fixed, wrong, intentional or did not
   matter, read from triage outcomes (the store's `finding_triage` table, plus the historical
   verdicts kept read-only in `comparison_rows`). **Done** (#446, #447): 24% of posted findings are
@@ -133,7 +134,14 @@ control, plus the incident eval:
 5. **Configurable strictness:** one setting decides what posts inline, what goes to the summary and
    what blocks the gate. **Partly done:** `post_min_severity` (#445) decides what posts.
 6. **Owner-written review guide per repo** (Anthropic): a `REVIEW.md` that says what counts as a
-   failure, caps nits, lists paths to skip and asks for file:line evidence.
+   failure, caps nits, lists paths to skip and asks for file:line evidence. **Done** (#463, #464, #465,
+   released in 0.3.3): a root `REVIEW.md` is the repo's review instructions, with `.crysk/gotchas.md` as
+   the fallback, and both are optional. The hunters and the refuter read it as facts; with
+   `materiality_gate` on, the judge applies its "Not blocking here" rules, but only to style, naming,
+   test-hygiene, generated-code and dev-script findings. Measured: refuter replay kept the same verdict
+   on 74 of 76 Martian cases and lost no corroborated finding. Not yet seen in production: an owner rule
+   actually demoting a finding. Reading the file from the base branch instead of the PR checkout waits
+   for the GitHub App (Stage 3).
 7. **Depth by risk** (Anthropic): the admission risk picks the hunter set and effort, not only review or
    skip.
 8. **A shorter loop:**
@@ -145,8 +153,10 @@ control, plus the incident eval:
      lines (Anthropic measured 59%) and 3% re-raise an open advisory. The extra rounds come from real
      bugs in the fixes: 85% of re-review findings are new findings on changed lines.
    - a blocking prior the materiality gate demotes on a later head is released (#451).
-9. **Re-review keeps history:** a re-review adds to the thread instead of rewriting the posted comment,
-   so what was said at each head stays traceable.
+9. ~~**Re-review keeps history:** a re-review adds to the thread instead of rewriting the posted comment,
+   so what was said at each head stays traceable.~~ **Dropped (2026-11-03):** inline findings already
+   live in their own threads, and GitHub keeps the edit history of the summary comment. A new summary per
+   head would break how a re-review finds its prior summary and state block.
 10. **PR score as an acceptance gate:** a deterministic score computed over the final evidence, not
     another model asked to grade 0–100. The fix loop runs until the score clears the repo's threshold,
     and some rules cannot be compensated by a high score (designed 2026-09-16; notes in Engram,
