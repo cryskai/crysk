@@ -333,6 +333,7 @@ describe("runPlatformConnect", () => {
     const outputs = h.events.filter((e) => e.startsWith("output:"));
     expect(outputs).toEqual([
       `output:github-token=${GITHUB_TOKEN}\n`,
+      `output:run-token=${RUN_TOKEN}\n`,
       "output:github-actor=crysk-dev[bot]\n",
     ]);
   });
@@ -359,7 +360,7 @@ describe("runPlatformConnect", () => {
     expect(maskRun).toBeGreaterThanOrEqual(0);
     expect(firstOutput).toBeGreaterThan(Math.max(maskGithub, maskRun));
     expect(h.events).toContain(`output:github-token=${GITHUB_TOKEN}\n`);
-    expect(h.events.join("")).not.toContain(`output:run`);
+    expect(h.events).toContain(`output:run-token=${RUN_TOKEN}\n`);
   });
 
   test("a failure prints an error, writes no output and exits 1", async () => {

@@ -356,6 +356,32 @@ runs:
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
+    # Platform mode only: tell the Crysk platform how this run ended, so every
+    # run is recorded with its cost. It posts metadata only (counts, token and
+    # cost totals, models, shas), never a finding or any text of the review, to
+    # the constant URL in src/ci/platform.ts, with the newest run token (the
+    # refresh step's, else the first exchange's).
+    #
+    # WHY !cancelled() and not success(): a failed or skipped review is a run
+    # too, and it still has an outcome to record; a cancelled one is a
+    # superseded run that never had one. It is gated on a run token being
+    # present, so a standalone run never reaches it.
+    #
+    # WHY it cannot turn the job red: the script prints a `::warning::` with the
+    # HTTP status and the API's message and exits 0. The review's own result
+    # stands. Builtins only, like publish: it runs even when nothing installed.
+    - name: Report to Crysk
+      id: report
+      if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}
+      shell: bash
+      env:
+        CRYSK_RUN_TOKEN: ${{ steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token }}
+        CRYSK_OUTCOME: ${{ steps.run-crysk.outputs.status }}
+        CRYSK_RUN_DIR: ${{ steps.run-crysk.outputs.run_dir }}
+        TRIGGER_PR: ${{ steps.trigger.outputs.pr }}
+        TRIGGER_HEAD_SHA: ${{ steps.trigger.outputs.head_sha }}
+      run: bun "${{ github.action_path }}/src/ci/platform-report.ts"
+
     # The same exchange again, for a run that was cancelled (see "Refresh the
     # Crysk token" above): the settle's post must not ride a token minted at the
     # start of a long run. A fresh OIDC token is a fresh identity, so the

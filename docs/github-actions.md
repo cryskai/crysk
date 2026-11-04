@@ -402,6 +402,29 @@ Two consequences follow from the posting identity and from the token's life:
   review that runs past the hour can still fail its own terminal post; the publish step then reports it
   with the fresh token.
 
+### Run reports
+
+In platform mode every finished run is also reported to the platform, so it is recorded with its cost. The
+`Connect to Crysk` step and each refresh step also output the exchange's `run-token` (masked like the
+installation token). A `Report to Crysk` step right after `Publish Crysk outcome` posts to
+`https://api.crysk.dev/runs/report` with the newest run token (the refresh step's, else the first
+exchange's). It runs unless the job was cancelled, so a failed or skipped review is reported too, and
+only when the run is platform-dispatched and a run token exists; a standalone run never reaches it.
+
+The report is metadata only: the action's `status` as `outcome`, the PR number, the head and base shas, the
+run status, schema and engine versions, the model, the blocking and advisory counts, the token, cost
+and wall-time totals (`cost_is_floor` when the cost is a floor of known spend), and one row per agent (key,
+model, tokens, cost, duration, attempts, status). It never carries findings, claims, summary text, hop trails
+or any other text that can quote your code. A review whose run directory the action never published
+(skipped, size-gated, failed before writing, and the cases in the known gap under "Downloading the run
+directory": every hunter died, a fatal error, a cancelled job) is reported with zero counts and usage, even
+if the CLI wrote a `findings.json` that run, from the head the trigger resolved; an empty status
+is reported as `error`.
+
+The report never fails the job. A platform that is down, a rejected token (HTTP 401) or a rejected field
+(HTTP 400, with the API's message) prints a `::warning::` naming the status and message and the step exits
+0. A repeat of the same run attempt is answered as already recorded and is not an error.
+
 ## Security considerations
 
 ### Fork pull requests
