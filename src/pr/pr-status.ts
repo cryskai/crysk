@@ -582,7 +582,7 @@ function decideNext(
     ) {
       return {
         next_action: "override-or-fix",
-        reason: `No review read this head and no automatic review will (${gate.description}); comment ${commandHint(REVIEW_COMMAND, "")} to verify it, or ${commandHint(OVERRIDE_COMMAND, "")} to merge it unverified.`,
+        reason: `The gate holds this head for a manual review: the automatic review budget is used up, or the review policy is manual (ci_review_policy is manual_only), so no review read it and none will on its own. Comment ${commandHint(REVIEW_COMMAND, "")} to verify it, or ${commandHint(OVERRIDE_COMMAND, "")} to merge it unverified.`,
       };
     }
     if (gate.pending_in_flight) {

@@ -58,7 +58,9 @@ export function classifyStatus(status: RawStatus): GateEvent {
     case "pending":
       // Since Stage 2 #12 a capped rule (budget used up, manual_only) holds the head pending until a
       // human acts. No run holds it, so it is not a review in flight: it is a head that is not green.
-      return d.includes("waiting for a manual review") ? "held" : "pending";
+      return /^crysk: waiting for a manual review \(/.test(d)
+        ? "held"
+        : "pending";
     case "error":
       return "error";
     case "success":
