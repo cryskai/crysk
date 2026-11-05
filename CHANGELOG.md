@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   summary or hop trail. Failed and skipped reviews are reported too (zero counts when the action
   published no run directory). A report failure, including one while reading or shaping the run
   directory, is a `::warning::` and never turns the job red. Standalone runs are unchanged.
+- **Platform mode: the run's findings are uploaded to the Crysk platform.** Right after a successful
+  `/runs/report`, the `Report to Crysk` step POSTs `{ schema_version, findings }` to `/runs/findings` with
+  the same run token: the `findings` array of `findings.json`, each object as the engine wrote it, at most
+  the first 500 (a `::warning::` names how many were dropped). `debug.refuted`, `debug.deduped` and the
+  summary are never sent, and a run with no `findings.json` or zero findings, or a failed report, sends
+  nothing. The platform encrypts the findings and honors each repository's metadata-only mode. A failure
+  (HTTP 409, 401, 400, 413 or a network error) is a `::warning::` with the status and message, never a
+  token, and never turns the job red. Standalone runs are unchanged.
 - **Platform mode: the review configuration the Crysk platform holds is applied on the runner.** The token
   exchange's `config: { person, repo }` now reaches the engine's own two-layer read. `person` is written to
   the personal config file the action already writes `routing` to (its `routing` wins over the `routing`

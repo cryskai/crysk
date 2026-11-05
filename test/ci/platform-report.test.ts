@@ -3,10 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  buildFindingsUpload,
   buildRunReport,
   type RunReportBody,
   readRunDir,
   runReportStep,
+  sendRunFindings,
   sendRunReport,
 } from "../../src/ci/platform-report";
 
@@ -328,11 +330,12 @@ interface Call {
   init: RequestInit;
 }
 
-function fakeFetch(respond: () => Response | Promise<Response>) {
+function fakeFetch(respond: (call: Call) => Response | Promise<Response>) {
   const calls: Call[] = [];
   const fn = (async (url: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(url), init: init ?? {} });
-    return respond();
+    const call = { url: String(url), init: init ?? {} };
+    calls.push(call);
+    return respond(call);
   }) as unknown as typeof fetch;
   return { fn, calls };
 }
@@ -413,6 +416,145 @@ describe("sendRunReport", () => {
   });
 });
 
+describe("buildFindingsUpload", () => {
+  test("is the schema version and the findings objects, whole and in order, and nothing else", () => {
+    const upload = buildFindingsUpload(FINDINGS);
+    expect(upload).not.toBeNull();
+    expect(Object.keys(upload?.body ?? {}).sort()).toEqual([
+      "findings",
+      "schema_version",
+    ]);
+    expect(upload?.body.schema_version).toBe("1.1.0");
+    expect(upload?.body.findings).toEqual(FINDINGS.findings);
+    expect(upload?.dropped).toBe(0);
+    const text = JSON.stringify(upload?.body);
+    expect(text).not.toContain(SUMMARY);
+    expect(text).not.toContain("debug");
+    expect(text).not.toContain("refuted");
+    expect(text).not.toContain("telemetry");
+  });
+
+  test("a document with debug arrays never carries them", () => {
+    const upload = buildFindingsUpload({
+      ...FINDINGS,
+      debug: {
+        refuted: [finding("F900", "blocking")],
+        deduped: [finding("F901", "blocking")],
+      },
+    });
+    const text = JSON.stringify(upload?.body);
+    expect(text).not.toContain("F900");
+    expect(text).not.toContain("F901");
+  });
+
+  test("no document, an unreadable one, or zero findings is nothing to send", () => {
+    expect(buildFindingsUpload(undefined)).toBeNull();
+    expect(buildFindingsUpload({ schema_version: "9.9.9" })).toBeNull();
+    expect(buildFindingsUpload("not a document")).toBeNull();
+    expect(buildFindingsUpload({ ...FINDINGS, findings: [] })).toBeNull();
+  });
+
+  test("sends the first 500 findings in the engine's order and counts the rest as dropped", () => {
+    const many = Array.from({ length: 503 }, (_, i) =>
+      finding(`F${String(i + 1).padStart(4, "0")}`, "advisory"),
+    );
+    const upload = buildFindingsUpload({ ...FINDINGS, findings: many });
+    expect(upload?.body.findings).toHaveLength(500);
+    expect(upload?.body.findings).toEqual(many.slice(0, 500));
+    expect(upload?.dropped).toBe(3);
+  });
+
+  test("exactly 500 findings drops none", () => {
+    const many = Array.from({ length: 500 }, (_, i) =>
+      finding(`F${String(i + 1).padStart(4, "0")}`, "advisory"),
+    );
+    const upload = buildFindingsUpload({ ...FINDINGS, findings: many });
+    expect(upload?.body.findings).toHaveLength(500);
+    expect(upload?.dropped).toBe(0);
+  });
+});
+
+describe("sendRunFindings", () => {
+  const UPLOAD = { schema_version: "1.1.0", findings: FINDINGS.findings };
+
+  test("POSTs the JSON body to /runs/findings with the run token as bearer", async () => {
+    const { fn, calls } = fakeFetch(() =>
+      json(200, { stored: 3, recorded: true, mode: "full" }),
+    );
+    const result = await sendRunFindings(
+      { fetch: fn, baseUrl: BASE, runToken: RUN_TOKEN },
+      UPLOAD,
+    );
+    expect(result).toEqual({
+      ok: true,
+      stored: 3,
+      recorded: true,
+      mode: "full",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(`${BASE}/runs/findings`);
+    expect(calls[0]?.init.method).toBe("POST");
+    const headers = new Headers(calls[0]?.init.headers);
+    expect(headers.get("authorization")).toBe(`Bearer ${RUN_TOKEN}`);
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual(UPLOAD);
+  });
+
+  test("recorded=false (a repeat) and metadata_only are successes", async () => {
+    const { fn } = fakeFetch(() =>
+      json(200, { stored: 0, recorded: false, mode: "metadata_only" }),
+    );
+    expect(
+      await sendRunFindings(
+        { fetch: fn, baseUrl: BASE, runToken: RUN_TOKEN },
+        UPLOAD,
+      ),
+    ).toEqual({ ok: true, stored: 0, recorded: false, mode: "metadata_only" });
+  });
+
+  for (const [status, message] of [
+    [409, "the run was not reported first"],
+    [401, "bad token"],
+    [400, "findings[0].id is required"],
+    [413, "payload too large"],
+  ] as const) {
+    test(`HTTP ${status} names the status and the API's message`, async () => {
+      const { fn } = fakeFetch(() => json(status, { message }));
+      expect(
+        await sendRunFindings(
+          { fetch: fn, baseUrl: BASE, runToken: RUN_TOKEN },
+          UPLOAD,
+        ),
+      ).toEqual({ ok: false, message: `HTTP ${status} — ${message}` });
+    });
+  }
+
+  test("an error without a JSON message still names the status", async () => {
+    const { fn } = fakeFetch(() => new Response("nope", { status: 413 }));
+    expect(
+      await sendRunFindings(
+        { fetch: fn, baseUrl: BASE, runToken: RUN_TOKEN },
+        UPLOAD,
+      ),
+    ).toEqual({ ok: false, message: "HTTP 413" });
+  });
+
+  test("a network error is a failure that never carries the token", async () => {
+    const { fn } = fakeFetch(() => {
+      throw new Error(`connect failed for ${RUN_TOKEN}`);
+    });
+    const result = await sendRunFindings(
+      { fetch: fn, baseUrl: BASE, runToken: RUN_TOKEN },
+      UPLOAD,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("connect failed");
+      expect(result.message).not.toContain(RUN_TOKEN);
+    }
+  });
+});
+
 describe("runReportStep", () => {
   const dir = fixtureDir({
     "findings.json": FINDINGS,
@@ -444,10 +586,10 @@ describe("runReportStep", () => {
     };
   }
 
-  test("posts one report and prints nothing on success", async () => {
+  test("posts the report first and prints nothing on success", async () => {
     const r = run(ENV, () => json(200, { run_id: "r1", recorded: true }));
     expect(await r.code).toBe(0);
-    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0]?.url).toBe(`${BASE}/runs/report`);
     expect(JSON.parse(String(r.calls[0]?.init.body)).counts).toEqual({
       blocking: 1,
       advisory: 2,
@@ -521,6 +663,171 @@ describe("runReportStep", () => {
       expect(r.calls).toHaveLength(0);
       expect(r.out.join("")).toContain("::warning");
     }
+  });
+});
+
+describe("runReportStep findings upload", () => {
+  const ok = (call: Call): Response =>
+    call.url.endsWith("/runs/report")
+      ? json(200, { run_id: "r1", recorded: true })
+      : json(200, { stored: 3, recorded: true, mode: "full" });
+
+  function envFor(files: Record<string, unknown>): Record<string, string> {
+    return {
+      CRYSK_RUN_TOKEN: RUN_TOKEN,
+      CRYSK_OUTCOME: "reviewed",
+      CRYSK_RUN_DIR: fixtureDir(files),
+      TRIGGER_PR: "7",
+      TRIGGER_HEAD_SHA: TRIGGER_HEAD,
+    };
+  }
+
+  async function run(
+    env: Record<string, string>,
+    respond: (call: Call) => Response | Promise<Response>,
+  ) {
+    const { fn, calls } = fakeFetch(respond);
+    const out: string[] = [];
+    const code = await runReportStep({
+      fetch: fn,
+      env,
+      baseUrl: BASE,
+      stdout: (text) => out.push(text),
+    });
+    return { calls, out, code, text: out.join("") };
+  }
+
+  const withFindings = envFor({
+    "findings.json": FINDINGS,
+    "pipeline.json": PIPELINE,
+  });
+
+  test("uploads the findings right after a successful report, with the same token, and prints nothing", async () => {
+    const r = await run(withFindings, ok);
+    expect(r.code).toBe(0);
+    expect(r.calls.map((call) => call.url)).toEqual([
+      `${BASE}/runs/report`,
+      `${BASE}/runs/findings`,
+    ]);
+    const headers = new Headers(r.calls[1]?.init.headers);
+    expect(headers.get("authorization")).toBe(`Bearer ${RUN_TOKEN}`);
+    expect(JSON.parse(String(r.calls[1]?.init.body))).toEqual({
+      schema_version: "1.1.0",
+      findings: FINDINGS.findings,
+    });
+    expect(r.out).toEqual([]);
+  });
+
+  test("the findings body is exactly schema_version and findings: no debug, summary or telemetry", async () => {
+    const env = envFor({
+      "findings.json": {
+        ...FINDINGS,
+        debug: { refuted: [finding("F900", "blocking")], deduped: [] },
+      },
+    });
+    const r = await run(env, ok);
+    const sent = JSON.parse(String(r.calls[1]?.init.body));
+    expect(Object.keys(sent).sort()).toEqual(["findings", "schema_version"]);
+    const text = String(r.calls[1]?.init.body);
+    expect(text).not.toContain("F900");
+    expect(text).not.toContain(SUMMARY);
+  });
+
+  test("a repeat (recorded=false) and a metadata-only repository are silent successes", async () => {
+    const r = await run(withFindings, (call) =>
+      call.url.endsWith("/runs/report")
+        ? json(200, { run_id: "r1", recorded: false })
+        : json(200, { stored: 0, recorded: false, mode: "metadata_only" }),
+    );
+    expect(r.calls).toHaveLength(2);
+    expect(r.out).toEqual([]);
+  });
+
+  test("a run without findings.json reports but sends no findings", async () => {
+    const r = await run(envFor({ "pipeline.json": PIPELINE }), ok);
+    expect(r.calls.map((call) => call.url)).toEqual([`${BASE}/runs/report`]);
+    expect(r.out).toEqual([]);
+  });
+
+  test("a run with no run directory sends no findings", async () => {
+    const r = await run({ ...withFindings, CRYSK_RUN_DIR: "" }, ok);
+    expect(r.calls.map((call) => call.url)).toEqual([`${BASE}/runs/report`]);
+  });
+
+  test("zero findings sends no findings call", async () => {
+    const r = await run(
+      envFor({ "findings.json": { ...FINDINGS, findings: [] } }),
+      ok,
+    );
+    expect(r.calls.map((call) => call.url)).toEqual([`${BASE}/runs/report`]);
+    expect(r.out).toEqual([]);
+  });
+
+  test("a failed report sends no findings call", async () => {
+    for (const respond of [
+      () => json(401, { message: "bad token" }),
+      () => json(400, { message: "invalid" }),
+      () => {
+        throw new Error("ECONNRESET");
+      },
+    ]) {
+      const r = await run(withFindings, respond);
+      expect(r.code).toBe(0);
+      expect(r.calls).toHaveLength(1);
+      expect(r.calls[0]?.url).toBe(`${BASE}/runs/report`);
+    }
+  });
+
+  for (const [status, message] of [
+    [409, "the run was not reported first"],
+    [401, "bad token"],
+    [400, "findings invalid"],
+    [413, "too large"],
+  ] as const) {
+    test(`HTTP ${status} on the findings is a warning with the status and message, exit 0, no token`, async () => {
+      const r = await run(withFindings, (call) =>
+        call.url.endsWith("/runs/report")
+          ? json(200, { run_id: "r1", recorded: true })
+          : json(status, { message }),
+      );
+      expect(r.code).toBe(0);
+      expect(r.text).toStartWith("::warning");
+      expect(r.text).toContain("findings");
+      expect(r.text).toContain(String(status));
+      expect(r.text).toContain(message);
+      expect(r.text).not.toContain(RUN_TOKEN);
+    });
+  }
+
+  test("a network error on the findings is a warning, not a failure, and never carries the token", async () => {
+    const r = await run(withFindings, (call) => {
+      if (call.url.endsWith("/runs/report")) {
+        return json(200, { run_id: "r1", recorded: true });
+      }
+      throw new Error(`ECONNRESET ${RUN_TOKEN}`);
+    });
+    expect(r.code).toBe(0);
+    expect(r.text).toStartWith("::warning");
+    expect(r.text).toContain("ECONNRESET");
+    expect(r.text).not.toContain(RUN_TOKEN);
+  });
+
+  test("more than 500 findings sends the first 500 and warns how many were dropped", async () => {
+    const many = Array.from({ length: 503 }, (_, i) =>
+      finding(`F${String(i + 1).padStart(4, "0")}`, "advisory"),
+    );
+    const r = await run(
+      envFor({ "findings.json": { ...FINDINGS, findings: many } }),
+      ok,
+    );
+    expect(r.code).toBe(0);
+    const sent = JSON.parse(String(r.calls[1]?.init.body));
+    expect(sent.findings).toHaveLength(500);
+    expect(sent.findings[499].id).toBe("F0500");
+    expect(r.text).toStartWith("::warning");
+    expect(r.text).toContain("3");
+    expect(r.text).toContain("500");
+    expect(r.text).not.toContain(RUN_TOKEN);
   });
 });
 
