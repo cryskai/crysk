@@ -60,6 +60,12 @@ Both private runners set `RB_STRICT=1`, which fails a partial review instead of 
 
 Every review is a live run. The engine prints its estimate before it starts.
 
+## Traces
+
+The image keeps the CLI's session for every step in `<run dir>/traces` when `RB_RUN_DIR` is set, which `run-image.sh` does: each file read, each search, and the reasoning, in order. To tell which step a trace belongs to, hash its first queued prompt and compare with `userPromptSha256` in `steps/evidence.<step>.attempt<n>.request.json`. Credentials from the environment are removed.
+
+The native runner does not keep traces, because there the sessions directory is your own history.
+
 ## Failures
 
 A non-zero exit fails the pull request, and the benchmark retries it and then fails the whole run. So the adapter exits non-zero when no hunter completed, and exits zero with no findings only when a review ran or the diff has nothing left after the default exclusions. A partial review is accepted with a warning, because one hunter that always fails must not fail the run. With `RB_STRICT=1` it fails instead.

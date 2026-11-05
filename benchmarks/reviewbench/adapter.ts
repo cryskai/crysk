@@ -7,6 +7,7 @@
 // findings means "reviewed, found nothing", so it must never stand in for a
 // review that did not happen.
 
+import { existsSync } from "node:fs";
 import { mkdtemp, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -31,6 +32,9 @@ export interface Contract {
   diff: string;
   out: string;
   repo: string;
+  // Where the CLI keeps its sessions. Only the image sets it: natively that is
+  // this person's own history, which must not be copied.
+  sessionsDir?: string;
   // Fail a partial review instead of accepting it. See assertComplete.
   strict: boolean;
   // Keeps the engine's run directory for the ledger. Only the local runner sets it.
@@ -57,6 +61,7 @@ export function readContract(
   }
   const model = env.RB_CONFIG_MODEL?.trim();
   const runDir = env.RB_RUN_DIR?.trim();
+  const sessionsDir = env.RB_SESSIONS_DIR?.trim();
   return {
     nwo: required("RB_NWO"),
     prNumber,
@@ -68,6 +73,7 @@ export function readContract(
     repo: env.RB_REPO?.trim() || "/work/repo",
     strict: env.RB_STRICT === "1",
     ...(runDir ? { runDir } : {}),
+    ...(sessionsDir ? { sessionsDir } : {}),
     ...(model ? { model } : {}),
   };
 }
@@ -214,6 +220,40 @@ export function assertComplete(doc: { run_status?: string }): void {
   }
 }
 
+const CREDENTIAL_VARIABLES = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+];
+
+// The engine asks the CLI for its final result only, so this is the one record of
+// what each step read and searched. The CLI keeps it as a session file in its
+// home, which the container is about to lose.
+//
+// To tell which step a trace belongs to, hash its first queued prompt and compare
+// with userPromptSha256 in that step's evidence file.
+export async function copyTraces(
+  sessionsDir: string,
+  runDir: string,
+  env: Record<string, string | undefined>,
+): Promise<number> {
+  const secrets = CREDENTIAL_VARIABLES.map((name) => env[name]).filter(
+    (value): value is string => Boolean(value),
+  );
+  let copied = 0;
+  if (!existsSync(sessionsDir)) return copied;
+  for await (const file of new Bun.Glob("**/*.jsonl").scan({
+    cwd: sessionsDir,
+    onlyFiles: true,
+  })) {
+    let text = await Bun.file(path.join(sessionsDir, file)).text();
+    for (const secret of secrets) text = text.replaceAll(secret, "[REDACTED]");
+    await Bun.write(path.join(runDir, "traces", path.basename(file)), text);
+    copied++;
+  }
+  return copied;
+}
+
 async function writeOutput(out: string, file: FindingsFile): Promise<void> {
   const temp = `${out}.tmp`;
   await Bun.write(temp, `${JSON.stringify(file, null, 2)}\n`);
@@ -249,6 +289,18 @@ async function main(): Promise<number> {
     { cwd: engine, stdin: "ignore", stdout: "inherit", stderr: "inherit" },
   );
   const code = await review.exited;
+  if (contract.runDir !== undefined && contract.sessionsDir !== undefined) {
+    try {
+      const copied = await copyTraces(
+        contract.sessionsDir,
+        runDir,
+        process.env,
+      );
+      console.log(`adapter: kept ${copied} trace(s)`);
+    } catch (error) {
+      console.error(`adapter: could not keep traces: ${String(error)}`);
+    }
+  }
   if (code !== 0) {
     console.error(`adapter: the review exited ${code}`);
     return code;

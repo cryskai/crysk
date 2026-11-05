@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   assertComplete,
   assertHuntersRan,
   type Contract,
+  copyTraces,
   isReviewable,
   readContract,
   reviewArgv,
@@ -79,6 +80,14 @@ describe("readContract", () => {
     });
     expect(local.repo).toBe("/tmp/repo");
     expect(local.runDir).toBe("/tmp/run");
+  });
+
+  test("reads the sessions directory only when the image sets it", () => {
+    expect(CONTRACT.sessionsDir).toBeUndefined();
+    expect(
+      readContract({ ...ENV, RB_SESSIONS_DIR: "/home/bun/.claude/projects" })
+        .sessionsDir,
+    ).toBe("/home/bun/.claude/projects");
   });
 
   test("reads the model from the manifest's configuration", () => {
@@ -270,6 +279,49 @@ describe("readContract's strict mode", () => {
   test("is off unless asked for", () => {
     expect(CONTRACT.strict).toBe(false);
     expect(readContract({ ...ENV, RB_STRICT: "1" }).strict).toBe(true);
+  });
+});
+
+describe("copyTraces", () => {
+  function dirs() {
+    const root = mkdtempSync(path.join(tmpdir(), "rb-traces-"));
+    return {
+      root,
+      sessions: path.join(root, "projects"),
+      runDir: path.join(root, "run"),
+    };
+  }
+
+  test("copies each session into the run directory, with secrets removed", async () => {
+    const { root, sessions, runDir } = dirs();
+    try {
+      await Bun.write(
+        path.join(sessions, "-work-repo", "one.jsonl"),
+        '{"content":"uses SECRET-VALUE here"}\n',
+      );
+      await Bun.write(path.join(sessions, "-work-repo", "two.jsonl"), "{}\n");
+      await Bun.write(path.join(sessions, "-work-repo", "skip.txt"), "no");
+      const copied = await copyTraces(sessions, runDir, {
+        CLAUDE_CODE_OAUTH_TOKEN: "SECRET-VALUE",
+      });
+      expect(copied).toBe(2);
+      const one = await Bun.file(
+        path.join(runDir, "traces", "one.jsonl"),
+      ).text();
+      expect(one).toBe('{"content":"uses [REDACTED] here"}\n');
+      expect(existsSync(path.join(runDir, "traces", "skip.txt"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("no sessions is not a failure, because traces must never cost a result", async () => {
+    const { root, sessions, runDir } = dirs();
+    try {
+      expect(await copyTraces(sessions, runDir, {})).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
