@@ -27,6 +27,7 @@ import {
 } from "#review/findings";
 import { isSafetyProtected } from "#review/materiality-gate";
 import { findMarker, MARKER_BRAND_PATTERN, MARKER_OPEN } from "../brand";
+import { redactSecrets, wasRedacted } from "../security/published-text";
 import {
   type FindingChannel,
   type GateStatus,
@@ -125,9 +126,14 @@ export function renderStateBlock(
       sev: f.sev,
       tier: f.tier,
       channel: f.channel,
+      // Stays as written, unlike the claim below. A location is the identity the
+      // engine compares, and a redacted one never pairs with its finding again,
+      // so a blocking row could never be released.
       locs: f.locs,
       c: f.c,
-      claim: f.claim,
+      // The block sits in the comment's raw source, so a secret here is still
+      // public. `c` keeps the fingerprint of the original claim.
+      claim: redactSecrets(f.claim),
     })),
   };
   if (reviews !== undefined && Number.isInteger(reviews) && reviews >= 1) {
@@ -270,10 +276,16 @@ function lastEvictableIndex(
 }
 
 function encodeStateJson(value: unknown): string {
-  return JSON.stringify(value)
-    .replaceAll("\u2028", "\\u2028")
-    .replaceAll("\u2029", "\\u2029")
-    .replaceAll("-->", "--\\u003e");
+  return (
+    JSON.stringify(value)
+      .replaceAll("\u2028", "\\u2028")
+      .replaceAll("\u2029", "\\u2029")
+      // No angle bracket at all: a claim or path must not spell a marker that a
+      // parser finds first, and GitHub also ends a comment at `--!>`, not only
+      // at `-->`. JSON.parse reads the escapes back to the same text.
+      .replaceAll("<", "\\u003c")
+      .replaceAll(">", "\\u003e")
+  );
 }
 
 function asStateFindings(parsed: unknown): StateFinding[] | null {
@@ -447,7 +459,9 @@ export function assembleLive(input: {
         tier: gatePrior.tier,
         channel: gatePrior.channel,
         locs: row.locs,
-        c: liveFingerprint(gatePrior.id, gatePrior.claim),
+        // The stored fingerprint when there is one: the stored claim may be
+        // sanitized, and the posted marker hashed the original.
+        c: gatePrior.c ?? liveFingerprint(gatePrior.id, gatePrior.claim),
         claim: gatePrior.claim,
         status: persisted,
       });
@@ -718,10 +732,16 @@ function gatePairing(
 // would turn the gate green on a finding the guard exists to keep blocking.
 // A blank claim counts as unknown: the badge reader writes an unrecovered
 // claim as "" (rereview/prepare.ts), and the guard cannot read safety content
-// that is not there.
+// that is not there. A redacted claim counts the same way, since the word that
+// made it a safety finding may be the part that was removed.
 function isReleasable(row: GateRow | undefined): boolean {
   const claim = row?.claim;
-  if (row === undefined || claim === undefined || claim.trim().length === 0) {
+  if (
+    row === undefined ||
+    claim === undefined ||
+    claim.trim().length === 0 ||
+    wasRedacted(claim)
+  ) {
     return false;
   }
   const paths = [...identityFromLocs(row.locs).keys()];

@@ -10,6 +10,7 @@
 // sides agree on.
 //
 import { MARKER_OPEN, matchMarkerPrefix } from "../brand";
+import { publishedText } from "../security/published-text";
 
 // Disjoint from PR_COMMENT_MARKER_PREFIX and PR_FINDING_MARKER_PREFIX on
 // purpose, same reasoning as their own disjointness (pr/preflight.ts): a
@@ -129,7 +130,7 @@ export function renderTriageReplyBody(
   reasoning: string,
 ): string {
   const head = `${triageMarker(fields)}\n\n${triageBadge(fields)}`;
-  const prose = reasoning.trim();
+  const prose = publishedText(reasoning.trim());
   return prose.length === 0 ? `${head}\n` : `${head}\n\n${prose}\n`;
 }
 

@@ -18,6 +18,7 @@ import {
   assembleLive,
   capLiveFindings,
   type LiveFinding,
+  materialityReleasedIds,
   PR_STATE_MARKER_PREFIX,
   parseStateBlock,
   renderStateBlock,
@@ -538,5 +539,54 @@ describe("assembleLive — a held triage settlement after verification", () => {
     expect(assembled.verifiedGoneIds).toEqual(["R001"]);
     expect(assembled.gateRows).toEqual([]);
     expect(unresolvedBlockingCount([], assembled.gateRows)).toBe(0);
+  });
+});
+
+describe("a redacted claim keeps the materiality guard closed", () => {
+  const HEAD = "b".repeat(40);
+  const survivor = {
+    path: "src/a.ts",
+    line: 10,
+    proof_refs: [],
+    tier: "advisory",
+    severity: "BLOCKER",
+    materiality: { label: "immaterial", reason: "x" },
+    claim: "unrelated style nit",
+    refuter_verdict: "corroborated",
+    causal_disposition: "introduced",
+  };
+
+  test("the auth word was inside the secret, and the finding still counts", () => {
+    const stored = parseStateBlock(
+      renderStateBlock(
+        HEAD,
+        [
+          stateFinding({
+            id: "R001",
+            sev: "BLOCKER",
+            tier: "blocking",
+            channel: "inline",
+            locs: ["src/a.ts:10"],
+            claim: `Logs postgres://auth:pw12345@db in the response`,
+          }),
+        ],
+        1,
+        1,
+      ),
+    )?.findings[0];
+    expect(stored?.claim).toContain("[REDACTED]");
+    const row = {
+      id: "R001",
+      tier: "blocking",
+      locs: stored?.locs ?? [],
+      status: "carried",
+      claim: stored?.claim ?? "",
+    };
+    expect(materialityReleasedIds([survivor] as never, [row] as never)).toEqual(
+      [],
+    );
+    expect(unresolvedBlockingCount([survivor] as never, [row] as never)).toBe(
+      1,
+    );
   });
 });
