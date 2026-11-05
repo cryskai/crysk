@@ -42,6 +42,7 @@ import {
   LEGACY_BIN_NAME,
   matchMarkerPrefix,
 } from "../brand";
+import { publishedText } from "../security/published-text";
 
 export interface DiffStat {
   files: number;
@@ -961,7 +962,7 @@ function liveFindingLines(rereview: RereviewDelta | undefined): string[] {
           ? "⚠️ severity unavailable"
           : severityEmoji(row.sev);
       out.push(
-        `- \`${row.status}\` ${badge} \`${loc}\` — ${liveClaimText(row.claim)} (${row.id})`,
+        `- \`${row.status}\` ${badge} ${code(loc)} — ${liveClaimText(row.claim)} (${row.id})`,
       );
     }
     out.push("");
@@ -1326,16 +1327,11 @@ function tierExplanationLines(finding: Finding): string[] {
 
 // The judge's reason is model text written about author-controlled input,
 // and it is posted. One line (a newline would end the list item and could
-// start a forged header line), capped, with HTML comment delimiters broken so
-// it can never open or close a marker the comment parsers read, and `@`
-// defused so it cannot notify anyone.
+// start a forged header line) and capped; oneLine makes it safe to publish.
 const MATERIALITY_REASON_MAX = 280;
 
 function materialityReason(reason: string): string {
-  const flat = oneLine(reason)
-    .replaceAll("<!--", "<!‐‐")
-    .replaceAll("-->", "‐‐>")
-    .replaceAll("@", "@\u200b");
+  const flat = oneLine(reason);
   return flat.length <= MATERIALITY_REASON_MAX
     ? flat
     : `${flat.slice(0, MATERIALITY_REASON_MAX - 1).trimEnd()}…`;
@@ -1351,7 +1347,7 @@ function promptToFixBlock(finding: Finding): string[] {
     "<details><summary>Prompt to fix with AI</summary>",
     "",
     "```",
-    `Fix this issue in ${finding.path} at line ${finding.line}:`,
+    `Fix this issue in ${oneLine(finding.path)} at line ${finding.line}:`,
     "",
     oneLine(finding.claim),
     "```",
@@ -1570,7 +1566,8 @@ export function blobUrl(
   path: string,
   fragment: string,
 ): string {
-  return `${webUrl}/blob/${sha}/${path}#${fragment}`;
+  // Encoded: a path is author-controlled, and it lands in the comment body.
+  return `${webUrl}/blob/${sha}/${encodeURI(path)}#${fragment}`;
 }
 
 function runLines(doc: FindingsDocument, meta: ReportMeta): string[] {
@@ -1809,9 +1806,12 @@ export function code(text: string): string {
 }
 
 // Claims arrive as free prose and sometimes carry newlines; a raw newline
-// inside a list item silently ends the item.
+// inside a list item silently ends the item. Every piece of model text and every
+// span in this file passes through here, which makes this the one place it is
+// made safe to publish. The finding marker fingerprints the raw claim instead, so
+// a comment posted before this existed still matches its finding.
 function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return publishedText(text.replace(/\s+/g, " ").trim());
 }
 
 function usd(amount: number): string {

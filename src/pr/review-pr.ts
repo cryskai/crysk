@@ -92,7 +92,7 @@ import {
   resolveMaxConcurrentSteps,
   resolveSharedPrefix,
 } from "#review/preflight";
-import { estimateCost } from "#review/report";
+import { code, estimateCost } from "#review/report";
 import {
   pipelineConsolidateInput,
   pipelineMaterialityInput,
@@ -229,7 +229,7 @@ export async function postAdjudicationReplies(input: {
     });
     const evidence =
       entry.evidence.length > 0
-        ? `\n\nEvidence:\n${entry.evidence.map((e) => `- \`${e}\``).join("\n")}`
+        ? `\n\nEvidence:\n${entry.evidence.map((e) => `- ${code(e)}`).join("\n")}`
         : "";
     const body = `${marker}\n\n${ADJUDICATION_BADGES[entry.verdict]}${evidence}`;
     let commentId: number | undefined;

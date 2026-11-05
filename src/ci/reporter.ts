@@ -42,6 +42,7 @@ import {
   severityEmoji,
 } from "#review/report";
 import { log } from "#ui/primitives";
+import { publishedText } from "../security/published-text";
 
 // ---------------------------------------------------------------------------
 // Workflow commands (`::group::`, `::endgroup::`, `::notice::`, `::warning::`,
@@ -238,7 +239,7 @@ function severityRank(severity: Severity): number {
 }
 
 function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return publishedText(text.replace(/\s+/g, " ").trim());
 }
 
 // Grouped by file (spec 2.1: "grouped by file and severity tier"), sorted
@@ -270,7 +271,7 @@ function findingLine(
   headSha: string,
   webUrl: string | undefined,
 ): string {
-  const loc = `${finding.path}:${finding.line}`;
+  const loc = oneLine(`${finding.path}:${finding.line}`);
   const linked =
     webUrl === undefined
       ? `\`${loc}\``
@@ -464,7 +465,7 @@ function reviewedLines(data: CiReviewSummary): string[] {
   } else {
     out.push("#### Findings", "");
     for (const [filePath, group] of groupFindingsByPath(data.findings)) {
-      out.push(`**\`${filePath}\`**`);
+      out.push(`**\`${oneLine(filePath)}\`**`);
       for (const finding of group) {
         out.push(findingLine(finding, data.headSha, data.repoWebUrl));
       }

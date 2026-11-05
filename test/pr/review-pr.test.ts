@@ -370,6 +370,28 @@ describe("postAdjudicationReplies", () => {
     expect(body).toContain("Evidence:\n- `src/a.ts:10`");
   });
 
+  test("evidence from the adjudicator is safe to publish", async () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const { spawnFn, calls } = fakeAuthorGh("github-actions[bot]");
+    await postAdjudicationReplies({
+      operatorRoot: "/repo",
+      pr: 42,
+      headSha: HEAD,
+      adjudications: [
+        {
+          ...ADJUDICATION,
+          evidence: [`\`@octocat ![x](https://evil.example/p.png) ${token}`],
+        },
+      ],
+      spawnFn,
+    });
+    const body = calls[0]?.stdin ?? "";
+    expect(body).not.toContain("@octocat");
+    expect(body).not.toContain("![x]");
+    expect(body).not.toContain(token);
+    expect(body).not.toContain("``@");
+  });
+
   test("a failed post prints a ::warning:: line and does not throw", async () => {
     const { spawnFn } = fakeGh(1, "boom");
     const lines: string[] = [];

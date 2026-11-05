@@ -183,6 +183,28 @@ describe("renderStepSummary — completed review with findings", () => {
   });
 });
 
+describe("renderStepSummary — model text is safe to publish", () => {
+  test("a hostile claim and path carry no mention, image, HTML or secret", () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const hostile = `@octocat ![x](https://evil.example/p.png) ${token} <img src=x>`;
+    const out = renderStepSummary({
+      kind: "reviewed",
+      prNumber: 123,
+      headSha: HEAD_SHA,
+      findings: [
+        finding({ id: "F001", claim: hostile, path: `src/${hostile}.ts` }),
+      ],
+      costUsdEst: 1,
+      wallMs: 1000,
+      model: "sonnet",
+    });
+    expect(out).not.toContain("@octocat");
+    expect(out).not.toContain("![x]");
+    expect(out).not.toContain(token);
+    expect(out).not.toContain("<img");
+  });
+});
+
 describe("renderStepSummary — clean review (no findings)", () => {
   const data: CiSummaryData = {
     kind: "reviewed",
