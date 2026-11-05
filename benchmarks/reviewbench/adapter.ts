@@ -14,7 +14,6 @@ import type { FindingsDocument } from "#review/findings";
 import { BUILTIN_IGNORE_RULES } from "../../src/ignore-file";
 import { filterDiffByIgnoreRules } from "../../src/review/size-gate";
 
-const REPO = "/work/repo";
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
 export interface Contract {
@@ -25,6 +24,9 @@ export interface Contract {
   agent: string;
   diff: string;
   out: string;
+  repo: string;
+  // Keeps the engine's run directory for the ledger. Only the local runner sets it.
+  runDir?: string;
   model?: string;
 }
 
@@ -46,6 +48,7 @@ export function readContract(
     throw new Error("RB_PR_NUMBER is not a positive integer");
   }
   const model = env.RB_CONFIG_MODEL?.trim();
+  const runDir = env.RB_RUN_DIR?.trim();
   return {
     nwo: required("RB_NWO"),
     prNumber,
@@ -54,6 +57,8 @@ export function readContract(
     agent: required("RB_AGENT"),
     diff: required("RB_DIFF"),
     out: required("RB_OUT"),
+    repo: env.RB_REPO?.trim() || "/work/repo",
+    ...(runDir ? { runDir } : {}),
     ...(model ? { model } : {}),
   };
 }
@@ -205,12 +210,14 @@ async function main(): Promise<number> {
     );
     return 0;
   }
-  const runDir = path.join(await mkdtemp(path.join(tmpdir(), "crysk-")), "run");
+  const runDir =
+    contract.runDir ??
+    path.join(await mkdtemp(path.join(tmpdir(), "crysk-")), "run");
   const review = Bun.spawn(
     reviewArgv({
       bun: process.execPath,
       cli: path.join(engine, "src/cli.ts"),
-      repo: REPO,
+      repo: contract.repo,
       contract,
       gotchas: path.join(import.meta.dir, "gotchas.md"),
       runDir,

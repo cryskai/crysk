@@ -7,6 +7,7 @@ import {
   reviewArgv,
   toFindingsFile,
 } from "../benchmarks/reviewbench/adapter";
+import { prKey, subscriptionEnv } from "../benchmarks/reviewbench/run-local";
 
 const BASE = "a".repeat(40);
 const HEAD = "b".repeat(40);
@@ -57,6 +58,18 @@ describe("readContract", () => {
       "RB_PR_NUMBER",
     );
     expect(() => readContract({ ...ENV, RB_HEAD: "abc" })).toThrow("RB_HEAD");
+  });
+
+  test("defaults to the contract's mount, and a local run can point elsewhere", () => {
+    expect(CONTRACT.repo).toBe("/work/repo");
+    expect(CONTRACT.runDir).toBeUndefined();
+    const local = readContract({
+      ...ENV,
+      RB_REPO: "/tmp/repo",
+      RB_RUN_DIR: "/tmp/run",
+    });
+    expect(local.repo).toBe("/tmp/repo");
+    expect(local.runDir).toBe("/tmp/run");
   });
 
   test("reads the model from the manifest's configuration", () => {
@@ -210,5 +223,29 @@ describe("assertHuntersRan", () => {
   test("a review where every hunter failed does not", () => {
     expect(() => assertHuntersRan(steps("failed", "failed"))).toThrow("hunter");
     expect(() => assertHuntersRan(steps())).toThrow("hunter");
+  });
+});
+
+describe("the local runner", () => {
+  test("names a pull request the way the official runner does", () => {
+    expect(
+      prKey({
+        nwo: "owner/repo",
+        pr_number: 7,
+        base: BASE,
+        head: "0123456789".repeat(4),
+      }),
+    ).toBe("owner_repo_7-01234567");
+  });
+
+  // A key left in the shell would bill per token instead of the subscription.
+  test("keeps no credential from the environment", () => {
+    const env = subscriptionEnv({
+      PATH: "/bin",
+      ANTHROPIC_API_KEY: "x",
+      ANTHROPIC_AUTH_TOKEN: "x",
+      CLAUDE_CODE_OAUTH_TOKEN: "x",
+    });
+    expect(env).toEqual({ PATH: "/bin" });
   });
 });

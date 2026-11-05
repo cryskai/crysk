@@ -37,6 +37,15 @@ scripts/try-agent.sh crysk-reviewbench -e CLAUDE_CODE_OAUTH_TOKEN          # the
 npm run judge -- --candidate findings --provider <provider> --model <id> --output scoring/results.json
 ```
 
+On your Claude subscription, with no token, run it natively instead. This is for private scoring: a leaderboard row needs the image and a final through their portal.
+
+```bash
+bun benchmarks/reviewbench/run-local.ts --reviewbench <clone> --out <dir outside this repo> --pr 0
+bun benchmarks/reviewbench/run-local.ts --reviewbench <clone> --out <dir outside this repo> --all
+```
+
+It removes credentials from the environment, so a key left in your shell cannot bill per token. Your personal `~/.crysk/config.json` still applies, so check that it sets no routing, `materiality_gate` or size limits you did not mean to measure. The plan the engine prints shows them.
+
 Every review is a live run. The engine prints its estimate before it starts.
 
 ## Failures
