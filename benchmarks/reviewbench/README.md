@@ -56,7 +56,7 @@ CLAUDE_CODE_OAUTH_TOKEN=... benchmarks/reviewbench/run-image.sh <clone> <dir out
 
 The token has to go through the image: natively on macOS the engine uses the Keychain's login and removes a token from the environment.
 
-Both private runners set `RB_STRICT=1`, which fails a partial review instead of scoring it.
+Both private runners set `RB_STRICT=1`, which fails a partial review instead of scoring it. Use a new output directory for each configuration: they skip a finished pull request by name, whatever configuration produced it.
 
 Every review is a live run. The engine prints its estimate before it starts.
 

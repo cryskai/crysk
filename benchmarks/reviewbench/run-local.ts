@@ -49,6 +49,14 @@ function git(cwd: string, args: string[]): { ok: boolean; stdout: string } {
   return { ok: run.exitCode === 0, stdout: run.stdout.toString() };
 }
 
+// An empty file would read as "nothing to review" and record a review that never
+// happened, so a diff git could not produce has to fail.
+export function threeDotDiff(repo: string, base: string, head: string): string {
+  const diff = git(repo, ["diff", `${base}...${head}`]);
+  if (!diff.ok) throw new Error(`could not diff ${base}...${head}`);
+  return diff.stdout;
+}
+
 function checkout(repo: string, entry: CorpusEntry): void {
   mkdirSync(repo, { recursive: true });
   if (!existsSync(path.join(repo, ".git"))) git(repo, ["init", "-q"]);
@@ -86,10 +94,7 @@ async function reviewOne(entry: CorpusEntry, out: string): Promise<number> {
   mkdirSync(prDir, { recursive: true });
   mkdirSync(path.dirname(result), { recursive: true });
   const diff = path.join(prDir, "diff.patch");
-  await Bun.write(
-    diff,
-    git(repo, ["diff", `${entry.base}...${entry.head}`]).stdout,
-  );
+  await Bun.write(diff, threeDotDiff(repo, entry.base, entry.head));
   const prJson = path.join(prDir, "pr.json");
   await Bun.write(prJson, JSON.stringify(entry));
   const adapter = Bun.spawn(

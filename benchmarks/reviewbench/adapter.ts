@@ -11,8 +11,14 @@ import { mkdtemp, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FindingsDocument } from "#review/findings";
-import { BUILTIN_IGNORE_RULES } from "../../src/ignore-file";
-import { filterDiffByIgnoreRules } from "../../src/review/size-gate";
+import {
+  type IgnoreFileReadResult,
+  readLocalIgnoreRules,
+} from "../../src/ignore-read";
+import {
+  filterDiffByIgnoreRules,
+  sizeGateConfigFor,
+} from "../../src/review/size-gate";
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
@@ -172,12 +178,14 @@ export function toFindingsFile(
   };
 }
 
-// The engine refuses a diff with nothing left after its default exclusions, and
-// that is an answer here, not a failure.
-export function isReviewable(diff: string): boolean {
-  return (
-    filterDiffByIgnoreRules(diff, BUILTIN_IGNORE_RULES).patch.trim().length > 0
-  );
+// The engine refuses a diff with nothing left after its exclusions, and that is
+// an answer here, not a failure. Same rules as the engine, so the verdicts agree.
+export function isReviewable(
+  diff: string,
+  ignore?: IgnoreFileReadResult,
+): boolean {
+  const { excludeRules } = sizeGateConfigFor({}, undefined, ignore);
+  return filterDiffByIgnoreRules(diff, excludeRules).patch.trim().length > 0;
 }
 
 // Zero findings from no hunters would score as a clean review. A partial review
@@ -217,8 +225,9 @@ async function main(): Promise<number> {
   // The benchmark checks that each configured label reaches the agent's output.
   console.log(`model=${contract.model ?? "default"}`);
   const engine = path.resolve(import.meta.dir, "../..");
-  if (!isReviewable(await Bun.file(contract.diff).text())) {
-    console.log("adapter: nothing to review after the default exclusions");
+  const ignore = await readLocalIgnoreRules(contract.repo);
+  if (!isReviewable(await Bun.file(contract.diff).text(), ignore)) {
+    console.log("adapter: nothing to review after the exclusions");
     await writeOutput(
       contract.out,
       toFindingsFile({ head_sha: contract.head, findings: [] }, contract),

@@ -12,7 +12,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates nodejs npm procps \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g --no-audit --no-fund @anthropic-ai/claude-code@2.1.318 \
-    && npm cache clean --force
+    && npm cache clean --force \
+    && git config --system --add safe.directory '*'
 
 WORKDIR /engine
 COPY package.json bun.lock tsconfig.json ./

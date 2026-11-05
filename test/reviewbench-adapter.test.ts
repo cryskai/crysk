@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   assertComplete,
   assertHuntersRan,
@@ -8,7 +11,12 @@ import {
   reviewArgv,
   toFindingsFile,
 } from "../benchmarks/reviewbench/adapter";
-import { prKey, subscriptionEnv } from "../benchmarks/reviewbench/run-local";
+import {
+  prKey,
+  subscriptionEnv,
+  threeDotDiff,
+} from "../benchmarks/reviewbench/run-local";
+import { parseIgnoreFile } from "../src/ignore-file";
 
 const BASE = "a".repeat(40);
 const HEAD = "b".repeat(40);
@@ -205,6 +213,17 @@ describe("isReviewable", () => {
     expect(isReviewable("")).toBe(false);
     expect(isReviewable(record("bun.lock"))).toBe(false);
   });
+
+  // The verdict has to match the engine's, which also reads the repository's
+  // ignore file: it errors on what is left with nothing, and reviews a negation.
+  test("the repository's ignore file counts, both ways", () => {
+    const ignore = (text: string) => ({
+      found: true,
+      rules: parseIgnoreFile(text, "user"),
+    });
+    expect(isReviewable(record("src/a.ts"), ignore("src/"))).toBe(false);
+    expect(isReviewable(record("bun.lock"), ignore("!bun.lock"))).toBe(true);
+  });
 });
 
 describe("assertHuntersRan", () => {
@@ -255,6 +274,38 @@ describe("readContract's strict mode", () => {
 });
 
 describe("the local runner", () => {
+  test("a diff that git cannot produce is a failure, not an empty review", async () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "rb-diff-"));
+    try {
+      const git = (...args: string[]) =>
+        Bun.spawnSync(["git", "-C", repo, ...args], {
+          stdout: "pipe",
+          stderr: "pipe",
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: "t",
+            GIT_AUTHOR_EMAIL: "t@example.com",
+            GIT_COMMITTER_NAME: "t",
+            GIT_COMMITTER_EMAIL: "t@example.com",
+          },
+        })
+          .stdout.toString()
+          .trim();
+      git("init", "-q");
+      await Bun.write(path.join(repo, "a.txt"), "1\n");
+      git("add", ".");
+      git("commit", "-qm", "one");
+      const base = git("rev-parse", "HEAD");
+      await Bun.write(path.join(repo, "a.txt"), "2\n");
+      git("commit", "-qam", "two");
+      const head = git("rev-parse", "HEAD");
+      expect(threeDotDiff(repo, base, head)).toContain("+2");
+      expect(() => threeDotDiff(repo, "f".repeat(40), head)).toThrow("diff");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("names a pull request the way the official runner does", () => {
     expect(
       prKey({
