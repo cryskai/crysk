@@ -6,6 +6,7 @@ own folder, with a `README.md` that explains how to run it.
 | Benchmark | Folder | What it answers |
 |---|---|---|
 | [Martian Code Review Bench](https://github.com/withmartian/code-review-benchmark) | [`martian/`](martian/README.md) | How Crysk compares with other review tools on 50 public PRs |
+| [ReviewBench](https://github.com/review-bench/ReviewBench) | [`reviewbench/`](reviewbench/README.md) | How Crysk compares with other review tools on 25 to 219 real PRs |
 
 ## Adding a benchmark
 
