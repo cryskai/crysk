@@ -1,13 +1,13 @@
 // Inject one pr-hero arm into a COPY of Martian's benchmark_data.json, so
 // their unmodified steps 2, 2.5 and 3 score us exactly like every vendor.
 //
-//   bun run scripts/martian-inject.ts --arm dev-default \
+//   bun run benchmarks/martian/martian-inject.ts --arm dev-default \
 //     --data <martian checkout>/offline/results/benchmark_data.json
 //
 // Each review comment body is what pr-hero posts on a real PR
 // (renderInlineComment), not a bare claim: vendors were judged on the
 // comments they posted, so we are too. Only qualified runs are exported
-// (scripts/martian-evidence.ts); `--allow-unqualified` exports the rest and
+// (benchmarks/martian/martian-evidence.ts); `--allow-unqualified` exports the rest and
 // lists them, for runs whose evidence predates a producer fix. A partial arm
 // is refused and the file is left untouched. Never point --data at the
 // upstream file you intend to keep pristine.
@@ -16,12 +16,12 @@ import path from "node:path";
 import { lookupGolden, type MartianGoldenPr } from "#compare/martian-adapter";
 import type { FindingsDocument } from "#review/findings";
 import { renderInlineComment } from "#review/report";
-import { writeJsonAtomically } from "../src/execution/atomic-write";
+import { writeJsonAtomically } from "../../src/execution/atomic-write";
 import {
   BENCH_HOME,
   type CasesFile,
   CORPORA,
-  corpusDocsFile,
+  corpusFile,
 } from "./martian-corpora";
 import { loadQualifiedReview } from "./martian-evidence";
 
@@ -35,7 +35,7 @@ const dataPath = argValue("--data");
 const allowUnqualified = Bun.argv.includes("--allow-unqualified");
 if (!arm || !dataPath) {
   console.error(
-    "usage: bun run scripts/martian-inject.ts --arm <id> --data <benchmark_data.json copy> [--allow-unqualified]",
+    "usage: bun run benchmarks/martian/martian-inject.ts --arm <id> --data <benchmark_data.json copy> [--allow-unqualified]",
   );
   process.exit(1);
 }
@@ -56,10 +56,10 @@ const unqualified: string[] = [];
 let injected = 0;
 for (const [name, corpus] of Object.entries(CORPORA)) {
   const cases = (await Bun.file(
-    corpusDocsFile(name, "cases.json"),
+    corpusFile(name, "cases.json"),
   ).json()) as CasesFile;
   const goldens = (await Bun.file(
-    corpusDocsFile(name, "goldens.json"),
+    corpusFile(name, "goldens.json"),
   ).json()) as MartianGoldenPr[];
   for (const row of cases.prs) {
     const label = `${name}-${row.pr}`;

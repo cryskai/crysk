@@ -1,6 +1,6 @@
 # Martian bench — operational flow
 
-Canonical protocol: `docs/benchmarks/martian-bench.md`. This file is the runbook.
+Canonical protocol: `benchmarks/martian/README.md`. This file is the runbook.
 
 ## Layout on disk
 
@@ -9,9 +9,9 @@ Canonical protocol: `docs/benchmarks/martian-bench.md`. This file is the runbook
 | `~/Desktop/martian-cal/cal.com` | Blobless clone (`git clone --filter=blob:none`). GitHub renamed the repo `calcom/cal.diy`; clone via `cal.com` still works |
 | `~/Desktop/martian-cal/runs/cal-<pr>-hunters/` | Baseline arm (`hunters`). Sacred until a **new** arm id is chosen |
 | `~/Desktop/martian-cal/runs/martian-judge.json` | Surface A scores for the dirs the judge scanned |
-| `docs/benchmarks/martian-cal-cases.json` | SHAs + GitHub size stats (captured 2026-08-19). All ten PRs are MERGED |
-| `docs/benchmarks/martian-cal-goldens.json` | Vendored Martian Cal.com goldens (10 PRs, 41 issues) |
-| `docs/benchmarks/martian-cal-gotchas.md` | Intentionally thin. No gold, no vendor comments |
+| `benchmarks/martian/corpora/martian-cal-cases.json` | SHAs + GitHub size stats (captured 2026-08-19). All ten PRs are MERGED |
+| `benchmarks/martian/corpora/martian-cal-goldens.json` | Vendored Martian Cal.com goldens (10 PRs, 41 issues) |
+| `benchmarks/martian/corpora/martian-cal-gotchas.md` | Intentionally thin. No gold, no vendor comments |
 
 A new arm **must** use a new suffix (`cal-<pr>-scout`, `cal-<pr>-hunters-v2`, …). `run` skips only schema-valid completed reviews with matching frozen identity and attributable attempt evidence. Legacy files alone do not qualify. Unqualified prior directories are preserved under `incomplete-attempts/`; use a new arm rather than rewriting a historical baseline.
 
@@ -25,7 +25,7 @@ Required flags (the harness already passes them):
 pr-hero review --repo <clone> --base <baseSha> --head <headSha>
   --two-dot --yes --no-summary
   --agents <SUGGESTED_AGENTS_DIR>
-  --gotchas docs/benchmarks/martian-cal-gotchas.md
+  --gotchas benchmarks/martian/corpora/martian-cal-gotchas.md
   --out ~/Desktop/martian-cal/runs/<arm-dir>
 ```
 
@@ -52,10 +52,10 @@ One variable if you change any of those. Name the new arm.
 ## The other four corpora (authorised 2026-10-25)
 
 `--corpus sentry|grafana|keycloak|discourse` selects the other forty PRs (`cal` is the default).
-Each corpus is data in `scripts/martian-corpora.ts` plus three docs files:
-`docs/benchmarks/martian-<corpus>-{cases.json,goldens.json,gotchas.md}`.
+Each corpus is data in `benchmarks/martian/martian-corpora.ts` plus three docs files:
+`benchmarks/martian/corpora/martian-<corpus>-{cases.json,goldens.json,gotchas.md}`.
 
-- Case files come from `bun run scripts/martian-cases.ts <corpus>` (read-only `gh api`). Never hand-edit them; `test/martian-corpora.test.ts` checks them against the goldens.
+- Case files come from `bun run benchmarks/martian/martian-cases.ts <corpus>` (read-only `gh api`). Never hand-edit them; `test/martian-corpora.test.ts` checks them against the goldens.
 - Fifteen PRs live in synthetic forks (`ai-code-review-evaluation/*`). Their rows carry `remote`, and the SHAs are fetched from there.
 - The four new clones are empty repos that fetch only each PR's two commits (`--depth=1`, blobless). Sentry costs ~235 MB, not a full clone.
 - Runs land in `~/Desktop/martian-cal/runs-<corpus>/<corpus>-<pr>-<arm>/`.
@@ -64,9 +64,9 @@ Each corpus is data in `scripts/martian-corpora.ts` plus three docs files:
 Judging like the vendor rows (no API key):
 
 ```bash
-bun run scripts/martian-claude-shim.ts --port 8787 2>~/Desktop/martian-cal/shim.log &   # OpenAI-compatible -> claude -p
+bun run benchmarks/martian/martian-claude-shim.ts --port 8787 2>~/Desktop/martian-cal/shim.log &   # OpenAI-compatible -> claude -p
 cp <martian>/offline/results/benchmark_data.json <copy>    # never mutate the upstream file
-bun run scripts/martian-inject.ts --arm <arm> --data <copy>
+bun run benchmarks/martian/martian-inject.ts --arm <arm> --data <copy>
 MARTIAN_BASE_URL=http://127.0.0.1:8787/v1 MARTIAN_API_KEY=local \
 MARTIAN_MODEL=anthropic/claude-opus-4-5-20251101 \
   uv run python -m code_review_benchmark.step2_extract_comments --tool pr-hero   # then 2.5 and 3
@@ -80,23 +80,23 @@ Before step 2.5, raise the per-call timeout in the **working copy** (not upstrea
 
 ```bash
 # $0 — size gate + cost band
-bun run scripts/martian-cal.ts plan              # default: 3-PR pilot
-bun run scripts/martian-cal.ts plan --all        # ten
-bun run scripts/martian-cal.ts plan --only 11059,7232
+bun run benchmarks/martian/martian-cal.ts plan              # default: 3-PR pilot
+bun run benchmarks/martian/martian-cal.ts plan --all        # ten
+bun run benchmarks/martian/martian-cal.ts plan --only 11059,7232
 
 # $0 — fetch SHAs, dry-run CLI
-bun run scripts/martian-cal.ts check --all
+bun run benchmarks/martian/martian-cal.ts check --all
 
 # LIVE — serial reviews. Skips dirs with findings.json
-bun run scripts/martian-cal.ts run --all
-bun run scripts/martian-cal.ts run --only 10600,10967
+bun run benchmarks/martian/martian-cal.ts run --all
+bun run benchmarks/martian/martian-cal.ts run --only 10600,10967
 
 # $0 — juxtapose findings vs goldens. NOT precision/recall
-bun run scripts/martian-cal.ts score --all
+bun run benchmarks/martian/martian-cal.ts score --all
 
 # LIVE — Surface A. Martian JUDGE_PROMPT, Claude Code CLI, sonnet, tools:[]
-bun run scripts/martian-judge.ts
-bun run scripts/martian-judge.ts --runs ~/Desktop/martian-cal/runs
+bun run benchmarks/martian/martian-judge.ts
+bun run benchmarks/martian/martian-judge.ts --runs ~/Desktop/martian-cal/runs
 ```
 
 Default `plan|check|run|score` is the 3-PR pilot (`14943,8330,8087`). `--all` is the ten.
@@ -107,7 +107,7 @@ After `run`, each dir must contain `findings.json` + `martian-review.json` (adap
 
 Do not collapse them.
 
-**Surface A — goldens (vendor-comparable shape).** LLM: “same underlying issue?” Semantic, not path±25. Our implementation: `scripts/martian-judge.ts`. Prompt is Martian’s; gateway is Claude Code CLI `sonnet` `tools:[]`, **not** `MARTIAN_API_KEY` / their Opus 4.5 tables. Label both. Sibling findings at the same `path:line` are not extra FPs (mechanical analogue of their step 2.5).
+**Surface A — goldens (vendor-comparable shape).** LLM: “same underlying issue?” Semantic, not path±25. Our implementation: `benchmarks/martian/martian-judge.ts`. Prompt is Martian’s; gateway is Claude Code CLI `sonnet` `tools:[]`, **not** `MARTIAN_API_KEY` / their Opus 4.5 tables. Label both. Sibling findings at the same `path:line` are not extra FPs (mechanical analogue of their step 2.5).
 
 Profiles (Martian): Strict = bug/security/concurrency/data/api · Core = Strict + perf/test_gap/doc_defect · All = + style/speculative. Our script scores All. Report High+Critical recall from the gold-side categories even when quoting All P/R.
 
@@ -129,7 +129,7 @@ Injecting `tool: "pr-hero"` into a **copy** of `benchmark_data.json` and running
 
 ```bash
 git clone --filter=blob:none https://github.com/calcom/cal.com.git ~/Desktop/martian-cal/cal.com
-# SHAs are in docs/benchmarks/martian-cal-cases.json — do not guess
+# SHAs are in benchmarks/martian/corpora/martian-cal-cases.json — do not guess
 git -C ~/Desktop/martian-cal/cal.com fetch --filter=blob:none origin <baseSha> <headSha>
 ```
 
@@ -141,7 +141,7 @@ Harness checks out `headSha` detached + `--force` per PR. Do not leave the clone
 - [ ] `findings.json` + `martian-review.json` per PR
 - [ ] Surface A artifact (`martian-judge.json`) with gateway + model labelled
 - [ ] Surface B named ran or not
-- [ ] Ledger in `docs/benchmarks/martian-bench.md` with cost
+- [ ] Ledger in `benchmarks/martian/README.md` with cost
 - [ ] High+Critical recall reported
 - [ ] Compared to corpus.md baseline when this is a new arm
 - [ ] Engram `topic_key: eval/martian-code-review-bench`

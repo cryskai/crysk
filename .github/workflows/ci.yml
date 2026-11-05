@@ -60,7 +60,7 @@ jobs:
       # over the same commit. A linter that always passes is worse than no
       # linter, because it is trusted. test/packaging.test.ts pins this line.
       - name: Lint
-        run: ./node_modules/.bin/biome check src test
+        run: ./node_modules/.bin/biome check src test benchmarks
 
       # Everything above runs from SOURCE, where `import.meta.dir` names a real
       # directory and the engine always reports asset mode "dev". The published

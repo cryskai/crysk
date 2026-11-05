@@ -75,7 +75,7 @@ High` (`→ baz #0`), Kilo CRITICAL/WARNING/SUGGESTION, the same top names as pr
 
 ## 5. Empirical check: our labels against Martian's goldens ($0)
 
-Data: the judged Martian 50 `dev-default` arm (`docs/benchmarks/martian-bench.md:485`; lab
+Data: the judged Martian 50 `dev-default` arm (`benchmarks/martian/README.md:485`; lab
 `bench/experiments/2026-10-25-martian-50-dev-default/`). Each of the **111 true positives** pairs one
 golden (Martian severity and category) with one of our matched candidates. Each candidate was linked back
 to its posted comment, which gives the badge severity and tier, and from there to the run's

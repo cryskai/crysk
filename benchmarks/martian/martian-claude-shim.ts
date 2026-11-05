@@ -2,7 +2,7 @@
 // offline pipeline (steps 2, 2.5 and 3) runs unmodified on a Claude
 // subscription instead of an API key.
 //
-//   bun run scripts/martian-claude-shim.ts [--port 8787] [--concurrency 4]
+//   bun run benchmarks/martian/martian-claude-shim.ts [--port 8787] [--concurrency 4]
 //   MARTIAN_BASE_URL=http://127.0.0.1:8787/v1 MARTIAN_API_KEY=local \
 //   MARTIAN_MODEL=anthropic/claude-opus-4-5-20251101 uv run python -m ...
 //

@@ -1,6 +1,6 @@
 // Project a pr-hero findings.json onto Martian's offline candidate shape.
 // Pure: no I/O, no judge, no precision/recall. The judge is theirs; this
-// only makes our artifacts injectable. See docs/martian-bench.md.
+// only makes our artifacts injectable. See benchmarks/martian/README.md.
 
 import type { Finding } from "#review/findings";
 

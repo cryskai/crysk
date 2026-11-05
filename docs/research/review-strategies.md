@@ -352,7 +352,7 @@ Phase 1 may land during DoorDash if `hunters` / `scout-led` are exactly today’
 ---
 
 **How a new pipeline is scored (2026-08-19):** n-vs-n on Martian’s public 50, not musive-only. Protocol,
-isolation, cost, and the Cal.com-first slice (10 PRs, Surface A scored): `docs/martian-bench.md`. One
+isolation, cost, and the Cal.com-first slice (10 PRs, Surface A scored): `benchmarks/martian/README.md`. One
 pipeline id per arm (this doc’s unit of choice). Run via `skills/martian-bench/SKILL.md`. Do not start a new arm from this file.
 
 ---
@@ -360,7 +360,7 @@ pipeline id per arm (this doc’s unit of choice). Run via `skills/martian-bench
 ## How a new experiment looks
 
 **Against Martian (when authorised):** same 50 public PRs, one pipeline id, their judge + stored
-vendor reviews. See `docs/martian-bench.md`. Still one variable.
+vendor reviews. See `benchmarks/martian/README.md`. Still one variable.
 
 **Prompt wording:** same pipeline id, new `--agents` folder.
 

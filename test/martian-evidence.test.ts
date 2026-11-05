@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { loadQualifiedReview } from "../scripts/martian-evidence";
-import { computeQualifiedBenchmarkMetrics } from "../scripts/martian-judge";
+import { loadQualifiedReview } from "../benchmarks/martian/martian-evidence";
+import { computeQualifiedBenchmarkMetrics } from "../benchmarks/martian/martian-judge";
 import { OpenCodeEvidenceCollector } from "../src/transports/opencode-evidence";
 
 test("legacy proofless complete findings never qualifies", async () => {
@@ -26,7 +26,7 @@ test("all-unknown costs and wall time remain unknown, with visible coverage", ()
   expect(metrics.missing).toBe(1);
 });
 
-import type { BenchmarkIdentity } from "../scripts/martian-evidence";
+import type { BenchmarkIdentity } from "../benchmarks/martian/martian-evidence";
 import { evidenceSha256 } from "../src/execution/attempt-evidence";
 import type { ProviderTransport } from "../src/execution/contracts";
 import { StepExecutionHarness } from "../src/execution/harness";
@@ -322,7 +322,7 @@ test("actual judge CLI honors frozen selected denominator and includes valid emp
   const proc = Bun.spawn(
     [
       process.execPath,
-      path.join(import.meta.dir, "../scripts/martian-judge.ts"),
+      path.join(import.meta.dir, "../benchmarks/martian/martian-judge.ts"),
       "--runs",
       runs,
       "--arm",
@@ -346,7 +346,10 @@ test("actual judge CLI honors frozen selected denominator and includes valid emp
 test("actual run CLI resumes only full matching proof, and preserves prior attempt when model identity changes", async () => {
   const x = await realAttemptFixture();
   const cases = await Bun.file(
-    path.join(import.meta.dir, "../docs/benchmarks/martian-cal-cases.json"),
+    path.join(
+      import.meta.dir,
+      "../benchmarks/martian/corpora/martian-cal-cases.json",
+    ),
   ).json();
   const row = cases.prs.find((r: { pr: number }) => r.pr === 14943);
   x.identity.headSha = row.headSha;
@@ -369,13 +372,16 @@ test("actual run CLI resumes only full matching proof, and preserves prior attem
   const preload = path.join(runs, "offline-preload.ts");
   const modulePath = path.join(
     import.meta.dir,
-    "../scripts/martian-evidence.ts",
+    "../benchmarks/martian/martian-evidence.ts",
   );
   await writeFile(
     preload,
     `import {mock} from 'bun:test';import * as real from ${JSON.stringify(modulePath)};const identity=${JSON.stringify(x.identity)};mock.module(${JSON.stringify(modulePath)},()=>({...real,freezeBenchmarkIdentity:async(input)=>({...identity,fingerprint:input.model==='changed'?'b'.repeat(64):identity.fingerprint})}));Bun.spawnSync=()=>({exitCode:0,stdout:Buffer.from(${JSON.stringify(row.headSha)}),stderr:Buffer.from('')});Bun.spawn=()=>{throw Error('OFFLINE: inference blocked')};globalThis.fetch=()=>{throw Error('OFFLINE: network blocked')};`,
   );
-  const cli = path.join(import.meta.dir, "../scripts/martian-cal.ts");
+  const cli = path.join(
+    import.meta.dir,
+    "../benchmarks/martian/martian-cal.ts",
+  );
   async function run(model?: string) {
     const proc = Bun.spawn(
       [
@@ -449,7 +455,7 @@ test("positive OpenCode frozen identity supplies the actual installed SDK reader
   await writeFile(path.join(root, "binary"), "fixture");
   const modulePath = path.join(
     import.meta.dir,
-    "../scripts/martian-evidence.ts",
+    "../benchmarks/martian/martian-evidence.ts",
   );
   const script = path.join(root, "test.ts");
   await writeFile(
@@ -512,7 +518,7 @@ test("actual judge CLI reports a frozen zero-output schedule rather than droppin
   const proc = Bun.spawn(
     [
       process.execPath,
-      path.join(import.meta.dir, "../scripts/martian-judge.ts"),
+      path.join(import.meta.dir, "../benchmarks/martian/martian-judge.ts"),
       "--runs",
       root,
       "--arm",
@@ -542,7 +548,7 @@ async function judge(runs: string) {
       process.execPath,
       "--preload",
       preload,
-      path.join(import.meta.dir, "../scripts/martian-judge.ts"),
+      path.join(import.meta.dir, "../benchmarks/martian/martian-judge.ts"),
       "--runs",
       runs,
       "--arm",

@@ -38,8 +38,8 @@ import {
   BENCH_HOME,
   type CasesFile,
   CORPORA,
-  corpusDocsFile,
-} from "./martian-corpora";
+  corpusFile,
+} from "../benchmarks/martian/martian-corpora";
 
 function argValue(flag: string): string | undefined {
   const i = Bun.argv.indexOf(flag);
@@ -97,10 +97,10 @@ interface PrJob {
 const jobs: PrJob[] = [];
 for (const [name, corpus] of Object.entries(CORPORA)) {
   const cases = (await Bun.file(
-    corpusDocsFile(name, "cases.json"),
+    corpusFile(name, "cases.json"),
   ).json()) as CasesFile;
   const goldens = (await Bun.file(
-    corpusDocsFile(name, "goldens.json"),
+    corpusFile(name, "goldens.json"),
   ).json()) as MartianGoldenPr[];
   for (const row of cases.prs) {
     const label = `${name}-${row.pr}`;
