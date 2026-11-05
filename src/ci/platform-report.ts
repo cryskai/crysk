@@ -49,6 +49,7 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { GATE_RECORD_FILE } from "../pr/gate-record";
 import type { FindingsDocument } from "../review/findings";
 import { validateFindingsDocument } from "../review/findings";
 import { PLATFORM_API_URL, type PlatformDataMode } from "./platform";
@@ -86,7 +87,9 @@ export interface RunReportBody {
   schema_version?: string;
   engine_version?: string;
   model?: string;
-  counts: { blocking: number; advisory: number };
+  // `blocking` and `advisory` are this run's findings. `unresolved_blocking` is what the gate decides on,
+  // earlier findings still open included; absent when the run recorded none.
+  counts: { blocking: number; advisory: number; unresolved_blocking?: number };
   usage: {
     tokens_in: number;
     tokens_out: number;
@@ -102,6 +105,7 @@ export interface RunReportBody {
 export interface RunDirFacts {
   findings?: unknown;
   pipeline?: unknown;
+  gate?: unknown;
 }
 
 export interface BuildRunReportInput {
@@ -166,7 +170,7 @@ export function buildRunReport(
     ...(typeof doc.model === "string" && doc.model !== ""
       ? { model: doc.model }
       : {}),
-    counts: { blocking, advisory },
+    counts: { blocking, advisory, ...gateCount(input.run.gate) },
     usage: {
       tokens_in: count(telemetry.tokens_in),
       tokens_out: count(telemetry.tokens_out),
@@ -178,6 +182,14 @@ export function buildRunReport(
     },
     agents: buildAgents(doc, input.run.pipeline),
   };
+}
+
+function gateCount(gate: unknown): { unresolved_blocking?: number } {
+  const value = (gate as { unresolved_blocking?: unknown } | null | undefined)
+    ?.unresolved_blocking;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? { unresolved_blocking: value }
+    : {};
 }
 
 function count(value: unknown): number {
@@ -282,6 +294,7 @@ export function readRunDir(
   for (const [key, file] of [
     ["findings", "findings.json"],
     ["pipeline", "pipeline.json"],
+    ["gate", GATE_RECORD_FILE],
   ] as const) {
     try {
       facts[key] = JSON.parse(readText(path.join(runDir, file)));

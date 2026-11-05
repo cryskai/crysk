@@ -108,6 +108,9 @@ function fixtureDir(files: Record<string, unknown>): string {
   return dir;
 }
 
+const withFindings = () =>
+  readRunDir(fixtureDir({ "findings.json": FINDINGS }));
+
 describe("buildRunReport", () => {
   const body = buildRunReport({
     outcome: "reviewed",
@@ -252,6 +255,47 @@ describe("buildRunReport", () => {
         "usage",
       ].sort(),
     );
+  });
+
+  test("sends the gate's own count of open blocking findings when the run recorded one", () => {
+    const body = buildRunReport({
+      outcome: "success",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: { ...withFindings(), gate: { unresolved_blocking: 2 } },
+    });
+    expect(body?.counts).toEqual({
+      blocking: 1,
+      advisory: 2,
+      unresolved_blocking: 2,
+    });
+  });
+
+  test("zero open blocking findings is sent, because it is a statement", () => {
+    const body = buildRunReport({
+      outcome: "success",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: { ...withFindings(), gate: { unresolved_blocking: 0 } },
+    });
+    expect(body?.counts.unresolved_blocking).toBe(0);
+  });
+
+  test.each([
+    [undefined],
+    [{}],
+    [{ unresolved_blocking: -1 }],
+    [{ unresolved_blocking: 1.5 }],
+    [{ unresolved_blocking: "2" }],
+    ["2"],
+  ])("a missing or malformed gate record sends no count: %j", (gate) => {
+    const body = buildRunReport({
+      outcome: "success",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: { ...withFindings(), gate },
+    });
+    expect(body?.counts).toEqual({ blocking: 1, advisory: 2 });
   });
 
   test("a floor that is not set is not sent, and agents are capped at 64", () => {
