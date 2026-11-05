@@ -74,6 +74,7 @@ import {
   WORKFLOW_FILE_NAME,
 } from "../brand";
 import { CliError } from "../errors";
+import { buildFindingStateRecord } from "./finding-state-record";
 import {
   buildPostPlan,
   computeDroppedFindingIds,
@@ -3173,6 +3174,8 @@ export async function postInlineFindings(input: {
           stateBudget,
         });
   const merged = mergeStateWithBudget(stateBlockBudget(referenceBody.length));
+  // What was finally written, for the record the platform reads: a re-merge below may drop rows.
+  let writtenState = merged;
 
   const renderWithState = (
     delta: PrCommentDelta,
@@ -3376,6 +3379,7 @@ export async function postInlineFindings(input: {
         stateBlockBudget(bodyWithoutState.length),
       );
       patchBody = renderPatch(reMerged, 0);
+      writtenState = reMerged;
     }
     if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
       process.stdout.write(
@@ -3530,6 +3534,17 @@ export async function postInlineFindings(input: {
     commentUrls: commentUrlByFindingId,
     movedHeadSha,
     ...(closingCommentId === undefined ? {} : { closingCommentId }),
+    ...(writtenState === undefined
+      ? {}
+      : {
+          findingState: buildFindingStateRecord({
+            rows: writtenState.rows,
+            freshFindingIds: postedDoc.findings.map((f) => f.id),
+            freshIds: writtenState.freshIds,
+            resolvedIds: framing?.resolved_ids ?? [],
+            dropped: writtenState.dropped,
+          }),
+        }),
   };
 }
 

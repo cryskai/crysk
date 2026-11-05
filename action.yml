@@ -385,7 +385,9 @@ runs:
     # run is recorded with its cost. The report posts metadata only (counts,
     # token and cost totals, models, shas), never a finding or any text of the
     # review, to the constant URL in src/ci/platform.ts, with the newest run
-    # token (the refresh step's, else the first exchange's). Once the report is
+    # token (the refresh step's, else the first exchange's). It also carries the gate's
+    # count of open blocking findings and their ids and statuses, which hold no text.
+    # Once the report is
     # accepted the same script uploads the run's findings (findings.json's
     # `findings` array only) to /runs/findings with that token.
     #

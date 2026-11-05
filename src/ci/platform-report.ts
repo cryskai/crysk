@@ -49,6 +49,10 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import {
+  FINDING_STATE_FILE,
+  type FindingStateRecord,
+} from "../pr/finding-state-record";
 import { GATE_RECORD_FILE } from "../pr/gate-record";
 import type { FindingsDocument } from "../review/findings";
 import { validateFindingsDocument } from "../review/findings";
@@ -98,6 +102,8 @@ export interface RunReportBody {
     wall_ms?: number;
   };
   agents: RunReportAgent[];
+  // Which findings stay open, under ids that last across runs. Absent when the run recorded none.
+  finding_states?: FindingStateRecord;
 }
 
 // What the builder knows about the run directory. Either part is absent when
@@ -106,6 +112,7 @@ export interface RunDirFacts {
   findings?: unknown;
   pipeline?: unknown;
   gate?: unknown;
+  findingStates?: unknown;
 }
 
 export interface BuildRunReportInput {
@@ -181,6 +188,72 @@ export function buildRunReport(
       wall_ms: count(telemetry.wall_ms),
     },
     agents: buildAgents(doc, input.run.pipeline),
+    ...findingStates(input.run.findingStates),
+  };
+}
+
+// The file is the run's own, but this goes off the runner, in metadata-only mode too: only the known
+// fields of the known shapes pass, so a future field that quotes code cannot ride along. Rows past the
+// cap count as dropped, so the platform says it does not know instead of reading them as resolved.
+const STABLE_ID = /^R\d{3,}$/;
+const FINDING_ID = /^[A-Za-z0-9_.-]{1,64}$/;
+const OPEN_STATUSES = new Set([
+  "carried",
+  "unconfirmed",
+  "suppressed",
+  "deferred",
+]);
+const TIERS = new Set(["blocking", "advisory", "unrecoverable"]);
+const MAX_FINDING_STATES = 500;
+
+function findingStates(record: unknown): {
+  finding_states?: FindingStateRecord;
+} {
+  if (typeof record !== "object" || record === null) return {};
+  const { open, fresh, resolved, dropped } = record as Record<string, unknown>;
+  if (
+    !Array.isArray(open) ||
+    typeof fresh !== "object" ||
+    fresh === null ||
+    Array.isArray(fresh) ||
+    !Array.isArray(resolved) ||
+    typeof dropped !== "number" ||
+    !Number.isInteger(dropped) ||
+    dropped < 0
+  ) {
+    return {};
+  }
+  const rows = open.flatMap((row): FindingStateRecord["open"] => {
+    const { id, status, tier } = (row ?? {}) as Record<string, unknown>;
+    return typeof id === "string" &&
+      STABLE_ID.test(id) &&
+      typeof status === "string" &&
+      OPEN_STATUSES.has(status) &&
+      typeof tier === "string" &&
+      TIERS.has(tier)
+      ? [{ id, status, tier }]
+      : [];
+  });
+  return {
+    finding_states: {
+      open: rows.slice(0, MAX_FINDING_STATES),
+      fresh: Object.fromEntries(
+        Object.entries(fresh as Record<string, unknown>)
+          .filter(
+            (entry): entry is [string, string] =>
+              FINDING_ID.test(entry[0]) &&
+              typeof entry[1] === "string" &&
+              STABLE_ID.test(entry[1]),
+          )
+          .slice(0, MAX_FINDING_STATES),
+      ),
+      resolved: resolved
+        .filter(
+          (id): id is string => typeof id === "string" && STABLE_ID.test(id),
+        )
+        .slice(0, MAX_FINDING_STATES),
+      dropped: dropped + Math.max(0, rows.length - MAX_FINDING_STATES),
+    },
   };
 }
 
@@ -295,6 +368,7 @@ export function readRunDir(
     ["findings", "findings.json"],
     ["pipeline", "pipeline.json"],
     ["gate", GATE_RECORD_FILE],
+    ["findingStates", FINDING_STATE_FILE],
   ] as const) {
     try {
       facts[key] = JSON.parse(readText(path.join(runDir, file)));

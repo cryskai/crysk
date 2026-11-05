@@ -298,6 +298,77 @@ describe("buildRunReport", () => {
     expect(body?.counts).toEqual({ blocking: 1, advisory: 2 });
   });
 
+  describe("finding_states", () => {
+    const build = (findingStates: unknown) =>
+      buildRunReport({
+        outcome: "success",
+        prNumber: 7,
+        triggerHeadSha: TRIGGER_HEAD,
+        run: { ...withFindings(), findingStates },
+      });
+    const good = {
+      open: [{ id: "R001", status: "carried", tier: "blocking" }],
+      fresh: { F001: "R002" },
+      resolved: ["R000"],
+      dropped: 0,
+    };
+
+    test("sends what the run recorded", () => {
+      expect(build(good)?.finding_states).toEqual(good);
+    });
+
+    test("no record sends nothing, so the platform can say it does not know", () => {
+      expect(build(undefined)).not.toHaveProperty("finding_states");
+    });
+
+    test.each([
+      ["text"],
+      [{ open: "x" }],
+      [{ open: [], fresh: {}, resolved: "x" }],
+      [{ ...good, dropped: -1 }],
+    ])("a malformed record sends nothing: %j", (bad) => {
+      expect(build(bad)).not.toHaveProperty("finding_states");
+    });
+
+    test("only the known fields of known shapes pass, so no text can ride along", () => {
+      const body = build({
+        open: [
+          { id: "R001", status: "carried", tier: "blocking", claim: CLAIM },
+          { id: "not an id", status: "carried", tier: "blocking" },
+          { id: "R002", status: CLAIM, tier: "blocking" },
+          { id: "R003", status: "carried", tier: CLAIM },
+        ],
+        fresh: { F001: "R002", "F002 extra": "R003", F003: CLAIM },
+        resolved: ["R000", CLAIM],
+        dropped: 0,
+        note: CLAIM,
+      });
+      expect(JSON.stringify(body)).not.toContain("PLANTED-CLAIM");
+      expect(body?.finding_states).toEqual({
+        open: [{ id: "R001", status: "carried", tier: "blocking" }],
+        fresh: { F001: "R002" },
+        resolved: ["R000"],
+        dropped: 0,
+      });
+    });
+
+    test("is capped, and the cut counts as dropped so the platform does not read it as resolved", () => {
+      const open = Array.from({ length: 600 }, (_, i) => ({
+        id: `R${String(i + 1).padStart(3, "0")}`,
+        status: "carried",
+        tier: "advisory",
+      }));
+      const states = build({
+        open,
+        fresh: {},
+        resolved: [],
+        dropped: 2,
+      })?.finding_states;
+      expect(states?.open).toHaveLength(500);
+      expect(states?.dropped).toBe(102);
+    });
+  });
+
   test("a floor that is not set is not sent, and agents are capped at 64", () => {
     const per_agent = Object.fromEntries(
       Array.from({ length: 70 }, (_, i) => [
