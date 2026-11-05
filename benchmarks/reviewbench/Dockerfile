@@ -9,7 +9,7 @@
 FROM oven/bun:1.4.4-debian
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates nodejs npm \
+    && apt-get install -y --no-install-recommends git ca-certificates nodejs npm procps \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g --no-audit --no-fund @anthropic-ai/claude-code@2.1.318 \
     && npm cache clean --force
