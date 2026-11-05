@@ -11,8 +11,10 @@ export interface FindingStateRecord {
   open: { id: string; status: string; tier: string }[];
   // This run's finding id -> its stable id.
   fresh: Record<string, string>;
-  // The stable ids this run verified gone or retired. Absence never means resolved.
+  // The stable ids this run verified gone. Absence never means resolved.
   resolved: string[];
+  // The stable ids a stronger finding replaced this run, under a new id. Not fixed, so not resolved.
+  superseded: string[];
   // Rows the state block's size cap left out, whose state is therefore unknown.
   dropped: number;
 }
@@ -22,6 +24,7 @@ export function buildFindingStateRecord(input: {
   freshFindingIds: readonly string[];
   freshIds: readonly (string | undefined)[];
   resolvedIds: readonly string[];
+  supersededIds: readonly string[];
   dropped: number;
 }): FindingStateRecord {
   const fresh: Record<string, string> = {};
@@ -33,6 +36,7 @@ export function buildFindingStateRecord(input: {
     open: input.rows.map(({ id, status, tier }) => ({ id, status, tier })),
     fresh,
     resolved: [...input.resolvedIds],
+    superseded: [...input.supersededIds],
     dropped: input.dropped,
   };
 }

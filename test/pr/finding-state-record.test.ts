@@ -38,6 +38,7 @@ describe("buildFindingStateRecord", () => {
     freshFindingIds: ["F001", "F002"],
     freshIds: ["R002", undefined],
     resolvedIds: ["R000"],
+    supersededIds: ["R005"],
     dropped: 1,
   });
 
@@ -57,6 +58,11 @@ describe("buildFindingStateRecord", () => {
     expect(record.dropped).toBe(1);
   });
 
+  test("names what a stronger finding replaced, apart from what was resolved", () => {
+    expect(record.superseded).toEqual(["R005"]);
+    expect(record.resolved).not.toContain("R005");
+  });
+
   test("carries no text of the review", () => {
     const text = JSON.stringify(record);
     expect(text).not.toContain("PLANTED-CLAIM");
@@ -68,7 +74,13 @@ describe("buildFindingStateRecord", () => {
 describe("writeFindingStateRecord", () => {
   test("the report step reads back what the run wrote", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "finding-state-"));
-    const record = { open: [], fresh: {}, resolved: ["R001"], dropped: 0 };
+    const record = {
+      open: [],
+      fresh: {},
+      resolved: ["R001"],
+      superseded: [],
+      dropped: 0,
+    };
     writeFindingStateRecord(dir, record);
     expect(
       JSON.parse(readFileSync(path.join(dir, FINDING_STATE_FILE), "utf8")),
@@ -82,6 +94,7 @@ describe("writeFindingStateRecord", () => {
         open: [],
         fresh: {},
         resolved: [],
+        superseded: [],
         dropped: 0,
       }),
     ).not.toThrow();

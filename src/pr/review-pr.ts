@@ -917,9 +917,9 @@ export async function reviewPr(
         onPosted: (outcome) => {
           posted = outcome;
         },
-        onBlockingCount: (count) => {
+        onBlockingCount: (count, conclusive) => {
           blockingCount = count;
-          writeGateRecord(runDir, count);
+          if (conclusive) writeGateRecord(runDir, count);
         },
       });
       // T5b: the verdicts are posted only after the review itself published.

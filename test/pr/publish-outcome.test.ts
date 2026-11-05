@@ -389,6 +389,38 @@ describe("publishRunOutcome", () => {
     expect(blockingCounts).toEqual([2]);
   });
 
+  // A zero only says nothing is open when the review finished: the gate itself ignores it otherwise.
+  test.each([
+    ["a finished review's zero", {}, [], true],
+    ["a zero where no reviewer ran", { noReviewerRan: true }, [], false],
+    [
+      "a zero where a hunter failed",
+      { hunterFailures: [{ agent: "logic", reason: "timeout" }] },
+      [],
+      false,
+    ],
+    [
+      "a count where a hunter failed",
+      { hunterFailures: [{ agent: "logic", reason: "timeout" }] },
+      [findingFixture("F001", "blocking")],
+      true,
+    ],
+  ])("%s", async (_name, over, findings, conclusive) => {
+    const seen: boolean[] = [];
+    await publishRunOutcome(
+      baseInput({
+        result: {
+          ...baseResult({ skillOutput: { ...baseSkillOutput(), findings } }),
+          ...over,
+        } as PipelineResult,
+        onBlockingCount: (_count, isConclusive) => {
+          seen.push(isConclusive);
+        },
+      }),
+    );
+    expect(seen).toEqual([conclusive]);
+  });
+
   // The gate count is UNRESOLVED blocking findings, not this run's survivors:
   // this run's blocking survivors plus every live blocking prior that nothing
   // verified gone. Three holes read green before it: a re-review carrying a

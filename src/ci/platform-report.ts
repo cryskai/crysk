@@ -210,7 +210,10 @@ function findingStates(record: unknown): {
   finding_states?: FindingStateRecord;
 } {
   if (typeof record !== "object" || record === null) return {};
-  const { open, fresh, resolved, dropped } = record as Record<string, unknown>;
+  const { open, fresh, resolved, superseded, dropped } = record as Record<
+    string,
+    unknown
+  >;
   if (
     !Array.isArray(open) ||
     typeof fresh !== "object" ||
@@ -248,6 +251,11 @@ function findingStates(record: unknown): {
           .slice(0, MAX_FINDING_STATES),
       ),
       resolved: resolved
+        .filter(
+          (id): id is string => typeof id === "string" && STABLE_ID.test(id),
+        )
+        .slice(0, MAX_FINDING_STATES),
+      superseded: (Array.isArray(superseded) ? superseded : [])
         .filter(
           (id): id is string => typeof id === "string" && STABLE_ID.test(id),
         )

@@ -3542,6 +3542,7 @@ export async function postInlineFindings(input: {
             freshFindingIds: postedDoc.findings.map((f) => f.id),
             freshIds: writtenState.freshIds,
             resolvedIds: framing?.resolved_ids ?? [],
+            supersededIds: (framing?.worsened ?? []).map((w) => w.priorId),
             dropped: writtenState.dropped,
           }),
         }),

@@ -310,8 +310,22 @@ describe("buildRunReport", () => {
       open: [{ id: "R001", status: "carried", tier: "blocking" }],
       fresh: { F001: "R002" },
       resolved: ["R000"],
+      superseded: ["R003"],
       dropped: 0,
     };
+
+    test("what a stronger finding replaced crosses only as ids", () => {
+      const body = build({
+        ...good,
+        superseded: ["R003", "quoting the customer's code"],
+      });
+      expect(body?.finding_states?.superseded).toEqual(["R003"]);
+    });
+
+    test("a record from before that field reads as nothing replaced", () => {
+      const { superseded: _omitted, ...older } = good;
+      expect(build(older)?.finding_states?.superseded).toEqual([]);
+    });
 
     test("sends what the run recorded", () => {
       expect(build(good)?.finding_states).toEqual(good);
@@ -348,6 +362,7 @@ describe("buildRunReport", () => {
         open: [{ id: "R001", status: "carried", tier: "blocking" }],
         fresh: { F001: "R002" },
         resolved: ["R000"],
+        superseded: [],
         dropped: 0,
       });
     });
