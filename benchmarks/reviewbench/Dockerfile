@@ -24,4 +24,4 @@ COPY src ./src
 COPY benchmarks/reviewbench ./benchmarks/reviewbench
 RUN bun install --frozen-lockfile --production
 
-ENTRYPOINT ["bun", "run", "/engine/benchmarks/reviewbench/adapter.ts"]
+ENTRYPOINT ["/engine/benchmarks/reviewbench/entrypoint.sh"]

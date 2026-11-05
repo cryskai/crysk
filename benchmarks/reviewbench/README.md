@@ -17,6 +17,8 @@ The engine's defaults, with two differences from a review on a pull request:
 | Size gate | Off (`--force`) | A pull request the gate skips scores nothing. The product skips past 4000 lines or 150 files by default |
 | Summary | Off (`--no-summary`) | It costs a step and adds no findings |
 
+The container starts as root and drops to the `bun` user, because Claude CLI refuses `bypassPermissions` as root.
+
 `materiality_gate` and `post_min_severity` are unset, as they are in the engine by default. Repositories that `crysk setup` configures get a posting floor, which this does not apply. CodeGraph is not in the image.
 
 `RB_CONFIG_MODEL` overrides the model. Otherwise the engine's default routes run.
