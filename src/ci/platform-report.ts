@@ -199,7 +199,10 @@ export function buildRunReport(
         ? { cost_is_floor: true }
         : {}),
       wall_ms: count(telemetry.wall_ms),
-      index_ms: count(telemetry.index_ms),
+      // Zero means no index was built, so there is no time to report.
+      ...(count(telemetry.index_ms) > 0
+        ? { index_ms: count(telemetry.index_ms) }
+        : {}),
       ...(telemetry.sync_ms === undefined
         ? {}
         : { sync_ms: count(telemetry.sync_ms) }),
@@ -285,15 +288,15 @@ function findingStates(record: unknown): {
 // Counts only, and only a plain name: this goes off the runner in metadata-only mode too, and a refuted
 // finding's claim can quote the customer's code.
 function refutedByHunter(doc: FindingsDocument): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const finding of doc.debug.refuted) {
+  // A Map, so a hunter named like an object's own property counts like any other.
+  const counts = new Map<string, number>();
+  for (const finding of doc.debug.refuted as unknown[]) {
+    const name = (finding as { hunter?: unknown } | null | undefined)?.hunter;
     const hunter =
-      typeof finding.hunter === "string" && FINDING_ID.test(finding.hunter)
-        ? finding.hunter
-        : "unknown";
-    counts[hunter] = (counts[hunter] ?? 0) + 1;
+      typeof name === "string" && FINDING_ID.test(name) ? name : "unknown";
+    counts.set(hunter, (counts.get(hunter) ?? 0) + 1);
   }
-  return counts;
+  return Object.fromEntries(counts);
 }
 
 function gateCount(gate: unknown): { unresolved_blocking?: number } {

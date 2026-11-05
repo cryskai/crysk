@@ -298,6 +298,25 @@ describe("buildRunReport", () => {
       expect(JSON.stringify(body)).not.toContain("secret.ts");
     });
 
+    test("an entry that is not a finding costs only its own name, never the report", () => {
+      const body = report([null, "text", 7, refuted("risk")]);
+      expect(body?.counts.refuted_by_hunter).toEqual({ unknown: 3, risk: 1 });
+      expect(body?.outcome).toBe("reviewed");
+    });
+
+    test("a hunter named like an object's own property is counted like any other", () => {
+      const text = JSON.stringify(
+        report([
+          refuted("constructor"),
+          refuted("constructor"),
+          refuted("__proto__"),
+        ]),
+      );
+      expect(JSON.parse(text).counts.refuted_by_hunter).toEqual(
+        JSON.parse('{"constructor": 2, "__proto__": 1}'),
+      );
+    });
+
     test("a refuted finding's claim never leaves the runner", () => {
       expect(JSON.stringify(report([refuted("risk")]))).not.toContain(CLAIM);
     });
@@ -318,6 +337,23 @@ describe("buildRunReport", () => {
       ),
     });
     expect(body?.usage).toMatchObject({ index_ms: 1200, sync_ms: 300 });
+  });
+
+  test("a run that built no index sends no indexing time, which is not a time of zero", () => {
+    const body = buildRunReport({
+      outcome: "reviewed",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: readRunDir(
+        fixtureDir({
+          "findings.json": {
+            ...FINDINGS,
+            telemetry: { ...FINDINGS.telemetry, index_ms: 0 },
+          },
+        }),
+      ),
+    });
+    expect(body?.usage).not.toHaveProperty("index_ms");
   });
 
   test("an engine that measured no sync sends none", () => {
