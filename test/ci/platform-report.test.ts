@@ -257,6 +257,115 @@ describe("buildRunReport", () => {
     );
   });
 
+  describe("what the refuter removed, as counts", () => {
+    const report = (refuted: unknown[]) =>
+      buildRunReport({
+        outcome: "reviewed",
+        prNumber: 7,
+        triggerHeadSha: TRIGGER_HEAD,
+        run: readRunDir(
+          fixtureDir({
+            "findings.json": { ...FINDINGS, debug: { refuted } },
+          }),
+        ),
+      });
+    const refuted = (hunter: unknown) => ({
+      ...finding("F100", "blocking"),
+      hunter,
+      refuter_verdict: "refuted",
+    });
+
+    test("counts refuted findings per hunter, since they never reach findings[]", () => {
+      const body = report([
+        refuted("reliability"),
+        refuted("reliability"),
+        refuted("risk"),
+      ]);
+      expect(body?.counts.refuted_by_hunter).toEqual({
+        reliability: 2,
+        risk: 1,
+      });
+      expect(body?.counts).toMatchObject({ blocking: 1, advisory: 2 });
+    });
+
+    test("a run that refuted nothing says so, which is not the same as not knowing", () => {
+      expect(report([])?.counts.refuted_by_hunter).toEqual({});
+    });
+
+    test("a hunter name that is not a plain identifier never leaves the runner", () => {
+      const body = report([refuted("src/secret.ts leaks"), refuted(undefined)]);
+      expect(body?.counts.refuted_by_hunter).toEqual({ unknown: 2 });
+      expect(JSON.stringify(body)).not.toContain("secret.ts");
+    });
+
+    test("an entry that is not a finding costs only its own name, never the report", () => {
+      const body = report([null, "text", 7, refuted("risk")]);
+      expect(body?.counts.refuted_by_hunter).toEqual({ unknown: 3, risk: 1 });
+      expect(body?.outcome).toBe("reviewed");
+    });
+
+    test("a hunter named like an object's own property is counted like any other", () => {
+      const text = JSON.stringify(
+        report([
+          refuted("constructor"),
+          refuted("constructor"),
+          refuted("__proto__"),
+        ]),
+      );
+      expect(JSON.parse(text).counts.refuted_by_hunter).toEqual(
+        JSON.parse('{"constructor": 2, "__proto__": 1}'),
+      );
+    });
+
+    test("a refuted finding's claim never leaves the runner", () => {
+      expect(JSON.stringify(report([refuted("risk")]))).not.toContain(CLAIM);
+    });
+  });
+
+  test("sends how long indexing took, apart from the review", () => {
+    const body = buildRunReport({
+      outcome: "reviewed",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: readRunDir(
+        fixtureDir({
+          "findings.json": {
+            ...FINDINGS,
+            telemetry: { ...FINDINGS.telemetry, index_ms: 1200, sync_ms: 300 },
+          },
+        }),
+      ),
+    });
+    expect(body?.usage).toMatchObject({ index_ms: 1200, sync_ms: 300 });
+  });
+
+  test("a run that built no index sends no indexing time, which is not a time of zero", () => {
+    const body = buildRunReport({
+      outcome: "reviewed",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: readRunDir(
+        fixtureDir({
+          "findings.json": {
+            ...FINDINGS,
+            telemetry: { ...FINDINGS.telemetry, index_ms: 0 },
+          },
+        }),
+      ),
+    });
+    expect(body?.usage).not.toHaveProperty("index_ms");
+  });
+
+  test("an engine that measured no sync sends none", () => {
+    const body = buildRunReport({
+      outcome: "reviewed",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: readRunDir(fixtureDir({ "findings.json": FINDINGS })),
+    });
+    expect(body?.usage).not.toHaveProperty("sync_ms");
+  });
+
   test("sends the gate's own count of open blocking findings when the run recorded one", () => {
     const body = buildRunReport({
       outcome: "success",
@@ -267,6 +376,7 @@ describe("buildRunReport", () => {
     expect(body?.counts).toEqual({
       blocking: 1,
       advisory: 2,
+      refuted_by_hunter: {},
       unresolved_blocking: 2,
     });
   });
@@ -295,7 +405,11 @@ describe("buildRunReport", () => {
       triggerHeadSha: TRIGGER_HEAD,
       run: { ...withFindings(), gate },
     });
-    expect(body?.counts).toEqual({ blocking: 1, advisory: 2 });
+    expect(body?.counts).toEqual({
+      blocking: 1,
+      advisory: 2,
+      refuted_by_hunter: {},
+    });
   });
 
   describe("finding_states", () => {
@@ -806,6 +920,7 @@ describe("runReportStep", () => {
     expect(JSON.parse(String(r.calls[0]?.init.body)).counts).toEqual({
       blocking: 1,
       advisory: 2,
+      refuted_by_hunter: {},
     });
     expect(r.out).toEqual([]);
   });
