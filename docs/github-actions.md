@@ -445,7 +445,7 @@ installation token). A `Report to Crysk` step right after `Publish Crysk outcome
 exchange's). It runs unless the job was cancelled, so a failed or skipped review is reported too, and
 only when the run is platform-dispatched and a run token exists; a standalone run never reaches it.
 
-The report is metadata only: the action's `status` as `outcome`, the PR number, the head and base shas, the
+The report body is metadata only: the action's `status` as `outcome`, the PR number, the head and base shas, the
 run status, schema and engine versions, the model, the blocking and advisory counts, the token, cost
 and wall-time totals (`cost_is_floor` when the cost is a floor of known spend), and one row per agent (key,
 model, tokens, cost, duration, attempts, status). It never carries findings, claims, summary text, hop trails
@@ -458,6 +458,33 @@ is reported as `error`.
 The report never fails the job. A platform that is down, a rejected token (HTTP 401) or a rejected field
 (HTTP 400, with the API's message) prints a `::warning::` naming the status and message and the step exits
 0. A repeat of the same run attempt is answered as already recorded and is not an error.
+
+#### Findings upload
+
+Right after the report is accepted, the same step posts the run's findings to
+`https://api.crysk.dev/runs/findings` with the same run token. The body is exactly
+`{ "schema_version", "findings" }`: the `findings` array of `findings.json`, each object as the engine
+wrote it (in `full` mode; see below), and nothing else. `debug.refuted`, `debug.deduped`, the summary and the telemetry are never
+sent. A run with no `findings.json` (including every case where the action published no run directory),
+an unreadable one, or zero findings sends nothing, and a failed report sends nothing either, since the
+report creates the run the findings attach to. At most 500 findings are sent: the first 500 in the
+engine's order, with a `::warning::` saying how many more were dropped.
+
+**Metadata-only repositories never send code.** Every token exchange (`Connect to Crysk` and the refresh
+steps) returns the repository's `data_mode`, and the step outputs it as `data-mode` (only `full` or
+`metadata_only`; a missing or unrecognised value is treated as `metadata_only` and a `::notice::` says so).
+The report step reads the same exchange as its run token: the refresh after the run when it ran, else the
+first, so a repository switched to `metadata_only` during a long run is honoured. In `full` mode each finding is sent whole, as described above. In
+`metadata_only` mode each finding is reduced on the runner to `id`, `category`, `path`, `line`, `severity`,
+`tier`, `hunter`, `evidence_class`, `refuter_verdict`, `causal_disposition`, `root_cause_id` and
+`hops_used`: never the `claim`, `proof_refs`, `hop_trail`, `symbol`, `dedupe_key`, `materiality` or any key
+not on that list. The count, order and 500 cap are unchanged.
+
+The platform encrypts what it receives in `full` mode and also applies each repository's mode on its side.
+It answers 200 with `{ stored, recorded, mode }` (`recorded: false` is a
+repeat of the same upload and is not an error). Like the report, the upload never fails the job: HTTP 409
+(the run was not reported first), 401, 400 (with the API's message), 413 (too large) or a network error
+prints a `::warning::` naming the status and message, never the token, and the step exits 0.
 
 ## Security considerations
 

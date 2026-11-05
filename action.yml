@@ -382,10 +382,12 @@ runs:
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
 
     # Platform mode only: tell the Crysk platform how this run ended, so every
-    # run is recorded with its cost. It posts metadata only (counts, token and
-    # cost totals, models, shas), never a finding or any text of the review, to
-    # the constant URL in src/ci/platform.ts, with the newest run token (the
-    # refresh step's, else the first exchange's).
+    # run is recorded with its cost. The report posts metadata only (counts,
+    # token and cost totals, models, shas), never a finding or any text of the
+    # review, to the constant URL in src/ci/platform.ts, with the newest run
+    # token (the refresh step's, else the first exchange's). Once the report is
+    # accepted the same script uploads the run's findings (findings.json's
+    # `findings` array only) to /runs/findings with that token.
     #
     # WHY !cancelled() and not success(): a failed or skipped review is a run
     # too, and it still has an outcome to record; a cancelled one is a
@@ -393,14 +395,21 @@ runs:
     # present, so a standalone run never reaches it.
     #
     # WHY it cannot turn the job red: the script prints a `::warning::` with the
-    # HTTP status and the API's message and exits 0. The review's own result
-    # stands. Builtins only, like publish: it runs even when nothing installed.
+    # HTTP status and the API's message and exits 0, for the report and for the
+    # findings upload alike. The review's own result stands. Builtins only, like
+    # publish: it runs even when nothing installed.
     - name: Report to Crysk
       id: report
       if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}
       shell: bash
       env:
         CRYSK_RUN_TOKEN: ${{ steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token }}
+        # From the same exchange as the run token (the refresh after the run
+        # when it ran, else the first): the repository's data mode decides
+        # whether finding text may leave the runner at all, and the first one
+        # can be a run's length old. Anything but `full` (including an empty
+        # value) is read as metadata_only.
+        CRYSK_DATA_MODE: ${{ steps.platform-publish.outputs.data-mode || steps.platform.outputs.data-mode }}
         CRYSK_OUTCOME: ${{ steps.run-crysk.outputs.status }}
         CRYSK_RUN_DIR: ${{ steps.run-crysk.outputs.run_dir }}
         TRIGGER_PR: ${{ steps.trigger.outputs.pr }}

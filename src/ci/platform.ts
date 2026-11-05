@@ -94,15 +94,22 @@ export function parsePlatformConfig(
   return { ok: true, config: layers };
 }
 
+// How much of the run the platform may keep, as /runs/token's `data_mode`
+// says. `full` is the only value that lets the report step send finding text.
+export type PlatformDataMode = "full" | "metadata_only";
+
 export type PlatformTokenResult =
   // `githubActor` is the login the platform says posts as the App's bot. It is
   // absent when the platform sent none or one that is not a plausible login.
   // `config` is absent when the platform sent none or only empty objects.
+  // `dataMode` is absent when the platform sent none or anything but exactly
+  // `full` or `metadata_only`; the connect step reads absence as metadata_only.
   | {
       ok: true;
       githubToken: string;
       runToken: string;
       githubActor?: string;
+      dataMode?: PlatformDataMode;
       config?: PlatformConfig;
     }
   // `message` names the HTTP status and the API's own `message` when there was
@@ -239,12 +246,14 @@ export async function exchangePlatformToken(
       github_token?: unknown;
       run_token?: unknown;
       github_actor?: unknown;
+      data_mode?: unknown;
       config?: unknown;
     };
     const {
       github_token: githubToken,
       run_token: runToken,
       github_actor: actor,
+      data_mode: dataMode,
     } = body;
     // Mask whatever string arrived before judging it, so a malformed reply
     // still cannot leak a token into the log.
@@ -278,6 +287,9 @@ export async function exchangePlatformToken(
       runToken,
       ...(typeof actor === "string" && SAFE_LOGIN.test(actor)
         ? { githubActor: actor }
+        : {}),
+      ...(dataMode === "full" || dataMode === "metadata_only"
+        ? { dataMode }
         : {}),
       ...(config.config === undefined ? {} : { config: config.config }),
     };
@@ -350,6 +362,25 @@ export async function runPlatformConnect(
   // output with `|| inputs.github-token`, so a token that was never written
   // would silently post as github-actions[bot].
   try {
+    // WHY fail closed: `data-mode` decides whether the report step may send
+    // finding text at all (src/ci/platform-report.ts), and a repository in
+    // metadata-only mode must never have its code leave the runner. A missing
+    // or unrecognised value therefore reads as metadata_only, with a notice.
+    // Written by EVERY exchange, refresh steps included: the report step reads
+    // the freshest one (the publish refresh, minted after the run), because the
+    // first token can be 75 minutes old and the repository's mode may have
+    // been switched to metadata_only since.
+    // WHY first: the report step pairs this exchange's run token with this
+    // exchange's data mode. Appends are not atomic, so if one throws the step
+    // fails; with the mode written before the tokens, a refresh that left a
+    // run token always left its mode, and the report never pairs a fresh
+    // token with the stale first-exchange mode.
+    deps.appendOutput(`data-mode=${result.dataMode ?? "metadata_only"}\n`);
+    if (result.dataMode === undefined) {
+      deps.stdout(
+        "::notice title=crysk::The Crysk platform sent no recognised data_mode; treating this repository as metadata_only, so no finding text is uploaded.\n",
+      );
+    }
     deps.appendOutput(`github-token=${result.githubToken}\n`);
     // The run token authenticates the report step (src/ci/platform-report.ts).
     // Already masked by the exchange above, like the installation token.

@@ -1,20 +1,36 @@
 // The action's report step: tell the Crysk platform how a run ended, so every
-// run is recorded (#157) with its cost attributed (#139).
+// run is recorded (#157) with its cost attributed (#139), then hand it the
+// run's findings so the dashboard can show them.
 //
 // It runs only in platform mode (action.yml gates the step on
 // `workflow_dispatch`, a non-empty `dispatch-id` and a run token being present),
 // after the publish step. Standalone use never reaches it.
 //
-// WHY METADATA ONLY: the body carries counts, token totals, costs, model names
-// and shas. It never carries a finding, a claim, a summary, a hop trail or any
-// other text that can quote the customer's code. The builder below COPIES the
-// numeric fields it names out of the run directory instead of forwarding a
-// document, so a field added to findings.json tomorrow cannot leak by default.
+// WHY THE REPORT IS METADATA ONLY: the body carries counts, token totals,
+// costs, model names and shas. It never carries a finding, a claim, a summary,
+// a hop trail or any other text that can quote the customer's code. The
+// builder below COPIES the numeric fields it names out of the run directory
+// instead of forwarding a document, so a field added to findings.json tomorrow
+// cannot leak by default.
+//
+// WHY THE FINDINGS GO SEPARATELY: they are the part that can quote customer
+// code, so they travel in their own request to /runs/findings. The platform
+// encrypts them and honors each repository's metadata-only mode on its side,
+// but a metadata_only repository's code must never leave the runner at all:
+// the action reads `data_mode` from the same token exchange as the run token
+// (CRYSK_DATA_MODE) and, unless it is exactly `full`, this script reduces each
+// finding to non-text fields (METADATA_ONLY_FINDING_FIELDS below). The body is
+// exactly `{ schema_version, findings }`: the `findings` array as the engine
+// wrote it (in `full` mode), never the document's `debug` arrays or its
+// summary prose. It is sent only after the
+// report succeeded (the report creates the run the findings attach to), and
+// never for a run with no findings.json or zero findings.
 //
 // WHY it never fails the job: the review already succeeded or failed on its own
 // merits and its outcome is posted. A platform that is down, a revoked token or
 // a rejected field is reported as a `::warning::` with the HTTP status and the
-// API's message, never a token, and the step exits 0.
+// API's message, never a token, and the step exits 0. A findings upload that
+// fails is a warning too, never a red job.
 //
 // WHY the base URL is the constant from ./platform and never an input: the run
 // token goes to that URL (see platform.ts).
@@ -35,10 +51,14 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { FindingsDocument } from "../review/findings";
 import { validateFindingsDocument } from "../review/findings";
-import { PLATFORM_API_URL } from "./platform";
+import { PLATFORM_API_URL, type PlatformDataMode } from "./platform";
 
 // The platform caps `agents` at 64 entries.
 const MAX_AGENTS = 64;
+
+// The platform accepts at most 500 findings per run. The first 500 in the
+// engine's order go out and the rest are named in a warning.
+const MAX_FINDINGS = 500;
 
 // Long enough for a slow API, short enough that a hung endpoint cannot hold the
 // job's tail.
@@ -284,12 +304,20 @@ export interface SendReportDeps {
   runToken: string;
 }
 
-export async function sendRunReport(
+type PostResult =
+  | { ok: true; reply: Record<string, unknown> }
+  | { ok: false; message: string };
+
+// One authenticated JSON POST to the platform. Every failure, whether an HTTP
+// status or a transport error, comes back as a message that never carries the
+// token.
+async function postJson(
   deps: SendReportDeps,
-  body: RunReportBody,
-): Promise<SendReportResult> {
+  endpoint: string,
+  body: unknown,
+): Promise<PostResult> {
   try {
-    const response = await deps.fetch(`${deps.baseUrl}/runs/report`, {
+    const response = await deps.fetch(`${deps.baseUrl}${endpoint}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${deps.runToken}`,
@@ -305,14 +333,10 @@ export async function sendRunReport(
         message: `HTTP ${response.status}${message === undefined ? "" : ` — ${message}`}`,
       };
     }
-    // recorded=false is a repeat of the same run attempt: a success.
     const parsed: unknown = await response.json().catch(() => ({}));
-    const reply: Record<string, unknown> =
-      typeof parsed === "object" && parsed !== null ? { ...parsed } : {};
     return {
       ok: true,
-      recorded: reply.recorded !== false,
-      ...(typeof reply.run_id === "string" ? { runId: reply.run_id } : {}),
+      reply: typeof parsed === "object" && parsed !== null ? { ...parsed } : {},
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -321,6 +345,128 @@ export async function sendRunReport(
       message: `the request could not complete: ${detail.split(deps.runToken).join("***")}`,
     };
   }
+}
+
+export async function sendRunReport(
+  deps: SendReportDeps,
+  body: RunReportBody,
+): Promise<SendReportResult> {
+  const result = await postJson(deps, "/runs/report", body);
+  if (!result.ok) return result;
+  // recorded=false is a repeat of the same run attempt: a success.
+  const { reply } = result;
+  return {
+    ok: true,
+    recorded: reply.recorded !== false,
+    ...(typeof reply.run_id === "string" ? { runId: reply.run_id } : {}),
+  };
+}
+
+export interface FindingsUploadBody {
+  schema_version: string;
+  // Each object exactly as the engine wrote it into findings.json.
+  findings: unknown[];
+}
+
+export interface FindingsUpload {
+  body: FindingsUploadBody;
+  // Findings beyond MAX_FINDINGS that were left out of the body.
+  dropped: number;
+}
+
+// The only fields of a finding a metadata_only repository's upload carries: ids,
+// locations, enum-like labels and counters. NEVER the claim, proof_refs,
+// hop_trail, symbol, dedupe_key or materiality (all can quote the code), and
+// NEVER a key this list does not name, so a field added to the engine
+// tomorrow stays on the runner by default.
+const METADATA_ONLY_FINDING_FIELDS = [
+  "id",
+  "category",
+  "path",
+  "line",
+  "severity",
+  "tier",
+  "hunter",
+  "evidence_class",
+  "refuter_verdict",
+  "causal_disposition",
+  "root_cause_id",
+  "hops_used",
+] as const;
+
+function metadataOnlyFinding(finding: unknown): Record<string, unknown> {
+  const kept: Record<string, unknown> = {};
+  if (typeof finding !== "object" || finding === null) return kept;
+  for (const field of METADATA_ONLY_FINDING_FIELDS) {
+    const value: unknown = Reflect.get(finding, field);
+    // Scalars only: a structure under an allowlisted name is not the field the
+    // platform expects and could hold text.
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      kept[field] = value;
+    }
+  }
+  return kept;
+}
+
+// null when there is nothing to upload: no findings.json, one this engine
+// cannot read, or zero findings. The document is validated only to know it is
+// one; in `full` mode the objects sent are the raw parsed ones, so a field the
+// validator does not model still reaches the platform untouched. In
+// `metadata_only` mode each is reduced to METADATA_ONLY_FINDING_FIELDS.
+export function buildFindingsUpload(
+  document: unknown,
+  dataMode: PlatformDataMode,
+): FindingsUpload | null {
+  let doc: FindingsDocument;
+  try {
+    doc = validateFindingsDocument(document);
+  } catch {
+    return null;
+  }
+  if (typeof document !== "object" || document === null) return null;
+  const raw = "findings" in document ? document.findings : undefined;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const sent: unknown[] = raw.slice(0, MAX_FINDINGS);
+  return {
+    body: {
+      schema_version: doc.schema_version,
+      findings: dataMode === "full" ? sent : sent.map(metadataOnlyFinding),
+    },
+    dropped: Math.max(0, raw.length - MAX_FINDINGS),
+  };
+}
+
+export type SendFindingsResult =
+  | {
+      ok: true;
+      stored: number;
+      recorded: boolean;
+      mode: "full" | "metadata_only" | undefined;
+    }
+  // Same message contract as SendReportResult.
+  | { ok: false; message: string };
+
+export async function sendRunFindings(
+  deps: SendReportDeps,
+  body: FindingsUploadBody,
+): Promise<SendFindingsResult> {
+  const result = await postJson(deps, "/runs/findings", body);
+  if (!result.ok) return result;
+  const { reply } = result;
+  return {
+    ok: true,
+    stored: typeof reply.stored === "number" ? reply.stored : 0,
+    // recorded=false is a repeat of the same upload: a success.
+    recorded: reply.recorded !== false,
+    mode:
+      reply.mode === "full" || reply.mode === "metadata_only"
+        ? reply.mode
+        : undefined,
+  };
 }
 
 async function apiMessage(response: Response): Promise<string | undefined> {
@@ -353,6 +499,10 @@ export async function runReportStep(deps: RunReportStepDeps): Promise<number> {
     deps.stdout(
       `::warning title=crysk::${escapeCommandData(`Crysk run report not recorded: ${message}`)}\n`,
     );
+  const warnFindings = (message: string): void =>
+    deps.stdout(
+      `::warning title=crysk::${escapeCommandData(`Crysk findings not uploaded: ${message}`)}\n`,
+    );
   // The whole step, not only the request: a run directory this engine wrote is
   // read and shaped here too, and a throw from either must still be a warning.
   try {
@@ -365,21 +515,43 @@ export async function runReportStep(deps: RunReportStepDeps): Promise<number> {
       warn("the run resolved no pull request number.");
       return 0;
     }
+    const run = readRunDir(deps.env.CRYSK_RUN_DIR ?? "", deps.readText);
     const body = buildRunReport({
       outcome: deps.env.CRYSK_OUTCOME ?? "",
       prNumber,
       triggerHeadSha: deps.env.TRIGGER_HEAD_SHA ?? "",
-      run: readRunDir(deps.env.CRYSK_RUN_DIR ?? "", deps.readText),
+      run,
     });
     if (body === null) {
       warn("the run resolved no head sha.");
       return 0;
     }
-    const result = await sendRunReport(
-      { fetch: deps.fetch, baseUrl: deps.baseUrl, runToken },
-      body,
-    );
-    if (!result.ok) warn(result.message);
+    const platform = { fetch: deps.fetch, baseUrl: deps.baseUrl, runToken };
+    const result = await sendRunReport(platform, body);
+    if (!result.ok) {
+      warn(result.message);
+      return 0;
+    }
+    // Only a recorded run has somewhere for findings to attach (409 otherwise).
+    try {
+      const upload = buildFindingsUpload(
+        run.findings,
+        deps.env.CRYSK_DATA_MODE === "full" ? "full" : "metadata_only",
+      );
+      if (upload === null) return 0;
+      if (upload.dropped > 0) {
+        warnFindings(
+          `only the first ${MAX_FINDINGS} findings are uploaded; ${upload.dropped} more were dropped.`,
+        );
+      }
+      const sent = await sendRunFindings(platform, upload.body);
+      if (!sent.ok) warnFindings(sent.message);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      warnFindings(
+        `the findings could not be sent: ${detail.split(runToken).join("***")}`,
+      );
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     warn(
