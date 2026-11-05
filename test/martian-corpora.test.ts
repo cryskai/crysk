@@ -11,7 +11,7 @@ import {
 // in the case file. A case file that falls out of step with its vendored
 // goldens would score a review against the wrong PR without any error.
 
-const DOCS = path.join(
+const CORPORA_DIR = path.join(
   import.meta.dir,
   "..",
   "benchmarks",
@@ -29,10 +29,10 @@ interface CaseRow {
 
 async function load(corpus: string) {
   const cases = (await Bun.file(
-    path.join(DOCS, `martian-${corpus}-cases.json`),
+    path.join(CORPORA_DIR, `martian-${corpus}-cases.json`),
   ).json()) as { pilot: number[]; prs: CaseRow[] };
   const goldens = (await Bun.file(
-    path.join(DOCS, `martian-${corpus}-goldens.json`),
+    path.join(CORPORA_DIR, `martian-${corpus}-goldens.json`),
   ).json()) as MartianGoldenPr[];
   return { cases, goldens };
 }
@@ -63,7 +63,7 @@ for (const corpus of CORPORA) {
 
   test(`${corpus}: has a gotchas file`, async () => {
     const gotchas = await Bun.file(
-      path.join(DOCS, `martian-${corpus}-gotchas.md`),
+      path.join(CORPORA_DIR, `martian-${corpus}-gotchas.md`),
     ).text();
     expect(gotchas).toContain("Do not open GitHub.");
   });

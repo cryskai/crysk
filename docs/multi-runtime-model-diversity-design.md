@@ -817,6 +817,6 @@ Rev 5 is ratifiable only when every applicable box is backed by code and an offl
 - [ ] `test/diversity/refuter-adjudication.test.ts`
 - [ ] `test/schema/migrations.test.ts`
 - [ ] `bun run typecheck`
-- [ ] `./node_modules/.bin/biome check src test`
+- [ ] `./node_modules/.bin/biome check src test benchmarks`
 
 Until this checklist passes, the current implementation remains authoritative and this document describes a future contract. No unimplemented transport, provider, settlement guarantee, security boundary, or D3 result may be advertised as production behavior.

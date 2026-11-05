@@ -1,6 +1,10 @@
 {
   "repo": "keycloak/keycloak",
-  "pilot": [1, 32918, 33832],
+  "pilot": [
+    1,
+    32918,
+    33832
+  ],
   "prs": [
     {
       "pr": 1,

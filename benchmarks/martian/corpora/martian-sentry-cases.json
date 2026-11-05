@@ -1,6 +1,10 @@
 {
   "repo": "getsentry/sentry",
-  "pilot": [1, 2, 3],
+  "pilot": [
+    1,
+    2,
+    3
+  ],
   "prs": [
     {
       "pr": 1,

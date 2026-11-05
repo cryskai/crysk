@@ -1,23 +1,24 @@
 # pr-hero's own exclusions, on top of the 9 shipped defaults (lockfiles, minified, snapshots).
 # Dialect: a gitignore(5) subset, read from the BASE ref under CI. Last matching rule wins.
 #
-# Scope: PROSE FILES ONLY, and only at the top level of docs/research, docs/history and the
-# benchmark folders. Research notes, benchmark ledgers and the roadmap are argued in review comments and PR descriptions, not by a hunter, and
-# their diffs are large — reviewing them spends budget on text that cannot break at runtime.
+# Scope: PROSE FILES ONLY, and only in docs/research, docs/benchmarks, docs/history and the
+# benchmark folders. Research notes, benchmark ledgers and the roadmap are argued in review comments
+# and PR descriptions, not by a hunter, and their diffs are large — reviewing them spends budget on text that cannot break at runtime.
 #
 # The rules are `*.md`, never `**`, so anything else that lands in those directories — a script, a
 # case list, a config, a fixture — stays in scope by construction rather than by a negation someone
 # has to remember to add. Our own corpus is the reason two goldens live in material a blanket
 # `docs/**` or `*.md` rule would hide: shell under `set -u` inside a markdown runbook, and a
 # macOS-only `sed -i ''` in a shell script. Both are Martian Cal.com goldens; the attribution that
-# records that class is docs/research/local-logic-misses.md. Runbooks, workflows, prompts, README
-# and CLAUDE.md stay in scope everywhere.
+# records that class is docs/research/local-logic-misses.md. Runbooks, workflows, prompts, the root
+# README and CLAUDE.md stay in scope everywhere.
 #
 # Known and accepted: a markdown file under these directories is unreviewed even when it quotes
 # a command. docs/research/scout-design.md is the live example. Prose meant to be EXECUTED belongs
 # in docs/release-runbook.md or in a script, both of which are reviewed.
 
 docs/research/*.md
+docs/benchmarks/*.md
 benchmarks/*.md
 benchmarks/*/*.md
 benchmarks/*/corpora/*.md

@@ -203,7 +203,9 @@ describe("Packaging & distribution configuration", () => {
   test("ci workflow invokes the real biome binary, never the bunx shim", () => {
     const workflowPath = path.join(rootDir, ".github", "workflows", "ci.yml");
     const content = readFileSync(workflowPath, "utf-8");
-    expect(content).toContain("./node_modules/.bin/biome check src test");
+    expect(content).toContain(
+      "./node_modules/.bin/biome check src test benchmarks\n",
+    );
 
     // Comments are stripped before the negative assertion on purpose: the
     // workflow SHOULD name the antipattern to explain why the long path is
