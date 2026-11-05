@@ -38,6 +38,7 @@ import {
   blobUrl,
   code,
   formatElapsed,
+  isLinkablePath,
   type PrCommentDelta,
   severityEmoji,
 } from "#review/report";
@@ -271,11 +272,11 @@ function findingLine(
   headSha: string,
   webUrl: string | undefined,
 ): string {
-  const loc = oneLine(`${finding.path}:${finding.line}`);
+  const loc = code(`${finding.path}:${finding.line}`);
   const linked =
-    webUrl === undefined
-      ? `\`${loc}\``
-      : `[\`${loc}\`](${blobUrl(webUrl, headSha, finding.path, `L${finding.line}`)})`;
+    webUrl === undefined || !isLinkablePath(finding.path)
+      ? loc
+      : `[${loc}](${blobUrl(webUrl, headSha, finding.path, `L${finding.line}`)})`;
   return (
     `- ${severityEmoji(finding.severity)} ${finding.severity} · ` +
     `${finding.tier} — ${linked} — ${oneLine(finding.claim)}`
@@ -465,7 +466,7 @@ function reviewedLines(data: CiReviewSummary): string[] {
   } else {
     out.push("#### Findings", "");
     for (const [filePath, group] of groupFindingsByPath(data.findings)) {
-      out.push(`**\`${oneLine(filePath)}\`**`);
+      out.push(`**${code(filePath)}**`);
       for (const finding of group) {
         out.push(findingLine(finding, data.headSha, data.repoWebUrl));
       }

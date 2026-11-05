@@ -126,7 +126,9 @@ export function renderStateBlock(
       sev: f.sev,
       tier: f.tier,
       channel: f.channel,
-      locs: f.locs,
+      // A model wrote the path too. A redacted location stops matching its
+      // finding, which appends a row: it stays visible and still counts.
+      locs: f.locs.map(redactSecrets),
       c: f.c,
       // The block sits in the comment's raw source, so a secret here is still
       // public. `c` keeps the fingerprint of the original claim.

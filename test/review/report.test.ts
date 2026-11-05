@@ -3028,3 +3028,44 @@ describe("what the comment parsers and GitHub read back from model text", () => 
     expect(parseStateBlock(block)?.findings[0]?.claim).toBe(row.claim);
   });
 });
+
+describe("a token in a model-written finding path", () => {
+  const HEAD = "b".repeat(40);
+  const WEB_URL = "https://github.com/acme/app";
+  const TOKEN = `ghp_${"a".repeat(36)}`;
+  const f = finding({ id: "F001", path: `src/${TOKEN}.ts`, line: 3 });
+
+  test("reaches no link in the outside-diff section", () => {
+    const body = renderPrComment(
+      doc({ findings: [] }),
+      WEB_URL,
+      undefined,
+      [f],
+      undefined,
+    );
+    expect(body).not.toContain(TOKEN);
+  });
+
+  test("reaches no location in the state block", () => {
+    const row = stateFinding({
+      id: "R001",
+      sev: "WARNING",
+      tier: "advisory",
+      channel: "inline",
+      locs: [`src/${TOKEN}.ts:3`],
+      claim: "a claim",
+    });
+    expect(renderStateBlock(HEAD, [row], 1, 1)).not.toContain(TOKEN);
+  });
+
+  test("an ordinary path still links", () => {
+    const body = renderPrComment(
+      doc({ findings: [] }),
+      WEB_URL,
+      undefined,
+      [finding({ id: "F002", path: "src/a.ts", line: 3 })],
+      undefined,
+    );
+    expect(body).toContain(`${WEB_URL}/blob/`);
+  });
+});

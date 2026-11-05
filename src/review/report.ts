@@ -1258,7 +1258,7 @@ function findingLocationLine(
 ): string {
   const loc = code(`${finding.path}:${finding.line}`);
   const linked =
-    linkLocation && webUrl !== undefined
+    linkLocation && webUrl !== undefined && isLinkablePath(finding.path)
       ? `[${loc}](${blobUrl(webUrl, headSha, finding.path, `L${finding.line}`)})`
       : loc;
   // A POSITIVE type test, not `=== undefined`. Defence in depth: the draft and
@@ -1516,10 +1516,7 @@ function renderRef(
 ): string {
   if (webUrl === undefined) return code(ref);
   const parsed = parseRefAnchor(ref);
-  // A token in the anchor would reach the link's href whole.
-  if (parsed === null || redactSecrets(parsed.path) !== parsed.path) {
-    return code(ref);
-  }
+  if (parsed === null || !isLinkablePath(parsed.path)) return code(ref);
   const fragment =
     parsed.end === undefined
       ? `L${parsed.start}`
@@ -1556,6 +1553,13 @@ function parseRefAnchor(ref: string): {
     end: match[2] === undefined ? undefined : Number(match[2]),
     prose: ref.trim().slice(anchor.length).trim(),
   };
+}
+
+// A finding's path is whatever the model wrote; nothing checks that the file
+// exists. A span redacts it, but a link's href needs the original, so a path
+// carrying a secret gets no link.
+export function isLinkablePath(path: string): boolean {
+  return redactSecrets(path) === path;
 }
 
 // A path is author-controlled and lands in a Markdown link. `)` would end the
