@@ -40,21 +40,38 @@ const SECRET_SHAPES: readonly RegExp[] = [
 const URL_CREDENTIALS =
   /(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]{0,30}:\/\/)(?:[^\s/?#${<]{0,256}:[^\s/?#${<]{1,256}|[^\s/?#${<:@]{20,256})@/gi;
 
-// An upper-case secret name holding a literal, as in a committed `.env` or YAML
-// file. A value that is code stays: `TOKEN = getToken()`, `API_KEY=$(...)`,
-// `KEY = process.env.KEY`. An unquoted value after a colon needs a digit, so a
-// type annotation (`API_KEY: string`) stays too.
-const SECRET_NAME =
-  "[A-Z0-9_]{0,40}(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_KEY|CREDENTIALS?)[A-Z0-9_]{0,40}";
-const UNQUOTED_VALUE = "[A-Za-z0-9_+/=@%!#^*~:-]{6,256}(?![A-Za-z0-9_.(\\[{$])";
-const ENV_ASSIGNMENT = new RegExp(
-  `(?<![A-Za-z0-9_])(${SECRET_NAME})(?:` +
-    `(\\s*[=:](?![=:])\\s*)(?:"(?!\\$)[^"\\n]{6,256}"|'(?!\\$)[^'\\n]{6,256}')` +
-    `|(=(?![=:]))(?!\\d+(?:[\\s,;]|$))${UNQUOTED_VALUE}` +
-    `|(:\\s*)(?=[^\\s]{0,256}\\d)(?!\\d+(?:[\\s,;]|$))${UNQUOTED_VALUE}` +
-    ")",
-  "g",
-);
+// A secret name followed by a value. The name alone decides nothing, because code
+// is full of these: `TOKEN=getToken`, `API_KEY = "x-api-key"`, `SECRET: Uint8Array`.
+// So isSecretValue reads the value.
+const SECRET_ASSIGNMENT =
+  /(?<![A-Za-z0-9_-])(["']?)((?:[A-Za-z0-9_-]{0,40}[_-])?(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|credentials?)(?:[_-][A-Za-z0-9_-]{0,40})?)\1(\s*[=:](?![=:])\s*)("[^"\n]{1,256}"|'[^'\n]{1,256}'|[^\s"',;]{1,256})/gi;
+
+// A digit is the signal: a literal with one is rarely a word or an identifier. A
+// password holds no such promise, so a password name also takes letters alone,
+// unless the value only repeats the word (`PASSWORD = "password"`). This leaves
+// letter-only values of other names, such as `API_KEY=hunter`: nothing tells them
+// from `API_KEY=config`.
+function isSecretValue(name: string, separator: string, raw: string): boolean {
+  const quoted = raw.startsWith('"') || raw.startsWith("'");
+  const value = quoted ? raw.slice(1, -1) : raw;
+  if (value.length < 6 || /^[\d_,.]+$/.test(value) || value.includes("$")) {
+    return false;
+  }
+  const colon = separator.includes(":");
+  if (!quoted) {
+    // Spaces around `=` are source code, and a bracket or a dot is an expression.
+    if (!colon && separator !== "=") return false;
+    if (/[.()[\]{}<>]/.test(value)) return false;
+    // A type annotation: `SECRET: Uint8Array`.
+    if (colon && /^[A-Z][a-z]/.test(value)) return false;
+  }
+  if (/\d/.test(value)) return true;
+  if (!/pass(?:word|wd)$/i.test(name) || /pass(?:word|wd)/i.test(value)) {
+    return false;
+  }
+  // `password: string` is a type. An upper-case name is a config key.
+  return quoted || !colon || name === name.toUpperCase();
+}
 
 const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/g;
 const PEM_END = /-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/g;
@@ -99,14 +116,17 @@ export function redactSecrets(text: string): string {
   return out
     .replace(URL_CREDENTIALS, `$1${REDACTED}@`)
     .replace(
-      ENV_ASSIGNMENT,
+      SECRET_ASSIGNMENT,
       (
-        _match: string,
+        match: string,
+        quote: string,
         name: string,
-        quoted?: string,
-        equals?: string,
-        colon?: string,
-      ) => `${name}${quoted ?? equals ?? colon ?? ""}${REDACTED}`,
+        separator: string,
+        raw: string,
+      ) =>
+        isSecretValue(name, separator, raw)
+          ? `${quote}${name}${quote}${separator}${REDACTED}`
+          : match,
     );
 }
 

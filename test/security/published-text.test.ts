@@ -220,3 +220,43 @@ describe("publishedText catches secrets beside word characters and in more names
     ).not.toContain("a".repeat(40));
   });
 });
+
+describe("publishedText judges an assignment by its value", () => {
+  const KEPT = [
+    "enum { TOKEN = 'tokens' }",
+    'const ACCESS_TOKEN = "access_token";',
+    'const API_KEY_HEADER = "x-api-key";',
+    "REFRESH_TOKEN: 'refresh_token',",
+    "TOKEN=undefined",
+    "TOKEN=getToken",
+    "API_KEY=config",
+    "SECRET: Uint8Array",
+    "TOKEN: Uint8Array;",
+    "PRIVATE_KEY: Base64String",
+    "password: string",
+    "api_key: string",
+    "max_tokens=1000000",
+    "TOKEN_LIMIT=1_000_000",
+    "tokenizer=bert-base-1",
+    'const PASSWORD = "password"',
+  ];
+  for (const text of KEPT) {
+    test(`keeps ${text}`, () => {
+      expect(publishedText(text)).toBe(text);
+    });
+  }
+
+  const REDACTED: readonly [string, string][] = [
+    ['"password":"hunter2"', '"password":[REDACTED]'],
+    ["password=hunter2", "password=[REDACTED]"],
+    ["secret_key=abc123def456", "secret_key=[REDACTED]"],
+    ["x-api-key: abc123def456", "x-api-key: [REDACTED]"],
+    ["DB_PASSWORD: correcthorse", "DB_PASSWORD: [REDACTED]"],
+    ["DB_PASSWORD=correcthorse", "DB_PASSWORD=[REDACTED]"],
+  ];
+  for (const [text, expected] of REDACTED) {
+    test(`redacts ${text}`, () => {
+      expect(publishedText(text)).toBe(expected);
+    });
+  }
+});
