@@ -15,6 +15,7 @@ RUN apt-get update \
     && npm cache clean --force \
     && git config --system --add safe.directory '*'
 
+ENV RB_SESSIONS_DIR=/home/bun/.claude/projects
 WORKDIR /engine
 COPY package.json bun.lock tsconfig.json ./
 COPY bin ./bin
