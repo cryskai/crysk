@@ -17,7 +17,7 @@
 // code, so they travel in their own request to /runs/findings. The platform
 // encrypts them and honors each repository's metadata-only mode on its side,
 // but a metadata_only repository's code must never leave the runner at all:
-// the action reads `data_mode` from the first token exchange
+// the action reads `data_mode` from the same token exchange as the run token
 // (CRYSK_DATA_MODE) and, unless it is exactly `full`, this script reduces each
 // finding to non-text fields (METADATA_ONLY_FINDING_FIELDS below). The body is
 // exactly `{ schema_version, findings }`: the `findings` array as the engine

@@ -404,10 +404,12 @@ runs:
       shell: bash
       env:
         CRYSK_RUN_TOKEN: ${{ steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token }}
-        # From the FIRST exchange only: the repository's data mode decides
-        # whether finding text may leave the runner at all. Anything but `full`
-        # (including an empty value) is read as metadata_only.
-        CRYSK_DATA_MODE: ${{ steps.platform.outputs.data-mode }}
+        # From the same exchange as the run token (the refresh after the run
+        # when it ran, else the first): the repository's data mode decides
+        # whether finding text may leave the runner at all, and the first one
+        # can be a run's length old. Anything but `full` (including an empty
+        # value) is read as metadata_only.
+        CRYSK_DATA_MODE: ${{ steps.platform-publish.outputs.data-mode || steps.platform.outputs.data-mode }}
         CRYSK_OUTCOME: ${{ steps.run-crysk.outputs.status }}
         CRYSK_RUN_DIR: ${{ steps.run-crysk.outputs.run_dir }}
         TRIGGER_PR: ${{ steps.trigger.outputs.pr }}

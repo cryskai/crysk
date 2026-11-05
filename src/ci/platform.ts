@@ -375,15 +375,15 @@ export async function runPlatformConnect(
     // finding text at all (src/ci/platform-report.ts), and a repository in
     // metadata-only mode must never have its code leave the runner. A missing
     // or unrecognised value therefore reads as metadata_only, with a notice.
-    // Written by the first connect step only (the one that binds the config
-    // directory): the refresh steps' outputs are never read for it.
-    if (deps.configDir !== undefined) {
-      deps.appendOutput(`data-mode=${result.dataMode ?? "metadata_only"}\n`);
-      if (result.dataMode === undefined) {
-        deps.stdout(
-          "::notice title=crysk::The Crysk platform sent no recognised data_mode; treating this repository as metadata_only, so no finding text is uploaded.\n",
-        );
-      }
+    // Written by EVERY exchange, refresh steps included: the report step reads
+    // the freshest one (the publish refresh, minted after the run), because the
+    // first token can be 75 minutes old and the repository's mode may have
+    // been switched to metadata_only since.
+    deps.appendOutput(`data-mode=${result.dataMode ?? "metadata_only"}\n`);
+    if (result.dataMode === undefined) {
+      deps.stdout(
+        "::notice title=crysk::The Crysk platform sent no recognised data_mode; treating this repository as metadata_only, so no finding text is uploaded.\n",
+      );
     }
     // Present only when there is configuration to apply: the setup step and the
     // run step are gated on it, so a standalone run (no platform step, no

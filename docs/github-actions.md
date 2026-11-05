@@ -470,10 +470,11 @@ an unreadable one, or zero findings sends nothing, and a failed report sends not
 report creates the run the findings attach to. At most 500 findings are sent: the first 500 in the
 engine's order, with a `::warning::` saying how many more were dropped.
 
-**Metadata-only repositories never send code.** The first token exchange (`Connect to Crysk`) returns the
-repository's `data_mode`, and the step outputs it as `data-mode` (only `full` or `metadata_only`; a missing
-or unrecognised value is treated as `metadata_only` and a `::notice::` says so). The report step reads that
-output only, never a refresh step's. In `full` mode each finding is sent whole, as described above. In
+**Metadata-only repositories never send code.** Every token exchange (`Connect to Crysk` and the refresh
+steps) returns the repository's `data_mode`, and the step outputs it as `data-mode` (only `full` or
+`metadata_only`; a missing or unrecognised value is treated as `metadata_only` and a `::notice::` says so).
+The report step reads the same exchange as its run token: the refresh after the run when it ran, else the
+first, so a repository switched to `metadata_only` during a long run is honoured. In `full` mode each finding is sent whole, as described above. In
 `metadata_only` mode each finding is reduced on the runner to `id`, `category`, `path`, `line`, `severity`,
 `tier`, `hunter`, `evidence_class`, `refuter_verdict`, `causal_disposition`, `root_cause_id` and
 `hops_used`: never the `claim`, `proof_refs`, `hop_trail`, `symbol`, `dedupe_key`, `materiality` or any key

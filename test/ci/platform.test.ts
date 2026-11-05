@@ -341,6 +341,7 @@ describe("runPlatformConnect", () => {
       `output:github-token=${GITHUB_TOKEN}\n`,
       `output:run-token=${RUN_TOKEN}\n`,
       "output:github-actor=crysk-dev[bot]\n",
+      "output:data-mode=metadata_only\n",
     ]);
   });
 
@@ -706,9 +707,11 @@ describe("action.yml platform wiring", () => {
     );
   });
 
-  test("the Report step reads the data mode from the first exchange (the connect step) only", () => {
+  test("the Report step reads the data mode from the same exchange as its run token (the refresh, else the first)", () => {
     expect(find("report").env?.CRYSK_DATA_MODE).toBe(
-      expression("steps.platform.outputs.data-mode"),
+      expression(
+        "steps.platform-publish.outputs.data-mode || steps.platform.outputs.data-mode",
+      ),
     );
   });
 });
@@ -798,13 +801,15 @@ describe("platform data mode", () => {
     },
   );
 
-  test("a refresh step (no config directory) writes no data-mode and no notice", async () => {
+  test("a refresh step (no config directory) writes data-mode too, with the same fail-closed notice", async () => {
     const h = connect({ data_mode: "full" });
     expect(await h.run()).toBe(0);
-    expect(h.events.join("")).not.toContain("data-mode");
+    expect(h.events).toContain("output:data-mode=full\n");
+    expect(h.events.join("")).not.toContain("::notice");
     const none = connect({});
     expect(await none.run()).toBe(0);
-    expect(none.events.join("")).not.toContain("::notice");
+    expect(none.events).toContain("output:data-mode=metadata_only\n");
+    expect(none.events.join("")).toContain("::notice");
   });
 
   test("the data-mode output follows the tokens and a failed exchange writes none", async () => {
