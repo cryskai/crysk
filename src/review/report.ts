@@ -42,7 +42,7 @@ import {
   LEGACY_BIN_NAME,
   matchMarkerPrefix,
 } from "../brand";
-import { publishedText } from "../security/published-text";
+import { publishedText, redactSecrets } from "../security/published-text";
 
 export interface DiffStat {
   files: number;
@@ -1516,7 +1516,10 @@ function renderRef(
 ): string {
   if (webUrl === undefined) return code(ref);
   const parsed = parseRefAnchor(ref);
-  if (parsed === null) return code(ref);
+  // A token in the anchor would reach the link's href whole.
+  if (parsed === null || redactSecrets(parsed.path) !== parsed.path) {
+    return code(ref);
+  }
   const fragment =
     parsed.end === undefined
       ? `L${parsed.start}`
@@ -1555,6 +1558,20 @@ function parseRefAnchor(ref: string): {
   };
 }
 
+// A path is author-controlled and lands in a Markdown link. `)` would end the
+// link and leave what follows as text, where `@name` is a real mention. Parens are
+// encoded by hand because encodeURIComponent leaves them. An unpaired surrogate
+// would make it throw, and a post that was paid for must not be lost to a path.
+function encodeBlobPath(path: string): string {
+  return path
+    .toWellFormed()
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")
+    .replaceAll("(", "%28")
+    .replaceAll(")", "%29");
+}
+
 // Exported for ui/result.ts, the second surface that links a finding to its
 // source. Deliberately SHARED rather than re-derived: the markdown report and
 // the terminal block must point a reader at the same bytes, and two copies of
@@ -1566,8 +1583,7 @@ export function blobUrl(
   path: string,
   fragment: string,
 ): string {
-  // Encoded: a path is author-controlled, and it lands in the comment body.
-  return `${webUrl}/blob/${sha}/${encodeURI(path)}#${fragment}`;
+  return `${webUrl}/blob/${sha}/${encodeBlobPath(path)}#${fragment}`;
 }
 
 function runLines(doc: FindingsDocument, meta: ReportMeta): string[] {

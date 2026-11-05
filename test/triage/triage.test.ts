@@ -359,3 +359,17 @@ describe("triageBadge + renderTriageReplyBody", () => {
     expect(body.endsWith("\n")).toBe(true);
   });
 });
+
+describe("renderTriageReplyBody publishes safe reasoning", () => {
+  test("a token, mention and image in the reasoning do not reach the reply", () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const body = renderTriageReplyBody(
+      { tag: "applied", headSha: "b".repeat(40), actor: "agent" },
+      `cc @octocat ![x](https://evil.example/p.png) ${token}`,
+    );
+    expect(body).not.toContain("@octocat");
+    expect(body).not.toContain("![x]");
+    expect(body).not.toContain(token);
+    expect(body.split("\n")[0]).toContain("crysk-triage tag=applied");
+  });
+});

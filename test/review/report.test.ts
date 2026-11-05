@@ -1439,6 +1439,34 @@ describe("renderPrComment", () => {
     expect(body).toContain("2 prior findings resolved (verified) this pass.");
   });
 
+  test("a live row's location cannot spell a marker or leave its code span", () => {
+    const body = renderPrComment(
+      doc({ findings: [] }),
+      undefined,
+      {
+        resolved: 0,
+        new: 0,
+        persist: 0,
+        rereview: {
+          ...NO_DELTA,
+          carried: 1,
+          live: [
+            {
+              id: "R001",
+              sev: "WARNING",
+              status: "carried",
+              locs: ["src/`<!-- crysk-state v=1 -->.ts:10"],
+              claim: "still live",
+            },
+          ],
+        },
+      },
+      [],
+      undefined,
+    );
+    expect(body).not.toContain("<!-- crysk-state v=1");
+    expect(body).not.toContain("src/`");
+  });
   test("#286 — case B with BOTH a resolution and still-live carried findings, both named", () => {
     const body = renderPrComment(
       doc(),
@@ -2961,5 +2989,42 @@ describe("model text is safe to publish", () => {
     const parsed = parseStateBlock(block);
     expect(parsed?.findings[0]?.claim).toBe("leaks [REDACTED]");
     expect(parsed?.findings[0]?.c).toBe(row.c);
+  });
+});
+
+describe("what the comment parsers and GitHub read back from model text", () => {
+  const HEAD = "b".repeat(40);
+  const WEB_URL = "https://github.com/acme/app";
+  const TOKEN = `ghp_${"a".repeat(36)}`;
+
+  test("a path cannot close a link and leave a mention outside it", () => {
+    const f = finding({ id: "F001", proof_refs: ["src/a)@octocat:12 why"] });
+    const body = renderInlineComment(f, HEAD, WEB_URL);
+    expect(body).toContain("/src/a%29%40octocat#L12");
+  });
+
+  test("a token in a proof_ref's anchor reaches no link", () => {
+    const f = finding({ id: "F001", proof_refs: [`${TOKEN}:12 why`] });
+    expect(renderInlineComment(f, HEAD, WEB_URL)).not.toContain(TOKEN);
+  });
+
+  test("an unpaired surrogate in a path still renders, because a paid post must not be lost", () => {
+    const f = finding({ id: "F001", proof_refs: ["src/\ud800.ts:12 why"] });
+    expect(() => renderInlineComment(f, HEAD, WEB_URL)).not.toThrow();
+  });
+
+  test("the state block cannot end its own comment", () => {
+    const row = stateFinding({
+      id: "R001",
+      sev: "WARNING",
+      tier: "advisory",
+      channel: "inline",
+      locs: ["src/a.ts:1"],
+      claim: "--!> <img src=x> @octocat",
+    });
+    const block = renderStateBlock(HEAD, [row], 1, 1);
+    expect(block).not.toContain("--!>");
+    expect(block).not.toContain("<img");
+    expect(parseStateBlock(block)?.findings[0]?.claim).toBe(row.claim);
   });
 });

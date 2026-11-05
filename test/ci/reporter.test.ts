@@ -192,7 +192,7 @@ describe("renderStepSummary — model text is safe to publish", () => {
       prNumber: 123,
       headSha: HEAD_SHA,
       findings: [
-        finding({ id: "F001", claim: hostile, path: `src/${hostile}.ts` }),
+        finding({ id: "F001", claim: hostile, path: `src/x ${hostile}.ts` }),
       ],
       costUsdEst: 1,
       wallMs: 1000,
