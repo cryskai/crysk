@@ -362,15 +362,6 @@ export async function runPlatformConnect(
   // output with `|| inputs.github-token`, so a token that was never written
   // would silently post as github-actions[bot].
   try {
-    deps.appendOutput(`github-token=${result.githubToken}\n`);
-    // The run token authenticates the report step (src/ci/platform-report.ts).
-    // Already masked by the exchange above, like the installation token.
-    deps.appendOutput(`run-token=${result.runToken}\n`);
-    // Not a secret. Only a login the platform returned, so the engine's trust
-    // set never learns one from anywhere else (see CRYSK_PLATFORM_ACTOR).
-    if (result.githubActor !== undefined) {
-      deps.appendOutput(`github-actor=${result.githubActor}\n`);
-    }
     // WHY fail closed: `data-mode` decides whether the report step may send
     // finding text at all (src/ci/platform-report.ts), and a repository in
     // metadata-only mode must never have its code leave the runner. A missing
@@ -379,11 +370,25 @@ export async function runPlatformConnect(
     // the freshest one (the publish refresh, minted after the run), because the
     // first token can be 75 minutes old and the repository's mode may have
     // been switched to metadata_only since.
+    // WHY first: the report step pairs this exchange's run token with this
+    // exchange's data mode. Appends are not atomic, so if one throws the step
+    // fails; with the mode written before the tokens, a refresh that left a
+    // run token always left its mode, and the report never pairs a fresh
+    // token with the stale first-exchange mode.
     deps.appendOutput(`data-mode=${result.dataMode ?? "metadata_only"}\n`);
     if (result.dataMode === undefined) {
       deps.stdout(
         "::notice title=crysk::The Crysk platform sent no recognised data_mode; treating this repository as metadata_only, so no finding text is uploaded.\n",
       );
+    }
+    deps.appendOutput(`github-token=${result.githubToken}\n`);
+    // The run token authenticates the report step (src/ci/platform-report.ts).
+    // Already masked by the exchange above, like the installation token.
+    deps.appendOutput(`run-token=${result.runToken}\n`);
+    // Not a secret. Only a login the platform returned, so the engine's trust
+    // set never learns one from anywhere else (see CRYSK_PLATFORM_ACTOR).
+    if (result.githubActor !== undefined) {
+      deps.appendOutput(`github-actor=${result.githubActor}\n`);
     }
     // Present only when there is configuration to apply: the setup step and the
     // run step are gated on it, so a standalone run (no platform step, no

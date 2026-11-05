@@ -338,10 +338,10 @@ describe("runPlatformConnect", () => {
     expect(await h.run()).toBe(0);
     const outputs = h.events.filter((e) => e.startsWith("output:"));
     expect(outputs).toEqual([
+      "output:data-mode=metadata_only\n",
       `output:github-token=${GITHUB_TOKEN}\n`,
       `output:run-token=${RUN_TOKEN}\n`,
       "output:github-actor=crysk-dev[bot]\n",
-      "output:data-mode=metadata_only\n",
     ]);
   });
 
@@ -491,9 +491,9 @@ describe("platform review configuration", () => {
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(CONFIG);
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(h.events.filter((e) => e.startsWith("output:"))).toEqual([
+      "output:data-mode=metadata_only\n",
       `output:github-token=${GITHUB_TOKEN}\n`,
       `output:run-token=${RUN_TOKEN}\n`,
-      "output:data-mode=metadata_only\n",
       `output:config-file=${file}\n`,
     ]);
     // The token never lands in the config file.
@@ -812,13 +812,30 @@ describe("platform data mode", () => {
     expect(none.events.join("")).toContain("::notice");
   });
 
-  test("the data-mode output follows the tokens and a failed exchange writes none", async () => {
+  test("data-mode precedes the tokens (a partial write never leaves a token without its mode) and a failed exchange writes none", async () => {
     const h = connect({ data_mode: "full" }, dir());
     await h.run();
     const outputs = h.events.filter((e) => e.startsWith("output:"));
-    expect(outputs.indexOf(`output:run-token=${RUN_TOKEN}\n`)).toBeLessThan(
-      outputs.indexOf("output:data-mode=full\n"),
+    expect(outputs.indexOf("output:data-mode=full\n")).toBeLessThan(
+      outputs.indexOf(`output:run-token=${RUN_TOKEN}\n`),
     );
+    const partial: string[] = [];
+    const { fn: partialFetch } = fakeFetch(() =>
+      json(200, { ...SUCCESS, data_mode: "metadata_only" }),
+    );
+    const partialCode = await runPlatformConnect({
+      fetch: partialFetch,
+      env: ENV,
+      baseUrl: BASE,
+      stdout: () => {},
+      appendOutput: (text) => {
+        if (text.startsWith("run-token=")) throw new Error("disk full");
+        partial.push(text);
+      },
+    });
+    expect(partialCode).toBe(1);
+    expect(partial).toContain("data-mode=metadata_only\n");
+    expect(partial.some((t) => t.startsWith("run-token="))).toBe(false);
     const failed: string[] = [];
     const { fn } = fakeFetch(() => json(409, { message: "x" }));
     const code = await runPlatformConnect({
