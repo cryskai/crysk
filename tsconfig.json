@@ -13,6 +13,6 @@
     "src/**/*.ts",
     "src/**/*.d.ts",
     "test/**/*.ts",
-    "fixtures/**/*.ts"
+    "fixtures/**/*.ts", "benchmarks/**/*.ts"
   ]
 }

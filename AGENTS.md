@@ -58,8 +58,8 @@ before it merges.
 
 ```bash
 bun test               # 2325 tests, all offline (fake spawn/runner)
-bun run typecheck      # tsc --noEmit, strict — covers src/test/fixtures, NOT scripts/
-bun run check          # biome — covers src+test only, NOT fixtures/ or scripts/
+bun run typecheck      # tsc --noEmit, strict — covers src/test/fixtures/benchmarks, NOT scripts/
+bun run check          # biome — covers src+test+benchmarks only, NOT fixtures/ or scripts/
 bun run refuter-probe  # LIVE: refuter verdict-vocabulary matrix, 4 arms (~$0.11/step, ~$1.3 at 3 replicates)
 bun run fixture-eval   # LIVE: full pipeline vs a planted bug in a disposable repo (~$0.08, ~1 min)
 bun run fixture-eval --scout         # LIVE: same, with the scout stage on (~$0.17, ~2 min)

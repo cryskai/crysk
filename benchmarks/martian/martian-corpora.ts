@@ -53,11 +53,7 @@ export const CORPORA: Record<string, Corpus> = {
 };
 
 export function corpusFile(corpus: string, suffix: string): string {
-  return path.join(
-    import.meta.dir,
-    "corpora",
-    `martian-${corpus}-${suffix}`,
-  );
+  return path.join(import.meta.dir, "corpora", `martian-${corpus}-${suffix}`);
 }
 
 export interface CaseRow {
