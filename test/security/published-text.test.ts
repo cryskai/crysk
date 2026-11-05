@@ -254,6 +254,9 @@ describe("publishedText judges an assignment by its value", () => {
     ["x-api-key: abc123def456", "x-api-key: [REDACTED]"],
     ["DB_PASSWORD: correcthorse", "DB_PASSWORD: [REDACTED]"],
     ["DB_PASSWORD=correcthorse", "DB_PASSWORD=[REDACTED]"],
+    ["password=123-456", "password=[REDACTED]"],
+    ["api_key=12-34-56", "api_key=[REDACTED]"],
+    ["SECRET: 123-456", "SECRET: [REDACTED]"],
   ];
   for (const [text, expected] of REDACTED) {
     test(`redacts ${text}`, () => {

@@ -54,9 +54,11 @@ const SECRET_ASSIGNMENT =
 function isSecretValue(name: string, separator: string, raw: string): boolean {
   const quoted = raw.startsWith('"') || raw.startsWith("'");
   const value = quoted ? raw.slice(1, -1) : raw;
-  if (value.length < 6 || /^[\d_,.-]+$/.test(value) || value.includes("$")) {
+  if (value.length < 6 || /^[\d_,.]+$/.test(value) || value.includes("$")) {
     return false;
   }
+  // `config/credentials:100-120` is a file and a line range, nothing else.
+  if (separator === ":" && /^\d+-\d+$/.test(value)) return false;
   const colon = separator.includes(":");
   if (!quoted) {
     // Spaces around `=` are source code, and a bracket or a dot is an expression.
