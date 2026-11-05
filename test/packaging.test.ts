@@ -43,6 +43,7 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.files).toContain("dist");
     expect(pkg.files).not.toContain("docs");
     expect(pkg.files).not.toContain("scripts");
+    expect(pkg.files).not.toContain("benchmarks");
     expect(pkg.files).not.toContain("fixtures");
     expect(pkg.files).not.toContain("test");
     expect(pkg.files).not.toContain("openspec");

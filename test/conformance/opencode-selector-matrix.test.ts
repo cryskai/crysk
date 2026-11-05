@@ -14,7 +14,7 @@ import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import {
   type BenchmarkIdentity,
   loadQualifiedReview,
-} from "../../scripts/martian-evidence";
+} from "../../benchmarks/martian/martian-evidence";
 import { evidenceSha256 } from "../../src/execution/attempt-evidence";
 import { StepExecutionHarness } from "../../src/execution/harness";
 import { attemptEvidencePath } from "../../src/execution/step-artifacts";

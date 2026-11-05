@@ -41,7 +41,7 @@ import {
   type StepSpec,
 } from "#review/step-runner";
 import { resolveRunnerAuthority } from "../src/runner-authority";
-import { BENCH_HOME, CORPORA } from "./martian-corpora";
+import { BENCH_HOME, CORPORA } from "../benchmarks/martian/martian-corpora";
 
 function argValue(flag: string): string | undefined {
   const i = Bun.argv.indexOf(flag);

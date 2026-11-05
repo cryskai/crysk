@@ -13,9 +13,9 @@ import {
   type ExecutionAttemptEvidence,
   evidenceSha256,
   readEvidenceFile,
-} from "../src/execution/attempt-evidence";
-import type { ResolvedModelRoute } from "../src/execution/contracts";
-import { hasCapturedTerminal } from "../src/transports/opencode-evidence";
+} from "../../src/execution/attempt-evidence";
+import type { ResolvedModelRoute } from "../../src/execution/contracts";
+import { hasCapturedTerminal } from "../../src/transports/opencode-evidence";
 
 export interface BenchmarkIdentity {
   schemaVersion: 1;
@@ -92,10 +92,10 @@ export async function freezeBenchmarkIdentity(input: {
     const executableSha256 = evidenceSha256(await readFile(executablePath));
     if (backend === "opencode") {
       const { observeOpenCodeExecutable } = await import(
-        "../src/transports/opencode-admission"
+        "../../src/transports/opencode-admission"
       );
       const { readInstalledOpenCodeSdkVersion } = await import(
-        "../src/transport-registry"
+        "../../src/transport-registry"
       );
       const observed = await observeOpenCodeExecutable(
         {

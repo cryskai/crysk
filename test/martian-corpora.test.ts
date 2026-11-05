@@ -6,12 +6,18 @@ import {
   prNumberFromUrl,
 } from "#compare/martian-adapter";
 
-// Drift guard for the five Martian corpora: scripts/martian-cal.ts keys run
+// Drift guard for the five Martian corpora: benchmarks/martian/martian-cal.ts keys run
 // directories and golden lookups on the PR number alone, and reviews the SHAs
 // in the case file. A case file that falls out of step with its vendored
 // goldens would score a review against the wrong PR without any error.
 
-const DOCS = path.join(import.meta.dir, "..", "docs", "benchmarks");
+const DOCS = path.join(
+  import.meta.dir,
+  "..",
+  "benchmarks",
+  "martian",
+  "corpora",
+);
 const CORPORA = ["cal", "sentry", "grafana", "keycloak", "discourse"];
 
 interface CaseRow {

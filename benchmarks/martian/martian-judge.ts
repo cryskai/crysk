@@ -7,8 +7,8 @@ import { loadBenchmarkSchedule, loadQualifiedReview } from "./martian-evidence";
 // their Martian gateway (we have no MARTIAN_API_KEY). The prompt is theirs;
 // the model is the engine's `sonnet` alias. Report both.
 //
-//   bun run scripts/martian-judge.ts
-//   bun run scripts/martian-judge.ts --runs ~/Desktop/martian-cal/runs
+//   bun run benchmarks/martian/martian-judge.ts
+//   bun run benchmarks/martian/martian-judge.ts --runs ~/Desktop/martian-cal/runs
 //
 // Sibling duplicates (same path:line) are not counted as extra FPs — the
 // mechanical analogue of their step 2.5, labelled as such.
@@ -21,8 +21,8 @@ import { lookupGolden, type MartianGoldenPr } from "#compare/martian-adapter";
 import { defaultEffortForRole } from "#model/catalog";
 import type { Finding } from "#review/findings";
 import { ClaudeCodeRunner } from "#review/step-runner";
-import { readEvidenceFile } from "../src/execution/attempt-evidence";
-import { resolveRunnerAuthority } from "../src/runner-authority";
+import { readEvidenceFile } from "../../src/execution/attempt-evidence";
+import { resolveRunnerAuthority } from "../../src/runner-authority";
 
 export type ResumeClassification = "complete" | "incomplete" | "inconclusive";
 
@@ -312,11 +312,9 @@ export function discriminateReviewCompletion(input: ReviewCompletionInput): {
   };
 }
 
-const ROOT = path.join(import.meta.dir, "..");
 const GOLDENS_PATH = path.join(
-  ROOT,
-  "docs",
-  "benchmarks",
+  import.meta.dir,
+  "corpora",
   "martian-cal-goldens.json",
 );
 const DEFAULT_RUNS = path.join(homedir(), "Desktop", "martian-cal", "runs");

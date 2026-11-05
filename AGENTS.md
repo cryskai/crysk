@@ -71,8 +71,8 @@ bun run scripts/opencode-mcp-toolid-probe.ts # LIVE: the literal MCP tool id, an
 bun run scripts/m6.ts plan   # $0: prices M6's 56 runs from gh counters + the target repo's config
 bun run scripts/m6.ts score  # $0: the floor table, re-runnable from artifacts forever
 bun run scripts/m6.ts run    # LIVE and the big one: 56 serial reviews, ~$174-374, ~4h44m
-bun run scripts/martian-cal.ts plan|check|run|score   # Martian Cal.com slice (never --pr)
-bun run scripts/martian-judge.ts     # LIVE: Martian Surface A judge on existing runs
+bun run benchmarks/martian/martian-cal.ts plan|check|run|score   # Martian Cal.com slice (never --pr)
+bun run benchmarks/martian/martian-judge.ts     # LIVE: Martian Surface A judge on existing runs
 ```
 
 ## Project skills
@@ -147,6 +147,7 @@ over** (found while wiring C5, 2026-08-23):
 - `src/agent-env.ts` — multi-agent IDE/CLI environment detector, skills digest sync with drift protection, and MCP registration.
 - `src/wizard.ts` — interactive TUI onboarding wizard (steps as data: tools, env, skills/mcp, workspace gotchas, verification) + zero-argument entry.
 - `fixtures/` + `scripts/` — the planted-bug eval and live micro-eval.
+- `benchmarks/` — harnesses and corpora for external benchmarks, one folder each. Results never land here; they go to the lab (rule 6).
 
 ## Rules that outrank convenience
 

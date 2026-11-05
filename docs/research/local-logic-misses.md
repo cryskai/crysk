@@ -2,7 +2,7 @@
 
 2026-09-17. Attribution of every golden missed by two same-day Martian Cal.com arms, then the hunter designed
 against what the attribution found and the arms that measured it. Ledger entry with the numbers:
-`docs/benchmarks/martian-bench.md` § Cal.com 10 arms of 2026-09-17.
+`benchmarks/martian/README.md` § Cal.com 10 arms of 2026-09-17.
 
 ## 1. The method (worth reusing: it costs nothing)
 

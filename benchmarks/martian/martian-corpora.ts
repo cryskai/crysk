@@ -1,7 +1,7 @@
-// The five Martian offline corpora as data, shared by scripts/martian-cal.ts
-// (reviews) and scripts/martian-inject.ts (export to Martian's pipeline).
+// The five Martian offline corpora as data, shared by benchmarks/martian/martian-cal.ts
+// (reviews) and benchmarks/martian/martian-inject.ts (export to Martian's pipeline).
 //
-// Each corpus's docs files share the `martian-<corpus>-` prefix. Cal.com keeps
+// Each corpus's files share the `martian-<corpus>-` prefix. Cal.com keeps
 // the paths of its 2026-08-19 baseline (a full blobless clone, runs/ at the
 // root). The others start from an empty repo and fetch only the two commits
 // each PR needs (`shallow`), and get their own runs root so
@@ -52,12 +52,10 @@ export const CORPORA: Record<string, Corpus> = {
   },
 };
 
-export function corpusDocsFile(corpus: string, suffix: string): string {
+export function corpusFile(corpus: string, suffix: string): string {
   return path.join(
     import.meta.dir,
-    "..",
-    "docs",
-    "benchmarks",
+    "corpora",
     `martian-${corpus}-${suffix}`,
   );
 }
