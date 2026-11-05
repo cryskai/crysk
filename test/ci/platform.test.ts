@@ -492,6 +492,7 @@ describe("platform review configuration", () => {
     expect(h.events.filter((e) => e.startsWith("output:"))).toEqual([
       `output:github-token=${GITHUB_TOKEN}\n`,
       `output:run-token=${RUN_TOKEN}\n`,
+      "output:data-mode=metadata_only\n",
       `output:config-file=${file}\n`,
     ]);
     // The token never lands in the config file.
@@ -703,5 +704,127 @@ describe("action.yml platform wiring", () => {
     expect(find("run-crysk").env?.CRYSK_PLATFORM_ACTOR).toBe(
       expression("steps.platform.outputs.github-actor"),
     );
+  });
+
+  test("the Report step reads the data mode from the first exchange (the connect step) only", () => {
+    expect(find("report").env?.CRYSK_DATA_MODE).toBe(
+      expression("steps.platform.outputs.data-mode"),
+    );
+  });
+});
+
+describe("platform data mode", () => {
+  async function exchange(dataMode: unknown) {
+    const { fn } = fakeFetch(() =>
+      json(200, { ...SUCCESS, data_mode: dataMode }),
+    );
+    return await exchangePlatformToken({
+      fetch: fn,
+      env: ENV,
+      baseUrl: BASE,
+      mask: () => {},
+    });
+  }
+
+  test.each(["full", "metadata_only"] as const)(
+    "%s is returned as the data mode",
+    async (mode) => {
+      const result = await exchange(mode);
+      expect(result.ok && result.dataMode).toBe(mode);
+    },
+  );
+
+  test.each([
+    ["absent", undefined],
+    ["null", null],
+    ["empty", ""],
+    ["another case", "FULL"],
+    ["padded", "full "],
+    ["an unknown mode", "partial"],
+    ["a number", 1],
+    ["an object", { mode: "full" }],
+  ])("%s is not a data mode", async (_label, value) => {
+    const result = await exchange(value);
+    expect(result.ok).toBe(true);
+    expect(result).not.toHaveProperty("dataMode");
+  });
+
+  function connect(body: Record<string, unknown>, configDir?: string) {
+    const events: string[] = [];
+    const { fn } = fakeFetch(() => json(200, { ...SUCCESS, ...body }));
+    return {
+      events,
+      run: () =>
+        runPlatformConnect({
+          fetch: fn,
+          env: ENV,
+          baseUrl: BASE,
+          stdout: (text) => events.push(`stdout:${text}`),
+          appendOutput: (text) => events.push(`output:${text}`),
+          ...(configDir === undefined ? {} : { configDir }),
+        }),
+    };
+  }
+  const dir = () => mkdtempSync(path.join(tmpdir(), "platform-mode-"));
+
+  test.each(["full", "metadata_only"] as const)(
+    "the connect step writes data-mode=%s and no notice",
+    async (mode) => {
+      const h = connect({ data_mode: mode }, dir());
+      expect(await h.run()).toBe(0);
+      expect(h.events).toContain(`output:data-mode=${mode}\n`);
+      expect(h.events.join("")).not.toContain("::notice");
+    },
+  );
+
+  test.each([
+    ["absent", undefined],
+    ["garbage", "everything"],
+    ["a wrong case", "Full"],
+    ["a line break", "full\nevil=1"],
+  ])(
+    "%s data_mode fails closed: data-mode=metadata_only with a notice",
+    async (_label, value) => {
+      const h = connect({ data_mode: value }, dir());
+      expect(await h.run()).toBe(0);
+      expect(h.events).toContain("output:data-mode=metadata_only\n");
+      expect(h.events.filter((e) => e.startsWith("output:data-mode"))).toEqual([
+        "output:data-mode=metadata_only\n",
+      ]);
+      const text = h.events.join("");
+      expect(text).toContain("::notice");
+      expect(text).toContain("metadata_only");
+      expect(text).not.toContain("evil");
+    },
+  );
+
+  test("a refresh step (no config directory) writes no data-mode and no notice", async () => {
+    const h = connect({ data_mode: "full" });
+    expect(await h.run()).toBe(0);
+    expect(h.events.join("")).not.toContain("data-mode");
+    const none = connect({});
+    expect(await none.run()).toBe(0);
+    expect(none.events.join("")).not.toContain("::notice");
+  });
+
+  test("the data-mode output follows the tokens and a failed exchange writes none", async () => {
+    const h = connect({ data_mode: "full" }, dir());
+    await h.run();
+    const outputs = h.events.filter((e) => e.startsWith("output:"));
+    expect(outputs.indexOf(`output:run-token=${RUN_TOKEN}\n`)).toBeLessThan(
+      outputs.indexOf("output:data-mode=full\n"),
+    );
+    const failed: string[] = [];
+    const { fn } = fakeFetch(() => json(409, { message: "x" }));
+    const code = await runPlatformConnect({
+      fetch: fn,
+      env: ENV,
+      baseUrl: BASE,
+      stdout: () => {},
+      appendOutput: (text) => failed.push(text),
+      configDir: dir(),
+    });
+    expect(code).toBe(1);
+    expect(failed).toEqual([]);
   });
 });

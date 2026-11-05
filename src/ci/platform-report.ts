@@ -15,10 +15,14 @@
 //
 // WHY THE FINDINGS GO SEPARATELY: they are the part that can quote customer
 // code, so they travel in their own request to /runs/findings. The platform
-// encrypts them and honors each repository's metadata-only mode on its side;
-// this script sends them either way. The body is exactly `{ schema_version,
-// findings }`: the `findings` array as the engine wrote it, never the
-// document's `debug` arrays or its summary prose. It is sent only after the
+// encrypts them and honors each repository's metadata-only mode on its side,
+// but a metadata_only repository's code must never leave the runner at all:
+// the action reads `data_mode` from the first token exchange
+// (CRYSK_DATA_MODE) and, unless it is exactly `full`, this script reduces each
+// finding to non-text fields (METADATA_ONLY_FINDING_FIELDS below). The body is
+// exactly `{ schema_version, findings }`: the `findings` array as the engine
+// wrote it (in `full` mode), never the document's `debug` arrays or its
+// summary prose. It is sent only after the
 // report succeeded (the report creates the run the findings attach to), and
 // never for a run with no findings.json or zero findings.
 //
@@ -47,7 +51,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { FindingsDocument } from "../review/findings";
 import { validateFindingsDocument } from "../review/findings";
-import { PLATFORM_API_URL } from "./platform";
+import { PLATFORM_API_URL, type PlatformDataMode } from "./platform";
 
 // The platform caps `agents` at 64 entries.
 const MAX_AGENTS = 64;
@@ -370,11 +374,53 @@ export interface FindingsUpload {
   dropped: number;
 }
 
+// The only fields of a finding a metadata_only repository's upload carries: ids,
+// locations, enum-like labels and counters. NEVER the claim, proof_refs,
+// hop_trail, symbol, dedupe_key or materiality (all can quote the code), and
+// NEVER a key this list does not name, so a field added to the engine
+// tomorrow stays on the runner by default.
+const METADATA_ONLY_FINDING_FIELDS = [
+  "id",
+  "category",
+  "path",
+  "line",
+  "severity",
+  "tier",
+  "hunter",
+  "evidence_class",
+  "refuter_verdict",
+  "causal_disposition",
+  "root_cause_id",
+  "hops_used",
+] as const;
+
+function metadataOnlyFinding(finding: unknown): Record<string, unknown> {
+  const kept: Record<string, unknown> = {};
+  if (typeof finding !== "object" || finding === null) return kept;
+  for (const field of METADATA_ONLY_FINDING_FIELDS) {
+    const value: unknown = Reflect.get(finding, field);
+    // Scalars only: a structure under an allowlisted name is not the field the
+    // platform expects and could hold text.
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      kept[field] = value;
+    }
+  }
+  return kept;
+}
+
 // null when there is nothing to upload: no findings.json, one this engine
 // cannot read, or zero findings. The document is validated only to know it is
-// one; the objects sent are the raw parsed ones, so a field the validator does
-// not model still reaches the platform untouched.
-export function buildFindingsUpload(document: unknown): FindingsUpload | null {
+// one; in `full` mode the objects sent are the raw parsed ones, so a field the
+// validator does not model still reaches the platform untouched. In
+// `metadata_only` mode each is reduced to METADATA_ONLY_FINDING_FIELDS.
+export function buildFindingsUpload(
+  document: unknown,
+  dataMode: PlatformDataMode,
+): FindingsUpload | null {
   let doc: FindingsDocument;
   try {
     doc = validateFindingsDocument(document);
@@ -384,10 +430,11 @@ export function buildFindingsUpload(document: unknown): FindingsUpload | null {
   if (typeof document !== "object" || document === null) return null;
   const raw = "findings" in document ? document.findings : undefined;
   if (!Array.isArray(raw) || raw.length === 0) return null;
+  const sent: unknown[] = raw.slice(0, MAX_FINDINGS);
   return {
     body: {
       schema_version: doc.schema_version,
-      findings: raw.slice(0, MAX_FINDINGS),
+      findings: dataMode === "full" ? sent : sent.map(metadataOnlyFinding),
     },
     dropped: Math.max(0, raw.length - MAX_FINDINGS),
   };
@@ -487,7 +534,10 @@ export async function runReportStep(deps: RunReportStepDeps): Promise<number> {
     }
     // Only a recorded run has somewhere for findings to attach (409 otherwise).
     try {
-      const upload = buildFindingsUpload(run.findings);
+      const upload = buildFindingsUpload(
+        run.findings,
+        deps.env.CRYSK_DATA_MODE === "full" ? "full" : "metadata_only",
+      );
       if (upload === null) return 0;
       if (upload.dropped > 0) {
         warnFindings(

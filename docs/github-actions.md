@@ -464,14 +464,23 @@ The report never fails the job. A platform that is down, a rejected token (HTTP 
 Right after the report is accepted, the same step posts the run's findings to
 `https://api.crysk.dev/runs/findings` with the same run token. The body is exactly
 `{ "schema_version", "findings" }`: the `findings` array of `findings.json`, each object as the engine
-wrote it, and nothing else. `debug.refuted`, `debug.deduped`, the summary and the telemetry are never
+wrote it (in `full` mode; see below), and nothing else. `debug.refuted`, `debug.deduped`, the summary and the telemetry are never
 sent. A run with no `findings.json` (including every case where the action published no run directory),
 an unreadable one, or zero findings sends nothing, and a failed report sends nothing either, since the
 report creates the run the findings attach to. At most 500 findings are sent: the first 500 in the
 engine's order, with a `::warning::` saying how many more were dropped.
 
-The platform encrypts the findings and applies each repository's metadata-only mode on its side; the
-action sends them either way. It answers 200 with `{ stored, recorded, mode }` (`recorded: false` is a
+**Metadata-only repositories never send code.** The first token exchange (`Connect to Crysk`) returns the
+repository's `data_mode`, and the step outputs it as `data-mode` (only `full` or `metadata_only`; a missing
+or unrecognised value is treated as `metadata_only` and a `::notice::` says so). The report step reads that
+output only, never a refresh step's. In `full` mode each finding is sent whole, as described above. In
+`metadata_only` mode each finding is reduced on the runner to `id`, `category`, `path`, `line`, `severity`,
+`tier`, `hunter`, `evidence_class`, `refuter_verdict`, `causal_disposition`, `root_cause_id` and
+`hops_used`: never the `claim`, `proof_refs`, `hop_trail`, `symbol`, `dedupe_key`, `materiality` or any key
+not on that list. The count, order and 500 cap are unchanged.
+
+The platform encrypts what it receives in `full` mode and also applies each repository's mode on its side.
+It answers 200 with `{ stored, recorded, mode }` (`recorded: false` is a
 repeat of the same upload and is not an error). Like the report, the upload never fails the job: HTTP 409
 (the run was not reported first), 401, 400 (with the API's message), 413 (too large) or a network error
 prints a `::warning::` naming the status and message, never the token, and the step exits 0.

@@ -30,7 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same run token: the `findings` array of `findings.json`, each object as the engine wrote it, at most
   the first 500 (a `::warning::` names how many were dropped). `debug.refuted`, `debug.deduped` and the
   summary are never sent, and a run with no `findings.json` or zero findings, or a failed report, sends
-  nothing. The platform encrypts the findings and honors each repository's metadata-only mode. A failure
+  nothing. In a `metadata_only` repository the code never leaves the runner: the connect step outputs the
+  platform's `data_mode` as `data-mode` (anything but exactly `full` or `metadata_only` fails closed to
+  `metadata_only`, with a `::notice::`), and each finding is then reduced to non-text fields (`id`,
+  `category`, `path`, `line`, `severity`, `tier`, `hunter`, `evidence_class`, `refuter_verdict`,
+  `causal_disposition`, `root_cause_id`, `hops_used`), never the claim, proof refs, hop trail, symbol, dedupe
+  key or materiality. The platform encrypts what it receives in `full` mode. A failure
   (HTTP 409, 401, 400, 413 or a network error) is a `::warning::` with the status and message, never a
   token, and never turns the job red. Standalone runs are unchanged.
 - **Platform mode: the review configuration the Crysk platform holds is applied on the runner.** The token

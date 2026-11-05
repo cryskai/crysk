@@ -418,7 +418,7 @@ describe("sendRunReport", () => {
 
 describe("buildFindingsUpload", () => {
   test("is the schema version and the findings objects, whole and in order, and nothing else", () => {
-    const upload = buildFindingsUpload(FINDINGS);
+    const upload = buildFindingsUpload(FINDINGS, "full");
     expect(upload).not.toBeNull();
     expect(Object.keys(upload?.body ?? {}).sort()).toEqual([
       "findings",
@@ -435,30 +435,35 @@ describe("buildFindingsUpload", () => {
   });
 
   test("a document with debug arrays never carries them", () => {
-    const upload = buildFindingsUpload({
-      ...FINDINGS,
-      debug: {
-        refuted: [finding("F900", "blocking")],
-        deduped: [finding("F901", "blocking")],
+    const upload = buildFindingsUpload(
+      {
+        ...FINDINGS,
+        debug: {
+          refuted: [finding("F900", "blocking")],
+          deduped: [finding("F901", "blocking")],
+        },
       },
-    });
+      "full",
+    );
     const text = JSON.stringify(upload?.body);
     expect(text).not.toContain("F900");
     expect(text).not.toContain("F901");
   });
 
   test("no document, an unreadable one, or zero findings is nothing to send", () => {
-    expect(buildFindingsUpload(undefined)).toBeNull();
-    expect(buildFindingsUpload({ schema_version: "9.9.9" })).toBeNull();
-    expect(buildFindingsUpload("not a document")).toBeNull();
-    expect(buildFindingsUpload({ ...FINDINGS, findings: [] })).toBeNull();
+    expect(buildFindingsUpload(undefined, "full")).toBeNull();
+    expect(buildFindingsUpload({ schema_version: "9.9.9" }, "full")).toBeNull();
+    expect(buildFindingsUpload("not a document", "full")).toBeNull();
+    expect(
+      buildFindingsUpload({ ...FINDINGS, findings: [] }, "metadata_only"),
+    ).toBeNull();
   });
 
   test("sends the first 500 findings in the engine's order and counts the rest as dropped", () => {
     const many = Array.from({ length: 503 }, (_, i) =>
       finding(`F${String(i + 1).padStart(4, "0")}`, "advisory"),
     );
-    const upload = buildFindingsUpload({ ...FINDINGS, findings: many });
+    const upload = buildFindingsUpload({ ...FINDINGS, findings: many }, "full");
     expect(upload?.body.findings).toHaveLength(500);
     expect(upload?.body.findings).toEqual(many.slice(0, 500));
     expect(upload?.dropped).toBe(3);
@@ -468,9 +473,87 @@ describe("buildFindingsUpload", () => {
     const many = Array.from({ length: 500 }, (_, i) =>
       finding(`F${String(i + 1).padStart(4, "0")}`, "advisory"),
     );
-    const upload = buildFindingsUpload({ ...FINDINGS, findings: many });
+    const upload = buildFindingsUpload({ ...FINDINGS, findings: many }, "full");
     expect(upload?.body.findings).toHaveLength(500);
     expect(upload?.dropped).toBe(0);
+  });
+
+  // The text-bearing and unknown fields a metadata_only upload must never carry.
+  const RICH = {
+    ...finding("F001", "blocking"),
+    symbol: "PLANTED-SYMBOL save",
+    root_cause_id: "RC-1",
+    materiality: { label: "immaterial", reason: "PLANTED-REASON secret.ts" },
+    future_field: "PLANTED-UNKNOWN secret.ts",
+  };
+  const ALLOWED = {
+    id: "F001",
+    category: 1,
+    path: "src/secret.ts",
+    line: 42,
+    severity: "BLOCKER",
+    tier: "blocking",
+    hunter: "reliability",
+    evidence_class: "deterministic",
+    refuter_verdict: "not_submitted",
+    causal_disposition: "introduced",
+    root_cause_id: "RC-1",
+    hops_used: 1,
+  };
+
+  test("metadata_only keeps only the allowlisted non-text fields, with their values", () => {
+    const upload = buildFindingsUpload(
+      { ...FINDINGS, findings: [RICH] },
+      "metadata_only",
+    );
+    expect(upload?.body.findings).toEqual([ALLOWED]);
+    const text = JSON.stringify(upload?.body);
+    for (const key of [
+      "claim",
+      "proof_refs",
+      "hop_trail",
+      "symbol",
+      "dedupe_key",
+      "materiality",
+      "future_field",
+    ]) {
+      expect(text).not.toContain(`"${key}"`);
+    }
+    for (const planted of [
+      CLAIM,
+      HOP,
+      "PLANTED-SYMBOL",
+      "PLANTED-REASON",
+      "PLANTED-UNKNOWN",
+      "diff-hunk#1",
+      "secret.ts:F001",
+    ]) {
+      expect(text).not.toContain(planted);
+    }
+  });
+
+  test("metadata_only keeps the cap, the order and the schema version", () => {
+    const many = Array.from({ length: 502 }, (_, i) =>
+      finding(`F${String(i + 1).padStart(4, "0")}`, "advisory"),
+    );
+    const upload = buildFindingsUpload(
+      { ...FINDINGS, findings: many },
+      "metadata_only",
+    );
+    expect(upload?.body.schema_version).toBe("1.1.0");
+    expect(upload?.body.findings).toHaveLength(500);
+    expect(upload?.dropped).toBe(2);
+    expect(upload?.body.findings.map((f) => (f as { id: string }).id)).toEqual(
+      many.slice(0, 500).map((f) => f.id),
+    );
+  });
+
+  test("full keeps every field of every finding, the unknown ones too", () => {
+    const upload = buildFindingsUpload(
+      { ...FINDINGS, findings: [RICH] },
+      "full",
+    );
+    expect(upload?.body.findings).toEqual([RICH]);
   });
 });
 
@@ -675,6 +758,7 @@ describe("runReportStep findings upload", () => {
   function envFor(files: Record<string, unknown>): Record<string, string> {
     return {
       CRYSK_RUN_TOKEN: RUN_TOKEN,
+      CRYSK_DATA_MODE: "full",
       CRYSK_OUTCOME: "reviewed",
       CRYSK_RUN_DIR: fixtureDir(files),
       TRIGGER_PR: "7",
@@ -828,6 +912,63 @@ describe("runReportStep findings upload", () => {
     expect(r.text).toContain("3");
     expect(r.text).toContain("500");
     expect(r.text).not.toContain(RUN_TOKEN);
+  });
+
+  const rich = {
+    ...finding("F001", "blocking"),
+    symbol: "PLANTED-SYMBOL save",
+    materiality: { label: "immaterial", reason: "PLANTED-REASON secret.ts" },
+  };
+
+  test("CRYSK_DATA_MODE=metadata_only uploads the allowlisted fields only", async () => {
+    const r = await run(
+      {
+        ...envFor({ "findings.json": { ...FINDINGS, findings: [rich] } }),
+        CRYSK_DATA_MODE: "metadata_only",
+      },
+      ok,
+    );
+    expect(r.calls).toHaveLength(2);
+    const body = String(r.calls[1]?.init.body);
+    for (const planted of [CLAIM, HOP, "PLANTED-SYMBOL", "PLANTED-REASON"]) {
+      expect(body).not.toContain(planted);
+    }
+    expect(JSON.parse(body).findings[0]).toMatchObject({
+      id: "F001",
+      path: "src/secret.ts",
+      line: 42,
+      tier: "blocking",
+    });
+    expect(r.out).toEqual([]);
+  });
+
+  test("an absent, empty or unrecognised CRYSK_DATA_MODE is metadata_only: no finding text leaves", async () => {
+    const base = envFor({
+      "findings.json": { ...FINDINGS, findings: [rich] },
+    });
+    const { CRYSK_DATA_MODE: _unset, ...absent } = base;
+    for (const env of [
+      absent,
+      { ...base, CRYSK_DATA_MODE: "" },
+      { ...base, CRYSK_DATA_MODE: "FULL" },
+      { ...base, CRYSK_DATA_MODE: "full " },
+      { ...base, CRYSK_DATA_MODE: "garbage" },
+    ]) {
+      const r = await run(env, ok);
+      expect(r.calls).toHaveLength(2);
+      const body = String(r.calls[1]?.init.body);
+      expect(body).not.toContain(CLAIM);
+      expect(body).not.toContain("PLANTED-SYMBOL");
+      expect(body).not.toContain("proof_refs");
+    }
+  });
+
+  test("CRYSK_DATA_MODE=full uploads the findings whole", async () => {
+    const r = await run(
+      envFor({ "findings.json": { ...FINDINGS, findings: [rich] } }),
+      ok,
+    );
+    expect(JSON.parse(String(r.calls[1]?.init.body)).findings).toEqual([rich]);
   });
 });
 
