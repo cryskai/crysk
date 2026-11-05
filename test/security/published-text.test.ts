@@ -237,6 +237,7 @@ describe("publishedText judges an assignment by its value", () => {
     "api_key: string",
     "max_tokens=1000000",
     "TOKEN_LIMIT=1_000_000",
+    "config/credentials:100-120",
     "tokenizer=bert-base-1",
     'const PASSWORD = "password"',
   ];

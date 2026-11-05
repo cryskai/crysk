@@ -54,7 +54,7 @@ const SECRET_ASSIGNMENT =
 function isSecretValue(name: string, separator: string, raw: string): boolean {
   const quoted = raw.startsWith('"') || raw.startsWith("'");
   const value = quoted ? raw.slice(1, -1) : raw;
-  if (value.length < 6 || /^[\d_,.]+$/.test(value) || value.includes("$")) {
+  if (value.length < 6 || /^[\d_,.-]+$/.test(value) || value.includes("$")) {
     return false;
   }
   const colon = separator.includes(":");

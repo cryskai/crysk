@@ -11,6 +11,7 @@ import {
   parseStateBlock,
   renderStateBlock,
   stateFinding,
+  unresolvedBlockingCount,
 } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import {
@@ -3046,16 +3047,73 @@ describe("a token in a model-written finding path", () => {
     expect(body).not.toContain(TOKEN);
   });
 
-  test("reaches no location in the state block", () => {
-    const row = stateFinding({
-      id: "R001",
-      sev: "WARNING",
-      tier: "advisory",
-      channel: "inline",
-      locs: [`src/${TOKEN}.ts:3`],
-      claim: "a claim",
-    });
-    expect(renderStateBlock(HEAD, [row], 1, 1)).not.toContain(TOKEN);
+  // Locations are the identity the engine compares, so they stay as written. A
+  // redacted one never pairs again and its blocking row can never be released.
+  test("a stored location still pairs with its finding", () => {
+    const path = `src/${TOKEN}.ts`;
+    const stored = parseStateBlock(
+      renderStateBlock(
+        HEAD,
+        [
+          stateFinding({
+            id: "R001",
+            sev: "BLOCKER",
+            tier: "blocking",
+            channel: "inline",
+            locs: [`${path}:3`],
+            claim: "a real bug",
+          }),
+        ],
+        1,
+        1,
+      ),
+    )?.findings[0];
+    expect(
+      unresolvedBlockingCount(
+        [
+          {
+            path,
+            line: 3,
+            proof_refs: [],
+            tier: "blocking",
+            severity: "BLOCKER",
+            claim: "a real bug",
+            refuter_verdict: "corroborated",
+            causal_disposition: "introduced",
+          },
+        ] as never,
+        [
+          {
+            id: "R001",
+            tier: "blocking",
+            locs: stored?.locs ?? [],
+            status: "carried",
+            claim: stored?.claim ?? "",
+          },
+        ] as never,
+      ),
+    ).toBe(1);
+  });
+
+  test("a line range on a secret-named file keeps its identity", () => {
+    const stored = parseStateBlock(
+      renderStateBlock(
+        HEAD,
+        [
+          stateFinding({
+            id: "R001",
+            sev: "WARNING",
+            tier: "advisory",
+            channel: "inline",
+            locs: ["config/credentials:100-120"],
+            claim: "a claim",
+          }),
+        ],
+        1,
+        1,
+      ),
+    )?.findings[0];
+    expect(stored?.locs).toEqual(["config/credentials:100-120"]);
   });
 
   test("an ordinary path still links", () => {
