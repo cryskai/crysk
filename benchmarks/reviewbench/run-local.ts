@@ -110,6 +110,7 @@ async function reviewOne(entry: CorpusEntry, out: string): Promise<number> {
         RB_PR_JSON: prJson,
         RB_OUT: result,
         RB_RUN_DIR: path.join(out, "runs", key),
+        RB_STRICT: "1",
       },
     },
   );

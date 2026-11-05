@@ -46,11 +46,21 @@ bun benchmarks/reviewbench/run-local.ts --reviewbench <clone> --out <dir outside
 
 It removes credentials from the environment, so a key left in your shell cannot bill per token. Your personal `~/.crysk/config.json` still applies, so check that it sets no routing, `materiality_gate` or size limits you did not mean to measure. The plan the engine prints shows them.
 
+To score privately on another subscription, without touching this machine's login, use the image with that account's token. It stops at the first failure, which is usually the plan's quota, and running it again skips the pull requests already done:
+
+```bash
+CLAUDE_CODE_OAUTH_TOKEN=... benchmarks/reviewbench/run-image.sh <clone> <dir outside this repo> [index]
+```
+
+The token has to go through the image: natively on macOS the engine uses the Keychain's login and removes a token from the environment.
+
+Both private runners set `RB_STRICT=1`, which fails a partial review instead of scoring it.
+
 Every review is a live run. The engine prints its estimate before it starts.
 
 ## Failures
 
-A non-zero exit fails the pull request, and the benchmark retries it and then fails the whole run. So the adapter exits non-zero when no hunter completed, and exits zero with no findings only when a review ran or the diff has nothing left after the default exclusions. A partial review is accepted with a warning, because one hunter that always fails must not fail the run.
+A non-zero exit fails the pull request, and the benchmark retries it and then fails the whole run. So the adapter exits non-zero when no hunter completed, and exits zero with no findings only when a review ran or the diff has nothing left after the default exclusions. A partial review is accepted with a warning, because one hunter that always fails must not fail the run. With `RB_STRICT=1` it fails instead.
 
 ## Results
 

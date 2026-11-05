@@ -25,6 +25,8 @@ export interface Contract {
   diff: string;
   out: string;
   repo: string;
+  // Fail a partial review instead of accepting it. See assertComplete.
+  strict: boolean;
   // Keeps the engine's run directory for the ledger. Only the local runner sets it.
   runDir?: string;
   model?: string;
@@ -58,6 +60,7 @@ export function readContract(
     diff: required("RB_DIFF"),
     out: required("RB_OUT"),
     repo: env.RB_REPO?.trim() || "/work/repo",
+    strict: env.RB_STRICT === "1",
     ...(runDir ? { runDir } : {}),
     ...(model ? { model } : {}),
   };
@@ -111,6 +114,7 @@ export interface FindingsFile {
 }
 
 type ReviewedDocument = Pick<FindingsDocument, "head_sha"> & {
+  run_status?: FindingsDocument["run_status"];
   findings: readonly { path: string; line: number; claim: string }[];
 };
 
@@ -191,6 +195,17 @@ export function assertHuntersRan(pipeline: {
   }
 }
 
+// The official run accepts a partial review, because one hunter that always
+// fails must not fail the whole run. Private scoring on a small plan can run out
+// of quota partway, and that leaves fewer findings that still look like a result.
+export function assertComplete(doc: { run_status?: string }): void {
+  if (doc.run_status !== "complete") {
+    throw new Error(
+      `the review is ${doc.run_status ?? "unknown"}, not complete`,
+    );
+  }
+}
+
 async function writeOutput(out: string, file: FindingsFile): Promise<void> {
   const temp = `${out}.tmp`;
   await Bun.write(temp, `${JSON.stringify(file, null, 2)}\n`);
@@ -233,6 +248,7 @@ async function main(): Promise<number> {
   const doc = (await Bun.file(
     path.join(runDir, "findings.json"),
   ).json()) as ReviewedDocument;
+  if (contract.strict) assertComplete(doc);
   const file = toFindingsFile(doc, contract);
   await writeOutput(contract.out, file);
   console.log(`adapter: wrote ${file.findings.length} finding(s)`);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assertComplete,
   assertHuntersRan,
   type Contract,
   isReviewable,
@@ -223,6 +224,33 @@ describe("assertHuntersRan", () => {
   test("a review where every hunter failed does not", () => {
     expect(() => assertHuntersRan(steps("failed", "failed"))).toThrow("hunter");
     expect(() => assertHuntersRan(steps())).toThrow("hunter");
+  });
+});
+
+describe("assertComplete, for a run that scores privately", () => {
+  const complete = {
+    head_sha: HEAD,
+    run_status: "complete" as const,
+    findings: [],
+  };
+
+  test("a complete review counts", () => {
+    expect(() => assertComplete(complete)).not.toThrow();
+  });
+
+  // Running out of quota partway leaves fewer findings that still look like a
+  // result, so the pull request must fail and be run again.
+  test("a partial review does not", () => {
+    expect(() =>
+      assertComplete({ ...complete, run_status: "partial" }),
+    ).toThrow("partial");
+  });
+});
+
+describe("readContract's strict mode", () => {
+  test("is off unless asked for", () => {
+    expect(CONTRACT.strict).toBe(false);
+    expect(readContract({ ...ENV, RB_STRICT: "1" }).strict).toBe(true);
   });
 });
 
