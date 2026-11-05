@@ -108,6 +108,9 @@ function fixtureDir(files: Record<string, unknown>): string {
   return dir;
 }
 
+const withFindings = () =>
+  readRunDir(fixtureDir({ "findings.json": FINDINGS }));
+
 describe("buildRunReport", () => {
   const body = buildRunReport({
     outcome: "reviewed",
@@ -252,6 +255,133 @@ describe("buildRunReport", () => {
         "usage",
       ].sort(),
     );
+  });
+
+  test("sends the gate's own count of open blocking findings when the run recorded one", () => {
+    const body = buildRunReport({
+      outcome: "success",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: { ...withFindings(), gate: { unresolved_blocking: 2 } },
+    });
+    expect(body?.counts).toEqual({
+      blocking: 1,
+      advisory: 2,
+      unresolved_blocking: 2,
+    });
+  });
+
+  test("zero open blocking findings is sent, because it is a statement", () => {
+    const body = buildRunReport({
+      outcome: "success",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: { ...withFindings(), gate: { unresolved_blocking: 0 } },
+    });
+    expect(body?.counts.unresolved_blocking).toBe(0);
+  });
+
+  test.each([
+    [undefined],
+    [{}],
+    [{ unresolved_blocking: -1 }],
+    [{ unresolved_blocking: 1.5 }],
+    [{ unresolved_blocking: "2" }],
+    ["2"],
+  ])("a missing or malformed gate record sends no count: %j", (gate) => {
+    const body = buildRunReport({
+      outcome: "success",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run: { ...withFindings(), gate },
+    });
+    expect(body?.counts).toEqual({ blocking: 1, advisory: 2 });
+  });
+
+  describe("finding_states", () => {
+    const build = (findingStates: unknown) =>
+      buildRunReport({
+        outcome: "success",
+        prNumber: 7,
+        triggerHeadSha: TRIGGER_HEAD,
+        run: { ...withFindings(), findingStates },
+      });
+    const good = {
+      open: [{ id: "R001", status: "carried", tier: "blocking" }],
+      fresh: { F001: "R002" },
+      resolved: ["R000"],
+      superseded: ["R003"],
+      dropped: 0,
+    };
+
+    test("what a stronger finding replaced crosses only as ids", () => {
+      const body = build({
+        ...good,
+        superseded: ["R003", "quoting the customer's code"],
+      });
+      expect(body?.finding_states?.superseded).toEqual(["R003"]);
+    });
+
+    test("a record from before that field reads as nothing replaced", () => {
+      const { superseded: _omitted, ...older } = good;
+      expect(build(older)?.finding_states?.superseded).toEqual([]);
+    });
+
+    test("sends what the run recorded", () => {
+      expect(build(good)?.finding_states).toEqual(good);
+    });
+
+    test("no record sends nothing, so the platform can say it does not know", () => {
+      expect(build(undefined)).not.toHaveProperty("finding_states");
+    });
+
+    test.each([
+      ["text"],
+      [{ open: "x" }],
+      [{ open: [], fresh: {}, resolved: "x" }],
+      [{ ...good, dropped: -1 }],
+    ])("a malformed record sends nothing: %j", (bad) => {
+      expect(build(bad)).not.toHaveProperty("finding_states");
+    });
+
+    test("only the known fields of known shapes pass, so no text can ride along", () => {
+      const body = build({
+        open: [
+          { id: "R001", status: "carried", tier: "blocking", claim: CLAIM },
+          { id: "not an id", status: "carried", tier: "blocking" },
+          { id: "R002", status: CLAIM, tier: "blocking" },
+          { id: "R003", status: "carried", tier: CLAIM },
+        ],
+        fresh: { F001: "R002", "F002 extra": "R003", F003: CLAIM },
+        resolved: ["R000", CLAIM],
+        dropped: 0,
+        note: CLAIM,
+      });
+      expect(JSON.stringify(body)).not.toContain("PLANTED-CLAIM");
+      expect(body?.finding_states).toEqual({
+        open: [{ id: "R001", status: "carried", tier: "blocking" }],
+        fresh: { F001: "R002" },
+        resolved: ["R000"],
+        superseded: [],
+        dropped: 0,
+      });
+    });
+
+    test("is capped, and the cut counts as dropped so the platform does not read it as resolved", () => {
+      const open = Array.from({ length: 600 }, (_, i) => ({
+        id: `R${String(i + 1).padStart(3, "0")}`,
+        status: "carried",
+        tier: "advisory",
+      }));
+      const states = build({
+        open,
+        fresh: {},
+        resolved: [],
+        dropped: 2,
+      })?.finding_states;
+      expect(states?.open).toHaveLength(500);
+      expect(states?.dropped).toBe(102);
+    });
   });
 
   test("a floor that is not set is not sent, and agents are capped at 64", () => {

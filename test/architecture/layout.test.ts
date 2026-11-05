@@ -165,6 +165,8 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "ci-admission-gate",
       "ci-publish",
       "discovery",
+      "finding-state-record",
+      "gate-record",
       "inline",
       "plan",
       "pr",

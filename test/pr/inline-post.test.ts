@@ -1437,6 +1437,62 @@ describe("postInlineFindings — previousHeadSha reaches the rendered summary", 
   });
 });
 
+describe("postInlineFindings — the record of findings across runs", () => {
+  const gh = () =>
+    makeFakeGh([
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+
+  test("a first review records its findings under stable ids", async () => {
+    const { spawnFn } = gh();
+    const posted = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({ id: "F001", path: "src/a.ts", line: 3 }),
+          finding({ id: "F002", path: "src/a.ts", line: 9 }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(posted.findingState?.fresh).toEqual({ F001: "R001", F002: "R002" });
+    expect(posted.findingState?.open.map((row) => row.id)).toEqual([
+      "R001",
+      "R002",
+    ]);
+    expect(posted.findingState?.resolved).toEqual([]);
+    expect(JSON.stringify(posted.findingState)).not.toContain("src/a.ts");
+  });
+
+  test("a post that writes no state block records nothing, so nothing is claimed", async () => {
+    const priorSummary = `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`;
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: priorSummary }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+    const posted = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(posted.findingState).toBeUndefined();
+  });
+});
+
 // WARN-5's other half: the fingerprint tie-break (design D3) depends on the
 // REAL claim text reaching the matcher through resolveInlinePostPlan's
 // `findingRefs` — a claim silently replaced by "" would disable the

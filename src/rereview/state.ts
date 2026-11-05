@@ -807,6 +807,8 @@ export interface MergedState {
   rows: LiveFinding[];
   hw: number;
   dropped: number;
+  // The stable id each `fresh` finding ended up with, by index.
+  freshIds: (string | undefined)[];
 }
 
 // Visible body the state block must leave room for. The PATCH body is longer
@@ -857,6 +859,7 @@ export function mergeStateFindings(input: MergeStateInput): MergedState {
     }
   }
   const touched = new Set<string>();
+  const freshIds: (string | undefined)[] = input.fresh.map(() => undefined);
 
   const pairs = pairBlockingSurvivors(
     input.fresh,
@@ -905,6 +908,7 @@ export function mergeStateFindings(input: MergeStateInput): MergedState {
         status: prior.status,
       };
       touched.add(prior.id);
+      freshIds[s] = prior.id;
       continue;
     }
     // WHY an unpaired survivor appends: a blocking survivor with no matching row
@@ -925,6 +929,7 @@ export function mergeStateFindings(input: MergeStateInput): MergedState {
       status: "unconfirmed",
     });
     touched.add(id);
+    freshIds[s] = id;
   }
 
   const capped = capLiveFindings(rows, "", input.headSha, input.stateBudget, {
@@ -936,6 +941,7 @@ export function mergeStateFindings(input: MergeStateInput): MergedState {
     rows: capped.kept,
     hw,
     dropped: capped.droppedUnconfirmed + capped.droppedCarried,
+    freshIds,
   };
 }
 

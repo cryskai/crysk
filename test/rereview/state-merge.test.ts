@@ -585,3 +585,36 @@ describe("S2 — a same-head re-post re-pairs its earlier rows", () => {
     expect(merged.hw).toBe(1);
   });
 });
+
+describe("mergeStateFindings freshIds", () => {
+  const merge = (input: Partial<Parameters<typeof mergeStateFindings>[0]>) =>
+    mergeStateFindings({
+      headSha: HEAD,
+      reviews: 2,
+      live: [],
+      previous: null,
+      fresh: [],
+      stateBudget: BIG_BUDGET,
+      ...input,
+    });
+
+  test("a new finding gets the id it was appended with", () => {
+    const merged = merge({
+      fresh: [fresh(10, "blocking"), fresh(20, "advisory")],
+    });
+    expect(merged.freshIds).toEqual(["R001", "R002"]);
+  });
+
+  test("a finding found again keeps the earlier id", () => {
+    const merged = merge({
+      live: [live("R007", "carried", { locs: ["src/app.ts:10"] })],
+      previous: { findings: [], hw: 7 },
+      fresh: [fresh(10, "blocking"), fresh(99, "blocking")],
+    });
+    expect(merged.freshIds).toEqual(["R007", "R008"]);
+  });
+
+  test("no fresh findings means no ids", () => {
+    expect(merge({}).freshIds).toEqual([]);
+  });
+});

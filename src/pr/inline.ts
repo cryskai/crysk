@@ -14,6 +14,7 @@
 import type { PrHeroFindingRef } from "#compare/compare";
 import { extractAnchor } from "#review/root-cause";
 import { diffRecordPath, splitDiffRecords } from "#review/size-gate";
+import type { FindingStateRecord } from "./finding-state-record";
 import { claimFingerprint, type ParsedFindingMarker } from "./preflight";
 
 // The comparison ref plus the proof_refs posting needs to re-anchor an
@@ -447,6 +448,8 @@ export function buildPostPlan(input: {
 // ---------------------------------------------------------------------------
 
 export interface InlinePostOutcome {
+  // Absent when this post wrote no state block, so nothing can be said about findings across runs.
+  findingState?: FindingStateRecord;
   reviewOutcome: "posted" | "demoted";
   reviewFindingCount: number;
   // Always [] this slice (issues #16/#17): findings no longer POST as

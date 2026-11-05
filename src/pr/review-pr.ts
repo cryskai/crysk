@@ -121,6 +121,7 @@ import { acquirePidLock } from "../home";
 import { worktreeLockPath } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
 import type { ProductionRuntime } from "../production-runtime";
+import { writeGateRecord } from "./gate-record";
 
 // The CLI's record for a pipeline whose every hunter failed (cli.json,
 // odd/tasks/agent-first-ci.md, T2c). reviewPr writes it right after the pipeline's
@@ -916,8 +917,9 @@ export async function reviewPr(
         onPosted: (outcome) => {
           posted = outcome;
         },
-        onBlockingCount: (count) => {
+        onBlockingCount: (count, conclusive) => {
           blockingCount = count;
+          if (conclusive) writeGateRecord(runDir, count);
         },
       });
       // T5b: the verdicts are posted only after the review itself published.

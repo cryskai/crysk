@@ -105,7 +105,9 @@ export interface PublishRunOutcomeInput {
   // (settleCommitStatusAndLedger) reads this count in reviewPr()'s finally,
   // and a throw later in this tail must not leave it unknown. The count is the
   // gate's UNRESOLVED blocking count (rereview/state.ts), not this run's survivors.
-  onBlockingCount: (count: number) => void;
+  // `conclusive` is false for a zero the gate itself ignores (commitStatusCompletion),
+  // because a reviewer that never ran or failed might have been the one to block.
+  onBlockingCount: (count: number, conclusive: boolean) => void;
   // Test-only seam (default: the real postFindingsIfEnabled). The posting stage
   // reaches gh with no offline seam of its own, so the suite passes a fake that
   // rejects or resolves, the way it drives the throw and the delivery point.
@@ -153,7 +155,13 @@ export async function publishRunOutcome(
     doc.findings,
     result.gatePriors ?? [],
   );
-  input.onBlockingCount(blockingCount);
+  input.onBlockingCount(
+    blockingCount,
+    blockingCount > 0 ||
+      (result.sessionFailed !== true &&
+        result.noReviewerRan !== true &&
+        (result.hunterFailures?.length ?? 0) === 0),
+  );
   const reportPath = await writeRunReport({
     runDir: input.runDir,
     doc,
