@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model text is made safe before it is published.** A pull request can steer what a model writes about it, and findings, the review summary, CI adjudication evidence and triage replies were posted as written. Credential-shaped text is now redacted, and mentions, Markdown images, raw HTML and HTML comments are defused, in PR comments, the step summary and the state block. A finding or path can no longer spell a marker that hides the real state block. `findings.json` in the run artifact still holds the original text.
 
 ### Added
+- **Fallback models.** Each role in `models` lists models tried in order: a step moves to the next one only
+  when the provider failed it (`rate_limit`, `quota_exhausted`, `network_transient`, `protocol_truncation`,
+  a step timeout, `model_unavailable`) after its own retries, and a refused login (`auth_invalid`) skips the
+  later models on the same credential. A bad answer, a context-window, output-limit or safety-refusal error,
+  and every other cause stop on the model that ran. Every model is bound and admitted before the cost
+  confirmation, so a fallback that cannot run fails before anything spends. `pipeline.json` records the model
+  that ran (`model`, `route`, `effort_applied`) and every model tried in `model_attempts`, each with its
+  attempts, cause and own usage; the platform report's per-agent model and the failed-hunter record name the
+  model that ran. A list of one model behaves and records exactly as before. See
+  [Fallback models](docs/configuration.md#fallback-models).
 - **Platform mode: a run the Crysk platform dispatched posts as the Crysk App's bot.** When the event is
   `workflow_dispatch` and the `dispatch-id` input is non-empty, a new `Connect to Crysk` step exchanges the
   run's GitHub OIDC token (audience `crysk`) for a repo-scoped installation token, masks it, and the trigger,

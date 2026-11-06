@@ -18,6 +18,7 @@ import type {
   TransportFailureCause,
 } from "../execution/contracts";
 import type { FailureClass } from "../execution/failure-classification";
+import type { FailureCause } from "../execution/failure-policy";
 import { StepExecutionHarness } from "../execution/harness";
 import type { SpendReservation } from "../execution/spend-limiter";
 import type { NormalizedUsage } from "../execution/usage-normalized";
@@ -61,6 +62,15 @@ export interface StepSpec {
   backend?: "claude-code" | "opencode";
   models?: string[];
   route?: ResolvedModelRoute;
+  // The routes tried after `route`, in order, when the provider fails it
+  // (S4; the plan's `fallbacks`, the runner side is model-fallback.ts).
+  // Absent when the step's role names one model.
+  fallbackRoutes?: readonly ResolvedModelRoute[];
+  // How many attempts earlier models of this same step already used. The
+  // harness numbers this run's attempts after them, so every model's attempt
+  // logs, receipts and evidence keep their own files instead of overwriting
+  // the first model's. Absent means 0.
+  attemptOffset?: number;
   // Frozen route fingerprint from the admitted plan. Required for routed
   // production execution via createProductionRuntime.
   routeKey?: string;
@@ -108,13 +118,37 @@ export interface StepResult {
   // resolved one (a transport cause, never a harness cause). Absent on success,
   // and on a failure with no transport cause. The CLI record names it per hunter.
   failureCause?: TransportFailureCause;
+  // The cause the step's final failed attempt ended on, harness causes
+  // included: `failureCause` above keeps transport causes only, so a timeout
+  // (`watchdog_timeout`) or a bad answer (`format_violation`) was invisible to
+  // anything reading the result. The fallback reads this one. Absent on
+  // success, on cancellation, and when no cause was resolved.
+  finalCause?: FailureCause;
   // The final failed attempt's one-line explanation (TransportOutcome.failureDetail),
   // when the transport gave one. Absent on success.
   failureDetail?: string;
   // The secret the final failed attempt ran on (TransportOutcome.failureCredential).
   failureCredential?: FailureCredential;
+  // Each model the step tried, in order, when its role listed more than one
+  // (S4). The last entry not `skipped` is the model that ran. Absent on a
+  // step with one model, which records exactly what it recorded before.
+  modelAttempts?: ModelAttempt[];
   stderrTail: string;
   resultText: string;
+}
+
+// One model of a step's list, as it ended. Usage is kept per model because
+// models can bill differently (a subscription model, then a metered one):
+// the step's total sums them, and only these entries keep each one's billing.
+export interface ModelAttempt {
+  route: ResolvedModelRoute;
+  // `skipped`: never run, because an earlier model on the same credential
+  // was refused its login (`auth_invalid`).
+  status: "ok" | "failed" | "skipped";
+  attempts: number;
+  // Why it failed, or `auth_invalid` for a skipped one. Absent on `ok`.
+  cause?: FailureCause;
+  usageV2?: NormalizedUsage;
 }
 
 export interface StepRunner {

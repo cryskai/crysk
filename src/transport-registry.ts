@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { capabilityGateDecision } from "#model/provider-capabilities";
-import type { ResolvedRoutePlan, ResolvedStepRoute } from "#model/routing";
+import {
+  planRoutes,
+  type ResolvedRoutePlan,
+  type ResolvedStepRoute,
+} from "#model/routing";
 import { type AssetMode, detectAssetMode } from "./assets";
 // Route-keyed transport factory/cache: one ProviderTransport instance per
 // `${backend}:${routeFingerprint}`. `release()` drops a lease; teardown order
@@ -971,7 +975,9 @@ export async function admitRoutePlan(
   const reports = new Map<RunnerBackend, ProviderCapabilityReport>();
   const mode = options.mode ?? "production";
 
-  for (const step of plan.steps) {
+  // Every route the plan may run, fallbacks included (S4): a fallback on a
+  // backend that is not admissible fails here, before anything spends.
+  for (const step of planRoutes(plan)) {
     const backend = step.route.backend;
 
     if (!registry.has(backend)) {

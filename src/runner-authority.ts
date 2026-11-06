@@ -9,7 +9,7 @@ import {
   resolveClaudeCanonicalBinary,
   verifyExecutableBinding,
 } from "#model/provider-capabilities";
-import type { ResolvedRoutePlan } from "#model/routing";
+import { planRoutes, type ResolvedRoutePlan } from "#model/routing";
 import type { CredentialKind, RunnerBackend } from "./execution/contracts";
 // #161: the SAME predicate the Claude CLI transport files usage on
 // (`claudeCliCostBasis` -> `envBillsMetered`) is the one `credentialKindForRoute`
@@ -220,7 +220,9 @@ function planUsesBackend(
   backend: RunnerBackend,
 ): boolean {
   const seen = new Set<RunnerBackend>();
-  for (const step of plan.steps) {
+  // Fallbacks included (S4): an OpenCode model listed only as a fallback still
+  // needs its executable resolved before the run.
+  for (const step of planRoutes(plan)) {
     if (!seen.has(step.route.backend)) {
       seen.add(step.route.backend);
       if (step.route.backend === backend) {

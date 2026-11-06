@@ -24,6 +24,7 @@ import {
 } from "#git/git";
 import { engineIdentity } from "#git/identity";
 import { countFreeRouteSteps } from "#model/free-discovery";
+import { planRoutes } from "#model/routing";
 import { reviewPr } from "#pr/review-pr";
 import type { Telemetry } from "#review/findings";
 import { type PipelineResult, runPipeline } from "#review/pipeline";
@@ -259,7 +260,7 @@ export async function review(options: CliOptions): Promise<number> {
     routePlan === undefined || productionAdmission === undefined
       ? undefined
       : await countFreeRouteSteps({
-          steps: routePlan.steps,
+          steps: planRoutes(routePlan),
           probe: productionAdmission.freeModelProbe,
         });
   // Named rather than inlined into renderPlan: the same context is what the

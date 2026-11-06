@@ -145,10 +145,12 @@ import type {
   FailureCredential,
   TransportFailureCause,
 } from "../execution/contracts";
+import type { FailureCause } from "../execution/failure-policy";
 // One predicate, owned beside the appends it recognizes. Already in this
 // module's graph through step-runner's value import of the harness, so it
 // adds no weight (the atomic-write WHY above is about a NEW dependency).
 import { isHarnessStderrAnnotation } from "../execution/harness";
+import { ranRoute } from "../execution/model-fallback";
 import {
   DEFAULT_CANCELLATION_DEADLINE_MS,
   HARNESS_GRACE_MARGIN_MS,
@@ -1151,8 +1153,21 @@ interface StepMeta {
   // not become a second, shorter copy of them. Redacted — a transport error
   // can carry a token — and capped.
   failure?: string;
-  // D2 PR3: route attached at step construction
+  // D2 PR3: route attached at step construction. On a step whose role listed
+  // several models (S4), overwritten when it settles with the route of the
+  // model that ran, like `model` and `effort_applied`.
   route?: ResolvedModelRoute;
+  // S4: every model the step tried, in order, with its own attempts, cause
+  // and usage (models can bill differently, so only these keep each one's
+  // billing). Absent on a step with one model.
+  model_attempts?: Array<{
+    model: string;
+    route: ResolvedModelRoute;
+    status: "ok" | "failed" | "skipped";
+    attempts: number;
+    cause?: FailureCause;
+    usage_v2?: NormalizedUsage;
+  }>;
 }
 
 // pipeline.json's `scout` key (§3.9). Written on EVERY run, including one
@@ -1840,9 +1855,7 @@ async function execute(
       outPath: path.join(stepsDir, `${name}.draft.json`),
       timeoutMs: stepTimeoutMs,
       maxAttempts: DEFAULT_STEP_MAX_ATTEMPTS,
-      ...(routeForStepKey(routePlan, name) === undefined
-        ? {}
-        : { route: routeForStepKey(routePlan, name) }),
+      ...stepRouteFields(routePlan, name),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -1913,9 +1926,7 @@ async function execute(
         effort: summarizerMeta.effort,
         cwd: input.worktree,
         outPath,
-        ...(routeForStepKey(routePlan, name) === undefined
-          ? {}
-          : { route: routeForStepKey(routePlan, name) }),
+        ...stepRouteFields(routePlan, name),
         // The summary is a cosmetic barrier ahead of dedupe/refutation. It
         // must not inherit the 30-minute hunter watchdog or its retry budget.
         timeoutMs: 5 * 60 * 1000,
@@ -2529,15 +2540,7 @@ async function runRefuter(
       ),
       timeoutMs: options.stepTimeoutMs,
       maxAttempts: DEFAULT_STEP_MAX_ATTEMPTS,
-      ...(routeForStepKey(state.routePlan, agentStepKey(options.agent)) ===
-      undefined
-        ? {}
-        : {
-            route: routeForStepKey(
-              state.routePlan,
-              agentStepKey(options.agent),
-            ),
-          }),
+      ...stepRouteFields(state.routePlan, agentStepKey(options.agent)),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -2743,15 +2746,7 @@ async function runVerify(
       // admitted route, as the refuter and adjudicator legs do. Left unset, a
       // routed run had no binding for these steps and every one failed
       // "No admitted binding for step route" before reaching a provider.
-      ...(routeForStepKey(state.routePlan, agentStepKey(options.agent)) ===
-      undefined
-        ? {}
-        : {
-            route: routeForStepKey(
-              state.routePlan,
-              agentStepKey(options.agent),
-            ),
-          }),
+      ...stepRouteFields(state.routePlan, agentStepKey(options.agent)),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -2937,15 +2932,7 @@ async function runAdjudicate(
       outPath: path.join(dir, "result.json"),
       timeoutMs: options.stepTimeoutMs,
       maxAttempts: DEFAULT_STEP_MAX_ATTEMPTS,
-      ...(routeForStepKey(state.routePlan, agentStepKey(options.agent)) ===
-      undefined
-        ? {}
-        : {
-            route: routeForStepKey(
-              state.routePlan,
-              agentStepKey(options.agent),
-            ),
-          }),
+      ...stepRouteFields(state.routePlan, agentStepKey(options.agent)),
       parse: parseAdjudicationResult,
       onRetry: (info) => emit(deps, { kind: "step-retry", ...info }),
     };
@@ -3167,9 +3154,7 @@ async function runScout(
       outPath,
       timeoutMs: SCOUT_TIMEOUT_MS,
       maxAttempts: 1,
-      ...(routeForStepKey(state.routePlan, name) === undefined
-        ? {}
-        : { route: routeForStepKey(state.routePlan, name) }),
+      ...stepRouteFields(state.routePlan, name),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -3210,6 +3195,8 @@ async function runScout(
   // BEFORE the verdict branches below, so every road that ends in `abandon`
   // still carries the attempt count and pointers of the session that ran.
   recordSettlement(meta, result, input.runDir);
+  // The model that ran, when the scout fell back to another (S4).
+  record.model = meta.model;
   state.usageTotal = sumUsage(state.usageTotal, result.usage);
   accumulateUsageV2(state, result);
   if (result.status !== "ok") return abandon();
@@ -3434,9 +3421,7 @@ async function runConsolidation(
       outPath,
       timeoutMs: CONSOLIDATE_TIMEOUT_MS,
       maxAttempts: CONSOLIDATE_MAX_ATTEMPTS,
-      ...(routeForStepKey(state.routePlan, name) === undefined
-        ? {}
-        : { route: routeForStepKey(state.routePlan, name) }),
+      ...stepRouteFields(state.routePlan, name),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -3474,6 +3459,8 @@ async function runConsolidation(
   // tokens.
   state.perAgent.consolidate = perAgentEntry(result);
   recordSettlement(meta, result, input.runDir);
+  // The model that ran, when consolidation fell back to another (S4).
+  record.model = meta.model;
   state.usageTotal = sumUsage(state.usageTotal, result.usage);
   accumulateUsageV2(state, result);
   if (result.status !== "ok") {
@@ -4073,8 +4060,12 @@ function hunterFailureOf(
   result: StepResult | undefined,
 ): HunterFailure {
   const cause = result?.failureCause;
-  const provider = spec.route?.provider.trim();
-  const model = spec.route?.modelSnapshot.trim();
+  // The model that ran, when the role listed several (S4): the provider and
+  // model to name are the ones that failed last, not the first one listed.
+  const route =
+    (result === undefined ? undefined : ranRoute(result)) ?? spec.route;
+  const provider = route?.provider.trim();
+  const model = route?.modelSnapshot.trim();
   const detail = failureDetailOf(result?.failureDetail);
   return {
     name: spec.name,
@@ -4385,16 +4376,42 @@ function routeForStepKey(
   return routePlan?.steps.find((step) => step.stepKey === stepKey)?.route;
 }
 
+// A step's route AND its fallbacks (S4), from the plan, as StepSpec fields.
+// One spread at every site that routes a step, so no site can hand a runner
+// the first model without the rest of the list.
+function stepRouteFields(
+  routePlan: ResolvedRoutePlan | undefined,
+  stepKey: string,
+): Pick<StepSpec, "route" | "fallbackRoutes"> {
+  const step = routePlan?.steps.find((s) => s.stepKey === stepKey);
+  if (step === undefined) return {};
+  return {
+    route: step.route,
+    ...(step.fallbacks === undefined || step.fallbacks.length === 0
+      ? {}
+      : { fallbackRoutes: step.fallbacks.map((fallback) => fallback.route) }),
+  };
+}
+
+// What a route's backend is sent: the Claude CLI's `--model`, or the
+// provider's model id.
+function routeExecutionModel(
+  route: ResolvedModelRoute,
+  fallback: string,
+): string {
+  if (route.backend === "claude-code") {
+    return claudeCliModel(route);
+  }
+  return route.modelSnapshot || fallback;
+}
+
 // What the step's backend is sent, recorded as the step's model in
 // pipeline.json: the route's model when there is a route, else the step's own.
 function effectiveExecutionModel(spec: StepSpec): string {
   if (spec.route === undefined) {
     return spec.model;
   }
-  if (spec.route.backend === "claude-code") {
-    return claudeCliModel(spec.route);
-  }
-  return spec.route.modelSnapshot || spec.model;
+  return routeExecutionModel(spec.route, spec.model);
 }
 
 function stepMeta(spec: StepSpec): StepMeta {
@@ -4445,6 +4462,27 @@ function recordSettlement(
   }
   if (result.reservations !== undefined && result.reservations.length > 0) {
     meta.reservations = result.reservations;
+  }
+  // S4: a step whose role listed several models records the one that ran,
+  // over the first model stamped before the spawn, and every model it tried.
+  // The backend can change with the model, and only the Claude CLI applies
+  // `effort`, so `effort_applied` follows the model that ran. A step with one
+  // model carries no `modelAttempts` and records what it always recorded.
+  if (result.modelAttempts !== undefined) {
+    const ran = ranRoute(result);
+    if (ran !== undefined) {
+      meta.route = ran;
+      meta.model = routeExecutionModel(ran, meta.model);
+      meta.effort_applied = ran.backend === "claude-code";
+    }
+    meta.model_attempts = result.modelAttempts.map((entry) => ({
+      model: routeExecutionModel(entry.route, meta.model),
+      route: entry.route,
+      status: entry.status,
+      attempts: entry.attempts,
+      ...(entry.cause === undefined ? {} : { cause: entry.cause }),
+      ...(entry.usageV2 === undefined ? {} : { usage_v2: entry.usageV2 }),
+    }));
   }
   meta.status = result.status;
   meta.attempts = result.attempts;

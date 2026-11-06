@@ -1624,6 +1624,14 @@ export class StepExecutionHarness implements StepRunner {
     // The transport cause of the most recent failed attempt. Reset by every attempt
     // that fails without one, so the step reports only the cause it ended on.
     let lastFailureCause: TransportFailureCause | undefined;
+    // The same attempt's cause with harness causes kept (watchdog_timeout,
+    // format_violation): what StepResult.finalCause reports, for the fallback.
+    let lastCause: FailureCause | undefined;
+    // Attempts earlier models of this step already used (StepSpec.attempt-
+    // Offset). Every per-attempt artifact is named by `attemptOffset +
+    // attempts`, so a fallback model never overwrites the first model's logs
+    // and receipts; `attempts` itself stays this run's own count.
+    const attemptOffset = step.attemptOffset ?? 0;
     let cancelHit = false;
     // D1-08 PR5b (§9.1): every attempt that reached the reserve step, in
     // order, each already finalized to a terminal reservation state by the
@@ -1666,9 +1674,10 @@ export class StepExecutionHarness implements StepRunner {
       const kind: "attempt" | "format-retry" =
         pendingFormatPrompt === undefined ? "attempt" : "format-retry";
 
+      const attemptNumber = attemptOffset + attempts;
       const request: TransportRequest = {
-        sessionId: `${step.name}-${Date.now()}-${attempts}`,
-        attempt: attempts,
+        sessionId: `${step.name}-${Date.now()}-${attemptNumber}`,
+        attempt: attemptNumber,
         executionModel: step.model,
         effort: step.effort,
         route:
@@ -1726,7 +1735,7 @@ export class StepExecutionHarness implements StepRunner {
 
       const attemptResult = await this.runAttempt({
         step,
-        attempt: attempts,
+        attempt: attemptNumber,
         kind,
         request,
         deadlineMs,
@@ -1769,6 +1778,10 @@ export class StepExecutionHarness implements StepRunner {
       lastFailureCause =
         attemptResult.resolution.kind === "cause" &&
         isTransportFailureCause(attemptResult.resolution.cause)
+          ? attemptResult.resolution.cause
+          : undefined;
+      lastCause =
+        attemptResult.resolution.kind === "cause"
           ? attemptResult.resolution.cause
           : undefined;
       if (attemptResult.resolution.kind === "legacy_terminal") {
@@ -1840,7 +1853,7 @@ export class StepExecutionHarness implements StepRunner {
       // naming attempt0.json, which would be the same lie in a new font.
       const receiptPointer =
         attempts >= 1
-          ? `see ${receiptPathFor(step, attempts)}`
+          ? `see ${receiptPathFor(step, attemptOffset + attempts)}`
           : "no attempt was admitted, so no receipt was written";
       return {
         name: step.name,
@@ -1875,6 +1888,7 @@ export class StepExecutionHarness implements StepRunner {
       ...(lastFailureCause === undefined
         ? {}
         : { failureCause: lastFailureCause }),
+      ...(lastCause === undefined ? {} : { finalCause: lastCause }),
       ...(lastOutcome?.failureDetail === undefined
         ? {}
         : { failureDetail: lastOutcome.failureDetail }),
