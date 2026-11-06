@@ -28,11 +28,7 @@ import {
   runCiSetup,
 } from "#ci/setup";
 import { DEFAULT_PIPELINE_TIMEOUT_MS } from "#review/pipeline";
-import {
-  parseArgs,
-  parseGlobalConfig,
-  parseLocalConfig,
-} from "#review/preflight";
+import { parseArgs } from "#review/preflight";
 import { runDoctor } from "../../src/doctor";
 import { prheroLayout } from "../../src/home-preflight";
 import { resolveOpenCodeAuthPath } from "../../src/security/credential-broker";
@@ -783,30 +779,28 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
   }
 
   // Threat matrix RED (1): person-layer writes use prheroLayout(home), never
-  // the workspace checkout's .crysk/config.json (repo parser rejects routing).
-  test("writes routing at prheroLayout(home).reviewConfigPath and not the workspace", async () => {
+  // the workspace checkout's .crysk/config.json. The routing input is gone
+  // (S2), so a non-empty one writes nothing anywhere and fails the step.
+  test("a routing input fails before writing to the home or the workspace", async () => {
     await withFixture(async ({ home, workspace }) => {
       const workspaceConfig = path.join(workspace, ".crysk", "config.json");
       await mkdir(path.dirname(workspaceConfig), { recursive: true });
       const workspaceBefore = `${JSON.stringify({ max_changed_lines: 50 })}\n`;
       await writeFile(workspaceConfig, workspaceBefore);
 
-      await materializeCiOpenCodeData({
-        home,
-        env: { HOME: home },
-        routing: OPENCODE_CI_ROUTING,
-        opencodeAuth: "",
-      });
+      await expect(
+        materializeCiOpenCodeData({
+          home,
+          env: { HOME: home },
+          routing: OPENCODE_CI_ROUTING,
+          opencodeAuth: "",
+        }),
+      ).rejects.toThrow(
+        'CI routing input: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
+      );
 
-      const expected = prheroLayout(home).reviewConfigPath;
-      expect(expected).toBe(path.join(home, ".crysk", "config.json"));
-      expect(existsSync(expected)).toBe(true);
-      const layer = parseGlobalConfig(await readFile(expected, "utf8"));
-      expect(layer.routing?.default?.backend).toBe("opencode");
-      expect(layer.routing?.default?.provider).toBe("deepseek");
-
+      expect(existsSync(prheroLayout(home).reviewConfigPath)).toBe(false);
       expect(await readFile(workspaceConfig, "utf8")).toBe(workspaceBefore);
-      expect(parseLocalConfig(workspaceBefore)).not.toHaveProperty("routing");
     });
   });
 
@@ -946,18 +940,23 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
     }
   }
 
-  test("a routing input that is not JSON records config-parse routing, with a fixed detail and no content", async () => {
-    const result = await runSetup({
-      ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ',
-    });
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("CI routing input is not valid JSON");
-    expect(JSON.parse(result.recordText ?? "null")).toEqual({
-      v: 1,
-      cls: { kind: "config-parse", source: "routing" },
-      detail: "the routing input is not valid JSON",
-    });
-    expect(result.recordText).not.toContain("SENTINEL");
+  // The routing input is gone (S2): any non-empty value, JSON or not, records
+  // the same class with a fixed detail and never its content.
+  test("a routing input records config-parse routing, with a fixed detail and no content", async () => {
+    for (const value of [
+      '{"SENTINEL-ROUTING-7f3a": ',
+      '{"SENTINEL-KEY-7f3a": 1}',
+    ]) {
+      const result = await runSetup({ ROUTING_INPUT: value });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("CI routing input: `routing` is gone");
+      expect(JSON.parse(result.recordText ?? "null")).toEqual({
+        v: 1,
+        cls: { kind: "config-parse", source: "routing" },
+        detail: "the routing input is gone: set models per role instead",
+      });
+      expect(result.recordText).not.toContain("SENTINEL");
+    }
   });
 
   // WHY a directory (F003 on #330): the setup record's temp name is unique per write
@@ -974,21 +973,8 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
     expect(JSON.parse(result.recordText ?? "null")).toEqual({
       v: 1,
       cls: { kind: "config-parse", source: "routing" },
-      detail: "the routing input is not valid JSON",
+      detail: "the routing input is gone: set models per role instead",
     });
-  });
-
-  test("a routing input of the wrong shape records config-parse routing too, without the key it names", async () => {
-    const result = await runSetup({
-      ROUTING_INPUT: '{"SENTINEL-KEY-7f3a": 1}',
-    });
-    expect(result.exitCode).toBe(1);
-    expect(JSON.parse(result.recordText ?? "null")).toEqual({
-      v: 1,
-      cls: { kind: "config-parse", source: "routing" },
-      detail: "the routing input is not a valid routing object",
-    });
-    expect(result.recordText).not.toContain("SENTINEL");
   });
 
   test("an OpenCode auth input that is not JSON records a credential malformed_payload, with a fixed detail", async () => {

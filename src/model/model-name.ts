@@ -110,6 +110,14 @@ export function parseModelName(raw: string): ModelName {
   if (typeof raw !== "string") {
     throw new ModelNameError("a model name must be a string");
   }
+  // The deny-list the old `routing` parser applied to its values, kept for
+  // the values that replaced them: the OpenCode grammar admits the characters
+  // of most API keys, so a key pasted as a model would otherwise parse.
+  if (redactDiagnostic(raw) !== raw) {
+    throw new ModelNameError(
+      "a model name looks like a credential, and credentials are not permitted in models",
+    );
+  }
   if (raw.startsWith(CLAUDE_PREFIX)) {
     return parseClaudeName(raw, raw.slice(CLAUDE_PREFIX.length));
   }
@@ -222,4 +230,15 @@ export function parseModelsConfig(value: unknown): ModelsConfig {
     result[role] = parseModelList(list, `models.${role}`);
   }
   return result;
+}
+
+// Whether any configured model runs on OpenCode, so the OpenCode SDK must be
+// installed. Replaces the old routing check, read by `crysk doctor`,
+// `crysk upgrade --reconcile` and the platform connect step: without it an
+// OpenCode user would silently lose the SDK install.
+export function modelsNeedOpenCode(models: ModelsConfig | undefined): boolean {
+  if (models === undefined) return false;
+  return Object.values(models).some((list) =>
+    list.some((name) => name.startsWith(OPENCODE_PREFIX)),
+  );
 }

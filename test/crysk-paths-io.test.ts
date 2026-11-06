@@ -194,9 +194,9 @@ describe("the ignore file", () => {
 });
 
 describe("the runner's person-layer config: writer and reader agree", () => {
-  const ROUTING = JSON.stringify({
-    default: { backend: "opencode", provider: "deepseek" },
-  });
+  // The person file is written only in platform mode now: the routing input
+  // that used to write it standalone is gone (S2).
+  const MODELS = { default: ["opencode:deepseek/deepseek-chat"] };
 
   test("on a fresh HOME the CI step writes where the CLI then reads", async () => {
     const home = path.join(scratch, "runner-home");
@@ -204,13 +204,14 @@ describe("the runner's person-layer config: writer and reader agree", () => {
     await materializeCiOpenCodeData({
       home,
       env: { HOME: home },
-      routing: ROUTING,
+      routing: "",
       opencodeAuth: "",
+      platformPerson: { models: MODELS },
     });
     expect(existsSync(path.join(home, ".crysk", "config.json"))).toBe(true);
     const { filePath, layer } = await loadGlobalConfigLayer(home);
     expect(filePath).toBe(path.join(home, ".crysk", "config.json"));
-    expect(layer?.routing?.default?.provider).toBe("deepseek");
+    expect(layer?.models).toEqual(MODELS);
   });
 
   test("a runner HOME that only has the legacy dir is written and read there", async () => {
@@ -219,12 +220,13 @@ describe("the runner's person-layer config: writer and reader agree", () => {
     await materializeCiOpenCodeData({
       home,
       env: { HOME: home },
-      routing: ROUTING,
+      routing: "",
       opencodeAuth: "",
+      platformPerson: { models: MODELS },
     });
     const { filePath, layer } = await loadGlobalConfigLayer(home);
     expect(filePath).toBe(path.join(home, ".prhero", "config.json"));
-    expect(layer?.routing?.default?.provider).toBe("deepseek");
+    expect(layer?.models).toEqual(MODELS);
     expect(existsSync(path.join(home, ".crysk"))).toBe(false);
   });
 });

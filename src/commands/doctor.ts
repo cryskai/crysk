@@ -1,6 +1,7 @@
 import os from "node:os";
 import { loadEffectiveConfig, resolveOptionalRepoRoot } from "#config/config";
-import { type RoutingConfig, routingNeedsOpenCodeSdk } from "#model/routing";
+import { type ModelsConfig, modelsNeedOpenCode } from "#model/model-name";
+import type { RoutingConfig } from "#model/routing";
 import type { CliOptions } from "#review/preflight";
 import { styleEnabled, terminalWidth } from "#ui/primitives";
 import {
@@ -39,6 +40,7 @@ export async function runDoctorCommand(input: {
   readSdkVersion?: () => Promise<string | undefined>;
 }): Promise<{ report: DoctorReport; lines: string[] }> {
   let routingConfig: RoutingConfig | undefined;
+  let models: ModelsConfig | undefined;
   let configCheck: DoctorCheckItem | undefined;
   try {
     const loaded = await loadEffectiveConfig({
@@ -47,6 +49,16 @@ export async function runDoctorCommand(input: {
       configFlag: input.configFlag,
     });
     routingConfig = loaded.effective.routing;
+    models = loaded.effective.models;
+    // A config that loads with warnings works today and will not after the
+    // key it uses is removed: degraded, with the warning as its message.
+    if (loaded.warnings.length > 0) {
+      configCheck = {
+        name: "config",
+        severity: "degraded",
+        message: loaded.warnings.join("\n"),
+      };
+    }
   } catch (error) {
     configCheck = {
       name: "config",
@@ -73,9 +85,9 @@ export async function runDoctorCommand(input: {
       readInstalledOpenCodeSdkVersion({
         nodeModulesDir: prheroLayout(input.home).nodeModulesDir,
       }));
-  const sdkCheck = routingNeedsOpenCodeSdk(routingConfig)
+  const sdkCheck = modelsNeedOpenCode(models)
     ? openCodeRoutingSdkCheck({
-        routing: routingConfig,
+        models,
         sdkVersion: await readSdkVersion(),
       })
     : undefined;

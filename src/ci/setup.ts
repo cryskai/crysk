@@ -53,7 +53,7 @@ import {
   recordTempPath,
 } from "#ci/trigger";
 import { resolveRepoRoot } from "#git/git";
-import { parseLocalConfig, parseRoutingConfig } from "#review/preflight";
+import { parseLocalConfig, REMOVED_ROUTING_MESSAGE } from "#review/preflight";
 import { commandForms } from "../brand";
 import {
   duplicateWorkflowProblem,
@@ -676,8 +676,8 @@ const AUTH_CLASS: ErrorClass = {
 };
 // The details the record carries. Each names the input that is wrong and never
 // its content, so a secret or a routing value cannot reach the PR.
-const ROUTING_NOT_JSON = "the routing input is not valid JSON";
-const ROUTING_NOT_OBJECT = "the routing input is not a valid routing object";
+const ROUTING_REMOVED =
+  "the routing input is gone: set models per role instead";
 const AUTH_NOT_JSON = "the opencode-auth input is not valid JSON";
 const AUTH_NOT_OBJECT = "the opencode-auth input must be a JSON object";
 
@@ -699,12 +699,12 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
 }
 
-// CI data plane: person-layer routing + 0600 auth.json. HOME must be a real
+// CI data plane: the person layer + 0600 auth.json. HOME must be a real
 // directory — empty/unset fails loud with no cwd fallback, because falling
-// back would write routing into the checkout (.prhero/config.json), which
+// back would write person keys into the checkout (.prhero/config.json), which
 // the repo parser rejects. Never log the auth blob; never inject readerFn.
-// In platform mode the platform's person layer joins the routing in that one
-// file; `routing` is the platform's when it sent one, else the input's, as today.
+// In platform mode the platform's person layer is that one file. The `routing`
+// input is gone (S2): a non-empty one fails the step with the new form.
 export async function materializeCiOpenCodeData(
   options: MaterializeCiOpenCodeDataOptions = {},
 ): Promise<void> {
@@ -720,40 +720,21 @@ export async function materializeCiOpenCodeData(
   const authRaw = options.opencodeAuth ?? env.OPENCODE_AUTH_INPUT ?? "";
   const platformMode = options.platformPerson !== undefined;
   const platformPerson = options.platformPerson ?? {};
-  // The input is parsed only when it is the one that will be written: a
-  // routing the platform overrides is not this run's configuration.
-  const platformRouting = platformPerson.routing !== undefined;
+  // The input is judged only when it would be this run's configuration: the
+  // platform's models win over it, as its routing did. A platform `routing`
+  // is refused by assertPlatformPerson below with the same message.
+  const platformRouting =
+    platformPerson.models !== undefined || platformPerson.routing !== undefined;
 
-  let routingConfig: ReturnType<typeof parseRoutingConfig> | null = null;
+  // S2's clean break, for the CI input too: a non-empty `routing` input (the
+  // CRYSK_ROUTING variable) is refused with the new form, never half-read.
+  // Empty or unset stays the Claude-default CI it always was.
   if (routingRaw.trim() !== "" && !platformRouting) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(routingRaw);
-    } catch (error) {
-      throw new SetupInputError(
-        ROUTING_CLASS,
-        ROUTING_NOT_JSON,
-        `CI routing input is not valid JSON: ${messageOf(error)}`,
-      );
-    }
-    try {
-      routingConfig = parseRoutingConfig(parsed, "~/.crysk/config.json");
-    } catch (error) {
-      // parseRoutingConfig names the offending key in its message: that message
-      // stays on stderr, and the record carries only the fixed detail.
-      throw new SetupInputError(
-        ROUTING_CLASS,
-        ROUTING_NOT_OBJECT,
-        messageOf(error),
-      );
-    }
-    if (routingConfig === undefined) {
-      throw new SetupInputError(
-        ROUTING_CLASS,
-        ROUTING_NOT_OBJECT,
-        "CI routing input must be a JSON object",
-      );
-    }
+    throw new SetupInputError(
+      ROUTING_CLASS,
+      ROUTING_REMOVED,
+      `CI routing input: ${REMOVED_ROUTING_MESSAGE}`,
+    );
   }
 
   let authBody: string | undefined;
@@ -789,7 +770,6 @@ export async function materializeCiOpenCodeData(
   }
   const personBody: Record<string, unknown> = {
     ...platformPerson,
-    ...(routingConfig === null ? {} : { routing: routingConfig }),
   };
   if (Object.keys(personBody).length > 0) {
     await mkdir(path.dirname(personFile), { recursive: true });

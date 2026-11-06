@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { CI_WORKFLOW_RELATIVE_PATH } from "#ci/setup";
 import { aliasCanonical } from "#model/catalog";
-import { routingNeedsOpenCodeSdk } from "#model/routing";
+import { modelsNeedOpenCode } from "#model/model-name";
 import {
   GOTCHAS_PLACEHOLDER_MARKER,
   GOTCHAS_TEMPLATE,
@@ -1096,59 +1096,30 @@ describe("doctor tri-state evaluation", () => {
   });
 });
 
-const openCodeDefault = {
-  backend: "opencode" as const,
-  provider: "opencode",
-};
-const claudeDefault = {
-  backend: "claude-code" as const,
-  provider: "anthropic",
-};
+const openCodeModels = { default: ["opencode:opencode/big-pickle"] };
 
-describe("routingNeedsOpenCodeSdk", () => {
-  test("undefined, disabled routing, and Claude-only routing do not need the SDK", () => {
-    expect(routingNeedsOpenCodeSdk(undefined)).toBe(false);
+describe("modelsNeedOpenCode", () => {
+  test("no models and Claude-only models do not need the SDK", () => {
+    expect(modelsNeedOpenCode(undefined)).toBe(false);
+    expect(modelsNeedOpenCode({})).toBe(false);
     expect(
-      routingNeedsOpenCodeSdk({
-        disabled: true,
-        default: openCodeDefault,
-      }),
-    ).toBe(false);
-    expect(routingNeedsOpenCodeSdk({ default: claudeDefault })).toBe(false);
-    expect(
-      routingNeedsOpenCodeSdk({
-        default: { ...openCodeDefault, disabled: true },
-      }),
-    ).toBe(false);
-    expect(
-      routingNeedsOpenCodeSdk({
-        default: { ...openCodeDefault, allowSpend: false },
+      modelsNeedOpenCode({
+        default: ["claude:sonnet-latest"],
+        summary: ["claude:claude-haiku-5-5"],
       }),
     ).toBe(false);
   });
 
-  test("an enabled OpenCode default or mapping needs the SDK", () => {
-    expect(routingNeedsOpenCodeSdk({ default: openCodeDefault })).toBe(true);
+  test("an OpenCode model in any role, at any position, needs the SDK", () => {
+    expect(modelsNeedOpenCode({ default: ["opencode:openai/gpt-5"] })).toBe(
+      true,
+    );
     expect(
-      routingNeedsOpenCodeSdk({
-        default: claudeDefault,
-        mappings: [
-          { logical: "sonnet", ...openCodeDefault },
-          { logical: "opus", ...claudeDefault, allowSpend: false },
-        ],
+      modelsNeedOpenCode({
+        default: ["claude:sonnet-latest"],
+        "hunter.logic": ["claude:opus-latest", "opencode:openai/gpt-5#high"],
       }),
     ).toBe(true);
-    expect(
-      routingNeedsOpenCodeSdk({
-        mappings: { sonnet: openCodeDefault },
-      }),
-    ).toBe(true);
-    expect(
-      routingNeedsOpenCodeSdk({
-        default: claudeDefault,
-        mappings: { sonnet: { ...openCodeDefault, disabled: true } },
-      }),
-    ).toBe(false);
   });
 });
 
@@ -1156,13 +1127,13 @@ describe("openCodeRoutingSdkCheck", () => {
   test("no OpenCode routing or the pinned version adds no row", () => {
     expect(
       openCodeRoutingSdkCheck({
-        routing: { default: claudeDefault },
+        models: { default: ["claude:sonnet-latest"] },
         sdkVersion: undefined,
       }),
     ).toBeUndefined();
     expect(
       openCodeRoutingSdkCheck({
-        routing: { default: openCodeDefault },
+        models: openCodeModels,
         sdkVersion: "1.18.25",
       }),
     ).toBeUndefined();
@@ -1171,7 +1142,7 @@ describe("openCodeRoutingSdkCheck", () => {
   test("a missing SDK blocks with the reconcile message", () => {
     for (const sdkVersion of [undefined, "", "   "]) {
       const item = openCodeRoutingSdkCheck({
-        routing: { default: openCodeDefault },
+        models: openCodeModels,
         sdkVersion,
       });
       expect(item?.severity).toBe("blocking");
@@ -1184,7 +1155,7 @@ describe("openCodeRoutingSdkCheck", () => {
 
   test("any other installed version blocks and names both versions", () => {
     const item = openCodeRoutingSdkCheck({
-      routing: { default: openCodeDefault },
+      models: openCodeModels,
       sdkVersion: "1.18.26",
     });
     expect(item?.severity).toBe("blocking");

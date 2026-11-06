@@ -12,8 +12,6 @@ import {
   repoWebUrlFromRemote,
   resolveBaseRef,
 } from "#git/refs";
-import { aliasCanonical } from "#model/catalog";
-import type { RoutingConfig } from "#model/routing";
 import {
   type AgentsDirConfigSeat,
   agentsDirProblems,
@@ -25,7 +23,6 @@ import {
   type ConfigLayer,
   DEFAULT_HOP_BUDGET,
   DEFAULT_MAX_VERIFICATION_STEPS,
-  DEFAULT_SUMMARY_MODEL,
   EMPTY_LOCAL_CONFIG,
   emptyDiffMessage,
   GOTCHAS_PLACEHOLDER_MARKER,
@@ -44,7 +41,6 @@ import {
   parseLocalConfig,
   parseNumstat,
   parseNumstatFiles,
-  parseRoutingConfig,
   preflightAgentsDir,
   REVIEW_MD_TEMPLATE,
   resolveAgentsDir,
@@ -1239,10 +1235,8 @@ describe("parseLocalConfig", () => {
   test("summary settings are optional and preserve supplied values", () => {
     expect(parseLocalConfig('{"summary": {}}').summary).toEqual({});
     expect(
-      parseLocalConfig(
-        JSON.stringify({ summary: { enabled: false, model: "opus" } }),
-      ).summary,
-    ).toEqual({ enabled: false, model: "opus" });
+      parseLocalConfig(JSON.stringify({ summary: { enabled: false } })).summary,
+    ).toEqual({ enabled: false });
   });
 
   test("summary validation is strict, including typos", () => {
@@ -1258,22 +1252,19 @@ describe("parseLocalConfig", () => {
     }
   });
 
+  // The summary MODEL is no longer resolved here: `models.summary` reaches
+  // the route plan, and only `--model` still lands on the settings.
   test("summary activation resolves flag over config over default-on", () => {
     const config = parseLocalConfig(
-      JSON.stringify({ summary: { enabled: false, model: "opus" } }),
+      JSON.stringify({ summary: { enabled: false } }),
     );
     expect(resolveSummary({}, parseLocalConfig("{}")).enabled).toBe(true);
-    expect(resolveSummary({}, config)).toEqual({
-      enabled: false,
-      model: "opus",
-    });
+    expect(resolveSummary({}, config)).toEqual({ enabled: false });
     expect(resolveSummary({ summary: true }, config)).toEqual({
       enabled: true,
-      model: "opus",
     });
     expect(resolveSummary({ summary: false }, config)).toEqual({
       enabled: false,
-      model: "opus",
     });
     expect(resolveSummary({ model: "sonnet" }, config)).toEqual({
       enabled: false,
@@ -1422,8 +1413,10 @@ describe("CONFIG_DIRECTION", () => {
       default_base: "dev",
       parity_trigger_paths: ["**/Auth*"],
       suspicion_priors: [{ path: "a.ts", weight: "high", reason: "hot" }],
-      summary: { enabled: false, model: "opus" },
+      summary: { enabled: false },
       routing: { mappings: [] },
+      models: { default: ["claude:sonnet-latest"] },
+      credentials: { claude: ["subscription"] },
       max_verification_steps: 3,
       max_concurrent_steps: 4,
       max_changed_lines: 1500,
@@ -1448,7 +1441,7 @@ describe("CONFIG_DIRECTION", () => {
       expect(CONFIG_DIRECTION[key as keyof LocalConfig]).toBeString();
     }
 
-    const summary: Required<SummaryConfig> = { enabled: true, model: "opus" };
+    const summary: Required<SummaryConfig> = { enabled: true };
     expect(Object.keys(SUMMARY_DIRECTION).sort()).toEqual(
       Object.keys(summary).sort(),
     );
@@ -1465,6 +1458,8 @@ describe("CONFIG_DIRECTION", () => {
       suspicion_priors: "repo",
       summary: "capped",
       routing: "person",
+      models: "person",
+      credentials: "person",
       max_verification_steps: "capped",
       max_concurrent_steps: "capped",
       max_changed_lines: "capped",
@@ -1482,7 +1477,7 @@ describe("CONFIG_DIRECTION", () => {
       ci_trusted_actors: "repo",
       ci_admission_observe_only: "repo",
     });
-    expect(SUMMARY_DIRECTION).toEqual({ enabled: "capped", model: "person" });
+    expect(SUMMARY_DIRECTION).toEqual({ enabled: "capped" });
   });
 });
 
@@ -1510,13 +1505,17 @@ describe("parseGlobalConfig", () => {
   test("admits every person and capped key", () => {
     const admitted = {
       agents_dir: "/tmp/agents",
-      summary: { enabled: false, model: "opus" },
+      summary: { enabled: false },
+      models: { default: ["claude:sonnet-latest"] },
+      credentials: { claude: ["api_key"] },
       max_verification_steps: 2,
       scout: false,
       materiality_gate: false,
       post: true,
     };
-    expect(parseGlobalConfig(JSON.stringify(admitted))).toEqual(admitted);
+    expect(parseGlobalConfig(JSON.stringify(admitted))).toEqual(
+      admitted as ConfigLayer,
+    );
     expect(parseGlobalConfig("{}")).toEqual({});
   });
 
@@ -1544,7 +1543,7 @@ describe("parseGlobalConfig", () => {
       ['{"summary": {"enabled": "no"}}', "summary.enabled must be a boolean"],
       [
         '{"summary": {"model": "  "}}',
-        "summary.model must be a non-empty string",
+        'summary.model is gone: set the summary model per person, under models in your person config, e.g. `"models": {"summary": ["claude:haiku-latest"]}`',
       ],
       [
         '{"max_verification_steps": -1}',
@@ -1568,10 +1567,12 @@ describe("parseGlobalConfig", () => {
 });
 
 describe("parseLocalConfig admits the same keys it does today", () => {
-  test("the admitted key set is unchanged, summary.model included", () => {
+  // `summary.model` left the set (L6 item 1): only "haiku" still parses, with
+  // a warning, and is dropped from a repo file (test/config/models-config).
+  test("the admitted key set is unchanged, the three person-only keys aside", () => {
     expect(
       Object.keys(CONFIG_DIRECTION)
-        .filter((k) => k !== "routing")
+        .filter((k) => !["routing", "models", "credentials"].includes(k))
         .sort(),
     ).toEqual(PRE_C5_LOCAL_KEYS);
     const full = {
@@ -1579,7 +1580,7 @@ describe("parseLocalConfig admits the same keys it does today", () => {
       default_base: "dev",
       parity_trigger_paths: ["**/Auth*"],
       suspicion_priors: [{ path: "a.ts", weight: 3, reason: "hot" }],
-      summary: { enabled: false, model: "opus" },
+      summary: { enabled: false },
       max_verification_steps: 3,
       scout: true,
       post: false,
@@ -1591,125 +1592,33 @@ describe("parseLocalConfig admits the same keys it does today", () => {
     }
   });
 
-  test("rejects routing key in repo config as a per-person key", () => {
+  // S2: `routing` is gone, so a repo file gets the clean-break message, not
+  // "routing is a per-person key", which would send the operator to move a
+  // dead key into the person file.
+  test("rejects routing in repo config with the clean-break message", () => {
     const raw = JSON.stringify({ routing: { mappings: [] } });
     expect(() => parseLocalConfig(raw)).toThrow(CliUsageError);
     expect(messageOf(() => parseLocalConfig(raw))).toBe(
-      ".crysk/config.json: routing is a per-person key — put it in your person config (~/.crysk/config.json, or ~/.prhero/config.json on an install set up before the rename; do not create ~/.crysk while ~/.prhero is in use)",
+      '.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
     );
   });
 });
 
-describe("Task 1.3: D2 Routing in preflight and credential rejection", () => {
-  test("parseGlobalConfig admits valid routing object", () => {
-    const routingConfig: RoutingConfig = {
-      mappings: [
-        {
-          logical: aliasCanonical("sonnet"),
-          backend: "claude-code",
-          provider: "anthropic",
-          gateway: "direct",
-          modelFamily: "sonnet",
-          modelSnapshot: "sonnet",
-        },
-      ],
-      default: {
-        backend: "opencode",
-        provider: "openrouter",
-        gateway: "openrouter",
-        modelFamily: "auto",
-        modelSnapshot: "auto",
-      },
-    };
-    const parsed = parseGlobalConfig(
-      JSON.stringify({ routing: routingConfig }),
-    );
-    expect(parsed.routing).toEqual(routingConfig);
-  });
-
-  test("parseGlobalConfig rejects non-object routing", () => {
-    expect(() => parseGlobalConfig('{"routing": "invalid"}')).toThrow(
-      CliUsageError,
-    );
-    expect(messageOf(() => parseGlobalConfig('{"routing": "invalid"}'))).toBe(
-      "~/.crysk/config.json routing must be an object",
-    );
-  });
-
-  test("parseGlobalConfig rejects invalid mapping backend or gateway", () => {
-    const badBackend = JSON.stringify({
-      routing: {
-        mappings: [
-          {
-            logical: "openai/gpt-4o",
-            backend: "bad-backend",
-            provider: "openai",
-          },
-        ],
-      },
-    });
-    expect(() => parseGlobalConfig(badBackend)).toThrow(CliUsageError);
-    expect(messageOf(() => parseGlobalConfig(badBackend))).toContain(
-      "backend must be claude-code|opencode",
-    );
-
-    const badGateway = JSON.stringify({
-      routing: {
-        mappings: [
-          {
-            logical: "openai/gpt-4o",
-            backend: "opencode",
-            provider: "openai",
-            gateway: "bad-gateway",
-          },
-        ],
-      },
-    });
-    expect(() => parseGlobalConfig(badGateway)).toThrow(CliUsageError);
-    expect(messageOf(() => parseGlobalConfig(badGateway))).toContain(
-      "gateway must be configured|direct|openrouter",
-    );
-  });
-
-  test("parseGlobalConfig rejects credential keys embedded in routing config", () => {
-    const credKeys = [
-      "apiKey",
-      "api_key",
-      "token",
-      "secret",
-      "password",
-      "bearer",
-    ];
-    for (const key of credKeys) {
-      const payload = JSON.stringify({
-        routing: {
-          mappings: [
-            {
-              logical: "openai/gpt-4o",
-              backend: "opencode",
-              provider: "openai",
-              [key]: "sk-secret12345678",
-            },
-          ],
-        },
-      });
-      expect(() => parseGlobalConfig(payload)).toThrow(CliUsageError);
-      expect(messageOf(() => parseGlobalConfig(payload))).toContain(
-        "credentials are not permitted in routing config",
+describe("routing is gone from the person file too (S2)", () => {
+  test("any routing value, valid before or not, gets the clean-break message", () => {
+    for (const routing of [
+      { default: { backend: "claude-code", provider: "anthropic" } },
+      "invalid",
+      { unknown_key_with_secret: "sk-ant-api03-abcdef123456789012345678" },
+    ]) {
+      const msg = messageOf(() =>
+        parseGlobalConfig(JSON.stringify({ routing })),
       );
+      expect(msg).toBe(
+        '~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
+      );
+      expect(msg).not.toContain("sk-ant");
     }
-  });
-
-  test("redacts secrets in error messages from preflight config parsing", () => {
-    const secret = "sk-ant-api03-abcdef123456789012345678";
-    const raw = JSON.stringify({
-      routing: {
-        unknown_key_with_secret: secret,
-      },
-    });
-    expect(() => parseGlobalConfig(raw)).toThrow(CliUsageError);
-    const msg = messageOf(() => parseGlobalConfig(raw));
-    expect(msg).not.toContain(secret);
   });
 });
 
@@ -1902,21 +1811,15 @@ describe("mergeConfig", () => {
 
   test("a person key is pure specificity — the team wins", () => {
     const both = mergeConfig(
-      { agents_dir: "/global/agents", summary: { model: "haiku" } },
-      { agents_dir: "/repo/agents", summary: { model: "opus" } },
+      { agents_dir: "/global/agents" },
+      { agents_dir: "/repo/agents" },
     );
     expect(both.effective.agents_dir).toBe("/repo/agents");
     expect(both.sources.agents_dir).toBe("repo");
-    expect(both.effective.summary?.model).toBe("opus");
-    expect(both.sources.summary.model).toBe("repo");
 
-    const quiet = mergeConfig(
-      { agents_dir: "/global/agents", summary: { model: "haiku" } },
-      {},
-    );
+    const quiet = mergeConfig({ agents_dir: "/global/agents" }, {});
     expect(quiet.effective.agents_dir).toBe("/global/agents");
     expect(quiet.sources.agents_dir).toBe("global");
-    expect(quiet.sources.summary.model).toBe("global");
   });
 
   // The parser rejects a `repo` key in the global file, but the fold does not
@@ -1936,23 +1839,20 @@ describe("mergeConfig", () => {
 
   test("arrays and the summary block are replaced, never deep-merged", () => {
     const merged = mergeConfig(
-      { summary: { enabled: true, model: "haiku" } },
+      { summary: { enabled: true } },
       {
         parity_trigger_paths: ["**/Auth*"],
         suspicion_priors: [{ path: "a.ts", weight: "high", reason: "hot" }],
-        summary: { model: "opus" },
+        summary: {},
       },
     );
     expect(merged.effective.parity_trigger_paths).toEqual(["**/Auth*"]);
     expect(merged.sources.parity_trigger_paths).toBe("repo");
     expect(merged.effective.suspicion_priors).toHaveLength(1);
     // The block is descended into per field, so the global's `enabled`
-    // survives a repo block that only names `model`.
-    expect(merged.effective.summary).toEqual({ enabled: true, model: "opus" });
-    expect(merged.sources.summary).toEqual({
-      enabled: "global",
-      model: "repo",
-    });
+    // survives a repo block that names nothing.
+    expect(merged.effective.summary).toEqual({ enabled: true });
+    expect(merged.sources.summary).toEqual({ enabled: "global" });
   });
 
   // O-14, and it takes two cases because only the second can detect the
@@ -1966,8 +1866,10 @@ describe("mergeConfig", () => {
       default_base: "default",
       parity_trigger_paths: "default",
       suspicion_priors: "default",
-      summary: { enabled: "default", model: "default" },
+      summary: { enabled: "default" },
       routing: "default",
+      models: "default",
+      credentials: "default",
       max_verification_steps: "default",
       max_concurrent_steps: "default",
       max_changed_lines: "default",
@@ -2025,7 +1927,6 @@ describe("mergeConfig", () => {
       summary: { enabled: false },
     });
     expect(sources.summary.enabled).toBe("repo");
-    expect(sources.summary.model).toBe("default");
     expect(resolveSummary({}, effective)).toEqual({ enabled: false });
     expect(resolveMaxVerificationSteps(effective)).toBe(
       DEFAULT_MAX_VERIFICATION_STEPS,
@@ -2045,7 +1946,7 @@ describe("initConfigTemplate", () => {
     expect(config).toEqual({
       agents_dir: "/Users/x/Desktop/deep-review/agents/clean",
       default_base: "dev",
-      summary: { enabled: true, model: DEFAULT_SUMMARY_MODEL },
+      summary: { enabled: true },
       parity_trigger_paths: [],
       suspicion_priors: [],
     });
@@ -2073,7 +1974,7 @@ describe("initConfigTemplate", () => {
   });
 
   // C5 O-9 / judgment ledger JD-17. The obligation names `agents_dir`, but the
-  // template also seeds `default_base`, `summary.model` and a hardcoded
+  // template also seeds `default_base` and a hardcoded
   // `summary.enabled: true` — and that last one is the value `capped` forbids
   // the team file from raising over a global `false`. The full set is handled,
   // not the key the obligation happens to name.
@@ -2083,7 +1984,7 @@ describe("initConfigTemplate", () => {
       defaultBase: "dev",
       global: {
         agents_dir: "/home/me/agents/clean",
-        summary: { enabled: false, model: "haiku" },
+        summary: { enabled: false },
       },
     });
     expect(parseLocalConfig(raw)).toEqual({
@@ -2102,22 +2003,21 @@ describe("initConfigTemplate", () => {
   });
 
   test("omits only the fields the global actually named", () => {
-    // A global that sets the model and nothing else leaves the cap seat to the
+    // A global that sets only the summary model leaves the cap seat to the
     // repo file, so `summary.enabled` still has to be seeded.
     const config = parseLocalConfig(
       initConfigTemplate({
         agentsDir: "/seed/agents",
         defaultBase: "dev",
-        global: { summary: { model: "haiku" } },
+        global: { models: { summary: ["claude:haiku-latest"] } },
       }),
     );
     expect(config.summary).toEqual({ enabled: true });
     expect(config.agents_dir).toBe("/seed/agents");
   });
 
-  // The regression boundary: with no global file the bytes are byte-for-byte
-  // the pre-C5 template. C5 introduces nothing for the operator who never
-  // writes a global config (D6).
+  // The regression boundary: with no global file the bytes are the pre-C5
+  // template minus `summary.model`, which init no longer writes (L6 item 1).
   test("with no global layer the template is unchanged", () => {
     const seeds = { agentsDir: "/seed/agents", defaultBase: "dev" };
     expect(initConfigTemplate(seeds)).toBe(
@@ -2125,7 +2025,7 @@ describe("initConfigTemplate", () => {
         {
           agents_dir: "/seed/agents",
           default_base: "dev",
-          summary: { enabled: true, model: DEFAULT_SUMMARY_MODEL },
+          summary: { enabled: true },
           parity_trigger_paths: [],
           suspicion_priors: [],
         },
@@ -2183,10 +2083,10 @@ describe("initTemplateOmissions", () => {
         defaultBase: "dev",
         global: {
           agents_dir: "/home/me/agents",
-          summary: { enabled: false, model: "haiku" },
+          summary: { enabled: false },
         },
       }).keys,
-    ).toEqual(["agents_dir", "summary.enabled", "summary.model"]);
+    ).toEqual(["agents_dir", "summary.enabled"]);
   });
 
   test("no global file omits nothing", () => {
@@ -2195,7 +2095,6 @@ describe("initTemplateOmissions", () => {
     ).toEqual({
       agentsDir: false,
       summaryEnabled: false,
-      summaryModel: false,
       keys: [],
     });
   });
@@ -2586,10 +2485,12 @@ describe("parse errors carry their record class (T2d-1)", () => {
   });
 
   test("a per-person key in the repo config is repo-config, same message", () => {
-    const error = thrownBy(() => parseLocalConfig('{"routing": {}}'));
+    const error = thrownBy(() =>
+      parseLocalConfig('{"models": {"default": ["claude:sonnet-latest"]}}'),
+    );
     expect(error.cls).toEqual({ kind: "config-parse", source: "repo-config" });
     expect(error.message).toBe(
-      ".crysk/config.json: routing is a per-person key — put it in your person config (~/.crysk/config.json, or ~/.prhero/config.json on an install set up before the rename; do not create ~/.crysk while ~/.prhero is in use)",
+      ".crysk/config.json: models is a per-person key — put it in your person config (~/.crysk/config.json, or ~/.prhero/config.json on an install set up before the rename; do not create ~/.crysk while ~/.prhero is in use)",
     );
   });
 
@@ -2602,25 +2503,14 @@ describe("parse errors carry their record class (T2d-1)", () => {
     );
   });
 
-  test("routing that the person layer rejects stays unclassified, same message", () => {
-    // WHY: the routing class renders PRH-ROUTING-INVALID, whose text names CRYSK_ROUTING
-    // and `gh variable set`. Neither is the fix for a personal file, so the person
-    // layer's routing error carries no class, like the rest of that file's errors.
+  test("routing in the person layer stays unclassified, like the rest of that file", () => {
+    // WHY: the routing class renders PRH-ROUTING-INVALID, whose text names the CI
+    // variable. That is not the fix for a personal file.
     const error = thrownBy(() => parseGlobalConfig('{"routing": "invalid"}'));
     expect(error).toBeInstanceOf(CliUsageError);
     expect(error.cls).toBeUndefined();
     expect(error.message).toBe(
-      "~/.crysk/config.json routing must be an object",
-    );
-  });
-
-  test("parseRoutingConfig names routing for any file it is given", () => {
-    const error = thrownBy(() =>
-      parseRoutingConfig("invalid", "~/.crysk/config.json"),
-    );
-    expect(error.cls).toEqual({ kind: "config-parse", source: "routing" });
-    expect(error.message).toBe(
-      "~/.crysk/config.json routing must be an object",
+      '~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
     );
   });
 

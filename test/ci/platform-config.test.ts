@@ -36,12 +36,12 @@ const SETUP_SCRIPT = path.resolve(
   "setup.ts",
 );
 
-const PLATFORM_ROUTING = {
-  default: { backend: "opencode", provider: "deepseek" },
-};
+const PLATFORM_MODELS = { default: ["opencode:deepseek/deepseek-chat"] };
 const INPUT_ROUTING = JSON.stringify({
   default: { backend: "opencode", provider: "openai" },
 });
+const ROUTING_GONE =
+  '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`';
 
 interface Fixture {
   root: string;
@@ -171,11 +171,11 @@ describe("deliverPlatformRepoLayer", () => {
   test("a per-person key in the repo layer is refused by the engine's repo parser", async () => {
     await expect(
       deliverPlatformRepoLayer({
-        repo: { routing: PLATFORM_ROUTING },
+        repo: { models: PLATFORM_MODELS },
         root: fixture.workspace,
         dir: fixture.platformDir,
       }),
-    ).rejects.toThrow(/config\.repo.*routing/s);
+    ).rejects.toThrow(/config\.repo.*models is a per-person key/s);
   });
 });
 
@@ -241,33 +241,34 @@ describe("materializeCiOpenCodeData with a platform person layer", () => {
     });
   });
 
-  test("platform routing wins over the routing input", async () => {
+  test("platform models win over the routing input", async () => {
     await run({
       routing: INPUT_ROUTING,
-      platformPerson: { routing: PLATFORM_ROUTING, scout: true },
+      platformPerson: { models: PLATFORM_MODELS, scout: true },
     });
     const layer = parseGlobalConfig(await readFile(personPath(), "utf8"));
-    expect(layer.routing?.default?.provider).toBe("deepseek");
+    expect(layer.models).toEqual(PLATFORM_MODELS);
     expect(layer.scout).toBe(true);
   });
 
-  test("without platform routing the routing input is kept, beside the platform keys", async () => {
-    await run({
-      routing: INPUT_ROUTING,
-      platformPerson: { post_min_severity: "blocking" },
-    });
-    const layer = parseGlobalConfig(await readFile(personPath(), "utf8"));
-    expect(layer.routing?.default?.provider).toBe("openai");
-    expect(layer.post_min_severity).toBe("blocking");
+  test("without platform models a routing input fails the step and writes nothing", async () => {
+    await expect(
+      run({
+        routing: INPUT_ROUTING,
+        platformPerson: { post_min_severity: "blocking" },
+      }),
+    ).rejects.toThrow(`CI routing input: ${ROUTING_GONE}`);
+    expect(existsSync(personPath())).toBe(false);
   });
 
-  test("an empty person object changes nothing: the routing input alone is written as it always was", async () => {
-    await run({ routing: INPUT_ROUTING, platformPerson: {} });
-    const written = await readFile(personPath(), "utf8");
-    expect(JSON.parse(written)).toEqual({
-      routing: JSON.parse(INPUT_ROUTING),
-    });
-    await rm(path.dirname(personPath()), { recursive: true });
+  test("platform routing is refused with the new form before anything is written", async () => {
+    await expect(
+      run({ platformPerson: { routing: { default: {} } } }),
+    ).rejects.toThrow(`platform config.person: ${ROUTING_GONE}`);
+    expect(existsSync(personPath())).toBe(false);
+  });
+
+  test("an empty person object writes nothing", async () => {
     await run({ platformPerson: {} });
     expect(existsSync(personPath())).toBe(false);
   });
@@ -276,7 +277,7 @@ describe("materializeCiOpenCodeData with a platform person layer", () => {
   // not be read as this run's person layer when this run has nothing to write.
   test("platform mode drops a personal file an earlier run left when nothing is to be written", async () => {
     await run({
-      platformPerson: { max_changed_lines: 4000, routing: PLATFORM_ROUTING },
+      platformPerson: { max_changed_lines: 4000, models: PLATFORM_MODELS },
     });
     expect(existsSync(personPath())).toBe(true);
     await run({ platformPerson: {} });
@@ -295,8 +296,9 @@ describe("materializeCiOpenCodeData with a platform person layer", () => {
   });
 
   test("standalone leaves the personal file exactly as it was", async () => {
-    await run({ routing: INPUT_ROUTING });
-    const before = await readFile(personPath(), "utf8");
+    await mkdir(path.dirname(personPath()), { recursive: true });
+    const before = `${JSON.stringify({ models: PLATFORM_MODELS })}\n`;
+    await writeFile(personPath(), before);
     await run({});
     expect(await readFile(personPath(), "utf8")).toBe(before);
   });

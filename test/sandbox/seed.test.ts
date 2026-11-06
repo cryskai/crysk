@@ -1,11 +1,12 @@
 // What init writes and sets, checked against the product's own parsers and
 // renderers. A value that only looks right to this file is not enough: the
-// routing string must parse through parseRoutingConfig and resolve to an
-// OpenCode route, and the repo config must load through parseLocalConfig,
+// routing string used to parse through the routing parser (gone, S2: see the
+// OPEN note on the materializer test below), and the repo config must load through parseLocalConfig,
 // because a rejected config burns a live run as PRH-CONFIG-INVALID.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { planCiReviewManualRequired } from "#ci/gates";
@@ -39,11 +40,9 @@ import {
 import { decidePublication, runPublish } from "../../src/ci/publish";
 import { materializeCiOpenCodeData } from "../../src/ci/setup";
 import { prheroLayout } from "../../src/home-preflight";
-import { resolveModelRoute } from "../../src/model/routing";
 import {
   gotchasUnusableReason,
   parseLocalConfig,
-  parseRoutingConfig,
 } from "../../src/review/preflight";
 import { resolveOpenCodeAuthPath } from "../../src/security/credential-broker";
 
@@ -123,32 +122,6 @@ describe("gotchas", () => {
 });
 
 describe("routing value", () => {
-  test("parses through the real parser and resolves every role to the snapshot it names", () => {
-    for (const snapshot of ["big-pickle", "deepseek-v4.1-flash-free"]) {
-      const routing = parseRoutingConfig(
-        JSON.parse(routingValueFor(snapshot)),
-        "~/.crysk/config.json",
-      );
-      for (const logical of [
-        "sonnet",
-        "opus",
-        "haiku",
-        `opencode/${snapshot}`,
-      ]) {
-        const route = resolveModelRoute(logical, routing);
-        expect({
-          backend: route.backend,
-          provider: route.provider,
-          model: route.modelSnapshot,
-        }).toEqual({
-          backend: "opencode",
-          provider: "opencode",
-          model: snapshot,
-        });
-      }
-    }
-  });
-
   test("refuses a snapshot outside letters, digits, . and -, since it is written into the routing JSON", () => {
     for (const bad of ["", "a b", "a/b", "x;y", 'a"b']) {
       expect(() => routingValueFor(bad)).toThrow(/not valid/);
@@ -165,25 +138,23 @@ describe("routing value", () => {
     }
   });
 
-  test("is accepted by the real CI materializer with the {} auth secret", async () => {
+  // OPEN (odd/tasks/role-model-routing.md): the routing input is gone (S2),
+  // and scripts/sandbox still sets it for the OpenCode route. Until the sandbox
+  // sets models instead, the real CI materializer refuses its value, and this
+  // test says so rather than pretend the route still works.
+  test("is refused by the real CI materializer until the sandbox sets models", async () => {
     home = await mkdtemp(path.join(tmpdir(), "pr-hero-sandbox-seed-"));
     const env = { HOME: home };
-    await materializeCiOpenCodeData({
-      routing: routingValueFor("big-pickle"),
-      opencodeAuth: OPENCODE_AUTH_VALUE,
-      home,
-      env,
-    });
-    const layer = JSON.parse(
-      await readFile(prheroLayout(home).reviewConfigPath, "utf8"),
-    ) as {
-      routing: { default: { backend: string; modelSnapshot: string } };
-    };
-    expect(layer.routing.default.backend).toBe("opencode");
-    expect(layer.routing.default.modelSnapshot).toBe("big-pickle");
-    expect(await readFile(resolveOpenCodeAuthPath(env, home), "utf8")).toBe(
-      "{}",
-    );
+    await expect(
+      materializeCiOpenCodeData({
+        routing: routingValueFor("big-pickle"),
+        opencodeAuth: OPENCODE_AUTH_VALUE,
+        home,
+        env,
+      }),
+    ).rejects.toThrow("`routing` is gone");
+    expect(existsSync(prheroLayout(home).reviewConfigPath)).toBe(false);
+    expect(existsSync(resolveOpenCodeAuthPath(env, home))).toBe(false);
   });
 });
 

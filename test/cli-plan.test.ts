@@ -685,8 +685,10 @@ const provenance = (
     default_base: "repo",
     parity_trigger_paths: "repo",
     suspicion_priors: "repo",
-    summary: { enabled: "repo", model: "default" },
+    summary: { enabled: "repo" },
     routing: "default",
+    models: "default",
+    credentials: "default",
     max_verification_steps: "default",
     max_concurrent_steps: "default",
     max_changed_lines: "default",
@@ -716,7 +718,8 @@ describe("plan card config provenance (C5 O-7)", () => {
             { agentsDirSource: "global", globalPresent: true },
             {
               agents_dir: "global",
-              summary: { enabled: "capped", model: "global" },
+              summary: { enabled: "capped" },
+              models: "global",
               max_verification_steps: "capped",
             },
           ),
@@ -731,7 +734,7 @@ describe("plan card config provenance (C5 O-7)", () => {
     // not merely that a global file existed.
     expect(text).toContain("summary.enabled ← capped");
     expect(text).toContain("max_verification_steps ← capped");
-    expect(text).toContain("summary.model ← global");
+    expect(text).toContain("models ← global");
     // Where to go look, on the card itself.
     expect(text).toContain(GLOBAL_CONFIG_PATH);
   });
@@ -766,7 +769,7 @@ describe("plan card config provenance (C5 O-7)", () => {
               default_base: "default",
               parity_trigger_paths: "default",
               suspicion_priors: "default",
-              summary: { enabled: "default", model: "default" },
+              summary: { enabled: "default" },
               max_verification_steps: "default",
             },
           ),
@@ -791,7 +794,8 @@ describe("plan card config provenance (C5 O-7)", () => {
     const sources: Partial<ConfigSources> = {
       agents_dir: "global",
       default_base: "global",
-      summary: { enabled: "capped", model: "global" },
+      summary: { enabled: "capped" },
+      models: "global",
     };
     const flagged = flat(
       renderPlan(
@@ -812,7 +816,7 @@ describe("plan card config provenance (C5 O-7)", () => {
     expect(flagged).not.toContain("agents_dir ←");
     expect(flagged).not.toContain("default_base ←");
     expect(flagged).not.toContain("summary.enabled ←");
-    expect(flagged).not.toContain("summary.model ←");
+    expect(flagged).not.toContain("models ←");
 
     // Same sources, no flags: now every one of them is named. agents_dir's
     // resolution changes with the flag too — that IS the mechanism, not a
@@ -828,7 +832,7 @@ describe("plan card config provenance (C5 O-7)", () => {
     expect(unflagged).toContain("agents_dir ← global");
     expect(unflagged).toContain("default_base ← global");
     expect(unflagged).toContain("summary.enabled ← capped");
-    expect(unflagged).toContain("summary.model ← global");
+    expect(unflagged).toContain("models ← global");
   });
 
   test("the PR card tags the same way", () => {
@@ -886,7 +890,8 @@ describe("plan card config provenance (C5 O-7)", () => {
         { agentsDirSource: "global", globalPresent: true },
         {
           agents_dir: "global",
-          summary: { enabled: "capped", model: "global" },
+          summary: { enabled: "capped" },
+          models: "global",
           max_verification_steps: "capped",
         },
       ),
@@ -973,7 +978,7 @@ describe("plan card config provenance (C5 O-7)", () => {
           options: options({ summary: true, model: "opus" }),
           configProvenance: provenance(
             { globalPresent: true },
-            { summary: { enabled: "capped", model: "global" } },
+            { summary: { enabled: "capped" }, models: "global" },
           ),
         }),
         false,
@@ -984,7 +989,7 @@ describe("plan card config provenance (C5 O-7)", () => {
     // The suppression itself is unchanged: still no layer named for a key a
     // flag decided (JD-10).
     expect(text).not.toContain("summary.enabled ←");
-    expect(text).not.toContain("summary.model ←");
+    expect(text).not.toContain("models ←");
   });
 
   // With no flag in play the old sentence is exact, and stays: every source is

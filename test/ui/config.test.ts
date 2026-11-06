@@ -61,7 +61,7 @@ describe("pr-hero config names the layer behind every value", () => {
       },
       {
         default_base: "dev",
-        summary: { enabled: true, model: "haiku" },
+        summary: { enabled: true },
         max_verification_steps: 12,
       },
     );
@@ -189,7 +189,7 @@ describe("pr-hero config names both files, present or not", () => {
 describe("pr-hero config styling", () => {
   test("zero \\x1b bytes with styles off", () => {
     const lines = render(
-      { agents_dir: "/a", summary: { enabled: false, model: "haiku" } },
+      { agents_dir: "/a", summary: { enabled: false } },
       { summary: { enabled: true }, max_verification_steps: 2 },
     );
     expect(lines.join("\n")).not.toContain("\x1b");
@@ -260,7 +260,7 @@ const WRAP_GLOBAL = {
 const WRAP_REPO = {
   default_base: "dev",
   max_verification_steps: 12,
-  summary: { enabled: true, model: "haiku" },
+  summary: { enabled: true },
 };
 // Value column starts at 25 (indent 2 + the 23 `max_verification_steps` needs),
 // so 64 leaves enough columns after `ci_admission_observe_only` widened the
@@ -337,15 +337,15 @@ describe("configRows", () => {
     const keys = rows.map((r) => r.key);
     for (const key of Object.keys(CONFIG_DIRECTION)) {
       if (key === "summary") {
-        // The one nested key, expanded per field because its two fields have
-        // different directions and one row cannot name two layers.
+        // The one nested key, expanded per field. `summary.model` is gone:
+        // the summary model is the `summary` role under `models`.
         expect(keys).toContain("summary.enabled");
-        expect(keys).toContain("summary.model");
+        expect(keys).not.toContain("summary.model");
         continue;
       }
       expect(keys).toContain(key);
     }
-    expect(keys).toHaveLength(Object.keys(CONFIG_DIRECTION).length + 1);
+    expect(keys).toHaveLength(Object.keys(CONFIG_DIRECTION).length);
   });
 
   test("routing cell formats unset, default route, and mappings counts correctly", () => {

@@ -158,6 +158,10 @@ export interface EffectiveConfig {
   // Returned from the same stat the read used, so the artifact cannot
   // disagree with what was actually loaded.
   globalPresent: boolean;
+  // What the two files said that still works but is on its way out (today,
+  // `summary.model: "haiku"`), one line each, file named. Every shell that
+  // loads config for a run prints them; the parsers never print.
+  warnings: string[];
 }
 
 // C5 §3.4 — the two-layer read, and the ONLY place either config file is
@@ -201,15 +205,19 @@ export interface EffectiveConfig {
 export async function loadGlobalConfigLayer(home: string): Promise<{
   filePath: string;
   layer: ConfigLayer | undefined;
+  warnings: string[];
 }> {
   const filePath = prheroLayout(home).reviewConfigPath;
-  if (!existsSync(filePath)) return { filePath, layer: undefined };
+  const warnings: string[] = [];
+  if (!existsSync(filePath)) return { filePath, layer: undefined, warnings };
   return {
     filePath,
     layer: parseGlobalConfig(
       await Bun.file(filePath).text(),
       `~/${path.basename(path.dirname(filePath))}/config.json`,
+      warnings,
     ),
+    warnings,
   };
 }
 
@@ -226,8 +234,11 @@ export async function loadEffectiveConfig(input: {
   if (input.configFlag && !existsSync(repoConfigPath)) {
     throw new CliError(`config file not found: ${repoConfigPath}`);
   }
-  const { filePath: globalConfigPath, layer: global } =
-    await loadGlobalConfigLayer(input.home);
+  const {
+    filePath: globalConfigPath,
+    layer: global,
+    warnings,
+  } = await loadGlobalConfigLayer(input.home);
   // `global !== undefined` and not a second stat: the helper returns a layer
   // exactly when the file was there and read, so the artifact's
   // `global_present` cannot disagree with what was actually loaded — which is
@@ -240,6 +251,7 @@ export async function loadEffectiveConfig(input: {
           input.configFlag
             ? undefined
             : `${path.basename(path.dirname(repoConfigPath))}/config.json`,
+          warnings,
         )
       : {};
   return {
@@ -247,6 +259,7 @@ export async function loadEffectiveConfig(input: {
     repoConfigPath,
     globalConfigPath,
     globalPresent,
+    warnings,
   };
 }
 

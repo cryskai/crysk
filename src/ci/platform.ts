@@ -402,10 +402,12 @@ export async function runPlatformConnect(
       // the input: action.yml reads an empty output as "use the input's" and
       // any value as the platform's answer, so a platform routing that does not
       // name OpenCode overrides an input that does.
-      const routing = result.config?.person.routing;
-      if (routing !== undefined) {
+      // Read off `models` now (S1): an `opencode:` model needs the CLI. A
+      // platform `routing` is refused by the setup step's person parser.
+      const models = result.config?.person.models;
+      if (models !== undefined) {
         deps.appendOutput(
-          `routing-opencode=${JSON.stringify(routing).toLowerCase().includes("opencode")}\n`,
+          `routing-opencode=${JSON.stringify(models).includes('"opencode:')}\n`,
         );
       }
     }
