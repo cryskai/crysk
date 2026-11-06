@@ -12,7 +12,12 @@ import {
 
 describe("model catalog", () => {
   test("anthropic aliases match the engine's logical alias set", () => {
-    expect([...allModelAliases()].sort()).toEqual(["haiku", "opus", "sonnet"]);
+    expect([...allModelAliases()].sort()).toEqual([
+      "fable",
+      "haiku",
+      "opus",
+      "sonnet",
+    ]);
   });
 
   test("lookupAlias resolves canonical identities from config/models/*.json", () => {
@@ -28,7 +33,7 @@ describe("model catalog", () => {
   test("provider catalog is loaded from JSON and frozen at import", () => {
     const anthropic = providerCatalog("anthropic");
     expect(anthropic.provider).toBe("anthropic");
-    expect(anthropic.aliases).toEqual(["sonnet", "opus", "haiku"]);
+    expect(anthropic.aliases).toEqual(["sonnet", "opus", "haiku", "fable"]);
     expect(Object.isFrozen(MODEL_CATALOG)).toBe(true);
   });
 });

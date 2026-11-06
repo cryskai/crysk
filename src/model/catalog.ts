@@ -139,14 +139,19 @@ for (const catalog of Object.values(PROVIDER_CATALOGS)) {
   }
 }
 
-export type ModelAlias = "sonnet" | "opus" | "haiku";
+export type ModelAlias = "sonnet" | "opus" | "haiku" | "fable";
 
 // Unchanged by #175, and the reason it is unchanged is the whole point of the
 // slice: the alias LIST is ours, so a config that drops one still has to fail
 // loud at import. `ModelAlias` is a compile-time union and the JSON is a
 // runtime file; without this loop a deleted alias would typecheck and then
 // throw `unknown alias` deep inside a run.
-const REQUIRED_ALIASES: readonly ModelAlias[] = ["sonnet", "opus", "haiku"];
+const REQUIRED_ALIASES: readonly ModelAlias[] = [
+  "sonnet",
+  "opus",
+  "haiku",
+  "fable",
+];
 for (const alias of REQUIRED_ALIASES) {
   if (!aliasIndex.has(alias)) {
     throw new Error(`model catalog: missing required alias "${alias}"`);
