@@ -11,6 +11,7 @@ import {
   productionFallbackRegistry,
   soleOpenCodeCredential,
 } from "../src/production-runtime";
+import { enforceProviderCapabilityGate } from "../src/review/route-preflight";
 import { resolveRunClaudeCredential } from "../src/security/claude-credential";
 import { OpenCodeAuthBroker } from "../src/security/credential-broker";
 import {
@@ -380,6 +381,30 @@ describe("CLI production wiring (verify C1/C3)", () => {
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
+    });
+
+    // The legacy no-plan path's capability gate checks Claude auth from an env: the run
+    // env (its binary lookup too), never the process env, so a CRYSK_* credential the
+    // run chose is the one it sees under the CLI's name.
+    test("the legacy capability gate reads the run env, not the process env", async () => {
+      const childEnv = {
+        PATH: "/nonexistent-u2",
+        ANTHROPIC_API_KEY: "sk-test",
+      };
+      await expect(
+        enforceProviderCapabilityGate({
+          routePlan: undefined,
+          workspaceRoot: "/nowhere",
+          runnerAuthority: {
+            runnerOptions: {
+              binaryPath: "/nonexistent-u2/claude",
+              workspaceRoot: "/nowhere",
+              executableAllowlist: [],
+              childEnv,
+            },
+          },
+        }),
+      ).rejects.toThrow(/provider capability gate failed/);
     });
 
     test("the chosen credential and its run env become the admission's authority options", async () => {

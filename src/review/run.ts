@@ -511,10 +511,12 @@ export async function resolvePipelineRoute(params: {
   scoutEnabled?: boolean;
   consolidateEnabled?: boolean;
   materialityEnabled?: boolean;
-  // S5: the run's Claude credential, chosen once at run start. Callers leave it out
-  // on a dry run, which authenticates nothing (like the capability gate it skips),
-  // so a dry run is never refused for a credential and admits on the process env.
-  claudeRun?: RunClaudeCredential;
+  // S5: the run's Claude credential, chosen once at run start. Required (undefined
+  // spelled out) so tsc keeps every caller handing it over: dropping it would compile
+  // and silently admit on the process env. A dry run passes undefined: it
+  // authenticates nothing (like the capability gate it skips), so it is never
+  // refused for a credential and admits on the process env.
+  claudeRun: RunClaudeCredential | undefined;
 }): Promise<ProductionRoutePlanResult | undefined> {
   return resolveProductionRoutePlanAtConfirm({
     modelsConfigured: params.modelsConfigured,

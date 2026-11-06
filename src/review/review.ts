@@ -258,7 +258,7 @@ export async function review(options: CliOptions): Promise<number> {
     models: config.models,
     summary,
     materialityEnabled: resolveMaterialityGate(config),
-    ...(options.dryRun ? {} : { claudeRun }),
+    claudeRun: options.dryRun ? undefined : claudeRun,
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;

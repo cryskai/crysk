@@ -308,7 +308,13 @@ export async function enforceProviderCapabilityGate(input: {
         `execution authority unavailable: ${input.runnerAuthority.error}`,
       );
     }
-    const capabilityReport = await produceClaudeCapabilityReport({});
+    // S5: the run env (one Claude credential, under the CLI's name), the same object
+    // the legacy runner hands its child, so the auth check sees the credential the
+    // run chose (a CRYSK_* secret included) and never one it stripped.
+    const runEnv = input.runnerAuthority?.runnerOptions?.childEnv;
+    const capabilityReport = await produceClaudeCapabilityReport(
+      runEnv === undefined ? {} : { env: { ...runEnv } },
+    );
     const capabilityGate = capabilityGateDecision(capabilityReport);
     if (!capabilityGate.ok) {
       throw new CliError(

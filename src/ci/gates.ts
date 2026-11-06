@@ -330,9 +330,8 @@ export type CiBillingMode = "subscription" | "metered";
 // ANTHROPIC_AUTH_TOKEN joined the signal in the same move. It was never
 // excluded by a decision — the doctrine below never mentions it — and
 // `ENV_PASSTHROUGH` (harness.ts) projects it into the child immediately beside
-// ANTHROPIC_API_KEY as the same per-token credential class, so the rule stated
-// two paragraphs down ("the mere PRESENCE of a key keeps the ceiling") already
-// covered it. Nil-delta for the shipped action: action.yml binds only
+// ANTHROPIC_API_KEY as the same per-token credential class, so the presence rule
+// that stood below (retired by S5) already covered it. Nil-delta for the shipped action: action.yml binds only
 // ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN, so no generated workflow can
 // newly acquire a ceiling from it.
 //
