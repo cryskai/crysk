@@ -965,6 +965,7 @@ export async function prepareProductionAdmissionContext(input: {
     import("./transports/opencode-client").OpenCodeSdkLike
   >;
   readonly env?: RunnerAuthorityOptions["env"];
+  readonly claudeCredential?: RunnerAuthorityOptions["claudeCredential"];
   readonly credentialBrokers?: RunnerAuthorityOptions["credentialBrokers"];
   // #182: see ProductionRuntimeOptions.freeModelProbe. When present, the
   // server credential below is upgraded to `provider_free` when EVERY
@@ -1002,6 +1003,9 @@ export async function prepareProductionAdmissionContext(input: {
     input.authorityDeps,
     {
       ...(input.env === undefined ? {} : { env: input.env }),
+      ...(input.claudeCredential === undefined
+        ? {}
+        : { claudeCredential: input.claudeCredential }),
       ...(input.credentialBrokers === undefined
         ? {}
         : { credentialBrokers: input.credentialBrokers }),
@@ -1242,6 +1246,10 @@ export class MultiProviderRunner implements StepRunner {
   private readonly attemptAdmissionGate?: AttemptAdmissionGate;
   private readonly graceMarginMs?: number;
   private readonly leaseTracker?: ActiveTransportLeaseTracker;
+  // S5: the run env (one Claude credential, chosen at run start), handed to every
+  // step's harness as its `childEnv`. Absent keeps the harness's own default, the
+  // process environment.
+  private readonly childEnv?: Readonly<Record<string, string | undefined>>;
   // 2026-09-02: ONE ledger for the whole run, and note the shape — it is
   // injectable but NOT optional-off, unlike `attemptAdmissionGate` beside it.
   // That difference is the point: the concurrency gate is an opt-in policy, a
@@ -1269,6 +1277,7 @@ export class MultiProviderRunner implements StepRunner {
     readonly attemptAdmissionGate?: AttemptAdmissionGate;
     readonly graceMarginMs?: number;
     readonly leaseTracker?: ActiveTransportLeaseTracker;
+    readonly childEnv?: Readonly<Record<string, string | undefined>>;
     // Injected only by tests that need to observe the CAS calls; production
     // takes the default, which is the whole point of defaulting rather than
     // requiring a caller to remember.
@@ -1283,6 +1292,7 @@ export class MultiProviderRunner implements StepRunner {
     this.attemptAdmissionGate = options.attemptAdmissionGate;
     this.graceMarginMs = options.graceMarginMs;
     this.leaseTracker = options.leaseTracker;
+    this.childEnv = options.childEnv;
     this.spendLedger = options.spendLedger ?? new InMemorySpendLedger();
   }
 
@@ -1508,6 +1518,10 @@ export class MultiProviderRunner implements StepRunner {
         ],
         binaryPath: binding.executable.absolutePath,
         credentialBroker: binding.credential.broker,
+        // S5: the same env the binding's credential kind was decided from
+        // (`options.env`, resolveBindingAuthority), so the child runs on the one
+        // credential the run chose and on nothing the process happens to hold.
+        ...(this.childEnv === undefined ? {} : { childEnv: this.childEnv }),
         transport: lease.transport,
         spawnFn: this.spawnFn,
         signal: this.signal,
@@ -1771,6 +1785,7 @@ export async function createProductionRuntime(
     attemptAdmissionGate: options.attemptAdmissionGate,
     graceMarginMs: options.graceMarginMs,
     leaseTracker,
+    ...(options.env === undefined ? {} : { childEnv: options.env }),
   });
 
   return {

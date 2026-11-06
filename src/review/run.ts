@@ -91,6 +91,7 @@ import {
   type ProductionRuntime,
 } from "../production-runtime";
 import type { RunnerAuthorityResolution } from "../runner-authority";
+import type { RunClaudeCredential } from "../security/claude-credential";
 
 // The codegraph server, and ONLY the codegraph server. Written per run and
 // handed to every step together with the runner's --strict-mcp-config: an
@@ -510,10 +511,15 @@ export async function resolvePipelineRoute(params: {
   scoutEnabled?: boolean;
   consolidateEnabled?: boolean;
   materialityEnabled?: boolean;
+  // S5: the run's Claude credential, chosen once at run start. Callers leave it out
+  // on a dry run, which authenticates nothing (like the capability gate it skips),
+  // so a dry run is never refused for a credential and admits on the process env.
+  claudeRun?: RunClaudeCredential;
 }): Promise<ProductionRoutePlanResult | undefined> {
   return resolveProductionRoutePlanAtConfirm({
     modelsConfigured: params.modelsConfigured,
     workspaceRoot: params.workspaceRoot,
+    ...(params.claudeRun === undefined ? {} : { claudeRun: params.claudeRun }),
     buildRoutePlan: () =>
       buildCliRoutePlan({
         spec: params.spec,

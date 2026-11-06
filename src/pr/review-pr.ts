@@ -121,6 +121,7 @@ import { acquirePidLock } from "../home";
 import { worktreeLockPath } from "../home-preflight";
 import { readLocalIgnoreRules } from "../ignore-read";
 import type { ProductionRuntime } from "../production-runtime";
+import { resolveRunClaudeCredential } from "../security/claude-credential";
 import { writeGateRecord } from "./gate-record";
 
 // The CLI's record for a pipeline whose every hunter failed (cli.json,
@@ -279,6 +280,13 @@ export async function reviewPr(
   const step1 = await resolvePrRunOptions(options, prArg);
   options = step1.options;
   const { operatorRoot, prNumber, home, isCi, loaded, config, summary } = step1;
+  // S5: the Claude credential this run uses, chosen once, here, from
+  // `credentials.claude` and what is set. The CI ceiling, the admission, every
+  // runner and binding, and the child read its env, which holds that one
+  // credential and no other.
+  const claudeRun = resolveRunClaudeCredential({
+    credentials: config.credentials,
+  });
   // S4 + T3 S7: the run's one posture. Every gate, skip, status, comment and
   // summary below takes these values; nothing re-resolves them. Both key on the
   // explicit --ci flag, never on `isCi` (which also folds in the CI/GITHUB_ACTIONS
@@ -301,6 +309,7 @@ export async function reviewPr(
       config,
       isCi,
       operatorRoot,
+      claudeRun,
     });
     await validateGotchas(step2.gotchasPath);
   } catch (error) {
@@ -699,6 +708,7 @@ export async function reviewPr(
       ciMode,
       statusContext,
       ciBudgetCeiling,
+      claudeRun,
       ciAdmissionLedger,
       skipDiscovery,
       hunterCount,

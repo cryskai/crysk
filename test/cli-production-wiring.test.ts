@@ -11,6 +11,7 @@ import {
   productionFallbackRegistry,
   soleOpenCodeCredential,
 } from "../src/production-runtime";
+import { resolveRunClaudeCredential } from "../src/security/claude-credential";
 import { OpenCodeAuthBroker } from "../src/security/credential-broker";
 import {
   admitRoutePlan,
@@ -298,6 +299,130 @@ describe("CLI production wiring (verify C1/C3)", () => {
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  // S5: the credential chosen at run start reaches admission, and a plan with a Claude
+  // route and no listed credential present is refused before anything is admitted.
+  describe("the run's Claude credential at admission (S5)", () => {
+    const refused = resolveRunClaudeCredential({
+      credentials: { claude: ["api_key"] },
+      env: { PATH: "/nowhere", CLAUDE_CODE_OAUTH_TOKEN: "oauth" },
+      loginPresent: false,
+    });
+
+    test("a plan with a Claude route and no listed credential is refused, naming the order", async () => {
+      let built = false;
+      const plan = createResolvedRoutePlan([
+        resolveStepRoute({
+          stepKey: "hunter-reliability",
+          role: "hunter",
+          cliModel: "sonnet",
+        }),
+      ]);
+      await expect(
+        resolveProductionRoutePlanAtConfirm({
+          modelsConfigured: true,
+          workspaceRoot: "/nowhere",
+          buildRoutePlan: async () => {
+            built = true;
+            return plan;
+          },
+          claudeRun: refused,
+        }),
+      ).rejects.toThrow(
+        /credentials\.claude is \[api_key\], and none of it is set.*subscription is set but not listed/,
+      );
+      expect(built).toBe(true);
+    });
+
+    test("the legacy no-plan path is always Claude, so it is refused too", async () => {
+      await expect(
+        resolveProductionRoutePlanAtConfirm({
+          modelsConfigured: false,
+          workspaceRoot: "/nowhere",
+          buildRoutePlan: async () => {
+            throw new Error("raw model id the CLI resolves itself");
+          },
+          claudeRun: refused,
+        }),
+      ).rejects.toThrow(/no Claude credential this run may use is set/);
+    });
+
+    test("a plan with no Claude route ignores Claude credentials", async () => {
+      const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-cli-route-"));
+      try {
+        const claude = await writeExecutable(
+          tmpDir,
+          "claude",
+          "#!/bin/sh\necho ok\n",
+        );
+        const opencode = await writeExecutable(tmpDir, "opencode", "opencode");
+        const plan = createResolvedRoutePlan([
+          resolveStepRoute({
+            stepKey: "hunter-reliability",
+            role: "hunter",
+            cliModel: "opencode:openai/gpt-4o",
+          }),
+        ]);
+        const routed = await resolveProductionRoutePlanAtConfirm({
+          modelsConfigured: true,
+          workspaceRoot: tmpDir,
+          buildRoutePlan: async () => plan,
+          loadSdk: mockLoadSdk,
+          authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+          claudeRun: resolveRunClaudeCredential({
+            credentials: { claude: ["api_key"] },
+            env: { PATH: tmpDir },
+            loginPresent: false,
+          }),
+        });
+        expect(routed?.routePlan).toBe(plan);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("the chosen credential and its run env become the admission's authority options", async () => {
+      const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-cli-route-"));
+      try {
+        const claude = await writeExecutable(
+          tmpDir,
+          "claude",
+          "#!/bin/sh\necho ok\n",
+        );
+        const opencode = await writeExecutable(tmpDir, "opencode", "opencode");
+        const plan = createResolvedRoutePlan([
+          resolveStepRoute({
+            stepKey: "hunter-reliability",
+            role: "hunter",
+            cliModel: "sonnet",
+          }),
+        ]);
+        const claudeRun = resolveRunClaudeCredential({
+          credentials: { claude: ["api_key", "subscription"] },
+          env: {
+            PATH: tmpDir,
+            ANTHROPIC_API_KEY: "sk-test",
+            CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+          },
+          loginPresent: false,
+        });
+        const routed = await resolveProductionRoutePlanAtConfirm({
+          modelsConfigured: true,
+          workspaceRoot: tmpDir,
+          buildRoutePlan: async () => plan,
+          loadSdk: mockLoadSdk,
+          authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+          claudeRun,
+        });
+        const options = routed?.productionAdmission.authorityOptions;
+        expect(options?.env === claudeRun.env).toBe(true);
+        expect(options?.claudeCredential).toBe("api_key");
+        expect(options?.env?.CLAUDE_CODE_OAUTH_TOKEN === undefined).toBe(true);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 
   test("d1_11EvidenceFromExactBinding keeps subscription pricing non-blocking", () => {

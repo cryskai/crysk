@@ -71,6 +71,7 @@ import {
   type RunnerAuthorityResolution,
   resolveRunnerAuthority,
 } from "../runner-authority";
+import type { RunClaudeCredential } from "../security/claude-credential";
 
 export type PrPlanAndConfirmResult =
   | { exitCode: number }
@@ -128,6 +129,8 @@ export async function resolvePrPlanAndConfirm(params: {
   // run, pr-hero/local otherwise (resolveCiPosture). Passed down, never re-derived.
   statusContext: CommitStatusContext;
   ciBudgetCeiling: { budgetUsd: number | undefined };
+  // S5: the run's Claude credential, chosen once at run start (reviewPr).
+  claudeRun: RunClaudeCredential;
   ciAdmissionLedger: CiAdmissionLedgerState | null;
   skipDiscovery: boolean;
   hunterCount: number;
@@ -218,6 +221,7 @@ export async function resolvePrPlanAndConfirm(params: {
     // re-review that hunts nothing new.
     materialityEnabled:
       resolveMaterialityGate(params.config) && !params.skipDiscovery,
+    claudeRun: params.claudeRun,
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;
@@ -232,6 +236,10 @@ export async function resolvePrPlanAndConfirm(params: {
         });
   const runnerAuthority = await resolveRunnerAuthority({
     workspaceRoot: params.worktreePath,
+    env: params.claudeRun.env,
+    ...(params.claudeRun.kind === undefined
+      ? {}
+      : { claudeCredential: params.claudeRun.kind }),
   });
   await enforceCapabilityGate({
     routePlan,

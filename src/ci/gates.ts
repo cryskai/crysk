@@ -336,28 +336,15 @@ export type CiBillingMode = "subscription" | "metered";
 // ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN, so no generated workflow can
 // newly acquire a ceiling from it.
 //
-// Which credential bills when BOTH CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are
-// present was settled by observation after this rule was written: CLI 2.1.312 prints
-// "claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is
-// set and takes precedence over your claude.ai login", and on this repo's CI with both
-// secrets bound every request used the API key (see credentialOf in
-// transports/claude-code-cli.ts). The rule below still does not depend on that answer,
-// and the gap it describes was real when it was written:
-// action.yml:111-112 binds both into the child env unconditionally,
-// test/harness/env-projection.test.ts:48-56 deliberately asserts both survive
-// the projection with no precedence between them, and `defaultClaudeAuthProbe`
-// (model/provider-capabilities.ts:402-405) ORs them into a single boolean. Whichever
-// one the Claude CLI itself prefers wins, and that fact is recorded nowhere in
-// this codebase.
-//
-// This rule does not need that answer, because the two errors are not
-// symmetric. Guess "unlimited" wrongly and a real invoice arrives that nobody
-// authorized. Guess "ceiling" wrongly and one review is skipped, which the
-// operator clears with a single line of YAML (`budget-usd: 0`). So the mere
-// PRESENCE of a key keeps the ceiling: we cannot rule out that it bills.
-// README.md:38-45 already states the user-facing half of the same rule —
-// sourcing ANTHROPIC_API_KEY into the shell "is what moves a run from quota to
-// invoice".
+// S5 (2026-11-06) retired the rule that stood here: "the mere PRESENCE of a key keeps
+// the ceiling", written while nobody chose which credential billed when both were set
+// (the CLI preferred the key, observed on CLI 2.1.312). Now the run chooses: the first
+// credential in `credentials.claude` (default subscription, then api_key) that is
+// present, once at run start (security/claude-credential.ts). The env this function
+// receives is that run's env, which holds the chosen Claude credential and no other,
+// so `metered` here means the run uses the API key, and a repo holding both secrets
+// with the default order runs on the subscription with no ceiling. A caller that
+// passes the raw process env instead gets the old presence answer.
 //
 // Trimming is load-bearing. 2026-09-02, #177 corrects the overstatement this
 // paragraph used to carry ("without the trim, no route would ever resolve as
