@@ -24,6 +24,7 @@ import {
   findMarkedCommentId,
   IN_FLIGHT_TTL_MS,
   isInFlightCommitStatus,
+  isManualReviewHold,
   latestStatusInContext,
   type ParsedFindingMarker,
   parseFindingMarker,
@@ -573,6 +574,17 @@ function decideNext(
     (a) => a.finding.blocking && a.finding.live_on_head,
   );
   if (gate.state === "pending") {
+    // Stage 2 #12: a capped rule (the budget used up, or manual_only) held the head instead of carrying a
+    // green no review saw. No run will review it on its own, so waiting is wrong, and so is a routine
+    // forced review: a human decides between verifying the head and merging it unverified.
+    if (
+      isManualReviewHold({ state: gate.state, description: gate.description })
+    ) {
+      return {
+        next_action: "override-or-fix",
+        reason: `The gate holds this head for a manual review: the automatic review budget is used up, or the review policy is manual (ci_review_policy is manual_only), so no review read it and none will on its own. Comment ${commandHint(REVIEW_COMMAND, "")} to verify it, or ${commandHint(OVERRIDE_COMMAND, "")} to merge it unverified.`,
+      };
+    }
     if (gate.pending_in_flight) {
       return {
         next_action: "wait",
@@ -600,11 +612,21 @@ function decideNext(
     };
   }
   if (gate.state === "success") {
+    // PR #472/#475: a finding that lives only in the summary (outside the diff) has no thread, so nothing
+    // can be owed on it, but a done that does not name it let the loop merge without reading it. Every
+    // done below carries this note.
+    const summaryOnly = analyzed.filter(
+      (a) => a.finding.comment_id === null,
+    ).length;
+    const summaryNote =
+      summaryOnly === 0
+        ? ""
+        : ` ${summaryOnly} finding(s) live only in the summary comment (outside the diff, no thread to reply in); read them there before merging.`;
     // An override is a human's unlock of the head, so it stays done whatever the findings say.
     if (gate.override.active) {
       return {
         next_action: "done",
-        reason: `The gate is green through an override by @${gate.override.by ?? "an unknown login"}; nothing is owed on this head.`,
+        reason: `The gate is green through an override by @${gate.override.by ?? "an unknown login"}; nothing is owed on this head.${summaryNote}`,
       };
     }
     // A partial review of this head (some reviewers failed) is not a finished review, and the
@@ -635,7 +657,7 @@ function decideNext(
     ) {
       return {
         next_action: "done",
-        reason: `The gate is green on answered findings no review verified (${gate.description}); the PR is ready to merge, or comment ${commandHint(REVIEW_COMMAND, "")} for another review.`,
+        reason: `The gate is green on answered findings no review verified (${gate.description}); the PR is ready to merge, or comment ${commandHint(REVIEW_COMMAND, "")} for another review.${summaryNote}`,
       };
     }
     // #317: no review ran, so the reason must not read as a review that passed.
@@ -644,14 +666,12 @@ function decideNext(
     ) {
       return {
         next_action: "done",
-        reason:
-          "Every changed file on this head is excluded from review, so there was nothing to review; nothing is owed.",
+        reason: `Every changed file on this head is excluded from review, so there was nothing to review; nothing is owed.${summaryNote}`,
       };
     }
     return {
       next_action: "done",
-      reason:
-        "The review on this head passed the gate, and every finding on this head has a reply.",
+      reason: `The review on this head passed the gate, and every finding on this head has a reply.${summaryNote}`,
     };
   }
   // failure: the blocking findings on this head decide between triage, fix, and override.
@@ -719,7 +739,7 @@ function decideNext(
         next_action: "fix",
         reason:
           open === 0 && unseen === 0
-            ? "Every live blocking finding is answered and a review rule skipped this head; push the fix. If a rule skips that push too, the gate reads the replies on it and can turn green, marked unverified; otherwise the review verifies it."
+            ? "Every live blocking finding is answered and a review rule skipped this head; push the fix. If a rule skips that push too, the gate reads the replies on it and can turn green, marked unverified, or, under a used-up budget or manual_only, hold the head for a manual review; otherwise the review verifies it."
             : `A live blocking finding is tagged applied, but ${open + unseen} blocking finding(s) are still open (deferred, misclassified, a dismissal not upheld, a reply at another head, or one this read cannot see), so replies alone will not unlock the carried red; push the fix, and answer or fix the rest.`,
       };
     }

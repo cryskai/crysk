@@ -122,8 +122,9 @@ const BUDGET_FIRST_REVIEW: Phase = {
 
 // The push after the budget is used up. Every case asserts that no review ran on the new
 // head (S1) and that the end-of-budget comment is there (S10). The status depends on what
-// the first review found, which the free model decides: a clean first review carries its
-// green, a red one turns green only when every blocking finding was answered `applied`.
+// the first review found, which the free model decides: a red stays red unless every
+// blocking finding was answered `applied`, and then, like a clean first review's green, it is
+// held pending for a manual review (Stage 2 #12), never carried as a green.
 function budgetAnswerPhase(tag: AnswerTag): Phase {
   return {
     action: { kind: "answer-and-push", tag },
@@ -134,16 +135,15 @@ function budgetAnswerPhase(tag: AnswerTag): Phase {
       { kind: "no-report" },
       { kind: "end-of-budget-comment" },
       ...(tag === "applied"
-        ? [{ kind: "status", state: "success" } as const]
+        ? [{ kind: "status", state: "pending" } as const]
         : []),
     ],
     afterPriorBlocking: [
       tag === "applied"
         ? {
             kind: "status",
-            state: "success",
-            descriptionStartsWith: "crysk: ",
-            descriptionContains: `answered finding(s), fixes unverified ${BUDGET_LABEL}`,
+            state: "pending",
+            descriptionStartsWith: `crysk: waiting for a manual review ${BUDGET_LABEL}`,
           }
         : {
             kind: "status",
@@ -154,8 +154,8 @@ function budgetAnswerPhase(tag: AnswerTag): Phase {
     ifNoPriorBlocking: [
       {
         kind: "status",
-        state: "success",
-        descriptionContains: `no review needed ${BUDGET_LABEL}`,
+        state: "pending",
+        descriptionStartsWith: `crysk: waiting for a manual review ${BUDGET_LABEL}`,
       },
     ],
   };

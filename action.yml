@@ -100,6 +100,33 @@ runs:
         # never the caller's repository, which has its own package.json.
         bun-version-file: ${{ github.action_path }}/package.json
 
+    # Platform mode: the Crysk platform dispatched this run (a workflow_dispatch
+    # carrying a `dispatch-id`), so it trades the run's OIDC token for an
+    # installation token of the Crysk App and every later step uses that instead
+    # of `github.token`: reviews post as the App's bot. A standalone run has no
+    # dispatch id, skips this step, and takes exactly the path it always did.
+    #
+    # WHY it runs before the trigger and fails the job: the trigger's own `gh`
+    # calls already need the token, and in platform mode a silent fallback to
+    # `github.token` would post under the wrong identity. A failure (id-token
+    # permission missing, a 401/403/409/429 from the platform) goes RED here.
+    # The platform URL is a constant in src/ci/platform.ts, never an input: the
+    # dispatch inputs are caller-controlled, and the OIDC token goes to that URL.
+    # The stub declares `dispatch-id` as a workflow input and does not forward it
+    # to this action, so it is read off the event. Builtins only, like the
+    # trigger: it runs before `bun install`.
+    - name: Connect to Crysk
+      id: platform
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != ''
+      shell: bash
+      env:
+        CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
+        # Where the platform's review configuration is left for the setup step:
+        # under the runner's temp directory, never the workspace. Bound here
+        # ONLY: the refresh steps below leave it unset, so they never touch it.
+        CRYSK_PLATFORM_CONFIG_DIR: ${{ runner.temp }}/crysk-platform
+      run: bun "${{ github.action_path }}/src/ci/platform.ts"
+
     # The trigger decides whether this run reviews at all, and it runs FIRST,
     # before `bun install`, so an ignored comment or a fork PR costs seconds
     # instead of a dependency install (that is also why src/ci/trigger.ts
@@ -121,7 +148,7 @@ runs:
       shell: bash
       env:
         # The commenter-permission and PR-head lookups go through `gh`.
-        GH_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ steps.platform.outputs.github-token || inputs.github-token }}
         EVENT_NAME: ${{ github.event_name }}
         EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
         EVENT_PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -146,8 +173,10 @@ runs:
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         # Presence only, never the routing text: whether the routing names
         # OpenCode, the same test the OpenCode install step makes. It names the
-        # backend of a no-credential outcome.
-        HAS_OPENCODE_ROUTING: ${{ contains(inputs.routing, 'opencode') }}
+        # backend of a no-credential outcome. In platform mode the platform's
+        # routing wins over the input: its output is `true` or `false` when the
+        # platform sent a routing, and empty otherwise (then the input decides).
+        HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode')) }}
         # The attempt of this run. A re-run keeps the run id, so the record names
         # the attempt, and the publisher orders a re-run's comments by it.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -178,6 +207,16 @@ runs:
       env:
         ROUTING_INPUT: ${{ inputs.routing }}
         OPENCODE_AUTH_INPUT: ${{ inputs.opencode-auth }}
+        # Platform mode only: the file the connect step left (empty in a
+        # standalone run, which then changes nothing). The step writes the
+        # platform's `person` layer to the personal config file, and its
+        # `repo` layer, only when the checkout has no repo config of its own,
+        # to a temp file it names in its `repo-config` output.
+        CRYSK_PLATFORM_CONFIG_FILE: ${{ steps.platform.outputs.config-file }}
+        # Presence only: whether the connect step ran, so a connected run with
+        # no platform configuration still owns the personal config file and
+        # drops what an earlier run left in it on a runner whose HOME persists.
+        CRYSK_PLATFORM_CONNECTED: ${{ steps.platform.outputs.github-token != '' }}
         # A malformed routing or auth input leaves setup.json here, so the publish
         # step names that input instead of reporting "an install step failed".
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
@@ -187,7 +226,7 @@ runs:
     # (install ≠ Run Crysk). Never unpinned. Digest verify of the official
     # installer is named, not built.
     - name: Install OpenCode CLI
-      if: ${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || contains(inputs.routing, 'opencode')) }}
+      if: ${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode'))) }}
       shell: bash
       run: |
         curl -fsSL https://opencode.ai/install | bash -s -- --version 1.18.30
@@ -204,8 +243,19 @@ runs:
         # free-text input (model, in particular) is attacker-influenceable
         # on a `pull_request_target`-triggered workflow; splicing it
         # straight into the script would be a command-injection hole.
-        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_TOKEN: ${{ steps.platform.outputs.github-token || inputs.github-token }}
+        # The login the platform returned for the App's bot, empty in a
+        # standalone run: the answered-findings gate trusts it as a poster.
+        CRYSK_PLATFORM_ACTOR: ${{ steps.platform.outputs.github-actor }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
+        # Platform mode only, and only for a checkout with no repo config of its
+        # own: the temp file holding the platform's repo layer, handed to the
+        # CLI's `--config` (which repoints the repo layer and nothing else).
+        CRYSK_REPO_CONFIG: ${{ steps.materialize.outputs.repo-config }}
+        # Platform mode only: `true` when the platform's configuration sets
+        # `post`. The run step then leaves `--post` out, because an explicit CLI
+        # option outranks the config and the platform's value would never apply.
+        POST_FROM_PLATFORM: ${{ steps.materialize.outputs.post-from-platform }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
         GITHUB_ACTIONS: 'true'
@@ -251,7 +301,7 @@ runs:
         # stays green. --yes skips the interactive confirmation prompt, which
         # has no TTY to run against here.
         set -- review --pr "$TRIGGER_PR" --ci --yes
-        if [ "$POST_INPUT" = "true" ]; then set -- "$@" --post; fi
+        if [ "$POST_INPUT" = "true" ] && [ "$POST_FROM_PLATFORM" != "true" ]; then set -- "$@" --post; fi
         if [ "$SCOUT_INPUT" = "true" ]; then set -- "$@" --scout; fi
         if [ "$STEP_SUMMARY_INPUT" = "false" ]; then set -- "$@" --no-step-summary; fi
         if [ -n "$MODEL_INPUT" ]; then set -- "$@" --model "$MODEL_INPUT"; fi
@@ -262,11 +312,28 @@ runs:
         if [ "$TRIGGER_FORCE" = "true" ]; then set -- "$@" --force; fi
         if [ "$TRIGGER_FULL" = "true" ]; then set -- "$@" --full; fi
         if [ "$TRIGGER_ADJUDICATE" = "true" ]; then set -- "$@" --adjudicate; fi
+        if [ -n "$CRYSK_REPO_CONFIG" ]; then set -- "$@" --config "$CRYSK_REPO_CONFIG"; fi
 
         # The CLI is the last command, so the job's result is exactly the CLI's.
         # Nothing here writes a marker after it: the CLI's cli.json is its own
         # record of the outcome, and the publish step reads it.
         bun "${{ github.action_path }}/bin/pr-hero.js" "$@"
+
+    # Refresh the Crysk token (platform mode only). The installation token from
+    # `Connect to Crysk` was minted before the trigger and lives about an hour,
+    # while Run Crysk may run for up to 75 minutes, so the late GitHub writes of
+    # this job (the publish step's status, comment and cleanup) take a freshly
+    # exchanged token instead: the same src/ci/platform.ts, the same masking,
+    # the same loud failure. Run Crysk's own early (pending status) and
+    # terminal posts run inside that one step and keep the token it started
+    # with: an action.yml step cannot swap its own env mid-run.
+    - name: Refresh the Crysk token
+      id: platform-publish
+      if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
+      shell: bash
+      env:
+        CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
+      run: bun "${{ github.action_path }}/src/ci/platform.ts"
 
     # Speaks for every outcome of a run (T2b, S3, T2c): no credential, a pull
     # request that cannot be resolved, a commenter permission that could not be
@@ -305,7 +372,7 @@ runs:
       if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ steps.platform-publish.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_RUN_ID: ${{ github.run_id }}
@@ -313,6 +380,55 @@ runs:
         # refused, since gh run rerun keeps the run id.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
       run: bun "${{ github.action_path }}/src/ci/publish.ts"
+
+    # Platform mode only: tell the Crysk platform how this run ended, so every
+    # run is recorded with its cost. The report posts metadata only (counts,
+    # token and cost totals, models, shas), never a finding or any text of the
+    # review, to the constant URL in src/ci/platform.ts, with the newest run
+    # token (the refresh step's, else the first exchange's). It also carries the gate's
+    # count of open blocking findings and their ids and statuses, which hold no text.
+    # Once the report is
+    # accepted the same script uploads the run's findings (findings.json's
+    # `findings` array only) to /runs/findings with that token.
+    #
+    # WHY !cancelled() and not success(): a failed or skipped review is a run
+    # too, and it still has an outcome to record; a cancelled one is a
+    # superseded run that never had one. It is gated on a run token being
+    # present, so a standalone run never reaches it.
+    #
+    # WHY it cannot turn the job red: the script prints a `::warning::` with the
+    # HTTP status and the API's message and exits 0, for the report and for the
+    # findings upload alike. The review's own result stands. Builtins only, like
+    # publish: it runs even when nothing installed.
+    - name: Report to Crysk
+      id: report
+      if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}
+      shell: bash
+      env:
+        CRYSK_RUN_TOKEN: ${{ steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token }}
+        # From the same exchange as the run token (the refresh after the run
+        # when it ran, else the first): the repository's data mode decides
+        # whether finding text may leave the runner at all, and the first one
+        # can be a run's length old. Anything but `full` (including an empty
+        # value) is read as metadata_only.
+        CRYSK_DATA_MODE: ${{ steps.platform-publish.outputs.data-mode || steps.platform.outputs.data-mode }}
+        CRYSK_OUTCOME: ${{ steps.run-crysk.outputs.status }}
+        CRYSK_RUN_DIR: ${{ steps.run-crysk.outputs.run_dir }}
+        TRIGGER_PR: ${{ steps.trigger.outputs.pr }}
+        TRIGGER_HEAD_SHA: ${{ steps.trigger.outputs.head_sha }}
+      run: bun "${{ github.action_path }}/src/ci/platform-report.ts"
+
+    # The same exchange again, for a run that was cancelled (see "Refresh the
+    # Crysk token" above): the settle's post must not ride a token minted at the
+    # start of a long run. A fresh OIDC token is a fresh identity, so the
+    # platform exchanges it again.
+    - name: Refresh the Crysk token (cancelled run)
+      id: platform-settle
+      if: ${{ cancelled() && steps.trigger.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
+      shell: bash
+      env:
+        CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
+      run: bun "${{ github.action_path }}/src/ci/platform.ts"
 
     # WHY a separate step: the publish step is !cancelled() on purpose (a
     # superseded run must not report a failure it never had), and a cancelled
@@ -325,7 +441,7 @@ runs:
       if: ${{ cancelled() && steps.trigger.outputs.run == 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ steps.platform-settle.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}
         # The run id builds the status's target URL. The lock is this run's

@@ -176,6 +176,7 @@ export async function evaluateCiAdmissionGate(input: {
     }
     const trustedActors = resolveCiTrustedActors({
       githubActor: process.env.GITHUB_ACTOR,
+      platformActor: process.env.CRYSK_PLATFORM_ACTOR,
       extra: config.ci_trusted_actors,
     });
     const allComments = [...reviewComments, ...issueComments];
@@ -387,7 +388,7 @@ export async function evaluateCiAdmissionGate(input: {
         advisoryCount: admissionVerdict.prior.advisory,
       });
       // S2: manual-required carries the last verdict like every other skip (publishCiSkip,
-      // admissionSkipDecision); a carried red with every blocking finding answered turns green, unverified.
+      // admissionSkipDecision), except a green: Stage 2 #12 holds it pending for a manual review.
       const plan = planCiReviewManualRequired({
         prNumber,
         verdict: admissionVerdict,

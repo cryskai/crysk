@@ -58,8 +58,8 @@ before it merges.
 
 ```bash
 bun test               # 2325 tests, all offline (fake spawn/runner)
-bun run typecheck      # tsc --noEmit, strict — covers src/test/fixtures, NOT scripts/
-bun run check          # biome — covers src+test only, NOT fixtures/ or scripts/
+bun run typecheck      # tsc --noEmit, strict — covers src/test/fixtures/benchmarks, NOT scripts/
+bun run check          # biome — covers src+test+benchmarks only, NOT fixtures/ or scripts/
 bun run refuter-probe  # LIVE: refuter verdict-vocabulary matrix, 4 arms (opus refuter, ~$0.08/step notional, ~$0.9 at 3 replicates; reads $0 cash under subscription auth)
 bun run fixture-eval   # LIVE: full pipeline vs a planted bug in a disposable repo (~$0.08, ~1 min)
 bun run fixture-eval --scout         # LIVE: same, with the scout stage on (~$0.17, ~2 min)
@@ -71,8 +71,8 @@ bun run scripts/opencode-mcp-toolid-probe.ts # LIVE: the literal MCP tool id, an
 bun run scripts/m6.ts plan   # $0: prices M6's 56 runs from gh counters + the target repo's config
 bun run scripts/m6.ts score  # $0: the floor table, re-runnable from artifacts forever
 bun run scripts/m6.ts run    # LIVE and the big one: 56 serial reviews, ~$174-374, ~4h44m
-bun run scripts/martian-cal.ts plan|check|run|score   # Martian Cal.com slice (never --pr)
-bun run scripts/martian-judge.ts     # LIVE: Martian Surface A judge on existing runs
+bun run benchmarks/martian/martian-cal.ts plan|check|run|score   # Martian Cal.com slice (never --pr)
+bun run benchmarks/martian/martian-judge.ts     # LIVE: Martian Surface A judge on existing runs
 bun run scripts/materiality-probe.ts plan|run|score   # materiality judge exam on known-answer anchors (plan/score $0, run LIVE, 176 opus spawns)
 bun run scripts/noise-baseline.ts plan|run|report      # share of posted store findings the materiality judge calls immaterial (plan/report $0, run LIVE; output stays outside the repo)
 bun run scripts/loop-metrics.ts fetch --repo <o/r> [--since <date>] && bun run scripts/loop-metrics.ts report <raw.json> [--base dev]   # $0: rounds and time to a green gate, from GitHub commit statuses (output stays outside the repo)
@@ -153,6 +153,7 @@ over** (found while wiring C5, 2026-08-23):
 - `src/agent-env.ts` — multi-agent IDE/CLI environment detector, skills digest sync with drift protection, and MCP registration.
 - `src/wizard.ts` — interactive TUI onboarding wizard (steps as data: tools, env, skills/mcp, workspace gotchas, verification) + zero-argument entry.
 - `fixtures/` + `scripts/` — the planted-bug eval and live micro-eval.
+- `benchmarks/` — harnesses and corpora for external benchmarks, one folder each. Results never land here; they go to the lab (rule 6).
 
 ## Rules that outrank convenience
 

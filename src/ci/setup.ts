@@ -38,6 +38,13 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import type { ErrorClass, SetupRecord } from "#ci/outcome";
+import { appendGithubOutput } from "#ci/platform";
+import {
+  assertPlatformPerson,
+  deliverPlatformRepoLayer,
+  PlatformConfigError,
+  readPlatformConfig,
+} from "#ci/platform-config";
 import type { ConfigPlan } from "#ci/review-levels";
 import {
   OVERRIDE_COMMAND,
@@ -45,6 +52,7 @@ import {
   REVIEW_COMMAND,
   recordTempPath,
 } from "#ci/trigger";
+import { resolveRepoRoot } from "#git/git";
 import { parseLocalConfig, parseRoutingConfig } from "#review/preflight";
 import { commandForms } from "../brand";
 import {
@@ -649,6 +657,13 @@ export interface MaterializeCiOpenCodeDataOptions {
   opencodeAuth?: string;
   home?: string;
   env?: Readonly<Record<string, string | undefined>>;
+  // Platform mode: the person layer the Crysk platform returned (`{}` when it
+  // sent none). Written into the same personal file as `routing`; its own
+  // `routing` wins over the input. Present means platform mode, in which the
+  // personal file belongs to this run: a file an earlier run left behind is
+  // removed when nothing is to be written, so it can never be read as this run's
+  // person layer on a runner whose HOME outlives the job.
+  platformPerson?: Record<string, unknown>;
 }
 
 // The file the publisher reads when this step fails on a malformed input, and
@@ -688,6 +703,8 @@ function messageOf(error: unknown): string {
 // directory — empty/unset fails loud with no cwd fallback, because falling
 // back would write routing into the checkout (.prhero/config.json), which
 // the repo parser rejects. Never log the auth blob; never inject readerFn.
+// In platform mode the platform's person layer joins the routing in that one
+// file; `routing` is the platform's when it sent one, else the input's, as today.
 export async function materializeCiOpenCodeData(
   options: MaterializeCiOpenCodeDataOptions = {},
 ): Promise<void> {
@@ -701,9 +718,14 @@ export async function materializeCiOpenCodeData(
 
   const routingRaw = options.routing ?? env.ROUTING_INPUT ?? "";
   const authRaw = options.opencodeAuth ?? env.OPENCODE_AUTH_INPUT ?? "";
+  const platformMode = options.platformPerson !== undefined;
+  const platformPerson = options.platformPerson ?? {};
+  // The input is parsed only when it is the one that will be written: a
+  // routing the platform overrides is not this run's configuration.
+  const platformRouting = platformPerson.routing !== undefined;
 
   let routingConfig: ReturnType<typeof parseRoutingConfig> | null = null;
-  if (routingRaw.trim() !== "") {
+  if (routingRaw.trim() !== "" && !platformRouting) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(routingRaw);
@@ -760,13 +782,20 @@ export async function materializeCiOpenCodeData(
     authBody = authRaw;
   }
 
-  if (routingConfig !== null) {
-    const layout = prheroLayout(home);
-    await mkdir(layout.dir, { recursive: true });
-    await writeFile(
-      layout.reviewConfigPath,
-      `${JSON.stringify({ routing: routingConfig }, null, 2)}\n`,
-    );
+  const personFile = prheroLayout(home).reviewConfigPath;
+  // Validated whole by the engine's person parser before anything is written.
+  if (Object.keys(platformPerson).length > 0) {
+    assertPlatformPerson(platformPerson, personFile);
+  }
+  const personBody: Record<string, unknown> = {
+    ...platformPerson,
+    ...(routingConfig === null ? {} : { routing: routingConfig }),
+  };
+  if (Object.keys(personBody).length > 0) {
+    await mkdir(path.dirname(personFile), { recursive: true });
+    await writeFile(personFile, `${JSON.stringify(personBody, null, 2)}\n`);
+  } else if (platformMode) {
+    await rm(personFile, { force: true });
   }
 
   if (authBody !== undefined) {
@@ -780,6 +809,48 @@ export async function materializeCiOpenCodeData(
 interface CiOpenCodeSetupDeps {
   env: Readonly<Record<string, string | undefined>>;
   stderr: (text: string) => void;
+  // Where the checkout is (the engine resolves its operator root from here).
+  cwd: string;
+  appendOutput: (text: string) => void;
+}
+
+// Workflow-command data escaping, as the runner's own toolkit does it.
+function escapeCommandData(text: string): string {
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+
+// Platform mode only (the connect step announced a config file): the repo layer
+// the platform sent reaches the run step as the `repo-config` output, which it
+// passes as `--config`, but ONLY when the checkout has no repo config of its own.
+// Returns whether the layer it delivered sets `post`.
+async function deliverPlatformRepo(
+  deps: CiOpenCodeSetupDeps,
+  platformFile: string,
+  repo: Record<string, unknown>,
+): Promise<boolean> {
+  if (Object.keys(repo).length === 0) return false;
+  let root: string;
+  try {
+    root = await resolveRepoRoot(deps.cwd);
+  } catch (error) {
+    throw new PlatformConfigError(
+      `the checked-out repository could not be found to decide whether it has its own config: ${messageOf(error)}`,
+    );
+  }
+  const result = await deliverPlatformRepoLayer({
+    repo,
+    root,
+    dir: path.dirname(platformFile),
+  });
+  if (result.status === "repo-file-wins") {
+    deps.stderr(
+      `::notice::${escapeCommandData(`Crysk platform config: this repository has its own ${path.relative(root, result.file)}, so it is used as is and the platform's repository settings are ignored.`)}\n`,
+    );
+  } else if (result.status === "written") {
+    deps.appendOutput(`repo-config=${result.file}\n`);
+    return repo.post !== undefined;
+  }
+  return false;
 }
 
 // WHY tmp then rename, the same as the trigger's record: the publisher reads the
@@ -807,12 +878,41 @@ async function writeSetupRecord(
 // any other failure (HOME, a write) stays unclassified, with no record.
 async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
   try {
-    await materializeCiOpenCodeData({ env: deps.env });
+    const platformFile = deps.env.CRYSK_PLATFORM_CONFIG_FILE ?? "";
+    const platform =
+      platformFile === "" ? undefined : readPlatformConfig(platformFile);
+    // The connect step announces a config file only when the platform sent
+    // configuration, so a connected run with none is told apart by this
+    // presence boolean: it still owns the personal file (see the option).
+    const platformMode =
+      platform !== undefined || deps.env.CRYSK_PLATFORM_CONNECTED === "true";
+    await materializeCiOpenCodeData({
+      env: deps.env,
+      ...(platformMode ? { platformPerson: platform?.person ?? {} } : {}),
+    });
+    // WHY the run step needs to know: it passes `--post` whenever the `post`
+    // input is true (the default), and an explicit CLI option outranks the
+    // config, so a `post` the platform set would never take effect.
+    let postFromPlatform = platform?.person.post !== undefined;
+    if (platform !== undefined) {
+      const repoPost = await deliverPlatformRepo(
+        deps,
+        platformFile,
+        platform.repo,
+      );
+      postFromPlatform ||= repoPost;
+    }
+    if (postFromPlatform) deps.appendOutput("post-from-platform=true\n");
     return 0;
   } catch (error) {
     deps.stderr(
       `crysk: failed to materialize OpenCode CI data: ${messageOf(error)}\n`,
     );
+    if (error instanceof PlatformConfigError) {
+      deps.stderr(
+        `::error::${escapeCommandData(`Crysk platform mode failed: ${messageOf(error)}`)}\n`,
+      );
+    }
     const outcomeDir = deps.env.CRYSK_OUTCOME_DIR ?? "";
     if (error instanceof SetupInputError && outcomeDir !== "") {
       try {
@@ -838,6 +938,9 @@ if (import.meta.main) {
       stderr: (text) => {
         process.stderr.write(text);
       },
+      cwd: process.cwd(),
+      appendOutput: (text) =>
+        appendGithubOutput(process.env.GITHUB_OUTPUT, text),
     }),
   );
 }

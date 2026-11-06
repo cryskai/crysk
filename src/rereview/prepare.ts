@@ -4,7 +4,7 @@
 // The case machine itself stays in rereview/plan.ts.
 
 import { normalizePath } from "#compare/compare";
-import { claimFingerprint } from "#pr/preflight";
+import { claimFingerprint, parseFindingMarker } from "#pr/preflight";
 import type { Severity } from "#review/findings";
 import { parseFindingCommentBadge } from "#review/report";
 import {
@@ -617,20 +617,20 @@ export function priorsFromStateFindings(
     channel: finding.channel,
     locs: finding.locs,
     claim: finding.claim,
+    c: finding.c,
     triage: null,
     newThreadReply: false,
   }));
 }
 
 // #206's fix: the fallback that runs whenever the previous summary's
-// `pr-hero-state` block cannot supply priors — missing, unparseable, or (the
-// ROUTINE case, not a rare one: a FIRST review never writes a state block at
-// all, see `postInlineFindings`'s `framing === undefined` branch in
-// src/pr/pr.ts) simply absent because this is the PR's second review. It
-// used to hardcode `sev: "WARNING"` / `tier: "advisory"` / `claim: ""` for
-// EVERY prior here — silently downgrading a live BLOCKER to a warning on
-// every second review of every PR, and collapsing every claim-less row onto
-// `claimFingerprint("")`'s shared constant.
+// `pr-hero-state` block cannot supply priors — missing or unparseable. Before
+// 2026-11-04 a FIRST review never wrote a state block, so this was the
+// routine path of every second review; summaries posted before then still
+// reach it. It used to hardcode `sev: "WARNING"` / `tier: "advisory"` /
+// `claim: ""` for EVERY prior here — silently downgrading a live BLOCKER to a
+// warning on every second review of every PR, and collapsing every claim-less
+// row onto `claimFingerprint("")`'s shared constant.
 //
 // `body` is the posted comment's raw text (the marker line alone carries no
 // sev/tier/claim — `findingMarker` signs only the claim's fingerprint, never
@@ -651,6 +651,7 @@ export function priorsFromPostedMarkers(
 ): PriorRecord[] {
   return posted.map((item, i) => {
     const recovered = parseFindingCommentBadge(item.body);
+    const c = recovered === null ? undefined : parseFindingMarker(item.body)?.c;
     return {
       id: `R${String(i + 1).padStart(3, "0")}`,
       sev: recovered?.sev ?? SEVERITY_UNRECOVERABLE,
@@ -658,6 +659,7 @@ export function priorsFromPostedMarkers(
       channel: item.channel,
       locs: [`${item.path}:${item.line}`],
       claim: recovered?.claim ?? "",
+      ...(c === undefined ? {} : { c }),
       triage: null,
       newThreadReply: false,
     };
@@ -750,13 +752,18 @@ export interface PostedForPrior {
 // triage tag or a thread left open; an over-match puts a "✅ RESOLVED ·
 // verified gone" reply on a still-live finding.
 export function bindPriorsToPosted<T extends PostedForPrior>(
-  priors: readonly { id: string; locs: readonly string[]; claim: string }[],
+  priors: readonly {
+    id: string;
+    locs: readonly string[];
+    claim: string;
+    c?: string;
+  }[],
   posted: readonly T[],
   window: number = IDENTITY_LINE_WINDOW,
 ): Map<string, T> {
   interface Pair {
     priorId: string;
-    claim: string;
+    fingerprint: string | undefined;
     row: T;
     distance: number;
   }
@@ -767,7 +774,12 @@ export function bindPriorsToPosted<T extends PostedForPrior>(
     for (const row of posted) {
       const distance = anchorDistance(identity, row, window);
       if (distance === null) continue;
-      pairs.push({ priorId: prior.id, claim: prior.claim, row, distance });
+      pairs.push({
+        priorId: prior.id,
+        fingerprint: priorFingerprint(prior),
+        row,
+        distance,
+      });
     }
   }
 
@@ -804,7 +816,7 @@ export function bindPriorsToPosted<T extends PostedForPrior>(
       let changed = false;
       const proposals: Pair[] = [];
       for (const [priorId, group] of byPrior) {
-        const winner = resolvePriorTie(group, group[0]?.claim ?? "");
+        const winner = resolvePriorTie(group, group[0]?.fingerprint);
         if (winner === undefined) {
           disqualified.add(priorId);
           changed = true;
@@ -869,16 +881,25 @@ function anchorDistance(
   return best;
 }
 
+// What a prior's marker should carry. No claim, no fingerprint:
+// `claimFingerprint("")` is a real constant hash (`e3b0c44298fc`) that every
+// empty-claim prior shares, so consulting it would hand a whole tied set to
+// whichever row came first. A stored `c` wins because the stored claim may be
+// its published form, which the posted marker never hashed.
+function priorFingerprint(prior: {
+  claim: string;
+  c?: string;
+}): string | undefined {
+  if (prior.claim.trim().length === 0) return undefined;
+  return prior.c ?? claimFingerprint(prior.claim);
+}
+
 function resolvePriorTie<T extends PostedForPrior>(
   tied: readonly { row: T; distance: number }[],
-  claim: string,
+  fingerprint: string | undefined,
 ): T | undefined {
   if (tied.length === 1) return tied[0]?.row;
-  // No claim, no tie-break: `claimFingerprint("")` is a real constant hash
-  // (`e3b0c44298fc`) that every empty-claim prior shares, so consulting it
-  // here would hand the whole tied set to whichever row came first.
-  if (claim.trim().length === 0) return undefined;
-  const fingerprint = claimFingerprint(claim);
+  if (fingerprint === undefined) return undefined;
   const matching = tied.filter((c) => c.row.marker.c === fingerprint);
   return matching.length === 1 ? matching[0]?.row : undefined;
 }
@@ -890,13 +911,17 @@ function resolvePriorTie<T extends PostedForPrior>(
 // claim-less prior shares), and anything short of exactly one match leaves the
 // comment to nobody.
 function resolveRowTie<T extends PostedForPrior>(
-  contenders: readonly { priorId: string; claim: string; row: T }[],
+  contenders: readonly {
+    priorId: string;
+    fingerprint: string | undefined;
+    row: T;
+  }[],
 ): { priorId: string; row: T } | undefined {
   if (contenders.length === 1) return contenders[0];
   const matching = contenders.filter(
     (contender) =>
-      contender.claim.trim().length > 0 &&
-      contender.row.marker.c === claimFingerprint(contender.claim),
+      contender.fingerprint !== undefined &&
+      contender.row.marker.c === contender.fingerprint,
   );
   return matching.length === 1 ? matching[0] : undefined;
 }

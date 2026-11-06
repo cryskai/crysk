@@ -18,7 +18,7 @@ Do not load for M6 scout A/B on musive alone, or a product review of our own PRs
 ## Hard Rules
 
 - Never `pr-hero review --pr` on the original public PR. Local `--repo --base --head --two-dot --yes` only. `--pr` posts a commit status on other people’s merged heads.
-- Never feed goldens, vendor reviews, or GitHub comments to hunters. Gold is judge-only. Gotchas stay `docs/benchmarks/martian-cal-gotchas.md` (thin, no gold).
+- Never feed goldens, vendor reviews, or GitHub comments to hunters. Gold is judge-only. Gotchas stay `benchmarks/martian/corpora/martian-cal-gotchas.md` (thin, no gold).
 - `--out` and `--gotchas` live **outside** the clone. Do not `codegraph init` on Cal.com.
 - One variable per arm. Name arm id + prompt-set sha. Cal.com 10 `*-hunters` dirs are the baseline — do not overwrite them for a new arm.
 - Do not headline All-profile F1. Report High+Critical recall. Martian F1 is not a launch gate. THE PIVOT holds.
@@ -41,12 +41,12 @@ Do not load for M6 scout A/B on musive alone, or a product review of our own PRs
 
 ## Execution Steps
 
-1. Load `references/corpus.md` and `docs/benchmarks/martian-bench.md`. Name the baseline arm and whether this spend is new.
-2. Confirm authorised slice, one variable, cost band: `bun run scripts/martian-cal.ts plan`.
+1. Load `references/corpus.md` and `benchmarks/martian/README.md`. Name the baseline arm and whether this spend is new.
+2. Confirm authorised slice, one variable, cost band: `bun run benchmarks/martian/martian-cal.ts plan`.
 3. `check` then `run`. Isolation is the engine’s. Resume requires the frozen schedule/identity and attributable delivered-attempt proof; existing files alone never qualify. Preserve unqualified directories under `incomplete-attempts/`. Unknown spend remains unknown.
-4. Surface A: `bun run scripts/martian-judge.ts`. Label gateway + model. Sibling same `path:line` are not extra FPs.
+4. Surface A: `bun run benchmarks/martian/martian-judge.ts`. Label gateway + model. Sibling same `path:line` are not extra FPs.
 5. Surface B only if authorised. Always **say** whether it ran.
-6. Ledger in `docs/benchmarks/martian-bench.md`. Quote High+Critical recall; All F1 is secondary.
+6. Ledger in `benchmarks/martian/README.md`. Quote High+Critical recall; All F1 is secondary.
 7. Triangulate via corpus.md. If Martian and musive disagree: musive + human wins for product; Martian wins for vendor n-vs-n. Do not average.
 
 ## Output Contract
@@ -57,6 +57,6 @@ Return: arm id + prompt-set sha + scout on/off + judge gateway/model; cost and w
 
 - `references/flow.md` — clone, flags, commands, resume, cost
 - `references/corpus.md` — baseline scores + other evals to triangulate
-- `../../docs/benchmarks/martian-bench.md` — protocol, isolation, two surfaces
-- `../../scripts/martian-cal.ts` / `../../scripts/martian-judge.ts`
+- `../../benchmarks/martian/README.md` — protocol, isolation, two surfaces
+- `../../benchmarks/martian/martian-cal.ts` / `../../benchmarks/martian/martian-judge.ts`
 - `../../src/martian-adapter.ts` / `../../test/martian-adapter.test.ts`

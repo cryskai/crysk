@@ -11,6 +11,7 @@ import {
   carriedSuccessDescription,
   unverifiedFixesDescription,
 } from "#pr/admission";
+import { manualReviewHoldDescription } from "#pr/preflight";
 import {
   blockingFindingAt,
   type Check,
@@ -833,9 +834,9 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
     // A hunter died: the partial review's red is not what the next phase describes.
     fail: obs({ hunterFailures: ["reliability"] }),
   },
-  // The push after the budget: no review, the end-of-budget comment, and a green.
+  // The push after the budget: no review, the end-of-budget comment, and the manual-review hold.
   "budget-answered/1": {
-    pass: budgetPush(carriedSuccessDescription(BUDGET_LABEL, OLD), "success"),
+    pass: budgetPush(manualReviewHoldDescription(BUDGET_LABEL, OLD), "pending"),
     // The push was reviewed again: the budget was not respected.
     fail: obs({
       comments: [
@@ -1994,7 +1995,7 @@ describe("ownBlockingSkipReason: the skip line of a closed ifOwnBlockingAt gate"
   });
 });
 
-describe("budget scenarios: the conditional status texts (budget-exhausted-carry S2, S3, S6)", () => {
+describe("budget scenarios: the conditional status texts (budget-exhausted-carry S2, S3; Stage 2 #12)", () => {
   const phase = (name: string) => {
     const found = findScenario(name)?.phases[1];
     if (found === undefined) throw new Error(`no phase 2 in ${name}`);
@@ -2002,29 +2003,23 @@ describe("budget scenarios: the conditional status texts (budget-exhausted-carry
   };
   const all = (checks: readonly Check[] | undefined, o: Observation) =>
     evaluateChecks(checks ?? [], o).every((r) => r.pass);
+  const held = manualReviewHoldDescription(BUDGET_LABEL, OLD);
   const answered = unverifiedFixesDescription(1, BUDGET_LABEL, OLD);
   const carriedRed = carriedBlockingDescription(1, OLD);
   const carriedGreen = carriedSuccessDescription(BUDGET_LABEL, OLD);
 
-  test("budget-answered: a red with every finding answered must read as the unverified green", () => {
+  test("budget-answered: a red with every finding answered must read as the manual-review hold", () => {
     const after = phase("budget-answered").afterPriorBlocking;
-    expect(all(after, budgetPush(answered, "success"))).toBe(true);
+    expect(all(after, budgetPush(held, "pending"))).toBe(true);
     // The answers were ignored and the red was carried.
     expect(all(after, budgetPush(carriedRed, "failure"))).toBe(false);
-    // A green that does not say its fixes are unverified (S6).
-    expect(all(after, budgetPush(carriedGreen, "success"))).toBe(false);
-    // The legacy lead reads as crysk (canonicalStatusText), as every product reader takes it.
-    expect(
-      all(
-        after,
-        budgetPush(answered.replace(/^crysk:/, "pr-hero:"), "success"),
-      ),
-    ).toBe(true);
+    // The pre-#12 unverified green: code no review read would merge.
+    expect(all(after, budgetPush(answered, "success"))).toBe(false);
   });
 
-  test("budget-answered: its unconditional checks require a green", () => {
+  test("budget-answered: its unconditional checks require the hold", () => {
     const checks = phase("budget-answered").checks;
-    expect(all(checks, budgetPush(answered, "success"))).toBe(true);
+    expect(all(checks, budgetPush(held, "pending"))).toBe(true);
     expect(all(checks, budgetPush(carriedRed, "failure"))).toBe(false);
   });
 
@@ -2032,22 +2027,20 @@ describe("budget scenarios: the conditional status texts (budget-exhausted-carry
     const after = phase("budget-unanswered").afterPriorBlocking;
     expect(all(after, budgetPush(carriedRed, "failure"))).toBe(true);
     // The deferral unlocked the gate.
-    expect(all(after, budgetPush(answered, "success"))).toBe(false);
+    expect(all(after, budgetPush(held, "pending"))).toBe(false);
     // Its unconditional checks pass on the red: they do not pin the state.
     expect(
       all(phase("budget-unanswered").checks, budgetPush(carriedRed, "failure")),
     ).toBe(true);
   });
 
-  test("both: a clean first review carries its green, naming the budget", () => {
+  test("both: a clean first review is held for a manual review, naming the budget", () => {
     for (const name of ["budget-answered", "budget-unanswered"]) {
       const clean = phase(name).ifNoPriorBlocking;
       expect(clean?.length).toBe(1);
-      expect(all(clean, budgetPush(carriedGreen, "success"))).toBe(true);
-      // A plain finished-review green: the push was reviewed, not carried.
-      expect(
-        all(clean, budgetPush("crysk: no blocking findings", "success")),
-      ).toBe(false);
+      expect(all(clean, budgetPush(held, "pending"))).toBe(true);
+      // The pre-#12 carried green.
+      expect(all(clean, budgetPush(carriedGreen, "success"))).toBe(false);
       expect(all(clean, budgetPush(carriedRed, "failure"))).toBe(false);
     }
   });

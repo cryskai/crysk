@@ -21,6 +21,7 @@ import type { CiMode } from "#pr/preflight";
 import type { RereviewProvenance } from "#rereview/prepare";
 import type { FindingsDocument } from "#review/findings";
 import { log } from "#ui/primitives";
+import { writeFindingStateRecord } from "./finding-state-record";
 
 export interface PostingStageResult {
   posted: InlinePostOutcome | null;
@@ -91,6 +92,9 @@ export async function postFindingsIfEnabled(input: {
   if (posted) {
     input.onDelivered?.();
     await writePostReceipt(input.runDir, input.pr, input.headSha, posted);
+    if (posted.findingState !== undefined) {
+      writeFindingStateRecord(input.runDir, posted.findingState);
+    }
     log(
       `posted: review ${posted.reviewOutcome} (${posted.reviewFindingCount} ` +
         `finding(s)), ${posted.outsideDiffCount} outside diff, ` +

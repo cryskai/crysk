@@ -1000,19 +1000,100 @@ describe("publishCiSkip: the outcome record", () => {
       });
 
       // budget-exhausted-carry S2: an exhausted budget and a manual-only policy are review rules like the
-      // others, so they carry the last verdict instead of writing a fixed failure.
-      test("an exhausted budget carries a green: the budget is respected and no human is needed", async () => {
-        const { calls, reads } = await skipWith(
-          [row("success", "review posted", T1)],
-          "max-attempts-exhausted",
-          { plan: "manual-required" },
-        );
-        expect(reads).toEqual([REVIEWED_HEAD]);
-        expect(calls.map((c) => [c.state, c.description])).toEqual([
-          [
-            "success",
-            `crysk: no review needed (review budget for this PR is used up); ${CARRIED_FROM}`,
+      // others, so they carry a red. Stage 2 #12: a green is held pending instead, since no later push is
+      // reviewed on its own and a carried green would let code no review read merge.
+      test.each([
+        ["max-attempts-exhausted", "review budget for this PR is used up"],
+        ["manual-only-policy", "ci_review_policy is manual_only"],
+      ] as const)(
+        "under %s a carried green is held pending for a manual review",
+        async (reason, label) => {
+          const { calls, reads } = await skipWith(
+            [row("success", "review posted", T1)],
+            reason,
+            { plan: "manual-required" },
+          );
+          expect(reads).toEqual([REVIEWED_HEAD]);
+          expect(calls.map((c) => [c.state, c.description])).toEqual([
+            [
+              "pending",
+              `crysk: waiting for a manual review (${label}); ${CARRIED_FROM} — /pr-hero review or /pr-hero override`,
+            ],
+          ]);
+        },
+      );
+
+      test("the next skip walks past a hold to the last review's verdict", async () => {
+        const HELD = "c".repeat(40);
+        const bySha: Record<string, Row[]> = {
+          [HELD]: [
+            row(
+              "pending",
+              "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /pr-hero review or /pr-hero override",
+              T1,
+            ),
           ],
+          [REVIEWED_HEAD]: [row("failure", BLOCKING_2, T1)],
+        };
+        const reads: string[] = [];
+        const calls: StatusCall[] = [];
+        await publishCiSkip(
+          gateInput("manual-required", recordingStatus(calls), {
+            admission: admissionInput("max-attempts-exhausted"),
+            readStatuses: async (_root: string, sha: string) => {
+              reads.push(sha);
+              return bySha[sha] ?? [];
+            },
+            listCommits: async () => [REVIEWED_HEAD, HELD, STATUS_HEAD],
+          }),
+        );
+        expect(reads).toEqual([HELD, REVIEWED_HEAD]);
+        expect(calls.map((c) => c.state)).toEqual(["failure"]);
+      });
+
+      // A hold names the commit whose verdict it held, so the walk jumps there: a PR with more commits
+      // since its last review than the walk's cap still finds that review instead of failing closed.
+      test("a hold points the walk at its carried commit, past the walk's cap", async () => {
+        const HOLD =
+          "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /pr-hero review or /pr-hero override";
+        const held = Array.from({ length: 25 }, (_, i) =>
+          (i + 1).toString(16).padStart(2, "0").repeat(20),
+        );
+        const bySha: Record<string, Row[]> = {
+          [REVIEWED_HEAD]: [row("success", "review posted", T1)],
+        };
+        bySha[held[held.length - 1] as string] = [row("pending", HOLD, T2)];
+        const reads: string[] = [];
+        const calls: StatusCall[] = [];
+        await publishCiSkip(
+          gateInput("manual-required", recordingStatus(calls), {
+            admission: admissionInput("max-attempts-exhausted"),
+            readStatuses: async (_root: string, sha: string) => {
+              reads.push(sha);
+              return bySha[sha] ?? [];
+            },
+            listCommits: async () => [REVIEWED_HEAD, ...held, STATUS_HEAD],
+          }),
+        );
+        expect(reads).toEqual([held[held.length - 1], REVIEWED_HEAD]);
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          ["pending", HOLD],
+        ]);
+      });
+
+      // Every rule that does not cap automatic reviews still carries a green.
+      test.each([
+        ["stopped", "automatic reviews stopped by a maintainer"],
+        ["low-risk-delta", "delta touches only low-risk paths"],
+        ["once-per-pr", "once_per_pr policy allows one automatic review"],
+        ["below-threshold", "prior findings below the re-review score floor"],
+      ] as const)("under %s a green still carries", async (reason, label) => {
+        const { calls } = await skipWith(
+          [row("success", "review posted", T1)],
+          reason,
+        );
+        expect(calls.map((c) => [c.state, c.description])).toEqual([
+          ["success", `crysk: no review needed (${label}); ${CARRIED_FROM}`],
         ]);
       });
 
@@ -1057,7 +1138,6 @@ describe("publishCiSkip: the outcome record", () => {
         };
 
         test.each([
-          ["max-attempts-exhausted", "review budget for this PR is used up"],
           ["stopped", "automatic reviews stopped by a maintainer"],
           ["once-per-pr", "once_per_pr policy allows one automatic review"],
         ] as const)(
@@ -1073,6 +1153,27 @@ describe("publishCiSkip: the outcome record", () => {
               [
                 "success",
                 `crysk: 2 answered finding(s), fixes unverified (${label}); ${CARRIED_FROM}`,
+              ],
+            ]);
+          },
+        );
+
+        test.each([
+          ["max-attempts-exhausted", "review budget for this PR is used up"],
+          ["manual-only-policy", "ci_review_policy is manual_only"],
+        ] as const)(
+          "under %s: every blocking finding answered holds the head pending, not green",
+          async (reason, label) => {
+            const { read } = answered(2, 0);
+            const { calls } = await skipWith(
+              [row("failure", BLOCKING_2, T1)],
+              reason,
+              { readAnswered: read },
+            );
+            expect(calls.map((c) => [c.state, c.description])).toEqual([
+              [
+                "pending",
+                `crysk: waiting for a manual review (${label}); ${CARRIED_FROM} — /pr-hero review or /pr-hero override`,
               ],
             ]);
           },
@@ -1113,7 +1214,7 @@ describe("publishCiSkip: the outcome record", () => {
           );
           expect(cutoffs).toEqual([T1]);
           expect(reads).toEqual([SKIPPED, REVIEWED_HEAD]);
-          expect(calls.map((c) => c.state)).toEqual(["success"]);
+          expect(calls.map((c) => c.state)).toEqual(["pending"]);
         });
 
         test("no review verdict down the chain hands readAnswered no cutoff (fail closed)", async () => {

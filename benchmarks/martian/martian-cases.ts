@@ -1,9 +1,9 @@
 // Build a Martian corpus case file from its vendored goldens ($0, read-only gh).
 //
-//   bun run scripts/martian-cases.ts sentry|grafana|keycloak|discourse
+//   bun run benchmarks/martian/martian-cases.ts sentry|grafana|keycloak|discourse
 //
-// Writes docs/benchmarks/martian-<corpus>-cases.json in the shape
-// scripts/martian-cal.ts reads. SHAs and size counters come from the GitHub
+// Writes benchmarks/martian/corpora/martian-<corpus>-cases.json in the shape
+// benchmarks/martian/martian-cal.ts reads. SHAs and size counters come from the GitHub
 // PR record named by each golden's URL. Fifteen of the fifty goldens point at
 // synthetic forks (`ai-code-review-evaluation/*`), not upstream PRs, so each
 // row records the clone URL its SHAs live in (`remote`). Never edit the output
@@ -17,7 +17,7 @@
 
 import path from "node:path";
 import type { MartianGoldenPr } from "#compare/martian-adapter";
-import { writeJsonAtomically } from "../src/execution/atomic-write";
+import { writeJsonAtomically } from "../../src/execution/atomic-write";
 
 const CORPORA: Record<string, string> = {
   sentry: "getsentry/sentry",
@@ -30,14 +30,14 @@ const corpus = Bun.argv[2] ?? "";
 const upstream = CORPORA[corpus];
 if (upstream === undefined) {
   console.error(
-    `usage: bun run scripts/martian-cases.ts ${Object.keys(CORPORA).join("|")}`,
+    `usage: bun run benchmarks/martian/martian-cases.ts ${Object.keys(CORPORA).join("|")}`,
   );
   process.exit(1);
 }
 
-const docs = path.join(import.meta.dir, "..", "docs", "benchmarks");
+const corpusDir = path.join(import.meta.dir, "corpora");
 const goldens = (await Bun.file(
-  path.join(docs, `martian-${corpus}-goldens.json`),
+  path.join(corpusDir, `martian-${corpus}-goldens.json`),
 ).json()) as MartianGoldenPr[];
 
 function gh<T>(endpoint: string): T {
@@ -89,7 +89,7 @@ for (const golden of goldens) {
   console.error(`${slug}#${number}  +${pull.additions}/-${pull.deletions}`);
 }
 
-const out = path.join(docs, `martian-${corpus}-cases.json`);
+const out = path.join(corpusDir, `martian-${corpus}-cases.json`);
 await writeJsonAtomically(out, {
   repo: upstream,
   pilot: prs.slice(0, 3).map((p) => p.pr),

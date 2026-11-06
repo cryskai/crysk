@@ -65,7 +65,7 @@ import type { CiMode } from "#pr/preflight";
 import type { Finding, FindingsDocument } from "#review/findings";
 import type { PrCommentDelta } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
-import { MARKER_OPEN } from "../brand";
+import { commandHint, MARKER_OPEN } from "../brand";
 import { CliUsageError } from "../errors";
 import { envBillsMetered } from "../execution/usage-normalized";
 import { ciForceReviewHintLine } from "./force-comment";
@@ -83,6 +83,7 @@ import {
 } from "./review-admission";
 import type { CiReviewPolicyMode } from "./review-policy";
 import type { DeltaRiskAssessment } from "./review-risk";
+import { OVERRIDE_COMMAND } from "./trigger";
 
 function usd(amount: number): string {
   return `$${amount.toFixed(2)}`;
@@ -697,8 +698,8 @@ function buildCoverageSkipComment(
 
 // budget-exhausted-carry S10: the comment a PR gets once no automatic review is left. It says so, explains
 // it by the repository's own rules, says what the gate does with the next pushes, and how to ask for more.
-// WHY no "override" here: an exhausted budget carries the last verdict (S2), and answered findings unlock a
-// carried red (S3), so nothing in this situation needs a human to unlock the gate.
+// Stage 2 #12: no review reads those pushes, so the gate holds a green instead of carrying it, and the
+// override is how a human merges a head no review verified.
 function buildManualRequiredComment(data: ManualRequiredSummary): string {
   const manualOnly = data.admissionReason === "manual-only-policy";
   const rules = [
@@ -724,9 +725,11 @@ function buildManualRequiredComment(data: ManualRequiredSummary): string {
     "",
     ...rules,
     "",
-    "What the gate does with the next pushes: it keeps the last review's verdict. A red verdict turns " +
-      "green, marked unverified, once every blocking finding has a reply from someone with write access: " +
-      "`applied`, or a `dismissed` the CI adjudicator upheld. Reply before you push: the gate reads the " +
+    "What the gate does with the next pushes: no review reads them, so it never turns green on its own. " +
+      "A red verdict stays red while a blocking finding is unanswered. A green verdict, or a red one whose " +
+      "blocking findings all have a reply from someone with write access (`applied`, or a `dismissed` the " +
+      "CI adjudicator upheld), waits as `pending` until a review verifies the head or " +
+      `${commandHint(OVERRIDE_COMMAND)} merges it unverified. Reply before you push: the gate reads the ` +
       "replies when the push arrives.",
     "",
     "The existing review comment still describes the last head Crysk reviewed.",

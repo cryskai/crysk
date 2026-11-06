@@ -42,6 +42,7 @@ import {
   LEGACY_BIN_NAME,
   matchMarkerPrefix,
 } from "../brand";
+import { publishedText, redactSecrets } from "../security/published-text";
 
 export interface DiffStat {
   files: number;
@@ -961,7 +962,7 @@ function liveFindingLines(rereview: RereviewDelta | undefined): string[] {
           ? "⚠️ severity unavailable"
           : severityEmoji(row.sev);
       out.push(
-        `- \`${row.status}\` ${badge} \`${loc}\` — ${liveClaimText(row.claim)} (${row.id})`,
+        `- \`${row.status}\` ${badge} ${code(loc)} — ${liveClaimText(row.claim)} (${row.id})`,
       );
     }
     out.push("");
@@ -1257,7 +1258,7 @@ function findingLocationLine(
 ): string {
   const loc = code(`${finding.path}:${finding.line}`);
   const linked =
-    linkLocation && webUrl !== undefined
+    linkLocation && webUrl !== undefined && isLinkablePath(finding.path)
       ? `[${loc}](${blobUrl(webUrl, headSha, finding.path, `L${finding.line}`)})`
       : loc;
   // A POSITIVE type test, not `=== undefined`. Defence in depth: the draft and
@@ -1326,16 +1327,11 @@ function tierExplanationLines(finding: Finding): string[] {
 
 // The judge's reason is model text written about author-controlled input,
 // and it is posted. One line (a newline would end the list item and could
-// start a forged header line), capped, with HTML comment delimiters broken so
-// it can never open or close a marker the comment parsers read, and `@`
-// defused so it cannot notify anyone.
+// start a forged header line) and capped; oneLine makes it safe to publish.
 const MATERIALITY_REASON_MAX = 280;
 
 function materialityReason(reason: string): string {
-  const flat = oneLine(reason)
-    .replaceAll("<!--", "<!‐‐")
-    .replaceAll("-->", "‐‐>")
-    .replaceAll("@", "@\u200b");
+  const flat = oneLine(reason);
   return flat.length <= MATERIALITY_REASON_MAX
     ? flat
     : `${flat.slice(0, MATERIALITY_REASON_MAX - 1).trimEnd()}…`;
@@ -1351,7 +1347,7 @@ function promptToFixBlock(finding: Finding): string[] {
     "<details><summary>Prompt to fix with AI</summary>",
     "",
     "```",
-    `Fix this issue in ${finding.path} at line ${finding.line}:`,
+    `Fix this issue in ${oneLine(finding.path)} at line ${finding.line}:`,
     "",
     oneLine(finding.claim),
     "```",
@@ -1520,7 +1516,7 @@ function renderRef(
 ): string {
   if (webUrl === undefined) return code(ref);
   const parsed = parseRefAnchor(ref);
-  if (parsed === null) return code(ref);
+  if (parsed === null || !isLinkablePath(parsed.path)) return code(ref);
   const fragment =
     parsed.end === undefined
       ? `L${parsed.start}`
@@ -1559,6 +1555,27 @@ function parseRefAnchor(ref: string): {
   };
 }
 
+// A finding's path is whatever the model wrote; nothing checks that the file
+// exists. A span redacts it, but a link's href needs the original, so a path
+// carrying a secret gets no link.
+export function isLinkablePath(path: string): boolean {
+  return redactSecrets(path) === path;
+}
+
+// A path is author-controlled and lands in a Markdown link. `)` would end the
+// link and leave what follows as text, where `@name` is a real mention. Parens are
+// encoded by hand because encodeURIComponent leaves them. An unpaired surrogate
+// would make it throw, and a post that was paid for must not be lost to a path.
+function encodeBlobPath(path: string): string {
+  return path
+    .toWellFormed()
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")
+    .replaceAll("(", "%28")
+    .replaceAll(")", "%29");
+}
+
 // Exported for ui/result.ts, the second surface that links a finding to its
 // source. Deliberately SHARED rather than re-derived: the markdown report and
 // the terminal block must point a reader at the same bytes, and two copies of
@@ -1570,7 +1587,7 @@ export function blobUrl(
   path: string,
   fragment: string,
 ): string {
-  return `${webUrl}/blob/${sha}/${path}#${fragment}`;
+  return `${webUrl}/blob/${sha}/${encodeBlobPath(path)}#${fragment}`;
 }
 
 function runLines(doc: FindingsDocument, meta: ReportMeta): string[] {
@@ -1809,9 +1826,12 @@ export function code(text: string): string {
 }
 
 // Claims arrive as free prose and sometimes carry newlines; a raw newline
-// inside a list item silently ends the item.
+// inside a list item silently ends the item. Every piece of model text and every
+// span in this file passes through here, which makes this the one place it is
+// made safe to publish. The finding marker fingerprints the raw claim instead, so
+// a comment posted before this existed still matches its finding.
 function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return publishedText(text.replace(/\s+/g, " ").trim());
 }
 
 function usd(amount: number): string {

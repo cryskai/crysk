@@ -1405,6 +1405,92 @@ describe("postInlineFindings — previousHeadSha reaches the rendered summary", 
     // even with previousHeadSha wired to undefined.
     expect(summaryCall?.stdin).toContain(`Δ since \`${OLD_HEAD.slice(0, 8)}\``);
   });
+
+  // PR #475 R001: a post with no re-review framing over another head's summary writes no state block.
+  // A block holding only this run's findings would replace the marker recovery the next review relies
+  // on, so still-open findings from older heads (blocking ones included) would stop being priors.
+  test("no re-review framing over another head's summary: no state block, so markers stay the priors", async () => {
+    const priorSummary = `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`;
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: priorSummary }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+    await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    const bodies = calls
+      .map((c) => c.stdin ?? "")
+      .filter((b) => b.startsWith("<!-- crysk-report "));
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body).not.toContain("<!-- crysk-state ");
+  });
+});
+
+describe("postInlineFindings — the record of findings across runs", () => {
+  const gh = () =>
+    makeFakeGh([
+      { match: ["issues/42/comments", "--paginate"], response: { stdout: "" } },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+
+  test("a first review records its findings under stable ids", async () => {
+    const { spawnFn } = gh();
+    const posted = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({
+        findings: [
+          finding({ id: "F001", path: "src/a.ts", line: 3 }),
+          finding({ id: "F002", path: "src/a.ts", line: 9 }),
+        ],
+      }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(posted.findingState?.fresh).toEqual({ F001: "R001", F002: "R002" });
+    expect(posted.findingState?.open.map((row) => row.id)).toEqual([
+      "R001",
+      "R002",
+    ]);
+    expect(posted.findingState?.resolved).toEqual([]);
+    expect(JSON.stringify(posted.findingState)).not.toContain("src/a.ts");
+  });
+
+  test("a post that writes no state block records nothing, so nothing is claimed", async () => {
+    const priorSummary = `<!-- pr-hero-report head=${OLD_HEAD} -->\n## pr-hero review`;
+    const { spawnFn } = makeFakeGh([
+      {
+        match: ["issues/42/comments", "--paginate"],
+        response: {
+          stdout: ndjson([{ id: 1, user: "pr-hero", body: priorSummary }]),
+        },
+      },
+      { match: ["pulls/42/comments", "--paginate"], response: { stdout: "" } },
+    ]);
+    const posted = await postInlineFindings({
+      operatorRoot: OPERATOR_ROOT,
+      pr: 42,
+      headSha: HEAD,
+      doc: doc({ findings: [] }),
+      diffPatch: diffAddingLines("src/a.ts", 20),
+      webUrl: undefined,
+      spawnFn,
+    });
+    expect(posted.findingState).toBeUndefined();
+  });
 });
 
 // WARN-5's other half: the fingerprint tie-break (design D3) depends on the

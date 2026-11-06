@@ -1,11 +1,11 @@
-// Martian offline harness, one corpus at a time (`docs/martian-bench.md`).
+// Martian offline harness, one corpus at a time (`benchmarks/martian/README.md`).
 // `--corpus cal` (default) is the Cal.com slice; sentry, grafana, keycloak and
-// discourse are the other forty PRs (case files from scripts/martian-cases.ts).
+// discourse are the other forty PRs (case files from benchmarks/martian/martian-cases.ts).
 //
-//   bun run scripts/martian-cal.ts plan    # $0 — size gate + cost band
-//   bun run scripts/martian-cal.ts check   # $0 — fetch SHAs, dry-run the CLI
-//   bun run scripts/martian-cal.ts run     # LIVE — default: the 3-PR pilot
-//   bun run scripts/martian-cal.ts score   # $0 — findings vs goldens, no judge
+//   bun run benchmarks/martian/martian-cal.ts plan    # $0 — size gate + cost band
+//   bun run benchmarks/martian/martian-cal.ts check   # $0 — fetch SHAs, dry-run the CLI
+//   bun run benchmarks/martian/martian-cal.ts run     # LIVE — default: the 3-PR pilot
+//   bun run benchmarks/martian/martian-cal.ts score   # $0 — findings vs goldens, no judge
 //
 // Local mode, never `--pr`: PR mode posts a commit status on the head, and
 // these are other people's merged PRs. `--two-dot` because the PRs are merged
@@ -32,13 +32,13 @@ import {
   DEFAULT_SIZE_GATE,
   evaluateSizeGateAggregate,
 } from "#review/size-gate";
-import { writeJsonAtomically } from "../src/execution/atomic-write";
+import { writeJsonAtomically } from "../../src/execution/atomic-write";
 import {
   BENCH_HOME,
   type CaseRow,
   type CasesFile,
   CORPORA,
-  corpusDocsFile,
+  corpusFile,
 } from "./martian-corpora";
 import {
   type BenchmarkSchedule,
@@ -50,7 +50,7 @@ import {
 const DEFAULT_LAB_AGENTS_DIR =
   "/Users/juanma/Desktop/deep-review/agents/slice3b-lifecycle-v6-clean";
 
-const ROOT = path.join(import.meta.dir, "..");
+const ROOT = path.join(import.meta.dir, "..", "..");
 // Display/cost only (never affects which agents actually run — that is
 // localReviewSpec() itself, resolved fresh per CLI subprocess in review()
 // below). Derived rather than a hand-maintained literal so an unconditional
@@ -81,7 +81,7 @@ function argValue(flag: string): string | undefined {
 const mode = Bun.argv[2];
 if (mode !== "plan" && mode !== "check" && mode !== "run" && mode !== "score") {
   fail(
-    "usage: bun run scripts/martian-cal.ts plan|check|run|score [--corpus cal|sentry|grafana|keycloak|discourse] [--all] [--only 14943,8330] [--arm <id>] [--model <logical>] [--hunter-model <l>] [--refuter-model <l>] [--repo …] [--runs …]",
+    "usage: bun run benchmarks/martian/martian-cal.ts plan|check|run|score [--corpus cal|sentry|grafana|keycloak|discourse] [--all] [--only 14943,8330] [--arm <id>] [--model <logical>] [--hunter-model <l>] [--refuter-model <l>] [--repo …] [--runs …]",
   );
 }
 
@@ -90,9 +90,9 @@ const corpus = CORPORA[corpusName];
 if (corpus === undefined) {
   fail(`--corpus must be one of ${Object.keys(CORPORA).join(", ")}`);
 }
-const CASES_PATH = corpusDocsFile(corpusName, "cases.json");
-const GOLDENS_PATH = corpusDocsFile(corpusName, "goldens.json");
-const GOTCHAS_PATH = corpusDocsFile(corpusName, "gotchas.md");
+const CASES_PATH = corpusFile(corpusName, "cases.json");
+const GOLDENS_PATH = corpusFile(corpusName, "goldens.json");
+const GOTCHAS_PATH = corpusFile(corpusName, "gotchas.md");
 const DEFAULT_REPO = path.join(BENCH_HOME, corpus.clone);
 const DEFAULT_RUNS = path.join(BENCH_HOME, corpus.runs);
 const cases = (await Bun.file(CASES_PATH).json()) as CasesFile;
@@ -458,13 +458,13 @@ if (mode === "run") {
     console.error(`martian-cal run: ${failures.length} failure(s):`);
     for (const f of failures) console.error(`  ${f}`);
   }
-  console.error("Now: bun run scripts/martian-cal.ts score");
+  console.error("Now: bun run benchmarks/martian/martian-cal.ts score");
   process.exit(failures.length === 0 ? 0 : 1);
 }
 
 if (!existsSync(runsRoot)) {
   fail(
-    `no runs root at ${runsRoot} — run \`bun run scripts/martian-cal.ts run\` first`,
+    `no runs root at ${runsRoot} — run \`bun run benchmarks/martian/martian-cal.ts run\` first`,
   );
 }
 

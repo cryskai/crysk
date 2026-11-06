@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-06
+
+### Security
+- **Model text is made safe before it is published.** A pull request can steer what a model writes about it, and findings, the review summary, CI adjudication evidence and triage replies were posted as written. Credential-shaped text is now redacted, and mentions, Markdown images, raw HTML and HTML comments are defused, in PR comments, the step summary and the state block. A finding or path can no longer spell a marker that hides the real state block. `findings.json` in the run artifact still holds the original text.
+
+### Added
+- **Platform mode: a run the Crysk platform dispatched posts as the Crysk App's bot.** When the event is
+  `workflow_dispatch` and the `dispatch-id` input is non-empty, a new `Connect to Crysk` step exchanges the
+  run's GitHub OIDC token (audience `crysk`) for a repo-scoped installation token, masks it, and the trigger,
+  run, publish and cancel-settle steps use it in place of `github.token`. The platform URL is a constant in
+  the engine, never an input. Any failure (no `id-token: write`, HTTP 401, 403, 409 or 429, a network error,
+  a token that cannot be written to `GITHUB_OUTPUT`)
+  turns the run red with the cause; platform mode never falls back to `github.token`. Standalone runs take
+  the same path as before. The publish and cancel-settle steps run the exchange again for a fresh token, so a
+  long review's late posts never ride an installation token minted an hour earlier. The gate also trusts the
+  App login the platform returns (`github_actor`) as a poster of findings and summaries, in platform mode only.
+- **Platform mode: every finished run is reported to the Crysk platform.** The platform steps now also output
+  the masked `run-token`, and a new `Report to Crysk` step after `Publish Crysk outcome` POSTs the run's
+  outcome, PR number, shas, blocking and advisory counts, token and cost totals and per-agent usage to
+  `/runs/report`, so each run is recorded with its cost. The body is metadata only: no finding, claim,
+  summary or hop trail. Failed and skipped reviews are reported too (zero counts when the action
+  published no run directory). A report failure, including one while reading or shaping the run
+  directory, is a `::warning::` and never turns the job red. Standalone runs are unchanged. The report also
+  carries the gate's own count of open blocking findings and each finding's state under the ids that last
+  across runs, so the platform tells new, still-open and resolved findings apart without guessing, and the
+  number of findings the refuter removed per hunter (counts only) with how long indexing took.
+- **Platform mode: the run's findings are uploaded to the Crysk platform.** Right after a successful
+  `/runs/report`, the `Report to Crysk` step POSTs `{ schema_version, findings }` to `/runs/findings` with
+  the same run token: the `findings` array of `findings.json`, each object as the engine wrote it, at most
+  the first 500 (a `::warning::` names how many were dropped). `debug.refuted`, `debug.deduped` and the
+  summary are never sent, and a run with no `findings.json` or zero findings, or a failed report, sends
+  nothing. In a `metadata_only` repository the code never leaves the runner: every token exchange outputs the
+  platform's `data_mode` as `data-mode` and the report step reads the one that minted its run token, so a
+  mode switched during a long run is honoured (anything but exactly `full` or `metadata_only` fails closed to
+  `metadata_only`, with a `::notice::`), and each finding is then reduced to non-text fields (`id`,
+  `category`, `path`, `line`, `severity`, `tier`, `hunter`, `evidence_class`, `refuter_verdict`,
+  `causal_disposition`, `root_cause_id`, `hops_used`), never the claim, proof refs, hop trail, symbol, dedupe
+  key or materiality. The platform encrypts what it receives in `full` mode. A failure
+  (HTTP 409, 401, 400, 413 or a network error) is a `::warning::` with the status and message, never a
+  token, and never turns the job red. Standalone runs are unchanged.
+- **Platform mode: the review configuration the Crysk platform holds is applied on the runner.** The token
+  exchange's `config: { person, repo }` now reaches the engine's own two-layer read. `person` is written to
+  the personal config file the action already writes `routing` to (its `routing` wins over the `routing`
+  input; without one the input keeps working), and `repo` is used only when the checkout has no
+  `.crysk/config.json` (or legacy `.prhero/config.json`) of its own, through the CLI's existing `--config`
+  override pointing at a temp file outside the workspace; a repository's own file wins whole and a
+  `::notice::` says so. Empty objects change nothing. A value the engine's parsers refuse, a malformed
+  `config`, or a file that cannot be written fails the run, naming the layer and the key or file, never a
+  value or a token. Standalone runs are unchanged. In platform mode the personal config file belongs to the
+  run (rewritten, or removed when there is nothing to write, so a runner whose `HOME` persists never reads an
+  earlier run's keys), a `post` the platform sets is applied (`--post` is left out, since the flag would
+  outrank the config), platform routing overrides the input for the OpenCode install and the no-credentials
+  backend alike, and the refresh steps ignore the `config` in their response.
+
+### Changed
+- **The GraphQL issue-comments fallback reports Bot authors as `<login>[bot]`**, as the REST path and the
+  review-comments fallback already did. Before, a bot's comments read on that path (for example
+  `github-actions[bot]` summaries in standalone mode) arrived under the bare login, so exact-login trust
+  checks missed them; they now match in every mode.
+- **An exhausted review budget or `manual_only` no longer turns an unreviewed head green.** Under these two
+  rules no later push gets an automatic review, so a carried green (or answered findings unlocking a carried
+  red) let code no review read merge: one measured pull request merged green over 11 unreviewed commits. The
+  gate now holds such a head `pending` with `crysk: waiting for a manual review (<rule>); carried from <sha>
+  — /pr-hero review or /pr-hero override`. A red still carries as a red. The hold is not a review in
+  flight: `crysk status` answers `override-or-fix` instead of `wait`, the next skip follows the hold to the
+  commit it names, and the loop metrics count it as not green. `/crysk stop`, a low-risk or below-threshold
+  delta, and once per PR still carry a green. A required `crysk` check now blocks merge on those heads until a
+  maintainer reviews or overrides them.
+
+### Fixed
+- **`crysk status` sees a first review's outside-diff findings.** An outside-diff finding has no comment of its
+  own; its only machine-readable copy is the summary's `crysk-state` block, and a first review wrote none. So
+  `crysk status` reported no findings and `done` over open advisories, and routed a blocking one to "names no
+  live blocking finding". The first review now writes the block too, and a `done` over summary-only findings
+  says so in its reason ("N finding(s) live only in the summary comment"). The next review reads its priors
+  from the block instead of recovering them from comment markers.
+- **A long run of held pushes keeps its hold.** The hold names the commit whose verdict it held, and the next
+  skip's walk jumps there, so a pull request with more than 20 commits since its last review no longer falls
+  to a red "found no earlier verdict".
+
 ## [0.3.3] - 2026-11-04
 
 ### Added
@@ -650,7 +730,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cryskai/crysk/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/cryskai/crysk/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/cryskai/crysk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/cryskai/crysk/compare/v0.3.0...v0.3.1

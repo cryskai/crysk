@@ -183,6 +183,58 @@ describe("renderStepSummary — completed review with findings", () => {
   });
 });
 
+describe("renderStepSummary — model text is safe to publish", () => {
+  test("a hostile claim and path carry no mention, image, HTML or secret", () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const hostile = `@octocat ![x](https://evil.example/p.png) ${token} <img src=x>`;
+    const out = renderStepSummary({
+      kind: "reviewed",
+      prNumber: 123,
+      headSha: HEAD_SHA,
+      findings: [
+        finding({ id: "F001", claim: hostile, path: `src/x ${hostile}.ts` }),
+      ],
+      costUsdEst: 1,
+      wallMs: 1000,
+      model: "sonnet",
+    });
+    expect(out).not.toContain("@octocat");
+    expect(out).not.toContain("![x]");
+    expect(out).not.toContain(token);
+    expect(out).not.toContain("<img");
+  });
+});
+
+describe("renderStepSummary — a model-written path", () => {
+  const base = {
+    kind: "reviewed" as const,
+    prNumber: 123,
+    headSha: HEAD_SHA,
+    costUsdEst: 1,
+    wallMs: 1000,
+    model: "sonnet",
+    repoWebUrl: "https://github.com/acme/app",
+  };
+
+  test("a backtick cannot close its code span and start a link", () => {
+    const path = "a`](https://evil.example)[`b";
+    const out = renderStepSummary({
+      ...base,
+      findings: [finding({ id: "F001", path })],
+    });
+    expect(out).not.toContain("a`]");
+  });
+
+  test("a token in the path reaches no link", () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const out = renderStepSummary({
+      ...base,
+      findings: [finding({ id: "F001", path: `src/${token}.ts` })],
+    });
+    expect(out).not.toContain(token);
+  });
+});
+
 describe("renderStepSummary — clean review (no findings)", () => {
   const data: CiSummaryData = {
     kind: "reviewed",

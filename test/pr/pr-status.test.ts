@@ -181,6 +181,21 @@ describe("buildPrStatus: next_action, first match wins", () => {
       state: "pending",
     },
     {
+      // Stage 2 #12: the gate's hold is no run, fresh or not; a human picks review or override.
+      name: "a fresh manual-review hold is not in flight: review or override",
+      input: input({
+        statuses: [
+          gate(
+            "pending",
+            "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /pr-hero review or /pr-hero override",
+            5,
+          ),
+        ],
+      }),
+      action: "override-or-fix",
+      state: "pending",
+    },
+    {
       name: "no pr-hero status on the head means review",
       input: input(),
       action: "review",
@@ -1874,6 +1889,62 @@ describe("buildPrStatus: a live blocking row with no comment thread", () => {
       1,
     );
   });
+
+  // PR #472: a first review's outside-diff advisories live only in the summary. A green gate is still
+  // done (no thread can carry a reply), but the reason must name them, or the loop merges unread.
+  test("a green gate with a summary-only advisory is done, and the reason names it", () => {
+    const status = buildPrStatus(
+      input({
+        statuses: [gate("success", "review posted")],
+        issueComments: [
+          {
+            id: 100,
+            body: summary(CURRENT, [
+              stateRow("R001", CLAIM, "advisory", "src/c.ts:7"),
+            ]),
+          },
+        ],
+      }),
+    );
+    expect(status.next_action).toBe("done");
+    expect(status.reason).toBe(
+      "The review on this head passed the gate, and every finding on this head has a reply. 1 finding(s) live only in the summary comment (outside the diff, no thread to reply in); read them there before merging.",
+    );
+  });
+
+  // PR #475 R002: every green `done`, not only the plain one, names the summary-only rows.
+  test.each([
+    ["an override", OVERRIDE_DESCRIPTION],
+    [
+      "an unverified-fixes green",
+      "crysk: 1 answered finding(s), fixes unverified (review budget for this PR is used up); carried from aaaaaaa",
+    ],
+    [
+      "a nothing-to-review green",
+      "crysk: nothing to review — every changed file is excluded",
+    ],
+  ])(
+    "%s with a summary-only advisory names it in its done reason",
+    (_name, description) => {
+      const status = buildPrStatus(
+        input({
+          statuses: [gate("success", description)],
+          issueComments: [
+            {
+              id: 100,
+              body: summary(CURRENT, [
+                stateRow("R001", CLAIM, "advisory", "src/c.ts:7"),
+              ]),
+            },
+          ],
+        }),
+      );
+      expect(status.next_action).toBe("done");
+      expect(status.reason).toContain(
+        "1 finding(s) live only in the summary comment (outside the diff, no thread to reply in); read them there before merging.",
+      );
+    },
+  );
 });
 
 describe("shouldWaitPrStatus", () => {

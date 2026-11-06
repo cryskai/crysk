@@ -43,6 +43,7 @@ describe("Packaging & distribution configuration", () => {
     expect(pkg.files).toContain("dist");
     expect(pkg.files).not.toContain("docs");
     expect(pkg.files).not.toContain("scripts");
+    expect(pkg.files).not.toContain("benchmarks");
     expect(pkg.files).not.toContain("fixtures");
     expect(pkg.files).not.toContain("test");
     expect(pkg.files).not.toContain("openspec");
@@ -202,7 +203,9 @@ describe("Packaging & distribution configuration", () => {
   test("ci workflow invokes the real biome binary, never the bunx shim", () => {
     const workflowPath = path.join(rootDir, ".github", "workflows", "ci.yml");
     const content = readFileSync(workflowPath, "utf-8");
-    expect(content).toContain("./node_modules/.bin/biome check src test");
+    expect(content).toContain(
+      "./node_modules/.bin/biome check src test benchmarks\n",
+    );
 
     // Comments are stripped before the negative assertion on purpose: the
     // workflow SHOULD name the antipattern to explain why the long path is
@@ -612,7 +615,13 @@ describe("Packaging & distribution configuration", () => {
       github: Record<string, string>;
       trigger: Record<string, string>;
       runner: Record<string, string>;
+      // Outputs of the materialize step the run step reads.
+      materialize?: Record<string, string>;
+      // Outputs of the platform connect step (empty in a standalone run).
+      platform?: Record<string, string>;
     }
+    const EFFECTIVE_OPENCODE_ROUTING =
+      "steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode'))";
     function resolveEnv(
       env: Record<string, string>,
       ctx: ActionContext,
@@ -635,6 +644,29 @@ describe("Packaging & distribution configuration", () => {
         if (runner !== undefined) return ctx.runner[runner] ?? "";
         const output = /^steps\.trigger\.outputs\.(\w+)$/.exec(expr)?.[1];
         if (output !== undefined) return ctx.trigger[output] ?? "";
+        // Platform mode is off in every run this harness simulates, so the
+        // step's output is unset and the `||` falls through to the input.
+        const fallback =
+          /^steps\.platform\.outputs\.github-token \|\| inputs\.([\w-]+)$/.exec(
+            expr,
+          )?.[1];
+        if (fallback !== undefined) return input(fallback);
+        if (expr === "steps.platform.outputs.github-actor") return "";
+        // The effective OpenCode routing: the platform's answer when it sent a
+        // routing (`true` or `false`), the input's otherwise.
+        if (expr === EFFECTIVE_OPENCODE_ROUTING) {
+          const platformRouting = ctx.platform?.["routing-opencode"] ?? "";
+          return String(
+            platformRouting === "true" ||
+              (platformRouting === "" && input("routing").includes("opencode")),
+          );
+        }
+        const materialized = /^steps\.materialize\.outputs\.([\w-]+)$/.exec(
+          expr,
+        )?.[1];
+        if (materialized !== undefined) {
+          return ctx.materialize?.[materialized] ?? "";
+        }
         throw new Error(`unsupported expression in an action.yml env: ${expr}`);
       };
       // A value may hold one expression or several, mixed with literal text
@@ -676,6 +708,8 @@ describe("Packaging & distribution configuration", () => {
       // The exit code the fake CLI returns, so the run step's handling of a
       // failed CLI can be observed. Zero unless a test says otherwise.
       cliExit = 0,
+      // What the materialize step reported (platform mode's `repo-config`).
+      materialize: Record<string, string> = {},
     ): Promise<{
       exitCode: number;
       trigger: Record<string, string>;
@@ -747,6 +781,7 @@ describe("Packaging & distribution configuration", () => {
           github,
           trigger,
           runner,
+          materialize,
         });
         const script = (runStep?.run ?? "").replaceAll(
           `\${{ github.action_path }}`,
@@ -824,17 +859,145 @@ describe("Packaging & distribution configuration", () => {
       },
     );
 
+    // Platform mode: the setup step names a temp file holding the platform's
+    // repo layer ONLY for a checkout with no repo config of its own, and the
+    // run step hands it to the engine's `--config` (which repoints the repo
+    // layer and nothing else). Every other run passes no `--config` at all.
+    test("--config is passed only when the setup step named a repo layer file", async () => {
+      const without = await cliArgsFor({ "pr-number": "305" });
+      expect(without).not.toContain("--config");
+
+      const run = await runAction(
+        { ...CREDENTIAL, "pr-number": "305" },
+        dispatchContext,
+        offlineGh,
+        0,
+        {
+          "repo-config":
+            "/runner/temp/crysk-platform/platform-repo-config.json",
+        },
+      );
+      const args = run.args ?? [];
+      const at = args.indexOf("--config");
+      expect(at).toBeGreaterThan(-1);
+      expect(args[at + 1]).toBe(
+        "/runner/temp/crysk-platform/platform-repo-config.json",
+      );
+    });
+
+    // An explicit CLI option outranks the config, and `--post` is passed by
+    // default, so a `post` the platform sets reaches the engine only when the
+    // run step leaves the flag out.
+    test.each([
+      ["the default input and no platform post", {}, {}, true],
+      ["the input off", { post: "false" }, {}, false],
+      [
+        "the default input and a platform post",
+        {},
+        { "post-from-platform": "true" },
+        false,
+      ],
+      [
+        "the input off and a platform post",
+        { post: "false" },
+        { "post-from-platform": "true" },
+        false,
+      ],
+    ])("--post with %s", async (_label, inputs, materialize, expectPost) => {
+      const run = await runAction(
+        { ...CREDENTIAL, "pr-number": "305", ...inputs },
+        dispatchContext,
+        offlineGh,
+        0,
+        materialize,
+      );
+      expect(run.args).toContain("--yes");
+      expect(run.args?.includes("--post")).toBe(expectPost);
+    });
+
+    test("the setup step is told only by presence that the connect step ran", () => {
+      const materialize = steps().find((step) => step.id === "materialize");
+      expect(materialize?.env?.CRYSK_PLATFORM_CONNECTED).toBe(
+        `\${{ steps.platform.outputs.github-token != '' }}`,
+      );
+      const run = steps().find((step) => step.id === "run-crysk");
+      expect(run?.env?.POST_FROM_PLATFORM).toBe(
+        `\${{ steps.materialize.outputs.post-from-platform }}`,
+      );
+    });
+
+    test("the setup and run steps read the platform's files only through env bound to the connect step's outputs", () => {
+      const materialize = steps().find((step) => step.id === "materialize");
+      expect(materialize?.env?.CRYSK_PLATFORM_CONFIG_FILE).toBe(
+        `\${{ steps.platform.outputs.config-file }}`,
+      );
+      const run = steps().find((step) => step.id === "run-crysk");
+      expect(run?.env?.CRYSK_REPO_CONFIG).toBe(
+        `\${{ steps.materialize.outputs.repo-config }}`,
+      );
+      // Only the first connect step may leave the configuration; the refresh
+      // steps never bind the directory.
+      const connect = steps().find((step) => step.id === "platform");
+      expect(connect?.env?.CRYSK_PLATFORM_CONFIG_DIR).toBe(
+        `\${{ runner.temp }}/crysk-platform`,
+      );
+      for (const id of ["platform-publish", "platform-settle"]) {
+        const refresh = steps().find((step) => step.id === id);
+        expect(refresh?.env?.CRYSK_PLATFORM_CONFIG_DIR).toBeUndefined();
+      }
+    });
+
+    test("platform routing that names OpenCode installs the OpenCode CLI too, and platform routing that does not overrides the input", () => {
+      const install = steps().find(
+        (step) => step.name === "Install OpenCode CLI",
+      );
+      // The same effective test the trigger step binds: the platform's answer
+      // when it sent a routing, the input's only when it sent none.
+      expect(String(install?.if)).toBe(
+        `\${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || ${EFFECTIVE_OPENCODE_ROUTING}) }}`,
+      );
+    });
+
+    test.each([
+      ["platform names OpenCode, input empty", "true", "", "true"],
+      [
+        "platform names OpenCode, input names it too",
+        "true",
+        "opencode",
+        "true",
+      ],
+      ["platform does not, input names OpenCode", "false", "opencode", "false"],
+      ["platform does not, input empty", "false", "", "false"],
+      ["no platform routing, input names OpenCode", "", "opencode", "true"],
+      ["no platform routing, input empty", "", "", "false"],
+    ])(
+      "the trigger's backend flag follows the platform's routing over the input: %s",
+      (_label, platformRouting, routing, expected) => {
+        const env = resolveEnv(triggerStep()?.env ?? {}, {
+          inputs: { routing },
+          github: {},
+          trigger: {},
+          runner: { temp: "/runner/temp" },
+          platform: { "routing-opencode": platformRouting },
+        });
+        expect(env.HAS_OPENCODE_ROUTING).toBe(expected);
+      },
+    );
+
     // ---------------------------------------------------------------------
     // The trigger step (odd/tasks/agent-first-ci.md, T1/S1): credential
     // detection and the `/pr-hero review` comment command live in the
     // action, so the calling workflow can be one short file.
     // ---------------------------------------------------------------------
 
-    test("the trigger runs right after Setup Bun, before anything is installed", () => {
+    test("the platform step, then the trigger, run right after Setup Bun, before anything is installed", () => {
       const all = steps();
       const setupBun = all.findIndex((step) => step.name === "Setup Bun");
       expect(setupBun).toBeGreaterThan(-1);
-      const trigger = all[setupBun + 1];
+      // Platform mode only: gated off for every standalone run, so the trigger
+      // is still the first step a standalone run executes after Setup Bun.
+      expect(all[setupBun + 1]?.id).toBe("platform");
+      const trigger = all[setupBun + 2];
       expect(trigger?.id).toBe("trigger");
       expect(trigger?.run).toContain("src/ci/trigger.ts");
     });
@@ -848,7 +1011,9 @@ describe("Packaging & distribution configuration", () => {
       // The publisher is gated on the publish output instead: it must also
       // run for the outcomes where the run never starts (T2b).
       const ungated = after
-        .filter((step) => step.id !== "publish")
+        .filter(
+          (step) => step.id !== "publish" && step.id !== "platform-publish",
+        )
         .filter(
           (step) =>
             !String(step.if ?? "").includes(
@@ -934,7 +1099,9 @@ describe("Packaging & distribution configuration", () => {
     });
 
     test("the trigger has a token for its permission and head lookups", () => {
-      expect(triggerStep()?.env?.GH_TOKEN).toBe(`\${{ inputs.github-token }}`);
+      expect(triggerStep()?.env?.GH_TOKEN).toBe(
+        `\${{ steps.platform.outputs.github-token || inputs.github-token }}`,
+      );
     });
 
     // ---------------------------------------------------------------------
@@ -966,10 +1133,16 @@ describe("Packaging & distribution configuration", () => {
       const upload = all.findIndex(
         (step) => step.name === "Upload Crysk run directory",
       );
-      expect(publish).toBe(run + 1);
-      // The cancel settle (SB3) sits between publish and the upload, right after publish.
+      // The platform refresh (platform mode only) sits between run and publish.
+      expect(all[run + 1]?.id).toBe("platform-publish");
+      expect(publish).toBe(run + 2);
+      // The run report (platform mode only) follows publish directly.
+      expect(all[publish + 1]?.id).toBe("report");
+      // The cancel settle (SB3) sits between publish and the upload, after the report.
       const settle = all.findIndex((step) => step.id === "cancel-settle");
-      expect(settle).toBe(publish + 1);
+      // The cancelled-run refresh sits between the report and the settle.
+      expect(all[publish + 2]?.id).toBe("platform-settle");
+      expect(settle).toBe(publish + 3);
       expect(upload).toBe(settle + 1);
       const step = all[publish];
       // A cancelled job still reaches always() steps, so always() would publish
@@ -987,7 +1160,7 @@ describe("Packaging & distribution configuration", () => {
       const all = steps();
       const publish = all.findIndex((step) => step.id === "publish");
       const settle = all.findIndex((step) => step.id === "cancel-settle");
-      expect(settle).toBe(publish + 1);
+      expect(settle).toBe(publish + 3);
       const step = all[settle];
       expect(step?.if).toBe(
         `\${{ cancelled() && steps.trigger.outputs.run == 'true' }}`,
@@ -999,7 +1172,7 @@ describe("Packaging & distribution configuration", () => {
       // Every value it reads is bound as the publish step binds it. It reads no
       // run attempt: its lock is the outcome directory the trigger cleared.
       for (const key of Object.keys(publishEnv)) {
-        if (key === "GITHUB_RUN_ATTEMPT") continue;
+        if (key === "GITHUB_RUN_ATTEMPT" || key === "GH_TOKEN") continue;
         expect(env?.[key]).toBe(publishEnv[key]);
       }
       expect(env?.GITHUB_RUN_ATTEMPT).toBeUndefined();
@@ -1013,9 +1186,49 @@ describe("Packaging & distribution configuration", () => {
         ...String(step?.run ?? "").matchAll(/\$\{\{[^}]*\}\}/g),
       ].map((match) => match[0]);
       expect(expressions).toEqual([`\${{ github.action_path }}`]);
-      expect(step?.env?.GH_TOKEN).toBe(`\${{ inputs.github-token }}`);
+      expect(step?.env?.GH_TOKEN).toBe(
+        `\${{ steps.platform-publish.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}`,
+      );
       expect(step?.env?.GITHUB_REPOSITORY).toBe(`\${{ github.repository }}`);
       expect(step?.env?.GITHUB_RUN_ID).toBe(`\${{ github.run_id }}`);
+    });
+
+    // WHY: every platform run is recorded, so the report must follow failed and
+    // skipped reviews too, yet never a cancelled job or a standalone run.
+    test("the report step is platform-only, runs after a failed review, takes the newest run token and binds everything through env:", () => {
+      const step = steps().find((candidate) => candidate.id === "report");
+      expect(step?.name).toBe("Report to Crysk");
+      expect(step?.shell).toBe("bash");
+      expect(step?.run).toBe(
+        `bun "\${{ github.action_path }}/src/ci/platform-report.ts"`,
+      );
+      const condition = String(step?.if ?? "");
+      expect(condition).toContain("!cancelled()");
+      expect(condition).not.toContain("always()");
+      expect(condition).not.toContain("success()");
+      expect(condition).toContain("github.event_name == 'workflow_dispatch'");
+      expect(condition).toContain("github.event.inputs['dispatch-id'] != ''");
+      expect(condition).toContain("steps.platform.outputs.run-token != ''");
+      expect(condition).toContain(
+        "steps.platform-publish.outputs.run-token != ''",
+      );
+      expect(step?.env?.CRYSK_RUN_TOKEN).toBe(
+        `\${{ steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token }}`,
+      );
+      expect(step?.env?.CRYSK_OUTCOME).toBe(
+        `\${{ steps.run-crysk.outputs.status }}`,
+      );
+      expect(step?.env?.CRYSK_RUN_DIR).toBe(
+        `\${{ steps.run-crysk.outputs.run_dir }}`,
+      );
+      expect(step?.env?.TRIGGER_PR).toBe(`\${{ steps.trigger.outputs.pr }}`);
+      expect(step?.env?.TRIGGER_HEAD_SHA).toBe(
+        `\${{ steps.trigger.outputs.head_sha }}`,
+      );
+      const expressions = [
+        ...String(step?.run ?? "").matchAll(/\$\{\{[^}]*\}\}/g),
+      ].map((match) => match[0]);
+      expect(expressions).toEqual([`\${{ github.action_path }}`]);
     });
 
     // WHY: gh run rerun keeps the run id. The publisher compares the record's
@@ -1045,7 +1258,7 @@ describe("Packaging & distribution configuration", () => {
     test("the trigger learns only whether the routing names OpenCode, never the routing text", () => {
       const env = triggerStep()?.env ?? {};
       expect(env.HAS_OPENCODE_ROUTING).toBe(
-        `\${{ contains(inputs.routing, 'opencode') }}`,
+        `\${{ ${EFFECTIVE_OPENCODE_ROUTING} }}`,
       );
       expect(JSON.stringify(env)).not.toContain("inputs.routing }}");
     });

@@ -1575,10 +1575,10 @@ describe("phaseReadsLog: every list a phase asserts counts (S1)", () => {
 });
 
 // budget-exhausted-carry: a budget of one review, then a push that answers every blocking
-// finding (or defers it) and meets the exhausted budget. The fake carries the verdict with
-// the product's own texts and notice, and its budgetCarry knob is the mutation each check
-// must catch.
-describe("budget scenarios: the push after the budget carries the verdict (budget-exhausted-carry)", () => {
+// finding (or defers it) and meets the exhausted budget. The fake carries a red and holds a
+// green for a manual review (Stage 2 #12) with the product's own texts and notice, and its
+// budgetCarry knob is the mutation each check must catch.
+describe("budget scenarios: the push after the budget carries a red and holds a green (budget-exhausted-carry, Stage 2 #12)", () => {
   const replies = (world: FakeGithub) =>
     [...world.inline.values()]
       .flat()
@@ -1609,7 +1609,7 @@ describe("budget scenarios: the push after the budget carries the verdict (budge
       passed(
         h.logs,
         "budget-answered",
-        /\[2\] status is success, description starts with crysk: , description contains answered finding\(s\), fixes unverified \(review budget for this PR is used up\)/,
+        /\[2\] status is pending, description starts with crysk: waiting for a manual review \(review budget for this PR is used up\)/,
       ),
     ).toBe(true);
     expect(
@@ -1624,7 +1624,7 @@ describe("budget scenarios: the push after the budget carries the verdict (budge
     ).toBe(true);
     expect(
       h.logs.some((l) =>
-        /not asserted: budget-answered \[2\] status is success, description contains no review needed .*\(phase 1 posted a blocking finding\)/.test(
+        /not asserted: budget-answered \[2\] status is pending, description starts with crysk: waiting for a manual review .*\(phase 1 posted a blocking finding\)/.test(
           l,
         ),
       ),
@@ -1641,7 +1641,7 @@ describe("budget scenarios: the push after the budget carries the verdict (budge
     expect(await runScenarios(h.deps, ["budget-answered"], OPTIONS)).toBe(1);
     expect(
       h.logs.some((l) =>
-        /FAIL {2}budget-answered: \[2\] status is success, description starts with crysk: , description contains answered finding/.test(
+        /FAIL {2}budget-answered: \[2\] status is pending, description starts with crysk: waiting for a manual review/.test(
           l,
         ),
       ),
@@ -1665,7 +1665,7 @@ describe("budget scenarios: the push after the budget carries the verdict (budge
     ).toBe(true);
   });
 
-  test("budget-answered with a clean first review: nothing to answer, the carried green names the budget", async () => {
+  test("budget-answered with a clean first review: nothing to answer, the hold names the budget", async () => {
     const world = new FakeGithub({ ref: REF });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["budget-answered"], OPTIONS)).toBe(0);
@@ -1679,12 +1679,12 @@ describe("budget scenarios: the push after the budget carries the verdict (budge
       passed(
         h.logs,
         "budget-answered",
-        /\[2\] status is success, description contains no review needed \(review budget for this PR is used up\)/,
+        /\[2\] status is pending, description starts with crysk: waiting for a manual review \(review budget for this PR is used up\)/,
       ),
     ).toBe(true);
     expect(
       h.logs.some((l) =>
-        /not asserted: budget-answered \[2\] status is success, description starts with crysk: .*\(phase 1 posted no blocking finding to carry\)/.test(
+        /not asserted: budget-answered \[2\] status is pending, description starts with crysk: waiting for a manual review .*\(phase 1 posted no blocking finding to carry\)/.test(
           l,
         ),
       ),
@@ -1725,7 +1725,7 @@ describe("budget scenarios: the push after the budget carries the verdict (budge
     ).toBe(true);
   });
 
-  test("budget-unanswered with a clean first review: the carried green names the budget", async () => {
+  test("budget-unanswered with a clean first review: the hold names the budget", async () => {
     const world = new FakeGithub({ ref: REF });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["budget-unanswered"], OPTIONS)).toBe(0);
@@ -1733,7 +1733,7 @@ describe("budget scenarios: the push after the budget carries the verdict (budge
       passed(
         h.logs,
         "budget-unanswered",
-        /\[2\] status is success, description contains no review needed/,
+        /\[2\] status is pending, description starts with crysk: waiting for a manual review/,
       ),
     ).toBe(true);
   });

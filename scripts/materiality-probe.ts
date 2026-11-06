@@ -4,7 +4,7 @@
 // answer is already known, and clear the pass bar fixed in
 // src/compare/materiality.ts:
 //   - material:   Martian goldens rated High/Critical, all five public corpora
-//                 (docs/benchmarks/martian-*-goldens.json). Labelled by Martian.
+//                 (benchmarks/martian/corpora/martian-*-goldens.json). Labelled by Martian.
 //   - immaterial: planted claims that are true but not worth posting
 //                 (docs/benchmarks/materiality-planted-anchors.json).
 //   - stability:  a fixed subset judged three times must keep its label.
@@ -53,6 +53,7 @@ import { JUDGE_MODEL, judgeClaim } from "./materiality-spawn";
 
 const ROOT = path.join(import.meta.dir, "..");
 const BENCH = path.join(ROOT, "docs", "benchmarks");
+const MARTIAN_CORPORA = path.join(ROOT, "benchmarks", "martian", "corpora");
 const CORPORA = ["cal", "discourse", "grafana", "keycloak", "sentry"];
 const STABILITY_PER_LABEL = 15;
 const REPLICATES = 3;
@@ -83,7 +84,7 @@ async function loadAnchors(): Promise<Anchor[]> {
   const anchors: Anchor[] = [];
   for (const corpus of CORPORA) {
     const goldens = (await Bun.file(
-      path.join(BENCH, `martian-${corpus}-goldens.json`),
+      path.join(MARTIAN_CORPORA, `martian-${corpus}-goldens.json`),
     ).json()) as MartianGoldenPr[];
     anchors.push(...goldenAnchors(corpus, goldens));
   }

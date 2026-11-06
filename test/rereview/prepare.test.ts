@@ -15,12 +15,19 @@ import {
   parseNameStatus,
   prepareDiscovery,
   priorsFromPostedMarkers,
+  priorsFromStateFindings,
   type RereviewGit,
   readRereviewProvenance,
   shouldAbortEmptyDiscovery,
   toRereviewProvenance,
 } from "#rereview/prepare";
-import type { LiveFinding } from "#rereview/state";
+import {
+  assembleLive,
+  type LiveFinding,
+  parseStateBlock,
+  renderStateBlock,
+  stateFinding,
+} from "#rereview/state";
 import type { Finding } from "#review/findings";
 import { renderInlineComment } from "#review/report";
 import { triageMarker } from "#triage/triage";
@@ -1305,5 +1312,101 @@ describe("F007 — readRereviewProvenance", () => {
       kind: "invalid",
       problem: "rereview.discovery_excluded_paths",
     });
+  });
+});
+
+describe("binding keeps working when the stored claim was sanitized", () => {
+  const HEAD = "b".repeat(40);
+  const TOKEN = `ghp_${"a".repeat(36)}`;
+  function comment(id: number, claim: string) {
+    return {
+      id,
+      marker: { path: "src/a.ts", line: 10, c: claimFingerprint(claim) },
+    };
+  }
+
+  test("a state row breaks a same-line tie with its stored fingerprint", () => {
+    const raw = `leaks ${TOKEN}`;
+    const other = "a different finding";
+    const rows = parseStateBlock(
+      renderStateBlock(
+        HEAD,
+        [raw, other].map((claim, i) =>
+          stateFinding({
+            id: `R00${i + 1}`,
+            sev: "WARNING",
+            tier: "advisory",
+            channel: "inline",
+            locs: ["src/a.ts:10"],
+            claim,
+          }),
+        ),
+        1,
+        2,
+      ),
+    )?.findings;
+    const bound = bindPriorsToPosted(priorsFromStateFindings(rows ?? []), [
+      comment(1, raw),
+      comment(2, other),
+    ]);
+    expect(bound.get("R001")?.id).toBe(1);
+    expect(bound.get("R002")?.id).toBe(2);
+  });
+
+  test("a prior recovered from its comment breaks the tie with that comment's marker", () => {
+    const claims = ["needs <T> at @scope", "a different finding"];
+    const posted = claims.map((claim, i) => ({
+      ...comment(i + 1, claim),
+      body: renderInlineComment(
+        {
+          id: `F00${i + 1}`,
+          path: "src/a.ts",
+          line: 10,
+          severity: "WARNING",
+          tier: "advisory",
+          claim,
+          proof_refs: [],
+          hunter: "x",
+          refuter_verdict: "not_submitted",
+          causal_disposition: "introduced",
+        } as never,
+        HEAD,
+      ),
+    }));
+    const priors = priorsFromPostedMarkers(
+      posted.map((p) => ({
+        path: "src/a.ts",
+        line: 10,
+        channel: "inline" as const,
+        body: p.body,
+      })),
+    );
+    const bound = bindPriorsToPosted(priors, posted);
+    expect(bound.get("R001")?.id).toBe(1);
+    expect(bound.get("R002")?.id).toBe(2);
+  });
+
+  test("a carried row keeps the raw fingerprint", () => {
+    const raw = `leaks ${TOKEN}`;
+    const row = stateFinding({
+      id: "R001",
+      sev: "WARNING",
+      tier: "advisory",
+      channel: "inline",
+      locs: ["src/a.ts:10"],
+      claim: raw,
+    });
+    const stored = parseStateBlock(
+      renderStateBlock(HEAD, [row], 1, 1),
+    )?.findings;
+    const priors = priorsFromStateFindings(stored ?? []);
+    const { live } = assembleLive({
+      settled: [
+        { id: "R001", status: "carried", locs: ["src/a.ts:10"] },
+      ] as never,
+      priors,
+      verifyVerdicts: new Map(),
+    });
+    expect(live[0]?.c).toBe(claimFingerprint(raw));
   });
 });

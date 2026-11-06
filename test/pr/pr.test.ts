@@ -671,6 +671,50 @@ describe("fetchPrComments — REST 404 GraphQL fallback", () => {
     expect(calls.some((c) => c.argv.join(" ").includes("graphql"))).toBe(true);
   });
 
+  test("GraphQL maps a Bot author to its [bot] login and keeps a User login, as REST does", async () => {
+    const { spawnFn, calls } = makeFakeGh([
+      {
+        match: ["issues/42/comments"],
+        response: { stderr: "gh: Not Found (HTTP 404)", exitCode: 1 },
+      },
+      repoView,
+      {
+        match: ["graphql", "databaseId"],
+        response: {
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      {
+                        databaseId: 7,
+                        body: "summary",
+                        author: { login: "crysk-dev", __typename: "Bot" },
+                      },
+                      {
+                        databaseId: 8,
+                        body: "human",
+                        author: { login: "octocat", __typename: "User" },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const comments = await fetchPrComments(OPERATOR_ROOT, 42, { spawnFn });
+    expect(comments.map((c) => c.user)).toEqual(["crysk-dev[bot]", "octocat"]);
+    // The query must ask for the type, or the login cannot be told from a user's.
+    expect(
+      calls.some((c) => c.argv.join(" ").includes("author{login __typename}")),
+    ).toBe(true);
+  });
+
   test("S-B — REST updated_at is optional and forwarded", async () => {
     const { spawnFn } = makeFakeGh([
       {

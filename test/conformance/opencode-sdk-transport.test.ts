@@ -9,7 +9,7 @@ import {
   computeQualifiedBenchmarkMetrics,
   discriminateReviewCompletion,
   evaluateResumeOutcome,
-} from "../../scripts/martian-judge";
+} from "../../benchmarks/martian/martian-judge";
 import {
   classifyWitnessEvidence,
   type SessionWitness,

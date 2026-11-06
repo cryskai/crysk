@@ -1,6 +1,6 @@
 {
   "name": "crysk",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "private": false,
   "license": "Apache-2.0",
   "repository": {
@@ -67,7 +67,7 @@
     "review": "bun run src/cli.ts",
     "fixture-eval": "bun run scripts/fixture-eval.ts",
     "refuter-probe": "bun run scripts/refuter-probe.ts",
-    "check": "biome check src test"
+    "check": "biome check src test benchmarks"
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.18.25"

@@ -32,6 +32,7 @@ import {
   isInFlightCommitStatus,
   LOCAL_COMMIT_STATUS_CONTEXT,
   latestStatusInContext,
+  manualReviewHoldDescription,
   PR_COMMENT_COVERAGE_PARTIAL_TOKEN,
   PR_COMMENT_MARKER_PREFIX,
   PR_FINDING_MARKER_PREFIX,
@@ -1539,6 +1540,25 @@ describe("isInFlightCommitStatus", () => {
             state: "pending",
             context: COMMIT_STATUS_CONTEXT,
             created_at: stale,
+          },
+        ],
+        now,
+      ),
+    ).toBe(false);
+  });
+
+  test("a fresh manual-review hold is not in-flight: no run holds it", () => {
+    expect(
+      isInFlightCommitStatus(
+        [
+          {
+            state: "pending",
+            context: COMMIT_STATUS_CONTEXT,
+            created_at: fresh,
+            description: manualReviewHoldDescription(
+              "review budget for this PR is used up",
+              "a".repeat(40),
+            ),
           },
         ],
         now,

@@ -349,6 +349,143 @@ The workflow token may also be unable to resolve review threads, even with `issu
 `Resource not accessible by integration` for that mutation, and the log says so once per run. The
 verified-gone reply is still posted, and the gate is unaffected: the thread stays open for a person to close.
 
+## Platform mode
+
+When the Crysk platform dispatches a run, the action posts as the Crysk App's bot instead of
+`github-actions[bot]`. Platform mode is on only when the event is `workflow_dispatch` **and** the
+dispatch input `dispatch-id` is non-empty; the platform's workflow stub sets both. Every other run is
+**standalone** and is unchanged: the step is skipped and the `github-token` input (default
+`github.token`) is used exactly as before.
+
+In platform mode a `Connect to Crysk` step runs first, before the trigger:
+
+1. It asks GitHub for the run's OIDC token with audience `crysk`.
+2. It sends that token to `https://api.crysk.dev/runs/token` with the dispatch id (recorded by the
+   platform), and receives a repo-scoped installation token and the login that token posts as.
+3. It masks the tokens in the log and hands the installation token to the trigger, run, publish and
+   cancel-settle steps in place of `github.token`. The publish and cancel-settle steps take a freshly
+   exchanged token (see below).
+
+The platform URL is fixed in the engine. It is not an input and not an environment variable, because
+anyone with write access can dispatch with arbitrary inputs and the OIDC token must never go to a server
+they pick.
+
+Platform mode never falls back to `github.token`. Any failure turns the job red with an error that names
+the cause, and no review runs:
+
+- **No `id-token: write`** — the workflow's `permissions:` lacks it, so GitHub issues no OIDC token.
+- **HTTP 401** — the token was not issued for audience `crysk`.
+- **HTTP 403** — the workflow is not the platform stub on the default branch, or the repository is not
+  connected or not set up.
+- **HTTP 409** — this OIDC token was already exchanged. The platform keys the exchange on the OIDC token's
+  id, not on the dispatch id; each exchange needs a newly requested OIDC token, which the step always
+  asks GitHub for.
+- **HTTP 429** — the platform rate-limited the exchange.
+- **Network or malformed reply** — the exchange could not complete.
+- **The token could not be handed on** — the step could not write `GITHUB_OUTPUT`; the run fails rather than
+  continue on `github.token`.
+
+The platform's own `message` is included in the error. No token is ever printed.
+
+Two consequences follow from the posting identity and from the token's life:
+
+- **Who the gate trusts.** The answered-findings gate trusts a finding or summary only from
+  `github-actions[bot]`, the run's actor (`GITHUB_ACTOR`), a login in `ci_trusted_actors`, and, in platform
+  mode, the login the platform returned in the exchange reply (`github_actor`, the Crysk App's bot). The
+  step hands it to `Run Crysk` as `CRYSK_PLATFORM_ACTOR`; a standalone run never sets it, and a reply
+  without a plausible login adds nothing.
+- **The token's life.** GitHub App installation tokens last about an hour, and a review may run up to 75
+  minutes. So the publish step and the cancel-settle step do not reuse the first token: a `Refresh the Crysk
+  token` step runs the same script again right before each. Every run of the script requests a NEW OIDC
+  token from GitHub, so the platform (which refuses a second exchange of the same OIDC token) exchanges it
+  again, and they prefer its result. The `Run Crysk` step itself keeps the token it started with, so a
+  review that runs past the hour can still fail its own terminal post; the publish step then reports it
+  with the fresh token.
+
+### Review configuration
+
+Review settings live on the Crysk platform. The exchange reply carries them as
+`config: { person: {...}, repo: {...} }`, split by the engine's own per-key rules: `person` holds the keys
+whose direction is `person` or `capped` (including `routing`), `repo` the keys whose direction is `repo`.
+The action applies them on the runner, so the engine's usual two-layer read resolves them against the
+repository's own `.crysk/config.json` with the same per-key rules a local run uses. Either object may be
+empty, and an empty one writes nothing and changes nothing. The values are validated on the platform, but
+the engine's own parsers re-check them on the runner and stay the authority.
+
+- **`person`** is the runner's personal config layer. It is written to the personal config file the
+  action already writes `routing` to (`$HOME/.crysk/config.json`, or `$HOME/.prhero/config.json` when that
+  is the one that exists). Its `routing` wins over the `routing` input and `CRYSK_ROUTING`; with no
+  `routing` from the platform, the input keeps working exactly as before, beside the platform's other keys.
+  Platform routing that names `opencode` installs the OpenCode CLI, the same as the input does, and the
+  no-credentials message names OpenCode's credential for it; a platform routing that does not name `opencode`
+  overrides an input that does, for both. In platform mode the personal file belongs to the run: it is
+  rewritten from the platform's `person` layer and the routing input, and removed when both are empty, so a
+  file an earlier run left on a runner whose `HOME` outlives the job is never read as this run's layer.
+  A `post` the platform sets (in `person`, or in a `repo` layer that is delivered) applies: the run step then
+  leaves out `--post`, which would otherwise outrank the config, so the `post` input no longer forces it.
+- **`repo`** is used **only when the checked-out repository has no repo config file of its own** (the
+  file the engine's repo reader opens: `.crysk/config.json`, or the pre-rename `.prhero/config.json`). It
+  is then written to a `0600` temp file under the runner's temp directory, outside the workspace, and the
+  run step hands it to the CLI's existing `--config` flag, which repoints the repo layer and nothing else.
+  The checkout is never written to. When the repository has its own file, that file wins whole,
+  `config.repo` is ignored, and the log says so with a `::notice::`.
+
+A configuration that cannot be applied turns the job red and no review runs, because a review with the
+wrong limits is worse than no review: a malformed `config` in the reply, a value the engine's parser
+refuses, or a file that cannot be written. The error names the layer and the key or file, never a value
+and never a token. The refresh steps, which run after the review and never use the configuration, ignore
+the `config` in their response. Standalone runs never reach any of this.
+
+### Run reports
+
+In platform mode every finished run is also reported to the platform, so it is recorded with its cost. The
+`Connect to Crysk` step and each refresh step also output the exchange's `run-token` (masked like the
+installation token). A `Report to Crysk` step right after `Publish Crysk outcome` posts to
+`https://api.crysk.dev/runs/report` with the newest run token (the refresh step's, else the first
+exchange's). It runs unless the job was cancelled, so a failed or skipped review is reported too, and
+only when the run is platform-dispatched and a run token exists; a standalone run never reaches it.
+
+The report body is metadata only: the action's `status` as `outcome`, the PR number, the head and base shas, the
+run status, schema and engine versions, the model, the blocking and advisory counts, the token, cost
+and wall-time totals (`cost_is_floor` when the cost is a floor of known spend), and one row per agent (key,
+model, tokens, cost, duration, attempts, status). It never carries findings, claims, summary text, hop trails
+or any other text that can quote your code. A review whose run directory the action never published
+(skipped, size-gated, failed before writing, and the cases in the known gap under "Downloading the run
+directory": every hunter died, a fatal error, a cancelled job) is reported with zero counts and usage, even
+if the CLI wrote a `findings.json` that run, from the head the trigger resolved; an empty status
+is reported as `error`.
+
+The report never fails the job. A platform that is down, a rejected token (HTTP 401) or a rejected field
+(HTTP 400, with the API's message) prints a `::warning::` naming the status and message and the step exits
+0. A repeat of the same run attempt is answered as already recorded and is not an error.
+
+#### Findings upload
+
+Right after the report is accepted, the same step posts the run's findings to
+`https://api.crysk.dev/runs/findings` with the same run token. The body is exactly
+`{ "schema_version", "findings" }`: the `findings` array of `findings.json`, each object as the engine
+wrote it (in `full` mode; see below), and nothing else. `debug.refuted`, `debug.deduped`, the summary and the telemetry are never
+sent. A run with no `findings.json` (including every case where the action published no run directory),
+an unreadable one, or zero findings sends nothing, and a failed report sends nothing either, since the
+report creates the run the findings attach to. At most 500 findings are sent: the first 500 in the
+engine's order, with a `::warning::` saying how many more were dropped.
+
+**Metadata-only repositories never send code.** Every token exchange (`Connect to Crysk` and the refresh
+steps) returns the repository's `data_mode`, and the step outputs it as `data-mode` (only `full` or
+`metadata_only`; a missing or unrecognised value is treated as `metadata_only` and a `::notice::` says so).
+The report step reads the same exchange as its run token: the refresh after the run when it ran, else the
+first, so a repository switched to `metadata_only` during a long run is honoured. In `full` mode each finding is sent whole, as described above. In
+`metadata_only` mode each finding is reduced on the runner to `id`, `category`, `path`, `line`, `severity`,
+`tier`, `hunter`, `evidence_class`, `refuter_verdict`, `causal_disposition`, `root_cause_id` and
+`hops_used`: never the `claim`, `proof_refs`, `hop_trail`, `symbol`, `dedupe_key`, `materiality` or any key
+not on that list. The count, order and 500 cap are unchanged.
+
+The platform encrypts what it receives in `full` mode and also applies each repository's mode on its side.
+It answers 200 with `{ stored, recorded, mode }` (`recorded: false` is a
+repeat of the same upload and is not an error). Like the report, the upload never fails the job: HTTP 409
+(the run was not reported first), 401, 400 (with the API's message), 413 (too large) or a network error
+prints a `::warning::` naming the status and message, never the token, and the step exits 0.
+
 ## Security considerations
 
 ### Fork pull requests
@@ -636,7 +773,7 @@ The table shows the status and the job exit for each case:
 | Finished pipeline in which no hunter ran on a review meant to run them (the budget ceiling or an unusable gotchas file stopped it first; a re-review that skipped discovery on purpose is not this case and stays green) | `error`: `review did not finish` | `success` | `0` |
 | Finished review, clean or advisory-only | `success` | `success` | `0` |
 | Size or budget skip (`/crysk review` reviews it anyway) | `failure`: `crysk skipped the review: … /pr-hero review reviews it anyway` | none | `0` |
-| Admission skip by any review rule: a low-risk or below-threshold delta, once per PR, a `/crysk stop`, the attempt budget used up (`ci_max_attempts`), or `manual_only` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `crysk: no review needed (<reason>); carried from <sha>`, or `failure` `crysk: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `crysk: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; a carried blocking failure whose blocking findings are all answered becomes `success` `crysk: N answered finding(s), fixes unverified (<reason>); carried from <sha>` (see below); with no readable verdict, `failure` `crysk skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it` | none | `0` |
+| Admission skip by any review rule: a low-risk or below-threshold delta, once per PR, a `/crysk stop`, the attempt budget used up (`ci_max_attempts`), or `manual_only` | inherits the verdict of the pull request's last reviewed commit (see below): `success` `crysk: no review needed (<reason>); carried from <sha>`, or `failure` `crysk: N blocking finding(s) carried from <sha> — fix and push, or /pr-hero override`, or `failure` `crysk: review partial (N of M hunters failed, set abc123) carried from <sha> — /pr-hero review retries it`; a carried blocking failure whose blocking findings are all answered becomes `success` `crysk: N answered finding(s), fixes unverified (<reason>); carried from <sha>` (see below); with no readable verdict, `failure` `crysk skipped the review (<reason>) and found no earlier verdict — /pr-hero review reviews it`. Under the attempt budget used up or `manual_only`, either green is held instead: `pending` `crysk: waiting for a manual review (<reason>); carried from <sha> — /pr-hero review or /pr-hero override` (see below) | none | `0` |
 | Same head, already reviewed | none (that head's own status already exists) | none | `0` |
 | Final status write failed (after its two attempts) | not written: the job fails with an `::error::` annotation | logged as a warning | `1` (gate only) |
 
@@ -679,12 +816,21 @@ The gate reads the replies when the push arrives, so reply before you push. A gr
 needed. An override is never carried: it is a human's decision for the code at the head it names, and the skipped head
 was never reviewed, so carrying it would turn a new head green with no review behind it. With no readable verdict (no
 reviewed head, a failed read, a head missing from the pull request's commits, or no verdict within the last 20 commits),
-the head is `failure` and says so: a trivial push must not pass the gate without a verdict behind it. A manual
-re-review required is always `failure`, because its code was never reviewed, and carrying a green verdict over it would
-let an unreviewed push pass the gate. A head whose newest `crysk` status is an override keeps it: a re-run of the gate
+the head is `failure` and says so: a trivial push must not pass the gate without a verdict behind it. A head whose
+newest `crysk` status is an override keeps it: a re-run of the gate
 on that head writes no skip status over the override, when the head's statuses can be read. When they cannot, the skip's
 status is written as planned and the run logs a warning, because a head that reads as nothing decided is the original
 bug; that write can replace an override the run could not see. Advisory mode writes no status on a skipped head, as before.
+
+**The attempt budget and `manual_only` hold a green for a manual review.** Under these two rules no later push gets
+an automatic review, so a carried green would let code no review read merge: one measured pull request merged green
+over 11 commits no review saw. Where any other rule would write a green (a carried one, or answered findings
+unlocking a red), these two write `pending` `crysk: waiting for a manual review (<reason>); carried from <sha> —
+/pr-hero review or /pr-hero override`. A red still carries as a red. The hold is not a review in flight: no run
+waits on it, the next skip follows it to the commit it names (so the walk's 20-commit cap restarts there instead of
+failing closed on a long held run), and `crysk status` answers `override-or-fix` on it, not
+`wait`. A `/crysk review` reviews the head (comment runs are outside the budget), and `/crysk override` merges it
+unverified. A `/crysk stop` is a maintainer's decision and keeps carrying the green.
 
 **What counts as unresolved.** The count behind a blocking `failure` is every blocking finding that is still
 open: this run's blocking findings, plus each blocking finding from an earlier review of the PR that has not
@@ -692,7 +838,7 @@ been cleared (subject to the known gap at the end of this paragraph). A finding 
 decide, when a triage reply deferred it, or when a triage reply dismissed it. A dismissal the adjudicator
 upheld counts too, until the next review of the same head: an upheld verdict takes effect in two steps, the recheck posts the ruling and the following same-head `/crysk review` stops counting the finding. A finding whose dismissal the adjudicator rejected, or that a triage reply marked `misclassified`, stays open across later pushes too. A finding leaves the count only when the re-review verifies it gone, or when every file it
 names was deleted. A dismissed, deferred or misclassified finding is re-verified when a push touches its code, and leaves the count when verified gone. Triage replies (`applied`, `dismissed`,
-`deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator checks them only when someone comments `/crysk recheck` (see [Rechecking a dismissal](#rechecking-a-dismissal)). The `crysk` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. **State block.** From the second review on, the summary carries a `crysk-state` block: the merged live set of the pull request's open findings. It holds every surviving earlier finding and this run's findings, so a blocking finding first raised by a re-review still counts on the next review, including a same-head `/crysk review` that runs no hunters. A finding that a re-review verified gone leaves the block. Each row keeps its `R###` id. The block's `hw` field is the highest id ever assigned on the pull request, so a retired id is never reused. When the summary would exceed GitHub's comment size limit, the cap drops prior advisory findings first (unconfirmed, then carried), never a blocking finding, and the summary states how many finding identities it dropped from the block. Known gap: the first review writes no state block, so an outside-diff finding of the first review is not persisted. Its inline findings are recovered from their markers on the second review.
+`deferred`, `misclassified`) do not turn the gate green on their own, because the CI-side adjudicator checks them only when someone comments `/crysk recheck` (see [Rechecking a dismissal](#rechecking-a-dismissal)). The `crysk` status counts unresolved blocking findings across re-reviews, as above, while the step summary and the `blocking-count` output count only this run's own blocking findings. On a re-review the two numbers can differ: an earlier blocking finding can still be open while this run finds none. **State block.** From the first review on, the summary carries a `crysk-state` block: the merged live set of the pull request's open findings. It holds every surviving earlier finding and this run's findings, so a blocking finding first raised by a re-review still counts on the next review, including a same-head `/crysk review` that runs no hunters. An outside-diff finding has no comment of its own, so the block is its only machine-readable copy: `crysk status` reads it from there. A finding that a re-review verified gone leaves the block. Each row keeps its `R###` id. The block's `hw` field is the highest id ever assigned on the pull request, so a retired id is never reused. When the summary would exceed GitHub's comment size limit, the cap drops prior advisory findings first (unconfirmed, then carried), never a blocking finding, and the summary states how many finding identities it dropped from the block. Two posts write no block. A re-review whose earlier summary was deleted mid-run writes none, because its framing names threads that no longer exist. A post with no re-review framing over another head's summary (one whose `head=` did not parse, or one a concurrent run wrote) writes none either, so the next review keeps recovering older heads' findings from their markers; that post's own outside-diff findings are then not in any block (known gap, PR #475).
 
 
 **Unlocking a gate.** A `failure` for blocking findings clears in one of two ways. A fix pushed to a new head
@@ -940,12 +1086,12 @@ GitHub, so a skill can drive review, reply, fix and wait from it instead of read
 | --- | --- |
 | `wait` | The gate is pending and in flight (less than 90 minutes old). |
 | `review` | No `crysk` (or `pr-hero`) status is on the head, the gate errored, a pending gate is older than 90 minutes and no run holds it, the gate is red over a partial review (`crysk: review partial (N of M hunters failed, set abc123)` or its carried form), or the gate passed over a partial review of this head (some reviewers failed), which the engine itself runs again. |
-| `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. A green over answered findings no review verified (`crysk: N answered finding(s), fixes unverified`) is `done` too, and its reason says so. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. |
+| `done` | The gate passed over a complete review of this head, and every finding posted on this head has a reply at that head. A green over answered findings no review verified (`crysk: N answered finding(s), fixes unverified`) is `done` too, and its reason says so. An override that turned the gate green is `done` even when a finding is still unanswered, because a human unlocked the head. A partial review of an older head is not this head's to act on. A finding that lives only in the summary comment (outside the diff, `comment_id: null`) has no thread a reply could land in, so it is never owed, but the reason counts it ("N finding(s) live only in the summary comment … read them there before merging"). |
 | `triage` | The gate is red and a live blocking finding on this head has no triage reply at the head it was posted on. Or the gate passed without an override and a finding posted on this head has no reply at that head: the triage skill answers advisory findings too. |
-| `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. When the red is carried (a review rule skipped the head), no review will run: the gate reads the replies on that push instead. |
+| `fix` | The gate is red, every live blocking finding is answered, and one of them is tagged `applied`. Push the fix; the next review verifies it. When the red is carried (a review rule skipped the head), no review will run: the gate reads the replies on that push instead, and turns green marked unverified, or, under a used-up budget or `manual_only`, holds the head for a manual review. |
 | `recheck` | The gate is red and a live blocking inline finding is answered `dismissed` with no CI ruling on this head, or an `inconclusive` one. Comment `/crysk recheck`; the CI adjudicator rules on it. |
 | `review` | The gate is red, and the CI adjudicator upheld every dismissal of a live blocking finding on this head. The recheck only posted the rulings; run `/crysk review`, and that review no longer counts them. |
-| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or an outside-diff finding, which has no thread to rule on). A size- or spend-ceiling-skipped review also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. |
+| `override-or-fix` | The gate is red, every live blocking finding is answered, and none can clear without a fix: none is `applied` or pending a CI ruling (a rejected dismissal, a `deferred` or `misclassified` tag, or an outside-diff finding, which has no thread to rule on). A size- or spend-ceiling-skipped review also lands here. The gate is red over a partial review's repeat form (`crysk: review partial again (N of M hunters failed, set abc123)`): the same hunters failed on the previous partial review, so a retry already failed the same way and the unlock is a route fix or `/crysk override`. Fix and push, or run `/crysk override`. The gate is also `pending` on a manual-review hold (`crysk: waiting for a manual review (<reason>)`, checked before `wait`): no review read the head and none will on its own, so comment `/crysk review` to verify it or `/crysk override` to merge it unverified. |
 
 The command fails closed. A failed `gh` read, a read that never answers within its bound, a truncated comment list, or a
 gate status it cannot read exits 1 with nothing on stdout, so a partial answer never looks like a clean PR.

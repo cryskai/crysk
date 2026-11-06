@@ -38,6 +38,8 @@ import {
   type CommitStatusFact,
   clipStatusDescription,
   commitStatusRequest,
+  heldVerdictSha,
+  manualReviewHoldDescription,
   partialReviewAgainDescription,
   partialReviewDescription,
   prHtmlUrl,
@@ -318,7 +320,7 @@ export interface AdmissionStatusInput {
 }
 
 export interface AdmissionStatusDecision {
-  state: "success" | "failure";
+  state: "success" | "failure" | "pending";
   description: string;
 }
 
@@ -335,11 +337,19 @@ type CarriedReason = Exclude<AdmissionStatusReason, "same-head">;
 
 // Every rule that skips a review carries the last verdict the same way (budget-exhausted-carry S2): the
 // rule is respected, so no review runs, and the head reads what the last review decided. Same-head is the
-// one exception: that head's own status already exists.
+// one exception: that head's own status already exists. A capped rule holds a green (holdsForManualReview).
 function isCarriedReason(
   reason: AdmissionStatusReason,
 ): reason is CarriedReason {
   return reason !== "same-head";
+}
+
+// ROADMAP Stage 2 #12: the rules that cap automatic reviews. Under them no later push is reviewed on its
+// own, so carrying a green would let code no review read merge (measured: one PR merged green over 11
+// unreviewed commits).
+// The head waits for a manual review instead; a red still carries, since it already blocks.
+function holdsForManualReview(reason: CarriedReason): boolean {
+  return reason === "max-attempts-exhausted" || reason === "manual-only-policy";
 }
 
 // The readers below rewrite a legacy `pr-hero` lead into `crysk` first (canonicalStatusText), so the
@@ -601,6 +611,12 @@ export function admissionSkipDecision(
   const verdict = newestCarriedVerdict(input.carried.statuses);
   if (verdict === undefined) return failClosed(label);
   if (verdict.state === "success") {
+    if (holdsForManualReview(input.reason)) {
+      return {
+        state: "pending",
+        description: manualReviewHoldDescription(label, input.carried.sha),
+      };
+    }
     // A carried unverified green stays unverified: chaining it never turns it into a green a review earned.
     const answeredCount = answeredCountIn(verdict.description ?? "");
     return {
@@ -638,6 +654,12 @@ export function admissionSkipDecision(
     answered.blocking > 0 &&
     answered.blocking >= blocking
   ) {
+    if (holdsForManualReview(input.reason)) {
+      return {
+        state: "pending",
+        description: manualReviewHoldDescription(label, input.carried.sha),
+      };
+    }
     return {
       state: "success",
       description: unverifiedFixesDescription(
@@ -676,6 +698,10 @@ const CARRY_WALK_CAP = 20;
 // missing from the list fails closed.
 // WHY a failed read ends the walk: a commit whose statuses did not read is not a commit with no verdict,
 // so skipping it would carry an older verdict across a read that never happened.
+// WHY a hold redirects the walk (Stage 2 #12): a hold is no verdict, but it names the commit whose verdict
+// it held. Under a used-up budget every push is held, so without the jump a PR with more commits since its
+// last review than the cap would fail closed red although that review is still on the PR. The jump only
+// ever moves to an older commit, so the walk ends, and the cap restarts from the commit it lands on.
 async function findCarriedVerdict(input: {
   operatorRoot: string;
   prNumber: number;
@@ -690,17 +716,33 @@ async function findCarriedVerdict(input: {
   if (shas === null) return null;
   const headIndex = shas.indexOf(input.headSha);
   if (headIndex < 0) return null;
-  const earlier = shas.slice(0, headIndex).reverse().slice(0, CARRY_WALK_CAP);
-  for (const sha of earlier) {
-    const statuses = await input.readStatuses(input.operatorRoot, sha, {
-      spawnFn: input.spawnFn,
-    });
-    if (statuses === null) return null;
-    if (newestCarriedVerdict(statuses) !== undefined) {
-      return { sha, statuses, older: earlier.slice(earlier.indexOf(sha) + 1) };
+  let end = headIndex;
+  walk: while (true) {
+    const earlier = shas.slice(0, end).reverse().slice(0, CARRY_WALK_CAP);
+    for (const sha of earlier) {
+      const statuses = await input.readStatuses(input.operatorRoot, sha, {
+        spawnFn: input.spawnFn,
+      });
+      if (statuses === null) return null;
+      if (newestCarriedVerdict(statuses) !== undefined) {
+        return {
+          sha,
+          statuses,
+          older: earlier.slice(earlier.indexOf(sha) + 1),
+        };
+      }
+      const newest = newestStatusInContext(statuses, COMMIT_STATUS_CONTEXT);
+      const held = newest === undefined ? null : heldVerdictSha(newest);
+      if (held !== null) {
+        const target = shas.findIndex((s) => s.startsWith(held));
+        if (target >= 0 && target < shas.indexOf(sha)) {
+          end = target + 1;
+          continue walk;
+        }
+      }
     }
+    return null;
   }
-  return null;
 }
 
 // WHY the head's override holds: a human's `/pr-hero override` on this head is the decision for it. A

@@ -2,7 +2,7 @@
 
 This document is the home for **how we measure pr-hero against other review products, and against our own methodology changes, on identical public diffs**. The bench is Martian’s Code Review Bench. We did not build it; we adopt it as the comparable field.
 
-Status: **CAL.COM 10 SCORED 2026-08-19 (Surface A).** Harness: `scripts/martian-cal.ts` + `scripts/martian-judge.ts`. Skill: `skills/martian-bench/SKILL.md`. Default run is still the 3-PR pilot; `--all` is the ten. Not the 50, not Surface B. Roadmap: see-also on C10 and D3 in `ROADMAP.md`. Does **not** reopen Phase A, does **not** replace THE PIVOT’s musive head-to-head, does **not** reorder DoorDash M6.
+Status: **CAL.COM 10 SCORED 2026-08-19 (Surface A).** Harness: `benchmarks/martian/martian-cal.ts` + `benchmarks/martian/martian-judge.ts`. Skill: `skills/martian-bench/SKILL.md`. Default run is still the 3-PR pilot; `--all` is the ten. Not the 50, not Surface B. Roadmap: see-also on C10 and D3 in `ROADMAP.md`. Does **not** reopen Phase A, does **not** replace THE PIVOT’s musive head-to-head, does **not** reorder DoorDash M6.
 
 **Frozen this session (Juanma, 2026-08-19):** we will lean on this benchmark hard. It is a real n-vs-n: every methodology change can sit next to Greptile, CodeRabbit, Cursor Bugbot, Copilot, Graphite, and the rest, on the same PRs. Skill: `skills/martian-bench/SKILL.md`.
 
@@ -225,9 +225,9 @@ Judge spend (their LLM match) is extra and small next to hunters. Log it.
 What is on disk for the TypeScript slice. Not the 50.
 
 1. **Worklist** — `docs/martian-cal-goldens.json` + `docs/martian-cal-cases.json` (SHAs via `gh`, captured 2026-08-19).
-2. **Driver** — `scripts/martian-cal.ts` (`plan|check|run|score`). Local `pr-hero review --repo --base --head --two-dot --yes --no-summary`. Refuses `--pr` / `--post`. `--out` outside the clone.
+2. **Driver** — `benchmarks/martian/martian-cal.ts` (`plan|check|run|score`). Local `pr-hero review --repo --base --head --two-dot --yes --no-summary`. Refuses `--pr` / `--post`. `--out` outside the clone.
 3. **Adapter** — `src/martian-adapter.ts`: `findings.json` → `martian-review.json` (`candidates[]` + `review_comments`). One candidate per finding.
-4. **Judge (Surface A)** — `scripts/martian-judge.ts`. Martian’s `JUDGE_PROMPT` (“same underlying issue?”), one Claude Code spawn per PR (`tools: []`, model `sonnet`). **Not** their Python gateway / `MARTIAN_API_KEY`. Sibling findings at the same `path:line` are not extra FPs (mechanical analogue of their step 2.5). Artifact: `~/Desktop/martian-cal/runs/martian-judge.json`.
+4. **Judge (Surface A)** — `benchmarks/martian/martian-judge.ts`. Martian’s `JUDGE_PROMPT` (“same underlying issue?”), one Claude Code spawn per PR (`tools: []`, model `sonnet`). **Not** their Python gateway / `MARTIAN_API_KEY`. Sibling findings at the same `path:line` are not extra FPs (mechanical analogue of their step 2.5). Artifact: `~/Desktop/martian-cal/runs/martian-judge.json`.
 5. **Inject** — not done. A copy of `benchmark_data.json` with `tool: "pr-hero"` is still the path to sit in *their* Opus 4.5 / Sonnet 4.5 / GPT-5.2 tables.
 6. **Surface B** — not done. Stored Greptile/CodeRabbit comments are still on their repo, not bucketed against us for the ten.
 
@@ -306,8 +306,8 @@ Profile confirmed off musive: concurrency / lifecycle / OAuth-credential plumbin
 Commands:
 
 ```bash
-bun run scripts/martian-cal.ts plan|check|run|score   # default = 3-PR pilot; --all = ten
-bun run scripts/martian-judge.ts                      # Surface A on existing runs
+bun run benchmarks/martian/martian-cal.ts plan|check|run|score   # default = 3-PR pilot; --all = ten
+bun run benchmarks/martian/martian-judge.ts                      # Surface A on existing runs
 ```
 
 ## Cal.com 10 arm `opencode-glm` (2026-09-11, Surface A)
@@ -370,8 +370,8 @@ How this arm came to be (one line each, full story in the session):
    bounds, incomplete accounting, and actual same-attempt observations.
 5. Engine for this arm: `24115ab` + uncommitted `src/transports/opencode-sdk.ts`
    (Fix 1–3), `test/conformance/opencode-sdk-transport.test.ts`,
-   `test/harness/spend-wiring.test.ts`, `scripts/martian-cal.ts` (`--arm`,
-   `--model`), `scripts/martian-judge.ts` (`--arm`, 0600 fix),
+   `test/harness/spend-wiring.test.ts`, `benchmarks/martian/martian-cal.ts` (`--arm`,
+   `--model`), `benchmarks/martian/martian-judge.ts` (`--arm`, 0600 fix),
    `scripts/opencode-prompt-probe.ts` (new). Harness `--arm`/`--model` support
    is arm infrastructure, not a methodology variable.
 6. A same-night `opencode` (deepseek) arm attempt is NOT scored: cause unproved,
@@ -505,7 +505,7 @@ behind their published vendor rows.
   `--allow-unqualified`; their review behaviour is the same, only the evidence pointer is missing. keycloak 36880
   first came out partial (a hunter lost both drafts to the bare-name proof-ref bug, fixed in #396) and was re-run
   once on the same engine `14e63f0`, which qualified.
-- **Judge transport.** `scripts/martian-claude-shim.ts` turns each OpenAI call into `claude -p --model <exact id>`
+- **Judge transport.** `benchmarks/martian/martian-claude-shim.ts` turns each OpenAI call into `claude -p --model <exact id>`
   on a Claude subscription. Two disclosed deviations: the CLI has no `temperature` (Martian sends `0.0`), and
   `LLM_CALL_TIMEOUT` was raised from 30 s to 300 s in the working copy, because queued CLI calls overran it and
   step 2.5 silently skipped dedup for 18 of 49 PRs (#398). Prompts, parsing and scoring are unchanged. Step 2.5

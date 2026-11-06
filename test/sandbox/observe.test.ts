@@ -17,7 +17,10 @@ import {
 import { SANDBOX_REPO } from "../../scripts/sandbox/rails";
 import { renderReport } from "../../scripts/sandbox/report";
 import { decidePublication } from "../../src/ci/publish";
-import { findingMarker } from "../../src/pr/preflight";
+import {
+  findingMarker,
+  manualReviewHoldDescription,
+} from "../../src/pr/preflight";
 
 const SHA = "a".repeat(40);
 
@@ -507,6 +510,19 @@ describe("S7 invariants", () => {
       }),
     );
     expect(running).toEqual([]);
+  });
+
+  test("a manual-review hold after the run completed is no violation: it waits for a human", () => {
+    const hold = {
+      state: "pending",
+      description: manualReviewHoldDescription(
+        "review budget for this PR is used up",
+        "a".repeat(40),
+      ),
+    };
+    expect(
+      invariantViolations(observation({ status: hold, comments: [] })),
+    ).toEqual([]);
   });
 
   test("an error status without a PRH code trips S7 and, with no other evidence, exits 1", () => {

@@ -38,10 +38,12 @@ import {
   blobUrl,
   code,
   formatElapsed,
+  isLinkablePath,
   type PrCommentDelta,
   severityEmoji,
 } from "#review/report";
 import { log } from "#ui/primitives";
+import { publishedText } from "../security/published-text";
 
 // ---------------------------------------------------------------------------
 // Workflow commands (`::group::`, `::endgroup::`, `::notice::`, `::warning::`,
@@ -238,7 +240,7 @@ function severityRank(severity: Severity): number {
 }
 
 function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return publishedText(text.replace(/\s+/g, " ").trim());
 }
 
 // Grouped by file (spec 2.1: "grouped by file and severity tier"), sorted
@@ -270,11 +272,11 @@ function findingLine(
   headSha: string,
   webUrl: string | undefined,
 ): string {
-  const loc = `${finding.path}:${finding.line}`;
+  const loc = code(`${finding.path}:${finding.line}`);
   const linked =
-    webUrl === undefined
-      ? `\`${loc}\``
-      : `[\`${loc}\`](${blobUrl(webUrl, headSha, finding.path, `L${finding.line}`)})`;
+    webUrl === undefined || !isLinkablePath(finding.path)
+      ? loc
+      : `[${loc}](${blobUrl(webUrl, headSha, finding.path, `L${finding.line}`)})`;
   return (
     `- ${severityEmoji(finding.severity)} ${finding.severity} · ` +
     `${finding.tier} — ${linked} — ${oneLine(finding.claim)}`
@@ -431,7 +433,7 @@ function manualRequiredLines(data: CiManualRequiredSummary): string[] {
   return [
     `### ⏹️ Crysk Review — Automatic Reviews Done — PR #${data.prNumber}`,
     "",
-    "**Reason:** no automatic review is left for this pull request; the gate keeps the last verdict.",
+    "**Reason:** no automatic review is left for this pull request; the gate keeps a red verdict and holds a green one `pending` for a manual review (`/crysk review` or `/crysk override`).",
     "",
     "| Metric | Value |",
     "| --- | --- |",
@@ -464,7 +466,7 @@ function reviewedLines(data: CiReviewSummary): string[] {
   } else {
     out.push("#### Findings", "");
     for (const [filePath, group] of groupFindingsByPath(data.findings)) {
-      out.push(`**\`${filePath}\`**`);
+      out.push(`**${code(filePath)}**`);
       for (const finding of group) {
         out.push(findingLine(finding, data.headSha, data.repoWebUrl));
       }

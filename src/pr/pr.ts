@@ -74,6 +74,7 @@ import {
   WORKFLOW_FILE_NAME,
 } from "../brand";
 import { CliError } from "../errors";
+import { buildFindingStateRecord } from "./finding-state-record";
 import {
   buildPostPlan,
   computeDroppedFindingIds,
@@ -1310,7 +1311,7 @@ const PR_ISSUE_COMMENTS_QUERY =
   "repository(owner:$repoOwner,name:$repoName){pullRequest(number:$number){" +
   "comments(first:100,after:$cursor){" +
   "pageInfo{endCursor hasNextPage}" +
-  "nodes{databaseId body createdAt updatedAt author{login}}}}}}";
+  "nodes{databaseId body createdAt updatedAt author{login __typename}}}}}}";
 
 const PR_REVIEW_COMMENTS_QUERY =
   "query($repoOwner:String!,$repoName:String!,$number:Int!,$cursor:String){" +
@@ -1609,7 +1610,7 @@ function issueCommentsFromNodes(nodes: unknown[]): {
     if (id === null) continue;
     comments.push({
       id,
-      user: graphqlLogin(record.author),
+      user: graphqlReviewLogin(record.author),
       body: typeof record.body === "string" ? record.body : "",
       ...(typeof record.createdAt === "string"
         ? { created_at: record.createdAt }
@@ -3133,31 +3134,48 @@ export async function postInlineFindings(input: {
   // WHY one merge function for both writes: the S1 re-merge reruns it with a
   // PATCH-sized budget and the SAME inputs, so the kept ids and hw cannot
   // drift between the POST and the PATCH.
+  // WHY a first review writes the block too: an outside-diff finding has no
+  // comment of its own, so the block is its only machine-readable copy. A
+  // first review without one left `crysk status` blind to those findings
+  // (PR #472: four advisories, status read none).
+  // WHY not every post without framing (PR #475 R001): over another head's
+  // summary, a block holding only this run's findings would replace the
+  // marker recovery the next review relies on, so still-open findings of
+  // older heads would stop being priors. Such a post writes the block only
+  // as a same-head re-post, which carries the previous rows. A re-review
+  // whose prior summary vanished has its framing dropped and stays
+  // state-less: that framing names threads that no longer exist.
+  const stateFramed =
+    framing !== undefined ||
+    (input.rereview === undefined &&
+      (existingSummaryId === null || previousState?.headSha === doc.head_sha));
   const mergeStateWithBudget = (
     stateBudget: number,
   ): MergedState | undefined =>
-    framing === undefined
+    !stateFramed
       ? undefined
       : mergeStateFindings({
           headSha: doc.head_sha,
           reviews: postedReviewCount,
-          live: framing.live,
+          live: framing?.live ?? [],
           previous: previousState,
           previousHead: previousState?.headSha ?? null,
           retiredIds: [
-            ...(framing.resolved_ids ?? []),
-            ...(framing.worsened ?? []).map((w) => w.priorId),
+            ...(framing?.resolved_ids ?? []),
+            ...(framing?.worsened ?? []).map((w) => w.priorId),
           ],
           // The priors this run's gate count released through a materiality
           // demotion, recorded on the rereview block by the pipeline, so the
           // state the next run reads agrees with this run's count.
-          ...(input.rereview?.materiality_released_ids === undefined
+          ...(framing?.materiality_released_ids === undefined
             ? {}
-            : { releasedIds: input.rereview.materiality_released_ids }),
+            : { releasedIds: framing.materiality_released_ids }),
           fresh: freshFindings,
           stateBudget,
         });
   const merged = mergeStateWithBudget(stateBlockBudget(referenceBody.length));
+  // What was finally written, for the record the platform reads: a re-merge below may drop rows.
+  let writtenState = merged;
 
   const renderWithState = (
     delta: PrCommentDelta,
@@ -3361,6 +3379,7 @@ export async function postInlineFindings(input: {
         stateBlockBudget(bodyWithoutState.length),
       );
       patchBody = renderPatch(reMerged, 0);
+      writtenState = reMerged;
     }
     if (patchBody.length > GITHUB_ISSUE_COMMENT_MAX) {
       process.stdout.write(
@@ -3515,6 +3534,18 @@ export async function postInlineFindings(input: {
     commentUrls: commentUrlByFindingId,
     movedHeadSha,
     ...(closingCommentId === undefined ? {} : { closingCommentId }),
+    ...(writtenState === undefined
+      ? {}
+      : {
+          findingState: buildFindingStateRecord({
+            rows: writtenState.rows,
+            freshFindingIds: postedDoc.findings.map((f) => f.id),
+            freshIds: writtenState.freshIds,
+            resolvedIds: framing?.resolved_ids ?? [],
+            supersededIds: (framing?.worsened ?? []).map((w) => w.priorId),
+            dropped: writtenState.dropped,
+          }),
+        }),
   };
 }
 

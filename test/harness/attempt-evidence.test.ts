@@ -412,7 +412,7 @@ test("persistAttemptEvidence records captureDropped with a reason and size when 
 // unconditionally — `JSON.stringify(value, null, 2)`'s per-level indentation
 // and newlines inflate a multi-thousand-record array well past what was
 // checked. A live capture was observed persisted at 4.9 MB, and
-// `readEvidenceFile` (used by scripts/martian-evidence.ts) enforces a
+// `readEvidenceFile` (used by benchmarks/martian/martian-evidence.ts) enforces a
 // SEPARATE 5 MiB read bound, so a capture that just barely passed the 4 MiB
 // check could still land past that too. 15000 records of a realistic
 // message.part.delta shape, sized so the collector's OWN byte cap (its F001

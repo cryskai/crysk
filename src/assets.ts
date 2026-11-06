@@ -74,7 +74,7 @@ function resolveVersion(): string {
     // Ignore read errors
   }
 
-  return "0.3.3";
+  return "0.4.0";
 }
 
 export function resolveEngineAssets(): EngineAssets {
@@ -142,7 +142,7 @@ export function isNpxCacheInvocation(invocation: SelfInvocation): boolean {
 // run this engine has ever written — before and after a change that alters
 // what every agent reads — reports the same engine. That is not a cosmetic gap. The Cal.com Martian
 // baseline is ratified as valid ACROSS engine versions on the condition that
-// the frontier is annotated (docs/martian-bench.md), and an artifact whose
+// the frontier is annotated (benchmarks/martian/README.md), and an artifact whose
 // engine field cannot change cannot annotate anything.
 //
 // The revision is the git commit, which moves on its own and needs nobody to

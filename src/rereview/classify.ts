@@ -107,6 +107,10 @@ export interface PriorRecord {
   channel: FindingChannel;
   locs: readonly string[];
   claim: string;
+  // The fingerprint of the claim as first written, which is what the posted
+  // marker carries. `claim` here may be its published form, so hashing it would
+  // not match. Absent when the prior has no claim to fingerprint.
+  c?: string;
   triage: PriorTriage | null;
   // Case B rule 7b: any new reply on the prior thread, including tags
   // other than a newly-applied `applied` (that one is rule 7).

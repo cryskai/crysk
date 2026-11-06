@@ -125,6 +125,22 @@ describe("prLoop", () => {
     expect(carried?.greenBy).toBe("review-clean");
   });
 
+  // Stage 2 #12: a capped rule's hold is pending, but no run: the head is not green, and the budget counts.
+  test("a manual-review hold is a head that is not green, and counts the budget", () => {
+    const loop = prLoop(
+      pr([
+        status("2026-10-20T10:05:00Z", "success", CLEAN),
+        status(
+          "2026-10-20T10:30:00Z",
+          "pending",
+          "crysk: waiting for a manual review (review budget for this PR is used up); carried from aaaaaaa — /pr-hero review or /pr-hero override",
+        ),
+      ]),
+    );
+    expect(loop?.greenBy).toBeNull();
+    expect(loop?.budgetExhausted).toBe(true);
+  });
+
   test("a review posted under both contexts counts once", () => {
     const loop = prLoop(
       pr([

@@ -635,7 +635,7 @@ describe("observability — admission metadata in step summaries", () => {
   });
 
   // budget-exhausted-carry S10: the end-of-budget comment explains the situation by the repo's rules and
-  // offers more rounds, and never asks for an override.
+  // offers more rounds. Stage 2 #12: it says a green waits for a review or an override.
   test("the end-of-budget comment says reviews are done, why, what the gate does, and how to get more", () => {
     const verdict = evaluateCiReviewAdmission(
       admissionInput({
@@ -674,12 +674,14 @@ describe("observability — admission metadata in step summaries", () => {
       "Automatic reviews used: 2/2 (`ci_max_attempts`).",
     );
     expect(comment).toContain(`Last reviewed head: \`${HEAD_A.slice(0, 7)}\`.`);
-    expect(comment).toContain("it keeps the last review's verdict");
-    expect(comment).toContain("marked unverified");
+    expect(comment).toContain("it never turns green on its own");
+    expect(comment).toContain(
+      "waits as `pending` until a review verifies the head",
+    );
+    expect(comment).toContain("`/crysk override`");
     expect(comment).toContain(
       "Want more review rounds? Comment `/crysk review`",
     );
-    expect(comment.toLowerCase()).not.toContain("override");
   });
 
   test("formatCiAdmissionObserveNotice describes a would-skip decision", () => {
