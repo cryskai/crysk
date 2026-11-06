@@ -20,6 +20,7 @@ import type {
 import type { FailureClass } from "../execution/failure-classification";
 import type { FailureCause } from "../execution/failure-policy";
 import { StepExecutionHarness } from "../execution/harness";
+import { runWithFallback } from "../execution/model-fallback";
 import type { SpendReservation } from "../execution/spend-limiter";
 import type { NormalizedUsage } from "../execution/usage-normalized";
 import type { CredentialBroker } from "../security/credential-broker";
@@ -245,8 +246,10 @@ export interface ClaudeCodeRunnerOptions {
 
 export class ClaudeCodeRunner implements StepRunner {
   private readonly harness: StepExecutionHarness;
+  private readonly signal?: AbortSignal;
 
   constructor(options: ClaudeCodeRunnerOptions = {}) {
+    this.signal = options.signal;
     this.harness = new StepExecutionHarness({
       workspaceRoot: options.workspaceRoot,
       executableAllowlist: options.executableAllowlist,
@@ -261,7 +264,19 @@ export class ClaudeCodeRunner implements StepRunner {
     });
   }
 
+  // A caller that builds its own plan (runPipeline with `models`, as the lab
+  // does) can hand this runner a step with fallbacks (S4). It runs them in
+  // order like the production runner does. Every Claude model here runs on
+  // the one Claude credential this runner holds; a model on another backend
+  // has no transport here, fails before any spawn with no cause, and so ends
+  // the step, recorded in its `modelAttempts`.
   async run(step: StepSpec): Promise<StepResult> {
-    return this.harness.run(step);
+    return runWithFallback({
+      step,
+      runOn: (single) => this.harness.run(single),
+      credentialOf: (route) =>
+        route.backend === "claude-code" ? "claude-code" : undefined,
+      cancelled: () => this.signal?.aborted === true,
+    });
   }
 }

@@ -187,6 +187,10 @@ model has used its own retries:
 model shares the OpenCode server's one. So a refused Claude login skips the other Claude models and moves
 to an OpenCode model, and the reverse. A cancelled run starts no further model.
 
+**Time.** Each model gets the step's own retries, each with the step's full timeout, so the longest a step
+can take grows with the list: a step whose three models all keep timing out takes three times what one
+model would. Only the run's own ceiling bounds the whole step.
+
 **Checked before anything spends.** Every model of every list is resolved, bound and admitted with the rest
 of the plan, before the cost confirmation, so a fallback that cannot run (no executable, no credential, a
 backend not admitted) fails the run up front instead of when its turn comes. One OpenCode server holds one

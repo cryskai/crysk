@@ -14,6 +14,7 @@ import {
   isTerminalSessionFailure,
   isTransientSessionFailure,
 } from "../../src/execution/failure-classification";
+import { StepExecutionHarness } from "../../src/execution/harness";
 import { FORMAT_RETRY_REMINDER } from "../../src/execution/step-artifacts";
 import { CLAUDE_ERROR_ROWS, claudeErrorEnvelope } from "./claude-error-rows";
 
@@ -725,5 +726,65 @@ describe("ClaudeCodeRunner error map", () => {
       childEnv: { ANTHROPIC_API_KEY: "k" },
     }).run(await makeSpec());
     expect(stepResult.failureCredential).toBe("ANTHROPIC_API_KEY");
+  });
+});
+
+// odd/tasks/role-model-routing.md S4 (E-d). A caller that builds its own plan
+// (runPipeline with `models`, as the lab does) can hand a step with fallbacks
+// to the legacy Claude runner. It must try them, not quietly run the first
+// model and report success; and a bare harness, which binds one transport,
+// must refuse the list rather than ignore it.
+describe("fallback models on the legacy Claude runner", () => {
+  const SONNET = {
+    backend: "claude-code" as const,
+    provider: "anthropic",
+    modelFamily: "sonnet",
+    modelSnapshot: "sonnet",
+  };
+  const OPUS = { ...SONNET, modelFamily: "opus", modelSnapshot: "opus" };
+  const MODEL_GONE = CLAUDE_ERROR_ROWS.find(
+    (row) => row.cause === "model_unavailable",
+  );
+
+  test("a model the provider does not serve moves to the next Claude model", async () => {
+    if (MODEL_GONE === undefined) throw new Error("no model_unavailable row");
+    const { spawnFn, calls } = makeFakeSpawn([
+      { stdout: claudeErrorEnvelope(MODEL_GONE), exitCode: 0 },
+      { stdout: envelope(JSON.stringify(GOOD_DRAFT)) },
+    ]);
+    const spec = await makeSpec({
+      maxAttempts: 1,
+      route: SONNET,
+      fallbackRoutes: [OPUS],
+    });
+    const result = await new ClaudeCodeRunner({ spawnFn }).run(spec);
+    expect(calls.map((call) => flagValue(call.argv, "--model"))).toEqual([
+      "sonnet",
+      "opus",
+    ]);
+    expect(result.status).toBe("ok");
+    expect(result.attempts).toBe(2);
+    expect(
+      result.modelAttempts?.map((entry) => [
+        entry.route.modelSnapshot,
+        entry.status,
+        entry.cause,
+      ]),
+    ).toEqual([
+      ["sonnet", "failed", "model_unavailable"],
+      ["opus", "ok", undefined],
+    ]);
+  });
+
+  test("a bare harness refuses a list it cannot run, before any spawn", async () => {
+    const { spawnFn, calls } = makeFakeSpawn([
+      { stdout: envelope(JSON.stringify(GOOD_DRAFT)) },
+    ]);
+    const spec = await makeSpec({ route: SONNET, fallbackRoutes: [OPUS] });
+    const result = await new StepExecutionHarness({ spawnFn }).run(spec);
+    expect(calls).toHaveLength(0);
+    expect(result.status).toBe("failed");
+    expect(result.attempts).toBe(0);
+    expect(result.stderrTail).toContain("fallback");
   });
 });

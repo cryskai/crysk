@@ -697,7 +697,7 @@ describe("every model is admitted and bound before anything runs", () => {
           "claude-code": successfulClaudeCredentialBroker,
         },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/opencode/i);
     expect(requests).toHaveLength(0);
   });
 

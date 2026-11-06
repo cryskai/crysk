@@ -619,6 +619,22 @@ export class StepExecutionHarness implements StepRunner {
   async run(step: StepSpec): Promise<StepResult> {
     let canonicalCwd = step.cwd;
 
+    // S4: a harness binds ONE transport and credential and runs one model.
+    // A step carrying fallbacks belongs to a runner that tries them
+    // (runWithFallback, model-fallback.ts), which hands this harness one
+    // model at a time. Running only the first here would quietly drop the
+    // rest of an explicit list, so the step is refused before any spawn.
+    if (step.fallbackRoutes !== undefined && step.fallbackRoutes.length > 0) {
+      return {
+        name: step.name,
+        status: "failed",
+        usage: zeroUsage(),
+        attempts: 0,
+        stderrTail: `Step "${step.name}" lists ${step.fallbackRoutes.length} fallback model(s), and this runner runs one model per step; run it through a runner that tries fallbacks (MultiProviderRunner, ClaudeCodeRunner)`,
+        resultText: "",
+      };
+    }
+
     // Resolve transport for this step
     const effectiveBackend =
       step.route?.backend ?? step.backend ?? "claude-code";

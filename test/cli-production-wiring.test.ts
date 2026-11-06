@@ -472,3 +472,93 @@ describe("CLI production wiring (verify C1/C3)", () => {
     });
   });
 });
+
+// odd/tasks/role-model-routing.md S4 (E-d): every model of a role's list is
+// admitted before the cost confirmation, so an OpenCode model listed only as
+// a fallback gets its executable resolved here, and a fallback that cannot
+// run fails here, before anything spends.
+describe("fallback models at the pre-confirm admission", () => {
+  function claudeThenOpenCode() {
+    return createResolvedRoutePlan([
+      resolveStepRoute({
+        stepKey: "hunter-reliability",
+        role: "hunter",
+        modelRole: "hunter.reliability",
+        models: {
+          "hunter.reliability": [
+            "claude:sonnet-latest",
+            "opencode:openai/gpt-4o",
+          ],
+        },
+      }),
+    ]);
+  }
+
+  test("an OpenCode model listed only as a fallback gets its executable resolved", async () => {
+    const tmpDir = await realpath(
+      await mkdtemp(path.join(tmpdir(), "pr-hero-cli-fallback-")),
+    );
+    try {
+      const claude = await writeExecutable(
+        tmpDir,
+        "claude",
+        "#!/bin/sh\necho ok\n",
+      );
+      const opencode = await writeExecutable(tmpDir, "opencode", "opencode");
+      const plan = claudeThenOpenCode();
+      const admission = await prepareProductionAdmissionContext({
+        workspaceRoot: tmpDir,
+        plan,
+        env: { PATH: tmpDir },
+        loadSdk: mockLoadSdk,
+        authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+      });
+      if ("error" in admission) {
+        throw new Error(admission.error);
+      }
+      expect(admission.authorityOptions.executableAllowlists?.opencode).toEqual(
+        [{ absolutePath: opencode.canonicalPath, sha256: opencode.sha256 }],
+      );
+      expect(admission.evidence.get("opencode")?.sdkAvailable).toBe(true);
+      await expect(
+        admitRoutePlan(plan, admission.registry, {
+          mode: "production",
+          evidence: admission.evidence,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a fallback whose executable cannot be found fails admission", async () => {
+    const tmpDir = await realpath(
+      await mkdtemp(path.join(tmpdir(), "pr-hero-cli-fallback-")),
+    );
+    try {
+      const claude = await writeExecutable(
+        tmpDir,
+        "claude",
+        "#!/bin/sh\necho ok\n",
+      );
+      // No opencode binary anywhere this admission may look.
+      const missing = { canonicalPath: path.join(tmpDir, "no-opencode") };
+      const admission = await prepareProductionAdmissionContext({
+        workspaceRoot: tmpDir,
+        plan: claudeThenOpenCode(),
+        env: { PATH: tmpDir },
+        loadSdk: mockLoadSdk,
+        authorityDeps: {
+          ...fixtureDeps(tmpDir, claude, missing),
+          existsFn: (p: string) =>
+            p.startsWith(tmpDir) && path.basename(p) !== "opencode",
+        },
+      });
+      expect("error" in admission ? admission.error : "admitted").toMatch(
+        /opencode/i,
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
