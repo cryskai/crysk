@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-06
+
 ### Security
 - **Model text is made safe before it is published.** A pull request can steer what a model writes about it, and findings, the review summary, CI adjudication evidence and triage replies were posted as written. Credential-shaped text is now redacted, and mentions, Markdown images, raw HTML and HTML comments are defused, in PR comments, the step summary and the state block. A finding or path can no longer spell a marker that hides the real state block. `findings.json` in the run artifact still holds the original text.
 
@@ -27,7 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/runs/report`, so each run is recorded with its cost. The body is metadata only: no finding, claim,
   summary or hop trail. Failed and skipped reviews are reported too (zero counts when the action
   published no run directory). A report failure, including one while reading or shaping the run
-  directory, is a `::warning::` and never turns the job red. Standalone runs are unchanged.
+  directory, is a `::warning::` and never turns the job red. Standalone runs are unchanged. The report also
+  carries the gate's own count of open blocking findings and each finding's state under the ids that last
+  across runs, so the platform tells new, still-open and resolved findings apart without guessing, and the
+  number of findings the refuter removed per hunter (counts only) with how long indexing took.
 - **Platform mode: the run's findings are uploaded to the Crysk platform.** Right after a successful
   `/runs/report`, the `Report to Crysk` step POSTs `{ schema_version, findings }` to `/runs/findings` with
   the same run token: the `findings` array of `findings.json`, each object as the engine wrote it, at most
@@ -61,8 +66,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   review-comments fallback already did. Before, a bot's comments read on that path (for example
   `github-actions[bot]` summaries in standalone mode) arrived under the bare login, so exact-login trust
   checks missed them; they now match in every mode.
-
-### Changed
 - **An exhausted review budget or `manual_only` no longer turns an unreviewed head green.** Under these two
   rules no later push gets an automatic review, so a carried green (or answered findings unlocking a carried
   red) let code no review read merge: one measured pull request merged green over 11 unreviewed commits. The
@@ -727,7 +730,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cryskai/crysk/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/cryskai/crysk/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/cryskai/crysk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/cryskai/crysk/compare/v0.3.0...v0.3.1
