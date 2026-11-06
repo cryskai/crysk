@@ -60,6 +60,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "admission-ledger",
       "classify-error",
       "cli-record",
+      "crysk-secrets",
       "force-comment",
       "gates",
       "outcome",

@@ -236,6 +236,60 @@ follows the same rule: it never echoes, logs, or truncates a secret value anywhe
   3. Enter Name (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`).
   4. Paste the token into Secret and click **Add secret**.
 
+### `CRYSK_*` secrets (upcoming)
+
+> **Not read by reviews yet.** The action accepts the `crysk-secrets` input and checks it, but a review
+> still authenticates only through `claude-token`, `anthropic-api-key` and `opencode-auth`. A workflow
+> that passes only `crysk-secrets` stops with `PRH-CRED-MISSING`. Keep the inputs above until a release
+> says to switch.
+
+Each credential gets one secret, with one name per kind:
+
+| Secret | What it holds |
+|---|---|
+| `CRYSK_CLAUDE_OAUTH_TOKEN` | Claude Code subscription: the token `claude setup-token` prints (replaces `CLAUDE_CODE_OAUTH_TOKEN`) |
+| `CRYSK_CLAUDE_API_KEY` | Claude Code on an Anthropic API key (replaces `ANTHROPIC_API_KEY`) |
+| `CRYSK_OPENCODE_<P>_API_KEY` | An OpenCode provider's API key |
+| `CRYSK_OPENCODE_<P>_OAUTH` | That provider's `opencode auth login` record, base64 on one line (`base64 -w0`) |
+
+`<P>` is the [Models.dev](https://models.dev) provider id in upper case, with `-` and `.` written as `_`:
+`deepseek` becomes `DEEPSEEK`, `github-copilot` becomes `GITHUB_COPILOT`, and `wafer.ai` becomes `WAFER_AI`.
+Two names are reserved for several Claude accounts: `CRYSK_CLAUDE_OAUTH_TOKEN_<NAME>` and
+`CRYSK_CLAUDE_API_KEY_<NAME>`. Crysk does not read them yet, and the run prints a notice when it gets one.
+
+The workflow names each secret it passes. It never passes `toJSON(secrets)`, which would hand every
+secret in the repository to the action and to everything the action installs. A secret the repository
+does not have arrives empty, and an empty value counts as absent, so one block can list every provider
+you might use:
+
+```yaml
+      - uses: cryskai/crysk@v0
+        with:
+          crysk-secrets: |
+            CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}
+            CRYSK_CLAUDE_API_KEY=${{ secrets.CRYSK_CLAUDE_API_KEY }}
+            CRYSK_OPENCODE_DEEPSEEK_API_KEY=${{ secrets.CRYSK_OPENCODE_DEEPSEEK_API_KEY }}
+            CRYSK_OPENCODE_OPENAI_OAUTH=${{ secrets.CRYSK_OPENCODE_OPENAI_OAUTH }}
+```
+
+What the action does with the input:
+
+- **Only the setup step sees the values.** The trigger, the dependency and OpenCode installers, and
+  Run Crysk do not. The step's shell pipes the input to `src/ci/setup.ts` on stdin and starts it with
+  the variable emptied, so no process the step spawns inherits the values.
+- **Every value is masked** with `::add-mask::` before anything else is written. That includes the
+  strings inside a decoded `_OAUTH` record, which GitHub would not otherwise know are secret.
+- **Later steps learn only what exists**, through the step's outputs: `crysk-secrets` (the names
+  kept), `claude-credentials` (`subscription`, `api_key`) and `opencode-providers` (the `<P>`
+  tokens). Nothing is written to `GITHUB_ENV`.
+- **The step fails** with `PRH-CRED-UNUSABLE` (`malformed_payload`) and names the secret when:
+  - an `_OAUTH` value is not padded standard base64, does not decode to a JSON object, or decodes to a
+    record whose `type` is not `oauth`;
+  - one name has a value on two lines;
+  - a line is not `NAME=value`, which is usually a base64 value that wrapped onto a second line.
+- **Other names are ignored**, each with a notice. A `CRYSK_` name is named in the notice. Any other
+  name is reported by its line number only, because it may be part of a value.
+
 ## OpenCode in CI
 
 Leave `OPENCODE_AUTH_JSON` and `CRYSK_ROUTING` unset to keep today's Claude CI. To run OpenCode, set
@@ -1110,6 +1164,7 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `step-summary` | `true` | Set `false` to skip the `$GITHUB_STEP_SUMMARY` write. |
 | `routing` | empty | Person-layer routing JSON (`config.routing` object). Wire from `vars.CRYSK_ROUTING || vars.PRHERO_ROUTING` (quoted). See [OpenCode in CI](#opencode-in-ci). |
 | `opencode-auth` | empty | Whole OpenCode `auth.json` blob. Wire from `secrets.OPENCODE_AUTH_JSON`. Never echo. |
+| `crysk-secrets` | empty | Upcoming, not read by reviews yet: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets (upcoming)](#crysk_-secrets-upcoming). |
 
 ## Error codes
 
@@ -1237,6 +1292,14 @@ Then re-set the secret:
 
 ```bash
 gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+```
+
+When `{detail}` names a `CRYSK_*` secret, the `crysk-secrets` input was refused. See
+[`CRYSK_*` secrets (upcoming)](#crysk_-secrets-upcoming). Re-set an `_OAUTH` secret from the provider's record in your
+OpenCode auth file, encoded on one line (on macOS, `base64` does not wrap, so drop `-w0`):
+
+```bash
+jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
 ```
 
 #### `source_read_failed`

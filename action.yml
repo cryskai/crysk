@@ -23,6 +23,10 @@ inputs:
   opencode-auth:
     description: 'Whole OpenCode auth.json store. Written 0600 at the OpenCode auth path. Never logged.'
     required: false
+  crysk-secrets:
+    description: 'Upcoming, not read by reviews yet: keep anthropic-api-key, claude-token and opencode-auth until a release says otherwise. The Crysk credentials as NAME=value lines, one per CRYSK_* secret, each line written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN, CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY, CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record). Only the setup step reads it; every value is masked.'
+    required: false
+    default: ''
   pr-number:
     description: 'Pull request number. Defaults to the triggering pull_request/issue_comment event.'
     required: false
@@ -220,7 +224,17 @@ runs:
         # A malformed routing or auth input leaves setup.json here, so the publish
         # step names that input instead of reporting "an install step failed".
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
-      run: bun "${{ github.action_path }}/src/ci/setup.ts"
+        # The CRYSK_* secrets (S8), bound in THIS step only: not the trigger, not
+        # the installers, and not Run Crysk until the engine reads them there
+        # (it would hand them to every git and gh child for nothing). The shell
+        # pipes them to setup.ts on stdin (printf is a builtin, so no process
+        # sees them in its argv) and runs bun with the variable emptied: Bun
+        # hands a child the environment it started with, so a variable bun
+        # received would reach git on the platform path. setup.ts masks every
+        # value and outputs presence only (crysk-secrets, claude-credentials,
+        # opencode-providers), never a value and never to GITHUB_ENV.
+        CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin
 
     # Pin 1.18.30 as its own step so GITHUB_PATH updates later steps only
     # (install ≠ Run Crysk). Never unpinned. Digest verify of the official
