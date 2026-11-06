@@ -226,7 +226,7 @@ describe("claudeCredentialRefusal", () => {
       subscription: "CLAUDE_CODE_OAUTH_TOKEN",
     });
     expect(claudeCredentialRefusal(selection, true)).toBe(
-      "no Claude credential this run may use is set: credentials.claude is [api_key], and none of it is set: api_key (CRYSK_CLAUDE_API_KEY or ANTHROPIC_API_KEY). subscription is set but not listed, so it is not used. set a listed credential, or change credentials.claude in your person config",
+      "no Claude credential this run may use is set: credentials.claude is [api_key], and none of those is set: api_key (CRYSK_CLAUDE_API_KEY or ANTHROPIC_API_KEY). subscription is set but not listed, so it is not used. Set a listed credential, or change credentials.claude in your person config",
     );
   });
 
@@ -240,7 +240,7 @@ describe("claudeCredentialRefusal", () => {
       true,
     );
     expect(message).toBe(
-      "no Claude credential this run may use is set: credentials.claude is [subscription, api_key] (the default), and none of it is set: subscription (CRYSK_CLAUDE_OAUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN, or a Claude login on this machine); api_key (CRYSK_CLAUDE_API_KEY or ANTHROPIC_API_KEY). ANTHROPIC_AUTH_TOKEN is set but no longer used: put an API key in CRYSK_CLAUDE_API_KEY or ANTHROPIC_API_KEY. set a listed credential, or change credentials.claude in your person config",
+      "no Claude credential this run may use is set: credentials.claude is [subscription, api_key] (the default), and none of those is set: subscription (CRYSK_CLAUDE_OAUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN, or a Claude login on this machine); api_key (CRYSK_CLAUDE_API_KEY or ANTHROPIC_API_KEY). ANTHROPIC_AUTH_TOKEN is set but no longer used: put an API key in CRYSK_CLAUDE_API_KEY or ANTHROPIC_API_KEY. Set a listed credential, or change credentials.claude in your person config",
     );
   });
 

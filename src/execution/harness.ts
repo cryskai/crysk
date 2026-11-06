@@ -85,9 +85,9 @@ import {
   FORMAT_RETRY_REMINDER,
   settlementReceiptPath,
 } from "./step-artifacts";
-import type { NormalizedUsage } from "./usage-normalized";
 import {
   envBillsMetered,
+  type NormalizedUsage,
   normalizeUnavailableUsage,
   projectLegacyUsage,
   sumNormalizedUsage,
@@ -1392,7 +1392,14 @@ export class StepExecutionHarness implements StepRunner {
             finalText: "",
             usage: normalizeUnavailableUsage({
               wallMs: harnessWatchdogMs ?? 0,
-              billingMode: transport.billingMode,
+              // A Claude child bills on the credential its env holds, which the run chose; the transport's own
+              // answer reads the engine's startup env and could name a credential the run stripped.
+              billingMode:
+                transport.backend === "claude-code"
+                  ? envBillsMetered(this.projectedEnv)
+                    ? "metered"
+                    : "subscription"
+                  : transport.billingMode,
             }),
             stderrTail: `Step timed out after ${harnessWatchdogMs}ms`,
             timedOut: true,

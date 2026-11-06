@@ -331,7 +331,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
           claudeRun: refused,
         }),
       ).rejects.toThrow(
-        /credentials\.claude is \[api_key\], and none of it is set.*subscription is set but not listed/,
+        /credentials\.claude is \[api_key\], and none of those is set.*subscription is set but not listed/,
       );
       expect(built).toBe(true);
     });

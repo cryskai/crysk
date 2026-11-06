@@ -327,8 +327,8 @@ On macOS with `/usr/bin/security` present, a run on the subscription projects th
 the child. A run on the API key attaches no Keychain broker at all. If the `Claude Code-credentials` item is
 absent entirely, projection fails closed and the step does not run. If the Keychain item exists but the CLI
 moved its OAuth record out of the expected shape, projection degrades (`#279`) and the child runs on the
-run's own environment, which holds no API key on a subscription run, so it fails rather than billing a key
-the run did not choose.
+run's own environment, which holds no API key on a subscription run, so it never bills a key the run did not
+choose: it runs on whatever the Claude CLI's own credential store holds, and fails only if that is empty too.
 
 ## Verifying at $0
 

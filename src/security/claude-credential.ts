@@ -158,7 +158,7 @@ export function claudeCredentialRefusal(
       !selection.order.includes(kind) && selection.presence[kind] !== undefined,
   );
   const parts = [
-    `no Claude credential this run may use is set: ${order}, and none of it is set: ${missing}`,
+    `no Claude credential this run may use is set: ${order}, and none of those is set: ${missing}`,
   ];
   if (unlisted.length > 0) {
     parts.push(
@@ -171,7 +171,7 @@ export function claudeCredentialRefusal(
     );
   }
   parts.push(
-    "set a listed credential, or change credentials.claude in your person config",
+    "Set a listed credential, or change credentials.claude in your person config",
   );
   return parts.join(". ");
 }
