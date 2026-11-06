@@ -1354,6 +1354,61 @@ describe("decidePublication — the pure table", () => {
     expect(plan.rendered.annotation).not.toContain("<provider>");
   });
 
+  // U1 (odd/tasks/role-model-routing.md, S8): a refused crysk-secrets input
+  // records the same class with a detail naming the secret or the line. The
+  // fix must point at that secret, not at the OpenCode auth store.
+  test("a setup record for a refused crysk-secrets input is PRH-CRED-UNUSABLE and points at the CRYSK_* secret", () => {
+    for (const detail of [
+      "CRYSK_OPENCODE_OPENAI_OAUTH is not base64 (encode the OpenCode auth record with base64 -w0)",
+      "CRYSK_CLAUDE_API_KEY is given more than once",
+      "line 3 of the crysk-secrets input is not NAME=value (a value split across lines? encode _OAUTH secrets with base64 -w0)",
+    ]) {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: false,
+        setup: {
+          v: 1,
+          cls: { kind: "credential", failureClass: "malformed_payload" },
+          detail,
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+      expect(plan.rendered.owner).toBe("config");
+      expect(plan.rendered.annotation).toContain(detail);
+      expect(plan.rendered.annotation).toContain(
+        "re-set the CRYSK_* secret it names",
+      );
+      expect(plan.rendered.annotation).not.toContain("OPENCODE_AUTH_JSON");
+      const summary = plan.rendered.summary.join("\n");
+      expect(summary).toContain(
+        "jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+      );
+      expect(summary).not.toContain("jq -e 'type==\"object\"'");
+    }
+  });
+
+  test("a malformed opencode-auth setup record keeps its OpenCode store fix", () => {
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail: "the opencode-auth input is not valid JSON",
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.annotation).toContain(
+      "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
+    );
+    expect(plan.rendered.summary.join("\n")).toContain(
+      "jq -e 'type==\"object\"'",
+    );
+  });
+
   test("an unverifiable 403 with no scope names the refused token, never a scope pr-hero does not know", () => {
     const plan = decidePublication({
       record: record({

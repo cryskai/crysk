@@ -1170,6 +1170,21 @@ const OPENCODE_SUBSCRIPTION_FIXES = [
 function isOpencodeRoute(params: ErrorParams): boolean {
   return params.backend?.trim() === "opencode";
 }
+// A refused `crysk-secrets` input (src/ci/crysk-secrets.ts, U1) records
+// malformed_payload with a detail that names a CRYSK_* secret or a line of the
+// input, never a value. Its fix is that secret, not the OpenCode auth store.
+function isCryskSecretsDetail(params: ErrorParams): boolean {
+  const detail = params.detail?.trim() ?? "";
+  return (
+    detail.startsWith("CRYSK_") ||
+    /^line \d+ of the crysk-secrets input /.test(detail)
+  );
+}
+const CRYSK_SECRETS_FIXES = [
+  "Re-set the CRYSK_* secret the message names. An _OAUTH secret is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
+  "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+  "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
+];
 const MODEL_NOT_SERVED: CatalogVariant = {
   why: "the routing names a model this provider does not offer",
   fixes: [
@@ -1343,14 +1358,19 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         // store and for a Claude keychain payload alike, and {detail} names which.
         what: "The credential store is not usable: {detail}",
         why: CRED_STORE_WHY,
-        fixes: [
-          "Check that the store is a JSON object:",
-          "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
-          "Then re-set the secret:",
-          OPENCODE_STORE,
-        ],
-        annotationFix:
-          "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
+        fixes: (params) =>
+          isCryskSecretsDetail(params)
+            ? CRYSK_SECRETS_FIXES
+            : [
+                "Check that the store is a JSON object:",
+                "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
+                "Then re-set the secret:",
+                OPENCODE_STORE,
+              ],
+        annotationFix: (params) =>
+          isCryskSecretsDetail(params)
+            ? "re-set the CRYSK_* secret it names (an _OAUTH secret is base64 -w0 of the provider's OpenCode record)"
+            : "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
       },
       source_read_failed: CREDENTIAL_UNUSABLE_ENV,
       "env-absent": CREDENTIAL_UNUSABLE_ENV,
