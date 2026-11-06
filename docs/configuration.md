@@ -191,6 +191,10 @@ to an OpenCode model, and the reverse. A cancelled run starts no further model.
 can take grows with the list: a step whose three models all keep timing out takes three times what one
 model would. Only the run's own ceiling bounds the whole step.
 
+**Cost.** The same holds for money: each model's attempts are paid on its own credential, so a step whose
+three models all fail after spending can cost up to three times one model. The CI `budget-usd` check reads
+the estimate before the run, which does not price fallbacks, and nothing caps dollars while the run goes.
+
 **Checked before anything spends.** Every model of every list is resolved, bound and admitted with the rest
 of the plan, before the cost confirmation, so a fallback that cannot run (no executable, no credential, a
 backend not admitted) fails the run up front instead of when its turn comes. One OpenCode server holds one
