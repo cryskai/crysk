@@ -8,7 +8,7 @@
 // a renderer that reached for `new Date()` would make that a lie).
 
 import { listPaths } from "#git/refs";
-import type { ResolvedModelRoute, ResolvedStepRoute } from "#model/routing";
+import type { ResolvedRoutePlan, ResolvedStepRoute } from "#model/routing";
 import type { PostMinSeverity } from "#pr/post-floor";
 import {
   type CiMode,
@@ -1864,40 +1864,36 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-export function formatModelRoute(
-  route: ResolvedModelRoute,
-  logicalIdentity?: string,
-): string {
-  const variant = route.modelVariant ? `#${route.modelVariant}` : "";
-  const modelName = route.modelSnapshot || route.modelFamily;
-  const target = `${route.provider}/${modelName}${variant}`;
-  const gateway = route.gateway ?? "direct";
-  const dims = `[${gateway}, ${route.backend}]`;
-  if (logicalIdentity && logicalIdentity !== target) {
-    return `${logicalIdentity} -> ${target} ${dims}`;
-  }
-  return `${target} ${dims}`;
-}
-
-export function formatStepRoute(
-  step: ResolvedStepRoute,
-  rawLogical?: string,
-): string {
-  return formatModelRoute(step.route, rawLogical ?? step.logicalIdentity);
+// A step's route as the plan card shows it: the model name it resolved to,
+// which already says its backend (`claude:sonnet-latest`,
+// `opencode:openai/gpt-5#high`). It replaced `alias -> provider/model
+// [gateway, backend]`, whose gateway no longer exists.
+export function formatStepRoute(step: ResolvedStepRoute): string {
+  return step.logicalIdentity;
 }
 
 // The envelope needs ONE model string. With no --model override each agent
-// carries its own frontmatter model, so report what actually ran rather than
-// inventing a single value: identical models collapse to one name, a mixed
-// set is recorded as a mix instead of as a lie.
+// carries its own model, so report what actually ran rather than inventing a
+// single value: identical models collapse to one name, a mixed set is
+// recorded as a mix instead of as a lie. With a route plan, "what ran" is the
+// plan's model for the hunters and the refuter (`models` moves them off their
+// frontmatter); a zero-config plan names the same aliases the frontmatter does.
 export function envelopeModel(
   options: { model?: string },
   agentFiles: Map<string, { model?: string }>,
+  routePlan?: ResolvedRoutePlan,
 ): string {
   if (options.model) return options.model;
   const models = new Set<string>();
-  for (const agent of agentFiles.values()) {
-    if (agent.model) models.add(agent.model);
+  const agentSteps = (routePlan?.steps ?? []).filter(
+    (step) => step.role === "hunter" || step.role === "refuter",
+  );
+  if (agentSteps.length > 0) {
+    for (const step of agentSteps) models.add(step.route.modelSnapshot);
+  } else {
+    for (const agent of agentFiles.values()) {
+      if (agent.model) models.add(agent.model);
+    }
   }
   if (models.size === 0) return "unspecified";
   return [...models].sort().join("+");

@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
+import { modelNameFromAlias } from "#model/model-name";
 import {
   agentStepKey,
-  parseLogicalIdentity,
   type ResolvedStepRoute,
-  type RoutingConfig,
   resolveStepRoute,
 } from "#model/routing";
 import {
@@ -106,7 +105,6 @@ export function freezeDiversityPlan(
 export interface BuildDiversityPlanInput {
   readonly spec: ReviewSpec;
   readonly c2SchemaVersion: string;
-  readonly routingConfig?: RoutingConfig;
   readonly cliModel?: string;
   readonly frontmatterModel?: (agentKey: string) => string | undefined;
   readonly target?: BenchmarkTarget;
@@ -131,7 +129,9 @@ export function buildDiversityPlan(
     if (!models || models.length === 0) continue;
     const specialty = resolveSpecialty(agent);
     for (const model of models) {
-      const parsed = parseLogicalIdentity(model);
+      // A leg's model is internal: a bare alias or a full model name. Its
+      // own model always wins over `models`, so the plan needs no `models`.
+      const parsed = { canonical: modelNameFromAlias(model).raw };
       const provisionalKey = diversityLegAgentKey(
         agent.key,
         deriveLegId(specialty, parsed.canonical, "pending"),
@@ -142,7 +142,6 @@ export function buildDiversityPlan(
         cliModel: input.cliModel,
         specModel: model,
         frontmatterModel: input.frontmatterModel?.(agent.key),
-        routingConfig: input.routingConfig,
       });
       const legId = deriveLegId(
         specialty,

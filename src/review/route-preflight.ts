@@ -2,14 +2,15 @@
 // enforce executable and provider capability gates, and admit production
 // routes across Claude and OpenCode runners before confirming or spending tokens.
 
+import type { ModelsConfig } from "#model/model-name";
 import {
   capabilityGateDecision,
   produceClaudeCapabilityReport,
 } from "#model/provider-capabilities";
 import {
   buildResolvedRoutePlan,
+  InvalidModelError,
   type ResolvedRoutePlan,
-  type RoutingConfig,
 } from "#model/routing";
 import { resolveEngineAssets } from "../assets";
 import { CliError } from "../errors";
@@ -111,7 +112,7 @@ export async function buildCliRoutePlan(params: {
   spec: ReviewSpec;
   options: CliOptions;
   agentFiles: Map<string, ParsedAgent>;
-  routingConfig?: RoutingConfig;
+  models?: ModelsConfig;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
   scoutEnabled?: boolean;
@@ -163,7 +164,7 @@ export async function buildCliRoutePlan(params: {
   return buildResolvedRoutePlan({
     agents: params.spec.agents,
     cliModel: params.options.model,
-    routingConfig: params.routingConfig,
+    models: params.models,
     frontmatterModel: (agentKey) => params.agentFiles.get(agentKey)?.model,
     ...(summarizerEnabled
       ? {
@@ -196,11 +197,19 @@ export async function buildCliRoutePlan(params: {
   });
 }
 
-// Pre-confirm route resolution: legacy runs without operator routing may omit
-// route provenance when the plan cannot be built, but admission failures must
+// Whether a plan that failed to build may fall back to the legacy no-plan
+// path (a prompt or `--model` naming a raw Claude id the CLI resolves itself).
+// Never when `models` is set, and never for a model written in the new form:
+// both are the operator's words, and the error is how to fix them.
+function planErrorIsFatal(error: unknown, modelsConfigured: boolean): boolean {
+  return modelsConfigured || error instanceof InvalidModelError;
+}
+
+// Pre-confirm route resolution: legacy runs without `models` may omit route
+// provenance when the plan cannot be built, but admission failures must
 // always surface before confirm — never be swallowed into routePlan = undefined.
 export async function resolveRoutePlanAtConfirm(input: {
-  routingConfigured: boolean;
+  modelsConfigured: boolean;
   buildRoutePlan: () => Promise<ResolvedRoutePlan>;
   registry?: TransportRegistry;
 }): Promise<ResolvedRoutePlan | undefined> {
@@ -210,7 +219,7 @@ export async function resolveRoutePlanAtConfirm(input: {
   try {
     routePlan = await input.buildRoutePlan();
   } catch (error) {
-    if (input.routingConfigured) throw error;
+    if (planErrorIsFatal(error, input.modelsConfigured)) throw error;
     return undefined;
   }
   await admitRoutePlan(routePlan, registry);
@@ -225,7 +234,7 @@ export interface ProductionRoutePlanResult {
 // Production admission: discover per-backend executable authority, derive
 // D1-11 evidence from exact-binding probes, and admit with one shared registry.
 export async function resolveProductionRoutePlanAtConfirm(input: {
-  routingConfigured: boolean;
+  modelsConfigured: boolean;
   workspaceRoot: string;
   buildRoutePlan: () => Promise<ResolvedRoutePlan>;
   authorityDeps?: ResolveRunnerAuthorityDeps;
@@ -236,7 +245,7 @@ export async function resolveProductionRoutePlanAtConfirm(input: {
   try {
     routePlan = await input.buildRoutePlan();
   } catch (error) {
-    if (input.routingConfigured) throw error;
+    if (planErrorIsFatal(error, input.modelsConfigured)) throw error;
     return undefined;
   }
 

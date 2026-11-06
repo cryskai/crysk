@@ -18,7 +18,7 @@ import {
   type ModelsConfig,
   parseModelsConfig,
 } from "#model/model-name";
-import type { RoutingConfig } from "#model/routing";
+import { judgeModelChoice } from "#model/routing";
 import { POST_MIN_SEVERITIES, type PostMinSeverity } from "#pr/post-floor";
 import type { SuspicionPrior } from "#review/prompt-set";
 import { type AgentSpec, isSafeSlug, type ReviewSpec } from "#review/spec";
@@ -512,7 +512,11 @@ Options:
                       default 8; 0 pauses verification), and optional
                       max_concurrent_steps (cap on steps in flight at once;
                       a positive integer; unset = unlimited)
-  --model <model>     Override every agent's model
+  --model <model>     Override every step's model but the materiality judge's:
+                      claude:<name>-latest, claude:<full model name>,
+                      opencode:<provider>/<model>[#variant], or a bare alias
+                      (sonnet, opus, haiku, fable). Per-role models go in
+                      "models" in ~/.crysk/config.json
   --summary           Enable the engine-owned PR summary (default)
   --no-summary        Disable the engine-owned PR summary
   --scout             review only: run the diff-only scout stage before the
@@ -2175,10 +2179,6 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   // exists. This row declares the key for the known-key set; the merge
   // descends into it rather than folding the object whole.
   summary: "capped",
-  // Removed (S2 of odd/tasks/role-model-routing.md): every parser refuses it
-  // with REMOVED_ROUTING_MESSAGE. The row stays only while the route plan
-  // still reads the type, and goes with it.
-  routing: "person",
   // Which model runs each role and which Claude credential pays for it are the
   // operator's decisions: a committed file must not move them onto another
   // model or another bill. Both are PERSON_ONLY_KEYS, refused in a repo file.
@@ -2224,7 +2224,6 @@ export interface LocalConfig {
   agents_dir?: string;
   default_base?: string;
   summary?: SummaryConfig;
-  routing?: RoutingConfig;
   // Role -> model list (S1). A role not listed uses `default`, and with no
   // `default` the step keeps its prompt's model.
   models?: ModelsConfig;
@@ -2307,8 +2306,8 @@ const KNOWN_CONFIG_KEYS = new Set<string>(Object.keys(CONFIG_DIRECTION));
 
 // Keys a committed repo file may never set. Wider than "direction is person":
 // `agents_dir` and `post_min_severity` are person-direction keys a repo file
-// may still name. These three choose a model or a bill.
-const PERSON_ONLY_KEYS = new Set<string>(["routing", "models", "credentials"]);
+// may still name. These two choose a model or a bill.
+const PERSON_ONLY_KEYS = new Set<string>(["models", "credentials"]);
 
 const LOCAL_CONFIG_KEYS = new Set<string>(
   Object.keys(CONFIG_DIRECTION).filter((key) => !PERSON_ONLY_KEYS.has(key)),
@@ -2504,6 +2503,16 @@ function parseConfigLayer(
       models = { ...models, summary: [...SUMMARY_MODEL_CONVERTED] };
       warnings?.push(
         `${file}: summary.model is gone; "haiku" is read as ${SUMMARY_MODEL_EXAMPLE}. Write that instead of summary.model.`,
+      );
+    }
+  }
+  // The judge's list is kept as written (the plan skips what it cannot
+  // use), but a model it will never run on is said out loud here, once.
+  if (models?.judge !== undefined) {
+    const { model, dropped } = judgeModelChoice(models);
+    if (dropped.length > 0) {
+      warnings?.push(
+        `${file}: models.judge skips ${dropped.join(", ")}: the materiality judge runs only on claude:sonnet-latest or claude:opus-latest${model === undefined ? ", so it stands down" : ""}.`,
       );
     }
   }
@@ -3042,11 +3051,6 @@ export function mergeConfig(
     CONFIG_DIRECTION.post_min_severity,
     (layer) => layer.post_min_severity,
   );
-  const routing = foldKey(
-    layers,
-    CONFIG_DIRECTION.routing,
-    (layer) => layer.routing,
-  );
   // Folded whole, not per role: the person layer is the only one that may
   // hold either, so there is never a second layer to merge roles from.
   const models = foldKey(
@@ -3120,7 +3124,6 @@ export function mergeConfig(
       ? {}
       : { default_base: defaultBase.value }),
     ...(summaryEnabled.value === undefined ? {} : { summary }),
-    ...(routing.value === undefined ? {} : { routing: routing.value }),
     ...(models.value === undefined ? {} : { models: models.value }),
     ...(credentials.value === undefined
       ? {}
@@ -3178,7 +3181,6 @@ export function mergeConfig(
     parity_trigger_paths: triggers.source,
     suspicion_priors: priors.source,
     summary: { enabled: summaryEnabled.source },
-    routing: routing.source,
     models: models.source,
     credentials: credentials.source,
     max_verification_steps: maxSteps.source,

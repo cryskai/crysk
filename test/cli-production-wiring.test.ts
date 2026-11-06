@@ -73,17 +73,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([step]);
       const admission = await prepareProductionAdmissionContext({
@@ -125,17 +115,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([step]);
       const injected = {
@@ -182,17 +162,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([step]);
       const admission = await prepareProductionAdmissionContext({
@@ -255,17 +225,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
     const zaiStep = resolveStepRoute({
       stepKey: "refuter",
       role: "refuter",
-      cliModel: "zai/glm-5",
-      routingConfig: {
-        mappings: {
-          "zai/glm-5": {
-            backend: "opencode",
-            provider: "zai",
-            modelFamily: "glm-5",
-            modelSnapshot: "glm-5",
-          },
-        },
-      },
+      cliModel: "opencode:zai/glm-5",
     });
     const registry = productionFallbackRegistry({
       mode: "production",
@@ -283,17 +243,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       resolveStepRoute({
         stepKey,
         role: stepKey === "refuter" ? "refuter" : "hunter",
-        cliModel: logical,
-        routingConfig: {
-          mappings: {
-            [logical]: {
-              backend: "opencode",
-              provider,
-              modelFamily: logical.split("/")[1],
-              modelSnapshot: logical.split("/")[1],
-            },
-          },
-        },
+        cliModel: `opencode:${provider}/${logical.split("/")[1]}`,
       });
     expect(() =>
       productionFallbackRegistry({
@@ -323,21 +273,11 @@ describe("CLI production wiring (verify C1/C3)", () => {
       const openStep = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([claudeStep, openStep]);
       const routed = await resolveProductionRoutePlanAtConfirm({
-        routingConfigured: true,
+        modelsConfigured: true,
         workspaceRoot: tmpDir,
         buildRoutePlan: async () => plan,
         env: { PATH: tmpDir },
@@ -407,17 +347,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
       return resolveStepRoute({
         stepKey,
         role: stepKey === "refuter" ? "refuter" : "hunter",
-        cliModel: logical,
-        routingConfig: {
-          mappings: {
-            [logical]: {
-              backend: "opencode",
-              provider,
-              modelFamily: logical.split("/")[1],
-              modelSnapshot: logical.split("/")[1],
-            },
-          },
-        },
+        cliModel: `opencode:${provider}/${logical.split("/")[1]}`,
       });
     }
 

@@ -172,40 +172,59 @@ describe("ClaudeCodeCliTransport §5.2 cancellation and terminal proof", () => {
     expect(signals).toHaveLength(0);
   });
 
-  test("direct routes pass executionModel (alias) to --model, not route snapshot", async () => {
-    const fake = makeFakeProc({
-      stdoutBody: JSON.stringify({ result: "ok" }),
-      exitCode: 0,
-    });
-    let spawnArgs: string[] | undefined;
-    const spawnFn = ((args: string[]) => {
-      spawnArgs = args;
-      return fake.proc;
-    }) as unknown as typeof Bun.spawn;
-    const transport = new ClaudeCodeCliTransport({
-      ...okPromptFns,
-      spawnFn,
-      getPgid: (pid) => pid,
-    });
+  // odd/tasks/role-model-routing.md E-c: `--model` is the ROUTE's model. A
+  // `-latest` name sends its CLI alias; a pinned name sends its full id, even
+  // when the step's own prompt alias (executionModel) says something else. It
+  // used to send the prompt alias, so a model configured for a role never
+  // reached the CLI.
+  for (const [name, route, expected] of [
+    [
+      "claude:sonnet-latest",
+      {
+        backend: "claude-code",
+        provider: "anthropic",
+        modelFamily: "sonnet",
+        modelSnapshot: "sonnet",
+      },
+      "sonnet",
+    ],
+    [
+      "claude:claude-opus-5-5",
+      {
+        backend: "claude-code",
+        provider: "anthropic",
+        modelFamily: "claude-opus-5-5",
+        modelSnapshot: "claude-opus-5-5",
+      },
+      "claude-opus-5-5",
+    ],
+  ] as const) {
+    test(`${name} reaches --model as ${expected}, whatever the step's alias`, async () => {
+      const fake = makeFakeProc({
+        stdoutBody: JSON.stringify({ result: "ok" }),
+        exitCode: 0,
+      });
+      let spawnArgs: string[] | undefined;
+      const spawnFn = ((args: string[]) => {
+        spawnArgs = args;
+        return fake.proc;
+      }) as unknown as typeof Bun.spawn;
+      const transport = new ClaudeCodeCliTransport({
+        ...okPromptFns,
+        spawnFn,
+        getPgid: (pid) => pid,
+      });
 
-    await transport.execute(
-      makeRequest({
-        executionModel: "sonnet",
-        route: {
-          backend: "claude-code",
-          provider: "anthropic",
-          gateway: "direct",
-          modelFamily: "sonnet",
-          modelSnapshot: "sonnet",
-        },
-      }),
-      { signal: new AbortController().signal },
-    );
+      await transport.execute(makeRequest({ executionModel: "haiku", route }), {
+        signal: new AbortController().signal,
+      });
 
-    const modelIndex = spawnArgs?.indexOf("--model") ?? -1;
-    expect(modelIndex).toBeGreaterThanOrEqual(0);
-    expect(spawnArgs?.[modelIndex + 1]).toBe("sonnet");
-  });
+      const modelIndex = spawnArgs?.indexOf("--model") ?? -1;
+      expect(modelIndex).toBeGreaterThanOrEqual(0);
+      expect(spawnArgs?.[modelIndex + 1]).toBe(expected);
+      expect(spawnArgs?.filter((a) => a === "--model")).toHaveLength(1);
+    });
+  }
 
   // The engine owns the effort and ALWAYS passes it (#299). The CLI's implicit
   // default is `high` except on the 5.5 family, where it is `medium`, so an

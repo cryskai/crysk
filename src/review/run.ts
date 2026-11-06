@@ -21,7 +21,8 @@ import {
   loadEffectiveConfig,
   notionalCostInput,
 } from "#config/config";
-import type { ResolvedRoutePlan, RoutingConfig } from "#model/routing";
+import type { ModelsConfig } from "#model/model-name";
+import type { ResolvedRoutePlan } from "#model/routing";
 import type { CiMode } from "#pr/preflight";
 import {
   type FindingsDocument,
@@ -367,7 +368,11 @@ export async function writeRunFindings(params: {
     pr: params.pr,
     base_sha: params.baseSha,
     head_sha: params.headSha,
-    model: envelopeModel(params.options, params.agentFiles),
+    model: envelopeModel(
+      params.options,
+      params.agentFiles,
+      params.result.routePlan,
+    ),
     iteration: 0,
     prompt_set: params.promptSet,
     engine: params.engine,
@@ -494,12 +499,12 @@ export async function writeMcpConfig(
 // wraps — `resolveProductionRoute` reads as a near-duplicate of that name at
 // a glance, which is exactly the confusion a shared wrapper should not add.
 export async function resolvePipelineRoute(params: {
-  routingConfigured: boolean;
+  modelsConfigured: boolean;
   workspaceRoot: string;
   spec: ReviewSpec;
   options: CliOptions;
   agentFiles: Map<string, ParsedAgent>;
-  routingConfig: RoutingConfig | undefined;
+  models: ModelsConfig | undefined;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
   scoutEnabled?: boolean;
@@ -507,14 +512,14 @@ export async function resolvePipelineRoute(params: {
   materialityEnabled?: boolean;
 }): Promise<ProductionRoutePlanResult | undefined> {
   return resolveProductionRoutePlanAtConfirm({
-    routingConfigured: params.routingConfigured,
+    modelsConfigured: params.modelsConfigured,
     workspaceRoot: params.workspaceRoot,
     buildRoutePlan: () =>
       buildCliRoutePlan({
         spec: params.spec,
         options: params.options,
         agentFiles: params.agentFiles,
-        routingConfig: params.routingConfig,
+        models: params.models,
         summary: params.summary,
         summarizerEnabled: params.summarizerEnabled,
         scoutEnabled: params.scoutEnabled,

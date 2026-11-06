@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { isEffort } from "#model/catalog";
 import { CLAUDE_CAPABILITY_STATICS } from "#model/provider-capabilities";
-import { spawnModelForClaudeCli } from "#model/routing";
+import { claudeCliModel } from "#model/routing";
 import type { BucketScope } from "../execution/bucket-id";
 import { deriveBucketId } from "../execution/bucket-id";
 import type {
@@ -745,7 +745,7 @@ export class ClaudeCodeCliTransport implements ProviderTransport {
       "--permission-mode",
       "bypassPermissions",
       "--model",
-      spawnModelForClaudeCli(request.route, request.executionModel),
+      claudeCliModel(request.route),
       "--effort",
       request.effort,
       // Moves the per-machine sections (cwd, env info, git status) out of the

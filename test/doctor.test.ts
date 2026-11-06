@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { CI_WORKFLOW_RELATIVE_PATH } from "#ci/setup";
-import { aliasCanonical } from "#model/catalog";
 import { modelsNeedOpenCode } from "#model/model-name";
 import {
   GOTCHAS_PLACEHOLDER_MARKER,
@@ -906,17 +905,9 @@ describe("doctor tri-state evaluation", () => {
       ).toBe("blocking");
     });
 
-    test("doctor route plan constructs an OpenCode binding from routing", () => {
+    test("doctor route plan constructs an OpenCode binding from models", () => {
       const open = buildDoctorRoutePlan({
-        mappings: {
-          [aliasCanonical("sonnet")]: {
-            backend: "opencode",
-            provider: "openai",
-            modelFamily: "gpt-4o",
-            modelSnapshot: "gpt-4o",
-            modelVariant: "high",
-          },
-        },
+        "hunter.logic": ["claude:opus-latest", "opencode:openai/gpt-4o#high"],
       }).steps.find((step) => step.route.backend === "opencode");
       expect(open?.route).toMatchObject({
         provider: "openai",

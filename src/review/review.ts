@@ -242,12 +242,12 @@ export async function review(options: CliOptions): Promise<number> {
     true,
   );
   const productionRoute = await resolvePipelineRoute({
-    routingConfigured: config.routing !== undefined,
+    modelsConfigured: config.models !== undefined,
     workspaceRoot: repoRoot,
     spec,
     options,
     agentFiles,
-    routingConfig: config.routing,
+    models: config.models,
     summary,
     materialityEnabled: resolveMaterialityGate(config),
   });

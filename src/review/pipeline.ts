@@ -16,18 +16,19 @@ import {
   type Effort,
   type StepRole,
 } from "#model/catalog";
+import type { ModelsConfig } from "#model/model-name";
 import {
   agentStepKey,
   buildResolvedRoutePlan,
+  claudeCliModel,
+  InvalidModelError,
   isMeasuredJudgeRoute,
   MATERIALITY_JUDGE_MODEL,
   MATERIALITY_STEP_KEY,
   type ResolvedModelRoute,
   type ResolvedRoutePlan,
-  type RoutingConfig,
   type RunnerBackend,
   resolveMaterialityJudgeRoute,
-  spawnModelForClaudeCli,
 } from "#model/routing";
 import {
   composeAdjudicationPrompt,
@@ -294,9 +295,9 @@ export interface PipelineInput {
   // demotes the immaterial ones to advisory. ABSENT means no judge step and
   // findings exactly as before (the scout's rule); pipeline.json still
   // carries a `materiality` record (`enabled: false`, `status: "skipped"`).
-  // No `model` seat on purpose: the judge is pinned to the model it was
-  // measured on (MATERIALITY_JUDGE_MODEL), and neither `--model` nor a
-  // frontmatter edit may move it.
+  // No `model` seat on purpose: the judge runs only on a model it was
+  // measured on (sonnet by default, opus through `models.judge`), and neither
+  // `--model`, `models.default` nor a frontmatter edit may move it.
   materiality?: { promptPath: string };
   // The PR title the materiality judge reads (S9): PrTarget.title in PR mode,
   // the reviewed head's commit subject in local mode. Author-controlled, so
@@ -352,9 +353,11 @@ export interface PipelineInput {
   // so callers that pass nothing see byte-identical step names, per_agent
   // keys, and parity semantics.
   spec?: ReviewSpec;
-  // D2 PR3: Optional pre-resolved model route plan or config
+  // D2 PR3: Optional pre-resolved model route plan, or the role -> model
+  // lists to build one from (S1). Absent `models` falls back to the merged
+  // config's, as the routing config used to.
   routePlan?: ResolvedRoutePlan;
-  routingConfig?: RoutingConfig;
+  models?: ModelsConfig;
   // Item 7: skip hunter (and scout) fan-out. A re-review whose restricted
   // delta is empty still classifies and verifies (C6); spawning hunters on
   // an empty patch would bill a first-review for nothing. Absent = run
@@ -1548,8 +1551,7 @@ async function execute(
   // it is settled long before a survivor exists to tier.
   state.refuterConfigured = reviewSpec.agents.some((a) => a.role === "refuter");
 
-  const effectiveRoutingConfig =
-    input.routingConfig ?? input.config?.effective?.routing;
+  const effectiveModels = input.models ?? input.config?.effective?.models;
 
   const frontmatterByKey = new Map<string, string | undefined>();
   for (const agent of reviewSpec.agents) {
@@ -1566,7 +1568,6 @@ async function execute(
   let diversityCtx = prepareDiversityExecution({
     reviewSpec,
     cliModel: input.model,
-    routingConfig: effectiveRoutingConfig,
     frontmatterModel: (agentKey) => frontmatterByKey.get(agentKey),
     target: input.diversityTarget,
     runtimeTarget: reviewSpec.multiModelDiversity?.enabled
@@ -1617,7 +1618,7 @@ async function execute(
       routePlan = buildResolvedRoutePlan({
         agents: diversityCtx.routeAgents,
         cliModel: input.model,
-        routingConfig: effectiveRoutingConfig,
+        models: effectiveModels,
         frontmatterModel: (agentKey) => frontmatterByKey.get(agentKey),
         ...(input.summarizer === undefined
           ? {}
@@ -1650,9 +1651,13 @@ async function execute(
           : { materiality: true as const }),
       });
     } catch (error) {
-      // Spec: legacy Claude-only runs without operator routing keep today's
-      // direct model passthrough; D2 route dimensions are optional then.
-      if (effectiveRoutingConfig !== undefined) throw error;
+      // Spec: legacy Claude-only runs without `models` keep today's direct
+      // model passthrough (a raw Claude id the CLI resolves itself); D2 route
+      // dimensions are optional then. A model written in the new form never
+      // falls back: its error says how to write it.
+      if (effectiveModels !== undefined || error instanceof InvalidModelError) {
+        throw error;
+      }
       routePlan = undefined;
     }
   }
@@ -3614,12 +3619,14 @@ async function runMaterialityJudge(
       record.reason =
         route !== undefined ||
         resolveMaterialityJudgeRoute(
-          input.routingConfig ?? input.config?.effective?.routing,
+          input.models ?? input.config?.effective?.models,
         ) === undefined
           ? "judge route is not the measured claude-code route"
           : "route plan carries no judge step";
       return;
     }
+    // `models.judge` may pick opus: the record names the model that runs.
+    record.model = route.modelSnapshot;
   }
   if (judge.length === 0) return;
 
@@ -3725,9 +3732,10 @@ async function runMaterialityJudge(
       tools: [],
       mcpConfigPath,
       // PINNED, never `input.model` or the frontmatter: the measured judge is
-      // sonnet, and a judge on another model is a different, unmeasured judge
-      // deciding which blockers post.
-      model: MATERIALITY_JUDGE_MODEL,
+      // sonnet or opus (`models.judge`, through the route), and a judge on
+      // another model is a different, unmeasured judge deciding which
+      // blockers post. A run with no route plan sends the measured default.
+      model: route?.modelSnapshot ?? MATERIALITY_JUDGE_MODEL,
       effort,
       cwd: input.worktree,
       outPath: path.join(dir, "result.json"),
@@ -4377,17 +4385,16 @@ function routeForStepKey(
   return routePlan?.steps.find((step) => step.stepKey === stepKey)?.route;
 }
 
+// What the step's backend is sent, recorded as the step's model in
+// pipeline.json: the route's model when there is a route, else the step's own.
 function effectiveExecutionModel(spec: StepSpec): string {
   if (spec.route === undefined) {
     return spec.model;
   }
   if (spec.route.backend === "claude-code") {
-    return spawnModelForClaudeCli(spec.route, spec.model);
+    return claudeCliModel(spec.route);
   }
-  return (
-    (spec.route as { model?: string } | undefined)?.model ??
-    (spec.route.modelSnapshot || spec.model)
-  );
+  return spec.route.modelSnapshot || spec.model;
 }
 
 function stepMeta(spec: StepSpec): StepMeta {

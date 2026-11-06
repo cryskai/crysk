@@ -425,7 +425,6 @@ describe("pipeline diversity integration", () => {
     const executedRoute = {
       backend: "opencode" as const,
       provider: "openai",
-      gateway: "configured",
       modelFamily: "gpt-4o",
       modelSnapshot: "gpt-4o-2024",
       modelVariant: "high",
@@ -468,7 +467,7 @@ describe("pipeline diversity integration", () => {
     const observation = ledger.observations[0]?.observation;
     expect(observation?.backend).toBe("opencode");
     expect(observation?.provider).toBe("openai");
-    expect(observation?.gateway).toBe("configured");
+    expect(observation).not.toHaveProperty("gateway");
     expect(observation?.modelFamily).toBe("gpt-4o");
     expect(observation?.modelSnapshot).toBe("gpt-4o-2024");
     expect(observation?.modelVariant).toBe("high");

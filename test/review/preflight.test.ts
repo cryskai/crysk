@@ -1414,7 +1414,6 @@ describe("CONFIG_DIRECTION", () => {
       parity_trigger_paths: ["**/Auth*"],
       suspicion_priors: [{ path: "a.ts", weight: "high", reason: "hot" }],
       summary: { enabled: false },
-      routing: { mappings: [] },
       models: { default: ["claude:sonnet-latest"] },
       credentials: { claude: ["subscription"] },
       max_verification_steps: 3,
@@ -1457,7 +1456,6 @@ describe("CONFIG_DIRECTION", () => {
       parity_trigger_paths: "repo",
       suspicion_priors: "repo",
       summary: "capped",
-      routing: "person",
       models: "person",
       credentials: "person",
       max_verification_steps: "capped",
@@ -1572,7 +1570,7 @@ describe("parseLocalConfig admits the same keys it does today", () => {
   test("the admitted key set is unchanged, the three person-only keys aside", () => {
     expect(
       Object.keys(CONFIG_DIRECTION)
-        .filter((k) => !["routing", "models", "credentials"].includes(k))
+        .filter((k) => !["models", "credentials"].includes(k))
         .sort(),
     ).toEqual(PRE_C5_LOCAL_KEYS);
     const full = {
@@ -1867,7 +1865,6 @@ describe("mergeConfig", () => {
       parity_trigger_paths: "default",
       suspicion_priors: "default",
       summary: { enabled: "default" },
-      routing: "default",
       models: "default",
       credentials: "default",
       max_verification_steps: "default",
