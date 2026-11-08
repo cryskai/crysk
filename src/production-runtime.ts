@@ -69,6 +69,8 @@ import {
 } from "./security/binding-policy";
 import {
   OPENCODE_OAUTH_PROVIDER,
+  OpenCodeApiTokenBroker,
+  OpenCodeAuthBroker,
   OpenCodeFreeBroker,
 } from "./security/credential-broker";
 import { authorizeWorkspaceCwd } from "./security/execution-authority";
@@ -1736,13 +1738,20 @@ function refuseOpenCodeBrokerMismatch(
   const openCode = [...bindings.values()].filter(
     (b) => b.route.backend === "opencode",
   );
+  // Only the production broker classes say which kind they project. Any other
+  // broker (a caller's fake) is not judged here, as before U4; a real broker
+  // handed the wrong kind still refuses it by name at projection.
   const mismatched = openCode
-    .filter(
-      (b) =>
-        b.credential.broker !== undefined &&
-        b.credential.broker instanceof OpenCodeFreeBroker !==
-          (b.credential.kind === "provider_free"),
-    )
+    .filter((b) => {
+      const broker = b.credential.broker;
+      const free = b.credential.kind === "provider_free";
+      return (
+        (broker instanceof OpenCodeFreeBroker && !free) ||
+        ((broker instanceof OpenCodeApiTokenBroker ||
+          broker instanceof OpenCodeAuthBroker) &&
+          free)
+      );
+    })
     .map(
       (b) =>
         `${b.route.provider}/${b.route.modelSnapshot} ${b.credential.kind}`,

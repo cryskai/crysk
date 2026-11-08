@@ -769,4 +769,35 @@ describe("U4: what a single-provider plan keeps", () => {
       await runtime.dispose();
     }
   });
+
+  // Admitted at 709e43f: the free guard judges only the production broker
+  // classes, never a caller's own broker.
+  test("a caller's own OpenCode broker on an all-free plan is still admitted", async () => {
+    const hunter = routeFor("hunter.logic", ["opencode:opencode/free-a"]);
+    const fake: CredentialBroker = {
+      project: async () => {
+        throw new Error("not called");
+      },
+    };
+    const runtime = await createProductionRuntime({
+      workspaceRoot: tmpDir,
+      plan: createResolvedRoutePlan([hunter]),
+      openCodeBinaryPath: opencode.canonicalPath,
+      executableAllowlists: {
+        opencode: [
+          { absolutePath: opencode.canonicalPath, sha256: opencode.sha256 },
+        ],
+      },
+      mode: "conformance",
+      credentialBrokers: { opencode: fake },
+      freeModelProbe: async () => true,
+    });
+    try {
+      const binding = runtime.bindings.get(hunter.routeFingerprint);
+      expect(binding?.credential.kind).toBe("provider_free");
+      expect(binding?.credential.broker).toBe(fake);
+    } finally {
+      await runtime.dispose();
+    }
+  });
 });

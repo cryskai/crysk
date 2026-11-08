@@ -300,8 +300,8 @@ OpenCode credential is a provider plus its kind (`provider_api_token`, `opencode
 
 - **One server per model, one record per server.** Each model's steps run through their own OpenCode
   server, launched under a synthetic home whose `auth.json` holds only that model's provider record. A
-  DeepSeek server never sees the OpenAI record, and the other way round. Steps on the same model share
-  its server; steps on different models never do.
+  DeepSeek server never sees the OpenAI record, and the other way round. Steps on different credentials
+  never share a server.
 - **Billing per model.** A metered model reserves spend and can fence its own credential's bucket; a
   subscription model reserves nothing; a free model settles at zero unless the provider prices it. The
   usage record of each attempt carries the billing of the credential it ran on.
