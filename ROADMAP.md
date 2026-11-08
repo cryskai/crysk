@@ -118,8 +118,8 @@ control, plus the incident eval:
    hide bugs, not fix a miscalibration. 48 of 52 blocking findings on re-reviews were judged material,
    and #19's own check found 35 of 36 musive 🔴 findings corroborated by the refuter.
 3. **Empty is a valid answer:** the prompts say plainly that a review with no findings is a correct
-   result, not a failed one. **Already true:** the reliability, logic, parity and lifecycle prompts say
-   it, a quarter of reviews end with no findings, and 12 of 21 reviews of diffs of 100 lines or fewer
+   result, not a failed one. **Already true:** the reliability, logic and parity prompts say it (so did
+   the lifecycle prompt, retired 2026-11-08), a quarter of reviews end with no findings, and 12 of 21 reviews of diffs of 100 lines or fewer
    found nothing.
 4. **Materiality rule:** a real defect that is not crucial is not posted, or goes to the summary. The
    threshold is configurable. **Done for blocking findings** (#448, live on this repo since #449).
