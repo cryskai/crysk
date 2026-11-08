@@ -67,6 +67,7 @@ import {
 } from "./security/binding-policy";
 import { OPENCODE_OAUTH_PROVIDER } from "./security/credential-broker";
 import { authorizeWorkspaceCwd } from "./security/execution-authority";
+import { readOpenCodeSecretNames } from "./security/opencode-secret-manifest";
 import {
   type AdmitRoutePlanOptions,
   type AdmittedRoutePlanResult,
@@ -925,7 +926,16 @@ export interface ProductionAdmissionContext {
 // #182: provider-level only — it cannot see modelSnapshot, so a free MODEL
 // verdict is resolved async in prepareProductionAdmissionContext (which has
 // the route in scope) and upgrades this result. See there.
-export function soleOpenCodeCredential(plan: ResolvedRoutePlan):
+//
+// U3: `openCodeSecretNames` is RunnerAuthorityOptions.openCodeSecretNames, the
+// names the CI setup step's manifest records (undefined without one). Required,
+// not optional, so tsc lists every caller: a site that dropped them would decide
+// the server's kind from the provider literal while the bindings follow the
+// secret, the two-answers defect #149 and #182 already paid for.
+export function soleOpenCodeCredential(
+  plan: ResolvedRoutePlan,
+  openCodeSecretNames: readonly string[] | undefined,
+):
   | {
       readonly kind: CredentialKind;
       readonly provider: string;
@@ -953,7 +963,16 @@ export function soleOpenCodeCredential(plan: ResolvedRoutePlan):
   // No opencode route: the value is never read, and the OAuth default keeps
   // the pre-#133 shape for every caller that passes a claude-only plan.
   const provider = [...providers][0] ?? OPENCODE_OAUTH_PROVIDER;
-  return { kind: credentialKindForRoute("opencode", provider), provider };
+  return {
+    kind: credentialKindForRoute(
+      "opencode",
+      provider,
+      {},
+      false,
+      openCodeSecretNames,
+    ),
+    provider,
+  };
 }
 
 export async function prepareProductionAdmissionContext(input: {
@@ -966,6 +985,9 @@ export async function prepareProductionAdmissionContext(input: {
   >;
   readonly env?: RunnerAuthorityOptions["env"];
   readonly claudeCredential?: RunnerAuthorityOptions["claudeCredential"];
+  // U3: given (tests), or read here from the setup step's manifest beside the
+  // OpenCode auth file `env` resolves to, once, when the plan names OpenCode.
+  readonly openCodeSecretNames?: RunnerAuthorityOptions["openCodeSecretNames"];
   readonly credentialBrokers?: RunnerAuthorityOptions["credentialBrokers"];
   // #182: see ProductionRuntimeOptions.freeModelProbe. When present, the
   // server credential below is upgraded to `provider_free` when EVERY
@@ -978,7 +1000,19 @@ export async function prepareProductionAdmissionContext(input: {
   // OpenCode SERVER is one per backend and outlives every step — it cannot
   // hold two providers' credentials at once. A plan naming two of them is
   // refused by NAME rather than served the wrong one.
-  const baseCredential = soleOpenCodeCredential(input.plan);
+  //
+  // U3: the CRYSK_OPENCODE_* names are read ONCE, here, and travel in the
+  // authority options below, which the runtime and the binding probe are built
+  // from, so the server's kind and every binding's kind follow the same names.
+  const openCodeSecretNames =
+    input.openCodeSecretNames ??
+    (planRoutes(input.plan).some((step) => step.route.backend === "opencode")
+      ? readOpenCodeSecretNames(input.env ?? process.env)
+      : undefined);
+  const baseCredential = soleOpenCodeCredential(
+    input.plan,
+    openCodeSecretNames,
+  );
   if (baseCredential.error !== undefined) {
     return { error: baseCredential.error };
   }
@@ -1006,6 +1040,7 @@ export async function prepareProductionAdmissionContext(input: {
       ...(input.claudeCredential === undefined
         ? {}
         : { claudeCredential: input.claudeCredential }),
+      ...(openCodeSecretNames === undefined ? {} : { openCodeSecretNames }),
       ...(input.credentialBrokers === undefined
         ? {}
         : { credentialBrokers: input.credentialBrokers }),
@@ -1627,7 +1662,7 @@ export async function createProductionRuntime(
       return verdict;
     };
     effectiveOptions = { ...options, freeModelProbe: memoised };
-    const base = soleOpenCodeCredential(plan);
+    const base = soleOpenCodeCredential(plan, options.openCodeSecretNames);
     if (base.error !== undefined) {
       throw new ProductionRuntimeError(base.error);
     }
@@ -1682,6 +1717,7 @@ export async function createProductionRuntime(
       binaryPath: effectiveOptions.binaryPath,
       env: effectiveOptions.env,
       credentialBrokers: effectiveOptions.credentialBrokers,
+      openCodeSecretNames: effectiveOptions.openCodeSecretNames,
       plan,
       ...(soleOverride === undefined
         ? {}
@@ -1851,6 +1887,8 @@ export function productionFallbackRegistry(options: {
   // function is fed `options`/`authorityOptions` (both that type) directly.
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly credentialBrokers?: RunnerAuthorityOptions["credentialBrokers"];
+  // U3: the same names the bindings read, so the server's kind follows them too.
+  readonly openCodeSecretNames?: RunnerAuthorityOptions["openCodeSecretNames"];
   // #133: optional because this function is also called with a bare
   // `{ mode }` by callers that never reach an opencode route. When it IS
   // present it decides the credential KIND, and dropping it here is how this
@@ -1872,7 +1910,7 @@ export function productionFallbackRegistry(options: {
       ? options.soleCredentialOverride
       : options.plan === undefined
         ? undefined
-        : soleOpenCodeCredential(options.plan);
+        : soleOpenCodeCredential(options.plan, options.openCodeSecretNames);
   if (
     credential !== undefined &&
     "error" in credential &&

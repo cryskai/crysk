@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
+import { chooseOpenCodeSecret } from "#ci/crysk-secrets";
 import type {
   ClaudeBinaryResolutionDeps,
   ExecutableAllowlistEntry,
@@ -45,6 +46,12 @@ export interface RunnerAuthorityOptions {
   // broker: a broker would project the subscription and strip the key the run chose.
   // Absent (tests, probes, doctor) keeps the pre-S5 decision below.
   readonly claudeCredential?: ClaudeCredentialKind;
+  // U3 (S8, L12): the CRYSK_OPENCODE_* secret names the CI setup step built the
+  // OpenCode auth file from, read once per run from its manifest
+  // (security/opencode-secret-manifest.ts). An OpenCode route's kind follows them
+  // (credentialKindForRoute). Absent (no manifest: the old opencode-auth input, a
+  // local store, tests) keeps the provider literal.
+  readonly openCodeSecretNames?: readonly string[];
   readonly credentialBrokers?: Partial<Record<RunnerBackend, CredentialBroker>>;
   /** Independent executable authority — never derived from the candidate binary. */
   readonly executableAllowlists?: Partial<
@@ -386,11 +393,22 @@ export async function withClaudeDiscoveryAllowlist(
 // `hasBroker: false`) so a caller that omits them — every existing call site
 // that never threaded either through, and every test that does not care
 // about this dimension — keeps today's answer: subscription.
+//
+// U3 (S8, L12, 2026-11-06): `openCodeSecretNames` lifts the provider-keyed limit
+// above for an auth file the CI setup step built from CRYSK_OPENCODE_* secrets.
+// The names (never the store) say which secret built the provider's record, and
+// chooseOpenCodeSecret, the same rule the setup step chose with, turns them into
+// the kind: `_OAUTH` (openai only, subscription first) is the ChatGPT OAuth kind,
+// `_API_KEY` is a metered API token, so `openai` on an API key now binds metered
+// instead of being refused. Still pure: the caller read the names. Absent or
+// silent names keep the provider literal, which the old `opencode-auth` input and
+// a local store still get.
 export function credentialKindForRoute(
   backend: RunnerBackend,
   provider: string,
   env: Readonly<Record<string, string | undefined>> = {},
   hasBroker = false,
+  openCodeSecretNames?: readonly string[],
 ): CredentialKind {
   if (backend === "claude-code") {
     return !hasBroker && envBillsMetered(env)
@@ -398,6 +416,12 @@ export function credentialKindForRoute(
       : "claude_subscription_oauth";
   }
   if (backend === "opencode") {
+    const choice =
+      openCodeSecretNames === undefined
+        ? undefined
+        : chooseOpenCodeSecret(provider, openCodeSecretNames);
+    if (choice?.kind === "api_key") return "provider_api_token";
+    if (choice?.kind === "oauth") return "opencode_chatgpt_oauth";
     return provider === OPENCODE_OAUTH_PROVIDER
       ? "opencode_chatgpt_oauth"
       : "provider_api_token";
@@ -561,7 +585,13 @@ export async function resolveBindingAuthority(
     if ("error" in verified) {
       return { error: verified.error };
     }
-    const credentialKind = credentialKindForRoute(backend, provider);
+    const credentialKind = credentialKindForRoute(
+      backend,
+      provider,
+      {},
+      false,
+      options.openCodeSecretNames,
+    );
     return {
       binding: {
         backend,

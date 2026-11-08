@@ -738,7 +738,10 @@ describe("every model is admitted and bound before anything runs", () => {
       "opencode:openai/gpt-4o",
       "opencode:zai/glm-4.6",
     ]);
-    const decided = soleOpenCodeCredential(createResolvedRoutePlan([route]));
+    const decided = soleOpenCodeCredential(
+      createResolvedRoutePlan([route]),
+      undefined,
+    );
     expect(decided.error).toContain("2 OpenCode providers");
     expect(decided.error).toContain("openai, zai");
   });

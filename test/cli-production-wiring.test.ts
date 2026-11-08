@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
@@ -13,7 +20,15 @@ import {
 } from "../src/production-runtime";
 import { enforceProviderCapabilityGate } from "../src/review/route-preflight";
 import { resolveRunClaudeCredential } from "../src/security/claude-credential";
-import { OpenCodeAuthBroker } from "../src/security/credential-broker";
+import {
+  OpenCodeApiTokenBroker,
+  OpenCodeAuthBroker,
+  resolveOpenCodeAuthPath,
+} from "../src/security/credential-broker";
+import {
+  openCodeSecretManifestPath,
+  serializeOpenCodeSecretManifest,
+} from "../src/security/opencode-secret-manifest";
 import {
   admitRoutePlan,
   type DefaultTransportRegistry,
@@ -541,7 +556,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
         openCodeStep("hunter-reliability", "zai/glm-5", "zai"),
         openCodeStep("refuter", "zai/glm-5", "zai"),
       ]);
-      expect(soleOpenCodeCredential(plan)).toEqual({
+      expect(soleOpenCodeCredential(plan, undefined)).toEqual({
         kind: "provider_api_token",
         provider: "zai",
       });
@@ -557,7 +572,7 @@ describe("CLI production wiring (verify C1/C3)", () => {
           cliModel: "sonnet",
         }),
       ]);
-      expect(soleOpenCodeCredential(plan)).toEqual({
+      expect(soleOpenCodeCredential(plan, undefined)).toEqual({
         kind: "opencode_chatgpt_oauth",
         provider: "openai",
       });
@@ -577,6 +592,75 @@ describe("CLI production wiring (verify C1/C3)", () => {
       expect(
         (oauth.registry as DefaultTransportRegistry).openCodeCredentialBroker,
       ).toBe(oauth.authorityOptions.credentialBrokers?.opencode);
+    });
+
+    // U3 (S8, L12 "Building auth.json"): the kind follows which CRYSK_* secret
+    // the setup step built the auth file from, named in its manifest. Without a
+    // manifest the provider literal stands, so the old opencode-auth input and
+    // a local store keep their answer.
+    test("the sole credential follows the CRYSK_* secret names", () => {
+      const plan = createResolvedRoutePlan([
+        openCodeStep("refuter", "openai/gpt-4o", "openai"),
+      ]);
+      expect(
+        soleOpenCodeCredential(plan, ["CRYSK_OPENCODE_OPENAI_API_KEY"]),
+      ).toEqual({ kind: "provider_api_token", provider: "openai" });
+      expect(
+        soleOpenCodeCredential(plan, [
+          "CRYSK_OPENCODE_OPENAI_API_KEY",
+          "CRYSK_OPENCODE_OPENAI_OAUTH",
+        ]),
+      ).toEqual({ kind: "opencode_chatgpt_oauth", provider: "openai" });
+      expect(soleOpenCodeCredential(plan, undefined)).toEqual({
+        kind: "opencode_chatgpt_oauth",
+        provider: "openai",
+      });
+    });
+
+    test("admission reads the setup step's manifest: openai on an API key binds the API-token broker", async () => {
+      const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-cli-cred-"));
+      const claude = await writeExecutable(
+        tmpDir,
+        "claude",
+        "#!/bin/sh\necho ok\n",
+      );
+      const opencode = await writeExecutable(tmpDir, "opencode", "opencode");
+      const dataHome = path.join(tmpDir, "xdg-data");
+      const authPath = resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome });
+      await mkdir(path.dirname(authPath), { recursive: true });
+      await writeFile(
+        openCodeSecretManifestPath(authPath),
+        serializeOpenCodeSecretManifest([
+          {
+            provider: "openai",
+            secret: "CRYSK_OPENCODE_OPENAI_API_KEY",
+            kind: "api_key",
+          },
+        ]),
+      );
+      try {
+        const admission = await prepareProductionAdmissionContext({
+          workspaceRoot: tmpDir,
+          plan: createResolvedRoutePlan([
+            openCodeStep("refuter", "openai/gpt-4o", "openai"),
+          ]),
+          env: { PATH: tmpDir, XDG_DATA_HOME: dataHome },
+          loadSdk: mockLoadSdk,
+          authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+        });
+        if ("error" in admission) throw new Error(admission.error);
+        expect(admission.authorityOptions.openCodeSecretNames).toEqual([
+          "CRYSK_OPENCODE_OPENAI_API_KEY",
+        ]);
+        const broker = admission.authorityOptions.credentialBrokers?.opencode;
+        expect(broker).toBeInstanceOf(OpenCodeApiTokenBroker);
+        expect(
+          (admission.registry as DefaultTransportRegistry)
+            .openCodeCredentialBroker,
+        ).toBe(broker);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
     });
 
     // SCOPE NOTE, updated by #137 and again on 2026-09-02, asserted rather

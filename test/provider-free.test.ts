@@ -980,7 +980,7 @@ describe("#182 wiring: bindings, server, gates", () => {
     const plan = createResolvedRoutePlan([
       opencodeStep("h", "opencode/m", "opencode", "m"),
     ]);
-    expect(soleOpenCodeCredential(plan)).toEqual({
+    expect(soleOpenCodeCredential(plan, undefined)).toEqual({
       kind: "provider_api_token",
       provider: "opencode",
     });
