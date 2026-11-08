@@ -52,7 +52,17 @@ export interface RunnerAuthorityOptions {
   // (credentialKindForRoute). Absent (no manifest: the old opencode-auth input, a
   // local store, tests) keeps the provider literal.
   readonly openCodeSecretNames?: readonly string[];
+  // `credentialBrokers.opencode` is ONE broker for every OpenCode route: a test
+  // seam, and what admission seeds when the plan names exactly one OpenCode
+  // credential. It cannot serve a plan with several (U4), so routes there take
+  // theirs from `openCodeBrokerFor`.
   readonly credentialBrokers?: Partial<Record<RunnerBackend, CredentialBroker>>;
+  // U4 (S9, L12): the broker for one OpenCode credential (kind + provider), per
+  // route. Admission builds one pool per run (createOpenCodeBrokerPool) so the
+  // bindings, the free-verdict upgrade and the server each route launches all
+  // hold the same instance for the same credential. Absent: a fresh
+  // `openCodeCredentialBrokerForKind` per binding, as before.
+  readonly openCodeBrokerFor?: OpenCodeBrokerFor;
   /** Independent executable authority — never derived from the candidate binary. */
   readonly executableAllowlists?: Partial<
     Record<RunnerBackend, readonly ExecutableAllowlistEntry[]>
@@ -479,6 +489,51 @@ export function openCodeCredentialBrokerForKind(
   return new OpenCodeAuthBroker();
 }
 
+// U4 (S9, L12): the broker for one OpenCode credential, keyed by its kind and
+// provider. A pool memoises it per credential so every route on that credential
+// shares ONE instance (#149's "one broker, never two diverging in silence", now
+// scoped per credential instead of per plan) while routes on different
+// credentials never share one: each broker projects only its own provider's
+// record, so no server is ever handed another credential's.
+export type OpenCodeBrokerFor = (
+  kind: CredentialKind,
+  provider: string,
+) => CredentialBroker;
+
+export function createOpenCodeBrokerPool(
+  make: OpenCodeBrokerFor = openCodeCredentialBrokerForKind,
+): OpenCodeBrokerFor {
+  const brokers = new Map<string, CredentialBroker>();
+  return (kind, provider) => {
+    // JSON, not a joined string: no separator can make two pairs collide.
+    const key = JSON.stringify([kind, provider]);
+    let broker = brokers.get(key);
+    if (broker === undefined) {
+      broker = make(kind, provider);
+      brokers.set(key, broker);
+    }
+    return broker;
+  };
+}
+
+// The broker an OpenCode route of this credential runs on: the caller's single
+// injected broker first (tests, and admission's seed for a one-credential plan),
+// then the run's pool, then a fresh default.
+export function openCodeBrokerForRoute(
+  options: Pick<
+    RunnerAuthorityOptions,
+    "credentialBrokers" | "openCodeBrokerFor"
+  >,
+  kind: CredentialKind,
+  provider: string,
+): CredentialBroker {
+  return (
+    options.credentialBrokers?.opencode ??
+    options.openCodeBrokerFor?.(kind, provider) ??
+    openCodeCredentialBrokerForKind(kind, provider)
+  );
+}
+
 export function openCodeCredentialBroker(provider: string): CredentialBroker {
   return openCodeCredentialBrokerForKind(
     credentialKindForRoute("opencode", provider),
@@ -607,11 +662,13 @@ export async function resolveBindingAuthority(
         // subscription's quota and a metered token's quota into one bucket
         // and make both wrong.
         credentialRef: `opencode-auth:${provider}`,
-        credentialBroker:
-          options.credentialBrokers?.opencode ??
-          // #182: the kind above, not a second derivation — deriving again
-          // here is how the broker and the kind drift apart unobserved.
-          openCodeCredentialBrokerForKind(credentialKind, provider),
+        // #182: the kind above, not a second derivation — deriving again
+        // here is how the broker and the kind drift apart unobserved.
+        credentialBroker: openCodeBrokerForRoute(
+          options,
+          credentialKind,
+          provider,
+        ),
         bucketId: "opencode",
       },
     };

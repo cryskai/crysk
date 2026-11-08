@@ -42,7 +42,8 @@ import type { NormalizedUsage } from "../../src/execution/usage-normalized";
 import {
   createProductionRuntime,
   type ProductionRuntimeOptions,
-  soleOpenCodeCredential,
+  planOpenCodeCredentials,
+  soleOpenCodeCredentialOf,
 } from "../../src/production-runtime";
 import { OpenCodeAuthBroker } from "../../src/security/credential-broker";
 import {
@@ -733,16 +734,22 @@ describe("every model is admitted and bound before anything runs", () => {
     ).rejects.toThrow(/opencode/i);
   });
 
-  test("OpenCode fallbacks on two providers are refused at plan time, by name", () => {
+  // U4 (S9): this used to be refused at plan time ("one OpenCode credential per
+  // run"). Each fallback now binds its own credential, so a refused login on one
+  // provider moves to the other (test/opencode-multi-credential.test.ts).
+  test("OpenCode fallbacks on two providers are two credentials, none refused", () => {
     const route = hunterRoute([
       "opencode:openai/gpt-4o",
       "opencode:zai/glm-4.6",
     ]);
-    const decided = soleOpenCodeCredential(
+    const credentials = planOpenCodeCredentials(
       createResolvedRoutePlan([route]),
       undefined,
     );
-    expect(decided.error).toContain("2 OpenCode providers");
-    expect(decided.error).toContain("openai, zai");
+    expect(credentials).toEqual([
+      { provider: "openai", kind: "opencode_chatgpt_oauth" },
+      { provider: "zai", kind: "provider_api_token" },
+    ]);
+    expect(soleOpenCodeCredentialOf(credentials)).toBeUndefined();
   });
 });

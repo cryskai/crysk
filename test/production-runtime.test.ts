@@ -2040,6 +2040,51 @@ describe("production runtime PR1", () => {
       expect(opencode?.billing.mode).toBe("metered");
     });
 
+    // U4: the doctor always bound each configured model on its own, so two
+    // OpenCode providers report two bindings, each with its own kind and
+    // billing. Pinned because U4 rewrote the credential code it shares.
+    test("collectDoctorExactBindingReports reports two OpenCode providers, each by its own credential", async () => {
+      await writeOpenCodeFixture(tmpDir);
+      const dataHome = path.join(tmpDir, "xdg-data");
+      const manifest = openCodeSecretManifestPath(
+        resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome }),
+      );
+      await mkdir(path.dirname(manifest), { recursive: true });
+      await writeFile(
+        manifest,
+        serializeOpenCodeSecretManifest([
+          {
+            provider: "openai",
+            secret: "CRYSK_OPENCODE_OPENAI_OAUTH",
+            kind: "oauth",
+          },
+          {
+            provider: "deepseek",
+            secret: "CRYSK_OPENCODE_DEEPSEEK_API_KEY",
+            kind: "api_key",
+          },
+        ]),
+      );
+      const reports = await collectDoctorExactBindingReports({
+        workspaceRoot: tmpDir,
+        models: {
+          refuter: [
+            "opencode:openai/gpt-4o",
+            "opencode:deepseek/deepseek-chat",
+          ],
+        },
+        env: { PATH: tmpDir, XDG_DATA_HOME: dataHome },
+      });
+      const opencode = reports
+        .filter((report) => report.backend === "opencode")
+        .map((report) => [report.auth.kind, report.billing.mode])
+        .sort();
+      expect(opencode).toEqual([
+        ["opencode_chatgpt_oauth", "subscription"],
+        ["provider_api_token", "metered"],
+      ]);
+    });
+
     test("mixed Claude/OpenCode conformance admits with evidence and dispatches by routeKey", async () => {
       const claudeStep = resolveStepRoute({
         stepKey: "hunter-reliability",

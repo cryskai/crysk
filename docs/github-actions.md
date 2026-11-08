@@ -334,8 +334,9 @@ run `opencode auth login` again on your machine and set the secret anew:
 jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
 ```
 
-One OpenCode provider per review still holds: a configuration whose models name two OpenCode providers is
-refused before anything runs, as it was with `opencode-auth`.
+A configuration whose models name several OpenCode providers runs each model on its own provider's secret,
+through its own OpenCode server that sees only that provider's record (see "Several OpenCode providers in
+one review" in [configuration.md](configuration.md)).
 
 ## OpenCode in CI
 
@@ -418,7 +419,7 @@ install and still starts.
 |---|---|
 | Non-openai API token (tested: **deepseek** `type: "api"`) | Executable metered path. Presence of the auth file applies the default spend ceiling — this is an invoice route, not an unlimited subscription. |
 | `openai` with `type: "api"` | **Refused.** The engine maps openai to ChatGPT OAuth; a pay-as-you-go API key is not remapped. Do not put an openai API key in `OPENCODE_AUTH_JSON` and expect it to run. |
-| Mixed OpenCode providers in one run | Out of scope ([#195](https://github.com/cryskai/crysk/issues/195)). One OpenCode provider per run. |
+| Mixed OpenCode providers in one run | Supported: each model runs through its own OpenCode server, projected with only its provider's record ([configuration.md](configuration.md), "Several OpenCode providers in one review"). |
 | `claude-code` + one OpenCode provider | Already works. Mix Claude credentials with one OpenCode `auth.json` entry and routing that names both backends. |
 
 ### Edges
