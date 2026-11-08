@@ -25,6 +25,7 @@ import os from "node:os";
 import path from "node:path";
 import { classifyCliError } from "#ci/classify-error";
 import { writeFatalCliRecord } from "#ci/cli-record";
+import { chooseOpenCodeSecret } from "#ci/crysk-secrets";
 import {
   CLI_RECORD_FILE,
   type CliRecord,
@@ -1388,6 +1389,38 @@ describe("decidePublication — the pure table", () => {
       );
       expect(summary).not.toContain("jq -e 'type==\"object\"'");
     }
+  });
+
+  // U3: another provider's _OAUTH is refused because only openai reads one, so
+  // re-setting that secret would fail again. The fix is the provider's _API_KEY.
+  test("a refused non-openai _OAUTH points at the provider's _API_KEY, never at re-setting the _OAUTH", () => {
+    // The refusal's own text, so the publisher's match cannot drift from it.
+    const detail =
+      chooseOpenCodeSecret("deepseek", ["CRYSK_OPENCODE_DEEPSEEK_OAUTH"])
+        ?.problem ?? "";
+    expect(detail.startsWith("CRYSK_OPENCODE_DEEPSEEK_OAUTH ")).toBe(true);
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail,
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+    expect(plan.rendered.owner).toBe("config");
+    expect(plan.rendered.annotation).toContain(detail);
+    expect(plan.rendered.annotation).toContain(
+      "remove that _OAUTH secret from the crysk-secrets input and set the provider's _API_KEY secret instead",
+    );
+    expect(plan.rendered.annotation).not.toContain("re-set the CRYSK_* secret");
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY");
+    expect(summary).not.toContain("gh secret set CRYSK_OPENCODE_OPENAI_OAUTH");
+    expect(summary).not.toContain("OPENCODE_AUTH_JSON");
   });
 
   test("a malformed opencode-auth setup record keeps its OpenCode store fix", () => {

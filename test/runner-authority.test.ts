@@ -440,7 +440,7 @@ describe("resolveBindingAuthority credential identity", () => {
     statFn: () => ({ mode: 0o755 }),
   };
 
-  async function bind(provider: string) {
+  async function bind(provider: string, openCodeSecretNames?: string[]) {
     const result = await resolveBindingAuthority(
       "opencode",
       provider,
@@ -450,6 +450,7 @@ describe("resolveBindingAuthority credential identity", () => {
         executableAllowlists: {
           opencode: [{ absolutePath: canonical, sha256 }],
         },
+        ...(openCodeSecretNames === undefined ? {} : { openCodeSecretNames }),
       },
       deps,
     );
@@ -485,6 +486,22 @@ describe("resolveBindingAuthority credential identity", () => {
     const token = await bind("zai");
     expect(oauth.credentialBroker).toBeInstanceOf(OpenCodeAuthBroker);
     expect(token.credentialBroker).toBeInstanceOf(OpenCodeApiTokenBroker);
+  });
+
+  // U3: the binding reads the CRYSK_* secret names from its options, the same
+  // names the plan's server credential reads (soleOpenCodeCredential), so the
+  // two cannot bind one openai route to two different kinds.
+  test("the binding follows the CRYSK_* secret names in its options", async () => {
+    const apiKey = await bind("openai", ["CRYSK_OPENCODE_OPENAI_API_KEY"]);
+    expect(apiKey.credentialKind).toBe("provider_api_token");
+    expect(apiKey.credentialBroker).toBeInstanceOf(OpenCodeApiTokenBroker);
+    expect(apiKey.credentialRef).toBe("opencode-auth:openai");
+    const both = await bind("openai", [
+      "CRYSK_OPENCODE_OPENAI_API_KEY",
+      "CRYSK_OPENCODE_OPENAI_OAUTH",
+    ]);
+    expect(both.credentialKind).toBe("opencode_chatgpt_oauth");
+    expect(both.credentialBroker).toBeInstanceOf(OpenCodeAuthBroker);
   });
 
   test("an injected broker still overrides both kinds", async () => {

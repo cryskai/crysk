@@ -61,7 +61,11 @@ import {
   recordTempPath,
 } from "#ci/trigger";
 import { resolveRepoRoot } from "#git/git";
-import { parseModelName } from "#model/model-name";
+import {
+  type ModelsConfig,
+  parseModelName,
+  parseModelsConfig,
+} from "#model/model-name";
 import { parseLocalConfig, REMOVED_ROUTING_MESSAGE } from "#review/preflight";
 import { commandForms } from "../brand";
 import {
@@ -736,20 +740,25 @@ async function writeOwnerOnlyFile(file: string, body: string): Promise<void> {
 
 // The OpenCode providers the person layer's models name, every role and every
 // fallback, sorted. The judge is skipped: it runs only claude: models (L6 item 5),
-// so an opencode: entry there is dropped and never reaches the plan. A name that
-// does not parse is skipped too; the person layer's own validation refuses it.
+// so an opencode: entry there is dropped and never reaches the plan. `default` is
+// counted even when every role overrides it (a record nobody reads costs nothing).
+// Read through parseModelsConfig, the engine's own parser, so a change to the
+// shape of a list entry (E-g) is a type error here, never a silent skip. Models
+// that do not parse yield none; assertPlatformPerson refuses them by name.
 function openCodeProvidersOfModels(models: unknown): string[] {
-  if (typeof models !== "object" || models === null) return [];
+  if (models === undefined) return [];
+  let config: ModelsConfig;
+  try {
+    config = parseModelsConfig(models);
+  } catch {
+    return [];
+  }
   const providers = new Set<string>();
-  for (const [role, list] of Object.entries(models)) {
-    if (role === "judge" || !Array.isArray(list)) continue;
+  for (const [role, list] of Object.entries(config)) {
+    if (role === "judge") continue;
     for (const name of list) {
-      try {
-        const parsed = parseModelName(name as string);
-        if (parsed.backend === "opencode") providers.add(parsed.provider);
-      } catch {
-        // Refused by assertPlatformPerson with its own message.
-      }
+      const parsed = parseModelName(name);
+      if (parsed.backend === "opencode") providers.add(parsed.provider);
     }
   }
   return [...providers].sort();

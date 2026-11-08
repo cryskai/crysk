@@ -142,6 +142,9 @@ export type OpenCodeSecretChoice =
 // serves it. The subscription comes first (L12 decision 4), like the Claude
 // order's default. The provider is normalized with opencodeSecretToken; a secret
 // name is never reversed into a provider.
+// outcome.ts matches this refusal to give it its own fix (the provider's
+// _API_KEY); test/ci/publish.test.ts runs this function's text through it.
+const UNSUPPORTED_OAUTH_TEXT = `is an OpenCode subscription record, which Crysk reads only for ${OPENCODE_OAUTH_SECRET_PROVIDER} for now`;
 export function chooseOpenCodeSecret(
   providerId: string,
   names: readonly string[],
@@ -154,7 +157,7 @@ export function chooseOpenCodeSecret(
   if (names.includes(oauth)) {
     if (providerId !== OPENCODE_OAUTH_SECRET_PROVIDER) {
       return {
-        problem: `${oauth} is an OpenCode subscription record, which Crysk reads only for ${OPENCODE_OAUTH_SECRET_PROVIDER} for now; set ${apiKey} instead`,
+        problem: `${oauth} ${UNSUPPORTED_OAUTH_TEXT}; set ${apiKey} instead`,
       };
     }
     return hasApiKey

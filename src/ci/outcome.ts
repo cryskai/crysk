@@ -1185,6 +1185,32 @@ const CRYSK_SECRETS_FIXES = [
   "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
   "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
 ];
+// U3: an _OAUTH secret for a provider other than openai is refused, since
+// only openai's subscription record can be projected. Re-setting it would fail
+// again, so the fix is that provider's _API_KEY, which the detail names.
+// The text is chooseOpenCodeSecret's (crysk-secrets.ts), matched here rather
+// than imported because this module imports no repo module but ../brand (the
+// builtins-only guard in test/ci/outcome.test.ts). test/ci/publish.test.ts
+// renders that function's own text, so a change on either side fails it.
+const UNSUPPORTED_OAUTH_DETAIL_RE =
+  /^CRYSK_OPENCODE_[A-Z0-9_]+_OAUTH is an OpenCode subscription record, which Crysk reads only for openai for now; set (CRYSK_OPENCODE_[A-Z0-9_]+_API_KEY) instead$/;
+function unsupportedOAuthApiKeyName(detail: string): string | undefined {
+  return UNSUPPORTED_OAUTH_DETAIL_RE.exec(detail.trim())?.[1];
+}
+function cryskSecretsFixes(params: ErrorParams): string[] {
+  const apiKey = unsupportedOAuthApiKeyName(params.detail ?? "");
+  if (apiKey === undefined) return CRYSK_SECRETS_FIXES;
+  return [
+    "Only openai reads an _OAUTH secret for now. Remove that _OAUTH secret from the crysk-secrets input and set this provider's API key instead:",
+    `$ gh secret set ${apiKey}`,
+    "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
+  ];
+}
+function cryskSecretsAnnotationFix(params: ErrorParams): string {
+  return unsupportedOAuthApiKeyName(params.detail ?? "") === undefined
+    ? "re-set the CRYSK_* secret it names (an _OAUTH secret is base64 -w0 of the provider's OpenCode record)"
+    : "remove that _OAUTH secret from the crysk-secrets input and set the provider's _API_KEY secret instead (only openai reads an _OAUTH secret for now)";
+}
 const MODEL_NOT_SERVED: CatalogVariant = {
   why: "the routing names a model this provider does not offer",
   fixes: [
@@ -1360,7 +1386,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         why: CRED_STORE_WHY,
         fixes: (params) =>
           isCryskSecretsDetail(params)
-            ? CRYSK_SECRETS_FIXES
+            ? cryskSecretsFixes(params)
             : [
                 "Check that the store is a JSON object:",
                 "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
@@ -1369,7 +1395,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
               ],
         annotationFix: (params) =>
           isCryskSecretsDetail(params)
-            ? "re-set the CRYSK_* secret it names (an _OAUTH secret is base64 -w0 of the provider's OpenCode record)"
+            ? cryskSecretsAnnotationFix(params)
             : "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
       },
       source_read_failed: CREDENTIAL_UNUSABLE_ENV,

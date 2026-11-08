@@ -841,11 +841,21 @@ export async function collectDoctorExactBindingReports(input: {
   >;
 }): Promise<readonly ExactBindingCapabilityReport[]> {
   const plan = buildDoctorRoutePlan(input.models);
+  // U3: the doctor binds OpenCode routes the way a review's admission does, so
+  // it reads the setup step's CRYSK_* manifest too.
+  const openCodeSecretNames = planRoutes(plan).some(
+    (step) => step.route.backend === "opencode",
+  )
+    ? readOpenCodeSecretNames(input.env ?? process.env)
+    : undefined;
   const authority = await prepareProductionRunnerAuthority(
     input.workspaceRoot,
     plan,
     input.authorityDeps,
-    input.env === undefined ? {} : { env: input.env },
+    {
+      ...(input.env === undefined ? {} : { env: input.env }),
+      ...(openCodeSecretNames === undefined ? {} : { openCodeSecretNames }),
+    },
   );
   if ("error" in authority) {
     throw new Error(authority.error);
