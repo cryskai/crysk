@@ -131,7 +131,7 @@ export function validateScoutLeads(candidate: unknown): ScoutLead[] {
 export const MAX_LEADS = 12; // above this it is a filter of nothing
 export const MAX_LEADS_PER_PATH = 3; // stops one interesting file absorbing the whole budget
 export const MAX_WHY_CHARS = 240; // one sentence; a paragraph is a finding in disguise
-export const MAX_LEADS_BLOCK_CHARS = 3000; // bounded prompt growth per hunter, x4 hunters
+export const MAX_LEADS_BLOCK_CHARS = 3000; // bounded prompt growth per hunter, times every hunter
 
 // The verbatim block shape from §3.8. The header paragraph is the
 // anti-anchoring guard, and it is what keeps §3.4's "bias" from decaying into

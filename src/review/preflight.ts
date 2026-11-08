@@ -1963,12 +1963,23 @@ export function assertBasenameOnly(file: string, index: number): void {
 
 export const AGENT_FILE_PATTERNS = ["deep-review-*.md", "review-*.md"];
 
-// BIDIRECTIONAL on purpose, and this is the check that pays for itself. The
-// default spec declares four agents and omits the lifecycle hunter, so
-// running the 5-file clean set with that spec silently drops the one hunter
-// the whole campaign is about — the run completes, the artifacts validate,
-// the cost looks normal, and nothing downstream notices. So: every file the
-// spec names must exist, AND every agent file present must be named.
+// BIDIRECTIONAL on purpose, and this is the check that pays for itself. A spec
+// that omits a file the dir carries silently drops that hunter — the run
+// completes, the artifacts validate, the cost looks normal, and nothing
+// downstream notices. So: every file the spec names must exist, AND every
+// agent file present must be named.
+//
+// The lifecycle hunter was retired from the default spec (2026-11-08: on the
+// benchmarks it added almost nothing the other hunters missed, for about 37%
+// of the cost and wall time). A custom set copied from an older default still
+// carries its file, so that one file gets the way out in its message.
+const RETIRED_AGENT_HINTS: Record<string, string> = {
+  "deep-review-lifecycle.md":
+    "; the lifecycle hunter was retired from the default spec: delete the " +
+    "file, or keep the hunter with " +
+    "CRYSK_EXTRA_HUNTERS=lifecycle:deep-review-lifecycle.md",
+};
+
 export function agentsDirProblems(
   specFiles: string[],
   presentFiles: string[],
@@ -1987,7 +1998,7 @@ export function agentsDirProblems(
     if (!named.has(file)) {
       problems.push(
         `the dir has "${file}" but no agent in the spec references it ` +
-          "(it would never run)",
+          `(it would never run)${RETIRED_AGENT_HINTS[file] ?? ""}`,
       );
     }
   }
@@ -2104,10 +2115,9 @@ function parseExtraHunters(read: BrandEnvValue | undefined): AgentSpec[] {
   });
 }
 
-// Local mode's wiring: the four unconditional hunters, the conditional
+// Local mode's wiring: the three unconditional hunters, the conditional
 // parity hunter, and the refuter. Deliberately NOT defaultReviewSpec() — that
-// one omits the lifecycle and logic hunters, and local mode targets the 6-file
-// clean set. Hunter keys stay inside the findings-schema v1.1.0 Hunter/specialty
+// one omits the logic hunter, and local mode targets the 5-file clean set. Hunter keys stay inside the findings-schema v1.1.0 Hunter/specialty
 // set, which validateReviewSpec enforces.
 //
 // `env` is injectable (defaults to `process.env`) so PRHERO_EXTRA_HUNTERS can
@@ -2125,7 +2135,6 @@ export function localReviewSpec(
         role: "hunter",
       },
       { key: "resilience", file: "deep-review-resilience.md", role: "hunter" },
-      { key: "lifecycle", file: "deep-review-lifecycle.md", role: "hunter" },
       { key: "logic", file: "deep-review-logic.md", role: "hunter" },
       {
         key: "parity",
