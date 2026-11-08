@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The `lifecycle` hunter is retired from the default review. Measured before the decision: on
+  ReviewBench (6 PRs, 2 replicates) a review without it cost 39% less and took 38% less wall time,
+  for about 2 valid findings lost per run and none of high severity; on the Martian 50 judgments it
+  was the only hunter behind 0 of 52 High+Critical findings. One real case argued the other way: on
+  a musive PR it was the only hunter to find a known blocker, once in two runs. A custom prompt set
+  that still carries `deep-review-lifecycle.md` now fails the prompt-set check with a message that
+  says to delete the file, or to keep the hunter with
+  `CRYSK_EXTRA_HUNTERS=lifecycle:deep-review-lifecycle.md`.
+
 ## [0.4.0] - 2026-11-06
 
 ### Security

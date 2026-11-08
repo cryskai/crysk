@@ -7,9 +7,9 @@ its diff, a mechanical dedupe merges their drafts, an adversarial refuter challe
 finding, and deterministic code — never a model — assigns blocking/advisory tiers.
 
 Its measured profile, stated up front: **high precision, narrow coverage**. What it reports is
-almost always real (13% false positives measured); it specializes in lifecycle and state-machine
-defects — stuck loading latches, missing cleanups, re-entrancy, stalls — and says nothing about
-style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
+almost always real (13% false positives measured); its hunters cover reliability (stale state, races,
+fail-open errors), resilience (keys, retries, locks, test isolation), local logic errors, and a
+cross-platform parity pass, and it says nothing about style or convention. Locally it is an **assistant, not a merge gate**: every report closes with that
 disclaimer, and nothing it prints blocks a merge. In CI its commit status is a gate by default: require the
 `crysk` check in branch protection, and blocking findings block the merge. `mode: advisory` keeps that check
 green.
