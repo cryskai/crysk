@@ -907,13 +907,41 @@ describe("doctor tri-state evaluation", () => {
 
     test("doctor route plan constructs an OpenCode binding from models", () => {
       const open = buildDoctorRoutePlan({
-        "hunter.logic": ["claude:opus-latest", "opencode:openai/gpt-4o#high"],
+        "hunter.logic": [
+          "claude:opus-latest",
+          { model: "opencode:openai/gpt-4o", effort: "high" },
+        ],
       }).steps.find((step) => step.route.backend === "opencode");
       expect(open?.route).toMatchObject({
         provider: "openai",
         modelFamily: "gpt-4o",
         modelVariant: "high",
       });
+    });
+
+    test("doctor route plan probes each distinct route once, effort entries included", () => {
+      const steps = buildDoctorRoutePlan({
+        default: ["claude:opus-latest"],
+        refuter: [{ model: "claude:opus-latest", effort: "max" }],
+        "hunter.logic": [
+          { model: "opencode:openai/gpt-4o", effort: "high" },
+          "opencode:openai/gpt-4o",
+        ],
+        summary: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+      }).steps.filter((step) => step.stepKey.startsWith("doctor-model-"));
+      // A Claude effort is not part of the route, so opus is probed once; the
+      // OpenCode variant is, so gpt-4o is probed with and without it.
+      expect(
+        steps.map((step) => [
+          step.stepKey,
+          step.logicalIdentity,
+          step.route.modelVariant,
+        ]),
+      ).toEqual([
+        ["doctor-model-1", "claude:opus-latest", undefined],
+        ["doctor-model-2", "opencode:openai/gpt-4o", "high"],
+        ["doctor-model-3", "opencode:openai/gpt-4o", undefined],
+      ]);
     });
   });
 
@@ -1108,7 +1136,10 @@ describe("modelsNeedOpenCode", () => {
     expect(
       modelsNeedOpenCode({
         default: ["claude:sonnet-latest"],
-        "hunter.logic": ["claude:opus-latest", "opencode:openai/gpt-5#high"],
+        "hunter.logic": [
+          "claude:opus-latest",
+          { model: "opencode:openai/gpt-5", effort: "high" },
+        ],
       }),
     ).toBe(true);
   });

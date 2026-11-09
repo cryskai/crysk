@@ -18,6 +18,7 @@
 // Here the exhaustive list IS the product — a key missing from the listing
 // would read as "pr-hero has no such setting".
 
+import { modelEntry } from "#model/model-name";
 import type {
   ConfigSource,
   ConfigSources,
@@ -109,14 +110,22 @@ function priorsCell(
 }
 
 // One cell for the whole object, one `role=model,model` entry per role, in
-// the order the file wrote them: the list order is the fallback order.
+// the order the file wrote them: the list order is the fallback order. An
+// entry with an effort reads `model (effort <level>)` (S7); without one it is
+// the bare name, whichever form the file used.
 function modelsCell(
   models: LocalConfig["models"],
   source: ConfigSource,
 ): ConfigCell {
   return listCell(
     Object.entries(models ?? {}).map(
-      ([role, list]) => `${role}=${list.join(",")}`,
+      ([role, list]) =>
+        `${role}=${list
+          .map((entry) => {
+            const { name, effort } = modelEntry(entry);
+            return effort === undefined ? name : `${name} (effort ${effort})`;
+          })
+          .join(",")}`,
     ),
     source,
   );

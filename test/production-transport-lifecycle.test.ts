@@ -382,12 +382,21 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const stepA = resolveStepRoute({
         stepKey: "refuter-a",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
       const stepB = resolveStepRoute({
         stepKey: "refuter-b",
         role: "refuter",
-        cliModel: "opencode:anthropic/claude-3-5-sonnet-20241022#default",
+        models: {
+          default: [
+            {
+              model: "opencode:anthropic/claude-3-5-sonnet-20241022",
+              effort: "default",
+            },
+          ],
+        },
       });
       const plan = createResolvedRoutePlan([stepA, stepB]);
 
@@ -481,7 +490,9 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
       const runtime = await createProductionRuntime({
         workspaceRoot: tmpDir,
@@ -559,7 +570,9 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
       const runtime = await createProductionRuntime({
         workspaceRoot: tmpDir,
@@ -1053,7 +1066,9 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
 
       const registry = new DefaultTransportRegistry({
@@ -1107,7 +1122,9 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
 
       const registry = new DefaultTransportRegistry();
@@ -1154,7 +1171,9 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
       const registry = createDefaultTransportRegistry({
         mode: "conformance",
@@ -1195,7 +1214,9 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
       const registry = new DefaultTransportRegistry();
       registry.register(
@@ -1453,7 +1474,9 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
       const plan = createResolvedRoutePlan([step]);
 
@@ -1521,7 +1544,9 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const stepOpenCode = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
       const { registry, releases } =
         wrapRegistryWithReleaseTracking(baseRegistry);
@@ -1634,7 +1659,9 @@ describe("Task 2.1 RED: production transport lifecycle", () => {
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
 
       const runtime = await createProductionRuntime({
@@ -2506,7 +2533,9 @@ describe("Task 5.1 RED U5 BE3a/b: generic facts, isolation safeguards, and concu
     const step = resolveStepRoute({
       stepKey: "hunter-reliability",
       role: "hunter",
-      cliModel: "opencode:openai/gpt-4o#high",
+      models: {
+        default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+      },
     });
 
     const registry = new DefaultTransportRegistry();

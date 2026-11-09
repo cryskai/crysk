@@ -16,7 +16,7 @@ import {
   createResolvedRoutePlan,
   freezeRoutePlan,
   planRoutes,
-  resolveStepRoute,
+  resolveModelEntryRoute,
 } from "#model/routing";
 import {
   ClaudeCodeRunner,
@@ -869,9 +869,11 @@ export async function probeBindingsReadiness(
 }
 
 // The plan `crysk doctor` probes: the two default models a zero-config review
-// runs (a sonnet hunter, an opus refuter), plus one step per distinct model
+// runs (a sonnet hunter, an opus refuter), plus one step per distinct route
 // `models` names, fallbacks included, so every binding a configured review
-// could open is checked before a review needs it.
+// could open is checked before a review needs it. Distinct by route, not by
+// entry: an OpenCode effort is the route's variant and so a binding of its own,
+// while a Claude effort is not part of the route and is probed once.
 export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
   const base = buildResolvedRoutePlan({
     agents: [
@@ -880,16 +882,19 @@ export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
     ],
   });
   if (models === undefined) return base;
-  const configured = [...new Set(Object.values(models).flat())];
+  const distinct = new Map<string, ResolvedStepRoute>();
+  for (const entry of Object.values(models).flat()) {
+    const step = resolveModelEntryRoute("doctor-model", "other", entry);
+    if (!distinct.has(step.routeFingerprint)) {
+      distinct.set(step.routeFingerprint, step);
+    }
+  }
   return createResolvedRoutePlan([
     ...base.steps,
-    ...configured.map((model, i) =>
-      resolveStepRoute({
-        stepKey: `doctor-model-${i + 1}`,
-        role: "other",
-        specModel: model,
-      }),
-    ),
+    ...[...distinct.values()].map((step, i) => ({
+      ...step,
+      stepKey: `doctor-model-${i + 1}`,
+    })),
   ]);
 }
 

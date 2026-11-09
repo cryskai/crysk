@@ -2094,7 +2094,9 @@ describe("production runtime PR1", () => {
       const openStep = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "opencode:openai/gpt-4o#high",
+        models: {
+          default: [{ model: "opencode:openai/gpt-4o", effort: "high" }],
+        },
       });
       const plan = createResolvedRoutePlan([claudeStep, openStep]);
       const opencodeFixture = await writeOpenCodeFixture(tmpDir);

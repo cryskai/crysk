@@ -3,9 +3,11 @@ import type { ResolvedModelRoute, RunnerBackend } from "../execution/contracts";
 import {
   hunterRole,
   isModelRole,
+  type ModelListEntry,
   type ModelName,
   ModelNameError,
   type ModelsConfig,
+  modelEntry,
   modelNameFromAlias,
   parseModelName,
 } from "./model-name";
@@ -26,7 +28,9 @@ export interface ResolvedStepRoute {
   readonly stepKey: string;
   readonly role: string;
   // The model name the step resolved to, as written (`claude:sonnet-latest`,
-  // `opencode:openai/gpt-5#high`). Prompt aliases appear in their converted form.
+  // `opencode:openai/gpt-5`). Prompt aliases appear in their converted form.
+  // An entry's effort is not part of it: for OpenCode it is the route's
+  // modelVariant, so the fingerprint still tells two efforts apart.
   readonly logicalIdentity: string;
   readonly route: ResolvedModelRoute;
   readonly routeFingerprint: string;
@@ -86,15 +90,26 @@ function toModelName(
 // THE route of a model name. For a `-latest` name the model is the CLI alias
 // (`sonnet`), which the Claude Code CLI resolves to the newest version itself;
 // for a pinned name it is the full id; for OpenCode it is the provider's model
-// id, with the variant beside it. `modelFamily` keeps the alias where there is
-// one, so a zero-config run records exactly what it recorded before.
-export function routeForModel(name: ModelName): ResolvedModelRoute {
+// id. `modelFamily` keeps the alias where there is one, so a zero-config run
+// records exactly what it recorded before.
+//
+// An OpenCode entry's effort becomes the route's variant (S7: "OpenCode:
+// `effort` becomes the model `variant`"), the field the removed `#variant`
+// suffix used to fill, so binding, transport cache and fingerprint keep
+// telling variants apart as they did. No effort, no variant (D1). A Claude
+// entry's effort is not part of the route: it is a launch flag, not a binding.
+export function routeForModel(
+  name: ModelName,
+  effort?: string,
+): ResolvedModelRoute {
   return {
     backend: name.backend,
     provider: name.provider,
     modelFamily: name.alias ?? name.model,
     modelSnapshot: name.model,
-    ...(name.variant === undefined ? {} : { modelVariant: name.variant }),
+    ...(effort !== undefined && name.backend === "opencode"
+      ? { modelVariant: effort }
+      : {}),
   };
 }
 
@@ -163,15 +178,27 @@ export interface ResolveStepRouteInput {
 // Only `models` holds a list. Its first model is the step's route and the rest
 // are its fallbacks, tried in order when the provider fails the one before
 // (S4; the runner side is model-fallback.ts). Every other source names one
-// model, so it has no fallbacks.
-export function resolveStepModels(
+// model, so it has no fallbacks. Only a `models` entry carries an effort (S7,
+// D4: `--model`, the CI input and a spec's model take a model only).
+interface StepModel {
+  readonly name: ModelName;
+  readonly effort?: string;
+}
+
+function stepModelOf(entry: ModelListEntry, stepKey: string): StepModel {
+  const { name, effort } = modelEntry(entry);
+  const parsed = toModelName(name, "models", stepKey);
+  return effort === undefined ? { name: parsed } : { name: parsed, effort };
+}
+
+function resolveStepChoices(
   input: ResolveStepRouteInput,
-): [ModelName, ...ModelName[]] {
+): [StepModel, ...StepModel[]] {
   if (input.cliModel !== undefined) {
-    return [toModelName(input.cliModel, "--model", input.stepKey)];
+    return [{ name: toModelName(input.cliModel, "--model", input.stepKey) }];
   }
   if (input.specModel !== undefined) {
-    return [toModelName(input.specModel, "spec", input.stepKey)];
+    return [{ name: toModelName(input.specModel, "spec", input.stepKey) }];
   }
   const configured =
     (input.modelRole === undefined
@@ -180,19 +207,28 @@ export function resolveStepModels(
   if (configured !== undefined && configured.length > 0) {
     const [first, ...rest] = configured;
     return [
-      toModelName(first, "models", input.stepKey),
-      ...rest.map((model) => toModelName(model, "models", input.stepKey)),
+      stepModelOf(first, input.stepKey),
+      ...rest.map((entry) => stepModelOf(entry, input.stepKey)),
     ];
   }
   if (
     input.frontmatterModel !== undefined &&
     input.frontmatterModel.trim().length > 0
   ) {
-    return [toModelName(input.frontmatterModel, "prompt", input.stepKey)];
+    return [
+      { name: toModelName(input.frontmatterModel, "prompt", input.stepKey) },
+    ];
   }
   throw new ModelRoutingError(
     `agent ${input.stepKey} has no model and no override given`,
   );
+}
+
+export function resolveStepModels(
+  input: ResolveStepRouteInput,
+): [ModelName, ...ModelName[]] {
+  const [first, ...rest] = resolveStepChoices(input);
+  return [first.name, ...rest.map((choice) => choice.name)];
 }
 
 export function resolveStepModel(input: ResolveStepRouteInput): ModelName {
@@ -202,15 +238,25 @@ export function resolveStepModel(input: ResolveStepRouteInput): ModelName {
 export function resolveStepRoute(
   input: ResolveStepRouteInput,
 ): ResolvedStepRoute {
-  const [first, ...rest] = resolveStepModels(input);
+  const [first, ...rest] = resolveStepChoices(input);
   const route = stepRouteFor(input.stepKey, input.role, first);
   if (rest.length === 0) return route;
   return {
     ...route,
-    fallbacks: rest.map((name) =>
-      stepRouteFor(input.stepKey, input.role, name),
+    fallbacks: rest.map((choice) =>
+      stepRouteFor(input.stepKey, input.role, choice),
     ),
   };
+}
+
+// One `models` entry as a step of its own, with no role precedence: what
+// `crysk doctor` probes for each model a config names.
+export function resolveModelEntryRoute(
+  stepKey: string,
+  role: string,
+  entry: ModelListEntry,
+): ResolvedStepRoute {
+  return stepRouteFor(stepKey, role, stepModelOf(entry, stepKey));
 }
 
 // Every route a plan may execute: each step's model, then each step's
@@ -227,9 +273,9 @@ export function planRoutes(
 function stepRouteFor(
   stepKey: string,
   role: string,
-  name: ModelName,
+  { name, effort }: StepModel,
 ): ResolvedStepRoute {
-  const route = routeForModel(name);
+  const route = routeForModel(name, effort);
   return {
     stepKey,
     role,
@@ -376,7 +422,10 @@ export function judgeModelChoice(models: ModelsConfig | undefined): {
   model?: string;
   dropped: string[];
 } {
-  const listed = models?.judge ?? [`claude:${MATERIALITY_JUDGE_MODEL}-latest`];
+  // Names only: models.judge takes no effort (D3), so an entry is its name.
+  const listed = (
+    models?.judge ?? [`claude:${MATERIALITY_JUDGE_MODEL}-latest`]
+  ).map((entry) => modelEntry(entry).name);
   const usable = listed.filter((name) => MEASURED_JUDGE_MODELS.includes(name));
   return {
     ...(usable.length === 0 ? {} : { model: usable[0] }),
@@ -393,7 +442,9 @@ export function resolveMaterialityJudgeRoute(
 ): ResolvedStepRoute | undefined {
   const { model } = judgeModelChoice(models);
   if (model === undefined) return undefined;
-  return stepRouteFor(MATERIALITY_STEP_KEY, "other", parseModelName(model));
+  return stepRouteFor(MATERIALITY_STEP_KEY, "other", {
+    name: parseModelName(model),
+  });
 }
 
 // The route the judge was measured on: sonnet or opus, through the Claude Code

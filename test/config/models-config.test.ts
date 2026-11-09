@@ -45,7 +45,10 @@ describe("models and credentials are person-only keys (S1, S5)", () => {
   const person = {
     models: {
       default: ["claude:sonnet-latest"],
-      "hunter.logic": ["opencode:openai/gpt-5#high", "claude:opus-latest"],
+      "hunter.logic": [
+        { model: "opencode:openai/gpt-5", effort: "high" },
+        "claude:opus-latest",
+      ],
     },
     credentials: { claude: ["subscription", "api_key"] },
   };
@@ -580,5 +583,32 @@ describe("repair tools on a config that no longer parses", () => {
       source: "global",
     });
     expect(rows.some((r) => r.key === "summary.model")).toBe(false);
+  });
+
+  test("an entry with an effort shows it beside its model (E-g)", () => {
+    const merged = mergeConfig(
+      parseGlobalConfig(
+        JSON.stringify({
+          models: {
+            default: [{ model: "claude:sonnet-latest" }],
+            refuter: [
+              { model: "claude:opus-latest", effort: "max" },
+              { model: "opencode:openai/gpt-5", effort: "high" },
+              "claude:haiku-latest",
+            ],
+          },
+        }),
+      ),
+      {},
+    );
+    expect(
+      configRows(merged.effective, merged.sources).find(
+        (r) => r.key === "models",
+      ),
+    ).toMatchObject({
+      value:
+        "default=claude:sonnet-latest, refuter=claude:opus-latest (effort max),opencode:openai/gpt-5 (effort high),claude:haiku-latest",
+      source: "global",
+    });
   });
 });

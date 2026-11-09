@@ -1347,7 +1347,7 @@ describe("setup.ts reads the crysk-secrets input", () => {
   // from the CRYSK_OPENCODE_* secrets, for the providers the person layer's
   // models name (fallbacks included). Assertions read keys, types and
   // booleans, so a failure never prints a credential file.
-  const withModels = (models: Record<string, string[]>) => ({
+  const withModels = (models: Record<string, unknown[]>) => ({
     platform: { person: { models }, repo: {} },
   });
   const secretsLines = (...lines: string[]) => lines.join("\n");
@@ -1391,6 +1391,26 @@ describe("setup.ts reads the crysk-secrets input", () => {
         .split("\n")
         .every((l) => l === "" || l.startsWith("::add-mask::")),
     ).toBe(true);
+  });
+
+  test("the providers are read off object entries too, effort or not (E-g)", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: SECRETS_INPUT },
+      withModels({
+        default: [{ model: "claude:sonnet-latest", effort: "high" }],
+        "hunter.logic": [
+          { model: "opencode:deepseek/deepseek-chat", effort: "max" },
+        ],
+      }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(Object.keys(result.auth ?? {})).toEqual(["deepseek"]);
+    expect(JSON.parse(result.manifestText ?? "null")?.providers).toEqual({
+      deepseek: {
+        secret: "CRYSK_OPENCODE_DEEPSEEK_API_KEY",
+        kind: "api_key",
+      },
+    });
   });
 
   test("an openai _OAUTH record is written whole, so the child can refresh it", async () => {

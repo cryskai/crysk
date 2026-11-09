@@ -76,14 +76,12 @@ describe("parseModelName: opencode names (S3)", () => {
     });
   });
 
-  test("#variant is carried apart from the model", () => {
-    expect(parseModelName("opencode:openai/gpt-5.1-codex#high")).toEqual({
-      raw: "opencode:openai/gpt-5.1-codex#high",
-      backend: "opencode",
-      provider: "openai",
-      model: "gpt-5.1-codex",
-      variant: "high",
-    });
+  test("#variant is refused with the {model, effort} form (E-g)", () => {
+    expect(() => parseModelName("opencode:openai/gpt-5.1-codex#high")).toThrow(
+      new ModelNameError(
+        '"opencode:openai/gpt-5.1-codex#high": the #variant suffix is gone: write {"model": "opencode:openai/gpt-5.1-codex", "effort": "high"} in models',
+      ),
+    );
   });
 
   test("a model id may itself hold a slash (provider is up to the first one)", () => {
@@ -107,7 +105,7 @@ describe("parseModelName: opencode names (S3)", () => {
       "opencode:openai/gpt 5",
     ]) {
       expect(() => parseModelName(bad), bad).toThrow(
-        "opencode:<provider>/<model>[#variant]",
+        "opencode:<provider>/<model>",
       );
     }
   });
@@ -125,7 +123,7 @@ describe("parseModelName: everything else", () => {
   test("an unprefixed name says which two forms exist", () => {
     for (const bad of ["openai/gpt-5", "gpt-5", "anthropic/sonnet", ""]) {
       expect(() => parseModelName(bad), bad).toThrow(
-        'a model is "claude:<name>" or "opencode:<provider>/<model>[#variant]"',
+        'a model is "claude:<name>" or "opencode:<provider>/<model>"',
       );
     }
   });
@@ -268,12 +266,12 @@ describe("parseModelsConfig: the models object", () => {
     expect(
       parseModelsConfig({
         default: ["claude:sonnet-latest"],
-        "hunter.logic": ["opencode:openai/gpt-5#high", "claude:opus-latest"],
+        "hunter.logic": ["opencode:openai/gpt-5", "claude:opus-latest"],
         summary: ["claude:haiku-latest"],
       }),
     ).toEqual({
       default: ["claude:sonnet-latest"],
-      "hunter.logic": ["opencode:openai/gpt-5#high", "claude:opus-latest"],
+      "hunter.logic": ["opencode:openai/gpt-5", "claude:opus-latest"],
       summary: ["claude:haiku-latest"],
     });
   });
