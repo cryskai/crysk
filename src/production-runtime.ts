@@ -15,6 +15,7 @@ import {
   buildResolvedRoutePlan,
   createResolvedRoutePlan,
   freezeRoutePlan,
+  planRoutes,
   resolveStepRoute,
 } from "#model/routing";
 import {
@@ -43,6 +44,7 @@ import type {
   VerifiedExecutable,
 } from "./execution/contracts";
 import { StepExecutionHarness } from "./execution/harness";
+import { runWithFallback } from "./execution/model-fallback";
 import {
   InMemorySpendLedger,
   type SpendLedger,
@@ -528,7 +530,9 @@ function uniqueRoutesByFingerprint(
   plan: ResolvedRoutePlan,
 ): readonly ResolvedStepRoute[] {
   const seen = new Map<string, ResolvedStepRoute>();
-  for (const step of plan.steps) {
+  // Fallbacks included (S4): a fallback is bound up front with the rest, so
+  // one that cannot run fails before the run spends, not when its turn comes.
+  for (const step of planRoutes(plan)) {
     if (!seen.has(step.routeFingerprint)) {
       seen.set(step.routeFingerprint, step);
     }
@@ -933,7 +937,10 @@ export function soleOpenCodeCredential(plan: ResolvedRoutePlan):
       readonly provider?: undefined;
     } {
   const providers = new Set<string>();
-  for (const step of plan.steps) {
+  // Fallbacks count (S4): a role listing OpenCode models on two providers is
+  // a mixed-provider plan, refused here before anything runs, never when the
+  // second provider's turn comes.
+  for (const step of planRoutes(plan)) {
     if (step.route.backend === "opencode") {
       providers.add(step.route.provider);
     }
@@ -1015,7 +1022,7 @@ export async function prepareProductionAdmissionContext(input: {
   if (
     probeInput === undefined &&
     preliminaryAuthority.openCodeBinaryPath !== undefined &&
-    input.plan.steps.some((step) => step.route.backend === "opencode")
+    planRoutes(input.plan).some((step) => step.route.backend === "opencode")
   ) {
     probeInput = createFreeModelProbe({
       binaryPath: preliminaryAuthority.openCodeBinaryPath,
@@ -1048,7 +1055,7 @@ export async function prepareProductionAdmissionContext(input: {
     // never probe (a subscription model is not free by declaration).
     if (openCodeCredential.kind === "provider_api_token") {
       const pairs = new Map<string, { provider: string; model: string }>();
-      for (const step of input.plan.steps) {
+      for (const step of planRoutes(input.plan)) {
         if (step.route.backend !== "opencode") continue;
         pairs.set(
           freeVerdictKey(step.route.provider, step.route.modelSnapshot),
@@ -1306,7 +1313,27 @@ export class MultiProviderRunner implements StepRunner {
     return undefined;
   }
 
+  // A step whose role lists several models tries them in order (S4,
+  // model-fallback.ts); every model's binding was frozen with the rest, so a
+  // fallback runs through exactly the admission a first model does.
+  //
+  // "The same credential", for a refused login (`auth_invalid`), is the
+  // binding's spend bucket: provider plus credential kind and ref
+  // (`bindingBucketId`). Every Claude model shares one, so a Claude login
+  // failure skips the other Claude models and moves to an OpenCode one, and
+  // the reverse.
   async run(step: StepSpec): Promise<StepResult> {
+    return runWithFallback({
+      step,
+      runOn: (single) => this.runOnBinding(single),
+      credentialOf: (route) =>
+        this.resolveBinding({ ...step, route, routeKey: undefined })?.credential
+          .bucketId,
+      cancelled: () => this.signal?.aborted === true,
+    });
+  }
+
+  private async runOnBinding(step: StepSpec): Promise<StepResult> {
     const binding = this.resolveBinding(step);
     if (binding === undefined) {
       return {
@@ -1592,7 +1619,7 @@ export async function createProductionRuntime(
     }
     if (base.kind === "provider_api_token" && base.provider !== undefined) {
       const pairs = new Map<string, { provider: string; model: string }>();
-      for (const step of plan.steps) {
+      for (const step of planRoutes(plan)) {
         if (step.route.backend !== "opencode") continue;
         pairs.set(
           freeVerdictKey(step.route.provider, step.route.modelSnapshot),

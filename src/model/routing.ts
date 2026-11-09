@@ -30,6 +30,10 @@ export interface ResolvedStepRoute {
   readonly logicalIdentity: string;
   readonly route: ResolvedModelRoute;
   readonly routeFingerprint: string;
+  // The models tried after this one, in the order the role lists them (S4).
+  // Each is a route of this same step. Absent when the role names one model,
+  // so a plan without lists is the plan it always was, byte for byte.
+  readonly fallbacks?: readonly ResolvedStepRoute[];
 }
 
 export interface ResolvedRoutePlan {
@@ -156,38 +160,68 @@ export interface ResolveStepRouteInput {
 //   5. the prompt's own alias, converted to `claude:<alias>-latest`.
 // 1, 2 and 5 are internal or legacy inputs and keep accepting bare aliases.
 //
-// Only the FIRST model of a list is used for now. Trying the next one on a
-// provider failure is the fallback runner's job (S4), which wraps the step's
-// execution; until it lands, a list of three runs its first.
-export function resolveStepModel(input: ResolveStepRouteInput): ModelName {
+// Only `models` holds a list. Its first model is the step's route and the rest
+// are its fallbacks, tried in order when the provider fails the one before
+// (S4; the runner side is model-fallback.ts). Every other source names one
+// model, so it has no fallbacks.
+export function resolveStepModels(
+  input: ResolveStepRouteInput,
+): [ModelName, ...ModelName[]] {
   if (input.cliModel !== undefined) {
-    return toModelName(input.cliModel, "--model", input.stepKey);
+    return [toModelName(input.cliModel, "--model", input.stepKey)];
   }
   if (input.specModel !== undefined) {
-    return toModelName(input.specModel, "spec", input.stepKey);
+    return [toModelName(input.specModel, "spec", input.stepKey)];
   }
   const configured =
     (input.modelRole === undefined
       ? undefined
       : input.models?.[input.modelRole]) ?? input.models?.default;
   if (configured !== undefined && configured.length > 0) {
-    return toModelName(configured[0], "models", input.stepKey);
+    const [first, ...rest] = configured;
+    return [
+      toModelName(first, "models", input.stepKey),
+      ...rest.map((model) => toModelName(model, "models", input.stepKey)),
+    ];
   }
   if (
     input.frontmatterModel !== undefined &&
     input.frontmatterModel.trim().length > 0
   ) {
-    return toModelName(input.frontmatterModel, "prompt", input.stepKey);
+    return [toModelName(input.frontmatterModel, "prompt", input.stepKey)];
   }
   throw new ModelRoutingError(
     `agent ${input.stepKey} has no model and no override given`,
   );
 }
 
+export function resolveStepModel(input: ResolveStepRouteInput): ModelName {
+  return resolveStepModels(input)[0];
+}
+
 export function resolveStepRoute(
   input: ResolveStepRouteInput,
 ): ResolvedStepRoute {
-  return stepRouteFor(input.stepKey, input.role, resolveStepModel(input));
+  const [first, ...rest] = resolveStepModels(input);
+  const route = stepRouteFor(input.stepKey, input.role, first);
+  if (rest.length === 0) return route;
+  return {
+    ...route,
+    fallbacks: rest.map((name) =>
+      stepRouteFor(input.stepKey, input.role, name),
+    ),
+  };
+}
+
+// Every route a plan may execute: each step's model, then each step's
+// fallbacks. Whatever binds, admits or picks a credential for a plan reads
+// this, never `plan.steps` alone, so a fallback that cannot run fails before
+// the run spends anything (S4) instead of when its turn comes.
+export function planRoutes(
+  plan: ResolvedRoutePlan,
+): readonly ResolvedStepRoute[] {
+  const fallbacks = plan.steps.flatMap((step) => step.fallbacks ?? []);
+  return fallbacks.length === 0 ? plan.steps : [...plan.steps, ...fallbacks];
 }
 
 function stepRouteFor(
@@ -220,8 +254,15 @@ export function resolveModelRoute(
 export function createResolvedRoutePlan(
   steps: readonly ResolvedStepRoute[],
 ): ResolvedRoutePlan {
+  // A step's fallbacks join its entry only when it has some, so a plan with
+  // no lists keeps the fingerprint it always had.
   const sortedFingerprints = steps
-    .map((s) => `${s.stepKey}:${s.routeFingerprint}`)
+    .map(
+      (s) =>
+        `${s.stepKey}:${s.routeFingerprint}${(s.fallbacks ?? [])
+          .map((f) => `>${f.routeFingerprint}`)
+          .join("")}`,
+    )
     .sort()
     .join(";");
   const planFingerprint = createHash("sha256")

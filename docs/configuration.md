@@ -154,6 +154,78 @@ The bundled refuter declares `opus` and the summarizer `haiku`; with no mapping 
 mapping a run uses on **one** provider: a plan naming two OpenCode providers is refused at
 admission — see [Credentials](#credentials) below.
 
+## Fallback models
+
+Each role in `models` takes a list, and the list is tried in order. The step runs on the first model; when
+the **provider** fails it, the step moves to the next one:
+
+```json
+{
+  "models": {
+    "hunter.logic": ["opencode:openai/gpt-5", "claude:sonnet-latest"],
+    "default": ["claude:sonnet-latest", "claude:opus-latest"]
+  }
+}
+```
+
+A role not listed uses `models.default`, fallbacks included. A list of one model behaves exactly as
+before: no fallback, and nothing new is recorded. `--model` names one model, so a run with it has no
+fallbacks; the materiality judge keeps its one measured model.
+
+**When it moves.** Only on a failure that is the provider's, not the model's answer, and only after the
+model has used its own retries:
+
+| Cause | Moves to the next model? |
+| --- | --- |
+| `rate_limit`, `quota_exhausted`, `network_transient`, `protocol_truncation`, `watchdog_timeout` (the step timed out), `model_unavailable` | yes |
+| `auth_invalid` (the login was refused, "Not logged in") | yes, skipping every later model on the same credential |
+| `format_violation` (a bad answer, after its one format retry) | no |
+| `context_window_exceeded`, `output_limit_exceeded`, `safety_refusal` | no |
+| anything else (configuration, protocol conformance, cancellation, an unconfirmed abort) | no |
+
+"The same credential" is the binding's credential: every Claude model shares one, and every OpenCode
+model shares the OpenCode server's one. So a refused Claude login skips the other Claude models and moves
+to an OpenCode model, and the reverse. A cancelled run starts no further model.
+
+**A fenced credential.** A metered attempt whose cost the provider never reported (a timeout, a stream
+cut short) fences its credential's spend for the rest of the run, so nothing spends on it blindly. A
+later model on that credential is then refused before any request: it is recorded `skipped`, and the
+list goes on to a model on another credential. So a metered OpenCode model that times out moves only to
+a model on another credential, never to another model on the same one.
+
+**Time.** Each model gets the step's own retries, each with the step's full timeout, so the longest a step
+can take grows with the list: a step whose three models all keep timing out takes three times what one
+model would. Only the run's own ceiling bounds the whole step.
+
+**Cost.** The same holds for money: each model's attempts are paid on its own credential, so a step whose
+three models all fail after spending can cost up to three times one model. The CI `budget-usd` check reads
+the estimate before the run, which does not price fallbacks, and nothing caps dollars while the run goes.
+
+**Checked before anything spends.** Every model of every list is resolved, bound and admitted with the rest
+of the plan, before the cost confirmation, so a fallback that cannot run (no executable, no credential, a
+backend not admitted) fails the run up front instead of when its turn comes. One OpenCode server holds one
+credential for the whole run, so OpenCode models on two providers, or a free model beside a metered one,
+are refused even when one of them is only a fallback. The confirm menu's free label counts the fallbacks
+too, so a free first model with a metered fallback is not shown as free.
+
+**What is recorded.** In `pipeline.json`, a step whose role listed several models has:
+
+- `model`, `route` and `effort_applied` of the model that **ran** (the last one that reached its provider), written when
+  the step settles over the first model stamped before the spawn. `effort_applied` follows the backend:
+  an OpenCode fallback records `false`.
+- `model_attempts`: every model tried, in order, each with its `model`, `route`, `status` (`ok`,
+  `failed` or `skipped`), `attempts`, the `cause` it failed on and its own `usage_v2`. `skipped` means it
+  never reached its provider: after a refused login on its credential (`cause` `auth_invalid`), or with no
+  cause when its credential was fenced or it failed before its first request. The step reports the cause
+  and detail of the model that ran. Models can bill differently, so the step's `usage_v2` sums them and only these
+  entries keep each model's billing.
+- `attempts` counts every model's attempts that reached a provider, and attempts are numbered across models, so each model's
+  attempt logs and settlement receipts keep their own files; the pointers name the last one.
+
+Spend is reserved per attempt on the binding of the model that runs it, exactly as for a single model.
+The per-agent model the platform report carries, and the provider and model named for a failed hunter,
+are the ones that ran. A step with one model records exactly what it recorded before.
+
 ## Effort
 
 How hard a model works is set per step with the Claude CLI's `--effort` control, and **Crysk owns it**:

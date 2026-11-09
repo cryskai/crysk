@@ -27,7 +27,7 @@ import {
   countFreeRouteSteps,
   type FreeRouteBilling,
 } from "#model/free-discovery";
-import type { ResolvedRoutePlan } from "#model/routing";
+import { planRoutes, type ResolvedRoutePlan } from "#model/routing";
 import {
   type CiAdmissionLedgerState,
   publishCiSkip,
@@ -227,7 +227,7 @@ export async function resolvePrPlanAndConfirm(params: {
     routePlan === undefined || productionAdmission === undefined
       ? undefined
       : await countFreeRouteSteps({
-          steps: routePlan.steps,
+          steps: planRoutes(routePlan),
           probe: productionAdmission.freeModelProbe,
         });
   const runnerAuthority = await resolveRunnerAuthority({
