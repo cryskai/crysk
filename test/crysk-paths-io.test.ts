@@ -96,6 +96,10 @@ describe("review with no instructions file", () => {
     const repo = await makeRepo();
     const home = path.join(scratch, "home");
     await mkdir(home);
+    // A login in the scratch HOME, so the run's login probe stops there and never
+    // asks the host's Keychain (defaultClaudeLoginPresent checks this file first).
+    await mkdir(path.join(home, ".claude"));
+    await writeFile(path.join(home, ".claude", ".credentials.json"), "{}");
     const git = (...args: string[]) =>
       Bun.spawnSync(["git", ...args], { cwd: repo });
     git("config", "user.email", "t@example.com");

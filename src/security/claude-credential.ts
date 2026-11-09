@@ -24,11 +24,15 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { claudeCredentialProjectionReady } from "#model/provider-capabilities";
+import {
+  claudeCredentialProjectionReady,
+  defaultKeychainCredentialPresent,
+} from "#model/provider-capabilities";
 import type {
   ClaudeCredentialKind,
   CredentialsConfig,
 } from "#review/preflight";
+import { CliError } from "../errors";
 
 export const DEFAULT_CLAUDE_CREDENTIAL_ORDER: readonly ClaudeCredentialKind[] =
   ["subscription", "api_key"];
@@ -149,6 +153,11 @@ function describeSources(
     : names;
 }
 
+// The refusal's own class, so a CI run can settle its admission row as an unspent
+// gate skip (settleClaudeCredentialRefusal, pr/admission.ts). No `cls`: the outcome
+// stays unclassified, and the CLI prints it as the one line it prints any CliError.
+export class ClaudeCredentialRefusalError extends CliError {}
+
 // The admission refusal for a plan that has a Claude route and no listed credential
 // present, or undefined when the run can go ahead. A plan with no Claude route ignores
 // Claude credentials, so it is never refused here. The message names the order and what
@@ -253,15 +262,34 @@ export interface RunClaudeCredential {
   readonly kind?: ClaudeCredentialKind;
 }
 
+// The probes behind defaultClaudeLoginPresent. Tests inject all three, so no test
+// reads the real Keychain or HOME.
+export interface ClaudeLoginProbe {
+  readonly platform?: NodeJS.Platform;
+  readonly existsFn?: (p: string) => boolean;
+  readonly keychainProbe?: () => boolean;
+}
+
 // The machine's own Claude login: a Keychain item the broker can project (macOS), or
 // the CLI's OAuth store. `~/.claude.json` does not count: every Claude user has it,
 // API-key users included, and counting it would strip their key.
+// WHY the item and not only the broker (R001, #494): `security` is on every Mac, so
+// counting the broker alone chose the login on a Mac that has only an API key; the
+// key was stripped, the projection found no item (`source_read_failed`) and every
+// step failed. The item check is metadata-only (no `-w`, no secret read).
 export function defaultClaudeLoginPresent(
   env: Readonly<Record<string, string | undefined>> = process.env,
+  probe: ClaudeLoginProbe = {},
 ): boolean {
-  if (claudeCredentialProjectionReady()) return true;
+  const exists = probe.existsFn ?? existsSync;
   const home = hasValue(env.HOME) ? env.HOME : homedir();
-  return existsSync(path.join(home, ".claude", ".credentials.json"));
+  if (exists(path.join(home, ".claude", ".credentials.json"))) return true;
+  return (
+    claudeCredentialProjectionReady({
+      ...(probe.platform === undefined ? {} : { platform: probe.platform }),
+      existsFn: exists,
+    }) && (probe.keychainProbe ?? defaultKeychainCredentialPresent)()
+  );
 }
 
 // Called once at run start, before any plan is admitted. With no env given it reads
