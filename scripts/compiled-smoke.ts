@@ -268,23 +268,15 @@ function checkOpenCodeSdkLoad(
     mkdirSync(path.dirname(sdkDestDir), { recursive: true });
     cpSync(OPENCODE_SDK_PACKAGE_DIR, sdkDestDir, { recursive: true });
 
-    // Person-layer config: `routing` is a "person" direction field
+    // Person-layer config: `models` is a "person" direction field
     // (CONFIG_DIRECTION, src/review/preflight.ts) — the repo-level
     // .prhero/config.json rejects it outright, so this has to live under the
-    // fake HOME, exactly where a real operator's global routing config would.
+    // fake HOME, exactly where a real operator's global models config would.
+    // `default` covers every step, so every step routes to OpenCode.
     mkdirSync(path.join(home, ".prhero"), { recursive: true });
     writeFileSync(
       path.join(home, ".prhero", "config.json"),
-      JSON.stringify({
-        routing: {
-          default: {
-            backend: "opencode",
-            provider: "openai",
-            gateway: "configured",
-            modelSnapshot: "gpt-4o",
-          },
-        },
-      }),
+      JSON.stringify({ models: { default: ["opencode:openai/gpt-4o"] } }),
     );
 
     // Route admission observes this binary's `--version` before it ever
