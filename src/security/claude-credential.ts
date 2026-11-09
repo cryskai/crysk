@@ -32,6 +32,7 @@ import type {
   ClaudeCredentialKind,
   CredentialsConfig,
 } from "#review/preflight";
+import { CliError } from "../errors";
 
 export const DEFAULT_CLAUDE_CREDENTIAL_ORDER: readonly ClaudeCredentialKind[] =
   ["subscription", "api_key"];
@@ -142,6 +143,11 @@ function describeSources(kind: ClaudeCredentialKind): string {
     ? `${names}, or a Claude login on this machine`
     : names;
 }
+
+// The refusal's own class, so a CI run can settle its admission row as an unspent
+// gate skip (settleClaudeCredentialRefusal, pr/admission.ts). No `cls`: the outcome
+// stays unclassified, and the CLI prints it as the one line it prints any CliError.
+export class ClaudeCredentialRefusalError extends CliError {}
 
 // The admission refusal for a plan that has a Claude route and no listed credential
 // present, or undefined when the run can go ahead. A plan with no Claude route ignores

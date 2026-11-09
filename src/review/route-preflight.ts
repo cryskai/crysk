@@ -27,6 +27,7 @@ import type {
   RunnerAuthorityResolution,
 } from "../runner-authority";
 import {
+  ClaudeCredentialRefusalError,
   claudeCredentialRefusal,
   type RunClaudeCredential,
 } from "../security/claude-credential";
@@ -256,7 +257,7 @@ export async function resolveProductionRoutePlanAtConfirm(input: {
       input.claudeRun.selection,
       planHasClaudeRoute,
     );
-    if (refusal !== undefined) throw new CliError(refusal);
+    if (refusal !== undefined) throw new ClaudeCredentialRefusalError(refusal);
   };
   let routePlan: ResolvedRoutePlan;
   try {
