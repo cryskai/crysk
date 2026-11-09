@@ -753,3 +753,111 @@ describe("every model is admitted and bound before anything runs", () => {
     expect(soleOpenCodeCredentialOf(credentials)).toBeUndefined();
   });
 });
+
+// S7 (E-g, E2): each model of a list runs at its own effort. The pipeline
+// resolves them (`entry ?? frontmatter ?? role default`) into `effort` and
+// `fallbackEfforts`; the runner used to copy the first model's effort into
+// every candidate.
+describe("each model runs at its own effort", () => {
+  function hunterEntries(
+    entries: NonNullable<ModelsConfig["hunter.reliability"]>,
+  ): ResolvedStepRoute {
+    return resolveStepRoute({
+      stepKey: "hunter-reliability",
+      role: "hunter",
+      modelRole: "hunter.reliability",
+      models: { "hunter.reliability": entries },
+    });
+  }
+
+  test("a fallback is sent its own effort, not the first model's", async () => {
+    const requests: TransportRequest[] = [];
+    const route = hunterEntries([
+      { model: "claude:sonnet-latest", effort: "max" },
+      { model: "claude:opus-latest", effort: "low" },
+    ]);
+    const runtime = await runtimeFor([route], {
+      "claude-code": scriptedTransport(
+        "claude-code",
+        (request) =>
+          request.route.modelSnapshot === "sonnet"
+            ? fail("model_unavailable")
+            : ok(),
+        requests,
+      ),
+    });
+    try {
+      const result = await runtime.runner.run(
+        stepFor(route, { effort: "max", fallbackEfforts: ["low"] }),
+      );
+      expect(result.status).toBe("ok");
+      expect(requests.map((r) => [r.route.modelSnapshot, r.effort])).toEqual([
+        ["sonnet", "max"],
+        ["opus", "low"],
+      ]);
+      expect(result.modelAttempts?.map((a) => a.effort)).toEqual([
+        "max",
+        "low",
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  test("a refused login still skips the other models on its credential, whatever their effort", async () => {
+    const claudeRequests: TransportRequest[] = [];
+    const openRequests: TransportRequest[] = [];
+    const route = hunterEntries([
+      { model: "claude:sonnet-latest", effort: "max" },
+      { model: "claude:opus-latest", effort: "low" },
+      "opencode:openai/gpt-4o",
+    ]);
+    const runtime = await runtimeFor([route], {
+      "claude-code": scriptedTransport(
+        "claude-code",
+        () => fail("auth_invalid"),
+        claudeRequests,
+      ),
+      opencode: scriptedTransport("opencode", () => ok(), openRequests),
+    });
+    try {
+      const result = await runtime.runner.run(
+        stepFor(route, { effort: "max", fallbackEfforts: ["low", "xhigh"] }),
+      );
+      expect(sent(claudeRequests)).toEqual(["claude-code:sonnet"]);
+      expect(openRequests.map((r) => r.effort)).toEqual(["xhigh"]);
+      expect(
+        result.modelAttempts?.map((a) => [
+          a.route.modelSnapshot,
+          a.status,
+          a.effort,
+        ]),
+      ).toEqual([
+        ["sonnet", "failed", "max"],
+        ["opus", "skipped", "low"],
+        ["gpt-4o", "ok", "xhigh"],
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  test("a step built without fallbackEfforts keeps running every model at its effort", async () => {
+    const requests: TransportRequest[] = [];
+    const route = hunterRoute(SONNET_THEN_OPUS);
+    const runtime = await runtimeFor([route], {
+      "claude-code": scriptedTransport(
+        "claude-code",
+        (request) =>
+          request.route.modelSnapshot === "sonnet" ? fail("rate_limit") : ok(),
+        requests,
+      ),
+    });
+    try {
+      await runtime.runner.run(stepFor(route, { effort: "medium" }));
+      expect(requests.map((r) => r.effort)).toEqual(["medium", "medium"]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+});

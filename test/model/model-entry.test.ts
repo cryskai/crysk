@@ -322,7 +322,11 @@ describe("an OpenCode entry's effort is the route's variant", () => {
     ]);
   });
 
-  test("a Claude entry's effort does not touch the route or the plan's fingerprint in E1", () => {
+  // E2 changed this on purpose: E1 pinned that a Claude entry's effort had no
+  // effect yet. It now rides the plan step (`effort`), where the pipeline
+  // reads it for `--effort`, and still stays off the route and both
+  // fingerprints: it is a launch flag, not a binding.
+  test("a Claude entry's effort rides the plan step, not the route or the plan's fingerprint", () => {
     const agents = [
       { key: "reliability", role: "hunter", model: undefined },
       { key: "refuter", role: "refuter" },
@@ -339,6 +343,43 @@ describe("an OpenCode entry's effort is the route's variant", () => {
       models: { default: [{ model: "claude:opus-latest", effort: "max" }] },
     });
     expect(withEffort.routeFingerprint).toBe(plain.routeFingerprint);
-    expect(withEffort.steps).toEqual(plain.steps);
+    expect(withEffort.steps.map((s) => s.route)).toEqual(
+      plain.steps.map((s) => s.route),
+    );
+    expect(withEffort.steps.map((s) => s.routeFingerprint)).toEqual(
+      plain.steps.map((s) => s.routeFingerprint),
+    );
+    expect(withEffort.steps.map((s) => s.effort)).toEqual(["max", "max"]);
+    expect(plain.steps.every((s) => !("effort" in s))).toBe(true);
+  });
+
+  test("each fallback step carries its own entry's effort", () => {
+    const step = resolveStepRoute({
+      stepKey: "hunter-logic",
+      role: "hunter",
+      modelRole: "hunter.logic",
+      models: {
+        "hunter.logic": [
+          { model: "claude:opus-latest", effort: "max" },
+          "claude:sonnet-latest",
+          { model: "opencode:openai/gpt-5", effort: "high" },
+        ],
+      },
+    });
+    expect(step.effort).toBe("max");
+    expect(step.fallbacks?.map((f) => f.effort)).toEqual([undefined, "high"]);
+  });
+
+  test("--model carries no entry effort", () => {
+    const step = resolveStepRoute({
+      stepKey: "hunter-logic",
+      role: "hunter",
+      modelRole: "hunter.logic",
+      cliModel: "sonnet",
+      models: {
+        "hunter.logic": [{ model: "claude:opus-latest", effort: "max" }],
+      },
+    });
+    expect(step).not.toHaveProperty("effort");
   });
 });

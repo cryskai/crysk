@@ -40,6 +40,20 @@ export interface ResolvedModelRoute {
   readonly modelVariant?: string;
 }
 
+// Whether a route's backend is sent an effort (S7), the ONE answer every
+// report's `effort_applied` reads. The Claude CLI always gets `--effort`.
+// OpenCode gets one only as the model variant a `models` entry's effort sets;
+// with no entry effort it is sent no variant (D1) and runs at the provider's
+// default, so nothing the engine asked for was applied. "Applied" means passed
+// to the backend: the Claude CLI clamps a level the model lacks and reports
+// nothing back.
+export function effortApplied(route: ResolvedModelRoute): boolean {
+  return (
+    route.backend === "claude-code" ||
+    (route.backend === "opencode" && route.modelVariant !== undefined)
+  );
+}
+
 export interface IsolationProjection {
   readonly credentialProjectionId: string;
   readonly env: Readonly<Record<string, string>>;

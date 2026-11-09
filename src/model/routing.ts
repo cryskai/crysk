@@ -34,6 +34,13 @@ export interface ResolvedStepRoute {
   readonly logicalIdentity: string;
   readonly route: ResolvedModelRoute;
   readonly routeFingerprint: string;
+  // The `models` entry's effort as written (S7), on either backend. Absent
+  // when the entry sets none, and always for `--model`, a spec model or a
+  // prompt alias (D4), so a plan without efforts is the plan it always was.
+  // The pipeline reads it for a Claude step's `--effort` (stepEffortFields);
+  // an OpenCode effort is also the route's modelVariant. Never part of either
+  // fingerprint: for Claude it is a launch flag, not a binding.
+  readonly effort?: string;
   // The models tried after this one, in the order the role lists them (S4).
   // Each is a route of this same step. Absent when the role names one model,
   // so a plan without lists is the plan it always was, byte for byte.
@@ -97,7 +104,8 @@ function toModelName(
 // `effort` becomes the model `variant`"), the field the removed `#variant`
 // suffix used to fill, so binding, transport cache and fingerprint keep
 // telling variants apart as they did. No effort, no variant (D1). A Claude
-// entry's effort is not part of the route: it is a launch flag, not a binding.
+// entry's effort is not part of the route: it is a launch flag, not a binding,
+// and rides the plan step instead (ResolvedStepRoute.effort).
 export function routeForModel(
   name: ModelName,
   effort?: string,
@@ -282,6 +290,7 @@ function stepRouteFor(
     logicalIdentity: name.raw,
     route,
     routeFingerprint: computeRouteFingerprint(name.raw, route),
+    ...(effort === undefined ? {} : { effort }),
   };
 }
 

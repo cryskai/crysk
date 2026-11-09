@@ -1866,10 +1866,14 @@ function round2(value: number): number {
 
 // A step's route as the plan card shows it: the model name it resolved to,
 // which already says its backend (`claude:sonnet-latest`,
-// `opencode:openai/gpt-5#high`). It replaced `alias -> provider/model
-// [gateway, backend]`, whose gateway no longer exists.
+// `opencode:openai/gpt-5`), and its `models` entry's effort when it sets one,
+// in the config row's form (`claude:opus-latest (effort max)`, S7). It
+// replaced `alias -> provider/model [gateway, backend]`, whose gateway no
+// longer exists.
 export function formatStepRoute(step: ResolvedStepRoute): string {
-  return step.logicalIdentity;
+  return step.effort === undefined
+    ? step.logicalIdentity
+    : `${step.logicalIdentity} (effort ${step.effort})`;
 }
 
 // The envelope needs ONE model string. With no --model override each agent
