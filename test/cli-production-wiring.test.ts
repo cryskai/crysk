@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
 import { resolveProductionRoutePlanAtConfirm } from "../src/cli";
+import { CliError } from "../src/errors";
 import type { ExactBindingCapabilityReport } from "../src/execution/contracts";
 import {
   d1_11EvidenceFromExactBinding,
@@ -20,7 +21,10 @@ import {
   soleOpenCodeCredentialOf,
 } from "../src/production-runtime";
 import { enforceProviderCapabilityGate } from "../src/review/route-preflight";
-import { resolveRunClaudeCredential } from "../src/security/claude-credential";
+import {
+  ClaudeCredentialRefusalError,
+  resolveRunClaudeCredential,
+} from "../src/security/claude-credential";
 import {
   OpenCodeApiTokenBroker,
   OpenCodeAuthBroker,
@@ -366,6 +370,21 @@ describe("CLI production wiring (verify C1/C3)", () => {
           claudeRun: refused,
         }),
       ).rejects.toThrow(/no Claude credential this run may use is set/);
+    });
+
+    // R003 (#494): plan.ts settles the CI row as gate-skipped by this class.
+    test("the refusal is a ClaudeCredentialRefusalError, still a plain CliError", async () => {
+      const error = await resolveProductionRoutePlanAtConfirm({
+        modelsConfigured: false,
+        workspaceRoot: "/nowhere",
+        buildRoutePlan: async () => {
+          throw new Error("raw model id the CLI resolves itself");
+        },
+        claudeRun: refused,
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ClaudeCredentialRefusalError);
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).cls).toBeUndefined();
     });
 
     test("a plan with no Claude route ignores Claude credentials", async () => {
