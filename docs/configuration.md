@@ -56,8 +56,9 @@ are the *repository variable names* the scaffolded workflow passes to the action
 parser as your person config and writes them to `$HOME/.crysk/config.json` on the runner (a fresh runner has
 no `~/.prhero`) — the same global layer described above, never the repo file. A value the parser refuses
 fails the run with `CRYSK-CONFIG-INVALID`, which names the input but never prints its content. A repository
-connected to the Crysk platform takes both from the platform's model settings instead, which win whole: the
-two inputs are then ignored, with a warning. Unset, every role runs the model its prompt declares, on the
+connected to the Crysk platform takes both from the platform's model settings instead, which win whole: when
+the platform sends any settings, the two inputs are ignored, with a warning; when it sends none, the inputs
+apply. Unset, every role runs the model its prompt declares, on the
 Claude CLI.
 
 The credentials themselves are `CRYSK_*` secrets passed in the `crysk-secrets` input. Full wiring (the
