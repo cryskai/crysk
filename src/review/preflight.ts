@@ -36,7 +36,7 @@ import { REPO_DIR_NAME } from "../brand-paths";
 // imports only the ones it uses itself.
 import { CliError, CliUsageError, withUsageClass } from "../errors";
 import { DEFAULT_BASE_REF, listPaths } from "../git/refs";
-import { redactDiagnostic } from "../security/redact";
+import { redactConfigValue } from "../security/redact";
 // review/size-gate.ts imports only a TYPE from here, so this is not a runtime
 // cycle — the type import is erased and size-gate has no load-time
 // dependency on this module.
@@ -2432,7 +2432,7 @@ function parseConfigLayer(
       throw new CliUsageError(`${file}: ${REMOVED_ROUTING_MESSAGE}`);
     }
     if (!KNOWN_CONFIG_KEYS.has(key)) {
-      throw new CliUsageError(`${file} unknown key: ${redactDiagnostic(key)}`);
+      throw new CliUsageError(`${file} unknown key: ${redactConfigValue(key)}`);
     }
     // Templated over the OFFENDING key, never a fixed example: one hardcoded
     // key name across three rejections sends two operators out of three
@@ -2682,7 +2682,7 @@ function parseCredentialsConfig(
   for (const key of Object.keys(record)) {
     if (key !== "claude") {
       throw new CliUsageError(
-        `${file} credentials has an unknown key "${redactDiagnostic(key)}": only claude is supported, e.g. ${CREDENTIALS_EXAMPLE}`,
+        `${file} credentials has an unknown key "${redactConfigValue(key)}": only claude is supported, e.g. ${CREDENTIALS_EXAMPLE}`,
       );
     }
   }
