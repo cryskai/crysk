@@ -1746,7 +1746,7 @@ describe("setup.ts reads the crysk-secrets input", () => {
       expect(result.output).toBe("");
     });
 
-    test("a credentials input the person parser refuses fails as models-input, naming the credentials input", async () => {
+    test("a credentials input the person parser refuses fails as credentials-input, naming the credentials input", async () => {
       for (const [raw, detail] of [
         ['{"SENTINEL-CREDS-55aa"', "the credentials input is not valid JSON"],
         [
@@ -1759,9 +1759,11 @@ describe("setup.ts reads the crysk-secrets input", () => {
           CREDENTIALS_INPUT: raw,
         });
         expect(result.exitCode).toBe(1);
-        expect(JSON.parse(result.record ?? "null")).toEqual(
-          MODELS_RECORD(detail),
-        );
+        expect(JSON.parse(result.record ?? "null")).toEqual({
+          v: 1,
+          cls: { kind: "config-parse", source: "credentials-input" },
+          detail,
+        });
         expect((result.record ?? "").includes("SENTINEL")).toBe(false);
         expect(personOf(result)).toBeUndefined();
       }

@@ -144,15 +144,13 @@ export interface CiCredentialPresence {
   runnerFile: boolean;
 }
 
-// The engine's Claude session files, relative to HOME, and its OpenCode
-// auth-store rule. Copied rather than imported, because this module may
+// The engine's Claude login file, relative to HOME (U2: `~/.claude.json` and
+// `~/.claude/session.json` are no credential), and its OpenCode auth-store rule. Copied rather than imported, because this module may
 // import only builtins (see the header): the originals are
 // CLAUDE_SESSION_FILES in src/model/provider-capabilities.ts and
 // resolveOpenCodeAuthPath in src/security/credential-broker.ts, and a drift
 // test in test/ci/trigger.test.ts pins this copy to both.
 const CLAUDE_SESSION_FILES: readonly string[] = [
-  ".claude.json",
-  path.join(".claude", "session.json"),
   path.join(".claude", ".credentials.json"),
 ];
 

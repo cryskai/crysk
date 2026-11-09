@@ -1,4 +1,4 @@
-import { OPENCODE_OAUTH_PROVIDER } from "../security/credential-broker";
+import { credentialKindForRoute } from "../runner-authority";
 
 // #182: live free-model discovery. OpenCode free models (backend `opencode`,
 // provider `opencode`, e.g. `muse-spark-1.3-contributor-free`) authenticate
@@ -268,10 +268,12 @@ export function createFreeModelProbe(options: {
 // free verdict covers. Reads only the verdicts admission already decided, so
 // it never spawns — `probe` is the memoised instance admission returned, and a
 // pair admission never probed would spawn here, which is why the gate below
-// is the same one admission applies. Only OpenCode api-token routes can be
-// free: an OAuth provider (OPENCODE_OAUTH_PROVIDER) never probes, and a
-// claude-code step has no free kind at all. A missing probe, or a throwing
-// one, counts as not free: an unknown price is never presented as free.
+// is the same one admission applies (openCodeFreeVerdicts in
+// production-runtime.ts): credentialKindForRoute over the run's CRYSK_OPENCODE_*
+// names (U3), so only a route whose kind is an API token can be free. An OAuth
+// route (`openai` on its `_OAUTH` record, or on no names at all) never probes,
+// and a claude-code step has no free kind at all. A missing probe, or a
+// throwing one, counts as not free: an unknown price is never presented as free.
 export interface FreeRouteBilling {
   readonly free: number;
   readonly total: number;
@@ -286,6 +288,9 @@ export async function countFreeRouteSteps(input: {
     };
   }[];
   readonly probe: FreeModelProbe | undefined;
+  // The names admission read from the setup step's manifest
+  // (productionAdmission.authorityOptions.openCodeSecretNames); absent outside CI.
+  readonly openCodeSecretNames?: readonly string[];
 }): Promise<FreeRouteBilling> {
   const total = input.steps.length;
   if (input.probe === undefined) return { free: 0, total };
@@ -293,15 +298,14 @@ export async function countFreeRouteSteps(input: {
   const verdicts = await Promise.all(
     input.steps.map(async ({ route }) => {
       if (route.backend !== "opencode") return false;
-      // The provider literal, not U3's kind-follows-secret rule: `openai` on a
-      // CRYSK_OPENCODE_OPENAI_API_KEY is metered and admission probes it
-      // (production-runtime.ts, openCodeFreeVerdicts), but this count never
-      // does, so an OpenAI model listed free would bind as free while the plan
-      // card counted it metered. Following the secret needs the run's secret
-      // names here, from review.ts and pr/plan.ts; left for that change (L47).
-      // Narrow in practice: on an API key (an empty OpenCode home, 2026-11-09)
-      // OpenAI lists 80 of 83 models priced, the 3 at zero being image models.
-      if (route.provider === OPENCODE_OAUTH_PROVIDER) return false;
+      const kind = credentialKindForRoute(
+        "opencode",
+        route.provider,
+        {},
+        false,
+        input.openCodeSecretNames,
+      );
+      if (kind !== "provider_api_token") return false;
       try {
         return await probe(route.provider, route.modelSnapshot);
       } catch {

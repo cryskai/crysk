@@ -237,15 +237,3 @@ describe("the judge (L6 item 5)", () => {
     ).toBe("claude --model sonnet");
   });
 });
-
-describe("the removed routing (S2)", () => {
-  test("a caller still passing routing is refused, never silently ignored", () => {
-    expect(() =>
-      plan({ routingConfig: { default: { backend: "opencode" } } }),
-    ).toThrow(
-      new InvalidModelError(
-        '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
-      ),
-    );
-  });
-});

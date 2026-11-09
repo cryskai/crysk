@@ -784,15 +784,16 @@ const AUTH_CLASS: ErrorClass = {
   kind: "credential",
   failureClass: "malformed_payload",
 };
-// The models and credentials inputs (D1): one class, CRYSK-CONFIG-INVALID's
-// `models-input` variant. Its details name the input and never its content (the
+// The models and credentials inputs (D1): CRYSK-CONFIG-INVALID's `models-input`
+// and `credentials-input` variants, each naming its own input and variable. Their
+// details name the input and never its content (the
 // variable may hold anything, a pasted key included), so the publisher can put
 // them on the PR. The parser's own message, which names the entry, goes to the
 // step's log only, through F2's redaction; a JSON syntax error's text is never
 // printed, since it can quote the input.
-const MODELS_INPUT_CLASS: ErrorClass = {
-  kind: "config-parse",
-  source: "models-input",
+const INPUT_CLASS: Record<"models" | "credentials", ErrorClass> = {
+  models: { kind: "config-parse", source: "models-input" },
+  credentials: { kind: "config-parse", source: "credentials-input" },
 };
 const INPUTS_IGNORED_WARNING =
   "The models and credentials inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.";
@@ -932,7 +933,7 @@ function readConfigInput(
     value = JSON.parse(raw);
   } catch {
     throw new SetupInputError(
-      MODELS_INPUT_CLASS,
+      INPUT_CLASS[key],
       `${label} is not valid JSON`,
       `CI ${key} input is not valid JSON`,
     );
@@ -941,7 +942,7 @@ function readConfigInput(
     parseGlobalConfig(JSON.stringify({ [key]: value }), label);
   } catch (error) {
     throw new SetupInputError(
-      MODELS_INPUT_CLASS,
+      INPUT_CLASS[key],
       `${label} does not follow the ${key} rules (the setup step's log names the entry)`,
       messageOf(error),
     );

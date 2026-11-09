@@ -385,10 +385,6 @@ export interface BuildRoutePlanInput {
   readonly agents: readonly RouteAgent[];
   readonly cliModel?: string;
   readonly models?: ModelsConfig;
-  // The removed alias-keyed routing (S2): passing one throws. No caller passes
-  // it any more; it stays only while test/model/role-routing.test.ts pins the
-  // throw, and goes with that test (L47).
-  readonly routingConfig?: Readonly<Record<string, unknown>>;
   readonly frontmatterModel?: (agentKey: string) => string | undefined;
   readonly summarizer?: { model?: string; frontmatterModel?: string };
   readonly scout?: {
@@ -467,13 +463,6 @@ export function isMeasuredJudgeRoute(route: ResolvedModelRoute): boolean {
 export function buildResolvedRoutePlan(
   input: BuildRoutePlanInput,
 ): ResolvedRoutePlan {
-  if (input.routingConfig !== undefined) {
-    // Loud, never ignored: a caller still routing would otherwise run every
-    // step on its prompt's Claude model while believing it chose another.
-    throw new InvalidModelError(
-      '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
-    );
-  }
   assertHunterRolesExist(input.models, input.agents);
   const stepRoutes: ResolvedStepRoute[] = [];
   for (const agent of input.agents) {

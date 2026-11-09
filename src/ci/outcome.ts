@@ -45,10 +45,11 @@ export type ErrorClass =
     }
   | {
       kind: "config-parse";
-      // `models-input`: the setup step's reading of the `models` input (D1),
-      // never the CLI's.
+      // `models-input` and `credentials-input`: the setup step's reading of the
+      // `models` and `credentials` inputs (D1), never the CLI's.
       source:
         | "models-input"
+        | "credentials-input"
         | "repo-config"
         | "person-config"
         | "extra-hunters";
@@ -452,8 +453,11 @@ function parseRecordParams(value: unknown): ErrorParams | undefined {
 // a writer's bug, the same rule as parseRecordClass below.
 function parseSetupClass(value: unknown): ErrorClass | undefined {
   if (!isRecordObject(value)) return undefined;
-  if (value.kind === "config-parse" && value.source === "models-input") {
-    return { kind: "config-parse", source: "models-input" };
+  if (
+    value.kind === "config-parse" &&
+    (value.source === "models-input" || value.source === "credentials-input")
+  ) {
+    return { kind: "config-parse", source: value.source };
   }
   if (
     value.kind === "credential" &&
@@ -791,6 +795,7 @@ export function codeOf(cls: ErrorClass): ErrorCode {
     case "config-parse":
       switch (cls.source) {
         case "models-input":
+        case "credentials-input":
         case "repo-config":
         case "person-config":
           return "CRYSK-CONFIG-INVALID";
@@ -924,6 +929,7 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
     case "config-parse":
       switch (cls.source) {
         case "models-input":
+        case "credentials-input":
         case "repo-config":
         case "person-config":
         case "extra-hunters":
@@ -1526,6 +1532,20 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         annotationFix:
           "fix the models JSON ({detail}) and set it again with `gh variable set CRYSK_MODELS`, the variable the workflow passes as `vars.CRYSK_MODELS`",
       },
+      // The `credentials` input, beside it, from vars.CRYSK_CREDENTIALS (D1).
+      "credentials-input": {
+        what: "The credentials input is invalid: {detail}",
+        why: "Crysk refuses to guess which Claude credential to use",
+        fixes: [
+          'Fix the Claude credential order, a JSON object such as {"claude": ["subscription", "api_key"]}, and set the variable again:',
+          '$ gh variable set CRYSK_CREDENTIALS --body "$(jq -c . credentials.json)"',
+          `The workflow passes it as \`${CREDENTIALS_INPUT_LINE}\`.`,
+          "Then re-run the workflow:",
+          "$ gh run rerun {runId}",
+        ],
+        annotationFix:
+          "fix the credentials JSON ({detail}) and set it again with `gh variable set CRYSK_CREDENTIALS`, the variable the workflow passes as `vars.CRYSK_CREDENTIALS`",
+      },
     },
   },
   "CRYSK-TOKEN-PERMISSION": {
@@ -2030,8 +2050,8 @@ function variantOf(cls: ErrorClass): string | undefined {
   switch (cls.kind) {
     case "credential":
       return cls.failureClass;
-    // Only the models input has a variant of its own (CRYSK-CONFIG-INVALID); the other
-    // sources find none and render their code's default.
+    // Only the models and credentials inputs have a variant of their own
+    // (CRYSK-CONFIG-INVALID); the other sources find none and render their code's default.
     case "config-parse":
       return cls.source;
     case "github":

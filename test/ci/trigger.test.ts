@@ -2001,8 +2001,6 @@ describe("runCiTrigger — credentials already on the runner", () => {
     baseEnv({ [STDIN_SECRETS]: "", HOME, ...extra });
 
   test.each<[string, Record<string, string>, string]>([
-    ["~/.claude.json", {}, "/home/runner/.claude.json"],
-    ["~/.claude/session.json", {}, "/home/runner/.claude/session.json"],
     [
       "~/.claude/.credentials.json",
       {},
@@ -2023,6 +2021,17 @@ describe("runCiTrigger — credentials already on the runner", () => {
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("true");
   });
+
+  // U2's rule (E-f leftover): `~/.claude.json` and `~/.claude/session.json` are no
+  // Claude credential, so on a GitHub-hosted runner either alone is no-credentials.
+  test.each(["/home/runner/.claude.json", "/home/runner/.claude/session.json"])(
+    "%s alone is no credential",
+    (file) => {
+      const run = runShell(noInput(), undefined, (p) => p === file);
+      expect(run.exitCode).toBe(1);
+      expect(run.outputs.run).toBe("false");
+    },
+  );
 
   test("with XDG_DATA_HOME set, the default OpenCode path is not the engine's and does not count", () => {
     const run = runShell(

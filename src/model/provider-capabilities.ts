@@ -472,14 +472,27 @@ function defaultKeychainCredentialPresent(): boolean {
   );
 }
 
-// The on-disk Claude sessions the default probe accepts, relative to HOME.
+// The on-disk Claude login the default probe accepts, relative to HOME: the
+// CLI's OAuth store. `~/.claude.json` and `~/.claude/session.json` are not a
+// credential (U2: every Claude user has the first, API-key users included).
 // Exported because src/ci/trigger.ts must reach the same verdict before
 // `bun install` and so keeps its own copy (it may import only builtins); a
 // drift test in test/ci/trigger.test.ts pins that copy to this list.
 export const CLAUDE_SESSION_FILES: readonly string[] = [
-  ".claude.json",
-  path.join(".claude", "session.json"),
   path.join(".claude", ".credentials.json"),
+];
+
+// U2's rule, claudeCredentialPresence in src/security/claude-credential.ts: a
+// subscription from CRYSK_CLAUDE_OAUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN or a login, an
+// API key from CRYSK_CLAUDE_API_KEY or ANTHROPIC_API_KEY, each trimmed; never
+// ANTHROPIC_AUTH_TOKEN. A copy, because that module imports this one and a value
+// import back would be a cycle (test/architecture/cycles.test.ts); a test in
+// test/model/provider-capabilities.test.ts pins the two equal.
+const CLAUDE_CREDENTIAL_ENV: readonly string[] = [
+  "CRYSK_CLAUDE_OAUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CRYSK_CLAUDE_API_KEY",
+  "ANTHROPIC_API_KEY",
 ];
 
 function defaultClaudeAuthProbe(
@@ -489,9 +502,9 @@ function defaultClaudeAuthProbe(
   platform: NodeJS.Platform,
   keychainProbe: () => boolean,
 ): "passed" | "failed" {
-  const hasToken =
-    Boolean(env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) ||
-    Boolean(env.ANTHROPIC_API_KEY?.trim());
+  const hasToken = CLAUDE_CREDENTIAL_ENV.some((name) =>
+    Boolean(env[name]?.trim()),
+  );
   if (hasToken) return "passed";
   const hasSessionFile = CLAUDE_SESSION_FILES.some((file) =>
     exists(path.join(home, file)),
