@@ -322,11 +322,11 @@ describe("an OpenCode entry's effort is the route's variant", () => {
     ]);
   });
 
-  // E2 changed this on purpose: E1 pinned that a Claude entry's effort had no
-  // effect yet. It now rides the plan step (`effort`), where the pipeline
-  // reads it for `--effort`, and still stays off the route and both
-  // fingerprints: it is a launch flag, not a binding.
-  test("a Claude entry's effort rides the plan step, not the route or the plan's fingerprint", () => {
+  // A Claude entry's effort rides the plan step (`effort`), where the pipeline
+  // reads it for `--effort`. It stays off the route and its fingerprint (a
+  // launch flag, not a binding), but the plan's fingerprint includes it, so
+  // two runs that differ only in effort never share one (Juanma, L38).
+  test("a Claude entry's effort rides the plan step and its fingerprint, not the route", () => {
     const agents = [
       { key: "reliability", role: "hunter", model: undefined },
       { key: "refuter", role: "refuter" },
@@ -342,7 +342,20 @@ describe("an OpenCode entry's effort is the route's variant", () => {
       frontmatterModel,
       models: { default: [{ model: "claude:opus-latest", effort: "max" }] },
     });
-    expect(withEffort.routeFingerprint).toBe(plain.routeFingerprint);
+    expect(withEffort.routeFingerprint).not.toBe(plain.routeFingerprint);
+    const lower = buildResolvedRoutePlan({
+      agents,
+      frontmatterModel,
+      models: { default: [{ model: "claude:opus-latest", effort: "low" }] },
+    });
+    expect(lower.routeFingerprint).not.toBe(withEffort.routeFingerprint);
+    // An entry without an effort keeps the plan it always had.
+    const bare = buildResolvedRoutePlan({
+      agents,
+      frontmatterModel,
+      models: { default: [{ model: "claude:opus-latest" }] },
+    });
+    expect(bare.routeFingerprint).toBe(plain.routeFingerprint);
     expect(withEffort.steps.map((s) => s.route)).toEqual(
       plain.steps.map((s) => s.route),
     );
@@ -381,5 +394,27 @@ describe("an OpenCode entry's effort is the route's variant", () => {
       },
     });
     expect(step).not.toHaveProperty("effort");
+  });
+});
+
+describe("the plan fingerprint and fallback efforts", () => {
+  test("a fallback's effort changes the plan fingerprint too", () => {
+    const agents = [{ key: "logic", role: "hunter", model: undefined }];
+    const frontmatterModel = () => "sonnet";
+    const plan = (effort?: string) =>
+      buildResolvedRoutePlan({
+        agents,
+        frontmatterModel,
+        models: {
+          "hunter.logic": [
+            "claude:opus-latest",
+            effort === undefined
+              ? "claude:sonnet-latest"
+              : { model: "claude:sonnet-latest", effort },
+          ],
+        },
+      }).routeFingerprint;
+    expect(plan("low")).not.toBe(plan());
+    expect(plan("low")).not.toBe(plan("high"));
   });
 });

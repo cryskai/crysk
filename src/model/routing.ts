@@ -38,8 +38,9 @@ export interface ResolvedStepRoute {
   // when the entry sets none, and always for `--model`, a spec model or a
   // prompt alias (D4), so a plan without efforts is the plan it always was.
   // The pipeline reads it for a Claude step's `--effort` (stepEffortFields);
-  // an OpenCode effort is also the route's modelVariant. Never part of either
-  // fingerprint: for Claude it is a launch flag, not a binding.
+  // an OpenCode effort is also the route's modelVariant. Never part of the
+  // route's fingerprint (for Claude it is a launch flag, not a binding), but
+  // part of the plan's (createResolvedRoutePlan).
   readonly effort?: string;
   // The models tried after this one, in the order the role lists them (S4).
   // Each is a route of this same step. Absent when the role names one model,
@@ -309,13 +310,18 @@ export function resolveModelRoute(
 export function createResolvedRoutePlan(
   steps: readonly ResolvedStepRoute[],
 ): ResolvedRoutePlan {
-  // A step's fallbacks join its entry only when it has some, so a plan with
-  // no lists keeps the fingerprint it always had.
+  // A step's fallbacks join its entry only when it has some, and an entry's
+  // effort only when it sets one, so a plan with no lists and no efforts keeps
+  // the fingerprint it always had. The effort is part of the plan, not of the
+  // route: two runs that differ only in effort are different plans, while the
+  // same model at two efforts still shares its binding (Juanma, L38).
+  const withEffort = (s: ResolvedStepRoute) =>
+    `${s.routeFingerprint}${s.effort === undefined ? "" : `@${s.effort}`}`;
   const sortedFingerprints = steps
     .map(
       (s) =>
-        `${s.stepKey}:${s.routeFingerprint}${(s.fallbacks ?? [])
-          .map((f) => `>${f.routeFingerprint}`)
+        `${s.stepKey}:${withEffort(s)}${(s.fallbacks ?? [])
+          .map((f) => `>${withEffort(f)}`)
           .join("")}`,
     )
     .sort()
