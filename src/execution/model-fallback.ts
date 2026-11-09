@@ -110,6 +110,9 @@ export async function runWithFallback(
         ? { routeKey: step.routeKey }
         : {}),
       ...(attemptsSoFar === 0 ? {} : { attemptOffset: attemptsSoFar }),
+      // A fallback's request names its own model (attempt evidence records
+      // it beside the route); the first keeps the caller's.
+      ...(index === 0 ? {} : { model: route.modelSnapshot || step.model }),
     });
     const reached = reachedAttempts(result);
     attemptsSoFar += reached;

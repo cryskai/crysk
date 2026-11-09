@@ -738,6 +738,31 @@ describe("fallback scenarios: numbering, spend, cancellation and the recorded mo
     }
   });
 
+  test("R9 each model's request names its own execution model", async () => {
+    const requests: TransportRequest[] = [];
+    const route = hunterRoute(THREE);
+    const runtime = await runtimeFor([route], {
+      "claude-code": scriptedTransport(
+        "claude-code",
+        (r) => (r.route.modelSnapshot === "haiku" ? ok() : fail("rate_limit")),
+        requests,
+      ),
+    });
+    try {
+      const result = await runtime.runner.run(
+        stepFor(route, { maxAttempts: 1 }),
+      );
+      expect(result.status).toBe("ok");
+      expect(requests.map((r) => r.executionModel)).toEqual([
+        "sonnet",
+        "opus",
+        "haiku",
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   test("R8 pre-aborted run: first model behaves as before, no fallback", async () => {
     const requests: TransportRequest[] = [];
     const controller = new AbortController();
