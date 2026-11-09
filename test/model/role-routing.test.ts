@@ -228,6 +228,23 @@ describe("the judge (L6 item 5)", () => {
     expect(p.steps.some((s) => s.stepKey === "materiality")).toBe(false);
   });
 
+  // The gate fails open: a judge the runner may not be able to bind stands down
+  // instead of killing the run at admission (resolveMaterialityJudgeRoute).
+  test("with every other step off Claude and no models.judge, the judge stands down", () => {
+    const p = plan({ models: { default: ["opencode:openai/gpt-5"] } });
+    expect(p.steps.some((s) => s.stepKey === "materiality")).toBe(false);
+  });
+
+  test("an explicit models.judge still runs on an OpenCode-only plan", () => {
+    const p = plan({
+      models: {
+        default: ["opencode:openai/gpt-5"],
+        judge: ["claude:sonnet-latest"],
+      },
+    });
+    expect(wire(p).materiality).toBe("claude --model sonnet");
+  });
+
   test("models.default never reaches the judge", () => {
     expect(
       wire(plan({ models: { default: ["claude:haiku-latest"] } })).materiality,

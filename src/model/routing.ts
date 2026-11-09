@@ -434,7 +434,20 @@ export function buildResolvedRoutePlan(
   if (input.materiality) {
     // No `cliModel` and no `models.default` on purpose (judgeModelChoice).
     const judge = resolveMaterialityJudgeRoute(input.models);
-    if (judge !== undefined) stepRoutes.push(judge);
+    // With no `models.judge`, the judge joins only a plan that already runs a
+    // Claude step: on a plan with none, the runner may hold no Claude
+    // credential, and a judge it cannot bind must stand down rather than fail
+    // admission for the whole run. An explicit `models.judge` is the operator
+    // saying the judge can run, so it always joins.
+    const hasClaudeStep = stepRoutes.some(
+      (s) => s.route.backend === "claude-code",
+    );
+    if (
+      judge !== undefined &&
+      (input.models?.judge !== undefined || hasClaudeStep)
+    ) {
+      stepRoutes.push(judge);
+    }
   }
   return createResolvedRoutePlan(stepRoutes);
 }
