@@ -344,9 +344,9 @@ describe("generateCiWorkflowTemplate (pure)", () => {
 
   test("never embeds a secret value — references secrets by name only", () => {
     const template = generateCiWorkflowTemplate();
-    expect(template).toContain(`\${{ secrets.ANTHROPIC_API_KEY }}`);
+    expect(template).toContain(`\${{ secrets.CRYSK_CLAUDE_API_KEY }}`);
     expect(template).toContain(`\${{ secrets.GITHUB_TOKEN }}`);
-    expect(template).toContain(`\${{ secrets.OPENCODE_AUTH_JSON }}`);
+    expect(template).toContain(`\${{ secrets.CRYSK_OPENCODE_OPENAI_OAUTH }}`);
     expect(template).not.toMatch(/sk-ant-[a-z0-9-]+/i);
     expect(template).not.toMatch(/ghp_|ghs_/);
     expect(template).not.toContain("oc-ci-fixture-not-a-secret");
@@ -355,9 +355,9 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     expect(template).not.toMatch(/"type"\s*:\s*"api"/);
   });
 
-  test("wires BOTH documented credential inputs, not just the API key", () => {
+  test("wires BOTH documented Claude credentials, not just the API key", () => {
     // The `with:` comment tells the reader to provide EITHER secret. A repo
-    // that follows it and sets only CLAUDE_CODE_OAUTH_TOKEN used to send an
+    // that follows it and sets only the OAuth token used to send an
     // empty credential and never authenticate, while `pr-hero doctor` — which
     // accepts either variable — reported a healthy CI configuration. Silent
     // auth failure behind a green diagnostic; the template has to pass the
@@ -368,11 +368,12 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     const step = parsed.jobs.review.steps.find(
       (s) => s.uses === "cryskai/crysk@v0",
     ) as { with?: Record<string, string> } | undefined;
-    expect(step?.with?.["anthropic-api-key"]).toBe(
-      `\${{ secrets.ANTHROPIC_API_KEY }}`,
+    const lines = (step?.with?.["crysk-secrets"] ?? "").split("\n");
+    expect(lines).toContain(
+      `CRYSK_CLAUDE_API_KEY=\${{ secrets.CRYSK_CLAUDE_API_KEY }}`,
     );
-    expect(step?.with?.["claude-token"]).toBe(
-      `\${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`,
+    expect(lines).toContain(
+      `CRYSK_CLAUDE_OAUTH_TOKEN=\${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}`,
     );
   });
 
@@ -431,26 +432,50 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     );
   });
 
-  // Threat matrix RED (5): vars must be quoted so an unset CRYSK_ROUTING
-  // becomes the empty string instead of breaking YAML. The auth secret is
-  // referenced by name, never inlined.
-  test("quoted with.routing is vars.CRYSK_ROUTING with a vars.PRHERO_ROUTING fallback, and with.opencode-auth is secrets.OPENCODE_AUTH_JSON", () => {
-    const template = generateCiWorkflowTemplate();
-    expect(template).toContain(
-      `routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
-    );
-    const parsed = Bun.YAML.parse(template) as {
+  // E-f F4 (D1, D2): the scaffold's Run Crysk step names every CRYSK_* secret
+  // explicitly, forwards the OpenCode API keys through slots driven by
+  // vars.CRYSK_OPENCODE_PROVIDERS, and reads the models and credentials inputs
+  // from repository variables. Secrets are referenced by name, never inlined.
+  test("the Run Crysk step passes the fixed CRYSK_* secrets, five OpenCode slots and the two variables", () => {
+    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
       jobs: { review: { steps: Array<Record<string, unknown>> } };
     };
     const step = parsed.jobs.review.steps.find((s) => s.name === "Run Crysk") as
       | { with?: Record<string, string> }
       | undefined;
-    expect(step?.with?.routing).toBe(
-      `\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}`,
-    );
-    expect(step?.with?.["opencode-auth"]).toBe(
-      `\${{ secrets.OPENCODE_AUTH_JSON }}`,
-    );
+    const lines = (step?.with?.["crysk-secrets"] ?? "").trimEnd().split("\n");
+    const slot = (i: number) =>
+      `fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[${i}]`;
+    expect(lines).toEqual([
+      "CRYSK_CLAUDE_OAUTH_TOKEN=$" + "{{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}",
+      "CRYSK_CLAUDE_API_KEY=$" + "{{ secrets.CRYSK_CLAUDE_API_KEY }}",
+      "CRYSK_OPENCODE_OPENAI_OAUTH=$" +
+        "{{ secrets.CRYSK_OPENCODE_OPENAI_OAUTH }}",
+      ...[0, 1, 2, 3, 4].map(
+        (i) =>
+          `CRYSK_OPENCODE_$` +
+          `{{ ${slot(i)} }}_API_KEY=$` +
+          `{{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', ${slot(i)})] }}`,
+      ),
+    ]);
+    expect(step?.with?.models).toBe("$" + "{{ vars.CRYSK_MODELS }}");
+    expect(step?.with?.credentials).toBe("$" + "{{ vars.CRYSK_CREDENTIALS }}");
+    expect(generateCiWorkflowTemplate()).not.toContain("toJSON(secrets)");
+  });
+
+  // An unused slot renders as `CRYSK_OPENCODE__API_KEY=` on GitHub (L42), and the
+  // intake must skip all five of them, not refuse the input.
+  test("five unused slots, as GitHub renders them, parse with no problem", () => {
+    const rendered = [
+      "CRYSK_CLAUDE_OAUTH_TOKEN=token",
+      "CRYSK_CLAUDE_API_KEY=",
+      "CRYSK_OPENCODE_OPENAI_OAUTH=",
+      ...Array.from({ length: 5 }, () => "CRYSK_OPENCODE__API_KEY="),
+    ].join("\n");
+    const parse = parseCryskSecrets(rendered);
+    expect(parse.problems).toEqual([]);
+    expect(parse.secrets.claude.subscription).toBe("token");
+    expect(parse.secrets.opencode.size).toBe(0);
   });
 });
 
@@ -489,12 +514,19 @@ describe("this repo's own workflow passes the CRYSK_* secrets", () => {
     expect(own()).not.toContain("toJSON(secrets)");
   });
 
-  test("the scaffolded template still passes the old inputs until it moves (E-f)", () => {
+  test("the scaffolded template passes the CRYSK_* secrets too, never the removed inputs (E-f F4)", () => {
     const withBlock = runCryskWith(generateCiWorkflowTemplate());
-    expect(withBlock["claude-token"]).toBe(
-      "$" + "{{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+    for (const removed of [
+      "anthropic-api-key",
+      "claude-token",
+      "opencode-auth",
+      "routing",
+    ]) {
+      expect(withBlock[removed], removed).toBeUndefined();
+    }
+    expect(withBlock["crysk-secrets"]).toContain(
+      "CRYSK_CLAUDE_OAUTH_TOKEN=$" + "{{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}",
     );
-    expect(withBlock["crysk-secrets"]).toBeUndefined();
   });
 });
 
@@ -1869,35 +1901,50 @@ describe("ci init next steps (CLI)", () => {
 // exists but is empty or still the scaffold turns the first PR red
 // (CRYSK-GOTCHAS-MISSING), so that one gets the fix steps; real instructions get
 // nothing.
-describe("ci init review-instructions steps (CLI)", () => {
-  async function runInit(
-    files: Record<string, string> = {},
-  ): Promise<{ output: string; code: number }> {
-    const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-gotchas-"));
-    try {
-      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
-      for (const [rel, contents] of Object.entries(files)) {
-        await mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
-        await writeFile(path.join(dir, rel), contents);
-      }
-      const result = Bun.spawnSync(
-        [
-          process.execPath,
-          path.join(import.meta.dir, "../../src/cli.ts"),
-          "ci",
-          "init",
-        ],
-        { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
+// `ci init` through the real CLI, in a scratch repository, with a scratch HOME so
+// the person config it reads is the test's (`personConfig`), never the host's.
+async function runInit(
+  files: Record<string, string> = {},
+  personConfig?: unknown,
+): Promise<{ output: string; code: number; workflowWritten: boolean }> {
+  const root = await mkdtemp(path.join(tmpdir(), "prhero-ci-gotchas-"));
+  const dir = path.join(root, "repo");
+  const home = path.join(root, "home");
+  try {
+    await mkdir(dir, { recursive: true });
+    await mkdir(home, { recursive: true });
+    if (personConfig !== undefined) {
+      await mkdir(path.join(home, ".crysk"), { recursive: true });
+      await writeFile(
+        path.join(home, ".crysk", "config.json"),
+        JSON.stringify(personConfig),
       );
-      return {
-        output: `${result.stdout}${result.stderr}`,
-        code: result.exitCode,
-      };
-    } finally {
-      await rm(dir, { recursive: true, force: true });
     }
+    Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+    for (const [rel, contents] of Object.entries(files)) {
+      await mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+      await writeFile(path.join(dir, rel), contents);
+    }
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        path.join(import.meta.dir, "../../src/cli.ts"),
+        "ci",
+        "init",
+      ],
+      { cwd: dir, env: { ...process.env, HOME: home, NO_COLOR: "1" } },
+    );
+    return {
+      output: `${result.stdout}${result.stderr}`,
+      code: result.exitCode,
+      workflowWritten: existsSync(path.join(dir, CI_WORKFLOW_RELATIVE_PATH)),
+    };
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
+}
 
+describe("ci init review-instructions steps (CLI)", () => {
   test("a repo with no instructions file is recommended a REVIEW.md, as optional, before opening the PR", async () => {
     const { output, code } = await runInit();
     expect(code).toBe(0);
@@ -1963,6 +2010,84 @@ describe("ci init review-instructions steps (CLI)", () => {
     const { output } = await runInit();
     expect(output).toContain(
       "require the `crysk` status check (not the `review` job; the legacy `pr-hero` status is still posted for one version, so an existing rule on `pr-hero` keeps working)",
+    );
+  });
+});
+
+// E-f F4 (D1, D2): the scaffolded workflow reads the models, the credential order
+// and the OpenCode providers from repository variables, so `ci init` prints the
+// commands that set them from the person's own config, and the CRYSK_* secrets.
+describe("ci init prints the CRYSK_* secrets and the workflow variables (CLI)", () => {
+  test("a person config with models, credentials and an OpenCode provider gets every command", async () => {
+    const { output, code } = await runInit(
+      {},
+      {
+        models: {
+          default: ["claude:sonnet-latest"],
+          "hunter.logic": ["opencode:deepseek/deepseek-chat"],
+        },
+        credentials: { claude: ["api_key", "subscription"] },
+      },
+    );
+    expect(code).toBe(0);
+    expect(output).toContain("$ gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
+    expect(output).toContain("$ gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY");
+    expect(output).toContain(
+      '$ gh variable set CRYSK_MODELS --body "$(jq -c .models ~/.crysk/config.json)"',
+    );
+    expect(output).toContain(
+      '$ gh variable set CRYSK_CREDENTIALS --body "$(jq -c .credentials ~/.crysk/config.json)"',
+    );
+    expect(output).toContain(
+      `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["DEEPSEEK"]'`,
+    );
+    expect(output).not.toMatch(
+      /ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|OPENCODE_AUTH_JSON/,
+    );
+  });
+
+  test("the judge's models are not forwarded, and OpenAI also gets its subscription command", async () => {
+    const { output } = await runInit(
+      {},
+      {
+        models: {
+          default: ["opencode:openai/gpt-5"],
+          judge: ["opencode:groq/llama"],
+        },
+      },
+    );
+    expect(output).toContain(
+      `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'`,
+    );
+    expect(output).toContain("gh secret set CRYSK_OPENCODE_OPENAI_OAUTH");
+    expect(output).not.toContain("CRYSK_CREDENTIALS");
+    expect(output).not.toContain("GROQ");
+  });
+
+  test("without a person config no variable is printed", async () => {
+    const { output, code } = await runInit();
+    expect(code).toBe(0);
+    expect(output).toContain("$ gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
+    expect(output).not.toContain("gh variable set");
+  });
+
+  test("models naming six OpenCode providers are refused before anything is written", async () => {
+    const providers = ["a1", "b2", "c3", "d4", "e5", "f6"];
+    const { output, code, workflowWritten } = await runInit(
+      {},
+      {
+        models: Object.fromEntries(
+          providers.map((p, i) => [
+            i === 0 ? "default" : `hunter.h${i}`,
+            [`opencode:${p}/model`],
+          ]),
+        ),
+      },
+    );
+    expect(code).toBe(1);
+    expect(workflowWritten).toBe(false);
+    expect(output).toContain(
+      "name 6 OpenCode providers (a1, b2, c3, d4, e5, f6), but the workflow forwards the keys of at most 5",
     );
   });
 });

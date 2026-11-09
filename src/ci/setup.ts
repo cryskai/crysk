@@ -41,11 +41,18 @@ import {
   type CryskSecretsParse,
   chooseOpenCodeSecret,
   cryskSecretsPresence,
+  MAX_OPENCODE_PROVIDER_SLOTS,
+  OPENCODE_OAUTH_SECRET_PROVIDER,
   opencodeSecretsFor,
   opencodeSecretToken,
   parseCryskSecrets,
 } from "#ci/crysk-secrets";
-import type { ErrorClass, SetupRecord } from "#ci/outcome";
+import {
+  CREDENTIALS_INPUT_LINE,
+  type ErrorClass,
+  MODELS_INPUT_LINE,
+  type SetupRecord,
+} from "#ci/outcome";
 import { appendGithubOutput } from "#ci/platform";
 import {
   assertPlatformPerson,
@@ -163,10 +170,11 @@ export interface CiWorkflowTemplateOptions {
   // scaffolded file names the gate and does not inherit it silently. `advisory`
   // keeps the status green whatever the review finds, as before S4.
   mode?: "gate" | "advisory";
-  // U5 (odd/tasks/role-model-routing.md, S8): the CRYSK_* secrets this workflow
-  // passes in the action's `crysk-secrets` input, one line each. Set, it replaces
-  // the removed credential inputs. Only THIS repo's own workflow sets it for now;
-  // the scaffolded template moves with E-f, so a scaffolded file is unchanged.
+  // U5 (odd/tasks/role-model-routing.md, S8): the only CRYSK_* secrets this
+  // workflow passes in the action's `crysk-secrets` input, one line each, with no
+  // OpenCode slots and no models or credentials input. Only THIS repo's own
+  // workflow sets it; unset, the scaffolded block (E-f F4) names the Claude pair,
+  // the OpenAI OAuth record, the OpenCode slots and the two variables.
   cryskSecrets?: readonly string[];
 }
 
@@ -202,48 +210,78 @@ export const OWN_CI_WORKFLOW_OPTIONS: CiWorkflowTemplateOptions = {
   cryskSecrets: ["CRYSK_CLAUDE_OAUTH_TOKEN", "CRYSK_CLAUDE_API_KEY"],
 };
 
-// The credential lines of the Run Crysk step's `with:` block. The removed inputs,
-// unless the options name CRYSK_* secrets.
+// The secrets every scaffolded workflow names: the Claude pair and the one OpenCode
+// OAuth record the engine reads (OPENCODE_OAUTH_SECRET_PROVIDER), as the platform's
+// stub names them. A secret the repository does not have arrives empty.
+const SCAFFOLD_FIXED_SECRETS: readonly string[] = [
+  "CRYSK_CLAUDE_OAUTH_TOKEN",
+  "CRYSK_CLAUDE_API_KEY",
+  `CRYSK_OPENCODE_${opencodeSecretToken(OPENCODE_OAUTH_SECRET_PROVIDER)}_OAUTH`,
+];
+
+// The repository variable listing the OpenCode providers a scaffolded workflow
+// forwards keys for, as a JSON array of secret tokens (["DEEPSEEK"]). `crysk ci init`
+// prints the command that sets it.
+export const OPENCODE_PROVIDERS_VARIABLE = "CRYSK_OPENCODE_PROVIDERS";
+
+// D2 (odd/tasks/role-model-routing.md L40-L42): slot i forwards
+// CRYSK_OPENCODE_<token i>_API_KEY, the token read from the variable above, so a
+// new provider needs a variable change, not a workflow edit. With the variable
+// unset, or fewer providers than slots, a slot renders as `CRYSK_OPENCODE__API_KEY=`
+// (verified on GitHub, run 42559256131), which the intake skips. The `|| '[]'`
+// keeps an unset variable valid JSON for fromJSON.
+function openCodeSlotLine(index: number): string {
+  const token = `fromJSON(vars.${OPENCODE_PROVIDERS_VARIABLE} || '[]')[${index}]`;
+  return `CRYSK_OPENCODE_\${{ ${token} }}_API_KEY=\${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', ${token})] }}`;
+}
+
+// The credential lines of the Run Crysk step's `with:` block. A scaffolded repo
+// gets every Claude and OpenCode line plus the models and credentials inputs from
+// repository variables (D1, D2); this repo's own workflow names its secrets
+// (`cryskSecrets`) and nothing else.
 function credentialWithLines(options: CiWorkflowTemplateOptions): string {
-  if (options.cryskSecrets === undefined) return LEGACY_CREDENTIAL_WITH_LINES;
-  const lines = options.cryskSecrets
-    .map((name) => `            ${name}=\${{ secrets.${name} }}`)
+  const names = options.cryskSecrets ?? SCAFFOLD_FIXED_SECRETS;
+  const lines = [
+    ...names.map((name) => `${name}=\${{ secrets.${name} }}`),
+    ...(options.cryskSecrets === undefined
+      ? Array.from({ length: MAX_OPENCODE_PROVIDER_SLOTS }, (_, i) =>
+          openCodeSlotLine(i),
+        )
+      : []),
+  ]
+    .map((line) => `            ${line}`)
     .join("\n");
-  return `          # The Crysk credentials: one CRYSK_* secret per line, each named
+  const block = `          # The Crysk credentials: one CRYSK_* secret per line, each named
           # explicitly (never the whole secrets context, which would hand the
           # action every secret of the repository). A secret the repository does not have
-          # arrives empty and counts as absent, so both Claude lines stay. With
-          # both set, credentials.claude picks one (the subscription first).
+          # arrives empty and counts as absent, so every line stays. With
+          # both Claude secrets set, credentials.claude picks one (the subscription first).
           #   CRYSK_CLAUDE_OAUTH_TOKEN — from \`claude setup-token\`: a long-lived
           #     (~1 year) token that draws on your Claude subscription. The
           #     session token \`/login\` leaves in the keychain expires in hours.
-          #   CRYSK_CLAUDE_API_KEY     — pay-as-you-go key (billed per token).
+          #   CRYSK_CLAUDE_API_KEY     — pay-as-you-go key (billed per token).`;
+  if (options.cryskSecrets !== undefined) {
+    return `${block}
           crysk-secrets: |
 ${lines}`;
+  }
+  return `${block}
+          #   CRYSK_OPENCODE_OPENAI_OAUTH — an OpenAI (ChatGPT) subscription for
+          #     OpenCode: the openai record of OpenCode's auth.json, base64 on one line.
+          #   CRYSK_OPENCODE_<PROVIDER>_API_KEY — an OpenCode provider's API key,
+          #     <PROVIDER> being its id uppercased with - and . as _. The ${MAX_OPENCODE_PROVIDER_SLOTS}
+          #     lines after the fixed ones forward the providers listed in
+          #     vars.${OPENCODE_PROVIDERS_VARIABLE} (a JSON array, e.g. ["DEEPSEEK"]);
+          #     an unused line renders as CRYSK_OPENCODE__API_KEY= and is skipped.
+          # \`crysk ci init\` prints the commands that set these secrets and variables.
+          crysk-secrets: |
+${lines}
+          # The models per role and the Claude credential order, as JSON, from
+          # repository variables. Unset, every role runs the default Claude model
+          # and the subscription is tried first.
+          ${MODELS_INPUT_LINE}
+          ${CREDENTIALS_INPUT_LINE}`;
 }
-
-const LEGACY_CREDENTIAL_WITH_LINES = `          # Provide a Claude credential and/or OpenCode auth (never leave every
-          # credential blank). Inputs are wired unconditionally: an unset secret
-          # or var expands to empty, which the action treats as absent, so
-          # leaving the one you do not use in place costs nothing. Deleting the
-          # line for the secret you DID set is what breaks — the credential
-          # never reaches the action, and it fails to authenticate silently.
-          #   ANTHROPIC_API_KEY       — pay-as-you-go key (billed per token via Anthropic Console), or
-          #   CLAUDE_CODE_OAUTH_TOKEN — from \`claude setup-token\`: a long-lived
-          #     (~1 year) token that draws on your Claude subscription at no
-          #     extra API cost. It must come from that command. The session
-          #     token \`/login\` leaves in the keychain expires in HOURS and is
-          #     kept alive by a refresh token CI does not have, so pasting that
-          #     one here yields a secret that works for a day and then breaks
-          #     reviews with no signal.
-          #   OPENCODE_AUTH_JSON      — whole OpenCode auth.json store
-          #   vars.CRYSK_ROUTING      — person-layer routing JSON; quoted so an
-          #     unset var is the empty string rather than broken YAML. The
-          #     older vars.PRHERO_ROUTING is read when this one is unset.
-          anthropic-api-key: \${{ secrets.ANTHROPIC_API_KEY }}
-          claude-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"
-          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}`;
 
 export function generateCiWorkflowTemplate(
   options: CiWorkflowTemplateOptions = {},
@@ -794,7 +832,7 @@ async function writeOwnerOnlyFile(file: string, body: string): Promise<void> {
 // shape of a list entry (E-g) is a type error here, never a silent skip. Models
 // that do not parse yield none; assertPlatformPerson and readConfigInput refuse
 // them by name before this runs.
-function openCodeProvidersOfModels(models: unknown): string[] {
+export function openCodeProvidersOfModels(models: unknown): string[] {
   if (models === undefined) return [];
   let config: ModelsConfig;
   try {

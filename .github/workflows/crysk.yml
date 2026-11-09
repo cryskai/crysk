@@ -221,8 +221,8 @@ jobs:
           # The Crysk credentials: one CRYSK_* secret per line, each named
           # explicitly (never the whole secrets context, which would hand the
           # action every secret of the repository). A secret the repository does not have
-          # arrives empty and counts as absent, so both Claude lines stay. With
-          # both set, credentials.claude picks one (the subscription first).
+          # arrives empty and counts as absent, so every line stays. With
+          # both Claude secrets set, credentials.claude picks one (the subscription first).
           #   CRYSK_CLAUDE_OAUTH_TOKEN — from `claude setup-token`: a long-lived
           #     (~1 year) token that draws on your Claude subscription. The
           #     session token `/login` leaves in the keychain expires in hours.

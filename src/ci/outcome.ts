@@ -1253,8 +1253,12 @@ const OPENCODE_CREDENTIAL_FIXES = [
   "$ gh run rerun {runId}",
 ] as const;
 
-// The `models` input as a workflow writes it (D1), spliced like the inputs above.
-const MODELS_INPUT_LINE = "models: $" + "{{ vars.CRYSK_MODELS }}";
+// The `models` and `credentials` inputs as a workflow writes them (D1), spliced like
+// the inputs above. The scaffolded workflow (src/ci/setup.ts) writes these lines, so
+// a fix that quotes them cannot disagree with the file the person has.
+export const MODELS_INPUT_LINE = "models: $" + "{{ vars.CRYSK_MODELS }}";
+export const CREDENTIALS_INPUT_LINE =
+  "credentials: $" + "{{ vars.CRYSK_CREDENTIALS }}";
 // One line of the crysk-secrets input as a workflow writes it, spliced like the
 // inputs above. `{name}` is not a catalog placeholder here: the caller passes a name.
 function cryskSecretsLine(name: string): string {

@@ -118,6 +118,13 @@ const PROVIDER_ID_RE = /^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$/;
 const EMPTY_OPENCODE_SLOT_NAME = "CRYSK_OPENCODE__API_KEY";
 const EMPTY_OPENCODE_SLOT_LINE = `${EMPTY_OPENCODE_SLOT_NAME}=`;
 
+// How many OpenCode provider slots a workflow carries, so the most OpenCode
+// providers one review's models may name. The scaffolded workflow (E-f F4, D2)
+// has this many slot lines, driven by vars.CRYSK_OPENCODE_PROVIDERS, and
+// `crysk ci init` refuses models that name more. The platform's stub has the
+// same count (its MAX_OPENCODE_PROVIDERS).
+export const MAX_OPENCODE_PROVIDER_SLOTS = 5;
+
 const SPLIT_HINT =
   "(a value split across lines? encode _OAUTH secrets with base64 -w0)";
 

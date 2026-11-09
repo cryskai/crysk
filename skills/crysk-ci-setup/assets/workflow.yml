@@ -126,26 +126,35 @@ jobs:
         uses: cryskai/crysk@v0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          # Provide a Claude credential and/or OpenCode auth (never leave every
-          # credential blank). Inputs are wired unconditionally: an unset secret
-          # or var expands to empty, which the action treats as absent, so
-          # leaving the one you do not use in place costs nothing. Deleting the
-          # line for the secret you DID set is what breaks — the credential
-          # never reaches the action, and it fails to authenticate silently.
-          #   ANTHROPIC_API_KEY       — pay-as-you-go key (billed per token via Anthropic Console), or
-          #   CLAUDE_CODE_OAUTH_TOKEN — from `claude setup-token`: a long-lived
-          #     (~1 year) token that draws on your Claude subscription at no
-          #     extra API cost. It must come from that command. The session
-          #     token `/login` leaves in the keychain expires in HOURS and is
-          #     kept alive by a refresh token CI does not have, so pasting that
-          #     one here yields a secret that works for a day and then breaks
-          #     reviews with no signal.
-          #   OPENCODE_AUTH_JSON      — whole OpenCode auth.json store
-          #   vars.CRYSK_ROUTING      — person-layer routing JSON; quoted so an
-          #     unset var is the empty string rather than broken YAML. The
-          #     older vars.PRHERO_ROUTING is read when this one is unset.
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          routing: "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"
-          opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
+          # The Crysk credentials: one CRYSK_* secret per line, each named
+          # explicitly (never the whole secrets context, which would hand the
+          # action every secret of the repository). A secret the repository does not have
+          # arrives empty and counts as absent, so every line stays. With
+          # both Claude secrets set, credentials.claude picks one (the subscription first).
+          #   CRYSK_CLAUDE_OAUTH_TOKEN — from `claude setup-token`: a long-lived
+          #     (~1 year) token that draws on your Claude subscription. The
+          #     session token `/login` leaves in the keychain expires in hours.
+          #   CRYSK_CLAUDE_API_KEY     — pay-as-you-go key (billed per token).
+          #   CRYSK_OPENCODE_OPENAI_OAUTH — an OpenAI (ChatGPT) subscription for
+          #     OpenCode: the openai record of OpenCode's auth.json, base64 on one line.
+          #   CRYSK_OPENCODE_<PROVIDER>_API_KEY — an OpenCode provider's API key,
+          #     <PROVIDER> being its id uppercased with - and . as _. The 5
+          #     lines after the fixed ones forward the providers listed in
+          #     vars.CRYSK_OPENCODE_PROVIDERS (a JSON array, e.g. ["DEEPSEEK"]);
+          #     an unused line renders as CRYSK_OPENCODE__API_KEY= and is skipped.
+          # `crysk ci init` prints the commands that set these secrets and variables.
+          crysk-secrets: |
+            CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}
+            CRYSK_CLAUDE_API_KEY=${{ secrets.CRYSK_CLAUDE_API_KEY }}
+            CRYSK_OPENCODE_OPENAI_OAUTH=${{ secrets.CRYSK_OPENCODE_OPENAI_OAUTH }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[0] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[0])] }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[1] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[1])] }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[2] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[2])] }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[3] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[3])] }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[4] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[4])] }}
+          # The models per role and the Claude credential order, as JSON, from
+          # repository variables. Unset, every role runs the default Claude model
+          # and the subscription is tried first.
+          models: ${{ vars.CRYSK_MODELS }}
+          credentials: ${{ vars.CRYSK_CREDENTIALS }}
           mode: gate

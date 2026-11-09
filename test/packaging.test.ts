@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -562,11 +563,23 @@ describe("Packaging & distribution configuration", () => {
             : [],
         );
       };
-      // The scaffolded template (E-f moves it): still the removed inputs, which
-      // stay declared so the trigger can name them.
+      // The scaffolded template (E-f F4): the CRYSK_* secrets and the two
+      // variable-fed inputs, and none of the removed inputs, which stay declared
+      // only so the trigger can name them.
       const scaffolded = keysOf(generateCiWorkflowTemplate());
       expect(scaffolded.length).toBeGreaterThan(0);
       for (const key of scaffolded) expect(declared).toContain(key);
+      for (const key of ["crysk-secrets", "models", "credentials"]) {
+        expect(scaffolded).toContain(key);
+      }
+      for (const removed of [
+        "anthropic-api-key",
+        "claude-token",
+        "opencode-auth",
+        "routing",
+      ]) {
+        expect(scaffolded).not.toContain(removed);
+      }
       const workflow = Bun.YAML.parse(
         generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS),
       ) as {
@@ -693,6 +706,13 @@ describe("Packaging & distribution configuration", () => {
           )?.[1];
         if (fallback !== undefined) return input(fallback);
         if (expr === "steps.platform.outputs.github-actor") return "";
+        // The setup step's platform bindings, unset in a standalone run.
+        if (expr === "steps.platform.outputs.config-file") {
+          return ctx.platform?.["config-file"] ?? "";
+        }
+        if (expr === "steps.platform.outputs.github-token != ''") {
+          return String((ctx.platform?.["github-token"] ?? "") !== "");
+        }
         // The models in effect: the platform's answer when it sent models,
         // the models input's otherwise.
         if (expr === EFFECTIVE_OPENCODE_ROUTING) {
@@ -1528,6 +1548,214 @@ describe("Packaging & distribution configuration", () => {
         expect(run.record).not.toContain(value);
       },
     );
+
+    // E-f F4 (odd/tasks/role-model-routing.md, D1, D2): the workflow `crysk ci
+    // init` scaffolds, its Run Crysk `with:` evaluated the way GitHub would for a
+    // repository holding every secret the file names, then run through the
+    // action's trigger, setup and run steps. Before F4 the scaffold passed the
+    // removed inputs, so a person who set the secrets it named was stopped with
+    // CRYSK-INPUT-REMOVED.
+    describe("the scaffolded workflow reviews", () => {
+      interface WorkflowContext {
+        secrets: Record<string, string>;
+        vars: Record<string, string>;
+      }
+      // fromJSON(vars.X || '[]')[i]: the i-th token, or null past the end, which
+      // GitHub renders as the empty string.
+      const slotToken = (
+        variable: string,
+        index: string,
+        ctx: WorkflowContext,
+      ): string => {
+        const list = JSON.parse(ctx.vars[variable] || "[]") as unknown[];
+        const token = list[Number(index)];
+        return typeof token === "string" ? token : "";
+      };
+      const SLOT = String.raw`fromJSON\(vars\.(\w+) \|\| '\[\]'\)\[(\d+)\]`;
+      // The expression shapes a scaffolded `with:` uses; anything else throws, so
+      // a new shape fails here instead of resolving to a guess.
+      function resolveWorkflowExpr(expr: string, ctx: WorkflowContext): string {
+        const secret = /^secrets\.(\w+)$/.exec(expr)?.[1];
+        if (secret !== undefined) return ctx.secrets[secret] ?? "";
+        const variable = /^vars\.(\w+)$/.exec(expr)?.[1];
+        if (variable !== undefined) return ctx.vars[variable] ?? "";
+        const either = /^vars\.(\w+) \|\| vars\.(\w+)$/.exec(expr);
+        if (either !== null) {
+          return ctx.vars[either[1] ?? ""] || (ctx.vars[either[2] ?? ""] ?? "");
+        }
+        const slot = new RegExp(`^${SLOT}$`).exec(expr);
+        if (slot !== null) return slotToken(slot[1] ?? "", slot[2] ?? "", ctx);
+        const slotSecret = new RegExp(
+          String.raw`^secrets\[format\('CRYSK_OPENCODE_\{0\}_API_KEY', ${SLOT}\)\]$`,
+        ).exec(expr);
+        if (slotSecret !== null) {
+          const token = slotToken(
+            slotSecret[1] ?? "",
+            slotSecret[2] ?? "",
+            ctx,
+          );
+          return ctx.secrets[`CRYSK_OPENCODE_${token}_API_KEY`] ?? "";
+        }
+        throw new Error(`unsupported expression in a workflow with: ${expr}`);
+      }
+      // The scaffold's Run Crysk `with:` as the action receives it.
+      function scaffoldInputs(ctx: WorkflowContext): Record<string, string> {
+        const workflow = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
+          jobs: {
+            review: {
+              steps: Array<{ uses?: string; with?: Record<string, unknown> }>;
+            };
+          };
+        };
+        const step = workflow.jobs.review.steps.find((s) =>
+          s.uses?.startsWith("cryskai/crysk@"),
+        );
+        return Object.fromEntries(
+          Object.entries(step?.with ?? {}).map(([key, value]) => [
+            key,
+            String(value).replace(
+              /\$\{\{\s*(.+?)\s*\}\}/g,
+              (_m, expr: string) => resolveWorkflowExpr(expr, ctx),
+            ),
+          ]),
+        );
+      }
+      // Every `secrets.NAME` the scaffold names, each holding a value of its
+      // kind (an `_OAUTH` secret is a base64 login record).
+      const OAUTH_RECORD = Buffer.from(
+        JSON.stringify({
+          type: "oauth",
+          access: "value-of-access",
+          refresh: "value-of-refresh",
+          expires: 1_900_000_000_000,
+        }),
+      ).toString("base64");
+      function everyNamedSecret(): Record<string, string> {
+        const names = new Set(
+          [
+            ...generateCiWorkflowTemplate().matchAll(/secrets\.([A-Z]\w*)/g),
+          ].map((m) => m[1] ?? ""),
+        );
+        names.delete("GITHUB_TOKEN");
+        return Object.fromEntries(
+          [...names].map((name) => [
+            name,
+            name.endsWith("_OAUTH") ? OAUTH_RECORD : `value-of-${name}`,
+          ]),
+        );
+      }
+      const pullRequest = {
+        repository: REPOSITORY,
+        event_name: "pull_request",
+        "event.pull_request.number": "12",
+        "event.pull_request.head.repo.full_name": REPOSITORY,
+        "event.pull_request.head.sha": HEAD,
+      };
+
+      // action.yml's own setup step script, under the runner's bash flags, with
+      // the step's own env bindings resolved from the inputs.
+      function runSetupStep(inputs: Record<string, string>): {
+        exitCode: number;
+        output: string;
+        authFile: string | undefined;
+        stderr: string;
+      } {
+        const root = mkdtempSync(path.join(os.tmpdir(), "crysk-scaffold-"));
+        try {
+          const home = path.join(root, "home");
+          const workspace = path.join(root, "workspace");
+          const runnerTemp = path.join(root, "runner");
+          mkdirSync(home);
+          mkdirSync(workspace);
+          mkdirSync(path.join(runnerTemp, "pr-hero-outcome"), {
+            recursive: true,
+          });
+          Bun.spawnSync(["git", "init", "-q"], { cwd: workspace });
+          const githubOutput = path.join(root, "github-output");
+          writeFileSync(githubOutput, "");
+          const setup = steps().find((step) => step.id === "materialize");
+          const env = resolveEnv(setup?.env ?? {}, {
+            inputs,
+            github: pullRequest,
+            trigger: {},
+            runner: { temp: runnerTemp },
+          });
+          const script = (setup?.run ?? "").replaceAll(
+            `\${{ github.action_path }}`,
+            rootDir,
+          );
+          const result = Bun.spawnSync(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+            {
+              cwd: workspace,
+              env: {
+                ...env,
+                PATH: process.env.PATH ?? "",
+                HOME: home,
+                GITHUB_OUTPUT: githubOutput,
+                XDG_DATA_HOME: "",
+              },
+            },
+          );
+          const authPath = path.join(
+            home,
+            ".local",
+            "share",
+            "opencode",
+            "auth.json",
+          );
+          return {
+            exitCode: result.exitCode,
+            output: readFileSync(githubOutput, "utf8"),
+            authFile: existsSync(authPath)
+              ? readFileSync(authPath, "utf8")
+              : undefined,
+            stderr: result.stderr.toString(),
+          };
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }
+
+      test("with every secret it names set and no variables, the trigger lets the review run and setup succeeds", async () => {
+        const inputs = scaffoldInputs({
+          secrets: everyNamedSecret(),
+          vars: {},
+        });
+        const run = await runAction(inputs, pullRequest);
+        expect(JSON.parse(run.record ?? "{}").decision).toBe("review");
+        expect(run.trigger.run).toBe("true");
+        expect(run.args?.slice(0, 3)).toEqual(["review", "--pr", "12"]);
+        const setup = runSetupStep(inputs);
+        expect(setup.stderr).toBe("");
+        expect(setup.exitCode).toBe(0);
+        expect(setup.output).toContain("crysk-secrets=");
+        expect(setup.authFile).toBeUndefined();
+      });
+
+      test("an OpenCode provider listed in vars.CRYSK_OPENCODE_PROVIDERS reaches the setup step through its slot", async () => {
+        const inputs = scaffoldInputs({
+          secrets: {
+            CRYSK_CLAUDE_OAUTH_TOKEN: "value-of-oauth",
+            CRYSK_OPENCODE_DEEPSEEK_API_KEY: "value-of-deepseek",
+          },
+          vars: {
+            CRYSK_MODELS: JSON.stringify({
+              default: ["opencode:deepseek/deepseek-chat"],
+            }),
+            CRYSK_OPENCODE_PROVIDERS: '["DEEPSEEK"]',
+          },
+        });
+        const run = await runAction(inputs, pullRequest);
+        expect(run.trigger.run).toBe("true");
+        const setup = runSetupStep(inputs);
+        expect(setup.exitCode).toBe(0);
+        expect(setup.output).toContain("opencode-auth-file=true");
+        expect(JSON.parse(setup.authFile ?? "{}")).toEqual({
+          deepseek: { type: "api", key: "value-of-deepseek" },
+        });
+      });
+    });
 
     test("a run with no credential never reaches the CLI: no marker, and a no-credentials record", async () => {
       const run = await runAction(

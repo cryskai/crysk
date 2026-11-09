@@ -58,7 +58,7 @@ describe("askChoices", () => {
     });
     expect(asked.some((q) => /changed lines/i.test(q))).toBe(true);
     expect(asked.some((q) => /ceiling/i.test(q))).toBe(false);
-    expect(lines.join("\n")).toContain("ANTHROPIC_API_KEY");
+    expect(lines.join("\n")).toContain("CRYSK_CLAUDE_API_KEY");
     // S5: a key alone no longer brings the ceiling back; the order decides.
     expect(lines.join("\n")).toContain("credentials.claude");
     expect(lines.join("\n")).not.toContain("budget-usd: 0");

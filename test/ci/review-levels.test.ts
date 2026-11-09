@@ -180,7 +180,7 @@ describe("renderChoicesSummary", () => {
     expect(text).toContain("once_per_pr, at most 1 automatic pass per PR");
     expect(text).toContain("advisory");
     expect(text).toContain(
-      "not set: no ceiling while the repo has no ANTHROPIC_API_KEY or OPENCODE_AUTH_JSON",
+      "not set: no ceiling while the review runs on CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model",
     );
     expect(text).toContain("observe only     yes");
     expect(text).toContain("gen/**");

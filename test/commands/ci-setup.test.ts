@@ -159,7 +159,7 @@ describe("ciSetupCommand with gh missing", () => {
       const { deps, lines } = fakeDeps([MISSING]);
       const code = await ciSetupCommand(
         { repo: dir, repoExplicit: true } as CliOptions,
-        { gh: deps, interactive: false },
+        { gh: deps, interactive: false, home: path.join(dir, "no-home") },
       );
       expect(code).toBe(0);
       expect(
@@ -208,7 +208,11 @@ describe("setup --ci review choices (CLI)", () => {
         "--ci",
         ...args,
       ],
-      { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
+      // A HOME with no person config, so the host's never shapes the output.
+      {
+        cwd: dir,
+        env: { ...process.env, HOME: path.join(dir, "no-home"), NO_COLOR: "1" },
+      },
     );
     // A repo seeded with the pre-rename file keeps it; a fresh one gets crysk.yml.
     const fresh = path.join(dir, ".github", "workflows", "crysk.yml");
@@ -269,7 +273,7 @@ describe("setup --ci review choices (CLI)", () => {
       });
       expect(r.output).not.toContain("nobody chose");
       expect(r.output).toContain(
-        "CLAUDE_CODE_OAUTH_TOKEN (create it with `claude setup-token`)",
+        "CRYSK_CLAUDE_OAUTH_TOKEN (create the value with `claude setup-token`)",
       );
     } finally {
       await rm(r.dir, { recursive: true, force: true });
@@ -505,6 +509,7 @@ describe("ciSetupCommand at a terminal", () => {
         {
           gh: deps,
           interactive: true,
+          home: path.join(dir, "no-home"),
           prompter: {
             choose: async (q, options) => {
               const a = take(q);
@@ -561,6 +566,7 @@ describe("ciSetupCommand with a broken .cryskignore", () => {
         ciSetupCommand({ repo: dir, repoExplicit: true } as CliOptions, {
           gh: deps,
           interactive: true,
+          home: path.join(dir, "no-home"),
           prompter: {
             choose: async (_q, options, def) => {
               const a = take();
