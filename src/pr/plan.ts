@@ -32,6 +32,7 @@ import {
   type CiAdmissionLedgerState,
   publishCiSkip,
   settleCiGateSkip,
+  settleClaudeCredentialRefusal,
 } from "#pr/admission";
 import { ghRepoWebUrl } from "#pr/pr";
 import {
@@ -222,6 +223,9 @@ export async function resolvePrPlanAndConfirm(params: {
     materialityEnabled:
       resolveMaterialityGate(params.config) && !params.skipDiscovery,
     claudeRun: params.claudeRun,
+  }).catch(async (error: unknown) => {
+    await settleClaudeCredentialRefusal(params.ciAdmissionLedger, error);
+    throw error;
   });
   const routePlan = productionRoute?.routePlan;
   const productionAdmission = productionRoute?.productionAdmission;

@@ -11,6 +11,7 @@ import {
   claudeRunEnv,
   clearCryskClaudeIntake,
   cryskIntakeEnv,
+  defaultClaudeLoginPresent,
   resolveRunClaudeCredential,
   selectClaudeCredential,
   takeCryskClaudeSecrets,
@@ -361,5 +362,78 @@ describe("the crysk-secrets intake", () => {
     } finally {
       clearCryskClaudeIntake();
     }
+  });
+});
+
+// R001 (#494): a Mac's login is the Keychain item, not the `security` binary being
+// installed. Every probe is injected: no test reads the real Keychain or HOME.
+describe("the machine's Claude login", () => {
+  const HOME = "/home/crysk-test";
+  const STORE = `${HOME}/.claude/.credentials.json`;
+  const mac = (files: readonly string[], item: boolean) => {
+    const asked: string[] = [];
+    return {
+      asked,
+      probe: {
+        platform: "darwin" as const,
+        existsFn: (p: string) => p === "/usr/bin/security" || files.includes(p),
+        keychainProbe: () => {
+          asked.push("keychain");
+          return item;
+        },
+      },
+    };
+  };
+
+  test("a Mac with no Keychain item and no OAuth store has no login", () => {
+    const { probe } = mac([], false);
+    expect(defaultClaudeLoginPresent({ HOME }, probe)).toBe(false);
+  });
+
+  test("a Mac with the Keychain item has a login", () => {
+    const { probe } = mac([], true);
+    expect(defaultClaudeLoginPresent({ HOME }, probe)).toBe(true);
+  });
+
+  test("the OAuth store counts on any host, and Linux never asks the Keychain", () => {
+    const asked: string[] = [];
+    const linux = (files: readonly string[]) => ({
+      platform: "linux" as const,
+      existsFn: (p: string) => files.includes(p),
+      keychainProbe: () => {
+        asked.push("keychain");
+        return true;
+      },
+    });
+    expect(defaultClaudeLoginPresent({ HOME }, linux([STORE]))).toBe(true);
+    expect(defaultClaudeLoginPresent({ HOME }, linux([]))).toBe(false);
+    expect(asked).toEqual([]);
+    expect(defaultClaudeLoginPresent({ HOME }, mac([STORE], false).probe)).toBe(
+      true,
+    );
+  });
+
+  test("a Mac with only an API key runs on the key, which stays in the child env", () => {
+    const env = { HOME, ANTHROPIC_API_KEY: "sk-test" };
+    const { probe } = mac([], false);
+    const selection = selectClaudeCredential(
+      undefined,
+      claudeCredentialPresence(env, defaultClaudeLoginPresent(env, probe)),
+    );
+    expect(selection.status).toBe("chosen");
+    if (selection.status !== "chosen") return;
+    expect(selection.kind).toBe("api_key");
+    expect(claudeRunEnv(env, selection).ANTHROPIC_API_KEY).toBe("sk-test");
+  });
+
+  test("a Mac with neither a login nor a key is refused before spend", () => {
+    const env = { HOME };
+    const { probe } = mac([], false);
+    const selection = selectClaudeCredential(
+      undefined,
+      claudeCredentialPresence(env, defaultClaudeLoginPresent(env, probe)),
+    );
+    expect(selection.status).toBe("none");
+    expect(claudeCredentialRefusal(selection, true)).toBeDefined();
   });
 });
