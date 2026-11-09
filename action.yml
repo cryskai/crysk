@@ -211,9 +211,9 @@ runs:
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         # Presence only, never the models text: whether the models in effect
         # name OpenCode. It names the backend of a no-credential outcome. The
-        # platform's models win over the models input (D1): its output is `true`
-        # or `false` when the platform sent models, and empty otherwise (then the
-        # input decides). The routing input no longer counts: a value there
+        # platform's person layer wins whole over the models input (D1): its
+        # output is `true` or `false` when the platform sent a non-empty person
+        # layer, models or not, and empty otherwise (then the input decides). The routing input no longer counts: a value there
         # stops the run (HAS_ROUTING above).
         HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.models, 'opencode:')) }}
         # The attempt of this run. A re-run keeps the run id, so the record names
