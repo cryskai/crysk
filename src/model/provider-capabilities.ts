@@ -461,7 +461,9 @@ export function claudeCredentialProjectionReady(
 // — pr-hero found its own gate refusing exactly that machine class) and the
 // Linux-style ~/.claude/.credentials.json. The default probe never spawns
 // claude; the keychain query is metadata-only (no -w), proven non-interactive.
-function defaultKeychainCredentialPresent(): boolean {
+// Exported for the run's login probe (security/claude-credential.ts), which asks
+// the same question: is there a Keychain item the broker could project.
+export function defaultKeychainCredentialPresent(): boolean {
   return (
     Bun.spawnSync([
       "/usr/bin/security",
