@@ -1194,20 +1194,28 @@ const CRYSK_SECRETS_FIXES = [
 // renders that function's own text, so a change on either side fails it.
 const UNSUPPORTED_OAUTH_DETAIL_RE =
   /^CRYSK_OPENCODE_[A-Z0-9_]+_OAUTH is an OpenCode subscription record, which Crysk reads only for openai for now; set (CRYSK_OPENCODE_[A-Z0-9_]+_API_KEY) instead$/;
-function unsupportedOAuthApiKeyName(detail: string): string | undefined {
-  return UNSUPPORTED_OAUTH_DETAIL_RE.exec(detail.trim())?.[1];
+// Setup joins one refusal per provider with "; ". The fix applies only when
+// every part is such a refusal, and then names each provider's _API_KEY.
+function unsupportedOAuthApiKeyNames(detail: string): string[] | undefined {
+  const names: string[] = [];
+  for (const part of detail.split(/; (?=CRYSK_OPENCODE_[A-Z0-9_]+_OAUTH )/)) {
+    const name = UNSUPPORTED_OAUTH_DETAIL_RE.exec(part.trim())?.[1];
+    if (name === undefined) return undefined;
+    names.push(name);
+  }
+  return names.length === 0 ? undefined : names;
 }
 function cryskSecretsFixes(params: ErrorParams): string[] {
-  const apiKey = unsupportedOAuthApiKeyName(params.detail ?? "");
-  if (apiKey === undefined) return CRYSK_SECRETS_FIXES;
+  const apiKeys = unsupportedOAuthApiKeyNames(params.detail ?? "");
+  if (apiKeys === undefined) return CRYSK_SECRETS_FIXES;
   return [
     "Only openai reads an _OAUTH secret for now. Remove that _OAUTH secret from the crysk-secrets input and set this provider's API key instead:",
-    `$ gh secret set ${apiKey}`,
+    ...apiKeys.map((apiKey) => `$ gh secret set ${apiKey}`),
     "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
   ];
 }
 function cryskSecretsAnnotationFix(params: ErrorParams): string {
-  return unsupportedOAuthApiKeyName(params.detail ?? "") === undefined
+  return unsupportedOAuthApiKeyNames(params.detail ?? "") === undefined
     ? "re-set the CRYSK_* secret it names (an _OAUTH secret is base64 -w0 of the provider's OpenCode record)"
     : "remove that _OAUTH secret from the crysk-secrets input and set the provider's _API_KEY secret instead (only openai reads an _OAUTH secret for now)";
 }
