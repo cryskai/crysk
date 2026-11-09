@@ -87,7 +87,7 @@ it runs on, in the order to try them:
 
 | Role | Steps | When the role is not listed |
 | --- | --- | --- |
-| `hunter.<key>` | one hunter: `hunter.lifecycle`, `hunter.logic`, `hunter.parity`, `hunter.reliability`, `hunter.resilience`, or the key of a hunter in your own prompt set | `default` |
+| `hunter.<key>` | one hunter: `hunter.logic`, `hunter.parity`, `hunter.reliability`, `hunter.resilience`, or the key of a hunter in your own prompt set | `default` |
 | `refuter` | the refuter, and the re-review verifier and the CI adjudicator, which run its prompt family | `default` |
 | `consolidate` | the consolidation pass after the refuter | `default` |
 | `scout` | the experimental diff-only scout | `default` |
