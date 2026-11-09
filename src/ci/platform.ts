@@ -395,21 +395,22 @@ export async function runPlatformConnect(
     // output) and an empty config both skip everything.
     if (configFile !== undefined) {
       deps.appendOutput(`config-file=${configFile}\n`);
-      // Whether the platform's models name OpenCode (S1): an `opencode:` model
-      // needs the CLI installed. Present whenever the platform sent models,
-      // `false` included, because the platform's models win over the `models`
-      // input (D1): the trigger's backend flag in action.yml reads an empty
-      // output as "use the input's" (`contains(inputs.models, 'opencode:')`)
-      // and any value as the platform's answer, so platform models that do not
-      // name OpenCode override an input that does. The OpenCode install step
-      // also reads the setup step's `opencode-models`, its own reading of the
-      // models in effect. A platform `routing` is refused by the setup step's
-      // person parser.
-      const models = result.config?.person.models;
-      if (models !== undefined) {
-        deps.appendOutput(
-          `routing-opencode=${JSON.stringify(models).includes('"opencode:')}\n`,
-        );
+      // Whether the models in effect name OpenCode (S1): an `opencode:` model
+      // needs the CLI installed. Present whenever the platform sent a non-empty
+      // person layer, `false` included, because that layer wins whole over the
+      // `models` and `credentials` inputs (D1; the setup step ignores them),
+      // so a layer with no models leaves the default models in effect. The
+      // trigger's backend flag in action.yml reads an empty output as "use the
+      // input's" (`contains(inputs.models, 'opencode:')`) and any value as the
+      // platform's answer. The OpenCode install step also reads the setup
+      // step's `opencode-models`, its own reading of the models in effect. A
+      // platform `routing` is refused by the setup step's person parser.
+      const person = result.config?.person ?? {};
+      if (Object.keys(person).length > 0) {
+        const models = person.models;
+        const opencode =
+          models !== undefined && JSON.stringify(models).includes('"opencode:');
+        deps.appendOutput(`routing-opencode=${opencode}\n`);
       }
     }
   } catch (error) {
