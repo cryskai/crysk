@@ -297,13 +297,8 @@ function stepRouteFor(
 
 // An internal model string (a bare alias or a full name) as a route, with no
 // role and no `models`: what a caller outside the plan needs to know which
-// backend a model runs on. The second parameter is the removed `routing`,
-// always undefined now; it stays only while benchmarks/martian/martian-evidence.ts
-// still passes it, and goes with that call.
-export function resolveModelRoute(
-  model: string,
-  _removedRouting?: undefined,
-): ResolvedModelRoute {
+// backend a model runs on.
+export function resolveModelRoute(model: string): ResolvedModelRoute {
   return routeForModel(toModelName(model, "spec", "route"));
 }
 
@@ -386,17 +381,10 @@ function assertHunterRolesExist(
   }
 }
 
-// The removed alias-keyed routing (S2). Typed loosely and refused at run time,
-// kept only because scripts/opencode-prompt-probe.ts (imported by a test, so
-// typechecked) still passes one; it goes when that script moves to `models`.
-export type RoutingConfig = Readonly<Record<string, unknown>>;
-
 export interface BuildRoutePlanInput {
   readonly agents: readonly RouteAgent[];
   readonly cliModel?: string;
   readonly models?: ModelsConfig;
-  // Removed (S2): passing one throws. See RoutingConfig.
-  readonly routingConfig?: RoutingConfig;
   readonly frontmatterModel?: (agentKey: string) => string | undefined;
   readonly summarizer?: { model?: string; frontmatterModel?: string };
   readonly scout?: {
@@ -475,13 +463,6 @@ export function isMeasuredJudgeRoute(route: ResolvedModelRoute): boolean {
 export function buildResolvedRoutePlan(
   input: BuildRoutePlanInput,
 ): ResolvedRoutePlan {
-  if (input.routingConfig !== undefined) {
-    // Loud, never ignored: a caller still routing would otherwise run every
-    // step on its prompt's Claude model while believing it chose another.
-    throw new InvalidModelError(
-      '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
-    );
-  }
   assertHunterRolesExist(input.models, input.agents);
   const stepRoutes: ResolvedStepRoute[] = [];
   for (const agent of input.agents) {

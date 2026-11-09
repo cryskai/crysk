@@ -255,18 +255,6 @@ describe("the judge (L6 item 5)", () => {
   });
 });
 
-describe("the removed routing (S2)", () => {
-  test("a caller still passing routing is refused, never silently ignored", () => {
-    expect(() =>
-      plan({ routingConfig: { default: { backend: "opencode" } } }),
-    ).toThrow(
-      new InvalidModelError(
-        '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
-      ),
-    );
-  });
-});
-
 describe("--model outranks --scout-model on the scout's route", () => {
   // The scout step records `--model > --scout-model` (pipeline.ts runScout,
   // resolveModel); the route the backend is sent must agree, or the CLI runs

@@ -34,6 +34,46 @@ const OPTIONS = {
   timeoutMs: 60_000,
 };
 
+// F1 decision 1: an action ref from before the code rename writes PRH-* codes. The
+// sandbox reads them as CRYSK-*, so the outcome and status checks, the S7 invariant
+// and the hunters-failed flake gate still hold against such a ref.
+describe("run: an action ref that writes PRH-* codes", () => {
+  test("no-credential exits 0: the PRH-CRED-MISSING outcome and status read as CRYSK-CRED-MISSING, with no S7 violation", async () => {
+    const world = new FakeGithub({ ref: REF, legacyCodes: true });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["no-credential"], OPTIONS)).toBe(0);
+    const comments = [...world.comments.values()].flat();
+    expect(comments.some((c) => c.body.includes("PRH-CRED-MISSING"))).toBe(
+      true,
+    );
+    expect(
+      h.logs.some((l) =>
+        /PASS {2}no-credential: outcome comment with code CRYSK-CRED-MISSING/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+    expect(h.logs.some((l) => l.includes("S7 violation"))).toBe(false);
+  });
+
+  test("a PRH-HUNTERS-FAILED run is the flake and is re-run once", async () => {
+    const world = new FakeGithub({
+      ref: REF,
+      plantedFinding: true,
+      legacyCodes: true,
+      runOutcomes: ["hunters-failed"],
+    });
+    const h = world.harness();
+    expect(await runScenarios(h.deps, ["review-free"], OPTIONS)).toBe(0);
+    expect(world.prs.size).toBe(2);
+    expect(
+      h.logs.some((l) =>
+        /^review-free\s+hunters-failed\s+ok\s+1\s+\S+$/.test(l),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("run: the scenarios against the fake repository", () => {
   test("review-free exits 0, closes its PR and branch, and the table names each expectation", async () => {
     const world = new FakeGithub({ ref: REF, plantedFinding: true });

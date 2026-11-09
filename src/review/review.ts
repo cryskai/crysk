@@ -270,6 +270,10 @@ export async function review(options: CliOptions): Promise<number> {
       : await countFreeRouteSteps({
           steps: planRoutes(routePlan),
           probe: productionAdmission.freeModelProbe,
+          // The CRYSK_OPENCODE_* names admission bound each route's kind with,
+          // so the card counts free exactly the routes admission probed (U3).
+          openCodeSecretNames:
+            productionAdmission.authorityOptions.openCodeSecretNames,
         });
   // Named rather than inlined into renderPlan: the same context is what the
   // confirm menu's "Show details" renders, and building it twice would risk

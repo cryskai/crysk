@@ -36,6 +36,8 @@ import { commandHint, isCommand, startsWithCommand } from "../brand";
 import {
   type CryskSecretsParse,
   cryskSecretsCarryCredential,
+  inheritedOpenCodeSecretNames,
+  inheritedOpenCodeSecretWarning,
   LEGACY_SECRET_REPLACEMENT,
   parseCryskSecrets,
 } from "./crysk-secrets";
@@ -142,15 +144,13 @@ export interface CiCredentialPresence {
   runnerFile: boolean;
 }
 
-// The engine's Claude session files, relative to HOME, and its OpenCode
-// auth-store rule. Copied rather than imported, because this module may
+// The engine's Claude login file, relative to HOME (U2: `~/.claude.json` and
+// `~/.claude/session.json` are no credential), and its OpenCode auth-store rule. Copied rather than imported, because this module may
 // import only builtins (see the header): the originals are
 // CLAUDE_SESSION_FILES in src/model/provider-capabilities.ts and
 // resolveOpenCodeAuthPath in src/security/credential-broker.ts, and a drift
 // test in test/ci/trigger.test.ts pins this copy to both.
 const CLAUDE_SESSION_FILES: readonly string[] = [
-  ".claude.json",
-  path.join(".claude", "session.json"),
   path.join(".claude", ".credentials.json"),
 ];
 
@@ -862,8 +862,9 @@ function lookupClass(decision: {
     : { kind: "github", status: decision.status };
 }
 
-// The route the run would have used. The trigger has no routing text, only
-// whether it names OpenCode (action.yml's own test for the OpenCode install).
+// The route the run would have used. The trigger has no models text, only
+// whether the models in effect name OpenCode: the platform's, or else the
+// `models` input's (action.yml's HAS_OPENCODE_ROUTING, D1).
 function backendOf(deps: CiTriggerDeps): string {
   return deps.env.HAS_OPENCODE_ROUTING === "true" ? "opencode" : "claude";
 }
@@ -1205,6 +1206,12 @@ function lookupNoCredentialsHead(
 }
 
 export function runCiTrigger(deps: CiTriggerDeps): number {
+  // E-f F5: first, on every event, so the warning shows whatever is decided.
+  for (const name of inheritedOpenCodeSecretNames(deps.env)) {
+    deps.stdout(
+      workflowCommand("warning", inheritedOpenCodeSecretWarning(name)),
+    );
+  }
   const secrets = parseCryskSecrets(deps.cryskSecrets ?? "");
   const base = readTriggerInput(deps, secrets);
   const input: CiTriggerInput = commenterPermissionNeeded(base)

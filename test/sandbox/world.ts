@@ -178,6 +178,9 @@ const OUTCOME_LEAD: Partial<Record<Outcome, string>> = {
 
 export interface WorldOptions {
   ref: string;
+  // The action is a ref from before the code rename (fd28303): its outcomes and error
+  // statuses carry PRH-* where this tree writes CRYSK-*.
+  legacyCodes?: boolean;
   // main's workflow; defaults to the scaffold pinned to `ref`.
   mainWorkflow?: string;
   // Every run decides `credential`, whatever its workflow says. Used to make an
@@ -406,12 +409,11 @@ export class FakeGithub {
     gotchas: string | undefined,
   ): Outcome {
     if (this.options.forceCredentialOutcome === true) return "credential";
-    if (
-      !/^\s+(?:opencode-auth|anthropic-api-key|claude-token):/m.test(workflow)
-    ) {
-      return "credential";
-    }
-    if (/^\s+routing: "\{not json"$/m.test(workflow)) return "removed-input";
+    // The trigger's credential check reads the crysk-secrets input (U5): with no
+    // such input, no CRYSK_* credential reaches the action.
+    if (!/^\s+crysk-secrets: \|$/m.test(workflow)) return "credential";
+    // The trigger stops a workflow that passes a removed input any value.
+    if (/^\s+routing:\s*\S/m.test(workflow)) return "removed-input";
     if (
       this.options.staleRecordsBreakRun === true &&
       /trigger\.json\.tmp/.test(workflow)
@@ -631,7 +633,11 @@ export class FakeGithub {
     } else {
       const as =
         outcome === "hunters-failed" ? this.options.huntersFailedAs : undefined;
-      const code = as?.code ?? OUTCOME_CODE[outcome];
+      const current = as?.code ?? OUTCOME_CODE[outcome];
+      const code =
+        this.options.legacyCodes === true
+          ? current.replace(/^CRYSK-/, "PRH-")
+          : current;
       const lead = OUTCOME_LEAD[outcome];
       const body =
         as?.sentence ??
@@ -732,7 +738,7 @@ export class FakeGithub {
           title,
           createdAt,
           isCrossRepository: false,
-          headRepositoryOwner: { login: "juanmaagd" },
+          headRepositoryOwner: { login: "cryskai" },
         }));
       return ok(JSON.stringify(open));
     }

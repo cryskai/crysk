@@ -302,7 +302,7 @@ export function renderChoicesSummary(
     `  budget           ${
       budget === undefined
         ? choices.billing === "subscription"
-          ? "not set: no ceiling while the repo has no ANTHROPIC_API_KEY or OPENCODE_AUTH_JSON secret (a subscription spends quota, not dollars); adding either brings back the $10 ceiling"
+          ? "not set: no ceiling while the review runs on CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model (a subscription spends quota, not dollars); CRYSK_CLAUDE_API_KEY chosen in its place, or an OpenCode model with its CRYSK_OPENCODE_* secret, brings back the $10 ceiling"
           : "not set: resolved from how the review is paid (no ceiling on a subscription, $10 on an API key)"
         : Number(budget) <= 0
           ? `none (budget-usd: ${budget}; 0 or less disables the ceiling)`

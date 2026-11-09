@@ -6,8 +6,8 @@
 
 import type { Gh, Git } from "./ports";
 
-export const SANDBOX_OWNER = "juanmaagd";
-export const SANDBOX_NAME = "pr-hero-sandbox";
+export const SANDBOX_OWNER = "cryskai";
+export const SANDBOX_NAME = "crysk-sandbox";
 export const SANDBOX_REPO = `${SANDBOX_OWNER}/${SANDBOX_NAME}`;
 export const SANDBOX_REMOTE_URL = `https://github.com/${SANDBOX_REPO}.git`;
 export const SCENARIO_BRANCH_PREFIX = "sandbox/";
@@ -24,15 +24,15 @@ export class RailViolation extends Error {
 
 // gh subcommands the runner may use, each checked for its repository target.
 const GH_REPO_VERBS = new Set(["view", "create", "clone"]);
-// The one variable the runner deletes is PRHERO_ROUTING, which the claude route
-// unsets (init.ts). It is a literal here, not an import from seed.ts, so widening
-// this rail means editing this allowlist; test/sandbox/rails.test.ts pins it to the
-// seed's constant.
-const ROUTING_VARIABLE_NAME = "PRHERO_ROUTING";
+// The one variable the runner writes is CRYSK_MODELS: the claude route deletes it and
+// the opencode route sets it (init.ts). It is a literal here, not an import from
+// seed.ts, so widening this rail means editing this allowlist;
+// test/sandbox/rails.test.ts pins it to the seed's constant. The runner sets no
+// secret: it only lists their names, so `secret set` is not a sandbox operation.
+const MODELS_VARIABLE_NAME = "CRYSK_MODELS";
 
 const GH_TARGETED = new Set([
   "secret list",
-  "secret set",
   "variable get",
   "variable set",
   "variable delete",
@@ -266,23 +266,40 @@ function assertRepoTarget(args: readonly string[]): void {
   if (repos.length === 0 || repos.some((repo) => repo !== SANDBOX_REPO)) {
     throw new RailViolation(`gh ${verb} ${sub} must target ${SANDBOX_REPO}`);
   }
-  if (verb === "variable" && sub === "delete") assertRoutingDelete(args);
+  if (verb === "variable" && (sub === "delete" || sub === "set")) {
+    assertModelsWrite(sub, args);
+  }
 }
 
-// The delete is exact: the routing variable's name, then the sandbox as its one
-// target, in one of the three spellings gh takes. Any other positional or flag is
-// refused, so the call is the claude route's delete and nothing wider.
-function assertRoutingDelete(args: readonly string[]): void {
-  const name = args[2];
-  const target = args.slice(3);
-  const aimed =
+// The sandbox as a call's one target, in one of the three spellings gh takes.
+function isSandboxTarget(target: readonly string[]): boolean {
+  return (
     (target.length === 2 &&
       (target[0] === "--repo" || target[0] === "-R") &&
       target[1] === SANDBOX_REPO) ||
-    (target.length === 1 && target[0] === `--repo=${SANDBOX_REPO}`);
-  if (name !== ROUTING_VARIABLE_NAME || !aimed) {
+    (target.length === 1 && target[0] === `--repo=${SANDBOX_REPO}`)
+  );
+}
+
+// A variable write is exact: the models variable's name, then the sandbox as its one
+// target, and for a set one `--body <value>` last. Any other positional or flag is
+// refused (`--env-file` would set every variable a file names), so the call is the
+// route's delete or set of CRYSK_MODELS and nothing wider.
+function assertModelsWrite(
+  sub: "delete" | "set",
+  args: readonly string[],
+): void {
+  const name = args[2];
+  const rest = args.slice(3);
+  const aimed =
+    sub === "delete"
+      ? isSandboxTarget(rest)
+      : rest.length >= 2 &&
+        rest.at(-2) === "--body" &&
+        isSandboxTarget(rest.slice(0, -2));
+  if (name !== MODELS_VARIABLE_NAME || !aimed) {
     throw new RailViolation(
-      `gh variable delete is limited to ${ROUTING_VARIABLE_NAME} in ${SANDBOX_REPO}`,
+      `gh variable ${sub} is limited to ${MODELS_VARIABLE_NAME} in ${SANDBOX_REPO}`,
     );
   }
 }

@@ -36,7 +36,7 @@ const NEW = "c".repeat(40);
 function obs(overrides: Partial<Observation> = {}): Observation {
   return {
     prNumber: 7,
-    prUrl: "https://github.com/juanmaagd/pr-hero-sandbox/pull/7",
+    prUrl: "https://github.com/cryskai/crysk-sandbox/pull/7",
     headSha: NEW,
     run: {
       id: 42,

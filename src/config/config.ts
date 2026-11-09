@@ -144,15 +144,10 @@ export function persistCanonicalReview(
   }
 }
 
-// `routing` is gone (odd/tasks/role-model-routing.md S2) and the parsers refuse
-// it, so it is always absent. It is typed here, and only here, because
-// benchmarks/martian/martian-evidence.ts still reads it; it goes with that read.
-type RemovedConfigKeys = { readonly routing?: undefined };
-
 export interface EffectiveConfig {
   // The ONE shape every resolver downstream receives, exactly as before C5.
   // They cannot tell how it was built, which is the whole of D9's promise.
-  effective: LocalConfig & RemovedConfigKeys;
+  effective: LocalConfig;
   sources: ConfigSources;
   repoConfigPath: string;
   globalConfigPath: string;

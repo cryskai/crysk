@@ -150,3 +150,30 @@ describe("src/ci/run.ts as a process", () => {
     expect(run.stderr.includes("SENTINEL")).toBe(false);
   });
 });
+
+// E-f F5: the Run Crysk step empties the Claude variables, but a CRYSK_OPENCODE_*
+// name is per provider and cannot be emptied in action.yml, so a job-level one
+// reaches every child of the review. run.ts warns, naming it, never its value.
+describe("runCiReview warns about a CRYSK_OPENCODE_* variable in its environment", () => {
+  test("names each one in a warning and never prints its value", async () => {
+    let stdout = "";
+    await runCiReview({
+      cryskSecrets: STUB_INPUT,
+      argv: ["review"],
+      env: {
+        CRYSK_OPENCODE_DEEPSEEK_API_KEY: "SENTINEL-JOB-DS-31",
+        CRYSK_OPENCODE_GROQ_API_KEY: "",
+        PATH: "/bin",
+      },
+      stdout: (text) => {
+        stdout += text;
+      },
+      runCli: async () => {},
+    });
+    expect(stdout).toContain(
+      "::warning title=crysk::CRYSK_OPENCODE_DEEPSEEK_API_KEY is set in this step's environment",
+    );
+    expect(stdout).not.toContain("CRYSK_OPENCODE_GROQ_API_KEY");
+    expect(stdout.includes("SENTINEL-JOB")).toBe(false);
+  });
+});

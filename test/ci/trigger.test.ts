@@ -2001,8 +2001,6 @@ describe("runCiTrigger — credentials already on the runner", () => {
     baseEnv({ [STDIN_SECRETS]: "", HOME, ...extra });
 
   test.each<[string, Record<string, string>, string]>([
-    ["~/.claude.json", {}, "/home/runner/.claude.json"],
-    ["~/.claude/session.json", {}, "/home/runner/.claude/session.json"],
     [
       "~/.claude/.credentials.json",
       {},
@@ -2023,6 +2021,17 @@ describe("runCiTrigger — credentials already on the runner", () => {
     expect(run.exitCode).toBe(0);
     expect(run.outputs.run).toBe("true");
   });
+
+  // U2's rule (E-f leftover): `~/.claude.json` and `~/.claude/session.json` are no
+  // Claude credential, so on a GitHub-hosted runner either alone is no-credentials.
+  test.each(["/home/runner/.claude.json", "/home/runner/.claude/session.json"])(
+    "%s alone is no credential",
+    (file) => {
+      const run = runShell(noInput(), undefined, (p) => p === file);
+      expect(run.exitCode).toBe(1);
+      expect(run.outputs.run).toBe("false");
+    },
+  );
 
   test("with XDG_DATA_HOME set, the default OpenCode path is not the engine's and does not count", () => {
     const run = runShell(
@@ -3038,5 +3047,34 @@ describe("action.yml hands crysk-secrets to the trigger on stdin", () => {
     );
     expect(run.stderr.includes("SENTINEL")).toBe(false);
     expect(run.output).toBe("");
+  });
+});
+
+// E-f F5: a CRYSK_OPENCODE_* name cannot be emptied in action.yml (the names are
+// per provider), so a job-level one reaches every process of the step. The trigger
+// warns, naming the variable and never its value.
+describe("the trigger warns about a CRYSK_OPENCODE_* variable in its environment", () => {
+  test("a job-level CRYSK_OPENCODE_* value is named in a warning, its value never printed", () => {
+    const run = runShell(
+      baseEnv({
+        CRYSK_OPENCODE_DEEPSEEK_API_KEY: "SENTINEL-JOB-DS-77",
+        CRYSK_OPENCODE_OPENAI_OAUTH: "SENTINEL-JOB-OAI-77",
+      }),
+    );
+    expect(run.stdout).toContain(
+      "::warning title=crysk::CRYSK_OPENCODE_DEEPSEEK_API_KEY is set in this step's environment",
+    );
+    expect(run.stdout).toContain(
+      "::warning title=crysk::CRYSK_OPENCODE_OPENAI_OAUTH is set in this step's environment",
+    );
+    expect(run.stdout.includes("SENTINEL")).toBe(false);
+    expect(run.output.includes("SENTINEL")).toBe(false);
+  });
+
+  test("an empty one, and every other variable, warns about nothing", () => {
+    const run = runShell(
+      baseEnv({ CRYSK_OPENCODE_DEEPSEEK_API_KEY: "", OTHER_SECRET: "x" }),
+    );
+    expect(run.stdout).not.toContain("is set in this step's environment");
   });
 });

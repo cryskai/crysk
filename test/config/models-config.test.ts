@@ -250,15 +250,15 @@ describe("routing is gone (S2)", () => {
 
   // The setup step's routing backstop is gone (E-f F0, D6): the trigger stops a
   // workflow that still passes the input with CRYSK-INPUT-REMOVED, and setup
-  // never receives it.
-  test("an empty CI routing input is still Claude-default CI", async () => {
+  // never receives it. Its successor is the models input (E-f F3, D1).
+  test("an empty CI models input is still Claude-default CI", async () => {
     const { dir, cleanup } = await scratch();
     try {
       await materializeCiOpenCodeData({
         home: dir,
         env: { HOME: dir },
-        routing: "  ",
-        opencodeAuth: "",
+        modelsInput: "  ",
+        credentialsInput: "",
       });
       expect(existsSync(path.join(dir, ".crysk", "config.json"))).toBe(false);
     } finally {
@@ -266,14 +266,29 @@ describe("routing is gone (S2)", () => {
     }
   });
 
-  test("platform models win over a stale CI routing input", async () => {
+  test("a routing object in the CI models input is refused by the models rules", async () => {
+    const { dir, cleanup } = await scratch();
+    try {
+      await expect(
+        materializeCiOpenCodeData({
+          home: dir,
+          env: { HOME: dir },
+          modelsInput: JSON.stringify(routing),
+        }),
+      ).rejects.toThrow("the models input models has an unknown role");
+      expect(existsSync(path.join(dir, ".crysk", "config.json"))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("platform models win over a CI models input", async () => {
     const { dir, cleanup } = await scratch();
     try {
       await materializeCiOpenCodeData({
         home: dir,
         env: { HOME: dir },
-        routing: JSON.stringify(routing.routing),
-        opencodeAuth: "",
+        modelsInput: JSON.stringify({ default: ["claude:sonnet-latest"] }),
         platformPerson: { models: { default: ["claude:opus-latest"] } },
       });
       const written = JSON.parse(

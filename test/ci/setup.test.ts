@@ -19,6 +19,8 @@ import {
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { parseCryskSecrets } from "#ci/crysk-secrets";
+import { deriveCiBillingMode } from "#ci/gates";
 import {
   CI_WORKFLOW_RELATIVE_PATH,
   generateCiWorkflowTemplate,
@@ -27,10 +29,12 @@ import {
   OWN_CI_WORKFLOW_OPTIONS,
   runCiSetup,
 } from "#ci/setup";
+import { loadEffectiveConfig } from "#config/config";
 import { DEFAULT_PIPELINE_TIMEOUT_MS } from "#review/pipeline";
 import { parseArgs } from "#review/preflight";
 import { runDoctor } from "../../src/doctor";
 import { prheroLayout } from "../../src/home-preflight";
+import { resolveRunClaudeCredential } from "../../src/security/claude-credential";
 import { resolveOpenCodeAuthPath } from "../../src/security/credential-broker";
 import { openCodeSecretManifestPath } from "../../src/security/opencode-secret-manifest";
 import { checkCiConfiguration } from "../../src/system-tools";
@@ -340,9 +344,9 @@ describe("generateCiWorkflowTemplate (pure)", () => {
 
   test("never embeds a secret value — references secrets by name only", () => {
     const template = generateCiWorkflowTemplate();
-    expect(template).toContain(`\${{ secrets.ANTHROPIC_API_KEY }}`);
+    expect(template).toContain(`\${{ secrets.CRYSK_CLAUDE_API_KEY }}`);
     expect(template).toContain(`\${{ secrets.GITHUB_TOKEN }}`);
-    expect(template).toContain(`\${{ secrets.OPENCODE_AUTH_JSON }}`);
+    expect(template).toContain(`\${{ secrets.CRYSK_OPENCODE_OPENAI_OAUTH }}`);
     expect(template).not.toMatch(/sk-ant-[a-z0-9-]+/i);
     expect(template).not.toMatch(/ghp_|ghs_/);
     expect(template).not.toContain("oc-ci-fixture-not-a-secret");
@@ -351,9 +355,9 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     expect(template).not.toMatch(/"type"\s*:\s*"api"/);
   });
 
-  test("wires BOTH documented credential inputs, not just the API key", () => {
+  test("wires BOTH documented Claude credentials, not just the API key", () => {
     // The `with:` comment tells the reader to provide EITHER secret. A repo
-    // that follows it and sets only CLAUDE_CODE_OAUTH_TOKEN used to send an
+    // that follows it and sets only the OAuth token used to send an
     // empty credential and never authenticate, while `pr-hero doctor` — which
     // accepts either variable — reported a healthy CI configuration. Silent
     // auth failure behind a green diagnostic; the template has to pass the
@@ -364,11 +368,12 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     const step = parsed.jobs.review.steps.find(
       (s) => s.uses === "cryskai/crysk@v0",
     ) as { with?: Record<string, string> } | undefined;
-    expect(step?.with?.["anthropic-api-key"]).toBe(
-      `\${{ secrets.ANTHROPIC_API_KEY }}`,
+    const lines = (step?.with?.["crysk-secrets"] ?? "").split("\n");
+    expect(lines).toContain(
+      `CRYSK_CLAUDE_API_KEY=\${{ secrets.CRYSK_CLAUDE_API_KEY }}`,
     );
-    expect(step?.with?.["claude-token"]).toBe(
-      `\${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`,
+    expect(lines).toContain(
+      `CRYSK_CLAUDE_OAUTH_TOKEN=\${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}`,
     );
   });
 
@@ -427,26 +432,50 @@ describe("generateCiWorkflowTemplate (pure)", () => {
     );
   });
 
-  // Threat matrix RED (5): vars must be quoted so an unset CRYSK_ROUTING
-  // becomes the empty string instead of breaking YAML. The auth secret is
-  // referenced by name, never inlined.
-  test("quoted with.routing is vars.CRYSK_ROUTING with a vars.PRHERO_ROUTING fallback, and with.opencode-auth is secrets.OPENCODE_AUTH_JSON", () => {
-    const template = generateCiWorkflowTemplate();
-    expect(template).toContain(
-      `routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
-    );
-    const parsed = Bun.YAML.parse(template) as {
+  // E-f F4 (D1, D2): the scaffold's Run Crysk step names every CRYSK_* secret
+  // explicitly, forwards the OpenCode API keys through slots driven by
+  // vars.CRYSK_OPENCODE_PROVIDERS, and reads the models and credentials inputs
+  // from repository variables. Secrets are referenced by name, never inlined.
+  test("the Run Crysk step passes the fixed CRYSK_* secrets, five OpenCode slots and the two variables", () => {
+    const parsed = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
       jobs: { review: { steps: Array<Record<string, unknown>> } };
     };
     const step = parsed.jobs.review.steps.find((s) => s.name === "Run Crysk") as
       | { with?: Record<string, string> }
       | undefined;
-    expect(step?.with?.routing).toBe(
-      `\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}`,
-    );
-    expect(step?.with?.["opencode-auth"]).toBe(
-      `\${{ secrets.OPENCODE_AUTH_JSON }}`,
-    );
+    const lines = (step?.with?.["crysk-secrets"] ?? "").trimEnd().split("\n");
+    const slot = (i: number) =>
+      `fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[${i}]`;
+    expect(lines).toEqual([
+      "CRYSK_CLAUDE_OAUTH_TOKEN=$" + "{{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}",
+      "CRYSK_CLAUDE_API_KEY=$" + "{{ secrets.CRYSK_CLAUDE_API_KEY }}",
+      "CRYSK_OPENCODE_OPENAI_OAUTH=$" +
+        "{{ secrets.CRYSK_OPENCODE_OPENAI_OAUTH }}",
+      ...[0, 1, 2, 3, 4].map(
+        (i) =>
+          `CRYSK_OPENCODE_$` +
+          `{{ ${slot(i)} }}_API_KEY=$` +
+          `{{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', ${slot(i)})] }}`,
+      ),
+    ]);
+    expect(step?.with?.models).toBe("$" + "{{ vars.CRYSK_MODELS }}");
+    expect(step?.with?.credentials).toBe("$" + "{{ vars.CRYSK_CREDENTIALS }}");
+    expect(generateCiWorkflowTemplate()).not.toContain("toJSON(secrets)");
+  });
+
+  // An unused slot renders as `CRYSK_OPENCODE__API_KEY=` on GitHub (L42), and the
+  // intake must skip all five of them, not refuse the input.
+  test("five unused slots, as GitHub renders them, parse with no problem", () => {
+    const rendered = [
+      "CRYSK_CLAUDE_OAUTH_TOKEN=token",
+      "CRYSK_CLAUDE_API_KEY=",
+      "CRYSK_OPENCODE_OPENAI_OAUTH=",
+      ...Array.from({ length: 5 }, () => "CRYSK_OPENCODE__API_KEY="),
+    ].join("\n");
+    const parse = parseCryskSecrets(rendered);
+    expect(parse.problems).toEqual([]);
+    expect(parse.secrets.claude.subscription).toBe("token");
+    expect(parse.secrets.opencode.size).toBe(0);
   });
 });
 
@@ -485,12 +514,19 @@ describe("this repo's own workflow passes the CRYSK_* secrets", () => {
     expect(own()).not.toContain("toJSON(secrets)");
   });
 
-  test("the scaffolded template still passes the old inputs until it moves (E-f)", () => {
+  test("the scaffolded template passes the CRYSK_* secrets too, never the removed inputs (E-f F4)", () => {
     const withBlock = runCryskWith(generateCiWorkflowTemplate());
-    expect(withBlock["claude-token"]).toBe(
-      "$" + "{{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+    for (const removed of [
+      "anthropic-api-key",
+      "claude-token",
+      "opencode-auth",
+      "routing",
+    ]) {
+      expect(withBlock[removed], removed).toBeUndefined();
+    }
+    expect(withBlock["crysk-secrets"]).toContain(
+      "CRYSK_CLAUDE_OAUTH_TOKEN=$" + "{{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}",
     );
-    expect(withBlock["crysk-secrets"]).toBeUndefined();
   });
 });
 
@@ -816,14 +852,24 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
     }
   }
 
-  // Threat matrix RED (2): the whole auth store lands 0600 at the broker path.
+  // Threat matrix RED (2): the auth file lands 0600 at the broker path. Built
+  // from the CRYSK_OPENCODE_* secrets since the opencode-auth input went (D6).
+  const DEEPSEEK_SECRETS = () =>
+    parseCryskSecrets(
+      "CRYSK_OPENCODE_DEEPSEEK_API_KEY=oc-ci-fixture-not-a-secret",
+    );
+  const DEEPSEEK_MODELS = JSON.stringify({
+    default: ["opencode:deepseek/deepseek-chat"],
+  });
+
   test("writes 0600 auth.json at resolveOpenCodeAuthPath()", async () => {
     await withFixture(async ({ home }) => {
       const env = { HOME: home };
       await materializeCiOpenCodeData({
         home,
         env,
-        opencodeAuth: OPENCODE_CI_AUTH,
+        modelsInput: DEEPSEEK_MODELS,
+        cryskSecrets: DEEPSEEK_SECRETS(),
       });
 
       const authPath = resolveOpenCodeAuthPath(env, home);
@@ -845,7 +891,8 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
       await expect(
         materializeCiOpenCodeData({
           env: { HOME: "" },
-          opencodeAuth: OPENCODE_CI_AUTH,
+          modelsInput: DEEPSEEK_MODELS,
+          cryskSecrets: DEEPSEEK_SECRETS(),
         }),
       ).rejects.toThrow(/HOME/);
 
@@ -854,13 +901,23 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
       expect(existsSync(path.join(workspace, ".local"))).toBe(false);
 
       const proc = Bun.spawn(
-        ["bun", path.resolve(__dirname, "..", "..", "src", "ci", "setup.ts")],
+        [
+          "bash",
+          "--noprofile",
+          "--norc",
+          "-eo",
+          "pipefail",
+          "-c",
+          `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${path.resolve(__dirname, "..", "..", "src", "ci", "setup.ts")}" --crysk-secrets-stdin`,
+        ],
         {
           cwd: workspace,
           env: {
             ...process.env,
             HOME: "",
-            OPENCODE_AUTH_INPUT: OPENCODE_CI_AUTH,
+            MODELS_INPUT: DEEPSEEK_MODELS,
+            CRYSK_SECRETS_INPUT:
+              "CRYSK_OPENCODE_DEEPSEEK_API_KEY=oc-ci-fixture-not-a-secret",
           },
           stdout: "pipe",
           stderr: "pipe",
@@ -877,17 +934,48 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
     });
   });
 
-  test("no platform layer skips the person-layer write", async () => {
+  test("no platform layer and no models input skip the person-layer write", async () => {
     await withFixture(async ({ home }) => {
       await materializeCiOpenCodeData({
         home,
         env: { HOME: home },
-        opencodeAuth: OPENCODE_CI_AUTH,
+        cryskSecrets: DEEPSEEK_SECRETS(),
       });
       expect(existsSync(prheroLayout(home).reviewConfigPath)).toBe(false);
+      // No models name deepseek, so its secret builds nothing either.
       expect(existsSync(resolveOpenCodeAuthPath({ HOME: home }, home))).toBe(
-        true,
+        false,
       );
+    });
+  });
+
+  // E-f F3 (D1): the credentials input reaches the run through the personal
+  // file, so its order decides the Claude credential, and an api_key-first order
+  // bills as metered.
+  test("the credentials input reaches the run: an api_key-first order chooses the API key and bills as metered", async () => {
+    await withFixture(async ({ home }) => {
+      await materializeCiOpenCodeData({
+        home,
+        env: { HOME: home },
+        credentialsInput: JSON.stringify({
+          claude: ["api_key", "subscription"],
+        }),
+      });
+      const loaded = await loadEffectiveConfig({ home });
+      expect(loaded.effective.credentials).toEqual({
+        claude: ["api_key", "subscription"],
+      });
+      const run = resolveRunClaudeCredential({
+        credentials: loaded.effective.credentials,
+        env: {
+          HOME: home,
+          CLAUDE_CODE_OAUTH_TOKEN: "fixture-oauth-not-a-secret",
+          ANTHROPIC_API_KEY: "fixture-key-not-a-secret",
+        },
+        loginPresent: false,
+      });
+      expect(run.kind).toBe("api_key");
+      expect(deriveCiBillingMode(run.env)).toBe("metered");
     });
   });
 });
@@ -926,7 +1014,8 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
         env: {
           ...process.env,
           HOME: home,
-          OPENCODE_AUTH_INPUT: "",
+          MODELS_INPUT: "",
+          CREDENTIALS_INPUT: "",
           CRYSK_OUTCOME_DIR: outDir,
           ...env,
         },
@@ -959,12 +1048,23 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
     expect(result.stderr).not.toContain("routing");
   });
 
+  // The opencode-auth input went the same way (D6): a value left in the
+  // environment, a job-level env for instance, is not read.
+  test("an opencode-auth value in the environment is not read: no failure and no record", async () => {
+    const result = await runSetup({
+      OPENCODE_AUTH_INPUT: '{"SENTINEL-AUTH-7f3a": ',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.recordText).toBeUndefined();
+    expect(result.stderr).not.toContain("opencode-auth");
+  });
+
   // WHY a directory (F003 on #330): the setup record's temp name is unique per write
   // now, so a directory left at the old fixed `setup.json.tmp` by an earlier job
   // cannot stop this step's record. A directory fails any write to that path.
   test("a directory left at the old fixed setup temp name does not stop the record", async () => {
     const result = await runSetup(
-      { OPENCODE_AUTH_INPUT: '{"SENTINEL-AUTH-7f3a": ' },
+      { MODELS_INPUT: '{"SENTINEL-MODELS-7f3a": ' },
       async (outDir) => {
         await mkdir(path.join(outDir, "setup.json.tmp"), { recursive: true });
       },
@@ -972,36 +1072,9 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
     expect(result.exitCode).toBe(1);
     expect(JSON.parse(result.recordText ?? "null")).toEqual({
       v: 1,
-      cls: { kind: "credential", failureClass: "malformed_payload" },
-      detail: "the opencode-auth input is not valid JSON",
+      cls: { kind: "config-parse", source: "models-input" },
+      detail: "the models input is not valid JSON",
     });
-  });
-
-  test("an OpenCode auth input that is not JSON records a credential malformed_payload, with a fixed detail", async () => {
-    const result = await runSetup({
-      OPENCODE_AUTH_INPUT: '{"SENTINEL-AUTH-7f3a": ',
-    });
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("CI opencode-auth is not valid JSON");
-    expect(JSON.parse(result.recordText ?? "null")).toEqual({
-      v: 1,
-      cls: { kind: "credential", failureClass: "malformed_payload" },
-      detail: "the opencode-auth input is not valid JSON",
-    });
-    expect(result.recordText).not.toContain("SENTINEL");
-  });
-
-  test("an OpenCode auth input that is JSON but not an object is the same class, with its own detail", async () => {
-    const result = await runSetup({
-      OPENCODE_AUTH_INPUT: '"SENTINEL-AUTH-7f3a"',
-    });
-    expect(result.exitCode).toBe(1);
-    expect(JSON.parse(result.recordText ?? "null")).toEqual({
-      v: 1,
-      cls: { kind: "credential", failureClass: "malformed_payload" },
-      detail: "the opencode-auth input must be a JSON object",
-    });
-    expect(result.recordText).not.toContain("SENTINEL");
   });
 
   test("a valid setup writes no record", async () => {
@@ -1013,7 +1086,7 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
   test("an environment failure writes no record, so the publisher cannot blame the configuration for it", async () => {
     const result = await runSetup({
       HOME: "",
-      OPENCODE_AUTH_INPUT: '{"SENTINEL-AUTH-7f3a": ',
+      MODELS_INPUT: '{"SENTINEL-MODELS-7f3a": ',
     });
     expect(result.exitCode).toBe(1);
     expect(result.recordText).toBeUndefined();
@@ -1117,12 +1190,13 @@ describe("setup.ts reads the crysk-secrets input", () => {
           ...process.env,
           PATH: pathEnv,
           HOME: home,
-          OPENCODE_AUTH_INPUT: "",
           CRYSK_OUTCOME_DIR: outDir,
           GITHUB_OUTPUT: githubOutput,
           GITHUB_ENV: githubEnv,
           CRYSK_PLATFORM_CONFIG_FILE: platformFile,
           CRYSK_SECRETS_INPUT: "",
+          MODELS_INPUT: "",
+          CREDENTIALS_INPUT: "",
           // Empty, so the OpenCode auth file resolves under this test's HOME
           // and never at a data home the host may have set.
           XDG_DATA_HOME: "",
@@ -1466,7 +1540,10 @@ describe("setup.ts reads the crysk-secrets input", () => {
     );
   });
 
-  test("the old opencode-auth input is unchanged when no CRYSK_OPENCODE_* secret serves the models", async () => {
+  // D6 (E-f F3): the opencode-auth input is gone. The trigger stops a workflow
+  // that passes one (CRYSK-INPUT-REMOVED) and action.yml never binds it here, so
+  // a value left in the environment (a job-level env, say) is not read.
+  test("an OPENCODE_AUTH_INPUT in the environment is not read, and a manifest an earlier run left is removed", async () => {
     const result = await runSetup(
       {
         OPENCODE_AUTH_INPUT: OPENCODE_CI_AUTH,
@@ -1485,11 +1562,11 @@ describe("setup.ts reads the crysk-secrets input", () => {
       },
     );
     expect(result.exitCode).toBe(0);
-    expect(result.authText === OPENCODE_CI_AUTH).toBe(true);
-    expect(result.authMode).toBe(0o600);
+    expect(result.authText).toBeUndefined();
     // The manifest describes a file this step built from CRYSK secrets only.
     expect(result.manifestText).toBeUndefined();
-    expect(result.stderr).not.toContain("opencode-auth input is ignored");
+    expect(result.output).not.toContain("opencode-auth-file");
+    expect(result.stderr).not.toContain("opencode-auth");
   });
 
   // U5: the Install OpenCode CLI step follows this output, so the CLI is
@@ -1503,13 +1580,6 @@ describe("setup.ts reads the crysk-secrets input", () => {
     expect(result.output.split("\n")).toContain("opencode-auth-file=true");
   });
 
-  test("an auth file from the old opencode-auth input reports opencode-auth-file=true too", async () => {
-    const result = await runSetup({ OPENCODE_AUTH_INPUT: OPENCODE_CI_AUTH });
-    expect(result.exitCode).toBe(0);
-    expect(result.authText === OPENCODE_CI_AUTH).toBe(true);
-    expect(result.output).toBe("opencode-auth-file=true\n");
-  });
-
   test("OpenCode models with no secret serving them write no auth file and no opencode-auth-file output", async () => {
     const result = await runSetup(
       { CRYSK_SECRETS_INPUT: "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-55aa" },
@@ -1520,26 +1590,236 @@ describe("setup.ts reads the crysk-secrets input", () => {
     expect(result.output).not.toContain("opencode-auth-file");
   });
 
-  test("with both inputs, the CRYSK_* secrets win and the opencode-auth input is ignored with a notice", async () => {
-    for (const oldInput of [OPENCODE_CI_AUTH, '{"SENTINEL-not-json": ']) {
-      const result = await runSetup(
-        {
-          OPENCODE_AUTH_INPUT: oldInput,
-          CRYSK_SECRETS_INPUT:
-            "CRYSK_OPENCODE_DEEPSEEK_API_KEY=SENTINEL-DEEPSEEK-55aa",
-        },
-        withModels({ default: ["opencode:deepseek/deepseek-chat"] }),
-      );
+  // E-f F3 (D1): a standalone workflow passes the models and credentials as two
+  // inputs, filled from vars.CRYSK_MODELS and vars.CRYSK_CREDENTIALS. The setup
+  // step reads them with the person parser and writes them as the personal file;
+  // a platform person layer wins whole over them.
+  describe("the models and credentials inputs (D1)", () => {
+    const personOf = (result: { homeFiles: string[] }) =>
+      result.homeFiles
+        .map((text) => {
+          try {
+            return JSON.parse(text) as Record<string, unknown>;
+          } catch {
+            return undefined;
+          }
+        })
+        .find(
+          (value) =>
+            value !== undefined &&
+            ("models" in value ||
+              "credentials" in value ||
+              "max_changed_lines" in value),
+        );
+    const outputLines = (result: { output: string }) =>
+      result.output.split("\n").filter((line) => line !== "");
+
+    test("a standalone models input naming an OpenCode model, with its secret, builds auth.json and reports opencode-models=true", async () => {
+      const models = {
+        default: ["claude:sonnet-latest"],
+        "hunter.logic": ["opencode:deepseek/deepseek-chat"],
+      };
+      const result = await runSetup({
+        MODELS_INPUT: JSON.stringify(models),
+        CRYSK_SECRETS_INPUT:
+          "CRYSK_OPENCODE_DEEPSEEK_API_KEY=SENTINEL-DEEPSEEK-55aa",
+      });
       expect(result.exitCode).toBe(0);
+      expect(Object.keys(result.auth ?? {})).toEqual(["deepseek"]);
+      expect(result.auth?.deepseek?.type).toBe("api");
       expect(result.auth?.deepseek?.key === "SENTINEL-DEEPSEEK-55aa").toBe(
         true,
       );
-      expect(result.authText?.includes("oc-ci-fixture")).toBe(false);
-      expect(result.stderr).toContain(
-        "::notice::the opencode-auth input is ignored: the CRYSK_OPENCODE_* secrets build the OpenCode auth file.",
-      );
+      expect(result.authMode).toBe(0o600);
+      expect(outputLines(result)).toContain("opencode-auth-file=true");
+      expect(outputLines(result)).toContain("opencode-models=true");
+      expect(personOf(result)).toEqual({ models });
       expect(result.record).toBeUndefined();
-    }
+    });
+
+    test("a free OpenCode model with no secret still reports opencode-models=true, with no auth file", async () => {
+      const result = await runSetup({
+        MODELS_INPUT: JSON.stringify({
+          default: ["opencode:opencode/big-pickle"],
+        }),
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.authText).toBeUndefined();
+      expect(result.output).toBe("opencode-models=true\n");
+    });
+
+    test("Claude-only models report no opencode-models output", async () => {
+      const result = await runSetup({
+        MODELS_INPUT: JSON.stringify({ default: ["claude:sonnet-latest"] }),
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toBe("");
+    });
+
+    test("the credentials input lands in the personal file beside the models", async () => {
+      const result = await runSetup({
+        MODELS_INPUT: JSON.stringify({ default: ["claude:sonnet-latest"] }),
+        CREDENTIALS_INPUT: JSON.stringify({
+          claude: ["api_key", "subscription"],
+        }),
+      });
+      expect(result.exitCode).toBe(0);
+      expect(personOf(result)).toEqual({
+        models: { default: ["claude:sonnet-latest"] },
+        credentials: { claude: ["api_key", "subscription"] },
+      });
+    });
+
+    test("an effort entry passes through the person parser", async () => {
+      const models = {
+        default: [{ model: "claude:sonnet-latest", effort: "high" }],
+        "hunter.logic": [
+          { model: "opencode:deepseek/deepseek-chat", effort: "max" },
+        ],
+      };
+      const result = await runSetup({
+        MODELS_INPUT: JSON.stringify(models),
+        CRYSK_SECRETS_INPUT:
+          "CRYSK_OPENCODE_DEEPSEEK_API_KEY=SENTINEL-DEEPSEEK-55aa",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(personOf(result)).toEqual({ models });
+      expect(Object.keys(result.auth ?? {})).toEqual(["deepseek"]);
+    });
+
+    const MODELS_RECORD = (detail: string) => ({
+      v: 1,
+      cls: { kind: "config-parse", source: "models-input" },
+      detail,
+    });
+
+    test("a models input that is not JSON fails as models-input with a fixed detail, never echoing it", async () => {
+      const result = await runSetup({
+        MODELS_INPUT: '{"SENTINEL-MODELS-55aa": ',
+        CRYSK_SECRETS_INPUT:
+          "CRYSK_OPENCODE_DEEPSEEK_API_KEY=SENTINEL-DEEPSEEK-55aa",
+      });
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.record ?? "null")).toEqual(
+        MODELS_RECORD("the models input is not valid JSON"),
+      );
+      expect(result.stderr).toContain("CI models input is not valid JSON");
+      for (const text of [result.record, result.stderr, result.output]) {
+        expect((text ?? "").includes("SENTINEL")).toBe(false);
+      }
+      // Nothing is written before the inputs are read.
+      expect(result.authText).toBeUndefined();
+      expect(personOf(result)).toBeUndefined();
+    });
+
+    test("a models input the person parser refuses fails as models-input; the record names the input, never its content", async () => {
+      const result = await runSetup({
+        MODELS_INPUT: JSON.stringify({
+          "SENTINEL-ROLE-55aa": ["claude:sonnet-latest"],
+        }),
+      });
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.record ?? "null")).toEqual(
+        MODELS_RECORD(
+          "the models input does not follow the models rules (the setup step's log names the entry)",
+        ),
+      );
+      expect((result.record ?? "").includes("SENTINEL")).toBe(false);
+      // The parser's own message, on the step's log, names the role.
+      expect(result.stderr).toContain("models has an unknown role");
+      expect(personOf(result)).toBeUndefined();
+    });
+
+    test("a #variant suffix is refused by the person parser, with the new form on the log", async () => {
+      const result = await runSetup({
+        MODELS_INPUT: JSON.stringify({
+          default: ["opencode:openai/gpt-5#high"],
+        }),
+      });
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.record ?? "null")).toEqual(
+        MODELS_RECORD(
+          "the models input does not follow the models rules (the setup step's log names the entry)",
+        ),
+      );
+      expect(result.stderr).toContain("the #variant suffix is gone");
+      expect(result.output).toBe("");
+    });
+
+    test("a credentials input the person parser refuses fails as credentials-input, naming the credentials input", async () => {
+      for (const [raw, detail] of [
+        ['{"SENTINEL-CREDS-55aa"', "the credentials input is not valid JSON"],
+        [
+          JSON.stringify({ claude: ["SENTINEL-CREDS-55aa"] }),
+          "the credentials input does not follow the credentials rules (the setup step's log names the entry)",
+        ],
+      ] as const) {
+        const result = await runSetup({
+          MODELS_INPUT: JSON.stringify({ default: ["claude:sonnet-latest"] }),
+          CREDENTIALS_INPUT: raw,
+        });
+        expect(result.exitCode).toBe(1);
+        expect(JSON.parse(result.record ?? "null")).toEqual({
+          v: 1,
+          cls: { kind: "config-parse", source: "credentials-input" },
+          detail,
+        });
+        expect((result.record ?? "").includes("SENTINEL")).toBe(false);
+        expect(personOf(result)).toBeUndefined();
+      }
+    });
+
+    test("with a platform person layer, the platform wins whole and the inputs are ignored with a warning", async () => {
+      const result = await runSetup(
+        {
+          // Malformed on purpose: an ignored input is not even read.
+          MODELS_INPUT: '{"SENTINEL-MODELS-55aa": ',
+          CREDENTIALS_INPUT: JSON.stringify({ claude: ["api_key"] }),
+          CRYSK_SECRETS_INPUT: SECRETS_INPUT,
+        },
+        withModels({ default: ["opencode:openai/gpt-5"] }),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain(
+        "::warning::The models and credentials inputs are ignored: this repository is connected to the Crysk platform, whose model settings apply.",
+      );
+      expect(result.stderr.includes("SENTINEL")).toBe(false);
+      expect(personOf(result)).toEqual({
+        models: { default: ["opencode:openai/gpt-5"] },
+      });
+      // The providers come from the platform's models, not the input's.
+      expect(Object.keys(result.auth ?? {})).toEqual(["openai"]);
+      expect(outputLines(result)).toContain("opencode-models=true");
+      expect(result.record).toBeUndefined();
+    });
+
+    test("a connected run whose platform sent no person layer applies the inputs", async () => {
+      const models = { default: ["claude:opus-latest"] };
+      const result = await runSetup(
+        { MODELS_INPUT: JSON.stringify(models) },
+        { platform: { person: {}, repo: {} } },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).not.toContain("::warning::");
+      expect(personOf(result)).toEqual({ models });
+    });
+
+    test("no inputs and no platform: the personal file a self-hosted runner keeps is left alone", async () => {
+      const own = { max_changed_lines: 123 };
+      const result = await runSetup(
+        { MODELS_INPUT: "", CREDENTIALS_INPUT: "  " },
+        {
+          prepareHome: async (home) => {
+            const file = prheroLayout(home).reviewConfigPath;
+            await mkdir(path.dirname(file), { recursive: true });
+            await writeFile(file, JSON.stringify(own));
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(personOf(result)).toEqual(own);
+      expect(result.output).toBe("");
+    });
   });
 });
 
@@ -1623,35 +1903,50 @@ describe("ci init next steps (CLI)", () => {
 // exists but is empty or still the scaffold turns the first PR red
 // (CRYSK-GOTCHAS-MISSING), so that one gets the fix steps; real instructions get
 // nothing.
-describe("ci init review-instructions steps (CLI)", () => {
-  async function runInit(
-    files: Record<string, string> = {},
-  ): Promise<{ output: string; code: number }> {
-    const dir = await mkdtemp(path.join(tmpdir(), "prhero-ci-gotchas-"));
-    try {
-      Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
-      for (const [rel, contents] of Object.entries(files)) {
-        await mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
-        await writeFile(path.join(dir, rel), contents);
-      }
-      const result = Bun.spawnSync(
-        [
-          process.execPath,
-          path.join(import.meta.dir, "../../src/cli.ts"),
-          "ci",
-          "init",
-        ],
-        { cwd: dir, env: { ...process.env, NO_COLOR: "1" } },
+// `ci init` through the real CLI, in a scratch repository, with a scratch HOME so
+// the person config it reads is the test's (`personConfig`), never the host's.
+async function runInit(
+  files: Record<string, string> = {},
+  personConfig?: unknown,
+): Promise<{ output: string; code: number; workflowWritten: boolean }> {
+  const root = await mkdtemp(path.join(tmpdir(), "prhero-ci-gotchas-"));
+  const dir = path.join(root, "repo");
+  const home = path.join(root, "home");
+  try {
+    await mkdir(dir, { recursive: true });
+    await mkdir(home, { recursive: true });
+    if (personConfig !== undefined) {
+      await mkdir(path.join(home, ".crysk"), { recursive: true });
+      await writeFile(
+        path.join(home, ".crysk", "config.json"),
+        JSON.stringify(personConfig),
       );
-      return {
-        output: `${result.stdout}${result.stderr}`,
-        code: result.exitCode,
-      };
-    } finally {
-      await rm(dir, { recursive: true, force: true });
     }
+    Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
+    for (const [rel, contents] of Object.entries(files)) {
+      await mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+      await writeFile(path.join(dir, rel), contents);
+    }
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        path.join(import.meta.dir, "../../src/cli.ts"),
+        "ci",
+        "init",
+      ],
+      { cwd: dir, env: { ...process.env, HOME: home, NO_COLOR: "1" } },
+    );
+    return {
+      output: `${result.stdout}${result.stderr}`,
+      code: result.exitCode,
+      workflowWritten: existsSync(path.join(dir, CI_WORKFLOW_RELATIVE_PATH)),
+    };
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
+}
 
+describe("ci init review-instructions steps (CLI)", () => {
   test("a repo with no instructions file is recommended a REVIEW.md, as optional, before opening the PR", async () => {
     const { output, code } = await runInit();
     expect(code).toBe(0);
@@ -1717,6 +2012,84 @@ describe("ci init review-instructions steps (CLI)", () => {
     const { output } = await runInit();
     expect(output).toContain(
       "require the `crysk` status check (not the `review` job; the legacy `pr-hero` status is still posted for one version, so an existing rule on `pr-hero` keeps working)",
+    );
+  });
+});
+
+// E-f F4 (D1, D2): the scaffolded workflow reads the models, the credential order
+// and the OpenCode providers from repository variables, so `ci init` prints the
+// commands that set them from the person's own config, and the CRYSK_* secrets.
+describe("ci init prints the CRYSK_* secrets and the workflow variables (CLI)", () => {
+  test("a person config with models, credentials and an OpenCode provider gets every command", async () => {
+    const { output, code } = await runInit(
+      {},
+      {
+        models: {
+          default: ["claude:sonnet-latest"],
+          "hunter.logic": ["opencode:deepseek/deepseek-chat"],
+        },
+        credentials: { claude: ["api_key", "subscription"] },
+      },
+    );
+    expect(code).toBe(0);
+    expect(output).toContain("$ gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
+    expect(output).toContain("$ gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY");
+    expect(output).toContain(
+      '$ gh variable set CRYSK_MODELS --body "$(jq -c .models ~/.crysk/config.json)"',
+    );
+    expect(output).toContain(
+      '$ gh variable set CRYSK_CREDENTIALS --body "$(jq -c .credentials ~/.crysk/config.json)"',
+    );
+    expect(output).toContain(
+      `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["DEEPSEEK"]'`,
+    );
+    expect(output).not.toMatch(
+      /ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|OPENCODE_AUTH_JSON/,
+    );
+  });
+
+  test("the judge's models are not forwarded, and OpenAI also gets its subscription command", async () => {
+    const { output } = await runInit(
+      {},
+      {
+        models: {
+          default: ["opencode:openai/gpt-5"],
+          judge: ["opencode:groq/llama"],
+        },
+      },
+    );
+    expect(output).toContain(
+      `$ gh variable set CRYSK_OPENCODE_PROVIDERS --body '["OPENAI"]'`,
+    );
+    expect(output).toContain("gh secret set CRYSK_OPENCODE_OPENAI_OAUTH");
+    expect(output).not.toContain("CRYSK_CREDENTIALS");
+    expect(output).not.toContain("GROQ");
+  });
+
+  test("without a person config no variable is printed", async () => {
+    const { output, code } = await runInit();
+    expect(code).toBe(0);
+    expect(output).toContain("$ gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
+    expect(output).not.toContain("gh variable set");
+  });
+
+  test("models naming six OpenCode providers are refused before anything is written", async () => {
+    const providers = ["a1", "b2", "c3", "d4", "e5", "f6"];
+    const { output, code, workflowWritten } = await runInit(
+      {},
+      {
+        models: Object.fromEntries(
+          providers.map((p, i) => [
+            i === 0 ? "default" : `hunter.h${i}`,
+            [`opencode:${p}/model`],
+          ]),
+        ),
+      },
+    );
+    expect(code).toBe(1);
+    expect(workflowWritten).toBe(false);
+    expect(output).toContain(
+      "name 6 OpenCode providers (a1, b2, c3, d4, e5, f6), but the workflow forwards the keys of at most 5",
     );
   });
 });
@@ -1976,7 +2349,7 @@ describe("checkCiConfiguration (pure diagnostic, system-tools.ts)", () => {
       exists: () => false,
     });
     expect(status.configured).toBe(false);
-    expect(status.message).toContain("ANTHROPIC_API_KEY");
+    expect(status.message).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
     expect(status.message).not.toContain("ghs_realtoken12345");
   });
 
@@ -1988,7 +2361,7 @@ describe("checkCiConfiguration (pure diagnostic, system-tools.ts)", () => {
     });
     expect(status.configured).toBe(false);
     expect(status.message).toContain("GITHUB_TOKEN");
-    expect(status.message).toContain("ANTHROPIC_API_KEY");
+    expect(status.message).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
   });
 
   test("GitHub Actions context: OpenCode auth file satisfies review auth without Anthropic", () => {
@@ -2170,7 +2543,7 @@ describe("doctor CI diagnostics (Pillar 3)", () => {
     });
     const ciCheck = report.checks.find((c) => c.name === "ci");
     expect(ciCheck?.severity).toBe("blocking");
-    expect(ciCheck?.message).toContain("ANTHROPIC_API_KEY");
+    expect(ciCheck?.message).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
     expect(ciCheck?.message).not.toContain("ghs_realtoken12345");
     expect(report.overall).toBe("blocking");
   });

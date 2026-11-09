@@ -42,7 +42,7 @@ interface OpenPr {
 
 const SAME_REPO = {
   isCrossRepository: false,
-  headRepositoryOwner: { login: "juanmaagd" },
+  headRepositoryOwner: { login: "cryskai" },
 };
 
 interface World {
@@ -84,7 +84,7 @@ function completedRun(): Run {
     headSha: HEAD_SHA,
     status: "completed",
     conclusion: "success",
-    url: "https://github.com/juanmaagd/pr-hero-sandbox/actions/runs/42",
+    url: "https://github.com/cryskai/crysk-sandbox/actions/runs/42",
     workflowName: WORKFLOW_NAME,
   };
 }

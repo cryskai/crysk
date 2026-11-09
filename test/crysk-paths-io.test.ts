@@ -198,8 +198,8 @@ describe("the ignore file", () => {
 });
 
 describe("the runner's person-layer config: writer and reader agree", () => {
-  // The person file is written only in platform mode now: the routing input
-  // that used to write it standalone is gone (S2).
+  // The platform's person layer and the standalone models input (E-f F3) both
+  // reach the same file.
   const MODELS = { default: ["opencode:deepseek/deepseek-chat"] };
 
   test("on a fresh HOME the CI step writes where the CLI then reads", async () => {
@@ -208,11 +208,22 @@ describe("the runner's person-layer config: writer and reader agree", () => {
     await materializeCiOpenCodeData({
       home,
       env: { HOME: home },
-      routing: "",
-      opencodeAuth: "",
       platformPerson: { models: MODELS },
     });
     expect(existsSync(path.join(home, ".crysk", "config.json"))).toBe(true);
+    const { filePath, layer } = await loadGlobalConfigLayer(home);
+    expect(filePath).toBe(path.join(home, ".crysk", "config.json"));
+    expect(layer?.models).toEqual(MODELS);
+  });
+
+  test("a standalone models input is written where the CLI then reads (E-f F3)", async () => {
+    const home = path.join(scratch, "standalone-home");
+    await mkdir(home);
+    await materializeCiOpenCodeData({
+      home,
+      env: { HOME: home },
+      modelsInput: JSON.stringify(MODELS),
+    });
     const { filePath, layer } = await loadGlobalConfigLayer(home);
     expect(filePath).toBe(path.join(home, ".crysk", "config.json"));
     expect(layer?.models).toEqual(MODELS);
@@ -224,8 +235,6 @@ describe("the runner's person-layer config: writer and reader agree", () => {
     await materializeCiOpenCodeData({
       home,
       env: { HOME: home },
-      routing: "",
-      opencodeAuth: "",
       platformPerson: { models: MODELS },
     });
     const { filePath, layer } = await loadGlobalConfigLayer(home);

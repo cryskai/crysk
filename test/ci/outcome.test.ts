@@ -133,6 +133,12 @@ const SAMPLES: Sample[] = [
     owner: "config",
   },
   {
+    name: "config-parse credentials-input",
+    cls: { kind: "config-parse", source: "credentials-input" },
+    code: "CRYSK-CONFIG-INVALID",
+    owner: "config",
+  },
+  {
     name: "config-parse repo-config",
     cls: { kind: "config-parse", source: "repo-config" },
     code: "CRYSK-CONFIG-INVALID",
@@ -2423,6 +2429,38 @@ describe("the routing codes are gone, and a malformed models input is CRYSK-CONF
     expect(summary).not.toContain(".crysk/config.json");
     expect(rendered.annotation).toContain("vars.CRYSK_MODELS");
     expect(`${summary}\n${rendered.annotation}`).not.toContain("CRYSK_ROUTING");
+  });
+
+  // F3 decision (a): a malformed credentials input names that input and its own
+  // variable, not the models input and CRYSK_MODELS.
+  test("a malformed credentials input renders CRYSK-CONFIG-INVALID, naming the input and vars.CRYSK_CREDENTIALS", () => {
+    const rendered = renderError(
+      { kind: "config-parse", source: "credentials-input" },
+      { detail: "the credentials input is not valid JSON", runId: "123" },
+      "action",
+    );
+    expect(rendered.code).toBe("CRYSK-CONFIG-INVALID");
+    expect(rendered.owner).toBe("config");
+    expect(rendered.what).toBe(
+      "The credentials input is invalid: the credentials input is not valid JSON",
+    );
+    const summary = rendered.summary.join("\n");
+    expect(summary).toContain("gh variable set CRYSK_CREDENTIALS");
+    expect(summary).toContain(
+      "credentials: $" + "{{ vars.CRYSK_CREDENTIALS }}",
+    );
+    expect(summary).not.toContain("CRYSK_MODELS");
+    expect(rendered.annotation).toContain("vars.CRYSK_CREDENTIALS");
+    expect(rendered.annotation).not.toContain("CRYSK_MODELS");
+  });
+
+  test("a setup record reads the credentials-input class", () => {
+    const record = {
+      v: 1,
+      cls: { kind: "config-parse", source: "credentials-input" },
+      detail: "the credentials input is not valid JSON",
+    } as const;
+    expect(parseSetupRecord(JSON.stringify(record))).toEqual(record);
   });
 
   // The touched existing behavior: the repo-config source keeps the file's wording.

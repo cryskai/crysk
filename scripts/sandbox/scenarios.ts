@@ -366,10 +366,10 @@ export const SCENARIOS: readonly Scenario[] = [
         // A precondition, not the subject: the free route may fail its hunters on
         // this first run (a flake), and the comment run is what is under test.
         // The hunters-failed tolerance and its flake label need an action ref that
-        // renders CRYSK-HUNTERS-FAILED, at or after the rename of the error codes
-        // (fd28303). Before T2c (98569d1) an all-hunters-failed run shows `review did
-        // not finish` with no code, and before the rename its code reads as no code;
-        // S7 reports either.
+        // renders the code, CRYSK-HUNTERS-FAILED or, before the rename of the error
+        // codes (fd28303), PRH-HUNTERS-FAILED, which reads as the same code. Before T2c
+        // (98569d1) an all-hunters-failed run shows `review did not finish` with no
+        // code; S7 reports it.
         checks: [{ kind: "path", accept: ["reviewed", "hunters-failed"] }],
       },
       {

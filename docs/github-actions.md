@@ -1648,6 +1648,30 @@ Then re-run the workflow:
 gh run rerun {runId}
 ```
 
+#### `credentials-input`
+
+The workflow's `credentials` input, filled from the `CRYSK_CREDENTIALS` variable, is not a valid Claude credential order. Crysk names the input and never echoes its value.
+
+**What:** The credentials input is invalid: {detail}
+
+**Why:** Crysk refuses to guess which Claude credential to use
+
+**Fix:**
+
+Fix the Claude credential order, a JSON object such as {"claude": ["subscription", "api_key"]}, and set the variable again:
+
+```bash
+gh variable set CRYSK_CREDENTIALS --body "$(jq -c . credentials.json)"
+```
+
+The workflow passes it as `credentials: ${{ vars.CRYSK_CREDENTIALS }}`.
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
 <a id="prh-token-permission"></a>
 
 ### CRYSK-TOKEN-PERMISSION

@@ -237,6 +237,10 @@ export async function resolvePrPlanAndConfirm(params: {
       : await countFreeRouteSteps({
           steps: planRoutes(routePlan),
           probe: productionAdmission.freeModelProbe,
+          // The CRYSK_OPENCODE_* names admission bound each route's kind with,
+          // so the card counts free exactly the routes admission probed (U3).
+          openCodeSecretNames:
+            productionAdmission.authorityOptions.openCodeSecretNames,
         });
   const runnerAuthority = await resolveRunnerAuthority({
     workspaceRoot: params.worktreePath,

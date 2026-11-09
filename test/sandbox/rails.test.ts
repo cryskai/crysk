@@ -17,7 +17,7 @@ import {
 } from "../../scripts/sandbox/rails";
 import {
   CLAUDE_TOKEN_SECRET,
-  ROUTING_VARIABLE,
+  MODELS_VARIABLE,
 } from "../../scripts/sandbox/seed";
 import { runSmoke } from "../../scripts/sandbox/smoke";
 import { type GhScript, harness, ok } from "./fakes";
@@ -33,9 +33,9 @@ describe("gh rail: the sandbox repo is the only target", () => {
       ["run", "list", "-R", SANDBOX_REPO, "--branch", "sandbox/x"],
       ["run", "view", "42", "-R", SANDBOX_REPO, "--json", "jobs"],
       ["secret", "list", "-R", SANDBOX_REPO, "--json", "name"],
-      ["variable", "get", "PRHERO_ROUTING", `--repo=${SANDBOX_REPO}`],
+      ["variable", "get", "CRYSK_MODELS", `--repo=${SANDBOX_REPO}`],
       ["repo", "view", SANDBOX_REPO, "--json", "name"],
-      ["repo", "create", SANDBOX_REPO, "--public"],
+      ["repo", "create", SANDBOX_REPO, "--private"],
       ["repo", "clone", SANDBOX_REPO, "/tmp/x"],
       ["api", sandboxApi("commits/abc/status")],
       ["api", sandboxApi("actions/runs/1/artifacts")],
@@ -186,59 +186,119 @@ describe("gh rail: short-flag clusters", () => {
   });
 });
 
-// The claude route deletes the routing variable, and only that one. The rail names it
-// as a literal, so widening it means editing this allowlist, not the seed.
-describe("gh rail: the routing variable is the only variable deleted", () => {
-  test("accepts exactly the delete the claude route makes, in either repo spelling", () => {
-    expect(() =>
-      assertGhArgs([
-        "variable",
-        "delete",
-        ROUTING_VARIABLE,
-        "--repo",
-        SANDBOX_REPO,
-      ]),
-    ).not.toThrow();
-    expect(() =>
-      assertGhArgs([
-        "variable",
-        "delete",
-        ROUTING_VARIABLE,
-        "-R",
-        SANDBOX_REPO,
-      ]),
-    ).not.toThrow();
-    expect(() =>
-      assertGhArgs([
-        "variable",
-        "delete",
-        ROUTING_VARIABLE,
-        `--repo=${SANDBOX_REPO}`,
-      ]),
-    ).not.toThrow();
+// The claude route deletes the models variable and the opencode route sets it, and
+// no other variable is written. The rail names it as a literal, so widening it means
+// editing this allowlist, not the seed.
+describe("gh rail: the models variable is the only variable written", () => {
+  test("names the seed's variable, CRYSK_MODELS", () => {
+    expect(MODELS_VARIABLE).toBe("CRYSK_MODELS");
   });
 
-  test("refuses a delete of any other variable name, or of no name", () => {
+  test("accepts exactly the delete the claude route makes, in either repo spelling", () => {
+    for (const target of [
+      ["--repo", SANDBOX_REPO],
+      ["-R", SANDBOX_REPO],
+      [`--repo=${SANDBOX_REPO}`],
+    ]) {
+      expect(() =>
+        assertGhArgs(["variable", "delete", MODELS_VARIABLE, ...target]),
+      ).not.toThrow();
+    }
+  });
+
+  test("accepts exactly the set the opencode route makes, in either repo spelling", () => {
+    for (const target of [
+      ["--repo", SANDBOX_REPO],
+      ["-R", SANDBOX_REPO],
+      [`--repo=${SANDBOX_REPO}`],
+    ]) {
+      expect(() =>
+        assertGhArgs([
+          "variable",
+          "set",
+          MODELS_VARIABLE,
+          ...target,
+          "--body",
+          '{"default":["opencode:opencode/x"]}',
+        ]),
+      ).not.toThrow();
+    }
+  });
+
+  test("refuses a set or delete of the old routing variable, any other name, or no name", () => {
     const refused: string[][] = [
-      ["variable", "delete", "OTHER_VARIABLE", "--repo", SANDBOX_REPO],
-      ["variable", "delete", "PRHERO_ROUTING_V2", "--repo", SANDBOX_REPO],
+      ["variable", "delete", "PRHERO_ROUTING", "--repo", SANDBOX_REPO],
+      ["variable", "delete", "CRYSK_ROUTING", "--repo", SANDBOX_REPO],
+      ["variable", "delete", "CRYSK_CREDENTIALS", "--repo", SANDBOX_REPO],
+      ["variable", "delete", "CRYSK_MODELS_V2", "--repo", SANDBOX_REPO],
       ["variable", "delete", "--repo", SANDBOX_REPO],
-      ["variable", "delete", "--repo", SANDBOX_REPO, ROUTING_VARIABLE],
+      ["variable", "delete", "--repo", SANDBOX_REPO, MODELS_VARIABLE],
+      ["variable", "set", "PRHERO_ROUTING", "-R", SANDBOX_REPO, "--body", "{}"],
+      [
+        "variable",
+        "set",
+        "CRYSK_OPENCODE_PROVIDERS",
+        "-R",
+        SANDBOX_REPO,
+        "--body",
+        "[]",
+      ],
+      ["variable", "set", "-R", SANDBOX_REPO, "--body", "{}"],
     ];
     for (const args of refused) {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
     }
   });
 
-  test("refuses the routing variable's delete in any other repo, or with no repo, or with a widening flag", () => {
+  test("refuses a set of the models variable in any other shape: another repo, no body, a file, a second value", () => {
     const refused: string[][] = [
-      ["variable", "delete", ROUTING_VARIABLE, "--repo", "cryskai/crysk"],
-      ["variable", "delete", ROUTING_VARIABLE, "-R", "cryskai/crysk"],
-      ["variable", "delete", ROUTING_VARIABLE],
+      [
+        "variable",
+        "set",
+        MODELS_VARIABLE,
+        "-R",
+        "cryskai/crysk",
+        "--body",
+        "x",
+      ],
+      ["variable", "set", MODELS_VARIABLE, "-R", SANDBOX_REPO],
+      ["variable", "set", MODELS_VARIABLE, "--body", "x"],
+      ["variable", "set", MODELS_VARIABLE, "-R", SANDBOX_REPO, "-f", ".env"],
+      [
+        "variable",
+        "set",
+        MODELS_VARIABLE,
+        "-R",
+        SANDBOX_REPO,
+        "--env-file",
+        ".env",
+      ],
+      [
+        "variable",
+        "set",
+        MODELS_VARIABLE,
+        "-R",
+        SANDBOX_REPO,
+        "--body",
+        "x",
+        "--body",
+        "y",
+      ],
+    ];
+    for (const args of refused) {
+      expect(() => assertGhArgs(args)).toThrow(RailViolation);
+    }
+  });
+
+  test("refuses the models variable's delete in any other repo, or with no repo, or with a widening flag", () => {
+    const refused: string[][] = [
+      ["variable", "delete", MODELS_VARIABLE, "--repo", "cryskai/crysk"],
+      ["variable", "delete", MODELS_VARIABLE, "-R", "cryskai/crysk"],
+      ["variable", "delete", MODELS_VARIABLE],
       [
         "variable",
         "delete",
-        ROUTING_VARIABLE,
+        MODELS_VARIABLE,
         "--env",
         "production",
         "-R",
@@ -247,9 +307,9 @@ describe("gh rail: the routing variable is the only variable deleted", () => {
       [
         "variable",
         "delete",
-        ROUTING_VARIABLE,
+        MODELS_VARIABLE,
         "--org",
-        "juanmaagd",
+        "cryskai",
         "-R",
         SANDBOX_REPO,
       ],
@@ -259,10 +319,40 @@ describe("gh rail: the routing variable is the only variable deleted", () => {
     }
   });
 
-  test("refuses the other variable verbs the claude route does not need", () => {
+  test("refuses the other variable verbs the runner does not need", () => {
     expect(() =>
       assertGhArgs(["variable", "list", "--repo", SANDBOX_REPO]),
     ).toThrow(RailViolation);
+  });
+});
+
+// init sets no secret any more: the old OpenCode auth secret is gone, and a secret's
+// value is the owner's to set. Only the listing that checks presence stays.
+describe("gh rail: the runner sets no secret", () => {
+  test("refuses a secret set of any name, the old OpenCode auth secret included", () => {
+    for (const name of [
+      "OPENCODE_AUTH_JSON",
+      "CRYSK_CLAUDE_OAUTH_TOKEN",
+      "CRYSK_CLAUDE_API_KEY",
+    ]) {
+      expect(() =>
+        assertGhArgs([
+          "secret",
+          "set",
+          name,
+          "-R",
+          SANDBOX_REPO,
+          "--body",
+          "{}",
+        ]),
+      ).toThrow(RailViolation);
+    }
+  });
+
+  test("still accepts the secret listing init reads", () => {
+    expect(() =>
+      assertGhArgs(["secret", "list", "-R", SANDBOX_REPO, "--json", "name"]),
+    ).not.toThrow();
   });
 });
 
@@ -478,8 +568,8 @@ describe("scenario branches", () => {
 describe("gh rail: short-flag clusters on every verb", () => {
   test("refuses a single-dash argument longer than two characters, on any verb", () => {
     const refused: string[][] = [
-      ["api", "repos/juanmaagd/pr-hero-sandbox", "-iX", "DELETE"],
-      ["api", "repos/juanmaagd/pr-hero-sandbox/issues", "-if", "title=x"],
+      ["api", "repos/cryskai/crysk-sandbox", "-iX", "DELETE"],
+      ["api", "repos/cryskai/crysk-sandbox/issues", "-if", "title=x"],
       [
         "pr",
         "close",
@@ -487,7 +577,7 @@ describe("gh rail: short-flag clusters on every verb", () => {
         "-R",
         SANDBOX_REPO,
         "-dR",
-        "juanmaagd/other",
+        "cryskai/other",
         "--delete-branch",
       ],
     ];
@@ -613,12 +703,12 @@ describe("gh api: dot segments and percent-encoding are refused before the prefi
     const refused: string[][] = [
       [
         "api",
-        "repos/juanmaagd/pr-hero-sandbox/git/refs/heads/sandbox/../main",
+        "repos/cryskai/crysk-sandbox/git/refs/heads/sandbox/../main",
         "-X",
         "DELETE",
       ],
-      ["api", "repos/juanmaagd/pr-hero-sandbox/%2e%2e/x"],
-      ["api", "repos/juanmaagd/pr-hero-sandbox/../pr-hero/pulls"],
+      ["api", "repos/cryskai/crysk-sandbox/%2e%2e/x"],
+      ["api", "repos/cryskai/crysk-sandbox/../pr-hero/pulls"],
     ];
     for (const args of refused) {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
@@ -641,7 +731,7 @@ describe("git rail: the remote is read only as origin's fetch and push URLs", ()
       ["remote", "get-url", "upstream"],
       ["remote", "get-url", "--push", "upstream"],
       ["remote", "get-url", "--all", "origin"],
-      ["push", "https://github.com/juanmaagd/pr-hero-sandbox.git", "main"],
+      ["push", "https://github.com/cryskai/crysk-sandbox.git", "main"],
     ];
     for (const args of refused) {
       expect(() => assertGitArgs(args)).toThrow(RailViolation);
@@ -686,7 +776,7 @@ const happyGh: GhScript = (args, world) => {
   }
   if (args[0] === "pr" && args[1] === "list") return ok("[]");
   if (args[0] === "pr" && args[1] === "create") {
-    return ok("https://github.com/juanmaagd/pr-hero-sandbox/pull/7\n");
+    return ok("https://github.com/cryskai/crysk-sandbox/pull/7\n");
   }
   if (args[0] === "run" && args[1] === "list") {
     return ok(
@@ -758,9 +848,9 @@ describe("every real call site passes the hardened rails", () => {
     const scenarioPr = {
       number: 7,
       headRefName: "sandbox/smoke-20261016T143000Z",
-      url: "https://github.com/juanmaagd/pr-hero-sandbox/pull/7",
+      url: "https://github.com/cryskai/crysk-sandbox/pull/7",
       isCrossRepository: false,
-      headRepositoryOwner: { login: "juanmaagd" },
+      headRepositoryOwner: { login: "cryskai" },
     };
     const inFlight = {
       databaseId: 42,
