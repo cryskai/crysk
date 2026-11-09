@@ -120,11 +120,11 @@ async function ensureRepo(deps: SandboxDeps): Promise<void> {
     "repo",
     "create",
     SANDBOX_REPO,
-    "--public",
+    "--private",
     "--description",
     REPO_DESCRIPTION,
   ]);
-  deps.log(`repo: created public ${SANDBOX_REPO}`);
+  deps.log(`repo: created private ${SANDBOX_REPO}`);
 }
 
 async function seedMain(

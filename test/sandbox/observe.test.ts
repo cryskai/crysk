@@ -52,7 +52,7 @@ const MANUAL = "<!-- pr-hero-manual-required -->\n\nreview this by hand";
 function observation(overrides: Partial<Observation> = {}): Observation {
   return {
     prNumber: 7,
-    prUrl: "https://github.com/juanmaagd/pr-hero-sandbox/pull/7",
+    prUrl: "https://github.com/cryskai/crysk-sandbox/pull/7",
     headSha: SHA,
     run: {
       id: 42,

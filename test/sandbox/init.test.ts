@@ -128,7 +128,7 @@ function scriptFor(w: World) {
 const REF = "v0.2.0";
 
 describe("init: repo", () => {
-  test("creates a public repo with the test-bed description only when it is missing", async () => {
+  test("creates a private repo with the test-bed description only when it is missing", async () => {
     const w = world({
       exists: false,
       hasCommits: false,
@@ -141,7 +141,7 @@ describe("init: repo", () => {
         "repo",
         "create",
         SANDBOX_REPO,
-        "--public",
+        "--private",
         "--description",
         REPO_DESCRIPTION,
       ],

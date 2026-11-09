@@ -738,7 +738,7 @@ export class FakeGithub {
           title,
           createdAt,
           isCrossRepository: false,
-          headRepositoryOwner: { login: "juanmaagd" },
+          headRepositoryOwner: { login: "cryskai" },
         }));
       return ok(JSON.stringify(open));
     }

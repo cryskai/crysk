@@ -6,8 +6,8 @@
 
 import type { Gh, Git } from "./ports";
 
-export const SANDBOX_OWNER = "juanmaagd";
-export const SANDBOX_NAME = "pr-hero-sandbox";
+export const SANDBOX_OWNER = "cryskai";
+export const SANDBOX_NAME = "crysk-sandbox";
 export const SANDBOX_REPO = `${SANDBOX_OWNER}/${SANDBOX_NAME}`;
 export const SANDBOX_REMOTE_URL = `https://github.com/${SANDBOX_REPO}.git`;
 export const SCENARIO_BRANCH_PREFIX = "sandbox/";
