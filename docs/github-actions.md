@@ -1286,6 +1286,42 @@ Then re-run the workflow:
 gh run rerun {runId}
 ```
 
+### PRH-INPUT-REMOVED
+
+**Owner:** your configuration
+
+**What:** The workflow passes inputs Crysk no longer reads: {detail}
+
+**Why:** Crysk now takes its credentials only from the CRYSK_* secrets in the crysk-secrets input, and its models only from `models`, so a review would run without the credential or models the workflow names
+
+The trigger stops the run before anything is installed when the workflow passes a value in `anthropic-api-key`, `claude-token`, `opencode-auth` or `routing`, whatever else it passes. The inputs stay declared only so this message can name them; an old input left empty (an unset secret) is not refused. `{detail}` lists the inputs that had a value.
+
+**Fix:**
+
+Set the CRYSK_* secret that replaces each old credential input:
+
+```bash
+claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN
+gh secret set CRYSK_CLAUDE_API_KEY
+gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
+```
+
+claude-token becomes CRYSK_CLAUDE_OAUTH_TOKEN and anthropic-api-key becomes CRYSK_CLAUDE_API_KEY. opencode-auth becomes one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider your models use, <PROVIDER> being the provider id uppercased with `-` and `.` as `_`. An OpenAI subscription is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):
+
+```bash
+jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
+```
+
+In the workflow, delete the old lines under `with:` and pass the secrets in one `crysk-secrets: |` block, one NAME=value line per secret, for example `CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}`.
+
+The routing input has no replacement input: set models per role (`models`) on the Crysk platform.
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
+```
+
 ### PRH-CRED-UNUSABLE
 
 **Owner:** your configuration

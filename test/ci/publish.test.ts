@@ -31,6 +31,7 @@ import {
   type CliRecord,
   PENDING_AT_FILE,
   parseCliRecord,
+  parseTriggerRecord,
   type TriggerRecord,
 } from "#ci/outcome";
 import {
@@ -1209,6 +1210,45 @@ describe("decidePublication — the pure table", () => {
     expect(plan.rendered.annotation).toContain(
       "gh secret set CLAUDE_CODE_OAUTH_TOKEN",
     );
+  });
+
+  // U5: a workflow still passing a removed input is stopped by the trigger, and its
+  // record names the inputs. The publisher posts the status and comment like a
+  // missing credential, under its own code.
+  test("a removed-inputs record is PRH-INPUT-REMOVED, naming the inputs and the CRYSK_* replacement", () => {
+    const plan = decidePublication({
+      record: record({
+        decision: "removed-inputs",
+        params: { detail: "claude-token, routing" },
+      }),
+      cliStarted: false,
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.code).toBe("PRH-INPUT-REMOVED");
+    expect(plan.rendered.owner).toBe("config");
+    expect(plan.status?.state).toBe("error");
+    expect(plan.status?.description).toBe(
+      "PRH-INPUT-REMOVED: The workflow passes inputs Crysk no longer reads: claude-token, routing",
+    );
+    expect(plan.rendered.annotation).toContain(
+      "delete the claude-token, routing input lines from the workflow",
+    );
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
+    expect(summary).toContain(
+      "set models per role (`models`) on the Crysk platform",
+    );
+  });
+
+  test("a removed-inputs record survives the publisher's own reading of trigger.json", () => {
+    const text = JSON.stringify(
+      record({
+        decision: "removed-inputs",
+        params: { detail: "opencode-auth" },
+      }),
+    );
+    expect(parseTriggerRecord(text)?.decision).toBe("removed-inputs");
   });
 
   test("no credentials on an opencode route names the OpenCode secret", () => {

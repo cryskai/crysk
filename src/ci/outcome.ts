@@ -46,7 +46,11 @@ type RouteReason =
 export type ErrorClass =
   | {
       kind: "trigger";
-      check: "no-credential" | "routing-missing" | "pr-unresolved";
+      check:
+        | "no-credential"
+        | "removed-input"
+        | "routing-missing"
+        | "pr-unresolved";
     }
   | {
       kind: "config-parse";
@@ -72,6 +76,7 @@ type GithubClass = Extract<ErrorClass, { kind: "github" }>;
 
 export const ERROR_CODES = [
   "PRH-CRED-MISSING",
+  "PRH-INPUT-REMOVED",
   "PRH-CRED-UNUSABLE",
   "PRH-CRED-REJECTED",
   "PRH-ROUTING-MISSING",
@@ -175,6 +180,7 @@ export interface TriggerRecord {
     | "denied"
     | "unverifiable"
     | "no-credentials"
+    | "removed-inputs"
     | "override";
   cls?: ErrorClass;
   params: ErrorParams;
@@ -405,6 +411,7 @@ const TRIGGER_DECISIONS: readonly TriggerRecord["decision"][] = [
   "denied",
   "unverifiable",
   "no-credentials",
+  "removed-inputs",
   "override",
 ];
 // A GitHub login, with the bound and characters of the trigger's check (GITHUB_LOGIN in
@@ -796,6 +803,8 @@ export function codeOf(cls: ErrorClass): ErrorCode {
       switch (cls.check) {
         case "no-credential":
           return "PRH-CRED-MISSING";
+        case "removed-input":
+          return "PRH-INPUT-REMOVED";
         case "routing-missing":
           return "PRH-ROUTING-MISSING";
         case "pr-unresolved":
@@ -943,6 +952,7 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
     case "trigger":
       switch (cls.check) {
         case "no-credential":
+        case "removed-input":
         case "routing-missing":
         case "pr-unresolved":
           return "config";
@@ -1277,6 +1287,27 @@ const OPENCODE_CREDENTIAL_FIXES = [
   "$ gh run rerun {runId}",
 ] as const;
 
+// One line of the crysk-secrets input as a workflow writes it, spliced like the
+// inputs above. `{name}` is not a catalog placeholder here: the caller passes a name.
+function cryskSecretsLine(name: string): string {
+  return `${name}=$` + `{{ secrets.${name} }}`;
+}
+// The old inputs and the CRYSK_* secret or setting that replaces each (U5, S2, S8).
+// The trigger names only the inputs the workflow passed (the record's detail); the
+// fix lists every replacement, so it reads the same whichever ones they are.
+const REMOVED_INPUT_FIXES = [
+  "Set the CRYSK_* secret that replaces each old credential input:",
+  "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
+  "$ gh secret set CRYSK_CLAUDE_API_KEY",
+  "$ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY",
+  "claude-token becomes CRYSK_CLAUDE_OAUTH_TOKEN and anthropic-api-key becomes CRYSK_CLAUDE_API_KEY. opencode-auth becomes one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider your models use, <PROVIDER> being the provider id uppercased with `-` and `.` as `_`. An OpenAI subscription is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
+  "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+  `In the workflow, delete the old lines under \`with:\` and pass the secrets in one \`crysk-secrets: |\` block, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_CLAUDE_OAUTH_TOKEN")}\`.`,
+  "The routing input has no replacement input: set models per role (`models`) on the Crysk platform.",
+  "Then re-run the workflow:",
+  "$ gh run rerun {runId}",
+] as const;
+
 function single(
   why: string,
   fixes: CatalogVariant["fixes"],
@@ -1344,6 +1375,16 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         params.backend?.trim() === "opencode"
           ? "set the OPENCODE_AUTH_JSON secret: `gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json`"
           : "set a Claude credential: `claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN`",
+    ),
+  },
+  "PRH-INPUT-REMOVED": {
+    level: "error",
+    owner: "config",
+    what: "The workflow passes inputs Crysk no longer reads: {detail}",
+    variants: single(
+      "Crysk now takes its credentials only from the CRYSK_* secrets in the crysk-secrets input, and its models only from `models`, so a review would run without the credential or models the workflow names",
+      REMOVED_INPUT_FIXES,
+      "delete the {detail} input lines from the workflow and pass the CRYSK_* secrets in the crysk-secrets input instead (models per role come from the Crysk platform)",
     ),
   },
   "PRH-CRED-UNUSABLE": {

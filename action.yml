@@ -11,17 +11,17 @@ inputs:
     required: false
     default: '${{ github.token }}'
   anthropic-api-key:
-    description: 'Anthropic API key for Claude models. Omit if claude-token is supplied.'
+    description: 'Removed: pass CRYSK_CLAUDE_API_KEY in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (PRH-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   claude-token:
-    description: 'Claude Code OAuth token. Omit if anthropic-api-key is supplied.'
+    description: 'Removed: pass CRYSK_CLAUDE_OAUTH_TOKEN in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (PRH-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   routing:
-    description: 'Person-layer routing JSON (the config.routing object). Unset or empty leaves Claude-default CI. Written to $HOME/.crysk/config.json (or $HOME/.prhero when that is the one that exists), never the repo file.'
+    description: 'Removed: models are set per role (models) on the Crysk platform. Declared only so a workflow that still passes a value stops at the trigger (PRH-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
     default: ''
   opencode-auth:
-    description: 'Whole OpenCode auth.json store. Written 0600 at the OpenCode auth path. Never logged.'
+    description: 'Removed: pass one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (PRH-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   crysk-secrets:
     description: 'The Crysk credentials as NAME=value lines, one per CRYSK_* secret, each line written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN, CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY, CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record). The trigger reads which credentials it holds (a run with only this input is not stopped for having none), and the setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need. The Claude secrets do not reach the review yet: keep claude-token or anthropic-api-key for Claude until a release says otherwise. An unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. Every value is masked and never reaches a child process through its environment.'
@@ -139,14 +139,15 @@ runs:
     # comments that do not start with `/crysk review`. This step re-checks
     # all of it instead of trusting the caller: a comment must be exactly
     # `/crysk review` or `/crysk review --full`, from a user with write
-    # or admin access, and at least one credential must be set. A same-repo
-    # run with none goes RED here instead of skipping green. It also resolves
+    # or admin access, no removed input may hold a value, and at least one
+    # credential must be set. A same-repo run that fails either goes RED here
+    # instead of skipping green. It also resolves
     # the PR number, `force`, `full` and the head sha, and every later step
     # is gated on its `run` output.
     #
     # Event values reach it ONLY through `env:`. The comment body is free
     # text anyone can type; spliced into a script it is command injection.
-    # The old credential inputs arrive as presence booleans (`!= ''`), never as
+    # The removed inputs arrive as presence booleans (`!= ''`), never as
     # values. The crysk-secrets input cannot: the workflow passes one line per
     # CRYSK_* name, empty when the secret is unset, so the input is never empty
     # and presence needs its parse. It is piped on stdin exactly as the setup
@@ -173,19 +174,20 @@ runs:
         PR_NUMBER_INPUT: ${{ inputs.pr-number }}
         FORCE_INPUT: ${{ inputs.force }}
         FULL_INPUT: ${{ inputs.full }}
+        # The inputs the clean break removed (U5): any with a value stops the run
+        # (PRH-INPUT-REMOVED). Presence only, never a value.
         HAS_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key != '' }}
         HAS_CLAUDE_TOKEN: ${{ inputs.claude-token != '' }}
         HAS_OPENCODE_AUTH: ${{ inputs.opencode-auth != '' }}
+        HAS_ROUTING: ${{ inputs.routing != '' }}
         # The trigger writes its decision to trigger.json here; the publish
         # step reads it. The run step writes the cli-started marker here too.
         # One path, bound the same way in all three steps (T2b).
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
-        # Presence only, never the routing text: whether the routing names
-        # OpenCode, the same test the OpenCode install step makes. It names the
-        # backend of a no-credential outcome. In platform mode the platform's
-        # routing wins over the input: its output is `true` or `false` when the
-        # platform sent a routing, and empty otherwise (then the input decides).
-        HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode')) }}
+        # Presence only: whether the platform's models name OpenCode. It names
+        # the backend of a no-credential outcome. The routing input no longer
+        # counts: a value there stops the run (HAS_ROUTING above).
+        HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' }}
         # The attempt of this run. A re-run keeps the run id, so the record names
         # the attempt, and the publisher orders a re-run's comments by it.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}

@@ -620,7 +620,13 @@ describe("Packaging & distribution configuration", () => {
       // Outputs of the platform connect step (empty in a standalone run).
       platform?: Record<string, string>;
     }
+    // Whether the platform's models name OpenCode. The routing input no longer
+    // counts: a value there stops the run at the trigger (U5).
     const EFFECTIVE_OPENCODE_ROUTING =
+      "steps.platform.outputs.routing-opencode == 'true'";
+    // The OpenCode install condition before U5, still bound until the run-step
+    // slice moves it to the setup step's output.
+    const LEGACY_OPENCODE_ROUTING =
       "steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode'))";
     function resolveEnv(
       env: Record<string, string>,
@@ -652,14 +658,9 @@ describe("Packaging & distribution configuration", () => {
           )?.[1];
         if (fallback !== undefined) return input(fallback);
         if (expr === "steps.platform.outputs.github-actor") return "";
-        // The effective OpenCode routing: the platform's answer when it sent a
-        // routing (`true` or `false`), the input's otherwise.
+        // Whether the platform's models name OpenCode.
         if (expr === EFFECTIVE_OPENCODE_ROUTING) {
-          const platformRouting = ctx.platform?.["routing-opencode"] ?? "";
-          return String(
-            platformRouting === "true" ||
-              (platformRouting === "" && input("routing").includes("opencode")),
-          );
+          return String(ctx.platform?.["routing-opencode"] === "true");
         }
         const materialized = /^steps\.materialize\.outputs\.([\w-]+)$/.exec(
           expr,
@@ -731,14 +732,16 @@ describe("Packaging & distribution configuration", () => {
       const runner = { temp: runnerTemp };
       try {
         let output = "";
+        // The step pipes the crysk-secrets input on stdin and starts bun with
+        // the variable emptied, so the trigger gets it as `cryskSecrets`.
+        const { CRYSK_SECRETS_INPUT: piped = "", ...triggerEnv } = resolveEnv(
+          triggerStep()?.env ?? {},
+          { inputs, github, trigger: {}, runner },
+        );
         const exitCode = runCiTrigger({
+          cryskSecrets: piped,
           env: {
-            ...resolveEnv(triggerStep()?.env ?? {}, {
-              inputs,
-              github,
-              trigger: {},
-              runner,
-            }),
+            ...triggerEnv,
             // Runner defaults every step inherits, not `env:` bindings.
             GITHUB_REPOSITORY: github.repository ?? "",
             GITHUB_RUN_ID: "4242",
@@ -819,7 +822,11 @@ describe("Packaging & distribution configuration", () => {
 
     const REPOSITORY = "acme/widgets";
     const HEAD = "c".repeat(40);
-    const CREDENTIAL = { "claude-token": "oauth-test-token" };
+    // The run's credential, as a workflow passes it since U5: one line of the
+    // crysk-secrets input.
+    const CREDENTIAL = {
+      "crysk-secrets": "CRYSK_CLAUDE_OAUTH_TOKEN=oauth-test-token",
+    };
     const dispatchContext = {
       repository: REPOSITORY,
       event_name: "workflow_dispatch",
@@ -954,7 +961,7 @@ describe("Packaging & distribution configuration", () => {
       // The same effective test the trigger step binds: the platform's answer
       // when it sent a routing, the input's only when it sent none.
       expect(String(install?.if)).toBe(
-        `\${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || ${EFFECTIVE_OPENCODE_ROUTING}) }}`,
+        `\${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || ${LEGACY_OPENCODE_ROUTING}) }}`,
       );
     });
 
@@ -968,10 +975,12 @@ describe("Packaging & distribution configuration", () => {
       ],
       ["platform does not, input names OpenCode", "false", "opencode", "false"],
       ["platform does not, input empty", "false", "", "false"],
-      ["no platform routing, input names OpenCode", "", "opencode", "true"],
+      // The routing input no longer names the backend: a value there is a
+      // removed input, and the trigger stops the run for it.
+      ["no platform routing, input names OpenCode", "", "opencode", "false"],
       ["no platform routing, input empty", "", "", "false"],
     ])(
-      "the trigger's backend flag follows the platform's routing over the input: %s",
+      "the trigger's backend flag follows only the platform's models: %s",
       (_label, platformRouting, routing, expected) => {
         const env = resolveEnv(triggerStep()?.env ?? {}, {
           inputs: { routing },
@@ -1084,12 +1093,13 @@ describe("Packaging & distribution configuration", () => {
       ]);
     });
 
-    test("credentials reach the trigger as presence booleans, never as values", () => {
+    test("the removed inputs reach the trigger as presence booleans, never as values", () => {
       const env = triggerStep()?.env ?? {};
       for (const input of [
         "anthropic-api-key",
         "claude-token",
         "opencode-auth",
+        "routing",
       ]) {
         const bound = Object.values(env).filter((value) =>
           value.includes(`inputs.${input}`),
@@ -1307,6 +1317,31 @@ describe("Packaging & distribution configuration", () => {
         `bun "\${{ github.action_path }}/bin/pr-hero.js" "$@"`,
       );
     });
+
+    // U5 clean break: an old input with a value stops the run at the trigger,
+    // through the action's own bindings, even beside a CRYSK_* credential.
+    test.each([
+      ["claude-token", "oauth-test-token"],
+      ["anthropic-api-key", "sk-ant-test"],
+      ["opencode-auth", '{"zai":{"type":"api","key":"k"}}'],
+      ["routing", '{"logical":{}}'],
+    ])(
+      "a workflow still passing %s never reaches the CLI: a removed-inputs record naming it",
+      async (input, value) => {
+        const run = await runAction(
+          { ...CREDENTIAL, "pr-number": "305", [input]: value },
+          { repository: REPOSITORY, event_name: "workflow_dispatch" },
+        );
+        expect(run.exitCode).toBe(1);
+        expect(run.args).toBeUndefined();
+        expect(run.cliStarted).toBe(false);
+        expect(JSON.parse(run.record ?? "{}")).toMatchObject({
+          decision: "removed-inputs",
+          params: { detail: input },
+        });
+        expect(run.record).not.toContain(value);
+      },
+    );
 
     test("a run with no credential never reaches the CLI: no marker, and a no-credentials record", async () => {
       const run = await runAction(

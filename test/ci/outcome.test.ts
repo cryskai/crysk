@@ -113,6 +113,12 @@ const SAMPLES: Sample[] = [
     owner: "config",
   },
   {
+    name: "trigger removed-input",
+    cls: { kind: "trigger", check: "removed-input" },
+    code: "PRH-INPUT-REMOVED",
+    owner: "config",
+  },
+  {
     name: "trigger routing-missing",
     cls: { kind: "trigger", check: "routing-missing" },
     code: "PRH-ROUTING-MISSING",
@@ -516,9 +522,9 @@ describe("codeOf and ownerOf: every class variant", () => {
 });
 
 describe("the code list and its catalog", () => {
-  test("ERROR_CODES holds the 24 distinct codes", () => {
-    expect(ERROR_CODES).toHaveLength(24);
-    expect(new Set(ERROR_CODES).size).toBe(24);
+  test("ERROR_CODES holds the 25 distinct codes", () => {
+    expect(ERROR_CODES).toHaveLength(25);
+    expect(new Set(ERROR_CODES).size).toBe(25);
     for (const code of ERROR_CODES) expect(code.startsWith("PRH-")).toBe(true);
   });
 
