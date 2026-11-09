@@ -23,7 +23,9 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
 ```
 
 - `<ref>` is a tag or branch of `cryskai/crysk`, pinned into the sandbox workflow.
-  Letters, digits, `.`, `_`, `/`, `-`.
+  Letters, digits, `.`, `_`, `/`, `-`. The sandbox reads error codes as `CRYSK-*`, so a
+  scenario that expects one needs a ref at or after their rename (`fd28303`): an older ref
+  names its codes the old way, which reads as no code.
 - `init` creates the public repo if it is absent, seeds `main` with the fixture's correct
   sources, the product's scaffolded workflow, the repo config and the gotchas, and sets the
   `OPENCODE_AUTH_JSON` secret to `{}` (harmless while routing is unset). The planted bug is
@@ -74,7 +76,7 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   is a finding until a re-run shows otherwise. A flake is re-run once automatically (see
   Commands). The label names the free model, but the re-run rule keys on the cause alone, so
   a hunters-failed run on the claude route is re-run the same way. The hunters-failed
-  tolerance and this label need an action ref at or after T2c (`98569d1`), where the publisher renders `CRYSK-HUNTERS-FAILED`; on an older ref an all-hunters-failed run shows `review did not finish` with no CRYSK code, and S7 reports it.
+  tolerance and this label need an action ref that renders `CRYSK-HUNTERS-FAILED`, at or after the rename of the error codes (`fd28303`). Before T2c (`98569d1`) an all-hunters-failed run shows `review did not finish` with no code, and before the rename its code reads as no code; S7 reports either.
 
 ## Scenarios
 
