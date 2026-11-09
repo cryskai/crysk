@@ -187,6 +187,12 @@ model has used its own retries:
 model shares the OpenCode server's one. So a refused Claude login skips the other Claude models and moves
 to an OpenCode model, and the reverse. A cancelled run starts no further model.
 
+**A fenced credential.** A metered attempt whose cost the provider never reported (a timeout, a stream
+cut short) fences its credential's spend for the rest of the run, so nothing spends on it blindly. A
+later model on that credential is then refused before any request: it is recorded `skipped`, and the
+list goes on to a model on another credential. So a metered OpenCode model that times out moves only to
+a model on another credential, never to another model on the same one.
+
 **Time.** Each model gets the step's own retries, each with the step's full timeout, so the longest a step
 can take grows with the list: a step whose three models all keep timing out takes three times what one
 model would. Only the run's own ceiling bounds the whole step.
@@ -206,14 +212,16 @@ free.
 
 **What is recorded.** In `pipeline.json`, a step whose role listed several models has:
 
-- `model`, `route` and `effort_applied` of the model that **ran** (the last one not skipped), written when
+- `model`, `route` and `effort_applied` of the model that **ran** (the last one that reached its provider), written when
   the step settles over the first model stamped before the spawn. `effort_applied` follows the backend:
   an OpenCode fallback records `false`.
 - `model_attempts`: every model tried, in order, each with its `model`, `route`, `status` (`ok`,
-  `failed` or `skipped`), `attempts`, the `cause` it failed on (or `auth_invalid` for a skipped one) and
-  its own `usage_v2`. Models can bill differently, so the step's `usage_v2` sums them and only these
+  `failed` or `skipped`), `attempts`, the `cause` it failed on and its own `usage_v2`. `skipped` means it
+  never reached its provider: after a refused login on its credential (`cause` `auth_invalid`), or with no
+  cause when its credential was fenced or it failed before its first request. The step reports the cause
+  and detail of the model that ran. Models can bill differently, so the step's `usage_v2` sums them and only these
   entries keep each model's billing.
-- `attempts` counts every model's attempts, and attempts are numbered across models, so each model's
+- `attempts` counts every model's attempts that reached a provider, and attempts are numbered across models, so each model's
   attempt logs and settlement receipts keep their own files; the pointers name the last one.
 
 Spend is reserved per attempt on the binding of the model that runs it, exactly as for a single model.

@@ -50,8 +50,10 @@ export function fallbackMove(cause: FailureCause | undefined): FallbackMove {
   return PROVIDER_FAILURES.has(cause) ? "next" : "stop";
 }
 
-// The route of the model that ran: the last one not skipped. Undefined for a
-// step with one model, whose route is the step's own.
+// The route of the model that ran: the last one not skipped. A model that
+// never reached its provider is recorded `skipped`, so it is never named here.
+// Undefined for a step with one model, whose route is the step's own, and for
+// a list none of whose models reached a provider.
 export function ranRoute(
   result: Pick<StepResult, "modelAttempts">,
 ): ResolvedModelRoute | undefined {
@@ -123,13 +125,32 @@ export async function runWithFallback(
         ? { routeKey: step.routeKey }
         : {}),
       ...(attemptsSoFar === 0 ? {} : { attemptOffset: attemptsSoFar }),
+      // A fallback's request names its own model (attempt evidence records
+      // it beside the route); the first keeps the caller's.
+      ...(index === 0 ? {} : { model: route.modelSnapshot || step.model }),
     });
-    attemptsSoFar += result.attempts;
+    const reached = reachedAttempts(result);
+    attemptsSoFar += reached;
     results.push(result);
+    if (reached === 0) {
+      // Never reached its provider: not the model that ran, and not the one
+      // whose outcome the step reports.
+      modelAttempts.push({
+        route,
+        status: "skipped",
+        attempts: 0,
+        effort: effortOf(index),
+      });
+      // A fenced bucket refuses every model on it at no cost, and another
+      // credential may still run. Anything else that stops a model before
+      // its first request is not the provider's, so it stops the step.
+      if (result.spendFenced === true) continue;
+      break;
+    }
     modelAttempts.push({
       route,
       status: result.status,
-      attempts: result.attempts,
+      attempts: reached,
       effort: effortOf(index),
       ...(result.status === "ok" || result.finalCause === undefined
         ? {}
@@ -150,16 +171,36 @@ export async function runWithFallback(
   return mergeResults(results, modelAttempts, attemptsSoFar);
 }
 
-// The step's one result: the last model's outcome, with what every model
-// spent. Usage and reservations are summed, never replaced, because a failed
-// model's attempts still cost what they cost.
+// The attempts of one model's run that reached its provider. An attempt
+// refused by a fenced bucket is always the run's last (the harness stops on
+// it), never reached the provider and wrote no file, so it takes no number:
+// the next model's attempts follow the ones that did run.
+function reachedAttempts(result: StepResult): number {
+  return result.attempts - (result.spendFenced === true ? 1 : 0);
+}
+
+// The step's one result: the outcome of the last model that reached its
+// provider (or the last model, when none did), with what every model spent.
+// Usage and reservations are summed, never replaced, because a failed
+// model's attempts still cost what they cost. Why each later model did not
+// run is kept in the tail, after the reported model's own.
 function mergeResults(
   results: readonly StepResult[],
   modelAttempts: ModelAttempt[],
   attempts: number,
 ): StepResult {
-  // The first model always runs (a skip needs a refused login before it).
-  const last = results[results.length - 1];
+  // The first model is always handed to `runOn` (a skip needs a refused
+  // login before it), so `results` is never empty.
+  const ranIndex = results.findLastIndex(
+    (result) => reachedAttempts(result) > 0,
+  );
+  const reported = ranIndex === -1 ? results.length - 1 : ranIndex;
+  // biome-ignore lint/style/noNonNullAssertion: results is never empty (above)
+  const last = results[reported]!;
+  const notRun = results
+    .slice(reported + 1)
+    .map((result) => result.stderrTail.trim())
+    .filter((tail) => tail.length > 0);
   let usageV2: NormalizedUsage | undefined;
   for (const result of results) {
     if (result.usageV2 === undefined) continue;
@@ -172,10 +213,18 @@ function mergeResults(
   const {
     usageV2: _lastUsage,
     reservations: _lastReservations,
+    spendFenced: _lastFenced,
     ...outcome
   } = last;
   return {
     ...outcome,
+    ...(notRun.length === 0
+      ? {}
+      : {
+          stderrTail: [outcome.stderrTail, ...notRun]
+            .filter((tail) => tail.length > 0)
+            .join("\n"),
+        }),
     // The legacy shape is projected from the normalized one whenever any
     // model reported it, exactly as the harness projects its own attempts.
     usage:
