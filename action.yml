@@ -39,7 +39,7 @@ inputs:
     description: 'Pull request number. Defaults to the triggering pull_request/issue_comment event.'
     required: false
   model:
-    description: 'Optional Claude model override for every agent'
+    description: 'Optional model name for every step but the materiality judge (claude:<alias>-latest, claude:claude-<id> or opencode:<provider>/<model>). It overrides models, takes no effort, and has no fallbacks; set models per role in the models input instead.'
     required: false
   scout:
     description: 'Run the experimental diff-only scout stage before hunting'

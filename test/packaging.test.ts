@@ -2177,10 +2177,11 @@ describe("Packaging & distribution configuration", () => {
     expect(existsSync(refPath)).toBe(true);
     const skill = readFileSync(skillPath, "utf-8");
     expect(skill).toContain("references/opencode-ci.md");
-    expect(skill).toContain("OPENCODE_AUTH_JSON");
-    expect(skill).toContain("CRYSK_ROUTING");
+    expect(skill).toContain("CRYSK_MODELS");
+    expect(skill).toContain("CRYSK_OPENCODE_PROVIDERS");
+    expect(skill).toContain("crysk-secrets");
     const ref = readFileSync(refPath, "utf-8");
-    expect(ref).toContain("modelSnapshot");
+    expect(ref).toContain("CRYSK_OPENCODE_PROVIDERS");
     expect(ref).toContain("Do **not** create `OPENAI_API_KEY`");
   });
 
