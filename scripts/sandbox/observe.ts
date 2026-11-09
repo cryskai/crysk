@@ -11,7 +11,7 @@
 import { MARKER_OPEN, matchMarkerPrefix } from "../../src/brand";
 import { isManualReviewHold } from "../../src/pr/preflight";
 import {
-  CRYSK_CODE,
+  cryskCodeOf,
   FINDING_MARKER_PREFIX,
   OUTCOME_MARKER_PREFIX,
   OVERRIDE_MARKER_PREFIX,
@@ -198,7 +198,7 @@ export type SmokePath =
   | "no-outcome";
 
 export function outcomeCodeOf(body: string): string | undefined {
-  return CRYSK_CODE.exec(body)?.[0];
+  return cryskCodeOf(body);
 }
 
 // The blocking entries in a report's `### Comments Outside Diff` section

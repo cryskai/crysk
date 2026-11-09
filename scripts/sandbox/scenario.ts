@@ -24,7 +24,7 @@ import {
   ownBlockingUndecided,
 } from "./expect";
 import { acquireRunLock, releaseRunLock } from "./lock";
-import { FINDING_MARKER_PREFIX, gateStatusOf } from "./markers";
+import { cryskCodeText, FINDING_MARKER_PREFIX, gateStatusOf } from "./markers";
 import {
   COMMENT_RUN_CLOCK_SKEW_MS,
   type CommentFact,
@@ -791,9 +791,14 @@ async function statusOf(
     }[];
   }>(deps, ["api", `repos/${SANDBOX_REPO}/commits/${sha}/status`]);
   const latest = gateStatusOf(combined.statuses);
-  return latest === undefined
-    ? undefined
-    : { state: latest.state, description: latest.description };
+  return latest === undefined ? undefined : statusFact(latest);
+}
+
+// The gate row as the checks read it: a PRH-* code that opens the description (a ref
+// from before the code rename) is read as its CRYSK-* name, so every reader downstream
+// matches CRYSK-* alone.
+function statusFact(row: { state: string; description: string }): StatusFact {
+  return { state: row.state, description: cryskCodeText(row.description) };
 }
 
 // The newer head of a rerun phase: the head the scenario pushed last, its status
@@ -1426,10 +1431,7 @@ async function collect(
     prUrl: pr.url,
     headSha,
     run: runFact,
-    status:
-      latest === undefined
-        ? undefined
-        : { state: latest.state, description: latest.description },
+    status: latest === undefined ? undefined : statusFact(latest),
     statusCreatedAt: latest?.created_at,
     comments,
     artifacts,

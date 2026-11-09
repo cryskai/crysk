@@ -280,8 +280,9 @@ export async function installSystemTool(
 // can happen in — see spec.md §4.1's two scenarios:
 //   - Inside GitHub Actions: are the required secrets present? Presence
 //     only, NEVER a value, a prefix, or a length — see CLAUDE.md's "Never
-//     leak secrets into generated output" rule. Review auth is Anthropic
-//     env OR the OpenCode auth file at resolveOpenCodeAuthPath().
+//     leak secrets into generated output" rule. Review auth is a Claude
+//     credential by U2's rule (CRYSK_CLAUDE_* first) OR the OpenCode auth
+//     file at resolveOpenCodeAuthPath().
 //   - In a local repo: is a pr-hero workflow configured at all?
 // Deliberately does NOT verify the workflow file is git-committed (spec's
 // "present and committed" local scenario) — that needs a git call, and the
@@ -311,27 +312,37 @@ export function checkCiConfiguration(
   if (options.isCi) {
     const exists = options.exists ?? existsSync;
     const hasGithubToken = Boolean(env.GITHUB_TOKEN?.trim());
+    // U2's rule, the one a run chooses by: CRYSK_CLAUDE_* first (what the action's
+    // crysk-secrets input carries, U5), then the CLI's names; a whitespace-only value
+    // is absent and ANTHROPIC_AUTH_TOKEN never counts. No login: a hosted runner has none.
+    const presence = claudeCredentialPresence(env, false);
     const hasClaudeAuth =
-      Boolean(env.ANTHROPIC_API_KEY?.trim()) ||
-      Boolean(env.CLAUDE_CODE_OAUTH_TOKEN?.trim());
+      presence.subscription !== undefined || presence.api_key !== undefined;
     const hasOpenCodeAuth = exists(resolveOpenCodeAuthPath(env));
     const hasReviewAuth = hasClaudeAuth || hasOpenCodeAuth;
 
     const missing: string[] = [];
     if (!hasGithubToken) missing.push("GITHUB_TOKEN");
-    if (!hasReviewAuth) missing.push("ANTHROPIC_API_KEY");
+    if (!hasReviewAuth) {
+      missing.push("CRYSK_CLAUDE_OAUTH_TOKEN (or CRYSK_CLAUDE_API_KEY)");
+    }
 
     if (missing.length === 0) {
       return {
         configured: true,
         message:
-          "Required CI secrets are present (GITHUB_TOKEN, Anthropic/Claude or OpenCode auth)",
+          "Required CI secrets are present (GITHUB_TOKEN, a CRYSK_CLAUDE_* credential or OpenCode auth)",
       };
     }
     return {
       configured: false,
       message: `Missing required CI secret(s): ${missing.join(", ")}`,
-      hint: "Configure the missing secret(s) as repository secrets and pass them in the workflow's `with:` block — never echo their values.",
+      hint:
+        "Set the missing secret(s) as repository secrets (`claude setup-token`, then " +
+        "`gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass each in the Crysk action's " +
+        // Spliced so the GitHub expression is not read as a template placeholder.
+        "`crysk-secrets` input as a `NAME=$" +
+        "{{ secrets.NAME }}` line — never echo their values.",
     };
   }
 

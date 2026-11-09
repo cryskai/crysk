@@ -1,11 +1,10 @@
 // init: bring the sandbox to the state a scenario run needs, idempotently.
 //
 // Order matters. The repo must exist before anything can be cloned, the clone
-// must be the sandbox before anything is pushed, and the secrets and routing
-// variable are set last, after main is pinned, so a failed push never leaves a
-// routing variable pointing at a workflow that is not there. Within the secrets
-// step the claude route's token check comes first, so a missing token changes no
-// routing.
+// must be the sandbox before anything is pushed, and the secrets check and the
+// models variable come last, after main is pinned, so a failed push never leaves a
+// models variable pointing at a workflow that is not there. The token check comes
+// before the variable, so a missing token changes no models.
 //
 // Idempotence is by content, not by hope: each desired file is compared with
 // the clone, and a commit is made only for the paths that differ. A second run
@@ -16,22 +15,21 @@ import { isNotFound } from "./ports";
 import { guardedGh, guardedGit, SANDBOX_REPO } from "./rails";
 import { cloneSandbox, commitPaths, ghJson, ghOk, git } from "./repo";
 import {
+  API_KEY_SECRET,
   CLAUDE_TOKEN_SECRET,
   DEFAULT_ROUTE,
-  OPENCODE_AUTH_SECRET,
-  OPENCODE_AUTH_VALUE,
+  MODELS_VARIABLE,
+  modelsValueFor,
   REPO_DESCRIPTION,
-  ROUTING_VARIABLE,
   type Route,
-  routingValueFor,
   sandboxFiles,
   validateRef,
   WORKFLOW_PATH,
 } from "./seed";
 
-// `route` decides the reviews' model route. The default is claude: the routing
-// variable is unset and the workflow runs the engine's default stack on the
-// subscription token. opencode:<snapshot> sets the variable to that free model.
+// `route` decides the reviews' models. The default is claude: CRYSK_MODELS is unset
+// and the workflow runs the engine's default Claude models on the subscription
+// token. opencode:<snapshot> sets the variable to that free model.
 export async function runInit(
   input: SandboxDeps,
   ref: string,
@@ -39,16 +37,14 @@ export async function runInit(
 ): Promise<void> {
   validateRef(ref);
   // Refused before anything is written, so a bad snapshot changes nothing.
-  const routing =
-    route.kind === "opencode"
-      ? routingValueFor(route.modelSnapshot)
-      : undefined;
+  const models =
+    route.kind === "opencode" ? modelsValueFor(route.modelSnapshot) : undefined;
   const deps: SandboxDeps = {
     ...input,
     gh: guardedGh(input.gh),
     git: guardedGit(input.git),
   };
-  await ensureRepo(deps, route);
+  await ensureRepo(deps);
   const dir = await deps.workspace.mkdtemp();
   try {
     await cloneSandbox(deps, dir);
@@ -56,18 +52,29 @@ export async function runInit(
   } finally {
     await deps.workspace.remove(dir);
   }
-  await ensureSecrets(deps, route);
-  if (routing === undefined) await ensureRoutingUnset(deps);
-  else await ensureRoutingVariable(deps, routing);
+  await ensureToken(deps);
+  if (models === undefined) await ensureModelsUnset(deps);
+  else await ensureModelsVariable(deps, models);
 }
 
-// The API key the scaffold wires into every run (variants.ts). The claude route's
-// "$0 cash" guarantee rests on it being absent: with it set, the engine bills per token.
-const ANTHROPIC_API_KEY_SECRET = "ANTHROPIC_API_KEY";
+async function secretNames(deps: SandboxDeps): Promise<string[]> {
+  return (
+    await ghJson<{ name: string }[]>(deps, [
+      "secret",
+      "list",
+      "-R",
+      SANDBOX_REPO,
+      "--json",
+      "name",
+    ])
+  ).map((secret) => secret.name);
+}
 
-// Refuses the claude route while ANTHROPIC_API_KEY is set on the sandbox. A listing
-// failure refuses too, since an unknown answer cannot prove the key is absent. It
-// deletes nothing: the owner does.
+// Refuses every route while CRYSK_CLAUDE_API_KEY is set on the sandbox: both routes
+// run Claude (the opencode route its materiality judge), and a credentials order that
+// lists api_key would bill per token. A listing failure refuses too, since an unknown
+// answer cannot prove the key is absent. It deletes nothing: the owner does. The old
+// ANTHROPIC_API_KEY is not checked: the scaffold no longer passes it, so it cannot bill.
 async function refuseStrayApiKey(deps: SandboxDeps): Promise<void> {
   const listed = await deps.gh([
     "secret",
@@ -85,20 +92,20 @@ async function refuseStrayApiKey(deps: SandboxDeps): Promise<void> {
   const names = (JSON.parse(listed.stdout) as { name: string }[]).map(
     (secret) => secret.name,
   );
-  if (names.includes(ANTHROPIC_API_KEY_SECRET)) {
+  if (names.includes(API_KEY_SECRET)) {
     throw new Error(
-      `${ANTHROPIC_API_KEY_SECRET} is set on the sandbox; the claude route runs on the subscription and must not be able to bill per token. ` +
-        `Remove it: gh secret delete ${ANTHROPIC_API_KEY_SECRET} --repo ${SANDBOX_REPO}`,
+      `${API_KEY_SECRET} is set on the sandbox; its reviews run Claude on the subscription and must not be able to bill per token. ` +
+        `Remove it: gh secret delete ${API_KEY_SECRET} --repo ${SANDBOX_REPO}`,
     );
   }
 }
 
 // An existing repo is checked for the stray key before anything else is written: the
 // seed and the secrets come after this step. A repo this step creates has no secrets.
-async function ensureRepo(deps: SandboxDeps, route: Route): Promise<void> {
+async function ensureRepo(deps: SandboxDeps): Promise<void> {
   const view = await deps.gh(["repo", "view", SANDBOX_REPO, "--json", "name"]);
   if (view.exitCode === 0) {
-    if (route.kind === "claude") await refuseStrayApiKey(deps);
+    await refuseStrayApiKey(deps);
     deps.log(`repo: ${SANDBOX_REPO} exists`);
     return;
   }
@@ -155,63 +162,31 @@ async function seedMain(
   deps.log(`main: pushed "${message}" (${changed.length} file(s))`);
 }
 
-// GitHub never returns a secret's value, so init can only check presence. One
-// listing serves both checks. A present secret is left alone; this is stated in the
-// output, not hidden.
-//
-// The claude route needs CLAUDE_CODE_OAUTH_TOKEN, and its absence is refused with the
-// command that sets it: the runner never sets a secret's value. The OpenCode auth
-// secret is written on every route. It is harmless while PRHERO_ROUTING is unset, and
-// the opencode route reads it.
-async function ensureSecrets(deps: SandboxDeps, route: Route): Promise<void> {
-  const names = (
-    await ghJson<{ name: string }[]>(deps, [
-      "secret",
-      "list",
-      "-R",
-      SANDBOX_REPO,
-      "--json",
-      "name",
-    ])
-  ).map((secret) => secret.name);
-  if (route.kind === "claude") {
-    if (!names.includes(CLAUDE_TOKEN_SECRET)) {
-      throw new Error(
-        `${CLAUDE_TOKEN_SECRET} is not set on ${SANDBOX_REPO}, so the claude route has no subscription to run on. ` +
-          `The owner sets it with: gh secret set ${CLAUDE_TOKEN_SECRET} --repo ${SANDBOX_REPO}`,
-      );
-    }
-    deps.log(
-      `secret ${CLAUDE_TOKEN_SECRET}: present (values are never read back, so not rewritten)`,
+// GitHub never returns a secret's value, so init can only check presence, and it sets
+// no secret. Every route needs CRYSK_CLAUDE_OAUTH_TOKEN: the action's credential check
+// counts only a CRYSK_* secret, and the Claude steps of every route run on it. Its
+// absence is refused with the commands that set it: the runner never sets a value.
+async function ensureToken(deps: SandboxDeps): Promise<void> {
+  if (!(await secretNames(deps)).includes(CLAUDE_TOKEN_SECRET)) {
+    throw new Error(
+      `${CLAUDE_TOKEN_SECRET} is not set on ${SANDBOX_REPO}, so no review has a Claude subscription to run on. ` +
+        `The owner sets it with: claude setup-token, then gh secret set ${CLAUDE_TOKEN_SECRET} --repo ${SANDBOX_REPO}`,
     );
   }
-  if (names.includes(OPENCODE_AUTH_SECRET)) {
-    deps.log(
-      `secret ${OPENCODE_AUTH_SECRET}: present (values are never read back, so not rewritten)`,
-    );
-    return;
-  }
-  await ghOk(deps, [
-    "secret",
-    "set",
-    OPENCODE_AUTH_SECRET,
-    "-R",
-    SANDBOX_REPO,
-    "--body",
-    OPENCODE_AUTH_VALUE,
-  ]);
-  deps.log(`secret ${OPENCODE_AUTH_SECRET}: set to {}`);
+  deps.log(
+    `secret ${CLAUDE_TOKEN_SECRET}: present (values are never read back, so not rewritten)`,
+  );
 }
 
-// The claude route runs on the engine's default stack, which an unset variable selects:
-// the workflow's `routing:` input is then empty, and the setup step reads an empty
-// routing as no routing config (src/ci/setup.ts). So a present variable is deleted, and
-// an absent one is left alone, which keeps a second run write-free.
-async function ensureRoutingUnset(deps: SandboxDeps): Promise<void> {
+// The claude route runs the engine's default models, which an unset variable selects:
+// the workflow's `models:` input is then empty, and the setup step reads an empty input
+// as no models (src/ci/setup.ts). So a present variable is deleted, and an absent one
+// is left alone, which keeps a second run write-free.
+async function ensureModelsUnset(deps: SandboxDeps): Promise<void> {
   const got = await deps.gh([
     "variable",
     "get",
-    ROUTING_VARIABLE,
+    MODELS_VARIABLE,
     "-R",
     SANDBOX_REPO,
   ]);
@@ -222,37 +197,37 @@ async function ensureRoutingUnset(deps: SandboxDeps): Promise<void> {
       );
     }
     deps.log(
-      `variable ${ROUTING_VARIABLE}: absent, the default Claude stack runs`,
+      `variable ${MODELS_VARIABLE}: absent, the default Claude models run`,
     );
     return;
   }
   await ghOk(deps, [
     "variable",
     "delete",
-    ROUTING_VARIABLE,
+    MODELS_VARIABLE,
     "--repo",
     SANDBOX_REPO,
   ]);
   deps.log(
-    `variable ${ROUTING_VARIABLE}: deleted, the default Claude stack runs`,
+    `variable ${MODELS_VARIABLE}: deleted, the default Claude models run`,
   );
 }
 
 // A variable's value can be read back, so it is compared and set only when it
 // differs or is absent.
-async function ensureRoutingVariable(
+async function ensureModelsVariable(
   deps: SandboxDeps,
-  routing: string,
+  models: string,
 ): Promise<void> {
   const got = await deps.gh([
     "variable",
     "get",
-    ROUTING_VARIABLE,
+    MODELS_VARIABLE,
     "-R",
     SANDBOX_REPO,
   ]);
-  if (got.exitCode === 0 && got.stdout.trimEnd() === routing) {
-    deps.log(`variable ${ROUTING_VARIABLE}: unchanged`);
+  if (got.exitCode === 0 && got.stdout.trimEnd() === models) {
+    deps.log(`variable ${MODELS_VARIABLE}: unchanged`);
     return;
   }
   if (got.exitCode !== 0 && !isNotFound(got.stderr)) {
@@ -264,11 +239,11 @@ async function ensureRoutingVariable(
   await ghOk(deps, [
     "variable",
     "set",
-    ROUTING_VARIABLE,
+    MODELS_VARIABLE,
     "-R",
     SANDBOX_REPO,
     "--body",
-    routing,
+    models,
   ]);
-  deps.log(`variable ${ROUTING_VARIABLE}: ${why}, set`);
+  deps.log(`variable ${MODELS_VARIABLE}: ${why}, set`);
 }

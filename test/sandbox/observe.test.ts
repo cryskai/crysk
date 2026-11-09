@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { evaluateCheck } from "../../scripts/sandbox/expect";
-import { RUN_STEP_NAME } from "../../scripts/sandbox/markers";
+import { cryskCodeText, RUN_STEP_NAME } from "../../scripts/sandbox/markers";
 import {
   classifyComment,
   classifyPath,
@@ -925,5 +925,35 @@ describe("classifyComment: the outside-diff entries with no parseable path (S2)"
       outsideDiffBlockingPaths: ["src/app.ts"],
     });
     expect(fact).not.toHaveProperty("outsideDiffUnlocated");
+  });
+});
+
+// F1 decision 1: a run of a ref from before the code rename (fd28303) writes PRH-*
+// where this tree writes CRYSK-*. The sandbox reads it as the CRYSK-* code it became,
+// so a scenario run against an older --ref still reads its codes.
+describe("codes from a ref before the rename", () => {
+  test("an outcome body's PRH-* code reads as the CRYSK-* code", () => {
+    expect(outcomeCodeOf("<!-- x -->\n\n### PRH-CRED-MISSING\n\nbody")).toBe(
+      "CRYSK-CRED-MISSING",
+    );
+    expect(outcomeCodeOf("## CRYSK-INPUT-REMOVED\n")).toBe(
+      "CRYSK-INPUT-REMOVED",
+    );
+    expect(outcomeCodeOf("no code here, pr-hero only")).toBeUndefined();
+  });
+
+  test("a status description that opens with a PRH-* code is read with the CRYSK-* one, and nothing else changes", () => {
+    expect(cryskCodeText("PRH-HUNTERS-FAILED: every hunter failed")).toBe(
+      "CRYSK-HUNTERS-FAILED: every hunter failed",
+    );
+    for (const same of [
+      "CRYSK-CRED-MISSING: no credential",
+      "pr-hero: 1 blocking finding",
+      "PRHX-1: not a code",
+      "see PRH-CRED-MISSING later",
+      "",
+    ]) {
+      expect(cryskCodeText(same)).toBe(same);
+    }
   });
 });
