@@ -22,7 +22,7 @@
 // `modelNameFromAlias` is the one place they become a model name.
 
 import type { RunnerBackend } from "../execution/contracts";
-import { redactDiagnostic } from "../security/redact";
+import { looksLikeCredential, redactConfigValue } from "../security/redact";
 import {
   EFFORT_LEVELS,
   isEffort,
@@ -67,10 +67,22 @@ const CLAUDE_FORMS =
   "claude:sonnet-latest, claude:opus-latest, claude:haiku-latest, claude:fable-latest or a full claude-* model name";
 const OPENCODE_FORM = "opencode:<provider>/<model>";
 
-// Every message quotes the name through redactDiagnostic: a config value is
+// Every message quotes the name through redactConfigValue: a config value is
 // echoed back to a terminal and a CI log, and a pasted key must not be.
 function quoted(raw: string): string {
-  return `"${redactDiagnostic(raw)}"`;
+  return `"${redactConfigValue(raw)}"`;
+}
+
+// A model name looks like a credential when the whole name does, any of its
+// `:`/`/` segments does, or the text after any `:` or `/` does:
+// `opencode:deepseek/<key>` parses as an OpenCode name, so a whole-value check
+// alone would let it through, and a base64 key can itself contain `/`.
+function nameLooksLikeCredential(raw: string): boolean {
+  const parts = raw.split(/[:/]/);
+  for (const [i, ch] of [...raw].entries()) {
+    if (ch === ":" || ch === "/") parts.push(raw.slice(i + 1));
+  }
+  return looksLikeCredential(raw) || parts.some(looksLikeCredential);
 }
 
 function parseClaudeName(raw: string, name: string): ModelName {
@@ -138,7 +150,7 @@ export function parseModelName(raw: string): ModelName {
   // The deny-list the old `routing` parser applied to its values, kept for
   // the values that replaced them: the OpenCode grammar admits the characters
   // of most API keys, so a key pasted as a model would otherwise parse.
-  if (redactDiagnostic(raw) !== raw) {
+  if (nameLooksLikeCredential(raw)) {
     throw new ModelNameError(
       "a model name looks like a credential, and credentials are not permitted in models",
     );
@@ -247,7 +259,7 @@ function checkEffort(effort: unknown, name: ModelName, at: string): string {
   if (typeof effort !== "string") {
     throw new ModelNameError(`${at}: effort must be a string`);
   }
-  if (redactDiagnostic(effort) !== effort) {
+  if (looksLikeCredential(effort)) {
     throw new ModelNameError(
       `${at}: the effort looks like a credential, and credentials are not permitted in models`,
     );

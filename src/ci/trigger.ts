@@ -95,7 +95,8 @@ export const REMOVED_INPUT_REPLACEMENT: Readonly<Record<RemovedInput, string>> =
     "claude-token": `pass ${LEGACY_SECRET_REPLACEMENT.CLAUDE_CODE_OAUTH_TOKEN} in the crysk-secrets input`,
     "anthropic-api-key": `pass ${LEGACY_SECRET_REPLACEMENT.ANTHROPIC_API_KEY} in the crysk-secrets input`,
     "opencode-auth": `pass ${LEGACY_SECRET_REPLACEMENT.OPENCODE_AUTH_JSON} in the crysk-secrets input`,
-    routing: "set models per role (`models`) on the Crysk platform",
+    routing:
+      "pass the models per role in the `models` input, from `vars.CRYSK_MODELS`",
   };
 
 // The env flag action.yml binds for each removed input.
@@ -1265,7 +1266,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
 
   if (decision.kind === "removed-inputs") {
     // Like a missing credential: the command is accepted, the run is red, and the
-    // PR's comment and status name the inputs to remove (PRH-INPUT-REMOVED).
+    // PR's comment and status name the inputs to remove (CRYSK-INPUT-REMOVED).
     react(deps, base, "eyes");
     const head =
       pr === undefined
@@ -1316,7 +1317,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
   }
 
   if (!resolution.ok) {
-    // The publisher renders the class (PRH-PR-UNRESOLVED). The review never
+    // The publisher renders the class (CRYSK-PR-UNRESOLVED). The review never
     // started, so the install step's marker is absent by design. A malformed
     // input carries its fixed detail, so the fix names the input to correct.
     const write = writeRecord(deps, run, {

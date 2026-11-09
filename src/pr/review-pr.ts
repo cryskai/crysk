@@ -143,7 +143,7 @@ export function recordPipelineOutcome(
 ): void {
   if (result?.sessionFailed !== true) return;
   // WHY the causes ride on the record: the publisher names the provider and the model
-  // when every hunter failed on the provider's side (PRH-MODEL-UNAVAILABLE). A run with
+  // when every hunter failed on the provider's side (CRYSK-MODEL-UNAVAILABLE). A run with
   // no failed hunter list keeps the record as it was before the field existed.
   const failures = result.hunterFailures ?? [];
   writeCliRecord(

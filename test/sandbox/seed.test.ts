@@ -2,7 +2,7 @@
 // renderers. A value that only looks right to this file is not enough: the
 // routing string used to parse through the routing parser (gone, S2: see the
 // OPEN note on the materializer test below), and the repo config must load through parseLocalConfig,
-// because a rejected config burns a live run as PRH-CONFIG-INVALID.
+// because a rejected config burns a live run as CRYSK-CONFIG-INVALID.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
@@ -27,7 +27,6 @@ import {
   actionRefFor,
   BUDGET_ONE_CONFIG_JSON,
   GOTCHAS_PATH,
-  OPENCODE_AUTH_VALUE,
   PLANTED_SITE,
   parseRoute,
   REPO_CONFIG_JSON,
@@ -139,20 +138,19 @@ describe("routing value", () => {
   });
 
   // OPEN (odd/tasks/role-model-routing.md): the routing input is gone (S2),
-  // and scripts/sandbox still sets it for the OpenCode route. Until the sandbox
-  // sets models instead, the real CI materializer refuses its value, and this
-  // test says so rather than pretend the route still works.
-  test("is refused by the real CI materializer until the sandbox sets models", async () => {
+  // and scripts/sandbox still sets it for the OpenCode route. The trigger stops
+  // a workflow that passes it (CRYSK-INPUT-REMOVED), and the real CI materializer
+  // no longer reads it (F0, D6): its value configures nothing. This test says so
+  // rather than pretend the route still works, until the sandbox sets models (F7).
+  test("configures nothing in the real CI materializer until the sandbox sets models", async () => {
     home = await mkdtemp(path.join(tmpdir(), "pr-hero-sandbox-seed-"));
     const env = { HOME: home };
-    await expect(
-      materializeCiOpenCodeData({
-        routing: routingValueFor("big-pickle"),
-        opencodeAuth: OPENCODE_AUTH_VALUE,
-        home,
-        env,
-      }),
-    ).rejects.toThrow("`routing` is gone");
+    await materializeCiOpenCodeData({
+      routing: routingValueFor("big-pickle"),
+      opencodeAuth: "",
+      home,
+      env,
+    });
     expect(existsSync(prheroLayout(home).reviewConfigPath)).toBe(false);
     expect(existsSync(resolveOpenCodeAuthPath(env, home))).toBe(false);
   });

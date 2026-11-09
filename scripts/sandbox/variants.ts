@@ -33,7 +33,7 @@ export class WorkflowVariantError extends Error {
 // the Run pr-hero step). no-credential removes all three, not only the one the
 // trigger reads, so no model credential reaches the action by any other input.
 // `github-token` is deliberately kept: it is the runner's GITHUB_TOKEN, which the
-// publisher needs to post the PRH-CRED-MISSING outcome and its status, so
+// publisher needs to post the CRYSK-CRED-MISSING outcome and its status, so
 // removing it would make the expected outcome unreachable.
 // The GitHub expressions are escaped in template literals, as src/ci/setup.ts escapes them.
 const CREDENTIAL_LINES = [
@@ -44,8 +44,8 @@ const CREDENTIAL_LINES = [
 
 const ROUTING_LINE = `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`;
 
-// A literal that is valid YAML and invalid routing JSON. The setup step rejects
-// it as config-parse/routing, which the publisher renders as PRH-ROUTING-INVALID.
+// A literal that is valid YAML. The routing input is gone (S2): the trigger stops
+// a workflow that passes it any value, which the publisher renders as CRYSK-INPUT-REMOVED.
 const BAD_ROUTING_LINE = '          routing: "{not json"';
 
 // The scaffold names its gate mode on its own line (src/ci/setup.ts writes it

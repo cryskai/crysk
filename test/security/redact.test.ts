@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { redactDiagnostic } from "../../src/security/redact";
+import {
+  looksLikeCredential,
+  redactConfigValue,
+  redactDiagnostic,
+} from "../../src/security/redact";
 
 describe("redactDiagnostic (§6.3 redaction-before-persistence)", () => {
   test("redacts Anthropic-style sk- keys", () => {
@@ -109,5 +113,87 @@ describe("redactDiagnostic (§6.3 redaction-before-persistence)", () => {
     expect(redacted).not.toContain("eyJhbGciOi");
     expect(redacted).not.toContain("abcd1234");
     expect(redacted.split("[REDACTED]").length - 1).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// odd/tasks/role-model-routing.md E-f F2 (L37, L39, D4): Google, Groq and xAI key shapes
+// are redacted everywhere; plain hex and base64 are not, because error output and logs
+// carry commit SHAs and digests. Those are refused only where a whole config value is
+// checked (looksLikeCredential). Fake keys are built here, never written out whole.
+const GOOGLE_KEY = `AIza${"Sy0aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT_-".padEnd(35, "x")}`;
+const GROQ_KEY = `gsk_${"a1B2c3D4e5".repeat(5)}Zz`;
+const XAI_KEY = `xai-${"Q9w8E7r6T5".repeat(8)}`;
+const SHA1 = "1cb0127".padEnd(40, "a3f9");
+const SHA256 =
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const BASE64_KEY = "dGhpc0lzTm90QVJlYWxLZXlCdXRMb29rc0xpa2VPbmUxMjM0NTY3OA==";
+
+describe("redactDiagnostic: Google, Groq and xAI keys (F2)", () => {
+  test("each key shape is redacted inside prose", () => {
+    for (const key of [GOOGLE_KEY, GROQ_KEY, XAI_KEY]) {
+      expect(redactDiagnostic(`provider refused ${key} at startup`)).toBe(
+        "provider refused [REDACTED] at startup",
+      );
+    }
+  });
+
+  test("model and provider names that share a prefix are kept", () => {
+    for (const text of [
+      "opencode:xai/grok-4-fast",
+      "opencode:openrouter/x-ai/grok-code-fast-1",
+      "xai-grok-4 failed",
+      "gsk_short",
+      "AIzaShort",
+    ]) {
+      expect(redactDiagnostic(text)).toBe(text);
+    }
+  });
+
+  test("commit SHAs and digests in error output survive (D4)", () => {
+    const text = `checkout ${SHA1} failed; artifact sha256 ${SHA256} did not match`;
+    expect(redactDiagnostic(text)).toBe(text);
+    expect(redactDiagnostic(SHA256)).toBe(SHA256);
+    expect(redactDiagnostic(BASE64_KEY)).toBe(BASE64_KEY);
+  });
+});
+
+describe("looksLikeCredential: a whole config value (F2, D4)", () => {
+  test("a key shape, a long hex or a long base64 value looks like a credential", () => {
+    for (const value of [
+      GOOGLE_KEY,
+      GROQ_KEY,
+      XAI_KEY,
+      "sk-a1B2c3D4e5F6g7H8",
+      SHA1,
+      SHA256,
+      SHA256.toUpperCase(),
+      BASE64_KEY,
+      BASE64_KEY.replace(/=+$/, ""),
+    ]) {
+      expect(looksLikeCredential(value)).toBe(true);
+    }
+  });
+
+  test("model ids, variant names and short hex do not", () => {
+    for (const value of [
+      "sonnet-latest",
+      "claude-sonnet-5-5",
+      "Qwen3-Coder-480B-A35B-Instruct-FP8",
+      "Llama-4-Maverick-17B-128E-Instruct-FP8",
+      "global.anthropic.claude-haiku-4-5-20251001-v1",
+      "deadbeef",
+      "high",
+      "xhigh",
+      "thinking",
+    ]) {
+      expect(looksLikeCredential(value)).toBe(false);
+    }
+  });
+
+  test("redactConfigValue prints [REDACTED] for the whole value, the rest as redactDiagnostic", () => {
+    expect(redactConfigValue(SHA256)).toBe("[REDACTED]");
+    expect(redactConfigValue(BASE64_KEY)).toBe("[REDACTED]");
+    expect(redactConfigValue(`x ${GROQ_KEY}`)).toBe("x [REDACTED]");
+    expect(redactConfigValue("unknown_key")).toBe("unknown_key");
   });
 });

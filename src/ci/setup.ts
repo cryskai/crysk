@@ -67,7 +67,7 @@ import {
   parseModelName,
   parseModelsConfig,
 } from "#model/model-name";
-import { parseLocalConfig, REMOVED_ROUTING_MESSAGE } from "#review/preflight";
+import { parseLocalConfig } from "#review/preflight";
 import { commandForms } from "../brand";
 import {
   duplicateWorkflowProblem,
@@ -704,14 +704,14 @@ export async function appendIgnorePatterns(
 }
 
 export interface MaterializeCiOpenCodeDataOptions {
-  // The removed `routing` input (S2): non-empty fails the step.
+  // The removed `routing` input (S2). No longer read (F0, D6): the trigger stops
+  // a workflow that passes one. Kept only while callers outside F0 still pass it.
   routing?: string;
   opencodeAuth?: string;
   home?: string;
   env?: Readonly<Record<string, string | undefined>>;
   // Platform mode: the person layer the Crysk platform returned (`{}` when it
-  // sent none), written as the personal file; its `models` win over a stale
-  // `routing` input. Present means platform mode, in which the
+  // sent none), written as the personal file. Present means platform mode, in which the
   // personal file belongs to this run: a file an earlier run left behind is
   // removed when nothing is to be written, so it can never be read as this run's
   // person layer on a runner whose HOME outlives the job.
@@ -734,21 +734,18 @@ export interface MaterializeCiOpenCodeDataResult {
 // The file the publisher reads when this step fails on a malformed input, and
 // the outcome directory the workflow binds for it (odd/tasks/agent-first-ci.md, A1).
 const SETUP_RECORD_FILE = "setup.json";
-const ROUTING_CLASS: ErrorClass = { kind: "config-parse", source: "routing" };
 const AUTH_CLASS: ErrorClass = {
   kind: "credential",
   failureClass: "malformed_payload",
 };
 // The details the record carries. Each names the input that is wrong and never
-// its content, so a secret or a routing value cannot reach the PR.
-const ROUTING_REMOVED =
-  "the routing input is gone: set models per role instead";
+// its content, so a secret cannot reach the PR.
 const AUTH_NOT_JSON = "the opencode-auth input is not valid JSON";
 const AUTH_NOT_OBJECT = "the opencode-auth input must be a JSON object";
 const AUTH_INPUT_IGNORED =
   "the opencode-auth input is ignored: the CRYSK_OPENCODE_* secrets build the OpenCode auth file.";
 
-// A routing or OpenCode auth input the user configured wrongly. `message` is the
+// An OpenCode auth or crysk-secrets input the user configured wrongly. `message` is the
 // line stderr has always printed; `cls` and `detail` are what the record carries.
 class SetupInputError extends Error {
   readonly cls: ErrorClass;
@@ -872,7 +869,8 @@ function assembleOpenCodeAuth(
 // back would write person keys into the checkout (.prhero/config.json), which
 // the repo parser rejects. Never log the auth blob; never inject readerFn.
 // In platform mode the platform's person layer is that one file. The `routing`
-// input is gone (S2): a non-empty one fails the step with the new form.
+// input is gone (S2): the trigger stops a workflow that passes one, and this
+// step does not read it (F0, D6).
 //
 // U3: when the CRYSK_OPENCODE_* secrets serve at least one provider the models
 // name, they build auth.json alone and the `opencode-auth` input is ignored with
@@ -891,26 +889,9 @@ export async function materializeCiOpenCodeData(
     );
   }
 
-  const routingRaw = options.routing ?? env.ROUTING_INPUT ?? "";
   const authRaw = options.opencodeAuth ?? env.OPENCODE_AUTH_INPUT ?? "";
   const platformMode = options.platformPerson !== undefined;
   const platformPerson = options.platformPerson ?? {};
-  // The input is judged only when it would be this run's configuration: the
-  // platform's models win over it, as its routing did. A platform `routing`
-  // is refused by assertPlatformPerson below with the same message.
-  const platformRouting =
-    platformPerson.models !== undefined || platformPerson.routing !== undefined;
-
-  // S2's clean break, for the CI input too: a non-empty `routing` input (the
-  // CRYSK_ROUTING variable) is refused with the new form, never half-read.
-  // Empty or unset stays the Claude-default CI it always was.
-  if (routingRaw.trim() !== "" && !platformRouting) {
-    throw new SetupInputError(
-      ROUTING_CLASS,
-      ROUTING_REMOVED,
-      `CI routing input: ${REMOVED_ROUTING_MESSAGE}`,
-    );
-  }
 
   const notices: string[] = [];
   const assembly =
@@ -1116,7 +1097,7 @@ function intakeCryskSecrets(
   return parsed;
 }
 
-// The step's whole job. Returns the exit code. A malformed routing or auth input
+// The step's whole job. Returns the exit code. A malformed auth or secrets input
 // is the user's configuration, so it also leaves setup.json for the publisher;
 // any other failure (HOME, a write) stays unclassified, with no record.
 async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {

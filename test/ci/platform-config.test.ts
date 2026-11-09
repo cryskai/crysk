@@ -251,16 +251,6 @@ describe("materializeCiOpenCodeData with a platform person layer", () => {
     expect(layer.scout).toBe(true);
   });
 
-  test("without platform models a routing input fails the step and writes nothing", async () => {
-    await expect(
-      run({
-        routing: INPUT_ROUTING,
-        platformPerson: { post_min_severity: "blocking" },
-      }),
-    ).rejects.toThrow(`CI routing input: ${ROUTING_GONE}`);
-    expect(existsSync(personPath())).toBe(false);
-  });
-
   test("platform routing is refused with the new form before anything is written", async () => {
     await expect(
       run({ platformPerson: { routing: { default: {} } } }),

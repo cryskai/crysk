@@ -492,6 +492,24 @@ describe("buildPrStatus: report and output shape", () => {
         issueComments: [
           {
             id: 200,
+            body: `<!-- crysk-outcome v=1 head=${CURRENT} run=1 attempt=1 -->\n\n### CRYSK-CRED-MISSING\n\nbody`,
+          },
+          {
+            id: 201,
+            body: `<!-- crysk-outcome v=1 head=${CURRENT} run=2 attempt=1 -->\n\n### CRYSK-CANCELLED: not reviewed\n\nbody`,
+          },
+        ],
+      }),
+    );
+    expect(status.report.outcome_code).toBe("CRYSK-CANCELLED");
+  });
+
+  test("an outcome comment posted before the rename reports its code as CRYSK-*", () => {
+    const status = buildPrStatus(
+      input({
+        issueComments: [
+          {
+            id: 200,
             body: `<!-- pr-hero-outcome v=1 head=${CURRENT} run=1 attempt=1 -->\n\n### PRH-CRED-MISSING\n\nbody`,
           },
           {
@@ -501,7 +519,7 @@ describe("buildPrStatus: report and output shape", () => {
         ],
       }),
     );
-    expect(status.report.outcome_code).toBe("PRH-CANCELLED");
+    expect(status.report.outcome_code).toBe("CRYSK-CANCELLED");
   });
 
   test("an older outcome's code is not used when the newest outcome has none", () => {
@@ -510,7 +528,7 @@ describe("buildPrStatus: report and output shape", () => {
         issueComments: [
           {
             id: 200,
-            body: `<!-- pr-hero-outcome v=1 head=${CURRENT} run=1 attempt=1 -->\n\n### PRH-CRED-MISSING`,
+            body: `<!-- pr-hero-outcome v=1 head=${CURRENT} run=1 attempt=1 -->\n\n### CRYSK-CRED-MISSING`,
           },
           {
             id: 201,

@@ -285,7 +285,7 @@ describe("publishRunOutcome", () => {
   });
 
   // T2d-1 (S2): this is an engine invariant, so the record names it as the
-  // pr-hero defect class (PRH-ENGINE-DEFECT), and the message stays the same.
+  // pr-hero defect class (CRYSK-ENGINE-DEFECT), and the message stays the same.
   test("the no-result invariant carries the invariant class", async () => {
     const { onPosted } = captureOnPosted();
     const error = await publishRunOutcome(

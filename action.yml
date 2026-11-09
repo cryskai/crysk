@@ -11,17 +11,17 @@ inputs:
     required: false
     default: '${{ github.token }}'
   anthropic-api-key:
-    description: 'Removed: pass CRYSK_CLAUDE_API_KEY in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (PRH-INPUT-REMOVED) before anything is installed. Leave it out.'
+    description: 'Removed: pass CRYSK_CLAUDE_API_KEY in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   claude-token:
-    description: 'Removed: pass CRYSK_CLAUDE_OAUTH_TOKEN in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (PRH-INPUT-REMOVED) before anything is installed. Leave it out.'
+    description: 'Removed: pass CRYSK_CLAUDE_OAUTH_TOKEN in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   routing:
-    description: 'Removed: models are set per role (models) on the Crysk platform. Declared only so a workflow that still passes a value stops at the trigger (PRH-INPUT-REMOVED) before anything is installed. Leave it out.'
+    description: 'Removed: models are set per role (models) on the Crysk platform. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
     default: ''
   opencode-auth:
-    description: 'Removed: pass one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (PRH-INPUT-REMOVED) before anything is installed. Leave it out.'
+    description: 'Removed: pass one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   crysk-secrets:
     description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _. A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). The input is read on stdin by those three steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
@@ -175,7 +175,7 @@ runs:
         FORCE_INPUT: ${{ inputs.force }}
         FULL_INPUT: ${{ inputs.full }}
         # The inputs the clean break removed (U5): any with a value stops the run
-        # (PRH-INPUT-REMOVED). Presence only, never a value.
+        # (CRYSK-INPUT-REMOVED). Presence only, never a value.
         HAS_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key != '' }}
         HAS_CLAUDE_TOKEN: ${{ inputs.claude-token != '' }}
         HAS_OPENCODE_AUTH: ${{ inputs.opencode-auth != '' }}
@@ -395,7 +395,7 @@ runs:
     # workflow cancels a superseded run (`cancel-in-progress`), and a cancelled
     # job still reaches its always() steps, as the Upload step's comment below
     # says. Under always(), a run cancelled before its Run step writes
-    # `cli-started` would publish a false PRH-INSTALL-FAILED on the superseded
+    # `cli-started` would publish a false CRYSK-INSTALL-FAILED on the superseded
     # head.
     #
     # WHY gated on `publish`, not on `run`: `run` is false for every outcome
@@ -480,7 +480,7 @@ runs:
     # run kills the CLI before its own signal settle lands, which left the
     # pr-hero status pending forever (sandbox `cancel` probe, SB3). This step
     # runs only on a cancel, and settles only this run's own pending on the head
-    # the CLI locked, as PRH-CANCELLED.
+    # the CLI locked, as CRYSK-CANCELLED.
     - name: Settle a cancelled review
       id: cancel-settle
       if: ${{ cancelled() && steps.trigger.outputs.run == 'true' }}

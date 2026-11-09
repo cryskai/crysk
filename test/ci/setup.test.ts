@@ -35,13 +35,6 @@ import { resolveOpenCodeAuthPath } from "../../src/security/credential-broker";
 import { openCodeSecretManifestPath } from "../../src/security/opencode-secret-manifest";
 import { checkCiConfiguration } from "../../src/system-tools";
 
-const OPENCODE_CI_ROUTING = JSON.stringify({
-  default: {
-    backend: "opencode",
-    provider: "deepseek",
-  },
-});
-
 const OPENCODE_CI_AUTH = JSON.stringify({
   deepseek: { type: "api", key: "oc-ci-fixture-not-a-secret" },
 });
@@ -823,32 +816,6 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
     }
   }
 
-  // Threat matrix RED (1): person-layer writes use prheroLayout(home), never
-  // the workspace checkout's .crysk/config.json. The routing input is gone
-  // (S2), so a non-empty one writes nothing anywhere and fails the step.
-  test("a routing input fails before writing to the home or the workspace", async () => {
-    await withFixture(async ({ home, workspace }) => {
-      const workspaceConfig = path.join(workspace, ".crysk", "config.json");
-      await mkdir(path.dirname(workspaceConfig), { recursive: true });
-      const workspaceBefore = `${JSON.stringify({ max_changed_lines: 50 })}\n`;
-      await writeFile(workspaceConfig, workspaceBefore);
-
-      await expect(
-        materializeCiOpenCodeData({
-          home,
-          env: { HOME: home },
-          routing: OPENCODE_CI_ROUTING,
-          opencodeAuth: "",
-        }),
-      ).rejects.toThrow(
-        'CI routing input: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
-      );
-
-      expect(existsSync(prheroLayout(home).reviewConfigPath)).toBe(false);
-      expect(await readFile(workspaceConfig, "utf8")).toBe(workspaceBefore);
-    });
-  });
-
   // Threat matrix RED (2): the whole auth store lands 0600 at the broker path.
   test("writes 0600 auth.json at resolveOpenCodeAuthPath()", async () => {
     await withFixture(async ({ home }) => {
@@ -856,7 +823,6 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
       await materializeCiOpenCodeData({
         home,
         env,
-        routing: "",
         opencodeAuth: OPENCODE_CI_AUTH,
       });
 
@@ -879,7 +845,6 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
       await expect(
         materializeCiOpenCodeData({
           env: { HOME: "" },
-          routing: OPENCODE_CI_ROUTING,
           opencodeAuth: OPENCODE_CI_AUTH,
         }),
       ).rejects.toThrow(/HOME/);
@@ -895,7 +860,6 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
           env: {
             ...process.env,
             HOME: "",
-            ROUTING_INPUT: OPENCODE_CI_ROUTING,
             OPENCODE_AUTH_INPUT: OPENCODE_CI_AUTH,
           },
           stdout: "pipe",
@@ -913,12 +877,11 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
     });
   });
 
-  test("empty routing skips the person-layer write", async () => {
+  test("no platform layer skips the person-layer write", async () => {
     await withFixture(async ({ home }) => {
       await materializeCiOpenCodeData({
         home,
         env: { HOME: home },
-        routing: "",
         opencodeAuth: OPENCODE_CI_AUTH,
       });
       expect(existsSync(prheroLayout(home).reviewConfigPath)).toBe(false);
@@ -935,7 +898,7 @@ describe("materializeCiOpenCodeData (impure edge)", () => {
 // commenting there starts nothing, silently, so the next steps must say where
 // the file has to land before `/pr-hero review` works.
 // The setup step's own exit path (odd/tasks/agent-first-ci.md, T2b / A1): a
-// malformed routing or auth input is the user's configuration, so the step
+// malformed auth input is the user's configuration, so the step
 // leaves setup.json for the publisher. Spawned, like the empty-HOME test
 // above, so the test exercises the real entry point and its real exit code.
 describe("setup.ts records a malformed input for the outcome publisher", () => {
@@ -963,7 +926,6 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
         env: {
           ...process.env,
           HOME: home,
-          ROUTING_INPUT: "",
           OPENCODE_AUTH_INPUT: "",
           CRYSK_OUTCOME_DIR: outDir,
           ...env,
@@ -985,23 +947,16 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
     }
   }
 
-  // The routing input is gone (S2): any non-empty value, JSON or not, records
-  // the same class with a fixed detail and never its content.
-  test("a routing input records config-parse routing, with a fixed detail and no content", async () => {
-    for (const value of [
-      '{"SENTINEL-ROUTING-7f3a": ',
-      '{"SENTINEL-KEY-7f3a": 1}',
-    ]) {
-      const result = await runSetup({ ROUTING_INPUT: value });
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("CI routing input: `routing` is gone");
-      expect(JSON.parse(result.recordText ?? "null")).toEqual({
-        v: 1,
-        cls: { kind: "config-parse", source: "routing" },
-        detail: "the routing input is gone: set models per role instead",
-      });
-      expect(result.recordText).not.toContain("SENTINEL");
-    }
+  // The routing input is gone (S2) and the trigger stops a workflow that passes
+  // one (CRYSK-INPUT-REMOVED, U5); action.yml does not bind it here. So the step
+  // no longer reads it, and its old backstop and record class are gone (F0, D6).
+  test("a routing value in the environment is not read: no failure and no record", async () => {
+    const result = await runSetup({
+      ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.recordText).toBeUndefined();
+    expect(result.stderr).not.toContain("routing");
   });
 
   // WHY a directory (F003 on #330): the setup record's temp name is unique per write
@@ -1009,7 +964,7 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
   // cannot stop this step's record. A directory fails any write to that path.
   test("a directory left at the old fixed setup temp name does not stop the record", async () => {
     const result = await runSetup(
-      { ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ' },
+      { OPENCODE_AUTH_INPUT: '{"SENTINEL-AUTH-7f3a": ' },
       async (outDir) => {
         await mkdir(path.join(outDir, "setup.json.tmp"), { recursive: true });
       },
@@ -1017,8 +972,8 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
     expect(result.exitCode).toBe(1);
     expect(JSON.parse(result.recordText ?? "null")).toEqual({
       v: 1,
-      cls: { kind: "config-parse", source: "routing" },
-      detail: "the routing input is gone: set models per role instead",
+      cls: { kind: "credential", failureClass: "malformed_payload" },
+      detail: "the opencode-auth input is not valid JSON",
     });
   });
 
@@ -1058,7 +1013,7 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
   test("an environment failure writes no record, so the publisher cannot blame the configuration for it", async () => {
     const result = await runSetup({
       HOME: "",
-      ROUTING_INPUT: '{"SENTINEL-ROUTING-7f3a": ',
+      OPENCODE_AUTH_INPUT: '{"SENTINEL-AUTH-7f3a": ',
     });
     expect(result.exitCode).toBe(1);
     expect(result.recordText).toBeUndefined();
@@ -1162,7 +1117,6 @@ describe("setup.ts reads the crysk-secrets input", () => {
           ...process.env,
           PATH: pathEnv,
           HOME: home,
-          ROUTING_INPUT: "",
           OPENCODE_AUTH_INPUT: "",
           CRYSK_OUTCOME_DIR: outDir,
           GITHUB_OUTPUT: githubOutput,
@@ -1667,7 +1621,7 @@ describe("ci init next steps (CLI)", () => {
 // The first-PR walkthrough. Review instructions are optional (S3), so a repo
 // with none is recommended a REVIEW.md, not told it must write one. A file that
 // exists but is empty or still the scaffold turns the first PR red
-// (PRH-GOTCHAS-MISSING), so that one gets the fix steps; real instructions get
+// (CRYSK-GOTCHAS-MISSING), so that one gets the fix steps; real instructions get
 // nothing.
 describe("ci init review-instructions steps (CLI)", () => {
   async function runInit(

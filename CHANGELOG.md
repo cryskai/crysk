@@ -97,6 +97,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CRYSK_CLAUDE_OAUTH_TOKEN` and `CRYSK_CLAUDE_API_KEY` variables count as the subscription and the key when
   they reach the run. The error fixes that told you to delete the API key secret so the OAuth token would
   win now say to change `credentials.claude`. See [Credentials](docs/configuration.md#credentials).
+- **Error codes are `CRYSK-*`, not `PRH-*`.** Every code keeps its name after the prefix
+  (`PRH-CRED-MISSING` is now `CRYSK-CRED-MISSING`) in annotations, job summaries, outcome comments and commit
+  statuses, and the cancelled status now says `/crysk review`. Outcome comments posted before the rename still
+  read: `crysk status` reports their old code as the `CRYSK-*` code it became in `report.outcome_code`, and a code
+  removed since reads as none. Each docs section keeps its old `#prh-*` anchor, so links in those comments still
+  land. Anything that matches `PRH-` in a status description or comment needs to match `CRYSK-`.
 - **The GraphQL issue-comments fallback reports Bot authors as `<login>[bot]`**, as the REST path and the
   review-comments fallback already did. Before, a bot's comments read on that path (for example
   `github-actions[bot]` summaries in standalone mode) arrived under the bare login, so exact-login trust

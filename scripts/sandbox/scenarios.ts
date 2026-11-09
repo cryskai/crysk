@@ -165,17 +165,17 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "no-credential",
     description:
-      "no model credential reaches the action: PRH-CRED-MISSING, an error status, no report ($0)",
+      "no model credential reaches the action: CRYSK-CRED-MISSING, an error status, no report ($0)",
     phases: [
       {
         action: { kind: "open", variant: "no-credential" },
         wait: "pull_request",
         checks: [
-          { kind: "outcome", code: "PRH-CRED-MISSING" },
+          { kind: "outcome", code: "CRYSK-CRED-MISSING" },
           {
             kind: "status",
             state: "error",
-            descriptionStartsWith: "PRH-CRED-MISSING",
+            descriptionStartsWith: "CRYSK-CRED-MISSING",
           },
           { kind: "no-report" },
         ],
@@ -185,17 +185,17 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "bad-routing",
     description:
-      "the routing input is malformed JSON: PRH-ROUTING-INVALID, an error status, no report ($0)",
+      "the workflow passes the removed routing input: CRYSK-INPUT-REMOVED, an error status, no report ($0)",
     phases: [
       {
         action: { kind: "open", variant: "bad-routing" },
         wait: "pull_request",
         checks: [
-          { kind: "outcome", code: "PRH-ROUTING-INVALID" },
+          { kind: "outcome", code: "CRYSK-INPUT-REMOVED" },
           {
             kind: "status",
             state: "error",
-            descriptionStartsWith: "PRH-ROUTING-INVALID",
+            descriptionStartsWith: "CRYSK-INPUT-REMOVED",
           },
           { kind: "no-report" },
         ],
@@ -205,7 +205,7 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "bad-gotchas",
     description:
-      "the branch commits the scaffold gotchas file: PRH-GOTCHAS-MISSING under your configuration, an error status, no report ($0)",
+      "the branch commits the scaffold gotchas file: CRYSK-GOTCHAS-MISSING under your configuration, an error status, no report ($0)",
     phases: [
       {
         // The scaffold carries the marker gotchasUnusableReason refuses, so the
@@ -219,13 +219,13 @@ export const SCENARIOS: readonly Scenario[] = [
         checks: [
           {
             kind: "outcome",
-            code: "PRH-GOTCHAS-MISSING",
+            code: "CRYSK-GOTCHAS-MISSING",
             lead: "Your configuration:",
           },
           {
             kind: "status",
             state: "error",
-            descriptionStartsWith: "PRH-GOTCHAS-MISSING",
+            descriptionStartsWith: "CRYSK-GOTCHAS-MISSING",
           },
           { kind: "no-report" },
         ],
@@ -339,7 +339,7 @@ export const SCENARIOS: readonly Scenario[] = [
       {
         action: { kind: "open", variant: "no-credential" },
         wait: "pull_request",
-        checks: [{ kind: "outcome", code: "PRH-CRED-MISSING" }],
+        checks: [{ kind: "outcome", code: "CRYSK-CRED-MISSING" }],
       },
       {
         action: { kind: "push", variant: "normal" },
@@ -365,10 +365,11 @@ export const SCENARIOS: readonly Scenario[] = [
         wait: "pull_request",
         // A precondition, not the subject: the free route may fail its hunters on
         // this first run (a flake), and the comment run is what is under test.
-        // The hunters-failed tolerance and its flake label need an action ref at or
-        // after T2c (98569d1), where the publisher renders PRH-HUNTERS-FAILED; on an
-        // older ref an all-hunters-failed run shows `review did not finish` with no
-        // PRH code, and S7 reports it.
+        // The hunters-failed tolerance and its flake label need an action ref that
+        // renders CRYSK-HUNTERS-FAILED, at or after the rename of the error codes
+        // (fd28303). Before T2c (98569d1) an all-hunters-failed run shows `review did
+        // not finish` with no code, and before the rename its code reads as no code;
+        // S7 reports either.
         checks: [{ kind: "path", accept: ["reviewed", "hunters-failed"] }],
       },
       {

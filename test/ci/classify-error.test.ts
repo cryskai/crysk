@@ -20,8 +20,8 @@ import {
 import { OpenCodeSdkUnavailableError } from "../../src/transports/opencode-admission";
 
 describe("classifyCliError: the mapped classes", () => {
-  // The route classes lost their throw sites with the alias-keyed routing
-  // (odd/tasks/role-model-routing.md S2): a bad model is an error whose
+  // The route classes and their codes went with the alias-keyed routing
+  // (odd/tasks/role-model-routing.md S2, E-f F0): a bad model is an error whose
   // message is the fix, and no catalog text names it.
   test("a model that does not resolve is unclassified", () => {
     expect(classifyCliError(new InvalidModelError("x"))).toEqual({
@@ -158,8 +158,8 @@ describe("classifyCliError: the class an error carries", () => {
   });
 });
 
-// The routing class renders PRH-ROUTING-INVALID, whose text names CRYSK_ROUTING. The
-// person file's routing error must not take it; the routing parser itself keeps it.
+// A `routing` key in the person file is refused with the new form, and stays
+// unclassified like the rest of that file: no code's text names the person file.
 describe("classifyCliError: the routing class depends on the layer that parsed", () => {
   function thrownBy(thrower: () => unknown): unknown {
     try {
