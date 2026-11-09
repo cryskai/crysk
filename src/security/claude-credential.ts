@@ -24,7 +24,10 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { claudeCredentialProjectionReady } from "#model/provider-capabilities";
+import {
+  claudeCredentialProjectionReady,
+  defaultKeychainCredentialPresent,
+} from "#model/provider-capabilities";
 import type {
   ClaudeCredentialKind,
   CredentialsConfig,
@@ -200,15 +203,34 @@ export interface RunClaudeCredential {
   readonly kind?: ClaudeCredentialKind;
 }
 
+// The probes behind defaultClaudeLoginPresent. Tests inject all three, so no test
+// reads the real Keychain or HOME.
+export interface ClaudeLoginProbe {
+  readonly platform?: NodeJS.Platform;
+  readonly existsFn?: (p: string) => boolean;
+  readonly keychainProbe?: () => boolean;
+}
+
 // The machine's own Claude login: a Keychain item the broker can project (macOS), or
 // the CLI's OAuth store. `~/.claude.json` does not count: every Claude user has it,
 // API-key users included, and counting it would strip their key.
+// WHY the item and not only the broker (R001, #494): `security` is on every Mac, so
+// counting the broker alone chose the login on a Mac that has only an API key; the
+// key was stripped, the projection found no item (`source_read_failed`) and every
+// step failed. The item check is metadata-only (no `-w`, no secret read).
 export function defaultClaudeLoginPresent(
   env: Readonly<Record<string, string | undefined>> = process.env,
+  probe: ClaudeLoginProbe = {},
 ): boolean {
-  if (claudeCredentialProjectionReady()) return true;
+  const exists = probe.existsFn ?? existsSync;
   const home = hasValue(env.HOME) ? env.HOME : homedir();
-  return existsSync(path.join(home, ".claude", ".credentials.json"));
+  if (exists(path.join(home, ".claude", ".credentials.json"))) return true;
+  return (
+    claudeCredentialProjectionReady({
+      ...(probe.platform === undefined ? {} : { platform: probe.platform }),
+      existsFn: exists,
+    }) && (probe.keychainProbe ?? defaultKeychainCredentialPresent)()
+  );
 }
 
 // Called once at run start, before any plan is admitted.
