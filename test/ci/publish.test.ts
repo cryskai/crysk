@@ -1481,6 +1481,33 @@ describe("decidePublication — the pure table", () => {
   // slots. A slot with a key and no provider is refused by the grammar, and its fix is
   // the platform's slot list, not "re-set the secret" with the openai jq line, which
   // would fail again. The detail is the grammar's own text, so the two cannot drift.
+  // Each unused slot that carries a value is its own refusal, and setup joins
+  // them with "; ", so two such slots must still get the platform slot fix.
+  test("two OpenCode slots with a key and no provider still get the platform slot fix", () => {
+    const detail = parseCryskSecrets(
+      "CRYSK_OPENCODE__API_KEY=SENTINEL-A\nCRYSK_OPENCODE__API_KEY=SENTINEL-B",
+    ).problems.join("; ");
+    expect(detail.split("; CRYSK_OPENCODE__API_KEY ").length).toBe(2);
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail,
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.annotation).toContain(
+      "forwarded an OpenCode key in a slot with no provider",
+    );
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("provider slots for this run are empty");
+    expect(summary).not.toContain("jq -c .openai");
+    expect(`${summary}${plan.rendered.annotation}`).not.toContain("SENTINEL");
+  });
+
   test("an OpenCode slot with a key and no provider gets the platform slot fix, not the re-set fix", () => {
     const detail =
       parseCryskSecrets("CRYSK_OPENCODE__API_KEY=SENTINEL-SLOT-41")
