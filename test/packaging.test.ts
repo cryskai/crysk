@@ -577,12 +577,21 @@ describe("Packaging & distribution configuration", () => {
       expect(ours).toContain("claude-token");
     });
 
-    test("run step invokes bin/pr-hero.js — the entrypoint verified to actually run", () => {
+    // U5: the step runs src/ci/run.ts, which takes the crysk-secrets input and
+    // then calls the same runCli bin/pr-hero.js calls under Bun.
+    test("run step invokes src/ci/run.ts, which runs the CLI bin/pr-hero.js runs", () => {
       const action = parsedAction();
       const runStep = action.runs.steps.find(
         (step) => step.id === "run-crysk",
       ) as { run?: string } | undefined;
-      expect(runStep?.run).toContain("bin/pr-hero.js");
+      expect(runStep?.run).toContain("src/ci/run.ts");
+      const entry = readFileSync(
+        path.join(rootDir, "src", "ci", "run.ts"),
+        "utf8",
+      );
+      expect(entry).toContain('import { runCli } from "../cli";');
+      const bin = readFileSync(path.join(rootDir, "bin", "pr-hero.js"), "utf8");
+      expect(bin).toContain('await import("../src/cli.ts")');
     });
 
     test("passes --ci unconditionally (--budget-usd/--step-summary require it at parse time)", () => {
@@ -624,10 +633,7 @@ describe("Packaging & distribution configuration", () => {
     // counts: a value there stops the run at the trigger (U5).
     const EFFECTIVE_OPENCODE_ROUTING =
       "steps.platform.outputs.routing-opencode == 'true'";
-    // The OpenCode install condition before U5, still bound until the run-step
-    // slice moves it to the setup step's output.
-    const LEGACY_OPENCODE_ROUTING =
-      "steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode'))";
+
     function resolveEnv(
       env: Record<string, string>,
       ctx: ActionContext,
@@ -954,15 +960,18 @@ describe("Packaging & distribution configuration", () => {
       }
     });
 
-    test("platform routing that names OpenCode installs the OpenCode CLI too, and platform routing that does not overrides the input", () => {
+    // L28 decision 3: the CLI is installed when the setup step wrote an OpenCode
+    // auth file from the CRYSK_OPENCODE_* secrets, or when the platform's models
+    // name OpenCode (a self-hosted runner's own auth file still gets the CLI).
+    test("the OpenCode CLI is installed when setup wrote its auth file or the platform's models name OpenCode", () => {
       const install = steps().find(
         (step) => step.name === "Install OpenCode CLI",
       );
-      // The same effective test the trigger step binds: the platform's answer
-      // when it sent a routing, the input's only when it sent none.
       expect(String(install?.if)).toBe(
-        `\${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || ${LEGACY_OPENCODE_ROUTING}) }}`,
+        `\${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || ${EFFECTIVE_OPENCODE_ROUTING}) }}`,
       );
+      // The removed inputs never decide it.
+      expect(String(install?.if)).not.toContain("inputs.");
     });
 
     test.each([
@@ -1306,6 +1315,8 @@ describe("Packaging & distribution configuration", () => {
       expect(failed.cliStarted).toBe(true);
     });
 
+    // U5: the last command pipes the crysk-secrets input to src/ci/run.ts, which
+    // reads it, then runs the CLI with the same arguments (test/ci/run.test.ts).
     test("the run step's last command is the CLI itself, so the job's result is the CLI's", () => {
       const run = steps().find((step) => step.id === "run-crysk");
       const lastCommand = String(run?.run ?? "")
@@ -1314,8 +1325,77 @@ describe("Packaging & distribution configuration", () => {
         .filter((line) => line !== "" && !line.startsWith("#"))
         .at(-1);
       expect(lastCommand).toBe(
-        `bun "\${{ github.action_path }}/bin/pr-hero.js" "$@"`,
+        `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/run.ts" "$@"`,
       );
+    });
+
+    // Only the crysk-secrets input carries a Claude credential to the review: the
+    // removed inputs are not bound, so nothing a workflow passes there reaches it.
+    test("Run Crysk binds no Claude credential variable, only the crysk-secrets input", () => {
+      const run = steps().find((step) => step.id === "run-crysk");
+      expect(run?.env?.CRYSK_SECRETS_INPUT).toBe(
+        `\${{ inputs.crysk-secrets }}`,
+      );
+      for (const name of [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CRYSK_CLAUDE_OAUTH_TOKEN",
+        "CRYSK_CLAUDE_API_KEY",
+      ]) {
+        expect(run?.env?.[name], name).toBeUndefined();
+      }
+      const raw = JSON.stringify(steps());
+      for (const input of [
+        "anthropic-api-key",
+        "claude-token",
+        "opencode-auth",
+      ]) {
+        expect(raw.includes(`inputs.${input} }}`), input).toBe(false);
+      }
+      expect(raw.includes("inputs.routing }}")).toBe(false);
+    });
+
+    // The fake `bun` prints what reaches it; the run step's pipe must hand the CLI
+    // the input on stdin and an empty variable, never the value in its env.
+    test("the run step pipes the input on stdin and starts bun with the variable empty", () => {
+      const run = steps().find((step) => step.id === "run-crysk");
+      const script = String(run?.run ?? "").replaceAll(
+        `\${{ github.action_path }}`,
+        "/action",
+      );
+      const fakeBun =
+        'bun() { printf "env=[%s]\\n" "$CRYSK_SECRETS_INPUT"; printf "stdin=[%s]\\n" "$(cat)"; }';
+      const dir = mkdtempSync(path.join(os.tmpdir(), "crysk-run-pipe-"));
+      try {
+        const result = Bun.spawnSync(
+          [
+            "bash",
+            "--noprofile",
+            "--norc",
+            "-eo",
+            "pipefail",
+            "-c",
+            `${fakeBun}\n${script}`,
+          ],
+          {
+            env: {
+              CRYSK_OUTCOME_DIR: dir,
+              CRYSK_SECRETS_INPUT: "CRYSK_CLAUDE_OAUTH_TOKEN=pipe-test-token",
+              TRIGGER_PR: "305",
+              PATH: process.env.PATH ?? "",
+            },
+          },
+        );
+        const out = result.stdout.toString();
+        expect(result.exitCode).toBe(0);
+        expect(out).toContain("env=[]\n");
+        expect(out).toContain(
+          "stdin=[CRYSK_CLAUDE_OAUTH_TOKEN=pipe-test-token]\n",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     // U5 clean break: an old input with a value stops the run at the trigger,
@@ -1474,7 +1554,7 @@ describe("Packaging & distribution configuration", () => {
       expect(install).toBeDefined();
       expect(install).not.toBe(run);
       expect(install?.id).not.toBe("run-crysk");
-      expect(String(install?.if)).toContain("inputs.");
+      expect(String(install?.if)).toContain("steps.materialize.outputs.");
       expect(String(install?.if)).not.toContain("secrets.");
       expect(install?.run).toContain("--version 1.18.30");
       expect(install?.run).not.toContain("latest");

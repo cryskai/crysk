@@ -1525,7 +1525,7 @@ describe("setup.ts reads the crysk-secrets input", () => {
   });
 });
 
-describe("action.yml hands crysk-secrets to the setup step only", () => {
+describe("action.yml hands crysk-secrets only to the steps that read it", () => {
   type Step = {
     id?: string;
     name?: string;
@@ -1548,12 +1548,21 @@ describe("action.yml hands crysk-secrets to the setup step only", () => {
   });
 
   // The trigger reads it too, for presence (U5); its own test is in
-  // test/ci/trigger.test.ts. No installer and no Run step sees it.
-  test("only the trigger's and the setup step's env bind it, and no script, condition or with: names it", () => {
+  // test/ci/trigger.test.ts. Run Crysk reads the Claude values (test/ci/run.test.ts
+  // and test/packaging.test.ts). No installer sees it.
+  test("only the trigger's, the setup step's and Run Crysk's env bind it, and no script, condition or with: names it", () => {
     const binders = steps.filter((step) =>
       JSON.stringify(step).includes("inputs.crysk-secrets"),
     );
-    expect(binders.map((step) => step.id)).toEqual(["trigger", "materialize"]);
+    expect(binders.map((step) => step.id)).toEqual([
+      "trigger",
+      "materialize",
+      "run-crysk",
+    ]);
+    const run = binders[2] as Step;
+    expect(run.env?.CRYSK_SECRETS_INPUT).toBe(`\${{ inputs.crysk-secrets }}`);
+    expect(run.run ?? "").not.toContain("inputs.crysk-secrets");
+    expect(run.if ?? "").not.toContain("crysk-secrets");
     const setup = binders[1] as Step;
     expect(setup.env?.CRYSK_SECRETS_INPUT).toBe(`\${{ inputs.crysk-secrets }}`);
     expect(setup.run ?? "").not.toContain("inputs.crysk-secrets");

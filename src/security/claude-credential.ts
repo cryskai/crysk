@@ -34,7 +34,8 @@ export const DEFAULT_CLAUDE_CREDENTIAL_ORDER: readonly ClaudeCredentialKind[] =
   ["subscription", "api_key"];
 
 // Where each credential may come from in the environment, the CRYSK_* secret first
-// (S8). The old names keep working until the clean break (U5).
+// (S8). The old names are the Claude CLI's own variables, which a local run exports;
+// in CI the action reads only the crysk-secrets input (the intake below, U5).
 const ENV_SOURCES = {
   subscription: ["CRYSK_CLAUDE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
   api_key: ["CRYSK_CLAUDE_API_KEY", "ANTHROPIC_API_KEY"],
@@ -192,6 +193,47 @@ export function claudeRunEnv(
   return run;
 }
 
+// U5: the Claude values the Run Crysk step took from the crysk-secrets input
+// (src/ci/run.ts, which reads the input on stdin), keyed by kind. Undefined until
+// run.ts takes them, which only the action does; a local run never sets it.
+let cryskClaudeIntake:
+  | { readonly subscription?: string; readonly api_key?: string }
+  | undefined;
+
+// Called once by src/ci/run.ts, before the CLI starts, with the parsed input's
+// Claude secrets (parseCryskSecrets's `secrets.claude`). Nothing is written to
+// process.env: Bun hands a child the environment it started with, and readers of
+// the startup env (the transport's billingMode getter, a `{...process.env}` copy)
+// would see a value assigned there. resolveRunClaudeCredential reads the intake.
+export function takeCryskClaudeSecrets(claude: {
+  readonly subscription?: string;
+  readonly api_key?: string;
+}): void {
+  cryskClaudeIntake = { ...claude };
+}
+
+// For tests: forget the intake, so a later test reads the process env again.
+export function clearCryskClaudeIntake(): void {
+  cryskClaudeIntake = undefined;
+}
+
+// The env a CI run reads its Claude credential from: every Claude variable of the
+// process env removed (a job-level ANTHROPIC_API_KEY nobody passed through the
+// crysk-secrets input must not be chosen), then the intake's values under their
+// CRYSK_* names. Pure; the run env (claudeRunEnv) is built from it as from any env.
+export function cryskIntakeEnv(
+  env: Readonly<Record<string, string | undefined>>,
+  claude: { readonly subscription?: string; readonly api_key?: string },
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = { ...env };
+  for (const name of CLAUDE_CREDENTIAL_VARIABLES) delete out[name];
+  for (const kind of ["subscription", "api_key"] as const) {
+    const value = claude[kind];
+    if (value !== undefined) out[ENV_SOURCES[kind][0]] = value;
+  }
+  return out;
+}
+
 export interface RunClaudeCredential {
   readonly selection: ClaudeCredentialSelection;
   // The environment every runner, binding and gate of this run reads.
@@ -211,13 +253,18 @@ export function defaultClaudeLoginPresent(
   return existsSync(path.join(home, ".claude", ".credentials.json"));
 }
 
-// Called once at run start, before any plan is admitted.
+// Called once at run start, before any plan is admitted. With no env given it reads
+// the process env, or, in the action, the crysk-secrets intake over it (U5).
 export function resolveRunClaudeCredential(input: {
   readonly credentials?: CredentialsConfig;
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly loginPresent?: boolean;
 }): RunClaudeCredential {
-  const env = input.env ?? process.env;
+  const env =
+    input.env ??
+    (cryskClaudeIntake === undefined
+      ? process.env
+      : cryskIntakeEnv(process.env, cryskClaudeIntake));
   const presence = claudeCredentialPresence(
     env,
     input.loginPresent ?? defaultClaudeLoginPresent(env),
