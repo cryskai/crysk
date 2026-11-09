@@ -1210,8 +1210,11 @@ const CRYSK_SECRETS_FIXES = [
 // The text is parseCryskSecrets's, matched here for the same reason as below.
 const EMPTY_SLOT_DETAIL =
   "CRYSK_OPENCODE__API_KEY has a value but no provider: an unused OpenCode slot must be empty";
+// Setup joins one refusal per line with "; ", so several unused slots that
+// carry a value arrive as that refusal repeated; every part must be it.
 function isEmptySlotDetail(detail: string): boolean {
-  return detail.trim() === EMPTY_SLOT_DETAIL;
+  const parts = detail.trim().split(/; (?=CRYSK_OPENCODE__API_KEY )/);
+  return parts.every((part) => part.trim() === EMPTY_SLOT_DETAIL);
 }
 const EMPTY_SLOT_FIXES = [
   "The Crysk platform passed an OpenCode key through a provider slot with no provider name, so Crysk cannot tell whose key it is. The platform's provider slots for this run are empty while a key was forwarded:",
