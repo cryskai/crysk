@@ -91,6 +91,7 @@ import {
   type ProductionRuntime,
 } from "../production-runtime";
 import type { RunnerAuthorityResolution } from "../runner-authority";
+import type { RunClaudeCredential } from "../security/claude-credential";
 
 // The codegraph server, and ONLY the codegraph server. Written per run and
 // handed to every step together with the runner's --strict-mcp-config: an
@@ -510,10 +511,17 @@ export async function resolvePipelineRoute(params: {
   scoutEnabled?: boolean;
   consolidateEnabled?: boolean;
   materialityEnabled?: boolean;
+  // S5: the run's Claude credential, chosen once at run start. Required (undefined
+  // spelled out) so tsc keeps every caller handing it over: dropping it would compile
+  // and silently admit on the process env. A dry run passes undefined: it
+  // authenticates nothing (like the capability gate it skips), so it is never
+  // refused for a credential and admits on the process env.
+  claudeRun: RunClaudeCredential | undefined;
 }): Promise<ProductionRoutePlanResult | undefined> {
   return resolveProductionRoutePlanAtConfirm({
     modelsConfigured: params.modelsConfigured,
     workspaceRoot: params.workspaceRoot,
+    ...(params.claudeRun === undefined ? {} : { claudeRun: params.claudeRun }),
     buildRoutePlan: () =>
       buildCliRoutePlan({
         spec: params.spec,

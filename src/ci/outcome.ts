@@ -1170,6 +1170,21 @@ const OPENCODE_SUBSCRIPTION_FIXES = [
 function isOpencodeRoute(params: ErrorParams): boolean {
   return params.backend?.trim() === "opencode";
 }
+// A refused `crysk-secrets` input (src/ci/crysk-secrets.ts, U1) records
+// malformed_payload with a detail that names a CRYSK_* secret or a line of the
+// input, never a value. Its fix is that secret, not the OpenCode auth store.
+function isCryskSecretsDetail(params: ErrorParams): boolean {
+  const detail = params.detail?.trim() ?? "";
+  return (
+    detail.startsWith("CRYSK_") ||
+    /^line \d+ of the crysk-secrets input /.test(detail)
+  );
+}
+const CRYSK_SECRETS_FIXES = [
+  "Re-set the CRYSK_* secret the message names. An _OAUTH secret is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
+  "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+  "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
+];
 const MODEL_NOT_SERVED: CatalogVariant = {
   why: "the routing names a model this provider does not offer",
   fixes: [
@@ -1343,14 +1358,19 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         // store and for a Claude keychain payload alike, and {detail} names which.
         what: "The credential store is not usable: {detail}",
         why: CRED_STORE_WHY,
-        fixes: [
-          "Check that the store is a JSON object:",
-          "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
-          "Then re-set the secret:",
-          OPENCODE_STORE,
-        ],
-        annotationFix:
-          "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
+        fixes: (params) =>
+          isCryskSecretsDetail(params)
+            ? CRYSK_SECRETS_FIXES
+            : [
+                "Check that the store is a JSON object:",
+                "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
+                "Then re-set the secret:",
+                OPENCODE_STORE,
+              ],
+        annotationFix: (params) =>
+          isCryskSecretsDetail(params)
+            ? "re-set the CRYSK_* secret it names (an _OAUTH secret is base64 -w0 of the provider's OpenCode record)"
+            : "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
       },
       source_read_failed: CREDENTIAL_UNUSABLE_ENV,
       "env-absent": CREDENTIAL_UNUSABLE_ENV,
@@ -1362,24 +1382,23 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
     owner: "config",
     what: "provider {provider} rejected the credential in {secret}",
     variants: {
-      // The rejected secret is a per-token credential (ANTHROPIC_API_KEY or
-      // ANTHROPIC_AUTH_TOKEN): the CLI prefers it to the OAuth token, so
-      // setting CLAUDE_CODE_OAUTH_TOKEN alone leaves the next run rejected the same way.
+      // The rejected secret is a per-token credential. Since S5 the run used it because it
+      // was the first present credential in `credentials.claude`, so the way to the
+      // subscription is that order (with the OAuth secret set), never deleting the key.
+      // The alternative names the secret both ways: the old name the workflow passes
+      // today, and its CRYSK_* name (S8).
       api_key: {
-        why: "the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN",
+        why: "the key is invalid, expired or revoked, and it is the Claude credential this run chose from credentials.claude",
         fixes: [
-          // Prose between the two commands keeps them in separate code blocks: they are
-          // alternatives, and one copied block would set the new key and then delete it.
           "Create a new key in the Claude Console and set it:",
           "$ gh secret set {secret}",
-          "Or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set):",
-          "$ gh secret delete {secret}",
+          "Or run on the subscription: set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN under the new names) and put subscription first in `credentials.claude` (the default order).",
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "create a new key and run `gh secret set {secret}`, or delete the {secret} secret so the OAuth token is used (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while the key is set)",
+          "create a new key and run `gh secret set {secret}`, or set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN) and put subscription first in `credentials.claude` (the default order)",
       },
       oauth: {
         why: "it is expired, revoked, or a short-lived /login session token",
@@ -1684,21 +1703,20 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         ...PROVIDER_LIMITED,
         what: "{detail} (rate limit or quota reached)",
       },
-      // The credit balance or spend limit of the account behind ANTHROPIC_API_KEY (the CLI
-      // prefers that key over the subscription token, so it is the credential in use).
-      // Waiting does not help: the fix is to top up, or to stop using the key.
+      // The credit balance or spend limit of the account behind ANTHROPIC_API_KEY (the
+      // credential this run chose from credentials.claude, S5). Waiting does not help:
+      // the fix is to top up, or to move the run to the subscription through that order.
       api_key: {
         what: "{detail}: the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit",
         why: "the provider refuses every request until the account has credit again, so a retry would fail the same way",
         fixes: [
-          "Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN:",
-          "$ gh secret delete ANTHROPIC_API_KEY",
+          "Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or run on the subscription: set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN under the new names) and put subscription first in `credentials.claude` (the default order).",
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or delete the ANTHROPIC_API_KEY secret so the review uses CLAUDE_CODE_OAUTH_TOKEN",
+          "add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN) and put subscription first in `credentials.claude` (the default order)",
       },
       // The Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached a usage window. The
       // provider's own sentence carries the reset time, so the what quotes it.
@@ -1709,11 +1727,11 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "Re-run after the limit resets (the reset time is in the sentence above):",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
-          "Or set ANTHROPIC_API_KEY to bill per token:",
+          "Or bill per token: set ANTHROPIC_API_KEY (CRYSK_CLAUDE_API_KEY under the new names) and put api_key first in `credentials.claude` (the default order uses the subscription while it is set):",
           "$ gh secret set ANTHROPIC_API_KEY",
         ],
         annotationFix:
-          "re-run after the limit resets, or set ANTHROPIC_API_KEY to bill per token",
+          "re-run after the limit resets, or set ANTHROPIC_API_KEY (CRYSK_CLAUDE_API_KEY) and put api_key first in `credentials.claude` to bill per token",
       },
     },
   },
@@ -1960,7 +1978,7 @@ function paramVariant(
     return "no-scope";
   }
   // The credential in the secret picks the fix: a rejected API key and a rejected OAuth
-  // token are replaced differently, and the CLI uses the key ahead of the token.
+  // token are replaced differently.
   if (code === "PRH-CRED-REJECTED" && variant === undefined) {
     if (
       params.secret === "ANTHROPIC_API_KEY" ||

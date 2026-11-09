@@ -214,12 +214,13 @@ export function defaultChoices(): CiSetupChoices {
 }
 
 // The `budget-usd` workflow input for these choices, or undefined to write none.
-// A subscription writes none. CI bills as metered only when a non-empty
-// ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) is present (envBillsMetered), so
-// a subscription-only repo already gets no ceiling. An explicit 0 would print
-// the disabled-ceiling warning on every run and, worse, stay an operator
-// override if an API key is added later, defeating the $10 fail-safe that the
-// key's mere presence is meant to bring back (gates.ts, CiBillingMode).
+// A subscription writes none. CI bills as metered only when the run's chosen
+// Claude credential is the API key (S5: the first of `credentials.claude` that is
+// present, default subscription then api_key; gates.ts, CiBillingMode), so a
+// subscription run already gets no ceiling. An explicit 0 would print the
+// disabled-ceiling warning on every run and, worse, stay an operator override if
+// the run later moves to an API key, defeating the $10 fail-safe a metered run
+// brings back.
 export function budgetInput(choices: CiSetupChoices): string | undefined {
   if (choices.billing === "api") {
     return String(choices.budgetUsd ?? CI_DEFAULT_METERED_BUDGET_USD);

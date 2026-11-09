@@ -10,6 +10,7 @@ import {
 import {
   buildResolvedRoutePlan,
   InvalidModelError,
+  planRoutes,
   type ResolvedRoutePlan,
 } from "#model/routing";
 import { resolveEngineAssets } from "../assets";
@@ -25,6 +26,11 @@ import type {
   RunnerAuthorityOptions,
   RunnerAuthorityResolution,
 } from "../runner-authority";
+import {
+  ClaudeCredentialRefusalError,
+  claudeCredentialRefusal,
+  type RunClaudeCredential,
+} from "../security/claude-credential";
 import {
   admitRoutePlan,
   createDefaultTransportRegistry,
@@ -240,21 +246,42 @@ export async function resolveProductionRoutePlanAtConfirm(input: {
   authorityDeps?: ResolveRunnerAuthorityDeps;
   loadSdk?: () => Promise<OpenCodeSdkLike>;
   env?: RunnerAuthorityOptions["env"];
+  // S5: the Claude credential chosen at run start. Its env replaces `env` (it is the
+  // process environment with one Claude credential left), and a plan that needs
+  // Claude with no listed credential present is refused here, before admission.
+  claudeRun?: RunClaudeCredential;
 }): Promise<ProductionRoutePlanResult | undefined> {
+  const refuse = (planHasClaudeRoute: boolean): void => {
+    if (input.claudeRun === undefined) return;
+    const refusal = claudeCredentialRefusal(
+      input.claudeRun.selection,
+      planHasClaudeRoute,
+    );
+    if (refusal !== undefined) throw new ClaudeCredentialRefusalError(refusal);
+  };
   let routePlan: ResolvedRoutePlan;
   try {
     routePlan = await input.buildRoutePlan();
   } catch (error) {
     if (planErrorIsFatal(error, input.modelsConfigured)) throw error;
+    // The legacy no-plan path runs every step on the Claude CLI.
+    refuse(true);
     return undefined;
   }
+  refuse(
+    planRoutes(routePlan).some((step) => step.route.backend === "claude-code"),
+  );
 
+  const env = input.claudeRun?.env ?? input.env;
   const productionAdmission = await prepareProductionAdmissionContext({
     workspaceRoot: input.workspaceRoot,
     plan: routePlan,
     authorityDeps: input.authorityDeps,
     loadSdk: input.loadSdk,
-    env: input.env,
+    ...(env === undefined ? {} : { env }),
+    ...(input.claudeRun?.kind === undefined
+      ? {}
+      : { claudeCredential: input.claudeRun.kind }),
   });
   if ("error" in productionAdmission) {
     throw new CliError(
@@ -282,7 +309,13 @@ export async function enforceProviderCapabilityGate(input: {
         `execution authority unavailable: ${input.runnerAuthority.error}`,
       );
     }
-    const capabilityReport = await produceClaudeCapabilityReport({});
+    // S5: the run env (one Claude credential, under the CLI's name), the same object
+    // the legacy runner hands its child, so the auth check sees the credential the
+    // run chose (a CRYSK_* secret included) and never one it stripped.
+    const runEnv = input.runnerAuthority?.runnerOptions?.childEnv;
+    const capabilityReport = await produceClaudeCapabilityReport(
+      runEnv === undefined ? {} : { env: { ...runEnv } },
+    );
     const capabilityGate = capabilityGateDecision(capabilityReport);
     if (!capabilityGate.ok) {
       throw new CliError(

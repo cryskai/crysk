@@ -1020,6 +1020,297 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
   });
 });
 
+// The CRYSK_* secrets intake (odd/tasks/role-model-routing.md, S8, L13, U1):
+// the setup step parses the `crysk-secrets` input, masks every value before it
+// writes anything, and tells later steps only which credentials exist. Each
+// test runs action.yml's own setup `run:` script under bash the way the runner
+// does (`bash -eo pipefail`), so the stdin hand-off is what is tested.
+describe("setup.ts reads the crysk-secrets input", () => {
+  const REPO_ROOT = path.resolve(__dirname, "..", "..");
+  const SETUP_SCRIPT = path.join(REPO_ROOT, "src", "ci", "setup.ts");
+  const setupStep = (
+    Bun.YAML.parse(
+      readFileSync(path.join(REPO_ROOT, "action.yml"), "utf8"),
+    ) as { runs: { steps: { id?: string; run?: string }[] } }
+  ).runs.steps.find((step) => step.id === "materialize");
+  const STEP_SCRIPT = (setupStep?.run ?? "").replaceAll(
+    `\${{ github.action_path }}`,
+    REPO_ROOT,
+  );
+  const b64 = (value: unknown) =>
+    Buffer.from(JSON.stringify(value), "utf8").toString("base64");
+  const OAUTH_VALUE = b64({
+    type: "oauth",
+    access: "SENTINEL-ACCESS-55aa",
+    refresh: "SENTINEL-REFRESH-55aa",
+    expires: 1_900_000_000_000,
+  });
+  const SECRETS_INPUT = [
+    "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-55aa",
+    "CRYSK_CLAUDE_API_KEY=SENTINEL-APIKEY-55aa",
+    "CRYSK_OPENCODE_DEEPSEEK_API_KEY=SENTINEL-DEEPSEEK-55aa",
+    `CRYSK_OPENCODE_OPENAI_OAUTH=${OAUTH_VALUE}`,
+    "CRYSK_OPENCODE_GROQ_API_KEY=",
+    "CRYSK_CLAUDE_OAUTH_TOKEN_BACKUP=SENTINEL-BACKUP-55aa",
+  ].join("\n");
+
+  async function runSetup(
+    env: Record<string, string>,
+    options: {
+      platform?: unknown;
+      fakeGit?: boolean;
+      // Run bun on setup.ts directly with `env`, bypassing the step's script.
+      direct?: boolean;
+    } = {},
+  ) {
+    const root = await mkdtemp(path.join(tmpdir(), "pr-hero-setup-secrets-"));
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    const outDir = path.join(root, "outcome");
+    const githubOutput = path.join(root, "github-output");
+    const githubEnv = path.join(root, "github-env");
+    const gitDump = path.join(root, "git-env-dump");
+    await mkdir(home, { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await writeFile(githubOutput, "");
+    await writeFile(githubEnv, "PRE_EXISTING=1\n");
+    Bun.spawnSync(["git", "init", "-q"], { cwd: workspace });
+    let pathEnv = process.env.PATH ?? "";
+    if (options.fakeGit === true) {
+      // A git first on PATH that records the environment it was given, then
+      // runs the real one: the platform path's repo-root lookup spawns it.
+      const realGit = Bun.which("git") as string;
+      const bin = path.join(root, "bin");
+      await mkdir(bin, { recursive: true });
+      await writeFile(
+        path.join(bin, "git"),
+        `#!/bin/sh\nenv >> "${gitDump}"\nexec "${realGit}" "$@"\n`,
+        { mode: 0o755 },
+      );
+      pathEnv = `${bin}:${pathEnv}`;
+    }
+    let platformFile = "";
+    if (options.platform !== undefined) {
+      platformFile = path.join(root, "platform", "platform-config.json");
+      await mkdir(path.dirname(platformFile), { recursive: true });
+      await writeFile(platformFile, JSON.stringify(options.platform));
+    }
+    try {
+      const argv =
+        options.direct === true
+          ? ["bun", SETUP_SCRIPT]
+          : [
+              "bash",
+              "--noprofile",
+              "--norc",
+              "-eo",
+              "pipefail",
+              "-c",
+              STEP_SCRIPT,
+            ];
+      const proc = Bun.spawn(argv, {
+        cwd: workspace,
+        env: {
+          ...process.env,
+          PATH: pathEnv,
+          HOME: home,
+          ROUTING_INPUT: "",
+          OPENCODE_AUTH_INPUT: "",
+          CRYSK_OUTCOME_DIR: outDir,
+          GITHUB_OUTPUT: githubOutput,
+          GITHUB_ENV: githubEnv,
+          CRYSK_PLATFORM_CONFIG_FILE: platformFile,
+          CRYSK_SECRETS_INPUT: "",
+          ...env,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      const recordPath = path.join(outDir, "setup.json");
+      const homeFiles: string[] = [];
+      for (const entry of new Bun.Glob("**/*").scanSync({
+        cwd: home,
+        dot: true,
+      })) {
+        homeFiles.push(await readFile(path.join(home, entry), "utf8"));
+      }
+      return {
+        exitCode,
+        stdout,
+        stderr,
+        output: await readFile(githubOutput, "utf8"),
+        envFile: await readFile(githubEnv, "utf8"),
+        record: existsSync(recordPath)
+          ? await readFile(recordPath, "utf8")
+          : undefined,
+        gitDump: existsSync(gitDump)
+          ? await readFile(gitDump, "utf8")
+          : undefined,
+        homeFiles,
+      };
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  test("masks every value before any other line, and only masks carry a value", async () => {
+    const result = await runSetup({ CRYSK_SECRETS_INPUT: SECRETS_INPUT });
+    expect(result.exitCode).toBe(0);
+    const lines = result.stdout.split("\n").filter((line) => line !== "");
+    expect(lines).toEqual([
+      "::add-mask::SENTINEL-OAUTH-55aa",
+      "::add-mask::SENTINEL-APIKEY-55aa",
+      "::add-mask::SENTINEL-DEEPSEEK-55aa",
+      `::add-mask::${OAUTH_VALUE}`,
+      "::add-mask::SENTINEL-ACCESS-55aa",
+      "::add-mask::SENTINEL-REFRESH-55aa",
+      "::add-mask::SENTINEL-BACKUP-55aa",
+    ]);
+    expect(result.stderr).not.toContain("SENTINEL");
+    expect(result.stderr).not.toContain(OAUTH_VALUE);
+    expect(result.stderr).toContain(
+      "::notice::CRYSK_CLAUDE_OAUTH_TOKEN_BACKUP is reserved for several Claude accounts, which Crysk does not read yet; it is ignored.",
+    );
+    expect(result.record).toBeUndefined();
+  });
+
+  test("writes presence to GITHUB_OUTPUT, nothing to GITHUB_ENV, and no value anywhere", async () => {
+    const result = await runSetup({ CRYSK_SECRETS_INPUT: SECRETS_INPUT });
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toBe(
+      [
+        "crysk-secrets=CRYSK_CLAUDE_API_KEY,CRYSK_CLAUDE_OAUTH_TOKEN,CRYSK_OPENCODE_DEEPSEEK_API_KEY,CRYSK_OPENCODE_OPENAI_OAUTH",
+        "claude-credentials=subscription,api_key",
+        "opencode-providers=DEEPSEEK,OPENAI",
+        "",
+      ].join("\n"),
+    );
+    expect(result.envFile).toBe("PRE_EXISTING=1\n");
+    // U1 parses only: nothing is written under HOME from these secrets.
+    expect(result.homeFiles.join("\n")).not.toContain("SENTINEL");
+    expect(result.homeFiles.join("\n")).not.toContain(OAUTH_VALUE);
+  });
+
+  test("the values never reach a child process: git, spawned on the platform path, sees neither the input nor a value", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: SECRETS_INPUT },
+      {
+        platform: { person: {}, repo: { default_base: "release" } },
+        fakeGit: true,
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    // git ran, so the check below is about a real child environment. Booleans,
+    // so a failure never prints the environment it captured.
+    const dump = result.gitDump ?? "";
+    expect(dump.includes("HOME=")).toBe(true);
+    // The step runs bun with the variable emptied, so at most `NAME=` is left.
+    expect(/^CRYSK_SECRETS_INPUT=.+$/m.test(dump)).toBe(false);
+    expect(dump.includes("SENTINEL")).toBe(false);
+    expect(dump.includes(OAUTH_VALUE)).toBe(false);
+    expect(result.output).toContain("repo-config=");
+    expect(result.output).toContain("claude-credentials=subscription,api_key");
+  });
+
+  test("a malformed _OAUTH fails the step with a record naming the secret, never its value", async () => {
+    const result = await runSetup({
+      CRYSK_SECRETS_INPUT: [
+        "CRYSK_CLAUDE_API_KEY=SENTINEL-APIKEY-55aa",
+        "CRYSK_OPENCODE_OPENAI_OAUTH=SENTINEL-not-base64!",
+      ].join("\n"),
+    });
+    expect(result.exitCode).toBe(1);
+    // Masked even though the step fails.
+    expect(result.stdout).toContain("::add-mask::SENTINEL-APIKEY-55aa");
+    expect(result.stdout).toContain("::add-mask::SENTINEL-not-base64!");
+    expect(result.stderr).toContain(
+      "CI crysk-secrets input: CRYSK_OPENCODE_OPENAI_OAUTH is not base64",
+    );
+    expect(result.stderr).not.toContain("SENTINEL");
+    expect(JSON.parse(result.record ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "credential", failureClass: "malformed_payload" },
+      detail:
+        "CRYSK_OPENCODE_OPENAI_OAUTH is not base64 (encode the OpenCode auth record with base64 -w0)",
+    });
+    expect(result.output).toBe("");
+  });
+
+  test("an empty input writes no mask and no output, exactly as before", async () => {
+    const result = await runSetup({ CRYSK_SECRETS_INPUT: "" });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.output).toBe("");
+    expect(result.envFile).toBe("PRE_EXISTING=1\n");
+  });
+
+  test("the input reaching bun through its environment is refused before anything runs, never printed", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: SECRETS_INPUT },
+      { direct: true },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(
+      "crysk: the crysk-secrets input reached setup.ts through its environment",
+    );
+    expect(result.stderr).not.toContain("SENTINEL");
+    expect(result.stdout).toBe("");
+    expect(result.output).toBe("");
+    expect(result.record).toBeUndefined();
+  });
+
+  test("without the stdin flag the script reads no secrets, as before the input existed", async () => {
+    const result = await runSetup({}, { direct: true });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.output).toBe("");
+  });
+});
+
+describe("action.yml hands crysk-secrets to the setup step only", () => {
+  type Step = {
+    id?: string;
+    name?: string;
+    if?: string;
+    run?: string;
+    env?: Record<string, string>;
+    with?: Record<string, unknown>;
+  };
+  const action = Bun.YAML.parse(
+    readFileSync(path.resolve(__dirname, "..", "..", "action.yml"), "utf8"),
+  ) as {
+    inputs: Record<string, { required?: boolean; default?: string }>;
+    runs: { steps: Step[] };
+  };
+  const steps = action.runs.steps;
+
+  test("the input is declared, optional and empty by default", () => {
+    expect(action.inputs["crysk-secrets"]?.required).toBe(false);
+    expect(action.inputs["crysk-secrets"]?.default).toBe("");
+  });
+
+  test("only the setup step's env binds it, and no script, condition or with: names it", () => {
+    const binders = steps.filter((step) =>
+      JSON.stringify(step).includes("inputs.crysk-secrets"),
+    );
+    expect(binders.map((step) => step.id)).toEqual(["materialize"]);
+    const setup = binders[0] as Step;
+    expect(setup.env?.CRYSK_SECRETS_INPUT).toBe(`\${{ inputs.crysk-secrets }}`);
+    expect(setup.run ?? "").not.toContain("inputs.crysk-secrets");
+    expect(setup.if ?? "").not.toContain("crysk-secrets");
+    expect(JSON.stringify(setup.with ?? {})).not.toContain("crysk-secrets");
+    // The shell pipes the value on stdin and runs bun with the variable empty.
+    expect(setup.run).toBe(
+      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin`,
+    );
+  });
+});
+
 describe("ci init next steps (CLI)", () => {
   test("say that /crysk review works once the workflow is on the default branch", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "prhero-ci-init-"));

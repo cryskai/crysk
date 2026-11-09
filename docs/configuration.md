@@ -282,8 +282,8 @@ exist today:
 
 | Kind | Source | Backend | Billing |
 | --- | --- | --- | --- |
-| `claude_subscription_oauth` | macOS Keychain item `Claude Code-credentials` (via `/usr/bin/security`) | `claude-code` | subscription (quota, `$0.00` cash) |
-| `provider_api_token` | ambient `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (claude-code), or the named key in OpenCode's `auth.json` (opencode) | `claude-code`, `opencode` | metered (real invoice) |
+| `claude_subscription_oauth` | `CRYSK_CLAUDE_OAUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`, the macOS Keychain item `Claude Code-credentials` (via `/usr/bin/security`), or `~/.claude/.credentials.json` | `claude-code` | subscription (quota, `$0.00` cash) |
+| `provider_api_token` | `CRYSK_CLAUDE_API_KEY` or `ANTHROPIC_API_KEY` (claude-code), or the named key in OpenCode's `auth.json` (opencode) | `claude-code`, `opencode` | metered (real invoice) |
 | `opencode_chatgpt_oauth` | the `openai` entry in `~/.local/share/opencode/auth.json` (or `$XDG_DATA_HOME/opencode/auth.json`), which must be `type: "oauth"` | `opencode` | subscription |
 | `provider_free` | the provider's own catalog declares the model free at runtime (`opencode models <provider> --verbose --refresh`, every cost leaf `0`, status active); the provider's `type: "api"` entry in `auth.json` is projected if one exists, otherwise nothing | `opencode` | free (not metered) |
 
@@ -301,23 +301,42 @@ Only **one** OpenCode provider is admitted per run — mixing a `provider_free` 
 one, or two different metered providers, is refused (`#195`): the OpenCode server holds one
 credential for its whole life.
 
-### claude-code: macOS vs. everywhere else
+### claude-code: one credential per run, in the order you choose
 
-On macOS with `/usr/bin/security` present, a Keychain broker projects the subscription OAuth
-record into the child and **strips** `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from its
-environment — so an exported key on a macOS developer's shell does not silently make a `claude-code`
-route metered; it still runs on the projected subscription record. Without that broker (Linux, CI), no
-projection happens: if `ANTHROPIC_API_KEY` or
-`ANTHROPIC_AUTH_TOKEN` is set in the ambient environment, the route binds `provider_api_token` and
-bills metered. This is why CI (which has no Keychain) always binds metered when an Anthropic API key
-secret is set. On macOS the broker is attached whenever `/usr/bin/security` exists: if the
-`Claude Code-credentials` item is absent entirely, projection fails closed and the step does not
-run.
+A run uses exactly **one** Claude credential, chosen once when it starts and never switched mid-run. Set
+the order in your person config (`~/.crysk/config.json`; a repository file cannot set it):
 
-One known exception: if the Keychain item exists but the CLI moved its OAuth record out of the
-expected shape, projection can fail in a way the harness degrades rather than kills — the route
-still reports subscription, but an ambient key was not fenced. Tracked in `#279`, not fixed as of
-this writing.
+```json
+{ "credentials": { "claude": ["subscription", "api_key"] } }
+```
+
+- `subscription` is the Claude Code subscription: the `CRYSK_CLAUDE_OAUTH_TOKEN` or `CLAUDE_CODE_OAUTH_TOKEN`
+  variable (`claude setup-token`), or a login on this machine (the macOS Keychain item, or
+  `~/.claude/.credentials.json`).
+- `api_key` is an Anthropic API key, billed per token: `CRYSK_CLAUDE_API_KEY` or `ANTHROPIC_API_KEY`.
+
+The run uses the first credential in the list that is set. A credential that is set but not listed is never
+used. If none of the listed ones is set and the plan sends a step to the Claude CLI, the review stops before
+it spends anything, with a message that names the order and what is set. A plan with no Claude step ignores
+Claude credentials. A dry run never stops for this: it authenticates nothing.
+
+**The default, when `credentials` is absent, is `["subscription", "api_key"]`.** This is a billing change
+for anyone who has both a subscription and an API key: before, the Claude CLI preferred the key whenever
+`ANTHROPIC_API_KEY` was set and the review billed per token; now the subscription runs and the key is not
+used. Put `api_key` first to keep billing per token. With only one of them set, nothing changes.
+
+The Claude child sees only the chosen credential, under the CLI's own name: `CLAUDE_CODE_OAUTH_TOKEN` for the
+subscription, `ANTHROPIC_API_KEY` for the key. The other one, and `ANTHROPIC_AUTH_TOKEN`, are removed from its
+environment. `ANTHROPIC_AUTH_TOKEN` is not a credential Crysk chooses: put an API key in `ANTHROPIC_API_KEY`
+instead. How a run bills follows the choice: on the API key it is metered and the CI budget ceiling applies
+(`$10` unless `budget-usd` says otherwise); on the subscription it draws on quota with no ceiling.
+
+On macOS with `/usr/bin/security` present, a run on the subscription projects the Keychain OAuth record into
+the child. A run on the API key attaches no Keychain broker at all. If the `Claude Code-credentials` item is
+absent entirely, projection fails closed and the step does not run. If the Keychain item exists but the CLI
+moved its OAuth record out of the expected shape, projection degrades (`#279`) and the child runs on the
+run's own environment, which holds no API key on a subscription run, so it never bills a key the run did not
+choose: it runs on whatever the Claude CLI's own credential store holds, and fails only if that is empty too.
 
 ## Verifying at $0
 

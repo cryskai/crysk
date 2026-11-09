@@ -354,6 +354,36 @@ describe("PR0 — live retry decision (§7)", () => {
     expect(second).toContain("--- observed models ---");
   });
 
+  // A step the harness watchdog killed reports no usage, but its billing label must follow the run's chosen
+  // credential (the child env), not whatever the engine process happened to start with (U2, L18).
+  test("a watchdog-killed Claude step is labelled with the child env's billing, not the process env's", async () => {
+    const dir = await tempDir();
+    const transport: ProviderTransport = {
+      backend: "claude-code",
+      // What the transport would answer from the process env: both credentials there means metered.
+      billingMode: "metered",
+      capabilities: async () => CAPABILITIES,
+      execute: async (_req, { signal }) =>
+        new Promise<TransportOutcome>((resolve) => {
+          signal.addEventListener("abort", () =>
+            resolve(failOutcome({ timedOut: true })),
+          );
+        }),
+      classifyFailure: () => undefined,
+    } as ProviderTransport;
+    const step = await makeStep(dir, { timeoutMs: 30, maxAttempts: 1 });
+    const harness = new StepExecutionHarness({
+      transport,
+      // The run chose the subscription: the child holds the OAuth token only.
+      childEnv: { CLAUDE_CODE_OAUTH_TOKEN: "subscription-token-for-test" },
+      spawnFn: (() => ({}) as unknown) as typeof Bun.spawn,
+      sleep: async () => {},
+    });
+    const result = await harness.run(step);
+    expect(result.status).not.toBe("ok");
+    expect(result.usageV2?.billingMode).toBe("subscription");
+  });
+
   test("a watchdog-killed attempt flushes its attempt log with timed_out: true (#185)", async () => {
     const dir = await tempDir();
     let calls = 0;

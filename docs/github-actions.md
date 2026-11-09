@@ -9,7 +9,8 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
 
 1. **Add one auth secret** (Settings → Secrets and variables → Actions → New repository secret):
    `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. Pick one — never both blank. Leave OpenCode unset:
-   that is today's Claude CI.
+   that is today's Claude CI. A run uses one Claude credential: with both set it uses the subscription,
+   unless `credentials.claude` puts `api_key` first (see [Configuration, Credentials](configuration.md#credentials)).
 2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
    to `.github/workflows/crysk.yml`, or run `npx -y crysk setup --ci` (or `crysk ci init`) in a clone of
    your repo, which writes the same template (`uses: cryskai/crysk@v0`). You do not need Crysk
@@ -235,6 +236,60 @@ follows the same rule: it never echoes, logs, or truncates a secret value anywhe
   2. Click **New repository secret**.
   3. Enter Name (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`).
   4. Paste the token into Secret and click **Add secret**.
+
+### `CRYSK_*` secrets (upcoming)
+
+> **Not read by reviews yet.** The action accepts the `crysk-secrets` input and checks it, but a review
+> still authenticates only through `claude-token`, `anthropic-api-key` and `opencode-auth`. A workflow
+> that passes only `crysk-secrets` stops with `PRH-CRED-MISSING`. Keep the inputs above until a release
+> says to switch.
+
+Each credential gets one secret, with one name per kind:
+
+| Secret | What it holds |
+|---|---|
+| `CRYSK_CLAUDE_OAUTH_TOKEN` | Claude Code subscription: the token `claude setup-token` prints (replaces `CLAUDE_CODE_OAUTH_TOKEN`) |
+| `CRYSK_CLAUDE_API_KEY` | Claude Code on an Anthropic API key (replaces `ANTHROPIC_API_KEY`) |
+| `CRYSK_OPENCODE_<P>_API_KEY` | An OpenCode provider's API key |
+| `CRYSK_OPENCODE_<P>_OAUTH` | That provider's `opencode auth login` record, base64 on one line (`base64 -w0`) |
+
+`<P>` is the [Models.dev](https://models.dev) provider id in upper case, with `-` and `.` written as `_`:
+`deepseek` becomes `DEEPSEEK`, `github-copilot` becomes `GITHUB_COPILOT`, and `wafer.ai` becomes `WAFER_AI`.
+Two names are reserved for several Claude accounts: `CRYSK_CLAUDE_OAUTH_TOKEN_<NAME>` and
+`CRYSK_CLAUDE_API_KEY_<NAME>`. Crysk does not read them yet, and the run prints a notice when it gets one.
+
+The workflow names each secret it passes. It never passes `toJSON(secrets)`, which would hand every
+secret in the repository to the action and to everything the action installs. A secret the repository
+does not have arrives empty, and an empty value counts as absent, so one block can list every provider
+you might use:
+
+```yaml
+      - uses: cryskai/crysk@v0
+        with:
+          crysk-secrets: |
+            CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}
+            CRYSK_CLAUDE_API_KEY=${{ secrets.CRYSK_CLAUDE_API_KEY }}
+            CRYSK_OPENCODE_DEEPSEEK_API_KEY=${{ secrets.CRYSK_OPENCODE_DEEPSEEK_API_KEY }}
+            CRYSK_OPENCODE_OPENAI_OAUTH=${{ secrets.CRYSK_OPENCODE_OPENAI_OAUTH }}
+```
+
+What the action does with the input:
+
+- **Only the setup step sees the values.** The trigger, the dependency and OpenCode installers, and
+  Run Crysk do not. The step's shell pipes the input to `src/ci/setup.ts` on stdin and starts it with
+  the variable emptied, so no process the step spawns inherits the values.
+- **Every value is masked** with `::add-mask::` before anything else is written. That includes the
+  strings inside a decoded `_OAUTH` record, which GitHub would not otherwise know are secret.
+- **Later steps learn only what exists**, through the step's outputs: `crysk-secrets` (the names
+  kept), `claude-credentials` (`subscription`, `api_key`) and `opencode-providers` (the `<P>`
+  tokens). Nothing is written to `GITHUB_ENV`.
+- **The step fails** with `PRH-CRED-UNUSABLE` (`malformed_payload`) and names the secret when:
+  - an `_OAUTH` value is not padded standard base64, does not decode to a JSON object, or decodes to a
+    record whose `type` is not `oauth`;
+  - one name has a value on two lines;
+  - a line is not `NAME=value`, which is usually a base64 value that wrapped onto a second line.
+- **Other names are ignored**, each with a notice. A `CRYSK_` name is named in the notice. Any other
+  name is reported by its line number only, because it may be part of a value.
 
 ## OpenCode in CI
 
@@ -546,12 +601,14 @@ gates, not quality gates, and never fail the job. The comment names the one-shot
 GitHub Actions. It does not change the ceilings for later pushes, and it does not review on the machine
 of whoever comments.
 
-**Leaving `budget-usd` unset resolves the ceiling from how the run is billed.** A Claude
-subscription route (`CLAUDE_CODE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its
-real cash cost is `$0.00` and there is no dollar figure to gate on — no ceiling is applied, and the run
-emits a `::notice::` saying so. A metered route (`ANTHROPIC_API_KEY`, or OpenCode API-token auth via
-`OPENCODE_AUTH_JSON`) gets a `10.00` default, because that is the case where a runaway PR really does
-produce an invoice. Setting `budget-usd` explicitly is honoured verbatim on either route.
+**Leaving `budget-usd` unset resolves the ceiling from how the run is billed.** A run uses one Claude
+credential, the first one in `credentials.claude` that is set (default `["subscription", "api_key"]`, see
+[Configuration, Credentials](configuration.md#credentials)). A run on the subscription
+(`CLAUDE_CODE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its real cash cost is `$0.00`
+and there is no dollar figure to gate on — no ceiling is applied, and the run emits a `::notice::` saying so.
+A metered run (the API key, `ANTHROPIC_API_KEY`, or OpenCode API-token auth via `OPENCODE_AUTH_JSON`) gets a
+`10.00` default, because that is the case where a runaway PR really does produce an invoice. Setting
+`budget-usd` explicitly is honoured verbatim on either route.
 
 **Leaving `max-changed-lines` / `max-changed-files` unset resolves them the same way.** On a Claude
 subscription route there is no size limit, so large pull requests are reviewed instead of skipped, and
@@ -559,11 +616,13 @@ the run emits a `::notice::` saying so. A metered route keeps `4000` lines / `50
 the workflow, or `max_changed_lines` / `max_changed_files` in `.crysk/config.json`, is honoured on
 either route, and `0` disables that limit.
 
-If **both** Claude credentials are set, the ceiling is applied: this project does not record which one
-the Claude CLI actually bills, and a wrongly-removed ceiling costs money while a wrongly-applied one
-costs one skipped review you can clear with `budget-usd: 0`. The same conservative rule applies when
-the OpenCode auth file is present: CI treats the run as able to invoice (metered ceiling) even if a
-Claude subscription token is also set. That does **not** stamp Claude CLI usage as metered solely
+If **both** Claude credentials are set, the run uses the one `credentials.claude` puts first, and the
+other never reaches the Claude CLI. With the default order that is the subscription, so the review draws on
+quota with no ceiling. **This is a billing change** for repositories that hold both secrets: before
+`credentials.claude`, the Claude CLI preferred the key and the review billed per token with the `$10`
+ceiling. Put `api_key` first to keep that. The OpenCode auth file keeps the conservative rule: when it is
+present, CI treats the run as able to invoice (metered ceiling) even if a Claude subscription token is also
+set. That does **not** stamp Claude CLI usage as metered solely
 because OpenCode auth is present — OpenCode API-token billing is beside Claude's subscription quota.
 
 **A `budget-usd` of `0` or below does not mean "spend nothing" — it disables the ceiling.** This
@@ -590,7 +649,7 @@ and backed by a durable attempt ledger stored in GitHub Check Runs (`checks: wri
 | `thorough` | `every_push` | 4 | (unset) | 8 |
 | `manual` | `manual_only` | 1 | (unset) | 8 |
 
-Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the repo has neither `ANTHROPIC_API_KEY` nor `OPENCODE_AUTH_JSON`, either of which makes the route metered; an explicit 0 would warn on every run and outlive a later API key); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and the repo has no `OPENCODE_AUTH_JSON`; a run on the API key, which `credentials.claude` decides, is metered; an explicit 0 would warn on every run and outlive a later move to the API key); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
 
 Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` and `budget-usd` unless a flag names them, and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
 
@@ -1110,6 +1169,7 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `step-summary` | `true` | Set `false` to skip the `$GITHUB_STEP_SUMMARY` write. |
 | `routing` | empty | Person-layer routing JSON (`config.routing` object). Wire from `vars.CRYSK_ROUTING || vars.PRHERO_ROUTING` (quoted). See [OpenCode in CI](#opencode-in-ci). |
 | `opencode-auth` | empty | Whole OpenCode `auth.json` blob. Wire from `secrets.OPENCODE_AUTH_JSON`. Never echo. |
+| `crysk-secrets` | empty | Upcoming, not read by reviews yet: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets (upcoming)](#crysk_-secrets-upcoming). |
 
 ## Error codes
 
@@ -1239,6 +1299,14 @@ Then re-set the secret:
 gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
 ```
 
+When `{detail}` names a `CRYSK_*` secret, the `crysk-secrets` input was refused. See
+[`CRYSK_*` secrets (upcoming)](#crysk_-secrets-upcoming). Re-set an `_OAUTH` secret from the provider's record in your
+OpenCode auth file, encoded on one line (on macOS, `base64` does not wrap, so drop `-w0`):
+
+```bash
+jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
+```
+
 #### `source_read_failed`
 
 Set the secret again:
@@ -1295,9 +1363,9 @@ When every failed hunter reports the secret it ran on, the fix starts with the o
 
 #### `api_key`
 
-**Why:** the key is invalid, expired or revoked, and the CLI uses it ahead of CLAUDE_CODE_OAUTH_TOKEN
+**Why:** the key is invalid, expired or revoked, and it is the Claude credential this run chose from credentials.claude
 
-The rejected secret is a per-token credential, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`. The CLI prefers it to the OAuth token (observed with CLI 2.1.312: with both present it prints that the key "takes precedence over your claude.ai login"), so setting the OAuth token alone changes nothing while the key is set.
+The rejected secret is a per-token credential, `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN` from an engine before `credentials.claude`). A run uses one Claude credential, the first one in `credentials.claude` that is set (see [Configuration, Credentials](configuration.md#credentials)), so the key ran because it came first or because the subscription was not set. Deleting the key is not needed to move the run to the subscription: the order decides.
 
 **Fix:**
 
@@ -1307,11 +1375,7 @@ Create a new key in the Claude Console and set it:
 gh secret set {secret}
 ```
 
-Or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN (setting CLAUDE_CODE_OAUTH_TOKEN alone changes nothing while {secret} is set):
-
-```bash
-gh secret delete {secret}
-```
+Or run on the subscription: set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN under the new names) and put subscription first in `credentials.claude` (the default order).
 
 Then ask for a new review:
 
@@ -1707,11 +1771,7 @@ Every hunter of the run failed on the same limit, and all of them reported the s
 
 **Fix:**
 
-Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or delete the secret so the review uses CLAUDE_CODE_OAUTH_TOKEN:
-
-```bash
-gh secret delete ANTHROPIC_API_KEY
-```
+Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or run on the subscription: set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN under the new names) and put subscription first in `credentials.claude` (the default order).
 
 Then ask for a new review:
 
@@ -1737,7 +1797,7 @@ gh pr comment {pr} --body "/crysk review"
 
 On a workflow set up before the rename, comment `/pr-hero review` instead.
 
-Or set ANTHROPIC_API_KEY to bill per token:
+Or bill per token: set ANTHROPIC_API_KEY (CRYSK_CLAUDE_API_KEY under the new names) and put api_key first in `credentials.claude` (the default order uses the subscription while it is set):
 
 ```bash
 gh secret set ANTHROPIC_API_KEY

@@ -83,6 +83,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend alike, and the refresh steps ignore the `config` in their response.
 
 ### Changed
+- **A run uses one Claude credential, in the order `credentials.claude` sets.** Your person config's
+  `credentials.claude` (`["subscription", "api_key"]`, either or both) names the order; the run uses the first
+  one that is set, chosen once at the start and never switched mid-run, and a credential that is set but not
+  listed is never used. **The default is `["subscription", "api_key"]`, a billing change for anyone holding
+  both**: before, the Claude CLI preferred a set `ANTHROPIC_API_KEY` and the review billed per token with the
+  `$10` CI ceiling; now the subscription runs, with no ceiling. Put `api_key` first to keep the old billing.
+  With only one credential set nothing changes. The Claude child gets only the chosen one
+  (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`); the other and `ANTHROPIC_AUTH_TOKEN` are removed, and
+  `ANTHROPIC_AUTH_TOKEN` is no longer used. A run on the API key attaches no macOS Keychain broker. The CI
+  budget ceiling and size limits follow the chosen credential. A plan that sends a step to the Claude CLI
+  with none of the listed credentials set stops before any spend, naming the order and what is set. The
+  `CRYSK_CLAUDE_OAUTH_TOKEN` and `CRYSK_CLAUDE_API_KEY` variables count as the subscription and the key when
+  they reach the run. The error fixes that told you to delete the API key secret so the OAuth token would
+  win now say to change `credentials.claude`. See [Credentials](docs/configuration.md#credentials).
 - **The GraphQL issue-comments fallback reports Bot authors as `<login>[bot]`**, as the REST path and the
   review-comments fallback already did. Before, a bot's comments read on that path (for example
   `github-actions[bot]` summaries in standalone mode) arrived under the bare login, so exact-login trust

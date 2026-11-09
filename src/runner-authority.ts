@@ -10,6 +10,7 @@ import {
   verifyExecutableBinding,
 } from "#model/provider-capabilities";
 import { planRoutes, type ResolvedRoutePlan } from "#model/routing";
+import type { ClaudeCredentialKind } from "#review/preflight";
 import type { CredentialKind, RunnerBackend } from "./execution/contracts";
 // #161: the SAME predicate the Claude CLI transport files usage on
 // (`claudeCliCostBasis` -> `envBillsMetered`) is the one `credentialKindForRoute`
@@ -34,7 +35,16 @@ export interface RunnerAuthorityOptions {
   // `credentialKindForRoute` reads to decide a claude-code route's credential
   // kind, so it has to be able to carry ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN,
   // not just PATH.
+  //
+  // S5: in a review run this is the RUN env (security/claude-credential.ts): the
+  // process environment with every Claude credential removed but the one chosen at
+  // run start. It is also what the harness hands the child (`childEnv`), so the
+  // binding's kind and the child's credential are read from the same object.
   readonly env?: Readonly<Record<string, string | undefined>>;
+  // S5: the Claude credential chosen at run start. `api_key` attaches no Keychain
+  // broker: a broker would project the subscription and strip the key the run chose.
+  // Absent (tests, probes, doctor) keeps the pre-S5 decision below.
+  readonly claudeCredential?: ClaudeCredentialKind;
   readonly credentialBrokers?: Partial<Record<RunnerBackend, CredentialBroker>>;
   /** Independent executable authority — never derived from the candidate binary. */
   readonly executableAllowlists?: Partial<
@@ -47,6 +57,8 @@ export interface ResolvedRunnerOptions {
   readonly workspaceRoot: string;
   readonly executableAllowlist: readonly ExecutableAllowlistEntry[];
   readonly credentialBroker?: CredentialBroker;
+  // S5: the run env, when the caller gave one, for the legacy runner's harness.
+  readonly childEnv?: Readonly<Record<string, string | undefined>>;
 }
 
 export type RunnerAuthorityResolution =
@@ -361,6 +373,15 @@ export async function withClaudeDiscoveryAllowlist(
 // (claude-code-cli.ts) by construction. #279 is the one path where that
 // equality breaks.
 //
+// S5 (2026-11-06): in a review run both inputs already follow the credential chosen at
+// run start (security/claude-credential.ts). `env` is the run env, holding only that
+// credential, and `hasBroker` is false when the API key was chosen
+// (`RunnerAuthorityOptions.claudeCredential`), so this predicate answers metered
+// exactly when the run uses the API key and needs no knowledge of the order itself.
+// One side effect on #279: with the subscription chosen, the run env carries no key,
+// so a degraded projection runs on no credential and fails, instead of quietly
+// switching to a key mid-run.
+//
 // Both arguments default to the "nothing is known" case (`env: {}`,
 // `hasBroker: false`) so a caller that omits them — every existing call site
 // that never threaded either through, and every test that does not care
@@ -471,8 +492,15 @@ export async function resolveBindingAuthority(
     // around: see the WHY block on `credentialKindForRoute` above for the
     // full reasoning, including the one known exception where a broker is
     // present but its projection degrades (#279).
+    //
+    // S5: an API key chosen at run start attaches no broker at all, on any host. The
+    // run env then carries ANTHROPIC_API_KEY and nothing else, so the kind below is
+    // metered by the same predicate, and the child spends the key the run chose.
     const broker =
-      options.credentialBrokers?.["claude-code"] ?? claudeCredentialBroker();
+      options.claudeCredential === "api_key"
+        ? undefined
+        : (options.credentialBrokers?.["claude-code"] ??
+          claudeCredentialBroker());
     // Falls back to `process.env` exactly like the opencode PATH lookup a few
     // lines below (`resolveOpenCodeCanonicalBinary`'s
     // `lookup.env?.PATH ?? process.env.PATH`) — nothing in the real CLI
@@ -593,6 +621,7 @@ export async function resolveRunnerAuthority(
       ...(binding.credentialBroker
         ? { credentialBroker: binding.credentialBroker }
         : {}),
+      ...(options.env === undefined ? {} : { childEnv: options.env }),
     },
   };
 }

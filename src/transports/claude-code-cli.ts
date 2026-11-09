@@ -1292,6 +1292,9 @@ function oneLine(words: string, room: number): string {
 
 // The secret the child ran on. The per-token variables (the list envBillsMetered reads) win
 // over CLAUDE_CODE_OAUTH_TOKEN, and a whitespace-only value is no credential (the same trim).
+// Since S5 a review run's child holds exactly one of them (the credential chosen at run
+// start, security/claude-credential.ts), so the precedence below only decides for callers
+// that build their own env.
 //
 // The precedence is observed, not assumed. With CLI 2.1.312 and both an API key and an
 // OAuth login present, the CLI prints "claude.ai connectors are disabled because

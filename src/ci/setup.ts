@@ -37,6 +37,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { cryskSecretsPresence, parseCryskSecrets } from "#ci/crysk-secrets";
 import type { ErrorClass, SetupRecord } from "#ci/outcome";
 import { appendGithubOutput } from "#ci/platform";
 import {
@@ -787,8 +788,23 @@ export async function materializeCiOpenCodeData(
   }
 }
 
+// The env variable action.yml binds the `crysk-secrets` input to, in this step
+// only, for its shell. The shell pipes it to this script on stdin (the flag
+// below) and runs bun with the variable emptied, so it never enters this
+// process's environment. WHY not read it here and `delete process.env[...]`:
+// Bun.spawn without an explicit `env` (git's, on the platform path) gives the
+// child the environment the process STARTED with, so a deleted variable still
+// reaches it (probed on Bun 1.4.4). A non-empty variable here means the step was
+// wired wrongly, and the script refuses to run.
+const CRYSK_SECRETS_ENV = "CRYSK_SECRETS_INPUT";
+const CRYSK_SECRETS_STDIN_FLAG = "--crysk-secrets-stdin";
+
 interface CiOpenCodeSetupDeps {
   env: Readonly<Record<string, string | undefined>>;
+  // The `crysk-secrets` input, already removed from `env` and process.env.
+  cryskSecrets: string;
+  // Workflow commands (`::add-mask::`) go here, the way platform.ts emits them.
+  stdout: (text: string) => void;
   stderr: (text: string) => void;
   // Where the checkout is (the engine resolves its operator root from here).
   cwd: string;
@@ -854,11 +870,43 @@ async function writeSetupRecord(
   }
 }
 
+// The `crysk-secrets` input (S8, L13). Every value is masked before this step
+// writes anything else, a refused input fails the step like a malformed auth
+// input, and later steps learn only which credentials exist: names, Claude
+// kinds and OpenCode provider tokens, never a value, and never GITHUB_ENV.
+// Empty input: nothing is printed or written, exactly as before the input
+// existed. Nothing reads the values yet; later units consume them.
+function intakeCryskSecrets(deps: CiOpenCodeSetupDeps): void {
+  if (deps.cryskSecrets.trim() === "") return;
+  const parsed = parseCryskSecrets(deps.cryskSecrets);
+  for (const value of parsed.masks) {
+    deps.stdout(`::add-mask::${escapeCommandData(value)}\n`);
+  }
+  for (const notice of parsed.notices) {
+    deps.stderr(`::notice::${escapeCommandData(notice)}\n`);
+  }
+  if (parsed.problems.length > 0) {
+    const detail = parsed.problems.join("; ");
+    throw new SetupInputError(
+      AUTH_CLASS,
+      detail,
+      `CI crysk-secrets input: ${detail}`,
+    );
+  }
+  const presence = cryskSecretsPresence(parsed);
+  deps.appendOutput(
+    `crysk-secrets=${presence.names.join(",")}\n` +
+      `claude-credentials=${presence.claude.join(",")}\n` +
+      `opencode-providers=${presence.opencodeProviders.join(",")}\n`,
+  );
+}
+
 // The step's whole job. Returns the exit code. A malformed routing or auth input
 // is the user's configuration, so it also leaves setup.json for the publisher;
 // any other failure (HOME, a write) stays unclassified, with no record.
 async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
   try {
+    intakeCryskSecrets(deps);
     const platformFile = deps.env.CRYSK_PLATFORM_CONFIG_FILE ?? "";
     const platform =
       platformFile === "" ? undefined : readPlatformConfig(platformFile);
@@ -913,9 +961,22 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
 }
 
 if (import.meta.main) {
+  if ((process.env[CRYSK_SECRETS_ENV] ?? "") !== "") {
+    process.stderr.write(
+      `crysk: the crysk-secrets input reached setup.ts through its environment, which every child it spawns would inherit; pipe it on stdin with ${CRYSK_SECRETS_STDIN_FLAG} and run bun with ${CRYSK_SECRETS_ENV} empty.\n`,
+    );
+    process.exit(1);
+  }
+  const cryskSecrets = process.argv.includes(CRYSK_SECRETS_STDIN_FLAG)
+    ? await Bun.stdin.text()
+    : "";
   process.exit(
     await runCiOpenCodeSetup({
       env: process.env,
+      cryskSecrets,
+      stdout: (text) => {
+        process.stdout.write(text);
+      },
       stderr: (text) => {
         process.stderr.write(text);
       },

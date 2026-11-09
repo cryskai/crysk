@@ -625,6 +625,108 @@ describe("resolveBindingAuthority claude-code credential kind (#161)", () => {
     expect(withBroker.credentialKind).toBe("claude_subscription_oauth");
     expect(withBroker.credentialBroker).toBe(fake);
   });
+
+  // S5: the credential chosen at run start decides the binding. An API key attaches
+  // no Keychain broker (on any host), so it bills metered on its own bucket.
+  async function bindChosen(
+    env: Readonly<Record<string, string | undefined>>,
+    claudeCredential: "subscription" | "api_key",
+    credentialBrokers?: { readonly "claude-code": CredentialBroker },
+  ) {
+    const result = await resolveBindingAuthority(
+      "claude-code",
+      "anthropic",
+      {
+        binaryPath: canonical,
+        workspaceRoot: "/fake/ws",
+        executableAllowlists: {
+          "claude-code": [{ absolutePath: canonical, sha256 }],
+        },
+        env,
+        claudeCredential,
+        ...(credentialBrokers === undefined ? {} : { credentialBrokers }),
+      },
+      deps,
+    );
+    if (result.binding === undefined) {
+      throw new Error(result.error ?? "no binding");
+    }
+    return result.binding;
+  }
+
+  test("S5: api_key chosen: metered, no broker even when one is supplied, the API bucket", async () => {
+    const fake: CredentialBroker = {
+      project: async () => {
+        throw new Error("never projected in this test");
+      },
+    };
+    const binding = await bindChosen(
+      { ANTHROPIC_API_KEY: "sk-test" },
+      "api_key",
+      { "claude-code": fake },
+    );
+    expect(binding.credentialKind).toBe("provider_api_token");
+    expect(binding.credentialBroker).toBeUndefined();
+    expect(binding.bucketId).toBe("claude-code-api");
+  });
+
+  test("S5: subscription chosen: subscription kind, the supplied broker attaches", async () => {
+    const fake: CredentialBroker = {
+      project: async () => {
+        throw new Error("never projected in this test");
+      },
+    };
+    const binding = await bindChosen(
+      { CLAUDE_CODE_OAUTH_TOKEN: "oauth" },
+      "subscription",
+      { "claude-code": fake },
+    );
+    expect(binding.credentialKind).toBe("claude_subscription_oauth");
+    expect(binding.credentialBroker).toBe(fake);
+    expect(binding.bucketId).toBe("claude-code");
+  });
+});
+
+describe("resolveRunnerAuthority run env (S5)", () => {
+  const bytes = new TextEncoder().encode("#!/bin/sh\necho hi\n");
+  const canonical = "/fake/bin/claude";
+  const deps = {
+    existsFn: () => true,
+    realpathFn: async (p: string) => p,
+    readFileFn: async () => bytes,
+    statFn: () => ({ mode: 0o755 }),
+  };
+
+  test("an explicit env becomes the runner's childEnv, and api_key drops the broker", async () => {
+    const env = { PATH: "/bin", ANTHROPIC_API_KEY: "sk-test" };
+    const fake: CredentialBroker = {
+      project: async () => {
+        throw new Error("never projected in this test");
+      },
+    };
+    const result = await resolveRunnerAuthority(
+      {
+        binaryPath: canonical,
+        workspaceRoot: "/fake/ws",
+        env,
+        claudeCredential: "api_key",
+        credentialBrokers: { "claude-code": fake },
+      },
+      deps,
+    );
+    if (result.runnerOptions === undefined) throw new Error(result.error);
+    expect(result.runnerOptions.childEnv === env).toBe(true);
+    expect(result.runnerOptions.credentialBroker).toBeUndefined();
+  });
+
+  test("no env given: no childEnv, so the harness keeps reading the process env as before", async () => {
+    const result = await resolveRunnerAuthority(
+      { binaryPath: canonical, workspaceRoot: "/fake/ws" },
+      deps,
+    );
+    if (result.runnerOptions === undefined) throw new Error(result.error);
+    expect("childEnv" in result.runnerOptions).toBe(false);
+  });
 });
 
 // #303: binding resolution used to call verifyExecutableAuthority, which

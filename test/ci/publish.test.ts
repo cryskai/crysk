@@ -506,7 +506,9 @@ describe("decidePublication — the pure table", () => {
         expect(p.rendered.annotation).toContain("Invalid API key");
       });
 
-      test("an empty credit balance on an API key says to add credit or delete the secret", () => {
+      // S5: the run uses the credential credentials.claude chose, so the way off the key
+      // is to change that order, never to delete the secret.
+      test("an empty credit balance on an API key says to add credit or change credentials.claude", () => {
         const entry = {
           cause: "quota_exhausted",
           provider: "anthropic",
@@ -520,7 +522,9 @@ describe("decidePublication — the pure table", () => {
         expect(all).toContain(
           "Add credit to the Anthropic account behind ANTHROPIC_API_KEY",
         );
-        expect(all).toContain("delete the ANTHROPIC_API_KEY secret");
+        expect(all).toContain("credentials.claude");
+        expect(all).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
+        expect(all).not.toContain("gh secret delete");
         expect(all).not.toContain("Wait, or raise the quota");
         expect(all).not.toContain(
           "wait for the limit to reset or raise the quota",
@@ -545,6 +549,9 @@ describe("decidePublication — the pure table", () => {
         expect(all).toContain("resets 12:40pm (Asia/Tokyo)");
         expect(all).toContain("Re-run after");
         expect(all).toContain("set ANTHROPIC_API_KEY");
+        // Setting the key alone changes nothing under the default order (S5).
+        expect(all).toContain("put api_key first in `credentials.claude`");
+        expect(all).toContain("CRYSK_CLAUDE_API_KEY");
         expect(all).not.toContain("raise the quota");
         expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
       });
@@ -615,23 +622,18 @@ describe("decidePublication — the pure table", () => {
           return p;
         }
 
-        test("ANTHROPIC_API_KEY: a new key, or delete it, and the OAuth token alone changes nothing", () => {
+        test("ANTHROPIC_API_KEY: a new key, or change credentials.claude to the subscription", () => {
           const p = rejected("ANTHROPIC_API_KEY");
           const summary = p.rendered.summary.join("\n");
           expect(
             summary.indexOf("gh secret set ANTHROPIC_API_KEY"),
           ).toBeGreaterThan(-1);
-          expect(summary).toContain("gh secret delete ANTHROPIC_API_KEY");
-          expect(summary).toContain(
-            "changes nothing while ANTHROPIC_API_KEY is set",
-          );
+          expect(summary).not.toContain("gh secret delete");
+          expect(summary).toContain("credentials.claude");
+          expect(summary).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
           expect(summary).not.toContain("claude setup-token");
-          expect(p.rendered.annotation).toContain(
-            "delete the ANTHROPIC_API_KEY secret",
-          );
-          expect(p.rendered.annotation).toContain(
-            "changes nothing while the key is set",
-          );
+          expect(p.rendered.annotation).toContain("credentials.claude");
+          expect(p.rendered.annotation).not.toContain("delete");
         });
 
         test("CLAUDE_CODE_OAUTH_TOKEN: claude setup-token first", () => {
@@ -643,19 +645,18 @@ describe("decidePublication — the pure table", () => {
           expect(p.rendered.annotation).toContain("claude setup-token");
         });
 
-        // The set and delete commands are alternatives: one copied block must never run both.
-        test("the per-token fix keeps set and delete in separate code blocks", () => {
+        // The per-token fix has one command, the new key: the other way out is a config
+        // change, so nothing a copied block runs can undo the key it just set.
+        test("the per-token fix has no delete command at all", () => {
           const summary =
             rejected("ANTHROPIC_API_KEY").rendered.summary.join("\n");
           const blocks = summary.split("```").filter((_, i) => i % 2 === 1);
+          expect(blocks.some((block) => block.includes("gh secret set"))).toBe(
+            true,
+          );
           expect(
-            blocks.some(
-              (block) =>
-                block.includes("gh secret set") &&
-                block.includes("gh secret delete"),
-            ),
+            blocks.some((block) => block.includes("gh secret delete")),
           ).toBe(false);
-          expect(summary).toContain("gh secret delete ANTHROPIC_API_KEY");
         });
 
         // Per-token credentials win over the OAuth token in the CLI, so a rejected
@@ -664,7 +665,7 @@ describe("decidePublication — the pure table", () => {
           const p = rejected("ANTHROPIC_AUTH_TOKEN");
           const summary = p.rendered.summary.join("\n");
           expect(p.rendered.annotation).toContain("ANTHROPIC_AUTH_TOKEN");
-          expect(summary).toContain("gh secret delete ANTHROPIC_AUTH_TOKEN");
+          expect(summary).toContain("gh secret set ANTHROPIC_AUTH_TOKEN");
           expect(summary).not.toContain("claude setup-token");
           expect(summary).not.toContain("ANTHROPIC_API_KEY");
         });
@@ -1352,6 +1353,61 @@ describe("decidePublication — the pure table", () => {
     expect(plan.rendered.owner).toBe("config");
     expect(plan.rendered.annotation).not.toContain("<backend>");
     expect(plan.rendered.annotation).not.toContain("<provider>");
+  });
+
+  // U1 (odd/tasks/role-model-routing.md, S8): a refused crysk-secrets input
+  // records the same class with a detail naming the secret or the line. The
+  // fix must point at that secret, not at the OpenCode auth store.
+  test("a setup record for a refused crysk-secrets input is PRH-CRED-UNUSABLE and points at the CRYSK_* secret", () => {
+    for (const detail of [
+      "CRYSK_OPENCODE_OPENAI_OAUTH is not base64 (encode the OpenCode auth record with base64 -w0)",
+      "CRYSK_CLAUDE_API_KEY is given more than once",
+      "line 3 of the crysk-secrets input is not NAME=value (a value split across lines? encode _OAUTH secrets with base64 -w0)",
+    ]) {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: false,
+        setup: {
+          v: 1,
+          cls: { kind: "credential", failureClass: "malformed_payload" },
+          detail,
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+      expect(plan.rendered.owner).toBe("config");
+      expect(plan.rendered.annotation).toContain(detail);
+      expect(plan.rendered.annotation).toContain(
+        "re-set the CRYSK_* secret it names",
+      );
+      expect(plan.rendered.annotation).not.toContain("OPENCODE_AUTH_JSON");
+      const summary = plan.rendered.summary.join("\n");
+      expect(summary).toContain(
+        "jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+      );
+      expect(summary).not.toContain("jq -e 'type==\"object\"'");
+    }
+  });
+
+  test("a malformed opencode-auth setup record keeps its OpenCode store fix", () => {
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail: "the opencode-auth input is not valid JSON",
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.annotation).toContain(
+      "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
+    );
+    expect(plan.rendered.summary.join("\n")).toContain(
+      "jq -e 'type==\"object\"'",
+    );
   });
 
   test("an unverifiable 403 with no scope names the refused token, never a scope pr-hero does not know", () => {

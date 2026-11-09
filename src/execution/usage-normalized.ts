@@ -52,10 +52,12 @@ export type UsageCostSource =
 // (PROJECTION_OWNED_KEYS, harness.ts) because the projection owns the
 // credential, so this predicate reads subscription on that path — which is
 // the truth there, and was not before the strip.
-// When an OAuth token and a key are both present this repo does not know which
-// one the Claude CLI bills (ci/gates.ts states that gap at length), and does
-// not need to — presence of a key answers metered, because guessing
-// subscription wrongly reports real money as not charged.
+// S5 (2026-11-06): in a review run both are never present together. The run env
+// (security/claude-credential.ts) holds only the Claude credential chosen from
+// `credentials.claude`, so this predicate answers metered exactly when the run
+// chose the API key. A caller with its own env that holds both still gets
+// metered, because guessing subscription wrongly reports real money as not
+// charged.
 //
 // Trimming is load-bearing, and it is worth being exact about WHAT it buys,
 // because the sentence it replaces overstated it and #177 is a finding about

@@ -206,7 +206,7 @@ export async function askChoices(
   );
   if (choices.billing === "subscription") {
     say(
-      "  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the repo has no ANTHROPIC_API_KEY or OPENCODE_AUTH_JSON secret. Adding either brings back the $10 ceiling.",
+      "  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and the repo has no OPENCODE_AUTH_JSON secret. A run on ANTHROPIC_API_KEY (no subscription set, or api_key first in credentials.claude) or an OPENCODE_AUTH_JSON secret brings back the $10 ceiling.",
     );
   } else {
     choices.budgetUsd = await askValue(

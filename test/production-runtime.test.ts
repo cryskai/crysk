@@ -1239,6 +1239,131 @@ describe("production runtime PR1", () => {
           else process.env.ANTHROPIC_API_KEY = priorKey;
         }
       });
+
+      // S5: the run env (one Claude credential, chosen at run start) is what the
+      // child sees, not the process's own environment. With the subscription chosen
+      // and the key stripped from the run env, a degraded Keychain projection has no
+      // key to fall back on: the attempt runs on no credential instead of switching
+      // to the key mid-run, and nothing reserves against the spend ledger.
+      test("S5: the harness child env is the run env, so a degraded projection never reaches a key the run did not choose", async () => {
+        const degradingBroker: CredentialBroker = {
+          async project() {
+            throw new CredentialProjectionError("missing_subscription_record");
+          },
+        };
+        const seen: Array<{ apiKey: boolean; oauth: boolean }> = [];
+        const base = createMockTransport("claude-code", []);
+        const transport: ProviderTransport = {
+          ...base,
+          execute: async (request) => {
+            seen.push({
+              apiKey: request.isolation.env.ANTHROPIC_API_KEY !== undefined,
+              oauth:
+                request.isolation.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined,
+            });
+            return {
+              completion: "success" as const,
+              protocolIntegrity: "verified" as const,
+              finalText: '{"findings":[]}',
+              usage: METERED_ZERO,
+              stderrTail: "",
+            };
+          },
+        };
+        const priorKey = process.env.ANTHROPIC_API_KEY;
+        process.env.ANTHROPIC_API_KEY = "sk-ambient-s5-test";
+        try {
+          const step = resolveStepRoute({
+            stepKey: "hunter-reliability",
+            role: "hunter",
+            cliModel: "sonnet",
+          });
+          const registry = new DefaultTransportRegistry();
+          registry.register("claude-code", transport);
+          const runtime = await createProductionRuntime({
+            workspaceRoot: tmpDir,
+            plan: createResolvedRoutePlan([step]),
+            binaryPath: claudeFixture.canonicalPath,
+            executableAllowlists: claudeAllowlist(claudeFixture),
+            registry,
+            mode: "conformance",
+            credentialBrokers: { "claude-code": degradingBroker },
+            env: { PATH: process.env.PATH, CLAUDE_CODE_OAUTH_TOKEN: "oauth" },
+            claudeCredential: "subscription",
+          });
+          const result = await runtime.runner.run(
+            makeStep(tmpDir, {
+              name: "hunter-reliability",
+              routeKey: step.routeFingerprint,
+              route: step.route,
+            }),
+          );
+          expect(seen).toEqual([{ apiKey: false, oauth: true }]);
+          expect(result.reservations).toBeUndefined();
+          expect(result.stderrTail).not.toContain(
+            "ambient credential bills metered",
+          );
+        } finally {
+          if (priorKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+          else process.env.ANTHROPIC_API_KEY = priorKey;
+        }
+      });
+
+      test("S5: an API key chosen at run start binds metered with no Keychain broker, even when one is supplied", async () => {
+        const broker: CredentialBroker = {
+          async project() {
+            throw new Error("an API-key run must never project the Keychain");
+          },
+        };
+        const seen: Array<{ apiKey: boolean; oauth: boolean }> = [];
+        const base = createMockTransport("claude-code", []);
+        const transport: ProviderTransport = {
+          ...base,
+          execute: async (request) => {
+            seen.push({
+              apiKey: request.isolation.env.ANTHROPIC_API_KEY !== undefined,
+              oauth:
+                request.isolation.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined,
+            });
+            return {
+              completion: "success" as const,
+              protocolIntegrity: "verified" as const,
+              finalText: '{"findings":[]}',
+              usage: METERED_ZERO,
+              stderrTail: "",
+            };
+          },
+        };
+        const step = resolveStepRoute({
+          stepKey: "hunter-reliability",
+          role: "hunter",
+          cliModel: "sonnet",
+        });
+        const registry = new DefaultTransportRegistry();
+        registry.register("claude-code", transport);
+        const runtime = await createProductionRuntime({
+          workspaceRoot: tmpDir,
+          plan: createResolvedRoutePlan([step]),
+          binaryPath: claudeFixture.canonicalPath,
+          executableAllowlists: claudeAllowlist(claudeFixture),
+          registry,
+          mode: "conformance",
+          credentialBrokers: { "claude-code": broker },
+          env: { PATH: process.env.PATH, ANTHROPIC_API_KEY: "sk-chosen" },
+          claudeCredential: "api_key",
+        });
+        const binding = [...runtime.bindings.values()][0];
+        expect(binding?.credential.kind).toBe("provider_api_token");
+        expect(binding?.credential.broker).toBeUndefined();
+        await runtime.runner.run(
+          makeStep(tmpDir, {
+            name: "hunter-reliability",
+            routeKey: step.routeFingerprint,
+            route: step.route,
+          }),
+        );
+        expect(seen).toEqual([{ apiKey: true, oauth: false }]);
+      });
     });
 
     // #133. The credential KIND is what decides how a route bills, and it is
