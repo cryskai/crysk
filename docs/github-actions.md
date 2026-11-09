@@ -7,31 +7,29 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
 
 ## Quick path
 
-> **The credential inputs changed.** The scaffolded workflow below (and `crysk ci init`) still passes the
-> removed `anthropic-api-key`, `claude-token`, `routing` and `opencode-auth` inputs, which now stop the
-> run with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed) as soon as one holds a value. Until the scaffold is
-> updated, replace those lines with the `crysk-secrets` block under
-> [`CRYSK_*` secrets](#crysk_-secrets) and set the `CRYSK_*` secrets it names.
-
-1. **Add one auth secret** (Settings → Secrets and variables → Actions → New repository secret):
-   `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. Pick one — never both blank. Leave OpenCode unset:
-   that is today's Claude CI. A run uses one Claude credential: with both set it uses the subscription,
-   unless `credentials.claude` puts `api_key` first (see [Configuration, Credentials](configuration.md#credentials)).
+1. **Add one Claude secret** (Settings → Secrets and variables → Actions → New repository secret):
+   `CRYSK_CLAUDE_OAUTH_TOKEN` (your Claude subscription, from `claude setup-token`) or
+   `CRYSK_CLAUDE_API_KEY` (an Anthropic API key, billed per token). One is enough. With both set, a run
+   uses the subscription unless `credentials.claude` puts `api_key` first (see
+   [Configuration, Credentials](configuration.md#credentials)). That is today's Claude CI; for OpenCode
+   models, see the end of this list.
 2. **Add the one workflow file.** Copy the YAML under [What the workflow does](#what-the-workflow-does)
    to `.github/workflows/crysk.yml`, or run `npx -y crysk setup --ci` (or `crysk ci init`) in a clone of
    your repo, which writes the same template (`uses: cryskai/crysk@v0`). You do not need Crysk
    installed locally: the file is the whole install. The command also checks the GitHub CLI: if `gh` is
    missing or logged out, it prints why the CI loop needs it (`gh secret set`, `crysk status`,
    `crysk triage reply`) and how to fix it, and in a terminal it offers to install it (macOS with
-   Homebrew) and to run `gh auth login`; the workflow is written either way. It reviews every push to a pull request, answers a
+   Homebrew) and to run `gh auth login`; the workflow is written either way. Its next steps print the
+   `gh secret set` and `gh variable set` commands for your setup (see [`crysk ci init`](#scaffolding-with-crysk-ci-init)).
+   It reviews every push to a pull request, answers a
    `/crysk review` comment (see [Re-review on demand](#re-review-on-demand)), and answers a
    `/crysk override` comment (see [Overriding a red gate](#overriding-a-red-gate)). Do **not** copy this
    repository's own `.github/workflows/crysk.yml`: that file is generated with
    `OWN_CI_WORKFLOW_OPTIONS` so this repo can dogfood the checkout (`uses: ./`,
    `max-changed-lines: 5000`, and a step that pins the pull request head on a comment run).
    `test/packaging.test.ts` asserts each file against its own generator options; it does **not** assert
-   the two are byte-identical. The template wires quoted `routing` / `opencode-auth` inputs; empty
-   values are absent, so Claude-only repos keep those lines.
+   the two are byte-identical. The template names every `CRYSK_*` secret it can pass; a secret your
+   repository does not have arrives empty and counts as absent, so a Claude-only repository keeps every line.
 3. **Write the repository review instructions (optional, recommended).** Put a `REVIEW.md` at the
    repository root (the file name Claude Code Review uses) with the facts a reviewer cannot infer from
    the diff: a deliberate oddity that looks like a bug, an invariant enforced outside the diff, an
@@ -51,12 +49,18 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
 6. **Open a pull request** from a branch in this repository (not a fork). Crysk comments inline, posts
    a summary review, and writes a `$GITHUB_STEP_SUMMARY` block within a few minutes. If no credential
    secret is set, the run fails red and its step summary lists the commands that set one.
-7. **Verify readiness any time** with `crysk doctor` — it checks for the required secrets when run
-   inside Actions, and for the workflow file's presence locally.
+7. **Verify readiness any time** with `crysk doctor` — locally it checks for the workflow file's presence.
 
-To review with OpenCode instead of (or mixed with) Claude, add `OPENCODE_AUTH_JSON` and
-`CRYSK_ROUTING` after step 1 — see [OpenCode in CI](#opencode-in-ci). You do not need a different
-Action.
+To pick the models each step runs on (OpenCode models included, as primary or fallback), set them per role
+in the `CRYSK_MODELS` repository variable and add each OpenCode provider's `CRYSK_OPENCODE_*` secret — see
+[OpenCode in CI](#opencode-in-ci). You do not need a different Action.
+
+**Upgrading a workflow from before the `CRYSK_*` secrets.** The `anthropic-api-key`, `claude-token`,
+`opencode-auth` and `routing` inputs are removed: a workflow that still passes a value in one stops at the
+trigger with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed), before anything is installed. Re-run
+`npx -y crysk ci init --force` (it rewrites the workflow and prints the commands for the new secrets and
+variables), or replace those lines by hand with the `crysk-secrets`, `models` and `credentials` lines of the
+template, and set the [`CRYSK_*` secrets](#crysk_-secrets).
 
 ## What the workflow does
 
@@ -102,10 +106,18 @@ jobs:
         uses: cryskai/crysk@v0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          routing: "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"
-          opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}
+          crysk-secrets: |
+            CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}
+            CRYSK_CLAUDE_API_KEY=${{ secrets.CRYSK_CLAUDE_API_KEY }}
+            CRYSK_OPENCODE_OPENAI_OAUTH=${{ secrets.CRYSK_OPENCODE_OPENAI_OAUTH }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[0] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[0])] }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[1] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[1])] }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[2] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[2])] }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[3] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[3])] }}
+            CRYSK_OPENCODE_${{ fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[4] }}_API_KEY=${{ secrets[format('CRYSK_OPENCODE_{0}_API_KEY', fromJSON(vars.CRYSK_OPENCODE_PROVIDERS || '[]')[4])] }}
+          models: ${{ vars.CRYSK_MODELS }}
+          credentials: ${{ vars.CRYSK_CREDENTIALS }}
+          mode: gate
 ```
 
 `crysk setup --ci` generates this file, with comments explaining each piece — see
@@ -122,8 +134,7 @@ one is on your default branch). The name of the file does not matter to Crysk, s
 `/crysk recheck`, `/crysk override` and `/crysk stop`. The action still accepts the `/pr-hero …` spellings
 for one version. A workflow file scaffolded earlier only starts a run on `/pr-hero …` comments, so a
 `/crysk …` comment does nothing there: re-run `crysk ci init --force` (or copy the `if:` and `group:`
-lines above) to accept both. The routing variable is likewise renamed: the new workflow reads
-`CRYSK_ROUTING` first and falls back to `PRHERO_ROUTING`, so an existing variable keeps working.
+lines above) to accept both.
 
 The action does the rest: it checks that a credential is set (and fails the run red, with the commands
 that fix it, when none is), parses a `/crysk review` comment and checks that its author has write
@@ -154,10 +165,9 @@ Three choices in the job are load-bearing:
 - **Fork pushes are skipped.** GitHub gives fork `pull_request` runs no secrets. A maintainer comments
   `/crysk review` instead; see [Fork pull requests](#fork-pull-requests).
 
-Keep every `with:` line even when you only use Claude: an unset secret or var expands to empty, which
-the Action treats as absent. Deleting the line for the credential you *did* set is what breaks. The
-quotes around `vars.CRYSK_ROUTING` are load-bearing — an unset repository variable must become the
-empty string, not broken YAML.
+Keep every `with:` line even when you only use Claude: an unset secret or variable expands to empty,
+which the Action treats as absent. Deleting the line for the credential you *did* set is what breaks. An
+unused provider slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped.
 
 **A run that cannot start the review still says so on the pull request.** When there is no
 model credential, the pull request number or head cannot be resolved, the commenter's permission
@@ -169,6 +179,26 @@ or unclassified) and the command that fixes it.
 A newer comment replaces the older one from the same author. Crysk removes its earlier outcome comment once a later run has completed a review. A denied or ignored `/crysk review`
 comment posts no comment: the trigger reacts to it instead ([Reactions on a command](#reactions-on-a-command)). A review that ran keeps its own status. A size or budget skip sets a `failure`
 status in gate mode and none in advisory (see [Gate mode](#gate-mode-the-status-is-the-check)).
+
+### Scaffolding with `crysk ci init`
+
+`crysk ci init` (the same as `crysk setup --ci`) writes the workflow above and, in its next steps, prints the
+commands that put your setup where the workflow reads it. It reads your person config
+(`~/.crysk/config.json`) first, and prints, never runs:
+
+- `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN` (or `CRYSK_CLAUDE_API_KEY` with `--billing api`);
+- one `gh secret set CRYSK_OPENCODE_<P>_API_KEY` per OpenCode provider your `models` name (fallbacks
+  included, the judge's list skipped), and for `openai` also the line that sets
+  `CRYSK_OPENCODE_OPENAI_OAUTH` from your OpenCode login for a ChatGPT subscription;
+- `gh variable set CRYSK_MODELS --body "$(jq -c .models ~/.crysk/config.json)"` when your config has
+  `models`, the same for `CRYSK_CREDENTIALS` when it has `credentials`, and
+  `gh variable set CRYSK_OPENCODE_PROVIDERS --body '["DEEPSEEK"]'` with the `<P>` token of each OpenCode
+  provider.
+
+Setting a secret or a variable is your call, so nothing is set for you. When your models name more than five
+OpenCode providers, or a provider id no `CRYSK_OPENCODE_*` name can carry, it stops before writing anything
+and says why: the workflow forwards the keys of at most five providers. A person config the parser refuses
+stops it too.
 
 ### Reactions on a command
 
@@ -209,8 +239,10 @@ the `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` and `OPENCODE_AUTH_JSON` secr
 `CRYSK_ROUTING` variable they carried) are read by nothing. They stay declared only so a workflow that
 still passes a value in one stops at the trigger, before anything is installed, with
 [`CRYSK-INPUT-REMOVED`](#crysk-input-removed) naming the input and its replacement. Move each secret to its
-`CRYSK_*` name; models per role come from the Crysk platform. The old names written inside
-`crysk-secrets` are not read either, and the trigger prints a warning naming the `CRYSK_*` secret for each.
+`CRYSK_*` name, and the models per role to the `CRYSK_MODELS` variable (the `models` input), or to the
+Crysk platform's model settings on a connected repository. An old input left empty (an unset secret) is not
+refused. The old names written inside `crysk-secrets` are not read either, and the trigger prints a warning
+naming the `CRYSK_*` secret for each.
 
 ### How to obtain and configure credentials
 
@@ -316,14 +348,15 @@ What the action does with the input:
 #### How the OpenCode secrets become the auth file
 
 The setup step builds OpenCode's `auth.json` from the `CRYSK_OPENCODE_*` secrets, in the same place and
-with the same `0600` mode the `opencode-auth` input uses (`$XDG_DATA_HOME/opencode/auth.json`, or
+with mode `0600` (`$XDG_DATA_HOME/opencode/auth.json`, or
 `~/.local/share/opencode/auth.json`):
 
-- **Only the providers your models use.** The step reads the `opencode:` models in the person layer's
-  `models`, every role and every fallback, and writes one record per provider. A secret for a provider
-  no model names is not read. The judge runs only `claude:` models, so an `opencode:` model listed for
-  `judge` adds nothing. Today the person layer comes from the platform; a standalone workflow has no way
-  to set `models` yet, so there the step writes nothing from these secrets.
+- **Only the providers your models use.** The step reads the `opencode:` models in the `models` in
+  effect (the `models` input, or the platform's on a connected repository), every role and every fallback,
+  and writes one record per provider. A secret for a provider no model names is not read. The judge runs
+  only `claude:` models, so an `opencode:` model listed for `judge` adds nothing. With no `models`, the step
+  writes nothing from these secrets. An OpenCode model given only in the `model` input gets no record:
+  name it in `models`.
 - **`_API_KEY`** becomes OpenCode's own API record, `{"type": "api", "key": "…"}`.
 - **`_OAUTH`** is the provider's login record, decoded and written whole, refresh token included, so
   OpenCode can renew the access token during the run.
@@ -337,14 +370,12 @@ with the same `0600` mode the `opencode-auth` input uses (`$XDG_DATA_HOME/openco
   so an API key in its place was refused.
 - **The choice is recorded.** The step prints a notice per provider naming the secret it used and the one
   it left unused, and writes `crysk-credentials.json` beside `auth.json`: names and kinds only, never a
-  value. The review reads that file to bind each OpenCode model to the right kind of credential. A file
-  built from the `opencode-auth` input has no such record, and an `openai` record there is still taken
-  for the subscription, as before.
+  value. The review reads that file to bind each OpenCode model to the right kind of credential. An
+  auth file the step did not build (a self-hosted runner's own) has no such record, and an `openai`
+  record there is taken for the subscription.
 - **A provider your models use with no secret** gets a notice naming both secret names it looked for.
-- **With both `opencode-auth` and these secrets**, the secrets win whenever they serve at least one
-  provider your models use. The `opencode-auth` input is then ignored as a whole, with a notice; the two
-  are never merged into one file. When no `CRYSK_OPENCODE_*` secret serves your models, the
-  `opencode-auth` input works exactly as before.
+- **When no `CRYSK_OPENCODE_*` secret serves your models**, the step writes no auth file and leaves one
+  already on the runner alone, so a self-hosted runner can keep its own OpenCode login.
 
 **A renewed token is not saved.** When the access token in an `_OAUTH` record expires during a run,
 OpenCode renews it with the refresh token, but only inside that run: nothing can write the new token
@@ -362,104 +393,94 @@ one review" in [configuration.md](configuration.md)).
 
 ## OpenCode in CI
 
-> **This section describes the removed `opencode-auth` and `routing` inputs**, which now stop the run
-> with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed). OpenCode credentials are `CRYSK_OPENCODE_*` secrets in
-> the `crysk-secrets` input (see [How the OpenCode secrets become the auth file](#how-the-opencode-secrets-become-the-auth-file)),
-> and models per role come from the Crysk platform.
-
-Leave `OPENCODE_AUTH_JSON` and `CRYSK_ROUTING` unset to keep today's Claude CI. To run OpenCode, set
-**both** — the Action is backend-agnostic; the next provider is DATA (routing JSON + one `auth.json`
-secret), not a new Action input.
+Leave `CRYSK_MODELS` unset to keep today's Claude CI: every step runs the model its prompt declares, on the
+Claude CLI. To run OpenCode models, as the first model of a role or as its fallback, you set three things.
+The Action is backend-agnostic: the next provider is data (a model name and a secret), not a new input.
 
 ### Wire it
 
-1. **Repository variable** `CRYSK_ROUTING` — the routing object only (`default` / `mappings` /
-   `disabled`), same shape as person-layer `config.routing`. Do not wrap it in `{"routing": ...}`
-   and do not put credentials inside it (the variable is public). OpenCode does not resolve Crysk
-   aliases (`sonnet` / `opus` / `haiku`): set `modelSnapshot` to an id `opencode models` lists. Routing
-   maps **logical model**, not hunter vs refuter. By default the hunters declare `sonnet`, the refuter
-   declares `opus`, and the summarizer runs on `haiku`, so a mapping moves only the steps whose alias it
-   names. An alias with no mapping and no `default` route currently falls through to the Claude CLI,
-   which needs Claude credentials in that run; a `default` route covers every alias, the refuter
-   included, so the refuter then runs on the default model.
+1. **Repository variable `CRYSK_MODELS`**: the `models` object of a person config, from role to an ordered
+   list of models (roles, names and effort are in
+   [Configuration, Models](configuration.md#models)). It is public, so never put a credential in it; a model
+   name that looks like one is refused. An OpenCode model is `opencode:<provider>/<model>`, with the model
+   id `opencode models <provider>` lists:
 
    ```bash
-   gh variable set CRYSK_ROUTING --body '{"default":{"backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"}}'
+   gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-flash"]}'
    ```
 
-   Mixed Claude summarizer (`haiku`) + OpenCode default (hunters and refuter both use the default route):
+   That runs every step on DeepSeek, the refuter and the summarizer included (the materiality judge stays on
+   Claude). A mixed setup, with the hunters on DeepSeek falling back to Claude and the refuter on Claude:
 
    ```bash
-   gh variable set CRYSK_ROUTING --body '{"default":{"backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"},"mappings":[{"logical":"haiku","backend":"claude-code","provider":"anthropic","gateway":"direct"}]}'
+   gh variable set CRYSK_MODELS --body '{"default": ["opencode:deepseek/deepseek-v4-flash", "claude:sonnet-latest"], "refuter": ["claude:opus-latest"], "summary": ["claude:haiku-latest"]}'
    ```
 
-   Hunters on OpenCode, refuter on Claude: map only `sonnet`. The unmapped `opus` refuter, and the
-   `haiku` summarizer (on unless `summary.enabled` is false), fall through to the Claude CLI, so keep
-   `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) alongside `OPENCODE_AUTH_JSON`:
+   Any step left on a `claude:` model needs a `CRYSK_CLAUDE_*` secret in the same run.
+2. **One secret per OpenCode provider**, `CRYSK_OPENCODE_<P>_API_KEY`, `<P>` being the provider id upper
+   case with `-` and `.` as `_` (see [`CRYSK_*` secrets](#crysk_-secrets)). For an OpenAI (ChatGPT)
+   subscription, `CRYSK_OPENCODE_OPENAI_OAUTH` instead, the `openai` record of your OpenCode login, base64
+   on one line:
 
    ```bash
-   gh variable set CRYSK_ROUTING --body '{"mappings":[{"logical":"sonnet","backend":"opencode","provider":"deepseek","gateway":"configured","modelSnapshot":"deepseek-v4-flash"}]}'
+   gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY   # paste the key when asked; never echo it
+   jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH   # on macOS, drop -w0
    ```
 
-   Do not use that shape for an OpenCode-only run (no Claude credentials): the refuter and the
-   summarizer would still be routed to the Claude CLI with no credentials to run them. Use a `default`
-   route as above, or map all three aliases (`sonnet`, `opus`, `haiku`), each with its own
-   `modelSnapshot`.
-
-2. **Repository secret** `OPENCODE_AUTH_JSON` — one JSON object in OpenCode's `auth.json` shape. Never
-   echo it. Cap 48 KB. If the personal store also has ChatGPT OAuth or extra providers, upload a
-   **CI-only** subset (one non-openai `type: "api"` record). Do not put a personal OAuth session in
-   GitHub.
+3. **Repository variable `CRYSK_OPENCODE_PROVIDERS`**: a JSON array of the `<P>` tokens whose API keys the
+   workflow forwards, at most five:
 
    ```bash
-   gh secret set OPENCODE_AUTH_JSON < auth.json   # paste or redirect; do not cat into logs
+   gh variable set CRYSK_OPENCODE_PROVIDERS --body '["DEEPSEEK"]'
    ```
 
-   Shape (placeholder keys only — never a real credential):
+   The scaffolded workflow has five slot lines after the fixed ones. Slot `i` reads the `i`-th token and
+   forwards `CRYSK_OPENCODE_<token>_API_KEY` by that exact name, so the action never receives any other
+   secret; an unused slot renders as `CRYSK_OPENCODE__API_KEY=` and is skipped. `CRYSK_OPENCODE_OPENAI_OAUTH`
+   has its own fixed line, so an OpenAI subscription needs no token here (an OpenAI API key does:
+   `OPENAI`). A repository connected to the Crysk platform gets the same five slots filled from the
+   platform's `opencode-providers` dispatch input instead, from the review's models.
 
-   ```json
-   {
-     "deepseek": { "type": "api", "key": "sk-test-fake" }
-   }
-   ```
-
-3. Keep the generated workflow `with:` lines (`routing: "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"` and
-   `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`). Open a same-repo PR.
-
-The Action writes routing to `$HOME/.crysk/config.json` on the runner (person layer) wrapping
-`{"routing": <parsed>}`. It never writes repo `.crysk/config.json`; that file's parser rejects
-`routing`. Empty or unset routing skips the person-layer write, so Claude-default CI stays available.
-`OPENCODE_AUTH_JSON` is written `0600` at the OpenCode auth path; brokers read that file. Invalid JSON
-fails the job loud.
+`crysk ci init` prints all three commands from your person config (see [`crysk ci init`](#scaffolding-with-crysk-ci-init)).
+The setup step writes the models to `$HOME/.crysk/config.json` on the runner (person layer) and builds
+OpenCode's `auth.json` from the secrets, `0600`, for the providers the models name
+([How the OpenCode secrets become the auth file](#how-the-opencode-secrets-become-the-auth-file)). It never
+writes the repository's `.crysk/config.json`, whose parser refuses `models`. A value the parser refuses in
+either variable, malformed JSON included, fails the run with [`CRYSK-CONFIG-INVALID`](#crysk-config-invalid).
 
 ### Pin 1.18.30
 
-The Action installs OpenCode CLI **1.18.30** in its own step, only when `opencode-auth` is non-empty
-**or** `routing` contains `opencode`. It never uses `latest`. The install appends `$HOME/.opencode/bin`
-to `GITHUB_PATH` so a **later** step (Run Crysk) sees the binary — the install step itself is not
-the review. Claude-only CI (no OpenCode secret, routing does not mention `opencode`) skips this
-install and still starts.
+The Action installs OpenCode CLI **1.18.30** in its own step, only when the setup step wrote an OpenCode
+auth file from the secrets **or** the models in effect name an `opencode:` model (a free model needs no
+credential, and a self-hosted runner may have its own login). It never uses `latest`. The install appends
+`$HOME/.opencode/bin` to `GITHUB_PATH` so a **later** step (Run Crysk) sees the binary — the install step
+itself is not the review. Claude-only CI (no `opencode:` model) skips this install and still starts.
 
 ### openai vs deepseek
 
-| Provider in `auth.json` | CI outcome |
+| Secret | CI outcome |
 |---|---|
-| Non-openai API token (tested: **deepseek** `type: "api"`) | Executable metered path. Presence of the auth file applies the default spend ceiling — this is an invoice route, not an unlimited subscription. |
-| `openai` with `type: "api"` | **Refused.** The engine maps openai to ChatGPT OAuth; a pay-as-you-go API key is not remapped. Do not put an openai API key in `OPENCODE_AUTH_JSON` and expect it to run. |
-| Mixed OpenCode providers in one run | Supported: each model runs through its own OpenCode server, projected with only its provider's record ([configuration.md](configuration.md), "Several OpenCode providers in one review"). |
-| `claude-code` + one OpenCode provider | Already works. Mix Claude credentials with one OpenCode `auth.json` entry and routing that names both backends. |
+| A non-openai `CRYSK_OPENCODE_<P>_API_KEY` (tested: **deepseek**) | Metered. The OpenCode auth file applies the default spend ceiling: this is an invoice route, not an unlimited subscription. |
+| `CRYSK_OPENCODE_OPENAI_API_KEY` | Metered, billed per token like any API key. |
+| `CRYSK_OPENCODE_OPENAI_OAUTH` | The ChatGPT subscription. With both OpenAI secrets set, the subscription is used. |
+| An `_OAUTH` secret for another provider your models use | **Refused**, naming the secret: only OpenAI's subscription can be projected. Set that provider's `_API_KEY`. |
+| Several OpenCode providers in one run | Supported: each model runs through its own OpenCode server, projected with only its provider's record ([configuration.md](configuration.md), "Several OpenCode providers in one review"). |
+| `claude:` models beside OpenCode ones | Supported. Pass a `CRYSK_CLAUDE_*` secret beside the OpenCode ones. |
 
 ### Edges
 
 - **Fork pushes** skip: GitHub does not give fork `pull_request` runs repository secrets. The review
   job `if` never reads `secrets`. A maintainer's `/crysk review` comment reviews a fork — see
   [Fork pull requests](#fork-pull-requests).
-- **OpenCode-only** (only `OPENCODE_AUTH_JSON` set, no Claude secret) counts as a credential and
-  reviews.
-- **Mismatch fails closed:** Claude credentials plus OpenCode routing but no `OPENCODE_AUTH_JSON`
-  passes the credential check (a Claude secret is set) and then **fails**, rather than skipping as a
-  clean review.
-- **48 KB** is the GitHub secret/variable size cap for both `OPENCODE_AUTH_JSON` and `CRYSK_ROUTING`.
+- **OpenCode-only** (only `CRYSK_OPENCODE_*` secrets, no Claude secret) counts as a credential and
+  reviews, as long as no step runs a `claude:` model. With `materiality_gate` on, the judge does (it runs
+  only on Claude), so keep a Claude secret for it. A plan that sends a step to the Claude CLI with no Claude
+  credential stops before it spends.
+- **Mismatch fails closed:** an OpenCode model with no secret for its provider gets a notice at setup, and
+  then the review **fails** for that provider's missing record ([`CRYSK-CRED-UNUSABLE`](#crysk-cred-unusable)),
+  rather than skipping as a clean review, unless the provider serves that model free.
+- **48 KB** is the GitHub variable size cap for `CRYSK_MODELS`; a `models` object is far smaller (at most
+  three models per role).
 
 ## Token permissions
 
@@ -535,23 +556,26 @@ Two consequences follow from the posting identity and from the token's life:
 
 Review settings live on the Crysk platform. The exchange reply carries them as
 `config: { person: {...}, repo: {...} }`, split by the engine's own per-key rules: `person` holds the keys
-whose direction is `person` or `capped` (including `routing`), `repo` the keys whose direction is `repo`.
+whose direction is `person` or `capped` (including `models` and `credentials`), `repo` the keys whose direction
+is `repo`.
 The action applies them on the runner, so the engine's usual two-layer read resolves them against the
 repository's own `.crysk/config.json` with the same per-key rules a local run uses. Either object may be
 empty, and an empty one writes nothing and changes nothing. The values are validated on the platform, but
 the engine's own parsers re-check them on the runner and stay the authority.
 
-- **`person`** is the runner's personal config layer. It is written to the personal config file the
-  action already writes `routing` to (`$HOME/.crysk/config.json`, or `$HOME/.prhero/config.json` when that
-  is the one that exists). Its `routing` wins over the `routing` input and `CRYSK_ROUTING`; with no
-  `routing` from the platform, the input keeps working exactly as before, beside the platform's other keys.
-  Platform routing that names `opencode` installs the OpenCode CLI, the same as the input does, and the
-  no-credentials message names OpenCode's credential for it; a platform routing that does not name `opencode`
-  overrides an input that does, for both. In platform mode the personal file belongs to the run: it is
-  rewritten from the platform's `person` layer and the routing input, and removed when both are empty, so a
-  file an earlier run left on a runner whose `HOME` outlives the job is never read as this run's layer.
-  A `post` the platform sets (in `person`, or in a `repo` layer that is delivered) applies: the run step then
-  leaves out `--post`, which would otherwise outrank the config, so the `post` input no longer forces it.
+- **`person`** is the runner's personal config layer. It is written to the personal config file
+  (`$HOME/.crysk/config.json`, or `$HOME/.prhero/config.json` when that is the one that exists), validated
+  whole by the engine's person parser first. A non-empty `person` wins whole over the `models` and
+  `credentials` inputs: they are not even read, and the step prints a warning when either holds a value. With
+  an empty `person`, the inputs apply as on a standalone run. Platform models that name `opencode:` install
+  the OpenCode CLI and build the auth file from the `CRYSK_OPENCODE_*` secrets, exactly as the input does,
+  and the no-credentials message names OpenCode's credential for them. The platform's workflow fills the
+  OpenCode provider slots of `crysk-secrets` from its own `opencode-providers` dispatch input. In platform
+  mode the personal file belongs to the run: it is rewritten from the layer in effect, and removed when there
+  is nothing to write, so a file an earlier run left on a runner whose `HOME` outlives the job is never read as
+  this run's layer. A `post` the platform sets (in `person`, or in a `repo` layer that is delivered) applies:
+  the run step then leaves out `--post`, which would otherwise outrank the config, so the `post` input no
+  longer forces it.
 - **`repo`** is used **only when the checked-out repository has no repo config file of its own** (the
   file the engine's repo reader opens: `.crysk/config.json`, or the pre-rename `.prhero/config.json`). It
   is then written to a `0600` temp file under the runner's temp directory, outside the workspace, and the
@@ -618,11 +642,11 @@ prints a `::warning::` naming the status and message, never the token, and the s
 ## Security considerations
 
 ### Fork pull requests
-In GitHub Actions, pull requests originating from forks do not receive repository secrets
-(`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENCODE_AUTH_JSON`). This is GitHub's intentional
-security boundary to prevent untrusted pull requests from exfiltrating credentials or consuming API
-budget. Repository **variables** (`CRYSK_ROUTING`) are visible; that is why routing must not contain
-credentials.
+In GitHub Actions, pull requests originating from forks do not receive repository secrets (the
+`CRYSK_*` secrets). This is GitHub's intentional security boundary to prevent untrusted pull requests from
+exfiltrating credentials or consuming API budget. Repository **variables** (`CRYSK_MODELS`,
+`CRYSK_CREDENTIALS`, `CRYSK_OPENCODE_PROVIDERS`) are visible; that is why they must not contain credentials,
+and why a model name or effort that looks like a credential is refused.
 
 So the generated workflow skips a fork's `pull_request` runs: they could never authenticate. To review
 a fork pull request, a user with write access comments `/crysk review` on it. That run is an
@@ -637,13 +661,18 @@ fork heads there too: that event runs in the base repository's context, with its
 it is choosing base-context reviews of forks. Crysk reads the head as text and never runs its code.
 
 The job `if` never reads `secrets` (GitHub does not allow it there). Credential presence is checked
-inside the action instead: a same-repo pull request with none of the three credential secrets fails
+inside the action instead: a same-repo pull request with no `CRYSK_*` credential in `crysk-secrets` fails
 red, with the commands that fix it, rather than skipping green and reading as a clean review. A
-credential already on the runner counts too: a Claude session file in `$HOME` or the OpenCode
-`auth.json` store. A self-hosted runner with none of these is left to the engine's own credential
-check, which can also see a macOS keychain entry. `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` set
-in the job's own `env:` does not count: the action's run step binds both from its inputs, so wire the
-secret as an input.
+credential already on the runner counts too: a Claude login file (`~/.claude/.credentials.json`) or the
+OpenCode `auth.json` store. A self-hosted runner with none of these is left to the engine's own credential
+check, which can also see a macOS keychain entry.
+
+Only the `crysk-secrets` input carries credentials. A Claude variable set in the job's own `env:`
+(`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, `CRYSK_CLAUDE_OAUTH_TOKEN`,
+`CRYSK_CLAUDE_API_KEY`) does not count and reaches nothing: every step of the action that runs a script
+binds those five to empty, so no installer, `gh` or `git` call inherits them. A `CRYSK_OPENCODE_*` variable
+in the job's `env:` gets a warning naming it, because every process the step starts could read it: pass it
+only in `crysk-secrets`, and remove it from the workflow's env.
 
 In this repository only, a comment run checks out the pull request's head and runs that engine
 (`uses: ./`), so it refuses fork pull requests outright: there the fork would supply the engine and run
@@ -678,10 +707,11 @@ of whoever comments.
 **Leaving `budget-usd` unset resolves the ceiling from how the run is billed.** A run uses one Claude
 credential, the first one in `credentials.claude` that is set (default `["subscription", "api_key"]`, see
 [Configuration, Credentials](configuration.md#credentials)). A run on the subscription
-(`CLAUDE_CODE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its real cash cost is `$0.00`
+(`CRYSK_CLAUDE_OAUTH_TOKEN`) draws on quota rather than a per-token invoice, so its real cash cost is `$0.00`
 and there is no dollar figure to gate on — no ceiling is applied, and the run emits a `::notice::` saying so.
-A metered run (the API key, `ANTHROPIC_API_KEY`, or OpenCode API-token auth via `OPENCODE_AUTH_JSON`) gets a
-`10.00` default, because that is the case where a runaway PR really does produce an invoice. Setting
+A metered run (the API key, `CRYSK_CLAUDE_API_KEY`, or an OpenCode auth file built from a
+`CRYSK_OPENCODE_*` secret) gets a `10.00` default, because that is the case where a runaway PR really does
+produce an invoice. Setting
 `budget-usd` explicitly is honoured verbatim on either route.
 
 **Leaving `max-changed-lines` / `max-changed-files` unset resolves them the same way.** On a Claude
@@ -694,9 +724,10 @@ If **both** Claude credentials are set, the run uses the one `credentials.claude
 other never reaches the Claude CLI. With the default order that is the subscription, so the review draws on
 quota with no ceiling. **This is a billing change** for repositories that hold both secrets: before
 `credentials.claude`, the Claude CLI preferred the key and the review billed per token with the `$10`
-ceiling. Put `api_key` first to keep that. The OpenCode auth file keeps the conservative rule: when it is
-present, CI treats the run as able to invoice (metered ceiling) even if a Claude subscription token is also
-set. That does **not** stamp Claude CLI usage as metered solely
+ceiling. Put `api_key` first to keep that (`credentials: ${{ vars.CRYSK_CREDENTIALS }}`, with
+`CRYSK_CREDENTIALS` set to `{"claude": ["api_key", "subscription"]}`). The OpenCode auth file keeps the
+conservative rule: when it is present, CI treats the run as able to invoice (metered ceiling) even if a
+Claude subscription token is also set. That does **not** stamp Claude CLI usage as metered solely
 because OpenCode auth is present — OpenCode API-token billing is beside Claude's subscription quota.
 
 **A `budget-usd` of `0` or below does not mean "spend nothing" — it disables the ceiling.** This
@@ -723,7 +754,7 @@ and backed by a durable attempt ledger stored in GitHub Check Runs (`checks: wri
 | `thorough` | `every_push` | 4 | (unset) | 8 |
 | `manual` | `manual_only` | 1 | (unset) | 8 |
 
-Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and the repo has no `OPENCODE_AUTH_JSON`; a run on the API key, which `credentials.claude` decides, is metered; an explicit 0 would warn on every run and outlive a later move to the API key); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
+Billing: `--billing subscription` writes no `budget-usd` (a subscription spends quota, not dollars, and CI applies no ceiling while the run uses the subscription and no `CRYSK_OPENCODE_*` secret builds an OpenCode auth file; a run on the API key, which `credentials.claude` decides, is metered; an explicit 0 would warn on every run and outlive a later move to the API key); `--billing api` writes `--budget-usd` or the $10 default. `--budget-usd` alone implies `api`, and `--budget-usd` with `subscription` is refused.
 
 Re-runs: a group (the level's keys, or `max_changed_lines`) is overwritten only when someone chose it this run (a flag or a terminal answer); otherwise it fills the file only if absent, and setup prints `Changed` and `Kept existing` lines. A `--force` refresh keeps the old workflow's `mode` and `budget-usd` unless a flag names them, and in a terminal every question defaults to the current value (a tuned level that matches no preset gets a "Keep current settings" option).
 
@@ -991,6 +1022,8 @@ read, a stop from that user does not count and a lift does, so the review runs. 
 automatic attempt (`ci_max_attempts`), so the budget is intact when the stop is lifted. The stop starts no
 workflow run, so it gets no reaction and costs nothing. It does not cancel a review that is already running.
 
+<a id="rechecking-a-dismissal"></a>
+
 **Rechecking a dismissal.** Comment exactly `/crysk recheck` on the pull request. It is `/crysk review` plus the CI adjudicator:
 the same write-access check and the same forced review of the head, and then the adjudicator rules on each pending `dismissed` reply
 to a blocking finding, at most 5 per run. Only a dismissal the adjudicator upholds leaves the gate count. A `deferred` or
@@ -998,6 +1031,8 @@ to a blocking finding, at most 5 per run. Only a dismissal the adjudicator uphol
 on the finding's thread by `github-actions[bot]`, and only replies from that login count, so a run with a custom token fails closed.
 A new dismissal reply is pending again. A verdict counts only on the head it was given, so a push needs a new recheck. An adjudicator step that fails posts nothing for that dismissal: it prints a notice and stays pending for the next recheck. The recheck run itself never changes the count: an upheld verdict leaves it from the next review of the same head (`/crysk review`), which reads the reply back, and only when GitHub recorded the reply under `github-actions[bot]`. If the reply did not land under that login, the recheck warns and the finding keeps counting. Dismissals never ruled on are adjudicated before retries of an inconclusive one. Not on fork pull requests: the adjudicator needs this repository's checkout of the head,
 so the comment is refused with a notice and a 👎 reaction.
+
+<a id="overriding-a-red-gate"></a>
 
 **Overriding a red gate.** Comment exactly `/crysk override` on the pull request. The same rule as
 `/crysk review` applies: a user with write or admin access may do it, and the pull request's author may too
@@ -1238,12 +1273,14 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `force` | `false` | Bypass the size gate, CI admission, and the budget ceiling for this run. A `/crysk review` comment from a user with write access sets it on its own; a legacy `pr-hero-force.yml` sets it to `true`. A forced run that reviews a head clears a size or budget skip's `failure` status. |
 | `mode` | `gate` | The commit status the review sets: `gate` turns it `failure` on blocking findings and on a size or budget skip, `advisory` keeps it `success` for a finished review. See [Gate mode](#gate-mode-the-status-is-the-check). |
 | `full` | `false` | On a re-review, widen discovery to the full pull request range (`--full`). A `/crysk review --full` comment sets it on its own; a legacy `pr-hero-force.yml` passes its `full` dispatch input. Use it when a prior review of the same head was hollow or wrong. |
-| `model` | engine default | Override every agent's model. |
+| `model` | empty | One model for every step but the materiality judge's (`claude:opus-latest`, `opencode:<provider>/<model>`; a bare `sonnet`, `opus`, `haiku` or `fable` means its `-latest` model), outranking `models`. No effort and no fallbacks. It builds no OpenCode auth file: name an OpenCode model in `models`. |
 | `scout` | `false` | Experimental diff-only pre-hunt stage; off by default. |
 | `post` | `true` | Set `false` to run the review and write outputs/summary without posting to the PR. |
 | `step-summary` | `true` | Set `false` to skip the `$GITHUB_STEP_SUMMARY` write. |
-| `anthropic-api-key`, `claude-token`, `opencode-auth`, `routing` | empty | Removed. A value in any of them stops the run with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed): pass the `CRYSK_*` secrets in `crysk-secrets`, and set models per role on the Crysk platform. |
+| `anthropic-api-key`, `claude-token`, `opencode-auth`, `routing` | empty | Removed. A value in any of them stops the run with [`CRYSK-INPUT-REMOVED`](#crysk-input-removed): pass the `CRYSK_*` secrets in `crysk-secrets`, and the models per role in `models`. |
 | `crysk-secrets` | empty | The credentials: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets](#crysk_-secrets). |
+| `models` | empty | The models per role, as JSON (the `models` object of a person config), from `vars.CRYSK_MODELS`. See [OpenCode in CI](#opencode-in-ci) and [Configuration, Models](configuration.md#models). Empty: every step runs its prompt's model. Ignored, with a warning, on a repository whose platform settings apply. |
+| `credentials` | empty | The Claude credential order, as JSON (`{"claude": ["subscription", "api_key"]}`), from `vars.CRYSK_CREDENTIALS`. Empty: the subscription first. Ignored like `models`. |
 
 ## Error codes
 
@@ -2131,8 +2168,12 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
   has a value. The step summary lists the `gh secret set` commands; adding a secret does not re-run past
   workflows, so re-run that run afterwards.
 - **The run is red with `CRYSK-INPUT-REMOVED`** — the workflow still passes a value in a removed input
-  (`anthropic-api-key`, `claude-token`, `opencode-auth`, `routing`). Delete those lines and pass the
-  `CRYSK_*` secrets in `crysk-secrets`.
+  (`anthropic-api-key`, `claude-token`, `opencode-auth`, `routing`). Re-run `npx -y crysk ci init --force`,
+  or delete those lines and pass the `CRYSK_*` secrets in `crysk-secrets` and the models in `models`.
+- **The run is red with `CRYSK-CONFIG-INVALID` naming the `models` or `credentials` input** — the
+  `CRYSK_MODELS` or `CRYSK_CREDENTIALS` variable is not valid JSON or breaks a rule. The step's log names
+  the entry; run the same object through `crysk config` locally (in `~/.crysk/config.json`) to see the
+  message, then set the variable again.
 - **Every re-run says "No changes to discover" after a hollow review** — a prior review of the same
   head completed without really reviewing (for example, every hunter returned nothing within
   seconds), and its summary marker now scopes discovery to nothing. On a head that was genuinely
@@ -2144,5 +2185,5 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 - **The review job is red** — never because of findings. Read `status` to tell the three causes apart:
   `error` is a fatal failure and the `::error::` annotation in the log names it; an **empty** `status`
   means every hunter died (the log shows their failures); `reviewed` means the review itself succeeded
-  but some comments could not be posted. See "Gate mode" above. OpenCode routing without
-  `OPENCODE_AUTH_JSON` fails closed rather than skipping.
+  but some comments could not be posted. See "Gate mode" above. An OpenCode model whose provider has no
+  `CRYSK_OPENCODE_*` secret fails closed rather than skipping.
