@@ -6,8 +6,10 @@ import {
   LEGACY_WORKFLOW_RELATIVE_PATH,
   WORKFLOW_RELATIVE_PATH,
 } from "./brand-paths";
-import { claudeCredentialProjectionReady } from "./model/provider-capabilities";
-import { claudeCredentialPresence } from "./security/claude-credential";
+import {
+  claudeCredentialPresence,
+  defaultClaudeLoginPresent,
+} from "./security/claude-credential";
 import { resolveOpenCodeAuthPath } from "./security/credential-broker";
 
 export type SystemTool = "git" | "claude" | "gh" | "codegraph";
@@ -32,6 +34,8 @@ export interface CheckSystemToolsOptions {
   home?: string;
   // Injectable so the Keychain half of the Claude login check is testable off macOS.
   platform?: NodeJS.Platform;
+  // Whether the Keychain item exists; tests inject it so none asks the real Keychain.
+  keychainProbe?: () => boolean;
 }
 
 export interface InstallSystemToolOptions {
@@ -143,14 +147,19 @@ export async function checkSystemTools(
     // credential variable (CRYSK_CLAUDE_* first, then the CLI's own names), or
     // the machine's own login. `~/.claude.json` and `~/.claude/session.json` do
     // not count: every Claude user has the first, API-key users included. The
-    // login half is defaultClaudeLoginPresent's, rebuilt over the injected
-    // `exists`, `home` and `platform`, because that function reads the real
-    // filesystem and HOME. On macOS it is the Keychain broker being available
-    // (`/usr/bin/security`), not the Keychain item itself: the doctor says
-    // what the run will choose, and a run on a Mac chooses the login.
-    const loginPresent =
-      claudeCredentialProjectionReady({ platform, existsFn: exists }) ||
-      exists(path.join(home, ".claude", ".credentials.json"));
+    // login half is defaultClaudeLoginPresent itself, over the injected `exists`,
+    // `home`, `platform` and `keychainProbe`: the CLI's OAuth store, or on macOS
+    // the Keychain item (R001, #494), so the doctor says what the run will choose.
+    const loginPresent = defaultClaudeLoginPresent(
+      { HOME: home },
+      {
+        platform,
+        existsFn: exists,
+        ...(options.keychainProbe === undefined
+          ? {}
+          : { keychainProbe: options.keychainProbe }),
+      },
+    );
     const presence = claudeCredentialPresence(env, loginPresent);
     const authOk =
       presence.subscription !== undefined || presence.api_key !== undefined;

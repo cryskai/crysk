@@ -105,7 +105,7 @@ describe("checkSystemTools (offline with injected fakes)", () => {
     const claudeAuth = async (
       options: Pick<
         Parameters<typeof checkSystemTools>[0] & object,
-        "exists" | "env" | "platform"
+        "exists" | "env" | "platform" | "keychainProbe"
       >,
     ) =>
       (
@@ -186,14 +186,27 @@ describe("checkSystemTools (offline with injected fakes)", () => {
       expect(status.authOk).toBe(true);
     });
 
-    test("macOS with the Keychain broker (/usr/bin/security) reports authOk: true", async () => {
+    test("macOS with the Keychain item reports authOk: true", async () => {
       const status = await claudeAuth({
         exists: (p) => p === "/usr/bin/security",
         env: {},
         platform: "darwin",
+        keychainProbe: () => true,
       });
 
       expect(status.authOk).toBe(true);
+    });
+
+    // R001 (#494): `security` is on every Mac; the run counts the item, so the doctor does.
+    test("macOS with the broker but no Keychain item is no login", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/usr/bin/security",
+        env: {},
+        platform: "darwin",
+        keychainProbe: () => false,
+      });
+
+      expect(status.authOk).toBe(false);
     });
 
     test("/usr/bin/security off macOS is no Keychain login", async () => {
