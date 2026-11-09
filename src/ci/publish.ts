@@ -474,6 +474,15 @@ function renderRecordOutcome(
       "action",
     );
   }
+  // The record's detail names the removed inputs; the class is the publisher's own,
+  // like a missing credential's.
+  if (record.decision === "removed-inputs") {
+    return renderError(
+      { kind: "trigger", check: "removed-input" },
+      params,
+      "action",
+    );
+  }
   if (record.decision === "unverifiable") {
     // WHY the step name: a lookup with no captured status has no class to
     // render, and "stopped at this step" needs a step to name.

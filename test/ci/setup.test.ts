@@ -457,6 +457,50 @@ describe("generateCiWorkflowTemplate (pure)", () => {
   });
 });
 
+// U5 (odd/tasks/role-model-routing.md, S8): this repository's own workflow passes
+// its credentials as CRYSK_* secrets in the crysk-secrets input, since the action
+// stops a run that still passes the removed inputs. The scaffolded template is
+// not changed here (E-f moves it).
+describe("this repo's own workflow passes the CRYSK_* secrets", () => {
+  function runCryskWith(template: string): Record<string, string> {
+    const parsed = Bun.YAML.parse(template) as {
+      jobs: { review: { steps: Array<Record<string, unknown>> } };
+    };
+    const step = parsed.jobs.review.steps.find((s) => s.name === "Run Crysk") as
+      | { with?: Record<string, string> }
+      | undefined;
+    return step?.with ?? {};
+  }
+
+  test("its Run Crysk step passes the Claude pair in crysk-secrets and no removed input", () => {
+    const withBlock = runCryskWith(own());
+    for (const removed of [
+      "anthropic-api-key",
+      "claude-token",
+      "opencode-auth",
+      "routing",
+    ]) {
+      expect(withBlock[removed], removed).toBeUndefined();
+    }
+    const lines = (withBlock["crysk-secrets"] ?? "").split("\n");
+    expect(lines).toContain(
+      "CRYSK_CLAUDE_OAUTH_TOKEN=$" + "{{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}",
+    );
+    expect(lines).toContain(
+      "CRYSK_CLAUDE_API_KEY=$" + "{{ secrets.CRYSK_CLAUDE_API_KEY }}",
+    );
+    expect(own()).not.toContain("toJSON(secrets)");
+  });
+
+  test("the scaffolded template still passes the old inputs until it moves (E-f)", () => {
+    const withBlock = runCryskWith(generateCiWorkflowTemplate());
+    expect(withBlock["claude-token"]).toBe(
+      "$" + "{{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+    );
+    expect(withBlock["crysk-secrets"]).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------
 // This repo's own comment runs (forceEngineFromPr).
 //
@@ -1474,6 +1518,34 @@ describe("setup.ts reads the crysk-secrets input", () => {
     expect(result.stderr).not.toContain("opencode-auth input is ignored");
   });
 
+  // U5: the Install OpenCode CLI step follows this output, so the CLI is
+  // installed when, and only when, this step wrote an OpenCode auth file.
+  test("an auth file built from the CRYSK_* secrets reports opencode-auth-file=true", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: SECRETS_INPUT },
+      withModels({ default: ["opencode:deepseek/deepseek-chat"] }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.output.split("\n")).toContain("opencode-auth-file=true");
+  });
+
+  test("an auth file from the old opencode-auth input reports opencode-auth-file=true too", async () => {
+    const result = await runSetup({ OPENCODE_AUTH_INPUT: OPENCODE_CI_AUTH });
+    expect(result.exitCode).toBe(0);
+    expect(result.authText === OPENCODE_CI_AUTH).toBe(true);
+    expect(result.output).toBe("opencode-auth-file=true\n");
+  });
+
+  test("OpenCode models with no secret serving them write no auth file and no opencode-auth-file output", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-55aa" },
+      withModels({ default: ["opencode:deepseek/deepseek-chat"] }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.authText).toBeUndefined();
+    expect(result.output).not.toContain("opencode-auth-file");
+  });
+
   test("with both inputs, the CRYSK_* secrets win and the opencode-auth input is ignored with a notice", async () => {
     for (const oldInput of [OPENCODE_CI_AUTH, '{"SENTINEL-not-json": ']) {
       const result = await runSetup(
@@ -1497,7 +1569,7 @@ describe("setup.ts reads the crysk-secrets input", () => {
   });
 });
 
-describe("action.yml hands crysk-secrets to the setup step only", () => {
+describe("action.yml hands crysk-secrets only to the steps that read it", () => {
   type Step = {
     id?: string;
     name?: string;
@@ -1519,12 +1591,23 @@ describe("action.yml hands crysk-secrets to the setup step only", () => {
     expect(action.inputs["crysk-secrets"]?.default).toBe("");
   });
 
-  test("only the setup step's env binds it, and no script, condition or with: names it", () => {
+  // The trigger reads it too, for presence (U5); its own test is in
+  // test/ci/trigger.test.ts. Run Crysk reads the Claude values (test/ci/run.test.ts
+  // and test/packaging.test.ts). No installer sees it.
+  test("only the trigger's, the setup step's and Run Crysk's env bind it, and no script, condition or with: names it", () => {
     const binders = steps.filter((step) =>
       JSON.stringify(step).includes("inputs.crysk-secrets"),
     );
-    expect(binders.map((step) => step.id)).toEqual(["materialize"]);
-    const setup = binders[0] as Step;
+    expect(binders.map((step) => step.id)).toEqual([
+      "trigger",
+      "materialize",
+      "run-crysk",
+    ]);
+    const run = binders[2] as Step;
+    expect(run.env?.CRYSK_SECRETS_INPUT).toBe(`\${{ inputs.crysk-secrets }}`);
+    expect(run.run ?? "").not.toContain("inputs.crysk-secrets");
+    expect(run.if ?? "").not.toContain("crysk-secrets");
+    const setup = binders[1] as Step;
     expect(setup.env?.CRYSK_SECRETS_INPUT).toBe(`\${{ inputs.crysk-secrets }}`);
     expect(setup.run ?? "").not.toContain("inputs.crysk-secrets");
     expect(setup.if ?? "").not.toContain("crysk-secrets");

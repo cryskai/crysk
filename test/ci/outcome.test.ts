@@ -28,6 +28,7 @@ import {
   parseTriggerRecord,
   renderCode,
   renderError,
+  renderHunterCause,
   type TriggerRecord,
   type UnsettledStatus,
 } from "#ci/outcome";
@@ -110,6 +111,12 @@ const SAMPLES: Sample[] = [
     name: "trigger no-credential",
     cls: { kind: "trigger", check: "no-credential" },
     code: "PRH-CRED-MISSING",
+    owner: "config",
+  },
+  {
+    name: "trigger removed-input",
+    cls: { kind: "trigger", check: "removed-input" },
+    code: "PRH-INPUT-REMOVED",
     owner: "config",
   },
   {
@@ -516,9 +523,9 @@ describe("codeOf and ownerOf: every class variant", () => {
 });
 
 describe("the code list and its catalog", () => {
-  test("ERROR_CODES holds the 24 distinct codes", () => {
-    expect(ERROR_CODES).toHaveLength(24);
-    expect(new Set(ERROR_CODES).size).toBe(24);
+  test("ERROR_CODES holds the 25 distinct codes", () => {
+    expect(ERROR_CODES).toHaveLength(25);
+    expect(new Set(ERROR_CODES).size).toBe(25);
     for (const code of ERROR_CODES) expect(code.startsWith("PRH-")).toBe(true);
   });
 
@@ -587,23 +594,75 @@ describe("wording: no invented scope, and the credential text names the route th
       }
       if (inFence) commands.push(line);
     }
-    expect(commands[0]).toContain("OPENCODE_AUTH_JSON");
+    expect(commands[0]).toContain("CRYSK_OPENCODE_<PROVIDER>_API_KEY");
     for (const command of commands) {
+      expect(command, command).not.toContain("CRYSK_CLAUDE_");
       expect(command, command).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
     }
   });
 
-  test("the claude route's with: example names the API key as the alternative to the OAuth token", () => {
+  // U5: the old inputs are removed, so the fix names the crysk-secrets line, and
+  // no fix names an old input or an old secret name.
+  test("the claude route's fix names both CRYSK_CLAUDE_* secrets and the crysk-secrets line that passes one", () => {
     const rendered = renderCode(
       "PRH-CRED-MISSING",
       { ...FULL, backend: "claude-code" },
       "action",
     );
+    const text = rendered.summary.join("\n");
+    expect(text).toContain("gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
+    expect(text).toContain("gh secret set CRYSK_CLAUDE_API_KEY");
     // The Actions expression is spliced, as in src/ci/outcome.ts, so the source
     // never holds a `${` pair that reads as a template placeholder.
-    expect(rendered.summary.join("\n")).toContain(
-      "anthropic-api-key: $" + "{{ secrets.ANTHROPIC_API_KEY }}",
+    expect(text).toContain(
+      "CRYSK_CLAUDE_OAUTH_TOKEN=$" + "{{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}",
     );
+  });
+
+  // U5: a rejected Claude credential names the CRYSK_* secret in the action (the
+  // workflow sets that one), and the CLI's own variable locally (the shell exports it).
+  test("a rejected credential names its CRYSK_* secret in the action and the CLI variable locally", () => {
+    const params = { provider: "anthropic", pr: 7, runId: "1", runUrl: "u" };
+    const action = renderHunterCause("auth_invalid", params, "action", {
+      credential: "ANTHROPIC_API_KEY",
+    });
+    const local = renderHunterCause("auth_invalid", params, "local", {
+      credential: "ANTHROPIC_API_KEY",
+    });
+    expect(action?.what).toContain(
+      "rejected the credential in CRYSK_CLAUDE_API_KEY",
+    );
+    expect(local?.what).toContain(
+      "rejected the credential in ANTHROPIC_API_KEY",
+    );
+    const oauth = renderHunterCause("auth_invalid", params, "action", {
+      credential: "CLAUDE_CODE_OAUTH_TOKEN",
+    });
+    expect(oauth?.summary.join("\n")).toContain(
+      "claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
+    );
+  });
+
+  test("no missing-credential fix names a removed input or an old secret name", () => {
+    for (const backend of ["claude-code", "opencode", ""]) {
+      const rendered = renderCode(
+        "PRH-CRED-MISSING",
+        { ...FULL, backend },
+        "action",
+      );
+      const text = `${rendered.summary.join("\n")}\n${rendered.annotation}`;
+      for (const old of [
+        "claude-token",
+        "anthropic-api-key",
+        "opencode-auth",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "OPENCODE_AUTH_JSON",
+        "CRYSK_ROUTING",
+      ]) {
+        expect(text.includes(old), `${backend} ${old}`).toBe(false);
+      }
+    }
   });
 });
 
@@ -744,7 +803,7 @@ describe("renderCode and renderError: the annotation", () => {
       "action",
     );
     expect(rendered.annotation).toBe(
-      "::error title=crysk PRH-CRED-MISSING::Your configuration: No credential for the <backend> route reached the action. Why: Crysk cannot authenticate, so it cannot review this PR. Fix: set a Claude credential: `claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN`. Docs: " +
+      "::error title=crysk PRH-CRED-MISSING::Your configuration: No credential for the <backend> route reached the action. Why: Crysk cannot authenticate, so it cannot review this PR. Fix: set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input. Docs: " +
         `${DOCS_URL_PREFIX}prh-cred-missing`,
     );
   });
@@ -1042,7 +1101,9 @@ describe("renderCode and renderError: the annotation", () => {
       { provider: "deepseek", secret: "OPENCODE_AUTH_JSON" },
       "action",
     );
-    expect(missingProvider.summary.join("\n")).toContain("opencode auth login");
+    expect(missingProvider.summary.join("\n")).toContain(
+      "gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY",
+    );
     const malformed = renderError(
       { kind: "credential", failureClass: "malformed_payload" },
       {},
@@ -1059,7 +1120,7 @@ describe("renderCode and renderError: the annotation", () => {
     );
   });
 
-  test("the missing-credential summary names the with: input for every route, and CRYSK_ROUTING for OpenCode only", () => {
+  test("the missing-credential summary names the crysk-secrets input for every route, and no routing variable", () => {
     const claude = renderError(
       { kind: "trigger", check: "no-credential" },
       { backend: "claude-code", runId: "123" },
@@ -1070,13 +1131,13 @@ describe("renderCode and renderError: the annotation", () => {
       { backend: "opencode", runId: "123" },
       "action",
     );
-    expect(claude.summary.join("\n")).toContain("with:");
-    expect(opencode.summary.join("\n")).toContain("with:");
+    expect(claude.summary.join("\n")).toContain("`crysk-secrets` input");
+    expect(opencode.summary.join("\n")).toContain("`crysk-secrets` input");
     expect(claude.summary.join("\n")).not.toContain("CRYSK_ROUTING");
-    expect(opencode.summary.join("\n")).toContain("CRYSK_ROUTING");
+    expect(opencode.summary.join("\n")).not.toContain("CRYSK_ROUTING");
   });
 
-  test("the missing-credential with: example follows the backend: opencode-auth on OpenCode, claude-token otherwise", () => {
+  test("the missing-credential crysk-secrets example follows the backend: an OpenCode secret on OpenCode, the Claude token otherwise", () => {
     const claude = renderError(
       { kind: "trigger", check: "no-credential" },
       { backend: "claude-code", runId: "123" },
@@ -1092,12 +1153,14 @@ describe("renderCode and renderError: the annotation", () => {
       { runId: "123" },
       "action",
     );
-    expect(opencode.summary.join("\n")).toContain("opencode-auth:");
-    expect(opencode.summary.join("\n")).not.toContain("claude-token:");
-    expect(claude.summary.join("\n")).toContain("claude-token:");
-    expect(claude.summary.join("\n")).not.toContain("opencode-auth:");
-    expect(missing.summary.join("\n")).toContain("claude-token:");
-    expect(missing.summary.join("\n")).not.toContain("opencode-auth:");
+    const opencodeLine = "CRYSK_OPENCODE_DEEPSEEK_API_KEY=$";
+    const claudeLine = "CRYSK_CLAUDE_OAUTH_TOKEN=$";
+    expect(opencode.summary.join("\n")).toContain(opencodeLine);
+    expect(opencode.summary.join("\n")).not.toContain(claudeLine);
+    expect(claude.summary.join("\n")).toContain(claudeLine);
+    expect(claude.summary.join("\n")).not.toContain(opencodeLine);
+    expect(missing.summary.join("\n")).toContain(claudeLine);
+    expect(missing.summary.join("\n")).not.toContain(opencodeLine);
   });
 
   test("a missing subscription record names the login its backend uses", () => {
@@ -1109,7 +1172,7 @@ describe("renderCode and renderError: the annotation", () => {
     expect(claude.annotation).toContain("claude setup-token");
     expect(claude.annotation).not.toContain("ChatGPT");
     expect(claude.summary.join("\n")).toContain(
-      "claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+      "claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
     );
     expect(claude.summary.join("\n")).not.toContain("ChatGPT");
 
@@ -1122,6 +1185,10 @@ describe("renderCode and renderError: the annotation", () => {
     expect(openai.annotation).toContain("opencode auth login");
     expect(openai.summary.join("\n")).toContain("ChatGPT");
     expect(openai.summary.join("\n")).toContain("opencode auth login");
+    expect(openai.summary.join("\n")).toContain(
+      "gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+    );
+    expect(openai.summary.join("\n")).not.toContain("OPENCODE_AUTH_JSON");
   });
 
   test("a route reason picks its own fix", () => {
@@ -1182,11 +1249,11 @@ describe("renderCode and renderError: the annotation", () => {
           { ...FULL, backend: "opencode" },
           "action",
         ).annotation,
-        "set the OPENCODE_AUTH_JSON secret: `gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json`",
+        "set the provider's CRYSK_OPENCODE_<PROVIDER>_API_KEY secret (`gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY`) and pass it in the crysk-secrets input",
       ],
       [
         renderCode("PRH-CRED-MISSING", FULL, "action").annotation,
-        "set a Claude credential: `claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN`",
+        "set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input",
       ],
     ];
     for (const [annotation, fix] of expected) {

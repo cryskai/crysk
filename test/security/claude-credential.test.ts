@@ -1,15 +1,20 @@
 // S5 (odd/tasks/role-model-routing.md): which Claude credential a run uses, and the env
 // its child sees. Assertions read key presence and kinds only; no test prints an env.
 import { describe, expect, test } from "bun:test";
+import { deriveCiBillingMode } from "../../src/ci/gates";
+import { envBillsMetered } from "../../src/execution/usage-normalized";
 import type { ClaudeCredentialKind } from "../../src/review/preflight";
 import {
   CLAUDE_CREDENTIAL_VARIABLES,
   claudeCredentialPresence,
   claudeCredentialRefusal,
   claudeRunEnv,
+  clearCryskClaudeIntake,
+  cryskIntakeEnv,
   defaultClaudeLoginPresent,
   resolveRunClaudeCredential,
   selectClaudeCredential,
+  takeCryskClaudeSecrets,
 } from "../../src/security/claude-credential";
 
 const ORDERS: ReadonlyArray<{
@@ -245,6 +250,21 @@ describe("claudeCredentialRefusal", () => {
     );
   });
 
+  // U5: in the action the Claude credential comes only from the crysk-secrets input
+  // (or a login on the runner), so the refusal names the CRYSK_* secrets there and
+  // never the CLI variables, which the action no longer reads.
+  test("in the action, the refusal names the CRYSK_* secrets in the crysk-secrets input", () => {
+    try {
+      takeCryskClaudeSecrets({});
+      const run = resolveRunClaudeCredential({ loginPresent: false });
+      expect(claudeCredentialRefusal(run.selection, true)).toBe(
+        "no Claude credential this run may use is set: credentials.claude is [subscription, api_key] (the default), and none of those is set: subscription (CRYSK_CLAUDE_OAUTH_TOKEN in the crysk-secrets input, or a Claude login on this machine); api_key (CRYSK_CLAUDE_API_KEY in the crysk-secrets input). Set a listed credential, or change credentials.claude in your person config",
+      );
+    } finally {
+      clearCryskClaudeIntake();
+    }
+  });
+
   test("a plan with no Claude route ignores Claude credentials", () => {
     const selection = selectClaudeCredential(["api_key"], {});
     expect(claudeCredentialRefusal(selection, false)).toBeUndefined();
@@ -255,6 +275,93 @@ describe("claudeCredentialRefusal", () => {
       api_key: "ANTHROPIC_API_KEY",
     });
     expect(claudeCredentialRefusal(selection, true)).toBeUndefined();
+  });
+});
+
+// U5 (odd/tasks/role-model-routing.md, S8, L27): in CI the Claude secrets arrive in
+// the crysk-secrets input, which the Run Crysk step pipes to src/ci/run.ts on stdin.
+// run.ts hands the Claude values to this module's intake; nothing writes process.env.
+// The run's env is the process env with every Claude variable dropped and the
+// intake's CRYSK_* values put in, so a job-level ANTHROPIC_API_KEY nobody passed
+// through crysk-secrets is never chosen.
+describe("the crysk-secrets intake", () => {
+  test("cryskIntakeEnv drops every Claude variable and adds only the intake's CRYSK_* names", () => {
+    const env = cryskIntakeEnv(
+      {
+        HOME: "/home/runner",
+        ANTHROPIC_API_KEY: "job-level-key",
+        CLAUDE_CODE_OAUTH_TOKEN: "job-level-oauth",
+        ANTHROPIC_AUTH_TOKEN: "job-level-bearer",
+        CRYSK_CLAUDE_API_KEY: "env-crysk-key",
+      },
+      { subscription: "intake-oauth" },
+    );
+    expect(env.HOME).toBe("/home/runner");
+    expect(env.CRYSK_CLAUDE_OAUTH_TOKEN === "intake-oauth").toBe(true);
+    for (const name of [
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "ANTHROPIC_AUTH_TOKEN",
+      "CRYSK_CLAUDE_API_KEY",
+    ]) {
+      expect(env[name], name).toBeUndefined();
+    }
+  });
+
+  test("an intake API key is the run's credential, under the CLI's variable, and bills metered", () => {
+    const run = resolveRunClaudeCredential({
+      env: cryskIntakeEnv(
+        { CLAUDE_CODE_OAUTH_TOKEN: "job-level-oauth" },
+        { api_key: "intake-key" },
+      ),
+      loginPresent: false,
+    });
+    expect(run.kind).toBe("api_key");
+    expect(run.env.ANTHROPIC_API_KEY === "intake-key").toBe(true);
+    expect(childKeys(run.env)).toEqual({
+      oauth: false,
+      apiKey: true,
+      authToken: false,
+    });
+    // Every billing reader reads this env: the usage stamp and the timeout label
+    // (envBillsMetered) and the CI ceiling (deriveCiBillingMode).
+    expect(envBillsMetered(run.env)).toBe(true);
+    expect(deriveCiBillingMode(run.env)).toBe("metered");
+  });
+
+  test("the credential order still decides between two intake secrets", () => {
+    const both = { subscription: "intake-oauth", api_key: "intake-key" };
+    const byDefault = resolveRunClaudeCredential({
+      env: cryskIntakeEnv({}, both),
+      loginPresent: false,
+    });
+    expect(byDefault.kind).toBe("subscription");
+    expect(deriveCiBillingMode(byDefault.env)).toBe("subscription");
+    const keyFirst = resolveRunClaudeCredential({
+      credentials: { claude: ["api_key", "subscription"] },
+      env: cryskIntakeEnv({}, both),
+      loginPresent: false,
+    });
+    expect(keyFirst.kind).toBe("api_key");
+  });
+
+  test("an intake taken by run.ts is what a run that passes no env reads, and process.env is untouched", () => {
+    const before = process.env.CRYSK_CLAUDE_API_KEY;
+    try {
+      takeCryskClaudeSecrets({ api_key: "SENTINEL-INTAKE-5c1" });
+      const run = resolveRunClaudeCredential({
+        credentials: { claude: ["api_key"] },
+        loginPresent: false,
+      });
+      expect(run.kind).toBe("api_key");
+      expect(run.env.ANTHROPIC_API_KEY === "SENTINEL-INTAKE-5c1").toBe(true);
+      expect(process.env.CRYSK_CLAUDE_API_KEY === before).toBe(true);
+      expect(process.env.ANTHROPIC_API_KEY === "SENTINEL-INTAKE-5c1").toBe(
+        false,
+      );
+    } finally {
+      clearCryskClaudeIntake();
+    }
   });
 });
 

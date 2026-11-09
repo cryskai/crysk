@@ -59,6 +59,18 @@ export const LEGACY_SECRET_NAMES = [
 ] as const;
 export type LegacySecretName = (typeof LEGACY_SECRET_NAMES)[number];
 
+// The CRYSK_* secret to set in place of each old name (U5), for the messages that
+// name it. OPENCODE_AUTH_JSON held the whole store; its replacement is one secret
+// per provider, and an `_OAUTH` record is read only for openai (U3).
+export const LEGACY_SECRET_REPLACEMENT: Readonly<
+  Record<LegacySecretName, string>
+> = {
+  CLAUDE_CODE_OAUTH_TOKEN: "CRYSK_CLAUDE_OAUTH_TOKEN",
+  ANTHROPIC_API_KEY: "CRYSK_CLAUDE_API_KEY",
+  OPENCODE_AUTH_JSON:
+    "one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription)",
+};
+
 export interface CryskSecretsParse {
   readonly secrets: CryskSecrets;
   // The kept names, sorted. Names only: they are already in the workflow file.
@@ -98,6 +110,13 @@ const MIN_MASK_LENGTH = 4;
 // <P>'s source: a Models.dev style provider id. Dots are accepted (`wafer.ai`)
 // and become `_` like dashes, as S8 says; `_` itself stays `_`.
 const PROVIDER_ID_RE = /^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$/;
+
+// The platform stub forwards OpenCode API keys through dynamic slots,
+// `CRYSK_OPENCODE_<TOKEN>_API_KEY=<secret>` with the token from a dispatch input
+// (platform L97-L98). An unused slot renders exactly as this line (empty token,
+// empty value; verified on GitHub, run 42544917469 on cryskai/crysk-sandbox).
+const EMPTY_OPENCODE_SLOT_NAME = "CRYSK_OPENCODE__API_KEY";
+const EMPTY_OPENCODE_SLOT_LINE = `${EMPTY_OPENCODE_SLOT_NAME}=`;
 
 const SPLIT_HINT =
   "(a value split across lines? encode _OAUTH secrets with base64 -w0)";
@@ -165,6 +184,19 @@ export function chooseOpenCodeSecret(
       : { kind: "oauth", secret: oauth };
   }
   return hasApiKey ? { kind: "api_key", secret: apiKey } : undefined;
+}
+
+// Whether the input carries any Crysk credential, for the trigger's no-credential
+// check (U5). A refused value counts: the setup step names what is wrong with it
+// (credential/malformed_payload), which says more than "no credential". An old
+// name never counts, and an empty value is absent.
+export function cryskSecretsCarryCredential(parse: CryskSecretsParse): boolean {
+  const presence = cryskSecretsPresence(parse);
+  return (
+    presence.claude.length > 0 ||
+    presence.opencodeProviders.length > 0 ||
+    parse.problems.length > 0
+  );
 }
 
 // What the setup step may tell later steps: names and kinds, never a value.
@@ -256,6 +288,9 @@ export function parseCryskSecrets(raw: string): CryskSecretsParse {
   for (const [index, rawLine] of lines.entries()) {
     const line = rawLine.trim();
     if (line === "") continue;
+    // An unused platform slot: skipped silently, never present. Only this exact
+    // line; a value under the empty token is refused below.
+    if (line === EMPTY_OPENCODE_SLOT_LINE) continue;
     const lineNo = index + 1;
     const match = LINE_RE.exec(line);
     if (match === null) {
@@ -283,6 +318,12 @@ export function parseCryskSecrets(raw: string): CryskSecretsParse {
     // `NAME=` from `${{ secrets.NAME }}`.
     if (value === "") continue;
     mask(value);
+    if (name === EMPTY_OPENCODE_SLOT_NAME) {
+      problems.push(
+        `${name} has a value but no provider: an unused OpenCode slot must be empty`,
+      );
+      continue;
+    }
 
     if ((LEGACY_SECRET_NAMES as readonly string[]).includes(name)) {
       legacy.add(name as LegacySecretName);
