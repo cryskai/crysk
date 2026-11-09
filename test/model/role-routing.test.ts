@@ -228,6 +228,23 @@ describe("the judge (L6 item 5)", () => {
     expect(p.steps.some((s) => s.stepKey === "materiality")).toBe(false);
   });
 
+  // The gate fails open: a judge the runner may not be able to bind stands down
+  // instead of killing the run at admission (resolveMaterialityJudgeRoute).
+  test("with every other step off Claude and no models.judge, the judge stands down", () => {
+    const p = plan({ models: { default: ["opencode:openai/gpt-5"] } });
+    expect(p.steps.some((s) => s.stepKey === "materiality")).toBe(false);
+  });
+
+  test("an explicit models.judge still runs on an OpenCode-only plan", () => {
+    const p = plan({
+      models: {
+        default: ["opencode:openai/gpt-5"],
+        judge: ["claude:sonnet-latest"],
+      },
+    });
+    expect(wire(p).materiality).toBe("claude --model sonnet");
+  });
+
   test("models.default never reaches the judge", () => {
     expect(
       wire(plan({ models: { default: ["claude:haiku-latest"] } })).materiality,
@@ -244,5 +261,23 @@ describe("the removed routing (S2)", () => {
         '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
       ),
     );
+  });
+});
+
+describe("--model outranks --scout-model on the scout's route", () => {
+  // The scout step records `--model > --scout-model` (pipeline.ts runScout,
+  // resolveModel); the route the backend is sent must agree, or the CLI runs
+  // one model while the step reports another.
+  test("with both, the scout is sent --model", () => {
+    const p = plan({
+      cliModel: "opus",
+      scout: { model: "haiku", defaultModel: "sonnet" },
+    });
+    expect(wire(p).scout).toBe("claude --model opus");
+  });
+
+  test("--scout-model alone still routes the scout", () => {
+    const p = plan({ scout: { model: "haiku", defaultModel: "sonnet" } });
+    expect(wire(p).scout).toBe("claude --model haiku");
   });
 });
