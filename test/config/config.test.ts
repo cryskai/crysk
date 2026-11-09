@@ -299,8 +299,10 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
         default_base: "repo",
         parity_trigger_paths: "repo",
         suspicion_priors: "repo",
-        summary: { enabled: "repo", model: "default" },
+        summary: { enabled: "repo" },
         routing: "default",
+        models: "default",
+        credentials: "default",
         max_verification_steps: "default",
         max_concurrent_steps: "default",
         max_changed_lines: "default",
@@ -356,8 +358,10 @@ describe("loadEffectiveConfig — O-5, no global file resolves as today", () => 
         default_base: "default",
         parity_trigger_paths: "default",
         suspicion_priors: "default",
-        summary: { enabled: "default", model: "default" },
+        summary: { enabled: "default" },
         routing: "default",
+        models: "default",
+        credentials: "default",
         max_verification_steps: "default",
         max_concurrent_steps: "default",
         max_changed_lines: "default",
@@ -440,7 +444,8 @@ describe("loadEffectiveConfig — the global layer", () => {
     const home = await tmpHome(
       JSON.stringify({
         agents_dir: "/Users/x/sets/clean",
-        summary: { enabled: false, model: "haiku" },
+        summary: { enabled: false },
+        models: { summary: ["claude:haiku-latest"] },
         max_verification_steps: 3,
       }),
     );
@@ -453,7 +458,7 @@ describe("loadEffectiveConfig — the global layer", () => {
       expect(loaded.globalPresent).toBe(true);
       expect(loaded.effective.agents_dir).toBe("/Users/x/sets/clean");
       expect(loaded.sources.agents_dir).toBe("global");
-      expect(loaded.sources.summary.model).toBe("global");
+      expect(loaded.sources.models).toBe("global");
       expect(loaded.sources.max_verification_steps).toBe("global");
       // A `repo` key stays absent: the global file cannot even carry one.
       expect(loaded.effective.default_base).toBeUndefined();
@@ -639,8 +644,10 @@ describe("pipelineConfigInput — O-6", () => {
         default_base: "default" as const,
         parity_trigger_paths: "default" as const,
         suspicion_priors: "default" as const,
-        summary: { enabled: "default" as const, model: "default" as const },
+        summary: { enabled: "default" as const },
         routing: "default" as const,
+        models: "default" as const,
+        credentials: "default" as const,
         max_verification_steps: "default" as const,
         max_concurrent_steps: "default" as const,
         max_changed_lines: "default" as const,
@@ -661,6 +668,7 @@ describe("pipelineConfigInput — O-6", () => {
       repoConfigPath: "/repo/.crysk/config.json",
       globalConfigPath: "/home/.crysk/config.json",
       globalPresent: true,
+      warnings: [],
     };
     expect(pipelineConfigInput(loaded)).toEqual({
       config: {

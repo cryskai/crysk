@@ -29,28 +29,6 @@ export interface RoutingConfig {
   readonly disabled?: boolean;
 }
 
-function mappingNeedsOpenCodeSdk(mapping: RouteMapping | undefined): boolean {
-  if (mapping === undefined) return false;
-  return (
-    mapping.backend === "opencode" &&
-    mapping.disabled !== true &&
-    mapping.allowSpend !== false
-  );
-}
-
-// Spend that would actually open an OpenCode transport. A disabled route,
-// a mapping that refuses spend, or no routing at all does not.
-export function routingNeedsOpenCodeSdk(
-  routing: RoutingConfig | undefined,
-): boolean {
-  if (routing === undefined || routing.disabled === true) return false;
-  if (mappingNeedsOpenCodeSdk(routing.default)) return true;
-  const mappings = routing.mappings;
-  if (mappings === undefined) return false;
-  const entries = Array.isArray(mappings) ? mappings : Object.values(mappings);
-  return entries.some((entry) => mappingNeedsOpenCodeSdk(entry));
-}
-
 export interface ParsedLogicalIdentity {
   readonly raw: string;
   readonly canonical: string;

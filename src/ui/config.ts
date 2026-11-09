@@ -138,6 +138,32 @@ function routingCell(
   };
 }
 
+// One cell for the whole object, one `role=model,model` entry per role, in
+// the order the file wrote them: the list order is the fallback order.
+function modelsCell(
+  models: LocalConfig["models"],
+  source: ConfigSource,
+): ConfigCell {
+  return listCell(
+    Object.entries(models ?? {}).map(
+      ([role, list]) => `${role}=${list.join(",")}`,
+    ),
+    source,
+  );
+}
+
+function credentialsCell(
+  credentials: LocalConfig["credentials"],
+  source: ConfigSource,
+): ConfigCell {
+  return listCell(
+    credentials?.claude === undefined
+      ? []
+      : [`claude=${credentials.claude.join(",")}`],
+    source,
+  );
+}
+
 // One row per key, and the two Records below are what stops a key from
 // silently going missing: both are exhaustive over their key union, so adding
 // a member to LocalConfig or SummaryConfig fails tsc until it has a cell here.
@@ -162,6 +188,8 @@ export function configRows(
       sources.suspicion_priors,
     ),
     routing: routingCell(effective.routing, sources.routing),
+    models: modelsCell(effective.models, sources.models),
+    credentials: credentialsCell(effective.credentials, sources.credentials),
     max_verification_steps: cell(
       effective.max_verification_steps?.toString(),
       sources.max_verification_steps,
@@ -226,7 +254,6 @@ export function configRows(
       effective.summary?.enabled?.toString(),
       sources.summary.enabled,
     ),
-    model: cell(effective.summary?.model, sources.summary.model),
   };
   // Object.entries over an object literal keeps declaration order, which is
   // the same guarantee CONFIG_DIRECTION already leans on for its derived key

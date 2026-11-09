@@ -229,15 +229,11 @@ describe("updater (lifecycle foundations)", () => {
   });
 });
 
-const OPENCODE_ROUTING = {
-  default: { backend: "opencode", provider: "opencode" },
-};
-const CLAUDE_ROUTING = {
-  default: { backend: "claude-code", provider: "anthropic" },
-};
+const OPENCODE_MODELS = { default: ["opencode:opencode/big-pickle"] };
+const CLAUDE_MODELS = { default: ["claude:sonnet-latest"] };
 
 async function withHome(
-  routing: unknown | undefined,
+  models: unknown | undefined,
   raw?: string,
 ): Promise<{ home: string; cleanup: () => Promise<void> }> {
   const home = await mkdtemp(path.join(tmpdir(), "prhero-reconcile-"));
@@ -245,8 +241,8 @@ async function withHome(
   await mkdir(layout.dir, { recursive: true });
   if (raw !== undefined) {
     await writeFile(layout.reviewConfigPath, raw);
-  } else if (routing !== undefined) {
-    await writeFile(layout.reviewConfigPath, JSON.stringify({ routing }));
+  } else if (models !== undefined) {
+    await writeFile(layout.reviewConfigPath, JSON.stringify({ models }));
   }
   return {
     home,
@@ -350,9 +346,9 @@ describe("spawnOpenCodeSdkInstaller", () => {
   });
 });
 
-describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it", () => {
-  test("Claude-only routing does not spawn", async () => {
-    const fixture = await withHome(CLAUDE_ROUTING);
+describe("reconcileUpgrade installs the OpenCode SDK only when a model needs it", () => {
+  test("Claude-only models do not spawn", async () => {
+    const fixture = await withHome(CLAUDE_MODELS);
     try {
       let spawned = false;
       const result = await quietReconcile(fixture.home, {
@@ -369,8 +365,8 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
     }
   });
 
-  test("OpenCode routing with a missing SDK installs via npm before doctor", async () => {
-    const fixture = await withHome(OPENCODE_ROUTING);
+  test("an OpenCode model with a missing SDK installs via npm before doctor", async () => {
+    const fixture = await withHome(OPENCODE_MODELS);
     const layout = prheroLayout(fixture.home);
     try {
       let installed = false;
@@ -407,8 +403,8 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
     }
   });
 
-  test("OpenCode routing that already has the pinned SDK does not spawn", async () => {
-    const fixture = await withHome(OPENCODE_ROUTING);
+  test("an OpenCode model that already has the pinned SDK does not spawn", async () => {
+    const fixture = await withHome(OPENCODE_MODELS);
     try {
       let spawned = false;
       const result = await quietReconcile(fixture.home, {
@@ -426,7 +422,7 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
   });
 
   test("compiled mode reads the SDK from the reconcile home and does not spawn", async () => {
-    const fixture = await withHome(OPENCODE_ROUTING);
+    const fixture = await withHome(OPENCODE_MODELS);
     const packageDir = path.join(
       prheroLayout(fixture.home).nodeModulesDir,
       "@opencode-ai",
@@ -459,7 +455,7 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
   });
 
   test("no npm and no bun reports both and does not spawn", async () => {
-    const fixture = await withHome(OPENCODE_ROUTING);
+    const fixture = await withHome(OPENCODE_MODELS);
     try {
       let spawned = false;
       let doctorRan = false;
@@ -486,22 +482,33 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
     }
   });
 
-  test("routing.disabled with an OpenCode default does not spawn", async () => {
-    const fixture = await withHome({
-      disabled: true,
-      default: OPENCODE_ROUTING.default,
-    });
+  test("a person file still holding routing reports the new form and does not spawn", async () => {
+    const fixture = await withHome(
+      undefined,
+      JSON.stringify({
+        routing: { default: { backend: "opencode", provider: "opencode" } },
+      }),
+    );
     try {
       let spawned = false;
+      let doctorRan = false;
       const result = await quietReconcile(fixture.home, {
         readSdkVersion: async () => undefined,
         spawnInstaller: async () => {
           spawned = true;
           return { code: 0, stderr: "" };
         },
+        runDoctorCheck: async () => {
+          doctorRan = true;
+          return { overall: "healthy" };
+        },
       });
       expect(spawned).toBe(false);
-      expect(result.ok).toBe(true);
+      expect(doctorRan).toBe(true);
+      expect(result.ok).toBe(false);
+      expect(result.errors.join("\n")).toContain(
+        '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
+      );
     } finally {
       await fixture.cleanup();
     }
@@ -532,7 +539,7 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
   });
 
   test("a live install lock refuses a second reconcile and hides the home", async () => {
-    const fixture = await withHome(OPENCODE_ROUTING);
+    const fixture = await withHome(OPENCODE_MODELS);
     const lockPath = path.join(
       prheroLayout(fixture.home).dir,
       "opencode-sdk.lock",
@@ -559,7 +566,7 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
   });
 
   test("a dead install lock is taken and the install still runs", async () => {
-    const fixture = await withHome(OPENCODE_ROUTING);
+    const fixture = await withHome(OPENCODE_MODELS);
     const lockPath = path.join(
       prheroLayout(fixture.home).dir,
       "opencode-sdk.lock",
@@ -587,7 +594,7 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
   });
 
   test("the lock holds the pid before the installer runs", async () => {
-    const fixture = await withHome(OPENCODE_ROUTING);
+    const fixture = await withHome(OPENCODE_MODELS);
     const lockPath = path.join(
       prheroLayout(fixture.home).dir,
       "opencode-sdk.lock",
@@ -610,7 +617,7 @@ describe("reconcileUpgrade installs the OpenCode SDK only when routing needs it"
   });
 
   test("an EEXIST from the installer is reported once", async () => {
-    const fixture = await withHome(OPENCODE_ROUTING);
+    const fixture = await withHome(OPENCODE_MODELS);
     try {
       let calls = 0;
       const result = await quietReconcile(fixture.home, {

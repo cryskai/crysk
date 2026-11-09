@@ -129,12 +129,19 @@ export async function loadRunConfig(params: {
   home: string;
   configFlag: string | undefined;
   options: Pick<CliOptions, "summary" | "model" | "scout" | "post">;
+  // Where config warnings go. Defaults to stderr, beside every other
+  // `warning:` line a run prints.
+  warn?: (line: string) => void;
 }): Promise<LoadedRunConfig> {
   const loaded = await loadEffectiveConfig({
     root: params.root,
     home: params.home,
     configFlag: params.configFlag,
   });
+  const warn =
+    params.warn ??
+    ((line: string) => process.stderr.write(`warning: ${line}\n`));
+  for (const line of loaded.warnings) warn(line);
   const config = loaded.effective;
   const summary = resolveSummary(params.options, config);
   const scout = resolveScout(params.options, config);

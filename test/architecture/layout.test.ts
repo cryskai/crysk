@@ -97,6 +97,7 @@ const MIGRATED_DOMAINS: MigratedDomain[] = [
       "catalog",
       "exec-snapshots",
       "free-discovery",
+      "model-name",
       "provider-capabilities",
       "routing",
     ],

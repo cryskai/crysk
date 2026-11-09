@@ -152,7 +152,7 @@ function configTags(
     flagged.summary
       ? undefined
       : configTag("summary.enabled", s.summary.enabled),
-    flagged.model ? undefined : configTag("summary.model", s.summary.model),
+    flagged.model ? undefined : configTag("models", s.models),
     configTag("max_verification_steps", s.max_verification_steps),
   ].filter((tag): tag is string => tag !== undefined);
 }
