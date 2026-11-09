@@ -53,6 +53,7 @@ const NO_CREDENTIALS = {
   anthropicApiKey: false,
   claudeToken: false,
   opencodeAuth: false,
+  cryskSecrets: false,
   runnerFile: false,
 };
 
@@ -851,7 +852,12 @@ describe("decideCiTrigger — precedence and credentials", () => {
     );
     expect(decision).toEqual({
       kind: "no-credentials",
-      inputs: ["anthropic-api-key", "claude-token", "opencode-auth"],
+      inputs: [
+        "crysk-secrets",
+        "anthropic-api-key",
+        "claude-token",
+        "opencode-auth",
+      ],
     });
   });
 
@@ -859,6 +865,7 @@ describe("decideCiTrigger — precedence and credentials", () => {
     "anthropicApiKey",
     "claudeToken",
     "opencodeAuth",
+    "cryskSecrets",
     "runnerFile",
   ] as const)("%s alone is enough to review", (credential) => {
     expect(
@@ -1077,6 +1084,8 @@ function runShell(
   }),
   exists: (filePath: string) => boolean = () => false,
   fs?: OutcomeFs,
+  // The crysk-secrets input, as the step's shell hands it over on stdin.
+  cryskSecrets?: string,
 ) {
   const ghCalls: string[][] = [];
   const sleeps: number[] = [];
@@ -1103,6 +1112,7 @@ function runShell(
       summary += text;
     },
     ...(fs === undefined ? {} : { fs }),
+    ...(cryskSecrets === undefined ? {} : { cryskSecrets }),
   });
   const outputs = Object.fromEntries(
     output
@@ -2122,20 +2132,25 @@ describe("the trigger looks for runner credentials where the engine does", () =>
 });
 
 describe("trigger.ts runs before `bun install`", () => {
-  // `../brand` is the one non-builtin: it has zero imports of its own, so it
-  // resolves before `bun install` (the same exception publish.ts and outcome.ts make).
-  test("it imports only runtime builtins, plus the import-free ../brand", () => {
+  // `../brand` and `./crysk-secrets` are the non-builtins: neither has an import
+  // of its own, so both resolve before `bun install` (the same exception
+  // publish.ts and outcome.ts make for ../brand).
+  test("it imports only runtime builtins, plus the import-free ../brand and ./crysk-secrets", () => {
     const source = readFileSync(MODULE_PATH, "utf-8");
     const specifiers = [
       ...source.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)"/gms),
     ].map((match) => match[1]);
     expect(specifiers.length).toBeGreaterThan(0);
     for (const specifier of specifiers) {
-      expect(specifier).toMatch(/^(node:|bun$|bun:|\.\.\/brand$)/);
+      expect(specifier).toMatch(
+        /^(node:|bun$|bun:|\.\.\/brand$|\.\/crysk-secrets$)/,
+      );
     }
-    expect(
-      readFileSync(path.resolve(MODULE_PATH, "../../brand.ts"), "utf-8"),
-    ).not.toMatch(/^\s*import\b/m);
+    for (const file of ["../../brand.ts", "../crysk-secrets.ts"]) {
+      expect(
+        readFileSync(path.resolve(MODULE_PATH, file), "utf-8"),
+      ).not.toMatch(/^\s*import\b/m);
+    }
   });
 
   // The real entry point, spawned: proves the `import.meta.main` shell reads
@@ -2643,5 +2658,278 @@ describe("runCiTrigger — /pr-hero recheck", () => {
     expect(run.outputs).toMatchObject({ run: "false", publish: "false" });
     expect(run.stdout).toContain("The recheck could not confirm");
     expect(run.ghCalls).toContainEqual(reactionArgv("-1"));
+  });
+});
+
+// U5 (odd/tasks/role-model-routing.md, S8, L12, L19): the trigger reads which
+// credentials the `crysk-secrets` input carries, so a workflow that passes only
+// that input (the platform's stub, version 3) is not stopped as having none. The
+// input reaches the trigger on stdin, like the setup step, and only its presence
+// is used: the values are parsed by the setup step's own grammar
+// (parseCryskSecrets) and never printed.
+describe("the trigger reads credential presence from the crysk-secrets input", () => {
+  const NO_OLD_INPUTS = {
+    HAS_ANTHROPIC_API_KEY: "false",
+    HAS_CLAUDE_TOKEN: "false",
+    HAS_OPENCODE_AUTH: "false",
+  };
+  // What the platform's stub hands over when the repository has only some of
+  // the secrets: one line per name, the unset ones empty.
+  const STUB_LINES = (set: Record<string, string>) =>
+    [
+      "CRYSK_CLAUDE_OAUTH_TOKEN",
+      "CRYSK_CLAUDE_API_KEY",
+      "CRYSK_OPENCODE_DEEPSEEK_API_KEY",
+      "CRYSK_OPENCODE_OPENAI_OAUTH",
+    ]
+      .map((name) => `${name}=${set[name] ?? ""}`)
+      .join("\n");
+
+  test("a CRYSK_* credential counts as a credential in the pure decision", () => {
+    expect(
+      decideCiTrigger(
+        pullRequest({ credentials: { ...NO_CREDENTIALS, cryskSecrets: true } }),
+      ),
+    ).toEqual({ kind: "review", force: false, full: false, adjudicate: false });
+  });
+
+  test("a workflow passing only crysk-secrets with a Claude secret reviews", () => {
+    const run = runShell(
+      baseEnv(NO_OLD_INPUTS),
+      undefined,
+      undefined,
+      undefined,
+      STUB_LINES({ CRYSK_CLAUDE_OAUTH_TOKEN: "SENTINEL-OAUTH-77bb" }),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs.run).toBe("true");
+    expect(run.stdout).not.toContain("SENTINEL");
+  });
+
+  test("a workflow passing only crysk-secrets with an OpenCode secret reviews", () => {
+    const run = runShell(
+      baseEnv(NO_OLD_INPUTS),
+      undefined,
+      undefined,
+      undefined,
+      STUB_LINES({ CRYSK_OPENCODE_DEEPSEEK_API_KEY: "SENTINEL-DS-77bb" }),
+    );
+    expect(run.outputs.run).toBe("true");
+  });
+
+  test("every line empty is no credential: red, with the input named in the cause", () => {
+    const run = runShell(
+      baseEnv(NO_OLD_INPUTS),
+      undefined,
+      undefined,
+      undefined,
+      STUB_LINES({}),
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.outputs.run).toBe("false");
+    expect(run.outputs.publish).toBe("true");
+    expect(run.stdout).toStartWith(
+      "::error title=crysk::Crysk has no credential for this review",
+    );
+    expect(run.stdout).toContain("crysk-secrets");
+  });
+
+  test("a malformed CRYSK_* value is left to the setup step, which names it, so the trigger does not call it missing", () => {
+    const run = runShell(
+      baseEnv(NO_OLD_INPUTS),
+      undefined,
+      undefined,
+      undefined,
+      STUB_LINES({ CRYSK_OPENCODE_OPENAI_OAUTH: "SENTINEL-not-base64!" }),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs.run).toBe("true");
+    expect(run.stdout).not.toContain("SENTINEL");
+  });
+
+  test("an old secret name inside the input is not a credential, and a warning names the CRYSK_* secret for it", () => {
+    const run = runShell(
+      baseEnv(NO_OLD_INPUTS),
+      undefined,
+      undefined,
+      undefined,
+      [
+        "CLAUDE_CODE_OAUTH_TOKEN=SENTINEL-OLD-77bb",
+        "ANTHROPIC_API_KEY=SENTINEL-OLDKEY-77bb",
+        "OPENCODE_AUTH_JSON=SENTINEL-OLDAUTH-77bb",
+      ].join("\n"),
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.outputs.run).toBe("false");
+    expect(run.stdout).toContain(
+      "::warning title=crysk::CLAUDE_CODE_OAUTH_TOKEN in the crysk-secrets input is an old secret name, and Crysk does not read it: set CRYSK_CLAUDE_OAUTH_TOKEN instead.",
+    );
+    expect(run.stdout).toContain(
+      "::warning title=crysk::ANTHROPIC_API_KEY in the crysk-secrets input is an old secret name, and Crysk does not read it: set CRYSK_CLAUDE_API_KEY instead.",
+    );
+    expect(run.stdout).toContain(
+      "::warning title=crysk::OPENCODE_AUTH_JSON in the crysk-secrets input is an old secret name, and Crysk does not read it: set one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) instead.",
+    );
+    expect(run.stdout).not.toContain("SENTINEL");
+  });
+
+  test("an old secret name beside a CRYSK_* credential reviews, still with the warning", () => {
+    const run = runShell(
+      baseEnv(NO_OLD_INPUTS),
+      undefined,
+      undefined,
+      undefined,
+      [
+        "CRYSK_CLAUDE_API_KEY=SENTINEL-KEY-77bb",
+        "CLAUDE_CODE_OAUTH_TOKEN=SENTINEL-OLD-77bb",
+      ].join("\n"),
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.outputs.run).toBe("true");
+    expect(run.stdout).toContain(
+      "CLAUDE_CODE_OAUTH_TOKEN in the crysk-secrets input is an old secret name",
+    );
+  });
+
+  test("an ignored event prints no warning about the input", () => {
+    const run = runShell(
+      commentEnv("hello", NO_OLD_INPUTS),
+      undefined,
+      undefined,
+      undefined,
+      "CLAUDE_CODE_OAUTH_TOKEN=SENTINEL-OLD-77bb",
+    );
+    expect(run.outputs.run).toBe("false");
+    expect(run.stdout).not.toContain("old secret name");
+  });
+
+  // Existing behavior the change touches: the old inputs and an on-runner
+  // credential file still count until the clean break refuses the old inputs.
+  test("the old credential inputs still count while crysk-secrets is empty", () => {
+    const run = runShell(baseEnv(), undefined, undefined, undefined, "");
+    expect(run.outputs.run).toBe("true");
+  });
+
+  test("an on-runner credential file still counts with an all-empty crysk-secrets", () => {
+    const run = runShell(
+      baseEnv({ ...NO_OLD_INPUTS, HOME: "/home/runner" }),
+      undefined,
+      (filePath) => filePath === "/home/runner/.claude/.credentials.json",
+      undefined,
+      STUB_LINES({}),
+    );
+    expect(run.outputs.run).toBe("true");
+  });
+});
+
+// The trigger step's own `run:` line, under bash as the runner runs it: the
+// input is piped on stdin and bun starts with the variable emptied, so no child
+// the trigger spawns (gh) inherits a value.
+describe("action.yml hands crysk-secrets to the trigger on stdin", () => {
+  const REPO_ROOT = path.resolve(import.meta.dir, "../..");
+  const triggerStep = (
+    Bun.YAML.parse(
+      readFileSync(path.join(REPO_ROOT, "action.yml"), "utf8"),
+    ) as {
+      runs: {
+        steps: { id?: string; run?: string; env?: Record<string, string> }[];
+      };
+    }
+  ).runs.steps.find((step) => step.id === "trigger");
+  const STEP_SCRIPT = (triggerStep?.run ?? "").replaceAll(
+    `\${{ github.action_path }}`,
+    REPO_ROOT,
+  );
+
+  test("the step binds the input in its env and pipes it to trigger.ts", () => {
+    expect(triggerStep?.env?.CRYSK_SECRETS_INPUT).toBe(
+      `\${{ inputs.crysk-secrets }}`,
+    );
+    expect(triggerStep?.run).toBe(
+      `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin`,
+    );
+  });
+
+  function runStep(env: Record<string, string>, script = STEP_SCRIPT) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "prhero-trigger-stdin-"));
+    try {
+      const outputPath = path.join(dir, "output");
+      const summaryPath = path.join(dir, "summary");
+      const dump = path.join(dir, "gh-env-dump");
+      writeFileSync(outputPath, "");
+      writeFileSync(summaryPath, "");
+      const bin = path.join(dir, "bin");
+      mkdirSync(bin);
+      // A gh that records the environment it was given and answers the head.
+      writeFileSync(
+        path.join(bin, "gh"),
+        `#!/bin/sh\nenv >> "${dump}"\nprintf '%s\\n' "${HEAD_SHA}"\n`,
+        { mode: 0o755 },
+      );
+      const bunDir = path.dirname(process.execPath);
+      const result = Bun.spawnSync(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+        {
+          cwd: dir,
+          env: {
+            ...env,
+            GITHUB_OUTPUT: outputPath,
+            GITHUB_STEP_SUMMARY: summaryPath,
+            HOME: dir,
+            PATH: `${bin}:${bunDir}:/usr/bin:/bin`,
+          },
+        },
+      );
+      return {
+        exitCode: result.exitCode,
+        stdout: result.stdout.toString(),
+        stderr: result.stderr.toString(),
+        output: readFileSync(outputPath, "utf-8"),
+        dump: existsSync(dump) ? readFileSync(dump, "utf-8") : "",
+      };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a dispatch with only crysk-secrets reviews, and gh never sees a value", () => {
+    const run = runStep({
+      ...baseEnv({
+        HAS_ANTHROPIC_API_KEY: "false",
+        HAS_CLAUDE_TOKEN: "false",
+        HAS_OPENCODE_AUTH: "false",
+        EVENT_NAME: "workflow_dispatch",
+        EVENT_PR_NUMBER: "",
+        EVENT_PR_HEAD_SHA: "",
+        PR_NUMBER_INPUT: "7",
+      }),
+      CRYSK_SECRETS_INPUT:
+        "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-77bb\nCRYSK_CLAUDE_API_KEY=",
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.output).toContain("run=true\n");
+    // gh ran (the head lookup), so the check is about a real child env.
+    // Booleans, so a failure never prints the environment it captured.
+    expect(run.dump.includes("HOME=")).toBe(true);
+    expect(run.dump.includes("SENTINEL")).toBe(false);
+    expect(/^CRYSK_SECRETS_INPUT=.+$/m.test(run.dump)).toBe(false);
+    expect(run.stdout.includes("SENTINEL")).toBe(false);
+    expect(run.stderr.includes("SENTINEL")).toBe(false);
+  });
+
+  test("the input reaching bun through its environment is refused, never printed", () => {
+    const run = runStep(
+      {
+        ...baseEnv(),
+        CRYSK_SECRETS_INPUT: "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-77bb",
+      },
+      `bun "${path.join(REPO_ROOT, "src", "ci", "trigger.ts")}"`,
+    );
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toContain(
+      "crysk: the crysk-secrets input reached trigger.ts through its environment",
+    );
+    expect(run.stderr.includes("SENTINEL")).toBe(false);
+    expect(run.output).toBe("");
   });
 });

@@ -128,7 +128,9 @@ describe("parseCryskSecrets: the name grammar", () => {
       "CRYSK_CLAUDE_OAUTH",
       "CRYSK_OPENCODE_API_KEY",
       "CRYSK_OPENCODE_OAUTH",
-      "CRYSK_OPENCODE__API_KEY",
+      // CRYSK_OPENCODE__API_KEY with a value is refused instead: it is the
+      // platform's slot name (see "the platform's empty OpenCode slot").
+      "CRYSK_OPENCODE__OAUTH",
       "CRYSK_OPENCODE_DEEPSEEK_TOKEN",
       "CRYSK_OPENAI_API_KEY",
     ]) {
@@ -248,6 +250,60 @@ describe("parseCryskSecrets: the name grammar", () => {
     );
     expect(parsed.secrets.claude).toEqual({ api_key: "abc" });
     expect(parsed.masks).toEqual([]);
+  });
+});
+
+// U5 scope addition (platform L97-L98): the platform stub forwards OpenCode API
+// keys through dynamic slots, `CRYSK_OPENCODE_<TOKEN>_API_KEY=<secret>` with the
+// token from a dispatch input. An unused slot renders exactly as
+// `CRYSK_OPENCODE__API_KEY=` (verified on GitHub, run 42544917469).
+describe("parseCryskSecrets: the platform's empty OpenCode slot", () => {
+  const EMPTY_SLOT = "CRYSK_OPENCODE__API_KEY=";
+
+  test("the exact empty-slot line is skipped silently: no notice, no problem, no mask, not present", () => {
+    const parsed = parseCryskSecrets([EMPTY_SLOT, EMPTY_SLOT].join("\n"));
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.notices).toEqual([]);
+    expect(parsed.masks).toEqual([]);
+    expect(parsed.names).toEqual([]);
+    expect(cryskSecretsPresence(parsed)).toEqual({
+      names: [],
+      claude: [],
+      opencodeProviders: [],
+    });
+  });
+
+  test("a value under the empty token is refused by name, never echoing the value, and masked", () => {
+    const parsed = parseCryskSecrets(
+      "CRYSK_OPENCODE__API_KEY=SENTINEL-SLOT-9c9c",
+    );
+    expect(parsed.problems).toEqual([
+      "CRYSK_OPENCODE__API_KEY has a value but no provider: an unused OpenCode slot must be empty",
+    ]);
+    expect(parsed.problems.join("\n")).not.toContain("SENTINEL");
+    expect(parsed.notices.join("\n")).not.toContain("SENTINEL");
+    expect(parsed.masks).toContain("SENTINEL-SLOT-9c9c");
+    expect(parsed.names).toEqual([]);
+  });
+
+  test("a normal line beside empty slots still parses", () => {
+    const parsed = parseCryskSecrets(
+      [
+        EMPTY_SLOT,
+        "CRYSK_OPENCODE_DEEPSEEK_API_KEY=SENTINEL-DS-9c9c",
+        EMPTY_SLOT,
+        "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-9c9c",
+      ].join("\n"),
+    );
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.notices).toEqual([]);
+    expect(parsed.names).toEqual([
+      "CRYSK_CLAUDE_OAUTH_TOKEN",
+      "CRYSK_OPENCODE_DEEPSEEK_API_KEY",
+    ]);
+    expect(opencodeSecretsFor(parsed.secrets, "deepseek")).toEqual({
+      apiKey: "SENTINEL-DS-9c9c",
+    });
   });
 });
 

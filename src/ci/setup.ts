@@ -692,6 +692,10 @@ export interface MaterializeCiOpenCodeDataOptions {
 export interface MaterializeCiOpenCodeDataResult {
   // Notices for the job log: names and provider ids only, never a value.
   readonly notices: readonly string[];
+  // Whether this step wrote the OpenCode auth file: from the CRYSK_OPENCODE_*
+  // secrets for the providers the models name, or from the old opencode-auth
+  // input. The Install OpenCode CLI step runs only then (U5).
+  readonly openCodeAuthWritten: boolean;
 }
 
 // The file the publisher reads when this step fails on a malformed input, and
@@ -956,7 +960,10 @@ export async function materializeCiOpenCodeData(
     if (authBody !== undefined) await writeOwnerOnlyFile(authPath, authBody);
     await rm(manifestPath, { force: true });
   }
-  return { notices };
+  return {
+    notices,
+    openCodeAuthWritten: fromSecrets !== undefined || authBody !== undefined,
+  };
 }
 
 // The env variable action.yml binds the `crysk-secrets` input to, in this step
@@ -1097,6 +1104,11 @@ async function runCiOpenCodeSetup(deps: CiOpenCodeSetupDeps): Promise<number> {
     });
     for (const notice of materialized.notices) {
       deps.stderr(`::notice::${escapeCommandData(notice)}\n`);
+    }
+    // Presence only: the Install OpenCode CLI step keys on it, so the CLI is
+    // installed when an OpenCode credential the run can use was written.
+    if (materialized.openCodeAuthWritten) {
+      deps.appendOutput("opencode-auth-file=true\n");
     }
     // WHY the run step needs to know: it passes `--post` whenever the `post`
     // input is true (the default), and an explicit CLI option outranks the

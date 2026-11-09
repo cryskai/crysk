@@ -24,7 +24,7 @@ inputs:
     description: 'Whole OpenCode auth.json store. Written 0600 at the OpenCode auth path. Never logged.'
     required: false
   crysk-secrets:
-    description: 'Upcoming, not read by reviews yet: keep anthropic-api-key, claude-token and opencode-auth until a release says otherwise. The Crysk credentials as NAME=value lines, one per CRYSK_* secret, each line written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN, CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY, CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record). Only the setup step reads it; every value is masked.'
+    description: 'The Crysk credentials as NAME=value lines, one per CRYSK_* secret, each line written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN, CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY, CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record). The trigger reads which credentials it holds (a run with only this input is not stopped for having none), and the setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need. The Claude secrets do not reach the review yet: keep claude-token or anthropic-api-key for Claude until a release says otherwise. An unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. Every value is masked and never reaches a child process through its environment.'
     required: false
     default: ''
   pr-number:
@@ -146,7 +146,12 @@ runs:
     #
     # Event values reach it ONLY through `env:`. The comment body is free
     # text anyone can type; spliced into a script it is command injection.
-    # Credentials arrive as presence booleans (`!= ''`), never as values.
+    # The old credential inputs arrive as presence booleans (`!= ''`), never as
+    # values. The crysk-secrets input cannot: the workflow passes one line per
+    # CRYSK_* name, empty when the secret is unset, so the input is never empty
+    # and presence needs its parse. It is piped on stdin exactly as the setup
+    # step takes it (bun runs with the variable emptied, so no `gh` call sees
+    # it), and the trigger keeps only whether a CRYSK_* credential is there.
     - name: Resolve trigger
       id: trigger
       shell: bash
@@ -184,7 +189,9 @@ runs:
         # The attempt of this run. A re-run keeps the run id, so the record names
         # the attempt, and the publisher orders a re-run's comments by it.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-      run: bun "${{ github.action_path }}/src/ci/trigger.ts"
+        # Piped to trigger.ts on stdin, never left in its environment (above).
+        CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin
 
     - name: Install dependencies
       if: steps.trigger.outputs.run == 'true'
@@ -239,6 +246,10 @@ runs:
     # Pin 1.18.30 as its own step so GITHUB_PATH updates later steps only
     # (install ≠ Run Crysk). Never unpinned. Digest verify of the official
     # installer is named, not built.
+    #
+    # The setup step now reports `opencode-auth-file=true` when it wrote an
+    # OpenCode auth file (U5); keying this condition on it waits for the clean
+    # break, since test/packaging.test.ts pins the condition below.
     - name: Install OpenCode CLI
       if: ${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode'))) }}
       shell: bash

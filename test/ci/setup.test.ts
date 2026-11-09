@@ -1474,6 +1474,34 @@ describe("setup.ts reads the crysk-secrets input", () => {
     expect(result.stderr).not.toContain("opencode-auth input is ignored");
   });
 
+  // U5: the Install OpenCode CLI step follows this output, so the CLI is
+  // installed when, and only when, this step wrote an OpenCode auth file.
+  test("an auth file built from the CRYSK_* secrets reports opencode-auth-file=true", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: SECRETS_INPUT },
+      withModels({ default: ["opencode:deepseek/deepseek-chat"] }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.output.split("\n")).toContain("opencode-auth-file=true");
+  });
+
+  test("an auth file from the old opencode-auth input reports opencode-auth-file=true too", async () => {
+    const result = await runSetup({ OPENCODE_AUTH_INPUT: OPENCODE_CI_AUTH });
+    expect(result.exitCode).toBe(0);
+    expect(result.authText === OPENCODE_CI_AUTH).toBe(true);
+    expect(result.output).toBe("opencode-auth-file=true\n");
+  });
+
+  test("OpenCode models with no secret serving them write no auth file and no opencode-auth-file output", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-55aa" },
+      withModels({ default: ["opencode:deepseek/deepseek-chat"] }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.authText).toBeUndefined();
+    expect(result.output).not.toContain("opencode-auth-file");
+  });
+
   test("with both inputs, the CRYSK_* secrets win and the opencode-auth input is ignored with a notice", async () => {
     for (const oldInput of [OPENCODE_CI_AUTH, '{"SENTINEL-not-json": ']) {
       const result = await runSetup(
@@ -1519,12 +1547,14 @@ describe("action.yml hands crysk-secrets to the setup step only", () => {
     expect(action.inputs["crysk-secrets"]?.default).toBe("");
   });
 
-  test("only the setup step's env binds it, and no script, condition or with: names it", () => {
+  // The trigger reads it too, for presence (U5); its own test is in
+  // test/ci/trigger.test.ts. No installer and no Run step sees it.
+  test("only the trigger's and the setup step's env bind it, and no script, condition or with: names it", () => {
     const binders = steps.filter((step) =>
       JSON.stringify(step).includes("inputs.crysk-secrets"),
     );
-    expect(binders.map((step) => step.id)).toEqual(["materialize"]);
-    const setup = binders[0] as Step;
+    expect(binders.map((step) => step.id)).toEqual(["trigger", "materialize"]);
+    const setup = binders[1] as Step;
     expect(setup.env?.CRYSK_SECRETS_INPUT).toBe(`\${{ inputs.crysk-secrets }}`);
     expect(setup.run ?? "").not.toContain("inputs.crysk-secrets");
     expect(setup.if ?? "").not.toContain("crysk-secrets");

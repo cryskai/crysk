@@ -19,7 +19,8 @@
 // ignored comment costs seconds instead of a dependency install. A package
 // import has no node_modules to resolve against yet, and a `#...` alias is no
 // better: it resolves to a src module whose own imports reach packages. Keep
-// every import here `node:` or `bun`.
+// every import here `node:` or `bun`, plus the import-free ../brand and
+// ./crysk-secrets (the CRYSK_* grammar, kept import-free for this step).
 
 import { randomBytes } from "node:crypto";
 import {
@@ -32,6 +33,12 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { commandHint, isCommand, startsWithCommand } from "../brand";
+import {
+  type CryskSecretsParse,
+  cryskSecretsCarryCredential,
+  LEGACY_SECRET_REPLACEMENT,
+  parseCryskSecrets,
+} from "./crysk-secrets";
 
 // Commands are written in the new `/crysk` form. The matchers in ../brand
 // also accept the legacy `/pr-hero` spelling for one version.
@@ -67,6 +74,7 @@ const GITHUB_LOGIN = /^(?=.{1,91}$)[A-Za-z0-9][A-Za-z0-9_-]{0,90}(\[bot\])?$/;
 const TRIGGER_PERMISSIONS: ReadonlySet<string> = new Set(["admin", "write"]);
 
 const CREDENTIAL_INPUTS = [
+  "crysk-secrets",
   "anthropic-api-key",
   "claude-token",
   "opencode-auth",
@@ -95,12 +103,16 @@ export type CommenterPermission =
       rateLimited?: boolean;
     };
 
-// Presence only. The action passes `inputs.<credential> != ''`, never the
-// value, so nothing in this module can print a secret it never received.
+// Presence only. The action passes `inputs.<credential> != ''` for the old
+// inputs, never the value. The `crysk-secrets` input is the one exception: its
+// lines are one input, so presence needs the parse, and the step hands it over on
+// stdin (runCiTrigger's `cryskSecrets`). Only this boolean leaves the parse.
 export interface CiCredentialPresence {
   anthropicApiKey: boolean;
   claudeToken: boolean;
   opencodeAuth: boolean;
+  // A CRYSK_* credential in the crysk-secrets input (cryskSecretsCarryCredential).
+  cryskSecrets: boolean;
   // A Claude session file or the OpenCode auth store already on the runner
   // (see runnerCredentialPaths). The engine authenticates with either.
   runnerFile: boolean;
@@ -407,12 +419,18 @@ export function decideCiTrigger(input: CiTriggerInput): CiTriggerDecision {
   // binds both from the inputs in its own `env:`, which overrides the job's,
   // so a job-level value never reaches the engine: counting it would trade
   // this clear red for a confusing auth failure later.
-  const { anthropicApiKey, claudeToken, opencodeAuth, runnerFile } =
-    input.credentials;
+  const {
+    anthropicApiKey,
+    claudeToken,
+    opencodeAuth,
+    cryskSecrets,
+    runnerFile,
+  } = input.credentials;
   if (
     !anthropicApiKey &&
     !claudeToken &&
     !opencodeAuth &&
+    !cryskSecrets &&
     !runnerFile &&
     !input.selfHostedRunner
   ) {
@@ -554,6 +572,9 @@ export interface CiTriggerDeps {
   stdout: (text: string) => void;
   appendOutput: (text: string) => void;
   appendSummary: (text: string) => void;
+  // The `crysk-secrets` input, read from stdin by the entry point below (never
+  // from `env`). Absent or empty: no CRYSK_* secret.
+  cryskSecrets?: string;
   // The record's file writes. The default is node:fs; a test injects a failing
   // one to prove the write is atomic.
   fs?: OutcomeFs;
@@ -776,6 +797,23 @@ function noCredentialCause(inputs: readonly string[]): string {
   return `Crysk has no credential for this review: pass one of the ${inputs.join(", ")} inputs.`;
 }
 
+// The old names (CLAUDE_CODE_OAUTH_TOKEN, ...) written inside the crysk-secrets
+// input. They are recorded by presence only and read by no step, so a workflow
+// that copied them there would otherwise lose its credential without a word.
+function warnLegacySecretNames(
+  deps: CiTriggerDeps,
+  secrets: CryskSecretsParse,
+): void {
+  for (const name of secrets.legacy) {
+    deps.stdout(
+      workflowCommand(
+        "warning",
+        `${name} in the crysk-secrets input is an old secret name, and Crysk does not read it: set ${LEGACY_SECRET_REPLACEMENT[name]} instead.`,
+      ),
+    );
+  }
+}
+
 // The lookup's class: only when gh printed an HTTP status. A 403 is a rate
 // limit only when gh said so; otherwise the catalog keeps its permission reading.
 function lookupClass(decision: {
@@ -827,6 +865,7 @@ function validSha(value: string): string | undefined {
 // HOME and XDG_DATA_HOME, which every step inherits from the runner.
 function readTriggerInput(
   deps: CiTriggerDeps,
+  secrets: CryskSecretsParse,
 ): Omit<CiTriggerInput, "commenterPermission"> {
   const { env } = deps;
   const text = (name: string): string => env[name] ?? "";
@@ -848,6 +887,7 @@ function readTriggerInput(
       anthropicApiKey: flag("HAS_ANTHROPIC_API_KEY"),
       claudeToken: flag("HAS_CLAUDE_TOKEN"),
       opencodeAuth: flag("HAS_OPENCODE_AUTH"),
+      cryskSecrets: cryskSecretsCarryCredential(secrets),
       runnerFile: runnerCredentialPaths(env).some((file) => exists(file)),
     },
     selfHostedRunner: text("RUNNER_ENVIRONMENT") === "self-hosted",
@@ -1129,7 +1169,8 @@ function lookupNoCredentialsHead(
 }
 
 export function runCiTrigger(deps: CiTriggerDeps): number {
-  const base = readTriggerInput(deps);
+  const secrets = parseCryskSecrets(deps.cryskSecrets ?? "");
+  const base = readTriggerInput(deps, secrets);
   const input: CiTriggerInput = commenterPermissionNeeded(base)
     ? {
         ...base,
@@ -1174,6 +1215,13 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
       }),
     );
     return 1;
+  }
+
+  // A run that reached the credential check (an override never does): an old
+  // secret name inside the input is named with its CRYSK_* replacement, whether
+  // or not another credential lets the review run, since nothing reads it.
+  if (decision.kind === "review" || decision.kind === "no-credentials") {
+    warnLegacySecretNames(deps, secrets);
   }
 
   if (decision.kind === "no-credentials") {
@@ -1325,10 +1373,28 @@ function appendTo(filePath: string | undefined): (text: string) => void {
   };
 }
 
+// The env variable action.yml binds the `crysk-secrets` input to in this step.
+// The shell pipes it on stdin (the flag below) and runs bun with it emptied, the
+// way setup.ts takes it: Bun hands a child the environment it STARTED with, so a
+// variable bun received would reach every `gh` call. A non-empty one here means
+// the step was wired wrongly, and the trigger refuses to run.
+const CRYSK_SECRETS_ENV = "CRYSK_SECRETS_INPUT";
+const CRYSK_SECRETS_STDIN_FLAG = "--crysk-secrets-stdin";
+
 if (import.meta.main) {
+  if ((process.env[CRYSK_SECRETS_ENV] ?? "") !== "") {
+    process.stderr.write(
+      `crysk: the crysk-secrets input reached trigger.ts through its environment, which every child it spawns would inherit; pipe it on stdin with ${CRYSK_SECRETS_STDIN_FLAG} and run bun with ${CRYSK_SECRETS_ENV} empty.\n`,
+    );
+    process.exit(1);
+  }
+  const cryskSecrets = process.argv.includes(CRYSK_SECRETS_STDIN_FLAG)
+    ? await Bun.stdin.text()
+    : "";
   process.exit(
     runCiTrigger({
       env: process.env,
+      cryskSecrets,
       gh: (args) => {
         const result = Bun.spawnSync(["gh", ...args], {
           stdout: "pipe",
