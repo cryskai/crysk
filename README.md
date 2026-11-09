@@ -54,9 +54,10 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    `npx -y crysk setup --ci` with your answers (writes `.github/workflows/crysk.yml`, or updates an existing `pr-hero.yml` in place, and the
    level's keys in `.crysk/config.json`, and prints a summary) and `npx -y crysk init`
    (writes a `REVIEW.md` scaffold when the repo has no review instructions), writes the repository's review instructions, and stores
-   one secret with `gh secret set`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription; `claude setup-token`
+   one secret with `gh secret set`: `CRYSK_CLAUDE_OAUTH_TOKEN` (subscription; `claude setup-token`
    prints it on any machine that has the Claude Code CLI, so this one does not need it) or
-   `ANTHROPIC_API_KEY` (pay as you go). Without an agent, run the same
+   `CRYSK_CLAUDE_API_KEY` (pay as you go). To run some steps on OpenCode models, it also sets the
+   `CRYSK_MODELS` variable and one `CRYSK_OPENCODE_*` secret per provider. Without an agent, run the same
    commands yourself and follow the [Quick path](docs/github-actions.md#quick-path).
 
 3. **Merge the workflow, `.crysk/` and `REVIEW.md` into the default branch.** A comment-triggered run
@@ -72,7 +73,7 @@ to install it (macOS with Homebrew) and to run `gh auth login`. It never blocks 
    --wait --json`, then hands the findings to `crysk-loop`, which replies to each one in its
    thread and pushes the fixes.
 
-Everything about the workflow (credentials, OpenCode routing, spend limits, the gate, error codes)
+Everything about the workflow (credentials, models and OpenCode, spend limits, the gate, error codes)
 is in [`docs/github-actions.md`](docs/github-actions.md).
 
 ## Requirements
@@ -99,18 +100,23 @@ whose binary needs no Bun on your machine.
 
 ### What a review bills against
 
-Crysk inherits whatever authentication your `claude` CLI already uses:
+A run uses exactly one Claude credential, chosen when it starts, in the order your
+`credentials.claude` sets ([Credentials](docs/configuration.md#credentials)):
 
-- **Signed in with a Claude subscription** → runs consume your **subscription quota**. No per-token
-  invoice arrives.
-- **`ANTHROPIC_API_KEY` exported in the environment** → `claude` picks it up and the same runs are
-  **billed as API usage**.
+- **Your Claude subscription** (`claude` signed in on this machine, or `CRYSK_CLAUDE_OAUTH_TOKEN` from
+  `claude setup-token`) → runs consume your **subscription quota**. No per-token invoice arrives.
+- **An Anthropic API key** (`CRYSK_CLAUDE_API_KEY`, or `ANTHROPIC_API_KEY`) → the same runs are **billed as
+  API usage**.
+
+The default order is the subscription first, so with both available the subscription runs and the key is
+not used: on macOS a Claude login always counts. To bill the key, put it first in your person config,
+`{"credentials": {"claude": ["api_key", "subscription"]}}`. The Claude CLI child sees only the chosen
+credential.
 
 The dollar figures Crysk prints — the cost band before a run, `crysk usage` after one — are
 always a **token-derived estimate**, because that is the only unit comparable across both models. On
-a subscription, read them as "how much of my window will this consume", not as a bill. If you keep an
-`ANTHROPIC_API_KEY` in a project `.env`, be deliberate about sourcing it into the shell you launch
-Crysk from: that single step is what moves a run from quota to invoice.
+a subscription, read them as "how much of my window will this consume", not as a bill. A step on an
+OpenCode model bills to that provider's credential instead (see [`docs/configuration.md`](docs/configuration.md)).
 
 ## Installation
 
@@ -261,8 +267,8 @@ and for a repo `git mv .prhero .crysk` (plain `mv` plus a `.gitignore` edit if t
 **Run `crysk config` to see which layer decided what.** It lists every key with its value, the
 layer it came from, and both file paths whether or not they exist. It never edits anything.
 
-Routing a model to a specific backend/provider, and how Crysk reads credentials for each backend,
-are their own topic — see [`docs/configuration.md`](docs/configuration.md).
+Which model each step runs on (`models`, per role, with fallbacks and effort), and how Crysk reads
+credentials for each backend, are their own topic — see [`docs/configuration.md`](docs/configuration.md).
 
 ### The one rule
 
@@ -280,7 +286,8 @@ never be able to enlarge *your* bill: on the two keys that spend, the team can o
 | `parity_trigger_paths` | **repo only** | Glob list. The parity hunter runs only when a changed path matches one — no globs, no parity hunter. |
 | `suspicion_priors` | **repo only** | `[{path, weight, reason}]` hints injected into hunter prompts — point them at your known hotspots. |
 | `summary.enabled` | both — team may only turn it **off** | Whether the engine-owned summarizer runs. Defaults to `true`, because it spends money and a silent opt-out would make the bill differ from the plan. |
-| `summary.model` | both | Model for that step. Defaults to whatever `prompts/summarizer.md` declares (`haiku`). |
+| `models` | **global only** | The models per role (`default`, `hunter.<key>`, `refuter`, `consolidate`, `scout`, `summary`, `judge`), each a list of one to three tried in order, e.g. `{"summary": ["claude:haiku-latest"]}`. Unset, each step runs the model its prompt declares. See [Models](docs/configuration.md#models). `summary.model` is gone: `"haiku"` still reads, with a warning; anything else is refused. |
+| `credentials` | **global only** | Which Claude credential a run uses, in order: `{"claude": ["subscription", "api_key"]}` (the default). See [Credentials](docs/configuration.md#credentials). |
 | `max_verification_steps` | both — team may only **lower** it | Cap on re-review verification spawns (item 7). Defaults to `8`; `0` is legal and pauses verification. |
 | `max_concurrent_steps` | both — team may only **lower** it | Cap on steps (hunters, refuters, verify, scout, summarizer) in flight at once. Unset means unlimited. Set it below a provider's concurrency limit (e.g. `8` for one that allows 10 in-flight requests) so a refuter fan-out does not draw HTTP 429s. |
 | `max_changed_lines` | both — team may only **lower** it | Line budget threshold before the size gate skips a review. Defaults to `4000`; `0` disables line budget check. |
