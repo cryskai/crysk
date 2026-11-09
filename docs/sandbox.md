@@ -1,10 +1,10 @@
 # CI sandbox
 
-`juanmaagd/pr-hero-sandbox` is a public scratch repository where the Crysk review
+`cryskai/crysk-sandbox` is a private scratch repository in the Crysk organization where the Crysk review
 action runs for real on GitHub's runners, against planted-bug pull requests. It exists so
 the pipeline and the Action can be run realistically, including their failure paths,
 without opening a PR on the product repo for every test. The goal is realistic runs
-that are cheap. The repo is public, so Actions minutes are free.
+that are cheap. The repo is private, so its Actions minutes count against the organization's plan.
 
 Code: `scripts/sandbox/` (runner, scenarios, rails). Tests: `test/sandbox/`, offline,
 under fakes. Run them with `bun test test/sandbox`.
@@ -29,7 +29,7 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   unexpected input), so it does not run this contract. The sandbox reads an error code under
   either prefix: a ref from before the rename (`fd28303`) writes `PRH-*`, which reads as the
   `CRYSK-*` code it became.
-- `init` creates the public repo if it is absent, and seeds `main` with the fixture's correct
+- `init` creates the private repo if it is absent, and seeds `main` with the fixture's correct
   sources, the product's scaffolded workflow, the repo config and the gotchas. The planted
   bug is not on `main`; each scenario commits it on its own branch. `init` sets no secret: it
   checks that `CRYSK_CLAUDE_OAUTH_TOKEN` is present and that `CRYSK_CLAUDE_API_KEY` is not
@@ -40,7 +40,7 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   the action's credential check counts only a `CRYSK_*` secret, and the Claude steps of every
   route run on it. `init` refuses before it changes the variable when the token is missing,
   with the commands the owner runs: `claude setup-token`, then
-  `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN --repo juanmaagd/pr-hero-sandbox`.
+  `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN --repo cryskai/crysk-sandbox`.
 - `--route` sets the models of every review in the sandbox. Under the default, `claude`,
   `init` deletes the `CRYSK_MODELS` variable if it is set, so every role runs the engine's
   default Claude models, which is production's stack. `opencode:<modelSnapshot>` sets
@@ -76,7 +76,7 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   so no review is billed per token. `init` refuses every route while `CRYSK_CLAUDE_API_KEY`
   is set on the sandbox, before it writes anything, because both routes run Claude and a
   `credentials` order that lists `api_key` would bill it; remove it with
-  `gh secret delete CRYSK_CLAUDE_API_KEY --repo juanmaagd/pr-hero-sandbox`. The old
+  `gh secret delete CRYSK_CLAUDE_API_KEY --repo cryskai/crysk-sandbox`. The old
   `ANTHROPIC_API_KEY` is not checked: the scaffold no longer passes it.
 - The `opencode:<modelSnapshot>` route runs reviews on one OpenCode model at cost 0, and its
   materiality judge on the Claude subscription's quota. The
@@ -152,7 +152,7 @@ after its run completed.
 
 The runner can reach one repository, and nothing else.
 
-- The target is hardcoded to `juanmaagd/pr-hero-sandbox`. Every `gh` and `git` call goes
+- The target is hardcoded to `cryskai/crysk-sandbox`. Every `gh` and `git` call goes
   through an allowlist (`scripts/sandbox/rails.ts`). A verb that is not listed is refused.
 - `gh` may view, create or clone only the sandbox repo, list its secrets (never set one), read
   its variables, set exactly `CRYSK_MODELS` (`-R <sandbox> --body <value>`) and delete exactly

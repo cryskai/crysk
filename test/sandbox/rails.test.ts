@@ -35,7 +35,7 @@ describe("gh rail: the sandbox repo is the only target", () => {
       ["secret", "list", "-R", SANDBOX_REPO, "--json", "name"],
       ["variable", "get", "CRYSK_MODELS", `--repo=${SANDBOX_REPO}`],
       ["repo", "view", SANDBOX_REPO, "--json", "name"],
-      ["repo", "create", SANDBOX_REPO, "--public"],
+      ["repo", "create", SANDBOX_REPO, "--private"],
       ["repo", "clone", SANDBOX_REPO, "/tmp/x"],
       ["api", sandboxApi("commits/abc/status")],
       ["api", sandboxApi("actions/runs/1/artifacts")],
@@ -309,7 +309,7 @@ describe("gh rail: the models variable is the only variable written", () => {
         "delete",
         MODELS_VARIABLE,
         "--org",
-        "juanmaagd",
+        "cryskai",
         "-R",
         SANDBOX_REPO,
       ],
@@ -568,8 +568,8 @@ describe("scenario branches", () => {
 describe("gh rail: short-flag clusters on every verb", () => {
   test("refuses a single-dash argument longer than two characters, on any verb", () => {
     const refused: string[][] = [
-      ["api", "repos/juanmaagd/pr-hero-sandbox", "-iX", "DELETE"],
-      ["api", "repos/juanmaagd/pr-hero-sandbox/issues", "-if", "title=x"],
+      ["api", "repos/cryskai/crysk-sandbox", "-iX", "DELETE"],
+      ["api", "repos/cryskai/crysk-sandbox/issues", "-if", "title=x"],
       [
         "pr",
         "close",
@@ -577,7 +577,7 @@ describe("gh rail: short-flag clusters on every verb", () => {
         "-R",
         SANDBOX_REPO,
         "-dR",
-        "juanmaagd/other",
+        "cryskai/other",
         "--delete-branch",
       ],
     ];
@@ -703,12 +703,12 @@ describe("gh api: dot segments and percent-encoding are refused before the prefi
     const refused: string[][] = [
       [
         "api",
-        "repos/juanmaagd/pr-hero-sandbox/git/refs/heads/sandbox/../main",
+        "repos/cryskai/crysk-sandbox/git/refs/heads/sandbox/../main",
         "-X",
         "DELETE",
       ],
-      ["api", "repos/juanmaagd/pr-hero-sandbox/%2e%2e/x"],
-      ["api", "repos/juanmaagd/pr-hero-sandbox/../pr-hero/pulls"],
+      ["api", "repos/cryskai/crysk-sandbox/%2e%2e/x"],
+      ["api", "repos/cryskai/crysk-sandbox/../pr-hero/pulls"],
     ];
     for (const args of refused) {
       expect(() => assertGhArgs(args)).toThrow(RailViolation);
@@ -731,7 +731,7 @@ describe("git rail: the remote is read only as origin's fetch and push URLs", ()
       ["remote", "get-url", "upstream"],
       ["remote", "get-url", "--push", "upstream"],
       ["remote", "get-url", "--all", "origin"],
-      ["push", "https://github.com/juanmaagd/pr-hero-sandbox.git", "main"],
+      ["push", "https://github.com/cryskai/crysk-sandbox.git", "main"],
     ];
     for (const args of refused) {
       expect(() => assertGitArgs(args)).toThrow(RailViolation);
@@ -776,7 +776,7 @@ const happyGh: GhScript = (args, world) => {
   }
   if (args[0] === "pr" && args[1] === "list") return ok("[]");
   if (args[0] === "pr" && args[1] === "create") {
-    return ok("https://github.com/juanmaagd/pr-hero-sandbox/pull/7\n");
+    return ok("https://github.com/cryskai/crysk-sandbox/pull/7\n");
   }
   if (args[0] === "run" && args[1] === "list") {
     return ok(
@@ -848,9 +848,9 @@ describe("every real call site passes the hardened rails", () => {
     const scenarioPr = {
       number: 7,
       headRefName: "sandbox/smoke-20261016T143000Z",
-      url: "https://github.com/juanmaagd/pr-hero-sandbox/pull/7",
+      url: "https://github.com/cryskai/crysk-sandbox/pull/7",
       isCrossRepository: false,
-      headRepositoryOwner: { login: "juanmaagd" },
+      headRepositoryOwner: { login: "cryskai" },
     };
     const inFlight = {
       databaseId: 42,
