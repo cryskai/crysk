@@ -410,7 +410,8 @@ export function buildResolvedRoutePlan(
         stepKey: "scout",
         role: "scout",
         modelRole: "scout",
-        cliModel: input.scout.model ?? input.cliModel,
+        // `--model` outranks `--scout-model`, as the scout step records it.
+        cliModel: input.cliModel ?? input.scout.model,
         frontmatterModel:
           input.scout.frontmatterModel ?? input.scout.defaultModel,
         models: input.models,

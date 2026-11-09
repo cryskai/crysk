@@ -246,3 +246,21 @@ describe("the removed routing (S2)", () => {
     );
   });
 });
+
+describe("--model outranks --scout-model on the scout's route", () => {
+  // The scout step records `--model > --scout-model` (pipeline.ts runScout,
+  // resolveModel); the route the backend is sent must agree, or the CLI runs
+  // one model while the step reports another.
+  test("with both, the scout is sent --model", () => {
+    const p = plan({
+      cliModel: "opus",
+      scout: { model: "haiku", defaultModel: "sonnet" },
+    });
+    expect(wire(p).scout).toBe("claude --model opus");
+  });
+
+  test("--scout-model alone still routes the scout", () => {
+    const p = plan({ scout: { model: "haiku", defaultModel: "sonnet" } });
+    expect(wire(p).scout).toBe("claude --model haiku");
+  });
+});
