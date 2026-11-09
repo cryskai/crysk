@@ -1509,6 +1509,33 @@ describe("decidePublication — the pure table", () => {
     expect(`${summary}${plan.rendered.annotation}`).not.toContain("SENTINEL");
   });
 
+  // Setup joins one refusal per provider with "; ", so two refused _OAUTH
+  // secrets must each still point at their own provider's _API_KEY.
+  test("two refused non-openai _OAUTH secrets each point at their own _API_KEY", () => {
+    const detail = ["deepseek", "zai"]
+      .map(
+        (p) =>
+          chooseOpenCodeSecret(p, [`CRYSK_OPENCODE_${p.toUpperCase()}_OAUTH`])
+            ?.problem ?? "",
+      )
+      .join("; ");
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail,
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.annotation).not.toContain("re-set the CRYSK_* secret");
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY");
+    expect(summary).toContain("gh secret set CRYSK_OPENCODE_ZAI_API_KEY");
+  });
+
   test("a malformed auth-store record keeps its OpenCode store fix, pointing CI at the CRYSK_OPENCODE_* secret", () => {
     const plan = decidePublication({
       record: record(),
