@@ -88,8 +88,8 @@ describe("withUsageClass", () => {
     let thrown: unknown;
     try {
       withUsageClass({ kind: "config-parse", source: "repo-config" }, () => {
-        throw new CliUsageError("routing bad", {
-          cls: { kind: "config-parse", source: "routing" },
+        throw new CliUsageError("extra hunters bad", {
+          cls: { kind: "config-parse", source: "extra-hunters" },
         });
       });
     } catch (error) {
@@ -97,7 +97,7 @@ describe("withUsageClass", () => {
     }
     expect((thrown as CliUsageError).cls).toEqual({
       kind: "config-parse",
-      source: "routing",
+      source: "extra-hunters",
     });
   });
 

@@ -248,23 +248,9 @@ describe("routing is gone (S2)", () => {
     );
   });
 
-  test("a non-empty CI routing input fails the step with the new form", async () => {
-    const { dir, cleanup } = await scratch();
-    try {
-      await expect(
-        materializeCiOpenCodeData({
-          home: dir,
-          env: { HOME: dir },
-          routing: JSON.stringify(routing.routing),
-          opencodeAuth: "",
-        }),
-      ).rejects.toThrow(`CI routing input: ${ROUTING_GONE}`);
-      expect(existsSync(path.join(dir, ".crysk", "config.json"))).toBe(false);
-    } finally {
-      await cleanup();
-    }
-  });
-
+  // The setup step's routing backstop is gone (E-f F0, D6): the trigger stops a
+  // workflow that still passes the input with PRH-INPUT-REMOVED, and setup
+  // never receives it.
   test("an empty CI routing input is still Claude-default CI", async () => {
     const { dir, cleanup } = await scratch();
     try {

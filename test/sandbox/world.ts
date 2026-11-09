@@ -6,8 +6,8 @@
 // checked against what a run would have left behind, not against a script.
 //
 // The product behaviour it encodes is the minimum the scenarios rely on: no model
-// credential input gives PRH-CRED-MISSING, a malformed routing literal gives
-// PRH-ROUTING-INVALID, a scaffold gotchas file on the head gives PRH-GOTCHAS-MISSING,
+// credential input gives PRH-CRED-MISSING, a routing input with a value gives
+// PRH-INPUT-REMOVED, a scaffold gotchas file on the head gives PRH-GOTCHAS-MISSING,
 // a review upserts the report for its head and removes the
 // outcome comments of earlier runs. Live runs are the proof of the product; this
 // fake is the proof of the runner's sequencing and its reads.
@@ -115,7 +115,7 @@ interface CommentRow {
 // (T2e).
 type Outcome =
   | "credential"
-  | "routing"
+  | "removed-input"
   | "gotchas"
   | "review"
   | "review-advisory"
@@ -165,7 +165,7 @@ const OUTCOME_CODE: Record<
   string
 > = {
   credential: "PRH-CRED-MISSING",
-  routing: "PRH-ROUTING-INVALID",
+  "removed-input": "PRH-INPUT-REMOVED",
   gotchas: "PRH-GOTCHAS-MISSING",
   "hunters-failed": "PRH-HUNTERS-FAILED",
 };
@@ -411,12 +411,12 @@ export class FakeGithub {
     ) {
       return "credential";
     }
-    if (/^\s+routing: "\{not json"$/m.test(workflow)) return "routing";
+    if (/^\s+routing: "\{not json"$/m.test(workflow)) return "removed-input";
     if (
       this.options.staleRecordsBreakRun === true &&
       /trigger\.json\.tmp/.test(workflow)
     ) {
-      return "routing";
+      return "removed-input";
     }
     // The CLI's gate reads the gotchas file (review-pr.ts validateGotchas), after
     // routing and before any spend.

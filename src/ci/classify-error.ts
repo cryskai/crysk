@@ -5,9 +5,9 @@
 //
 // Each mapping is justified by the throw site and by the catalog text of its code
 // (src/ci/outcome.ts ERROR_CATALOG):
-// - The route classes (unmapped, ambiguous, spend-disabled) have no throw site
-//   since the alias-keyed routing was removed (odd/tasks/role-model-routing.md S2):
-//   a model is now a name that parses or a usage error that says how to write it.
+// - No route class: the alias-keyed routing and its codes were removed
+//   (odd/tasks/role-model-routing.md S2, E-f F0). A model is now a name that parses
+//   or a usage error that says how to write it.
 // - OpenCodeVersionAdmissionError (src/transport-registry.ts) with reason "version"
 //   -> capability/version_unsupported: the pinned version-pair checks
 //   (admitOpenCodeVersionPair, loadOpenCodeSdk); PRH-RUNTIME-UNAVAILABLE calls the

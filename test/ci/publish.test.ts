@@ -892,19 +892,19 @@ describe("decidePublication — the pure table", () => {
       expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
     });
 
-    test("a CLI error is rendered from its class: a route class names the route code and its owner", () => {
+    test("a CLI error is rendered from its class: a config class names its code and its owner", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
         cliRecord: {
           v: 1,
           outcome: "error",
-          cls: { kind: "route", reason: "unmapped" },
+          cls: { kind: "config-parse", source: "extra-hunters" },
         },
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-ROUTE-UNRESOLVABLE");
+      expect(plan.rendered.code).toBe("PRH-PROMPTSET-INVALID");
       expect(plan.rendered.owner).toBe("config");
     });
 
@@ -1249,8 +1249,9 @@ describe("decidePublication — the pure table", () => {
     const summary = plan.rendered.summary.join("\n");
     expect(summary).toContain("gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
     expect(summary).toContain(
-      "set models per role (`models`) on the Crysk platform",
+      "The routing input becomes the `models` input: set your models per role in the CRYSK_MODELS variable",
     );
+    expect(plan.rendered.annotation).toContain("vars.CRYSK_MODELS");
   });
 
   test("a removed-inputs record survives the publisher's own reading of trigger.json", () => {
@@ -1378,16 +1379,16 @@ describe("decidePublication — the pure table", () => {
       cliStarted: false,
       setup: {
         v: 1,
-        cls: { kind: "config-parse", source: "routing" },
-        detail: "the routing input is not valid JSON",
+        cls: { kind: "config-parse", source: "models-input" },
+        detail: "the models input is not valid JSON",
       },
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-ROUTING-INVALID");
+    expect(plan.rendered.code).toBe("PRH-CONFIG-INVALID");
     expect(plan.rendered.owner).toBe("config");
     expect(plan.rendered.annotation).toContain(
-      "the routing input is not valid JSON",
+      "the models input is not valid JSON",
     );
   });
 
@@ -1809,20 +1810,18 @@ describe("runPublish — the shell", () => {
       cliRecord: {
         v: 1,
         outcome: "error",
-        cls: { kind: "route", reason: "unmapped" },
+        cls: { kind: "config-parse", source: "extra-hunters" },
       },
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain(
-      "::error title=crysk PRH-ROUTE-UNRESOLVABLE::",
-    );
-    expect(run.summary).toContain("### PRH-ROUTE-UNRESOLVABLE");
+    expect(run.stdout).toContain("::error title=crysk PRH-PROMPTSET-INVALID::");
+    expect(run.summary).toContain("### PRH-PROMPTSET-INVALID");
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
     expect(status?.args).toContain("state=error");
     expect(
       status?.args.some((arg) =>
-        arg.startsWith("description=PRH-ROUTE-UNRESOLVABLE: "),
+        arg.startsWith("description=PRH-PROMPTSET-INVALID: "),
       ),
     ).toBe(true);
     expect(commentPost(run.calls)?.args).toContain(
@@ -1837,7 +1836,7 @@ describe("runPublish — the shell", () => {
       cliRecord: {
         v: 1,
         outcome: "error",
-        cls: { kind: "route", reason: "unmapped" },
+        cls: { kind: "config-parse", source: "extra-hunters" },
         head_sha: REVIEWED_HEAD,
       },
     });
@@ -2557,15 +2556,15 @@ describe("runPublish — the shell", () => {
       record: record(),
       setup: {
         v: 1,
-        cls: { kind: "config-parse", source: "routing" },
-        detail: "the routing input is not valid JSON",
+        cls: { kind: "config-parse", source: "models-input" },
+        detail: "the models input is not valid JSON",
       },
     });
-    expect(run.stdout).toContain("::error title=crysk PRH-ROUTING-INVALID::");
+    expect(run.stdout).toContain("::error title=crysk PRH-CONFIG-INVALID::");
     expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(
-      "description=PRH-ROUTING-INVALID: The routing variable is invalid: the routing input is not valid JSON",
+      "description=PRH-CONFIG-INVALID: The models input is invalid: the models input is not valid JSON",
     );
     expect(commentPost(run.calls)).toBeDefined();
   });

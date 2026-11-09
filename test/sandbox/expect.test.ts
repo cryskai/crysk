@@ -137,7 +137,7 @@ describe("evaluateCheck: each kind passes and fails on its own fact", () => {
         .pass,
     ).toBe(true);
     expect(
-      evaluateCheck({ kind: "outcome", code: "PRH-ROUTING-INVALID" }, withCode)
+      evaluateCheck({ kind: "outcome", code: "PRH-INPUT-REMOVED" }, withCode)
         .pass,
     ).toBe(false);
     expect(evaluateCheck({ kind: "no-outcome" }, withCode).pass).toBe(false);
@@ -153,7 +153,7 @@ describe("evaluateCheck: each kind passes and fails on its own fact", () => {
     };
     expect(evaluateCheck(check, err).pass).toBe(true);
     expect(
-      evaluateCheck(check, obs({ status: errorStatus("PRH-ROUTING-INVALID") }))
+      evaluateCheck(check, obs({ status: errorStatus("PRH-INPUT-REMOVED") }))
         .pass,
     ).toBe(false);
     expect(evaluateCheck(check, obs({ status: undefined })).detail).toBe(
@@ -306,8 +306,8 @@ const RECORDED: Record<string, { pass: Observation; fail: Observation }> = {
   },
   "bad-routing/0": {
     pass: obs({
-      status: errorStatus("PRH-ROUTING-INVALID"),
-      comments: [outcome("PRH-ROUTING-INVALID")],
+      status: errorStatus("PRH-INPUT-REMOVED"),
+      comments: [outcome("PRH-INPUT-REMOVED")],
     }),
     fail: obs({
       status: errorStatus("PRH-CRED-MISSING"),

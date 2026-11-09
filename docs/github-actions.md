@@ -1339,7 +1339,11 @@ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRY
 
 In the workflow, delete the old lines under `with:` and pass the secrets in one `crysk-secrets: |` block, one NAME=value line per secret, for example `CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}`.
 
-The routing input has no replacement input: set models per role (`models`) on the Crysk platform.
+The routing input becomes the `models` input: set your models per role in the CRYSK_MODELS variable, and pass it as `models: ${{ vars.CRYSK_MODELS }}` (a repository connected to the Crysk platform takes them from its model settings instead).
+
+```bash
+gh variable set CRYSK_MODELS --body '{"default": ["claude:sonnet-latest"]}'
+```
 
 Then re-run the workflow:
 
@@ -1529,68 +1533,6 @@ gh pr comment {pr} --body "/crysk review"
 
 On a workflow set up before the rename, comment `/pr-hero review` instead.
 
-### PRH-ROUTING-MISSING
-
-**Owner:** your configuration
-
-**What:** OpenCode auth is set but the routing variable is empty, so the default Claude route is used
-
-**Why:** the run would fail later at the Claude credential check
-
-**Fix:**
-
-```bash
-gh variable set CRYSK_ROUTING --body "$(jq -c .routing ~/.crysk/config.json)"
-```
-
-On a machine set up before the rename the config is ~/.prhero/config.json: use that path in the command.
-
-A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
-
-### PRH-ROUTING-INVALID
-
-**Owner:** your configuration
-
-**What:** The routing variable is invalid: {detail}
-
-**Why:** Crysk cannot tell which backend and model each agent should use
-
-**Fix:**
-
-Edit the JSON, then set it again:
-
-```bash
-gh variable set CRYSK_ROUTING --body "$(jq -c . routing.json)"
-```
-
-A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
-
-### PRH-ROUTE-UNRESOLVABLE
-
-**Owner:** your configuration
-
-**What:** Model routing for {step} has no usable route: {detail}
-
-**Why:** every agent needs exactly one backend, provider and model
-
-**Fix**, by reason:
-
-#### `unmapped`
-
-Add or complete this model's route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename), with an explicit `modelSnapshot`.
-
-#### `ambiguous`
-
-Remove the duplicate mapping for this route from CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
-
-#### `spend-disabled`
-
-Enable spend for this route in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
-
-#### `multiple-opencode-providers`
-
-Keep one OpenCode provider per review in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
-
 ### PRH-MODEL-UNAVAILABLE
 
 **Owner:** provider
@@ -1663,6 +1605,30 @@ Fix the file, then check it:
 
 ```bash
 crysk review --pr {pr} --dry-run
+```
+
+#### `models-input`
+
+The workflow's `models` input, filled from the `CRYSK_MODELS` variable, is not a valid models object. Crysk names the input and never echoes its value.
+
+**What:** The models input is invalid: {detail}
+
+**Why:** Crysk refuses to guess which model each role should use
+
+**Fix:**
+
+Fix the models per role, a JSON object from role to model list, and set the variable again:
+
+```bash
+gh variable set CRYSK_MODELS --body "$(jq -c . models.json)"
+```
+
+The workflow passes it as `models: ${{ vars.CRYSK_MODELS }}`.
+
+Then re-run the workflow:
+
+```bash
+gh run rerun {runId}
 ```
 
 ### PRH-TOKEN-PERMISSION

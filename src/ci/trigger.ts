@@ -95,7 +95,8 @@ export const REMOVED_INPUT_REPLACEMENT: Readonly<Record<RemovedInput, string>> =
     "claude-token": `pass ${LEGACY_SECRET_REPLACEMENT.CLAUDE_CODE_OAUTH_TOKEN} in the crysk-secrets input`,
     "anthropic-api-key": `pass ${LEGACY_SECRET_REPLACEMENT.ANTHROPIC_API_KEY} in the crysk-secrets input`,
     "opencode-auth": `pass ${LEGACY_SECRET_REPLACEMENT.OPENCODE_AUTH_JSON} in the crysk-secrets input`,
-    routing: "set models per role (`models`) on the Crysk platform",
+    routing:
+      "pass the models per role in the `models` input, from `vars.CRYSK_MODELS`",
   };
 
 // The env flag action.yml binds for each removed input.

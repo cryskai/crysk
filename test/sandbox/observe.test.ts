@@ -354,10 +354,10 @@ describe("classifyPath", () => {
       comments: [],
       status: {
         state: "error",
-        description: "PRH-ROUTE-UNRESOLVABLE: no route",
+        description: "PRH-CONFIG-INVALID: bad config",
       },
     });
-    expect(classifyPath(obs)).toBe("error:PRH-ROUTE-UNRESOLVABLE");
+    expect(classifyPath(obs)).toBe("error:PRH-CONFIG-INVALID");
   });
 
   test("hunters-failed: an outcome comment that names it", () => {

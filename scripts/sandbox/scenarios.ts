@@ -185,17 +185,17 @@ export const SCENARIOS: readonly Scenario[] = [
   {
     name: "bad-routing",
     description:
-      "the routing input is malformed JSON: PRH-ROUTING-INVALID, an error status, no report ($0)",
+      "the workflow passes the removed routing input: PRH-INPUT-REMOVED, an error status, no report ($0)",
     phases: [
       {
         action: { kind: "open", variant: "bad-routing" },
         wait: "pull_request",
         checks: [
-          { kind: "outcome", code: "PRH-ROUTING-INVALID" },
+          { kind: "outcome", code: "PRH-INPUT-REMOVED" },
           {
             kind: "status",
             state: "error",
-            descriptionStartsWith: "PRH-ROUTING-INVALID",
+            descriptionStartsWith: "PRH-INPUT-REMOVED",
           },
           { kind: "no-report" },
         ],

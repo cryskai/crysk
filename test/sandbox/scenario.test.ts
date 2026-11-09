@@ -78,13 +78,13 @@ describe("run: the scenarios against the fake repository", () => {
     ).toBe(true);
   });
 
-  test("bad-routing exits 0: a malformed routing input is PRH-ROUTING-INVALID", async () => {
+  test("bad-routing exits 0: a routing input with a value is PRH-INPUT-REMOVED", async () => {
     const world = new FakeGithub({ ref: REF });
     const h = world.harness();
     expect(await runScenarios(h.deps, ["bad-routing"], OPTIONS)).toBe(0);
     expect(
       h.logs.some((l) =>
-        /PASS {2}bad-routing: outcome comment with code PRH-ROUTING-INVALID/.test(
+        /PASS {2}bad-routing: outcome comment with code PRH-INPUT-REMOVED/.test(
           l,
         ),
       ),

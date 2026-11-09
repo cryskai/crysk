@@ -44,8 +44,8 @@ const CREDENTIAL_LINES = [
 
 const ROUTING_LINE = `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`;
 
-// A literal that is valid YAML and invalid routing JSON. The setup step rejects
-// it as config-parse/routing, which the publisher renders as PRH-ROUTING-INVALID.
+// A literal that is valid YAML. The routing input is gone (S2): the trigger stops
+// a workflow that passes it any value, which the publisher renders as PRH-INPUT-REMOVED.
 const BAD_ROUTING_LINE = '          routing: "{not json"';
 
 // The scaffold names its gate mode on its own line (src/ci/setup.ts writes it

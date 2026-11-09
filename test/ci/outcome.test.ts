@@ -25,6 +25,7 @@ import {
   ownerOf,
   parseCliRecord,
   parseOutcomeCode,
+  parseSetupRecord,
   parseTriggerRecord,
   renderCode,
   renderError,
@@ -120,21 +121,15 @@ const SAMPLES: Sample[] = [
     owner: "config",
   },
   {
-    name: "trigger routing-missing",
-    cls: { kind: "trigger", check: "routing-missing" },
-    code: "PRH-ROUTING-MISSING",
-    owner: "config",
-  },
-  {
     name: "trigger pr-unresolved",
     cls: { kind: "trigger", check: "pr-unresolved" },
     code: "PRH-PR-UNRESOLVED",
     owner: "config",
   },
   {
-    name: "config-parse routing",
-    cls: { kind: "config-parse", source: "routing" },
-    code: "PRH-ROUTING-INVALID",
+    name: "config-parse models-input",
+    cls: { kind: "config-parse", source: "models-input" },
+    code: "PRH-CONFIG-INVALID",
     owner: "config",
   },
   {
@@ -171,30 +166,6 @@ const SAMPLES: Sample[] = [
     name: "gotchas placeholder",
     cls: { kind: "gotchas", reason: "placeholder" },
     code: "PRH-GOTCHAS-MISSING",
-    owner: "config",
-  },
-  {
-    name: "route unmapped",
-    cls: { kind: "route", reason: "unmapped" },
-    code: "PRH-ROUTE-UNRESOLVABLE",
-    owner: "config",
-  },
-  {
-    name: "route ambiguous",
-    cls: { kind: "route", reason: "ambiguous" },
-    code: "PRH-ROUTE-UNRESOLVABLE",
-    owner: "config",
-  },
-  {
-    name: "route spend-disabled",
-    cls: { kind: "route", reason: "spend-disabled" },
-    code: "PRH-ROUTE-UNRESOLVABLE",
-    owner: "config",
-  },
-  {
-    name: "route multiple-opencode-providers",
-    cls: { kind: "route", reason: "multiple-opencode-providers" },
-    code: "PRH-ROUTE-UNRESOLVABLE",
     owner: "config",
   },
   {
@@ -523,9 +494,9 @@ describe("codeOf and ownerOf: every class variant", () => {
 });
 
 describe("the code list and its catalog", () => {
-  test("ERROR_CODES holds the 25 distinct codes", () => {
-    expect(ERROR_CODES).toHaveLength(25);
-    expect(new Set(ERROR_CODES).size).toBe(25);
+  test("ERROR_CODES holds the 22 distinct codes", () => {
+    expect(ERROR_CODES).toHaveLength(22);
+    expect(new Set(ERROR_CODES).size).toBe(22);
     for (const code of ERROR_CODES) expect(code.startsWith("PRH-")).toBe(true);
   });
 
@@ -1191,21 +1162,6 @@ describe("renderCode and renderError: the annotation", () => {
     expect(openai.summary.join("\n")).not.toContain("OPENCODE_AUTH_JSON");
   });
 
-  test("a route reason picks its own fix", () => {
-    const ambiguous = renderError(
-      { kind: "route", reason: "ambiguous" },
-      { step: "hunter" },
-      "action",
-    );
-    expect(ambiguous.summary.join("\n")).toContain("duplicate mapping");
-    const multiple = renderError(
-      { kind: "route", reason: "multiple-opencode-providers" },
-      {},
-      "action",
-    );
-    expect(multiple.summary.join("\n")).toContain("one OpenCode provider");
-  });
-
   test("the annotation Fix is the real fixing step, not the first command, for every code and variant", () => {
     const fixOf = (annotation: string): string => {
       const start = annotation.indexOf("Fix: ");
@@ -1270,13 +1226,7 @@ describe("renderCode and renderError: the annotation", () => {
     );
   });
 
-  test("no rendered annotation or summary carries a raw credential, capability, route or transport token", () => {
-    const routeReasons = [
-      "unmapped",
-      "ambiguous",
-      "spend-disabled",
-      "multiple-opencode-providers",
-    ] as const;
+  test("no rendered annotation or summary carries a raw credential, capability or transport token", () => {
     const credentialClasses = Object.keys(CREDENTIAL_EXPECTED) as Array<
       keyof typeof CREDENTIAL_EXPECTED
     >;
@@ -1290,7 +1240,6 @@ describe("renderCode and renderError: the annotation", () => {
       ...CAPABILITY_ISSUES.map(
         (issue): ErrorClass => ({ kind: "capability", issue }),
       ),
-      ...routeReasons.map((reason): ErrorClass => ({ kind: "route", reason })),
       ...transportCauses.map(
         (cause): ErrorClass => ({ kind: "transport", cause }),
       ),
@@ -1298,7 +1247,6 @@ describe("renderCode and renderError: the annotation", () => {
     const tokens: string[] = [
       ...credentialClasses,
       ...CAPABILITY_ISSUES,
-      ...routeReasons,
       ...transportCauses,
     ];
     for (const cls of classes) {
@@ -1778,22 +1726,6 @@ describe("parseCliRecord — the cli.json contract", () => {
       { v: 1, outcome: "error", cls: { kind: "unknown" } },
     ],
     [
-      "error, route unmapped",
-      { v: 1, outcome: "error", cls: { kind: "route", reason: "unmapped" } },
-    ],
-    [
-      "error, route ambiguous",
-      { v: 1, outcome: "error", cls: { kind: "route", reason: "ambiguous" } },
-    ],
-    [
-      "error, route spend-disabled",
-      {
-        v: 1,
-        outcome: "error",
-        cls: { kind: "route", reason: "spend-disabled" },
-      },
-    ],
-    [
       "error, capability version_unsupported",
       {
         v: 1,
@@ -1844,14 +1776,6 @@ describe("parseCliRecord — the cli.json contract", () => {
       },
     ],
     [
-      "error, config-parse for routing",
-      {
-        v: 1,
-        outcome: "error",
-        cls: { kind: "config-parse", source: "routing" },
-      },
-    ],
-    [
       "error, config-parse for extra hunters",
       {
         v: 1,
@@ -1886,14 +1810,6 @@ describe("parseCliRecord — the cli.json contract", () => {
     [
       "error with a class the CLI never writes",
       text({ v: 1, outcome: "error", cls: { kind: "github", status: 403 } }),
-    ],
-    [
-      "error with a route reason outside the CLI's set",
-      text({
-        v: 1,
-        outcome: "error",
-        cls: { kind: "route", reason: "multiple-opencode-providers" },
-      }),
     ],
     [
       "error with a capability issue outside the CLI's set",
@@ -2418,17 +2334,102 @@ describe("actionsRunUrl — the run a pending belongs to", () => {
   });
 });
 
-// A workflow scaffolded before the rename passes only vars.PRHERO_ROUTING to
-// the action, so the routing fixes must name it, not only CRYSK_ROUTING.
-describe("routing fixes name the pre-rename variable too", () => {
-  test("PRH-ROUTING-MISSING points a pre-rename workflow at PRHERO_ROUTING", () => {
+// F0 (odd/tasks/role-model-routing.md, E-f): the alias-keyed routing is gone (S2), and
+// its codes with it. A malformed `models` input, which the setup step reads from
+// vars.CRYSK_MODELS (D1), is a variant of PRH-CONFIG-INVALID.
+describe("the routing codes are gone, and a malformed models input is PRH-CONFIG-INVALID", () => {
+  const REMOVED = [
+    "PRH-ROUTING-MISSING",
+    "PRH-ROUTING-INVALID",
+    "PRH-ROUTE-UNRESOLVABLE",
+  ];
+
+  test("no catalogued code is a removed routing code", () => {
+    for (const code of REMOVED) {
+      expect((ERROR_CODES as readonly string[]).includes(code), code).toBe(
+        false,
+      );
+      expect(Object.keys(ERROR_CATALOG), code).not.toContain(code);
+    }
+  });
+
+  // Accepted as part of the clean break (L44): an outcome comment an older engine
+  // posted with a removed code reads as no code.
+  test("an old outcome comment that names a removed routing code reads as no code", () => {
+    for (const code of REMOVED) {
+      const body = `${OUTCOME_MARKER_PREFIX}v=1 head=unknown run=7 attempt=1 -->\n\n### ${code}\n\nbody`;
+      expect(parseOutcomeCode(body), code).toBeNull();
+    }
+  });
+
+  test("a CLI record naming a route class or the routing source is refused", () => {
+    for (const cls of [
+      { kind: "route", reason: "unmapped" },
+      { kind: "route", reason: "ambiguous" },
+      { kind: "route", reason: "spend-disabled" },
+      { kind: "config-parse", source: "routing" },
+      // The setup step's class, never the CLI's.
+      { kind: "config-parse", source: "models-input" },
+    ]) {
+      expect(
+        parseCliRecord(JSON.stringify({ v: 1, outcome: "error", cls })),
+        JSON.stringify(cls),
+      ).toBeUndefined();
+    }
+  });
+
+  test("a setup record reads the models-input class, and refuses the routing source", () => {
+    const detail = "the models input is not valid JSON";
+    expect(
+      parseSetupRecord(
+        JSON.stringify({
+          v: 1,
+          cls: { kind: "config-parse", source: "models-input" },
+          detail,
+        }),
+      ),
+    ).toEqual({
+      v: 1,
+      cls: { kind: "config-parse", source: "models-input" },
+      detail,
+    });
+    expect(
+      parseSetupRecord(
+        JSON.stringify({
+          v: 1,
+          cls: { kind: "config-parse", source: "routing" },
+          detail,
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("a malformed models input renders PRH-CONFIG-INVALID, naming the input and vars.CRYSK_MODELS", () => {
     const rendered = renderError(
-      { kind: "trigger", check: "routing-missing" },
-      {},
+      { kind: "config-parse", source: "models-input" },
+      { detail: "the models input is not valid JSON", runId: "123" },
       "action",
     );
-    expect(rendered.what).not.toContain("CRYSK_ROUTING is empty");
-    expect(rendered.summary.join("\n")).toContain("reads PRHERO_ROUTING");
-    expect(rendered.annotation).toContain("PRHERO_ROUTING");
+    expect(rendered.code).toBe("PRH-CONFIG-INVALID");
+    expect(rendered.owner).toBe("config");
+    expect(rendered.what).toBe(
+      "The models input is invalid: the models input is not valid JSON",
+    );
+    const summary = rendered.summary.join("\n");
+    expect(summary).toContain("CRYSK_MODELS");
+    expect(summary).not.toContain(".crysk/config.json");
+    expect(rendered.annotation).toContain("vars.CRYSK_MODELS");
+    expect(`${summary}\n${rendered.annotation}`).not.toContain("CRYSK_ROUTING");
+  });
+
+  // The touched existing behavior: the repo-config source keeps the file's wording.
+  test("a malformed repo config still renders the .crysk/config.json wording", () => {
+    const rendered = renderError(
+      { kind: "config-parse", source: "repo-config" },
+      { detail: "bad key" },
+      "action",
+    );
+    expect(rendered.code).toBe("PRH-CONFIG-INVALID");
+    expect(rendered.what).toBe(".crysk/config.json is invalid: bad key");
   });
 });

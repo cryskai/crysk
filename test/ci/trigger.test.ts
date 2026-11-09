@@ -2915,7 +2915,7 @@ describe("the trigger stops a workflow that still passes a removed input", () =>
       "the claude-token input is gone: pass CRYSK_CLAUDE_OAUTH_TOKEN in the crysk-secrets input",
     );
     expect(run.stdout).toContain(
-      "the routing input is gone: set models per role (`models`) on the Crysk platform",
+      "the routing input is gone: pass the models per role in the `models` input, from `vars.CRYSK_MODELS`",
     );
     expect(run.stdout).not.toContain("SECRET-VALUE");
   });
