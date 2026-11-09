@@ -293,6 +293,13 @@ runs:
         # the CLI's own variable. A job-level ANTHROPIC_API_KEY or
         # CLAUDE_CODE_OAUTH_TOKEN is not read either: run.ts drops them.
         CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
+        # Emptied for the whole CLI process, as the old input bindings did: a
+        # job-level value must not reach git, gh or the OpenCode server child
+        # (OpenCode reads ANTHROPIC_API_KEY for its own anthropic provider). The
+        # Claude CLI child gets the chosen credential from the run env instead.
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
         GITHUB_ACTIONS: 'true'
         CI: 'true'
         NO_COLOR: '1'

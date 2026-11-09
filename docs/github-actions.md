@@ -11,7 +11,7 @@ require `crysk` in branch protection to block a merge on them. `mode: advisory` 
 > removed `anthropic-api-key`, `claude-token`, `routing` and `opencode-auth` inputs, which now stop the
 > run with [`PRH-INPUT-REMOVED`](#prh-input-removed) as soon as one holds a value. Until the scaffold is
 > updated, replace those lines with the `crysk-secrets` block under
-> [`CRYSK_*` secrets](#crysk_-secrets-upcoming) and set the `CRYSK_*` secrets it names.
+> [`CRYSK_*` secrets](#crysk_-secrets) and set the `CRYSK_*` secrets it names.
 
 1. **Add one auth secret** (Settings → Secrets and variables → Actions → New repository secret):
    `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. Pick one — never both blank. Leave OpenCode unset:
@@ -194,7 +194,7 @@ trim it.
 | `GITHUB_TOKEN` | secret | Yes (auto-provided) | GitHub injects this automatically; the action's `github-token` input defaults to it — you rarely need to set it explicitly. |
 | `CRYSK_CLAUDE_OAUTH_TOKEN` | secret | One credential at least | The long-lived token printed by `claude setup-token` (valid ~1 year). Consumes directly from your Claude subscription (Pro/Team/Enterprise) with **zero extra API billing/costs**. Must come from that command — see the warning under Option 1. |
 | `CRYSK_CLAUDE_API_KEY` | secret | One credential at least | A standard Anthropic API key, billed per token via your Anthropic Console account. |
-| `CRYSK_OPENCODE_<P>_API_KEY`, `CRYSK_OPENCODE_<P>_OAUTH` | secrets | One credential at least | One per OpenCode provider your models use (see [`CRYSK_*` secrets](#crysk_-secrets-upcoming)). |
+| `CRYSK_OPENCODE_<P>_API_KEY`, `CRYSK_OPENCODE_<P>_OAUTH` | secrets | One credential at least | One per OpenCode provider your models use (see [`CRYSK_*` secrets](#crysk_-secrets)). |
 
 Every credential reaches the action through one input, `crysk-secrets`, one `NAME=value` line per secret
 (the example below). With no `CRYSK_*` credential (and no Claude or OpenCode login on the runner), the run
@@ -254,9 +254,9 @@ still passes a value in one stops at the trigger, before anything is installed, 
 Then name the secret in the workflow's `crysk-secrets` block (below): a secret the workflow does not pass
 never reaches Crysk.
 
-### `CRYSK_*` secrets (upcoming)
+### `CRYSK_*` secrets
 
-The heading keeps its old anchor; the secrets are no longer upcoming. They are the only way to pass a
+The `CRYSK_*` secrets are the only way to pass a
 credential: the trigger reads which ones are set, the setup step builds the OpenCode auth file from the
 `CRYSK_OPENCODE_*` secrets, and Run Crysk hands the `CRYSK_CLAUDE_*` secrets to the review's credential
 choice.
@@ -1242,7 +1242,7 @@ gate status it cannot read exits 1 with nothing on stdout, so a partial answer n
 | `post` | `true` | Set `false` to run the review and write outputs/summary without posting to the PR. |
 | `step-summary` | `true` | Set `false` to skip the `$GITHUB_STEP_SUMMARY` write. |
 | `anthropic-api-key`, `claude-token`, `opencode-auth`, `routing` | empty | Removed. A value in any of them stops the run with [`PRH-INPUT-REMOVED`](#prh-input-removed): pass the `CRYSK_*` secrets in `crysk-secrets`, and set models per role on the Crysk platform. |
-| `crysk-secrets` | empty | The credentials: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets](#crysk_-secrets-upcoming). |
+| `crysk-secrets` | empty | The credentials: `NAME=value` lines naming each `CRYSK_*` secret. See [`CRYSK_*` secrets](#crysk_-secrets). |
 
 ## Error codes
 
@@ -1413,7 +1413,7 @@ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
 
 When `{detail}` names a `CRYSK_*` secret, the `crysk-secrets` input was refused. See
-[`CRYSK_*` secrets](#crysk_-secrets-upcoming). Re-set an `_OAUTH` secret from the provider's record in your
+[`CRYSK_*` secrets](#crysk_-secrets). Re-set an `_OAUTH` secret from the provider's record in your
 OpenCode auth file, encoded on one line (on macOS, `base64` does not wrap, so drop `-w0`):
 
 ```bash

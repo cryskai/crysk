@@ -1358,8 +1358,10 @@ describe("Packaging & distribution configuration", () => {
     });
 
     // Only the crysk-secrets input carries a Claude credential to the review: the
-    // removed inputs are not bound, so nothing a workflow passes there reaches it.
-    test("Run Crysk binds no Claude credential variable, only the crysk-secrets input", () => {
+    // removed inputs are not bound, so nothing a workflow passes there reaches it,
+    // and the CLI's own variables are bound empty, so a job-level value reaches no
+    // child of the CLI (git, gh, the OpenCode server), as the old bindings ensured.
+    test("Run Crysk binds the Claude variables empty, and only the crysk-secrets input carries a credential", () => {
       const run = steps().find((step) => step.id === "run-crysk");
       expect(run?.env?.CRYSK_SECRETS_INPUT).toBe(
         `\${{ inputs.crysk-secrets }}`,
@@ -1368,9 +1370,10 @@ describe("Packaging & distribution configuration", () => {
         "ANTHROPIC_API_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_AUTH_TOKEN",
-        "CRYSK_CLAUDE_OAUTH_TOKEN",
-        "CRYSK_CLAUDE_API_KEY",
       ]) {
+        expect(run?.env?.[name], name).toBe("");
+      }
+      for (const name of ["CRYSK_CLAUDE_OAUTH_TOKEN", "CRYSK_CLAUDE_API_KEY"]) {
         expect(run?.env?.[name], name).toBeUndefined();
       }
       const raw = JSON.stringify(steps());

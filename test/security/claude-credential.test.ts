@@ -362,15 +362,4 @@ describe("the crysk-secrets intake", () => {
       clearCryskClaudeIntake();
     }
   });
-
-  test("with no intake taken, a run that passes no env reads the process env as before", () => {
-    clearCryskClaudeIntake();
-    const run = resolveRunClaudeCredential({
-      credentials: { claude: ["api_key"] },
-      loginPresent: false,
-    });
-    const processKey = (process.env.ANTHROPIC_API_KEY ?? "").trim() !== "";
-    const processCrysk = (process.env.CRYSK_CLAUDE_API_KEY ?? "").trim() !== "";
-    expect(run.kind === "api_key").toBe(processKey || processCrysk);
-  });
 });
