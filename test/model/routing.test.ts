@@ -98,13 +98,12 @@ describe("routes", () => {
     );
   });
 
-  test("an OpenCode name carries provider, model and variant", () => {
-    expect(resolveModelRoute("opencode:openai/gpt-5#high")).toEqual({
+  test("an OpenCode name carries provider and model, and no variant", () => {
+    expect(resolveModelRoute("opencode:openai/gpt-5")).toEqual({
       backend: "opencode",
       provider: "openai",
       modelFamily: "gpt-5",
       modelSnapshot: "gpt-5",
-      modelVariant: "high",
     });
   });
 
@@ -334,7 +333,7 @@ describe("ReviewSpec validation - models[] rejection & model validation", () => 
       "sonnet",
       "fable",
       "claude:opus-latest",
-      "opencode:openai/gpt-4o#high",
+      "opencode:openai/gpt-4o",
     ]) {
       expect(validateReviewSpec(withModel(model)).agents[0].model).toBe(model);
     }
@@ -342,6 +341,7 @@ describe("ReviewSpec validation - models[] rejection & model validation", () => 
       "unknown-bare-model",
       "openai/gpt-4o",
       "claude:opus",
+      "opencode:openai/gpt-4o#high",
     ]) {
       expect(() => validateReviewSpec(withModel(model)), model).toThrow(
         ReviewSpecValidationError,

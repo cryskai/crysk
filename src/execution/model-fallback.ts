@@ -11,6 +11,7 @@
 // another credential, so each model is its own harness run, with its own
 // retries, its own reservations and its own usage.
 
+import type { Effort } from "#model/catalog";
 import type { ModelAttempt, StepResult, StepSpec } from "#review/step-runner";
 import { sumUsage } from "../usage";
 import type { ResolvedModelRoute } from "./contracts";
@@ -83,6 +84,13 @@ export async function runWithFallback(
   }
 
   const candidates = [step.route, ...fallbacks];
+  // S7: each model runs at its own effort. This used to spread the step into
+  // every candidate, so a fallback inherited the FIRST model's effort, which
+  // may be that model's own entry effort and none of the fallback's business.
+  const effortOf = (index: number): Effort =>
+    index === 0
+      ? step.effort
+      : (step.fallbackEfforts?.[index - 1] ?? step.effort);
   const modelAttempts: ModelAttempt[] = [];
   const results: StepResult[] = [];
   const refusedCredentials = new Set<string>();
@@ -96,14 +104,21 @@ export async function runWithFallback(
         route,
         status: "skipped",
         attempts: 0,
+        effort: effortOf(index),
         cause: "auth_invalid",
       });
       continue;
     }
-    const { fallbackRoutes: _list, routeKey: _key, ...single } = step;
+    const {
+      fallbackRoutes: _list,
+      fallbackEfforts: _efforts,
+      routeKey: _key,
+      ...single
+    } = step;
     const result = await input.runOn({
       ...single,
       route,
+      effort: effortOf(index),
       // The first model keeps the caller's frozen route key; a fallback is
       // matched to its own binding by route.
       ...(index === 0 && step.routeKey !== undefined
@@ -120,7 +135,12 @@ export async function runWithFallback(
     if (reached === 0) {
       // Never reached its provider: not the model that ran, and not the one
       // whose outcome the step reports.
-      modelAttempts.push({ route, status: "skipped", attempts: 0 });
+      modelAttempts.push({
+        route,
+        status: "skipped",
+        attempts: 0,
+        effort: effortOf(index),
+      });
       // A fenced bucket refuses every model on it at no cost, and another
       // credential may still run. Anything else that stops a model before
       // its first request is not the provider's, so it stops the step.
@@ -131,6 +151,7 @@ export async function runWithFallback(
       route,
       status: result.status,
       attempts: reached,
+      effort: effortOf(index),
       ...(result.status === "ok" || result.finalCause === undefined
         ? {}
         : { cause: result.finalCause }),

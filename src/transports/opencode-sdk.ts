@@ -1131,14 +1131,16 @@ export class OpenCodeSdkTransport implements ProviderTransport {
         });
       });
 
-      // `request.effort` is deliberately NOT forwarded. Effort is a Claude Code
-      // CLI control (`claude --effort`, #299); OpenCode's closest equivalent is
-      // per-model reasoning variants, whose levels differ by provider and are
-      // not the same scale, so mapping one onto the other here would invent a
-      // meaning. That is a separate decision. What this backend does instead is
-      // honest about it: the request plan still records the level the engine
-      // asked for, with `effortApplied: false` (attempt-evidence.ts), and
-      // pipeline.json says `effort_applied: false`.
+      // `request.effort` is deliberately NOT forwarded. It is on the Claude
+      // Code CLI's scale (`claude --effort`, #299); OpenCode's equivalent is
+      // per-model reasoning variants, whose names differ by provider, so
+      // mapping one onto the other here would invent a meaning. A variant
+      // reaches OpenCode only when a `models` entry names one as its `effort`
+      // (S7): it is the route's `modelVariant`, sent with the model by the
+      // client (transport-registry.ts), and admission has checked it against
+      // the model's variants. Without one, no variant is sent (D1), the
+      // request plan records the level as intent with `effortApplied: false`
+      // (attempt-evidence.ts), and pipeline.json says `effort_applied: false`.
       createPromise = this.client.createSession({
         correlation: { sessionId: request.sessionId, attempt: request.attempt },
         signal: operation.signal,

@@ -245,6 +245,11 @@ describe("a hunter whose role lists two models", () => {
           },
           status: "failed",
           attempts: 1,
+          // S7: each row says the effort its model was asked for and whether
+          // its backend was sent one. The fake runner reports no per-model
+          // effort, so each row carries the step's (the hunter default).
+          effort: "xhigh",
+          effort_applied: true,
           cause: "rate_limit",
           usage_v2: USAGE,
         },
@@ -253,6 +258,9 @@ describe("a hunter whose role lists two models", () => {
           route: GPT,
           status: "ok",
           attempts: 1,
+          effort: "xhigh",
+          // No entry effort on OpenCode: no variant sent (D1).
+          effort_applied: false,
           usage_v2: USAGE,
         },
       ]);

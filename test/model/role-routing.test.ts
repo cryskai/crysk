@@ -83,7 +83,10 @@ describe("models by role (S1)", () => {
     const p = plan({
       models: {
         default: ["claude:opus-latest"],
-        "hunter.logic": ["opencode:openai/gpt-5#high", "claude:sonnet-latest"],
+        "hunter.logic": [
+          { model: "opencode:openai/gpt-5", effort: "high" },
+          "claude:sonnet-latest",
+        ],
         "hunter.parity": ["claude:claude-sonnet-5-5"],
         summary: ["claude:fable-latest"],
       },

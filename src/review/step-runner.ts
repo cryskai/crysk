@@ -67,6 +67,11 @@ export interface StepSpec {
   // (S4; the plan's `fallbacks`, the runner side is model-fallback.ts).
   // Absent when the step's role names one model.
   fallbackRoutes?: readonly ResolvedModelRoute[];
+  // The effort each of `fallbackRoutes` runs at, in the same order (S7): its
+  // `models` entry's effort, else the prompt's frontmatter, else the role's
+  // default (the pipeline's stepEffortFields). Absent with no fallbacks. A
+  // step built without it runs every fallback at `effort`.
+  fallbackEfforts?: readonly Effort[];
   // How many attempts earlier models of this same step already used. The
   // harness numbers this run's attempts after them, so every model's attempt
   // logs, receipts and evidence keep their own files instead of overwriting
@@ -157,6 +162,10 @@ export interface ModelAttempt {
   status: "ok" | "failed" | "skipped";
   // Attempts that reached the provider: 0 for a skipped model.
   attempts: number;
+  // The effort this model was asked to run at (S7; StepSpec.effort or its
+  // entry in `fallbackEfforts`), skipped models included. Optional only so a
+  // runner that predates it still type-checks; runWithFallback always sets it.
+  effort?: Effort;
   // Why it failed, or `auth_invalid` for a model skipped after a refused
   // login. Absent on `ok`, and on a model skipped for any other reason.
   cause?: FailureCause;

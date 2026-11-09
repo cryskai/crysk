@@ -1,8 +1,10 @@
 import { homedir } from "node:os";
 import {
   createFreeModelProbe,
+  createModelVariantsProbe,
   type FreeModelProbe,
   freeVerdictKey,
+  type ModelVariantsProbe,
 } from "#model/free-discovery";
 import type { ModelsConfig } from "#model/model-name";
 import type { ProviderCapabilityReport } from "#model/provider-capabilities";
@@ -16,7 +18,7 @@ import {
   createResolvedRoutePlan,
   freezeRoutePlan,
   planRoutes,
-  resolveStepRoute,
+  resolveModelEntryRoute,
 } from "#model/routing";
 import {
   ClaudeCodeRunner,
@@ -869,9 +871,11 @@ export async function probeBindingsReadiness(
 }
 
 // The plan `crysk doctor` probes: the two default models a zero-config review
-// runs (a sonnet hunter, an opus refuter), plus one step per distinct model
+// runs (a sonnet hunter, an opus refuter), plus one step per distinct route
 // `models` names, fallbacks included, so every binding a configured review
-// could open is checked before a review needs it.
+// could open is checked before a review needs it. Distinct by route, not by
+// entry: an OpenCode effort is the route's variant and so a binding of its own,
+// while a Claude effort is not part of the route and is probed once.
 export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
   const base = buildResolvedRoutePlan({
     agents: [
@@ -880,16 +884,19 @@ export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
     ],
   });
   if (models === undefined) return base;
-  const configured = [...new Set(Object.values(models).flat())];
+  const distinct = new Map<string, ResolvedStepRoute>();
+  for (const entry of Object.values(models).flat()) {
+    const step = resolveModelEntryRoute("doctor-model", "other", entry);
+    if (!distinct.has(step.routeFingerprint)) {
+      distinct.set(step.routeFingerprint, step);
+    }
+  }
   return createResolvedRoutePlan([
     ...base.steps,
-    ...configured.map((model, i) =>
-      resolveStepRoute({
-        stepKey: `doctor-model-${i + 1}`,
-        role: "other",
-        specModel: model,
-      }),
-    ),
+    ...[...distinct.values()].map((step, i) => ({
+      ...step,
+      stepKey: `doctor-model-${i + 1}`,
+    })),
   ]);
 }
 
@@ -1099,6 +1106,76 @@ async function openCodeFreeVerdicts(
   return verdicts;
 }
 
+// S7 (E-g, E2): an OpenCode `models` entry's effort is sent as the model's
+// variant, and OpenCode accepts a variant the model does not have without an
+// error and runs it at the default level (L34). So every variant a plan would
+// send, fallbacks included, is checked against the variants OpenCode lists for
+// that model before the run starts, and refused by name: an unknown variant,
+// a model with no variants, and a listing that could not be read all stop the
+// review here, before the cost confirmation. A plan sending no variant (no
+// OpenCode entry sets an effort, D1) checks nothing and spawns nothing.
+//
+// The listing is `opencode models <provider> --verbose --refresh`, the same
+// read the free check makes (model/free-discovery.ts); admission launches no
+// server, so the server's own model list is not reachable here.
+export async function openCodeVariantRefusal(
+  plan: ResolvedRoutePlan,
+  probe: ModelVariantsProbe | undefined,
+): Promise<string | undefined> {
+  const checks = new Map<
+    string,
+    { readonly step: ResolvedStepRoute; readonly stepKeys: string[] }
+  >();
+  for (const step of planRoutes(plan)) {
+    if (
+      step.route.backend !== "opencode" ||
+      step.route.modelVariant === undefined
+    ) {
+      continue;
+    }
+    const key = JSON.stringify([
+      step.route.provider,
+      step.route.modelSnapshot,
+      step.route.modelVariant,
+    ]);
+    const found = checks.get(key);
+    if (found === undefined) {
+      checks.set(key, { step, stepKeys: [step.stepKey] });
+    } else if (!found.stepKeys.includes(step.stepKey)) {
+      found.stepKeys.push(step.stepKey);
+    }
+  }
+  if (checks.size === 0) return undefined;
+  const refusals = await Promise.all(
+    [...checks.values()].map(async ({ step, stepKeys }) => {
+      const variant = step.route.modelVariant ?? "";
+      const what = `effort "${variant}" for ${step.logicalIdentity}`;
+      const where = `(${stepKeys.join(", ")})`;
+      const listing =
+        probe === undefined
+          ? {
+              kind: "unavailable" as const,
+              reason: "no OpenCode binary to list them with",
+            }
+          : await probe(step.route.provider, step.route.modelSnapshot);
+      if (listing.kind === "unavailable") {
+        return `${what} could not be checked against its OpenCode variants (${listing.reason}); OpenCode runs a variant the model does not have at its default level without an error, so the review does not start on an unchecked one: fix that, or remove the effort ${where}`;
+      }
+      if (listing.variants.length === 0) {
+        return `${what} cannot apply: OpenCode lists no variants for this model, so it would run at its default level: remove the effort ${where}`;
+      }
+      if (!listing.variants.includes(variant)) {
+        return `${what} is not one of its OpenCode variants (${listing.variants.join(", ")}), and OpenCode would run it at the model's default level without an error: write one of those, or remove the effort ${where}`;
+      }
+      return undefined;
+    }),
+  );
+  const refused = refusals.filter(
+    (refusal): refusal is string => refusal !== undefined,
+  );
+  return refused.length === 0 ? undefined : `models: ${refused.join("; ")}`;
+}
+
 export async function prepareProductionAdmissionContext(input: {
   readonly workspaceRoot: string;
   readonly plan: ResolvedRoutePlan;
@@ -1122,6 +1199,10 @@ export async function prepareProductionAdmissionContext(input: {
   // own kind. The memoised wrapper is returned so the runtime built from this
   // admission reuses its verdicts.
   readonly freeModelProbe?: FreeModelProbe;
+  // S7: lists a model's OpenCode variants (openCodeVariantRefusal). Tests
+  // inject one; otherwise it is built from the authority's OpenCode binary,
+  // and only when the plan sends a variant.
+  readonly modelVariantsProbe?: ModelVariantsProbe;
 }): Promise<ProductionAdmissionContext | { readonly error: string }> {
   // U3: the CRYSK_OPENCODE_* names are read ONCE, here, and travel in the
   // authority options below, which the runtime and the binding probe are built
@@ -1159,6 +1240,25 @@ export async function prepareProductionAdmissionContext(input: {
   );
   if ("error" in preliminaryAuthority) {
     return preliminaryAuthority;
+  }
+  // S7: before the free check, the bindings and the cost confirmation. The
+  // probe is built only when a route sends a variant, so a plan without one
+  // spawns nothing new.
+  const sendsVariant = planRoutes(input.plan).some(
+    (step) =>
+      step.route.backend === "opencode" &&
+      step.route.modelVariant !== undefined,
+  );
+  if (sendsVariant) {
+    const variantsProbe =
+      input.modelVariantsProbe ??
+      (preliminaryAuthority.openCodeBinaryPath === undefined
+        ? undefined
+        : createModelVariantsProbe({
+            binaryPath: preliminaryAuthority.openCodeBinaryPath,
+          }));
+    const refusal = await openCodeVariantRefusal(input.plan, variantsProbe);
+    if (refusal !== undefined) return { error: refusal };
   }
   // When the caller supplied no probe but the plan names opencode routes and
   // the authority resolved a binary, probe for real: without this nothing in

@@ -63,6 +63,7 @@ import {
 import { resolveRepoRoot } from "#git/git";
 import {
   type ModelsConfig,
+  modelEntry,
   parseModelName,
   parseModelsConfig,
 } from "#model/model-name";
@@ -792,8 +793,8 @@ function openCodeProvidersOfModels(models: unknown): string[] {
   const providers = new Set<string>();
   for (const [role, list] of Object.entries(config)) {
     if (role === "judge") continue;
-    for (const name of list) {
-      const parsed = parseModelName(name);
+    for (const entry of list) {
+      const parsed = parseModelName(modelEntry(entry).name);
       if (parsed.backend === "opencode") providers.add(parsed.provider);
     }
   }

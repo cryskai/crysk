@@ -826,3 +826,191 @@ describe("fallback models at the pre-confirm admission", () => {
     }
   });
 });
+
+// odd/tasks/role-model-routing.md S7 (E-g, E2; L34): OpenCode accepts a
+// variant a model does not have, without an error, and runs it at the default
+// level. So an OpenCode entry's effort is checked against the variants
+// `opencode models <provider> --verbose` lists for the model, at the
+// pre-confirm admission every review path runs before its cost confirmation,
+// and refused by name. The fixture binary prints a listing in the shape
+// OpenCode 1.19 prints (`<provider>/<id>` then the model's JSON) and logs
+// each invocation, so a plan with no variant can be shown to list nothing.
+describe("an OpenCode effort is checked against the model's variants before the confirmation (S7)", () => {
+  const LISTING = [
+    "openai/gpt-5",
+    JSON.stringify(
+      {
+        id: "gpt-5",
+        status: "active",
+        variants: { none: {}, low: {}, high: {} },
+      },
+      null,
+      2,
+    ),
+    "openai/gpt-5-nano",
+    JSON.stringify({ id: "gpt-5-nano", status: "active", variants: {} }),
+  ].join("\n");
+
+  async function withFixture(
+    run: (ctx: {
+      tmpDir: string;
+      log: string;
+      resolve: (
+        entries: Array<string | { model: string; effort?: string }>,
+      ) => ReturnType<typeof resolveProductionRoutePlanAtConfirm>;
+    }) => Promise<void>,
+  ): Promise<void> {
+    const tmpDir = await realpath(
+      await mkdtemp(path.join(tmpdir(), "pr-hero-cli-variants-")),
+    );
+    try {
+      const log = path.join(tmpDir, "opencode.log");
+      const listing = path.join(tmpDir, "listing.txt");
+      await writeFile(listing, `${LISTING}\n`);
+      const claude = await writeExecutable(
+        tmpDir,
+        "claude",
+        "#!/bin/sh\necho ok\n",
+      );
+      const opencode = await writeExecutable(
+        tmpDir,
+        "opencode",
+        [
+          "#!/bin/sh",
+          `echo "$*" >> "${log}"`,
+          'if [ "$1" = "--version" ]; then echo "1.18.30"; exit 0; fi',
+          `if [ "$1" = "models" ] && [ "$2" = "openai" ]; then cat "${listing}"; exit 0; fi`,
+          'if [ "$1" = "models" ]; then echo "Provider not found: $2" >&2; exit 1; fi',
+          "exit 0",
+          "",
+        ].join("\n"),
+      );
+      await run({
+        tmpDir,
+        log,
+        resolve: (entries) =>
+          resolveProductionRoutePlanAtConfirm({
+            modelsConfigured: true,
+            workspaceRoot: tmpDir,
+            buildRoutePlan: async () =>
+              createResolvedRoutePlan([
+                resolveStepRoute({
+                  stepKey: "hunter-logic",
+                  role: "hunter",
+                  modelRole: "hunter.logic",
+                  models: { "hunter.logic": entries },
+                }),
+              ]),
+            env: { PATH: tmpDir },
+            loadSdk: mockLoadSdk,
+            authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+          }),
+      });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  async function refusal(
+    promise: Promise<unknown>,
+  ): Promise<string | undefined> {
+    try {
+      await promise;
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  test("an unknown variant is refused by name, with the model's variants", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([{ model: "opencode:openai/gpt-5", effort: "turbo" }]),
+        ),
+      ).toBe(
+        'production admission failed: models: effort "turbo" for opencode:openai/gpt-5 is not one of its OpenCode variants (none, low, high), and OpenCode would run it at the model\'s default level without an error: write one of those, or remove the effort (hunter-logic)',
+      );
+    });
+  });
+
+  test("a fallback's variant is checked too", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([
+            "claude:sonnet-latest",
+            { model: "opencode:openai/gpt-5", effort: "max" },
+          ]),
+        ),
+      ).toContain('effort "max" for opencode:openai/gpt-5 is not one');
+    });
+  });
+
+  test("an effort on a model with no variants is refused", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([{ model: "opencode:openai/gpt-5-nano", effort: "high" }]),
+        ),
+      ).toBe(
+        'production admission failed: models: effort "high" for opencode:openai/gpt-5-nano cannot apply: OpenCode lists no variants for this model, so it would run at its default level: remove the effort (hunter-logic)',
+      );
+    });
+  });
+
+  test("a model the listing does not have cannot be checked, and is refused", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([{ model: "opencode:openai/gpt-9", effort: "high" }]),
+        ),
+      ).toBe(
+        'production admission failed: models: effort "high" for opencode:openai/gpt-9 could not be checked against its OpenCode variants (openai/gpt-9 is not in opencode models openai); OpenCode runs a variant the model does not have at its default level without an error, so the review does not start on an unchecked one: fix that, or remove the effort (hunter-logic)',
+      );
+    });
+  });
+
+  test("a listing that fails is refused, naming the command", async () => {
+    await withFixture(async ({ resolve }) => {
+      expect(
+        await refusal(
+          resolve([
+            { model: "opencode:deepseek/deepseek-chat", effort: "max" },
+          ]),
+        ),
+      ).toContain(
+        'effort "max" for opencode:deepseek/deepseek-chat could not be checked against its OpenCode variants (opencode models deepseek exited 1)',
+      );
+    });
+  });
+
+  test("a variant the model lists is admitted and stays on the route", async () => {
+    await withFixture(async ({ resolve, log }) => {
+      const routed = await resolve([
+        { model: "opencode:openai/gpt-5", effort: "high" },
+      ]);
+      expect(routed?.routePlan.steps[0]?.route.modelVariant).toBe("high");
+      // One listing, the free check's argv.
+      const calls = (await Bun.file(log).text())
+        .split("\n")
+        .filter((line) => line.startsWith("models"));
+      expect(calls).toEqual(["models openai --verbose --refresh"]);
+    });
+  });
+
+  test("a plan that sends no variant lists nothing (D1)", async () => {
+    await withFixture(async ({ resolve, log }) => {
+      const routed = await resolve(["opencode:openai/gpt-5"]);
+      expect(routed?.routePlan.steps[0]?.route).not.toHaveProperty(
+        "modelVariant",
+      );
+      const text = (await Bun.file(log).exists())
+        ? await Bun.file(log).text()
+        : "";
+      expect(text.split("\n").filter((l) => l.startsWith("models"))).toEqual(
+        [],
+      );
+    });
+  });
+});
