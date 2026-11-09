@@ -30,7 +30,7 @@ If the operator already has `models` in `~/.crysk/config.json`, `npx -y crysk ci
 | Role | Steps |
 |---|---|
 | `default` | every role not listed (not the judge) |
-| `hunter.<key>` | one hunter: `lifecycle`, `logic`, `parity`, `reliability`, `resilience` |
+| `hunter.<key>` | one hunter: `logic`, `parity`, `reliability`, `resilience` |
 | `refuter` | refuter, re-review verifier, CI adjudicator |
 | `consolidate`, `scout`, `summary` | those steps |
 | `judge` | materiality judge: only `claude:sonnet-latest` or `claude:opus-latest`, never `default` |
