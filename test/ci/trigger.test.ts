@@ -3040,3 +3040,32 @@ describe("action.yml hands crysk-secrets to the trigger on stdin", () => {
     expect(run.output).toBe("");
   });
 });
+
+// E-f F5: a CRYSK_OPENCODE_* name cannot be emptied in action.yml (the names are
+// per provider), so a job-level one reaches every process of the step. The trigger
+// warns, naming the variable and never its value.
+describe("the trigger warns about a CRYSK_OPENCODE_* variable in its environment", () => {
+  test("a job-level CRYSK_OPENCODE_* value is named in a warning, its value never printed", () => {
+    const run = runShell(
+      baseEnv({
+        CRYSK_OPENCODE_DEEPSEEK_API_KEY: "SENTINEL-JOB-DS-77",
+        CRYSK_OPENCODE_OPENAI_OAUTH: "SENTINEL-JOB-OAI-77",
+      }),
+    );
+    expect(run.stdout).toContain(
+      "::warning title=crysk::CRYSK_OPENCODE_DEEPSEEK_API_KEY is set in this step's environment",
+    );
+    expect(run.stdout).toContain(
+      "::warning title=crysk::CRYSK_OPENCODE_OPENAI_OAUTH is set in this step's environment",
+    );
+    expect(run.stdout.includes("SENTINEL")).toBe(false);
+    expect(run.output.includes("SENTINEL")).toBe(false);
+  });
+
+  test("an empty one, and every other variable, warns about nothing", () => {
+    const run = runShell(
+      baseEnv({ CRYSK_OPENCODE_DEEPSEEK_API_KEY: "", OTHER_SECRET: "x" }),
+    );
+    expect(run.stdout).not.toContain("is set in this step's environment");
+  });
+});

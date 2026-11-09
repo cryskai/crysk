@@ -1461,15 +1461,15 @@ describe("Packaging & distribution configuration", () => {
       expect(run?.env?.CRYSK_SECRETS_INPUT).toBe(
         `\${{ inputs.crysk-secrets }}`,
       );
+      // E-f F5: the CRYSK_CLAUDE_* names too, so a job-level one is emptied as well.
       for (const name of [
         "ANTHROPIC_API_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_AUTH_TOKEN",
+        "CRYSK_CLAUDE_OAUTH_TOKEN",
+        "CRYSK_CLAUDE_API_KEY",
       ]) {
         expect(run?.env?.[name], name).toBe("");
-      }
-      for (const name of ["CRYSK_CLAUDE_OAUTH_TOKEN", "CRYSK_CLAUDE_API_KEY"]) {
-        expect(run?.env?.[name], name).toBeUndefined();
       }
       const raw = JSON.stringify(steps());
       for (const input of [
@@ -1548,6 +1548,111 @@ describe("Packaging & distribution configuration", () => {
         expect(run.record).not.toContain(value);
       },
     );
+
+    // E-f F5: a job-level Claude variable must not reach any process the action
+    // starts (git, gh, npm, the OpenCode installer, the engine and its children).
+    // A step `env:` binding of '' is what empties a variable a job set, so every
+    // step with a `run:` binds the five; the engine gets its Claude credential from
+    // the crysk-secrets input instead.
+    describe("every step that starts a process empties the Claude variables", () => {
+      const CLAUDE_VARIABLES = [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CRYSK_CLAUDE_OAUTH_TOKEN",
+        "CRYSK_CLAUDE_API_KEY",
+      ];
+      const processSteps = () =>
+        steps().filter((step) => step.run !== undefined);
+
+      test("each run step binds the five to an empty value", () => {
+        expect(processSteps().length).toBeGreaterThan(5);
+        for (const step of processSteps()) {
+          for (const name of CLAUDE_VARIABLES) {
+            expect(step.env?.[name], `${step.id ?? step.name} ${name}`).toBe(
+              "",
+            );
+          }
+        }
+      });
+
+      // Each step's own script under the runner's bash flags, the job env under
+      // the step's bindings (every expression resolved to empty), and every
+      // command it can start replaced by a function that records whether a
+      // Claude variable reached it.
+      test("with the five set at job level, no process a step starts sees one", () => {
+        const job = Object.fromEntries(
+          CLAUDE_VARIABLES.map((name) => [name, `SENTINEL-JOB-${name}`]),
+        );
+        // Records go to a file: a fake's stdout may be piped (curl | bash).
+        const fakes = ["bun", "gh", "git", "npm", "curl"]
+          .map(
+            (cmd) =>
+              `${cmd}() { for v in ${CLAUDE_VARIABLES.join(" ")}; do if [ -n "\${!v}" ]; then echo "LEAK ${cmd} $v" >> "$F5_RECORD"; fi; done; echo "ran ${cmd}" >> "$F5_RECORD"; }`,
+          )
+          .join("\n");
+        const root = mkdtempSync(path.join(os.tmpdir(), "crysk-f5-"));
+        try {
+          const action = path.join(root, "action");
+          mkdirSync(action);
+          // The install step runs bun install only where package.json exists.
+          writeFileSync(path.join(action, "package.json"), "{}");
+          mkdirSync(path.join(root, "pr-hero-outcome"));
+          const ran: string[] = [];
+          const record = path.join(root, "record");
+          for (const step of processSteps()) {
+            const bindings = Object.fromEntries(
+              Object.entries(step.env ?? {}).map(([name, value]) => [
+                name,
+                String(value)
+                  .replaceAll(`\${{ runner.temp }}`, root)
+                  .replace(/\$\{\{[^}]*\}\}/g, ""),
+              ]),
+            );
+            const script = (step.run ?? "").replaceAll(
+              `\${{ github.action_path }}`,
+              action,
+            );
+            const result = Bun.spawnSync(
+              [
+                "bash",
+                "--noprofile",
+                "--norc",
+                "-eo",
+                "pipefail",
+                "-c",
+                `${fakes}\n${script}`,
+              ],
+              {
+                cwd: root,
+                env: {
+                  // The system's own tools only, so a `claude` the host has
+                  // installed never skips the installer step.
+                  PATH: "/usr/bin:/bin",
+                  HOME: root,
+                  GITHUB_PATH: path.join(root, "github-path"),
+                  CRYSK_OUTCOME_DIR: root,
+                  F5_RECORD: record,
+                  ...job,
+                  ...bindings,
+                },
+              },
+            );
+            expect(result.exitCode, step.id ?? step.name).toBe(0);
+            const out = existsSync(record) ? readFileSync(record, "utf8") : "";
+            rmSync(record, { force: true });
+            expect(out, step.id ?? step.name).not.toContain("LEAK");
+            ran.push(...(out.match(/^ran \w+$/gm) ?? []));
+          }
+          // The fakes really stood in for the processes: the steps started them.
+          expect(ran).toContain("ran bun");
+          expect(ran).toContain("ran npm");
+          expect(ran).toContain("ran curl");
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    });
 
     // E-f F4 (odd/tasks/role-model-routing.md, D1, D2): the workflow `crysk ci
     // init` scaffolds, its Run Crysk `with:` evaluated the way GitHub would for a

@@ -36,6 +36,8 @@ import { commandHint, isCommand, startsWithCommand } from "../brand";
 import {
   type CryskSecretsParse,
   cryskSecretsCarryCredential,
+  inheritedOpenCodeSecretNames,
+  inheritedOpenCodeSecretWarning,
   LEGACY_SECRET_REPLACEMENT,
   parseCryskSecrets,
 } from "./crysk-secrets";
@@ -1206,6 +1208,12 @@ function lookupNoCredentialsHead(
 }
 
 export function runCiTrigger(deps: CiTriggerDeps): number {
+  // E-f F5: first, on every event, so the warning shows whatever is decided.
+  for (const name of inheritedOpenCodeSecretNames(deps.env)) {
+    deps.stdout(
+      workflowCommand("warning", inheritedOpenCodeSecretWarning(name)),
+    );
+  }
   const secrets = parseCryskSecrets(deps.cryskSecrets ?? "");
   const base = readTriggerInput(deps, secrets);
   const input: CiTriggerInput = commenterPermissionNeeded(base)

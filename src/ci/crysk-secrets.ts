@@ -125,6 +125,26 @@ const EMPTY_OPENCODE_SLOT_LINE = `${EMPTY_OPENCODE_SLOT_NAME}=`;
 // same count (its MAX_OPENCODE_PROVIDERS).
 export const MAX_OPENCODE_PROVIDER_SLOTS = 5;
 
+// E-f F5: action.yml empties the Claude variables in every step, but an OpenCode
+// secret's name is per provider, so a job-level CRYSK_OPENCODE_* variable cannot be
+// emptied there and reaches every process the step starts. The trigger and the run
+// step name such a variable in a warning, never its value. Empty ones carry nothing.
+const OPENCODE_ENV_NAME_RE = /^CRYSK_OPENCODE_[A-Z0-9_]+$/;
+
+export function inheritedOpenCodeSecretNames(
+  env: Readonly<Record<string, string | undefined>>,
+): string[] {
+  return Object.keys(env)
+    .filter(
+      (name) => OPENCODE_ENV_NAME_RE.test(name) && (env[name] ?? "") !== "",
+    )
+    .sort();
+}
+
+export function inheritedOpenCodeSecretWarning(name: string): string {
+  return `${name} is set in this step's environment, so every process the step starts can read it: pass it only in the crysk-secrets input, and remove it from the workflow's env.`;
+}
+
 const SPLIT_HINT =
   "(a value split across lines? encode _OAUTH secrets with base64 -w0)";
 

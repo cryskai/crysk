@@ -46,13 +46,13 @@ inputs:
     required: false
     default: 'false'
   max-changed-lines:
-    description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit. Leave unset to use the repo config value max_changed_lines; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription (a run draws on quota, not a per-token invoice), 4000 on a metered ANTHROPIC_API_KEY route.'
+    description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit. Leave unset to use the repo config value max_changed_lines; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription (a run draws on quota, not a per-token invoice), 4000 on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_* secret).'
     required: false
   max-changed-files:
-    description: 'Size gate: skip the review when the diff exceeds this many changed files. 0 disables the limit. Leave unset to use the repo config value max_changed_files; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription, 50 on a metered ANTHROPIC_API_KEY route.'
+    description: 'Size gate: skip the review when the diff exceeds this many changed files. 0 disables the limit. Leave unset to use the repo config value max_changed_files; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription, 50 on a metered route.'
     required: false
   budget-usd:
-    description: 'Spend gate: skip the review when its estimated cost exceeds this USD ceiling. Leave unset to resolve the ceiling from the route billing mode - no ceiling on a Claude subscription (a run draws on quota, not a per-token invoice), a default ceiling on a metered ANTHROPIC_API_KEY route. An explicit value is honoured on any route; a value <= 0 disables the ceiling (the size limits above resolve separately).'
+    description: 'Spend gate: skip the review when its estimated cost exceeds this USD ceiling. Leave unset to resolve the ceiling from the route billing mode - no ceiling on a Claude subscription (a run draws on quota, not a per-token invoice), a default ceiling on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_* secret). An explicit value is honoured on any route; a value <= 0 disables the ceiling (the size limits above resolve separately).'
     required: false
     default: ''
   mode:
@@ -132,6 +132,17 @@ runs:
       if: github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != ''
       shell: bash
       env:
+        # E-f F5: the five Claude variables, emptied for every process this step
+        # starts. A job-level value (env: on the job or the workflow) would
+        # otherwise reach every git, gh, npm and bun child; the review takes its
+        # Claude credential from the crysk-secrets input only. A CRYSK_OPENCODE_*
+        # name is per provider and cannot be emptied here, so the trigger and the
+        # run step warn about one instead (src/ci/crysk-secrets.ts).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
         # Where the platform's review configuration is left for the setup step:
         # under the runner's temp directory, never the workspace. Bound here
@@ -165,6 +176,12 @@ runs:
       id: trigger
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         # The commenter-permission and PR-head lookups go through `gh`.
         GH_TOKEN: ${{ steps.platform.outputs.github-token || inputs.github-token }}
         EVENT_NAME: ${{ github.event_name }}
@@ -211,6 +228,13 @@ runs:
       shell: bash
       # --omit=optional skips the `bun` npm package (the npx launcher's Bun, about 85 MiB):
       # setup-bun already put Bun on PATH, and the engine's own dependencies are not optional.
+      env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
       run: |
         if [ -f "${{ github.action_path }}/package.json" ]; then
           cd "${{ github.action_path }}" && bun install --frozen-lockfile --omit=optional
@@ -219,6 +243,13 @@ runs:
     - name: Install Claude Code CLI
       if: steps.trigger.outputs.run == 'true'
       shell: bash
+      env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
       run: |
         if ! command -v claude >/dev/null 2>&1; then
           npm install -g @anthropic-ai/claude-code
@@ -229,6 +260,12 @@ runs:
       if: steps.trigger.outputs.run == 'true'
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         # The removed routing and opencode-auth inputs are not bound: the trigger
         # stops any run that passes a value in them (U5), and setup.ts no longer
         # reads them (D6).
@@ -278,6 +315,13 @@ runs:
     - name: Install OpenCode CLI
       if: ${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') }}
       shell: bash
+      env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
       run: |
         curl -fsSL https://opencode.ai/install | bash -s -- --version 1.18.30
         echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
@@ -287,6 +331,16 @@ runs:
       if: steps.trigger.outputs.run == 'true'
       shell: bash
       env:
+        # The Claude variables, emptied for the whole CLI process (E-f F5, see
+        # Connect to Crysk): a job-level value must not reach git, gh or the
+        # OpenCode server child (OpenCode reads ANTHROPIC_API_KEY for its own
+        # anthropic provider). The Claude CLI child gets the chosen credential
+        # from the run env instead.
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         # Every `${{ inputs.* }}` / `${{ github.* }}` value pr-hero needs is
         # bound here, through `env:`, and referenced below as a QUOTED shell
         # variable — never interpolated directly into the script body. A
@@ -314,13 +368,6 @@ runs:
         # the CLI's own variable. A job-level ANTHROPIC_API_KEY or
         # CLAUDE_CODE_OAUTH_TOKEN is not read either: run.ts drops them.
         CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
-        # Emptied for the whole CLI process, as the old input bindings did: a
-        # job-level value must not reach git, gh or the OpenCode server child
-        # (OpenCode reads ANTHROPIC_API_KEY for its own anthropic provider). The
-        # Claude CLI child gets the chosen credential from the run env instead.
-        ANTHROPIC_API_KEY: ''
-        CLAUDE_CODE_OAUTH_TOKEN: ''
-        ANTHROPIC_AUTH_TOKEN: ''
         GITHUB_ACTIONS: 'true'
         CI: 'true'
         NO_COLOR: '1'
@@ -398,6 +445,12 @@ runs:
       if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
       run: bun "${{ github.action_path }}/src/ci/platform.ts"
 
@@ -438,6 +491,12 @@ runs:
       if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         GH_TOKEN: ${{ steps.platform-publish.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}
@@ -471,6 +530,12 @@ runs:
       if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         CRYSK_RUN_TOKEN: ${{ steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token }}
         # From the same exchange as the run token (the refresh after the run
         # when it ran, else the first): the repository's data mode decides
@@ -493,6 +558,12 @@ runs:
       if: ${{ cancelled() && steps.trigger.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
       run: bun "${{ github.action_path }}/src/ci/platform.ts"
 
@@ -507,6 +578,12 @@ runs:
       if: ${{ cancelled() && steps.trigger.outputs.run == 'true' }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         GH_TOKEN: ${{ steps.platform-settle.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}

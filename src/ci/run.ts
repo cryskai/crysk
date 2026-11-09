@@ -21,13 +21,20 @@
 
 import { runCli } from "../cli";
 import { takeCryskClaudeSecrets } from "../security/claude-credential";
-import { parseCryskSecrets } from "./crysk-secrets";
+import {
+  inheritedOpenCodeSecretNames,
+  inheritedOpenCodeSecretWarning,
+  parseCryskSecrets,
+} from "./crysk-secrets";
 
 export interface CiRunDeps {
   // The crysk-secrets input, read from stdin by the entry point below.
   readonly cryskSecrets: string;
   // The CLI's arguments, as the step built them (`review --pr <n> --ci --yes ...`).
   readonly argv: readonly string[];
+  // This process's environment, read only for the names of CRYSK_OPENCODE_*
+  // variables a job set (E-f F5). Absent: nothing to warn about.
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly stdout: (text: string) => void;
   readonly runCli: (argv: string[]) => Promise<void>;
 }
@@ -41,6 +48,13 @@ export async function runCiReview(deps: CiRunDeps): Promise<void> {
   const parsed = parseCryskSecrets(deps.cryskSecrets);
   for (const value of parsed.masks) {
     deps.stdout(`::add-mask::${escapeCommandData(value)}\n`);
+  }
+  // E-f F5: action.yml cannot empty a per-provider name, and the review's children
+  // inherit this process's environment, so a job-level one is named here.
+  for (const name of inheritedOpenCodeSecretNames(deps.env ?? {})) {
+    deps.stdout(
+      `::warning title=crysk::${escapeCommandData(inheritedOpenCodeSecretWarning(name))}\n`,
+    );
   }
   takeCryskClaudeSecrets(parsed.secrets.claude);
   await deps.runCli([...deps.argv]);
@@ -65,6 +79,7 @@ if (import.meta.main) {
   await runCiReview({
     cryskSecrets,
     argv: process.argv.slice(2),
+    env: process.env,
     stdout: (text) => {
       process.stdout.write(text);
     },
