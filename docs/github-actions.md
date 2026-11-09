@@ -1261,17 +1261,16 @@ When the action stops with an error, the annotation and the job summary start wi
 Set one credential for the route you use:
 
 ```bash
-claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
-gh secret set ANTHROPIC_API_KEY
-opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN
+gh secret set CRYSK_CLAUDE_API_KEY
 ```
 
-If the secret is already set, check that the workflow passes it to the action under `with:`, for example `claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` or `anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}`: a secret the workflow does not pass never reaches Crysk.
+If the secret is already set, check that the workflow passes it to the action in the `crysk-secrets` input, one NAME=value line per secret, for example `CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}`: a secret the workflow does not pass never reaches Crysk.
 
 Dependabot PRs read Dependabot secrets, so set this one too:
 
 ```bash
-gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN
+gh secret set --app dependabot CRYSK_CLAUDE_OAUTH_TOKEN
 ```
 
 Then re-run the workflow:
@@ -1282,29 +1281,29 @@ gh run rerun {runId}
 
 **Fix**, on an OpenCode route:
 
-Set the OpenCode credential for the route you use:
+Set the OpenCode credential of each provider your models use:
 
 ```bash
-opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
 
-If the secret is already set, check that the workflow passes it to the action under `with:`, for example `opencode-auth: ${{ secrets.OPENCODE_AUTH_JSON }}`: a secret the workflow does not pass never reaches Crysk.
+<PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).
 
-An OpenCode route also needs the routing variable:
+For an OpenAI subscription, set its record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):
 
 ```bash
-gh variable set CRYSK_ROUTING --body '<routing-object-json>'
+jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
 ```
 
-A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.
+If the secret is already set, check that the workflow passes it to the action in the `crysk-secrets` input, one NAME=value line per secret, for example `CRYSK_OPENCODE_DEEPSEEK_API_KEY=${{ secrets.CRYSK_OPENCODE_DEEPSEEK_API_KEY }}`: a secret the workflow does not pass never reaches Crysk.
 
 Dependabot PRs read Dependabot secrets, so set this one too:
 
 ```bash
-gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+gh secret set --app dependabot CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
 
-A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.
+A Claude route uses `CRYSK_CLAUDE_OAUTH_TOKEN` instead, from `claude setup-token`.
 
 Then re-run the workflow:
 
@@ -1364,33 +1363,38 @@ gh run rerun {runId}
 
 Every hunter of the run failed on the missing record, so the lead names the route. When the route is not known, the sentence reads "The {backend}/{provider} route for {step} has no usable credential ({detail})".
 
-Add {provider} to the OpenCode store, then re-set the secret:
+Set {provider}'s secret and pass it in the crysk-secrets input:
 
 ```bash
-opencode auth login
-gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
+
+<PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).
 
 #### `missing_subscription_record`
 
 On the Claude route (`backend` is `claude-code`, or no OpenCode backend):
 
-Log in again with `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`:
+Log in again with `claude setup-token`, then set `CRYSK_CLAUDE_OAUTH_TOKEN`:
 
 ```bash
-claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN
 ```
 
 On the OpenCode route (`backend` is `opencode`):
 
-Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then re-set the secret:
+Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then set its record, base64 on one line (on macOS, drop -w0):
 
 ```bash
 opencode auth login
-gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
 ```
 
-Or rename the provider in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
+Or bill per token with an OpenAI API key instead:
+
+```bash
+gh secret set CRYSK_OPENCODE_OPENAI_API_KEY
+```
 
 #### `malformed_payload`
 
@@ -1402,19 +1406,27 @@ Check that the store is a JSON object:
 jq -e 'type=="object"' ~/.local/share/opencode/auth.json
 ```
 
-Then re-set the secret:
+In CI the action builds this file from the CRYSK_OPENCODE_* secrets: re-set the one for this provider.
 
 ```bash
-gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
 
 When `{detail}` names a `CRYSK_*` secret, the `crysk-secrets` input was refused. See
-[`CRYSK_*` secrets (upcoming)](#crysk_-secrets-upcoming). Re-set an `_OAUTH` secret from the provider's record in your
+[`CRYSK_*` secrets](#crysk_-secrets-upcoming). Re-set an `_OAUTH` secret from the provider's record in your
 OpenCode auth file, encoded on one line (on macOS, `base64` does not wrap, so drop `-w0`):
 
 ```bash
 jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
 ```
+
+When `{detail}` is `CRYSK_OPENCODE__API_KEY has a value but no provider: an unused OpenCode slot must be empty`,
+the Crysk platform passed an OpenCode key through a provider slot with no provider name, so Crysk cannot tell
+whose key it is: the platform's provider slots for this run are empty while a key was forwarded. Re-setting the
+secret does not help. Open the repository's model settings on the Crysk platform, save the OpenCode provider
+whose key this is again so its slot names the provider, then re-run the workflow. In a workflow you wrote
+yourself, name the provider in the line (`CRYSK_OPENCODE_<PROVIDER>_API_KEY`) and leave an unused slot as
+`CRYSK_OPENCODE__API_KEY=` with nothing after it.
 
 #### `source_read_failed`
 
@@ -1443,19 +1455,19 @@ gh secret set {secret}
 **Fix:**
 
 ```bash
-claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN
 ```
 
 Or, for an API key, create a new key in the Claude Console and set it:
 
 ```bash
-gh secret set ANTHROPIC_API_KEY
+gh secret set CRYSK_CLAUDE_API_KEY
 ```
 
-Or, for OpenCode, re-export the auth store and re-set the secret:
+Or, for OpenCode, set the provider's key again:
 
 ```bash
-gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json
+gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY
 ```
 
 Then ask for a new review:
@@ -1468,13 +1480,16 @@ On a workflow set up before the rename, comment `/pr-hero review` instead. Its w
 `pr-hero Review`. The artifact name comes from the action, so a run of this release uploads
 `crysk-run-<pr-number>-<head-sha>` and a run of an older action release `pr-hero-run-<pr-number>-<head-sha>`.
 
-When every failed hunter reports the secret it ran on, the fix starts with the one for that secret.
+When every failed hunter reports the secret it ran on, the fix starts with the one for that secret. In the
+action, `{secret}` is the `CRYSK_*` secret the workflow passes (`CRYSK_CLAUDE_API_KEY` or
+`CRYSK_CLAUDE_OAUTH_TOKEN`); a local run names the Claude CLI's own variable (`ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN`), which it exports itself.
 
 #### `api_key`
 
 **Why:** the key is invalid, expired or revoked, and it is the Claude credential this run chose from credentials.claude
 
-The rejected secret is a per-token credential, `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN` from an engine before `credentials.claude`). A run uses one Claude credential, the first one in `credentials.claude` that is set (see [Configuration, Credentials](configuration.md#credentials)), so the key ran because it came first or because the subscription was not set. Deleting the key is not needed to move the run to the subscription: the order decides.
+The rejected secret is a per-token credential, `CRYSK_CLAUDE_API_KEY` in the action, `ANTHROPIC_API_KEY` locally (or `ANTHROPIC_AUTH_TOKEN` from an engine before `credentials.claude`). A run uses one Claude credential, the first one in `credentials.claude` that is set (see [Configuration, Credentials](configuration.md#credentials)), so the key ran because it came first or because the subscription was not set. Deleting the key is not needed to move the run to the subscription: the order decides.
 
 **Fix:**
 
@@ -1484,7 +1499,7 @@ Create a new key in the Claude Console and set it:
 gh secret set {secret}
 ```
 
-Or run on the subscription: set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN under the new names) and put subscription first in `credentials.claude` (the default order).
+Or run on the subscription: set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order).
 
 Then ask for a new review:
 
@@ -1498,12 +1513,12 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 **Why:** it is expired, revoked, or a short-lived /login session token
 
-The rejected secret is `CLAUDE_CODE_OAUTH_TOKEN`.
+The rejected secret is the subscription token, `CRYSK_CLAUDE_OAUTH_TOKEN` in the action, `CLAUDE_CODE_OAUTH_TOKEN` locally.
 
 **Fix:**
 
 ```bash
-claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN
+claude setup-token && gh secret set {secret}
 ```
 
 Then ask for a new review:
@@ -1582,11 +1597,11 @@ Keep one OpenCode provider per review in CRYSK_ROUTING (PRHERO_ROUTING on a work
 
 **What:** Provider {provider} does not serve the model configured for {step}
 
-**Why:** the routing names a model this provider does not offer
+**Why:** the configured models name a model this provider does not offer
 
 **Fix:**
 
-Fix the `modelSnapshot` for this step in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).
+Set a model this provider serves for this step's role in `models` (on the Crysk platform, the model settings).
 
 List the models this provider serves:
 
@@ -1874,13 +1889,13 @@ Every hunter of the run failed on the same limit, and all of them reported the s
 
 #### `api_key`
 
-**What:** {detail}: the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit
+**What:** {detail}: the Anthropic account behind the API key has no credit left or reached its spend limit
 
 **Why:** the provider refuses every request until the account has credit again, so a retry would fail the same way
 
 **Fix:**
 
-Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or run on the subscription: set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN under the new names) and put subscription first in `credentials.claude` (the default order).
+Add credit to the Anthropic account behind the API key (Claude Console → Plans & Billing), or run on the subscription: set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order).
 
 Then ask for a new review:
 
@@ -1892,7 +1907,7 @@ On a workflow set up before the rename, comment `/pr-hero review` instead.
 
 #### `subscription`
 
-**What:** {detail}: the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached its usage limit
+**What:** {detail}: the Claude subscription reached its usage limit
 
 **Why:** the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way
 
@@ -1906,10 +1921,10 @@ gh pr comment {pr} --body "/crysk review"
 
 On a workflow set up before the rename, comment `/pr-hero review` instead.
 
-Or bill per token: set ANTHROPIC_API_KEY (CRYSK_CLAUDE_API_KEY under the new names) and put api_key first in `credentials.claude` (the default order uses the subscription while it is set):
+Or bill per token: set CRYSK_CLAUDE_API_KEY and put api_key first in `credentials.claude` (the default order uses the subscription while it is set):
 
 ```bash
-gh secret set ANTHROPIC_API_KEY
+gh secret set CRYSK_CLAUDE_API_KEY
 ```
 
 ### PRH-PROVIDER-UNAVAILABLE

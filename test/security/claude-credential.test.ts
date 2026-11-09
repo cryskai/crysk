@@ -249,6 +249,21 @@ describe("claudeCredentialRefusal", () => {
     );
   });
 
+  // U5: in the action the Claude credential comes only from the crysk-secrets input
+  // (or a login on the runner), so the refusal names the CRYSK_* secrets there and
+  // never the CLI variables, which the action no longer reads.
+  test("in the action, the refusal names the CRYSK_* secrets in the crysk-secrets input", () => {
+    try {
+      takeCryskClaudeSecrets({});
+      const run = resolveRunClaudeCredential({ loginPresent: false });
+      expect(claudeCredentialRefusal(run.selection, true)).toBe(
+        "no Claude credential this run may use is set: credentials.claude is [subscription, api_key] (the default), and none of those is set: subscription (CRYSK_CLAUDE_OAUTH_TOKEN in the crysk-secrets input, or a Claude login on this machine); api_key (CRYSK_CLAUDE_API_KEY in the crysk-secrets input). Set a listed credential, or change credentials.claude in your person config",
+      );
+    } finally {
+      clearCryskClaudeIntake();
+    }
+  });
+
   test("a plan with no Claude route ignores Claude credentials", () => {
     const selection = selectClaudeCredential(["api_key"], {});
     expect(claudeCredentialRefusal(selection, false)).toBeUndefined();

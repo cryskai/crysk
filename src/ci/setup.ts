@@ -162,6 +162,11 @@ export interface CiWorkflowTemplateOptions {
   // scaffolded file names the gate and does not inherit it silently. `advisory`
   // keeps the status green whatever the review finds, as before S4.
   mode?: "gate" | "advisory";
+  // U5 (odd/tasks/role-model-routing.md, S8): the CRYSK_* secrets this workflow
+  // passes in the action's `crysk-secrets` input, one line each. Set, it replaces
+  // the removed credential inputs. Only THIS repo's own workflow sets it for now;
+  // the scaffolded template moves with E-f, so a scaffolded file is unchanged.
+  cryskSecrets?: readonly string[];
 }
 
 export const DEFAULT_CI_ACTION_REF = "cryskai/crysk@v0";
@@ -183,13 +188,61 @@ export const DEFAULT_CI_ACTION_REF = "cryskai/crysk@v0";
 // no dollar cost to cap, so this repo opts out explicitly; fixing the
 // billing-mode resolution itself is a separate issue. `maxChangedLines`
 // stays: that gate is real on any route.
+//
+// `cryskSecrets` names the Claude pair (U5): the action stops a run that passes the
+// removed inputs, so this repo's own review passes CRYSK_* secrets. The repository
+// must hold them before the PR that brings this file runs its review.
 export const OWN_CI_WORKFLOW_OPTIONS: CiWorkflowTemplateOptions = {
   actionRef: "./",
   maxChangedLines: "5000",
   budgetUsd: "0",
   mode: "gate",
   forceEngineFromPr: true,
+  cryskSecrets: ["CRYSK_CLAUDE_OAUTH_TOKEN", "CRYSK_CLAUDE_API_KEY"],
 };
+
+// The credential lines of the Run Crysk step's `with:` block. The removed inputs,
+// unless the options name CRYSK_* secrets.
+function credentialWithLines(options: CiWorkflowTemplateOptions): string {
+  if (options.cryskSecrets === undefined) return LEGACY_CREDENTIAL_WITH_LINES;
+  const lines = options.cryskSecrets
+    .map((name) => `            ${name}=\${{ secrets.${name} }}`)
+    .join("\n");
+  return `          # The Crysk credentials: one CRYSK_* secret per line, each named
+          # explicitly (never the whole secrets context, which would hand the
+          # action every secret of the repository). A secret the repository does not have
+          # arrives empty and counts as absent, so both Claude lines stay. With
+          # both set, credentials.claude picks one (the subscription first).
+          #   CRYSK_CLAUDE_OAUTH_TOKEN — from \`claude setup-token\`: a long-lived
+          #     (~1 year) token that draws on your Claude subscription. The
+          #     session token \`/login\` leaves in the keychain expires in hours.
+          #   CRYSK_CLAUDE_API_KEY     — pay-as-you-go key (billed per token).
+          crysk-secrets: |
+${lines}`;
+}
+
+const LEGACY_CREDENTIAL_WITH_LINES = `          # Provide a Claude credential and/or OpenCode auth (never leave every
+          # credential blank). Inputs are wired unconditionally: an unset secret
+          # or var expands to empty, which the action treats as absent, so
+          # leaving the one you do not use in place costs nothing. Deleting the
+          # line for the secret you DID set is what breaks — the credential
+          # never reaches the action, and it fails to authenticate silently.
+          #   ANTHROPIC_API_KEY       — pay-as-you-go key (billed per token via Anthropic Console), or
+          #   CLAUDE_CODE_OAUTH_TOKEN — from \`claude setup-token\`: a long-lived
+          #     (~1 year) token that draws on your Claude subscription at no
+          #     extra API cost. It must come from that command. The session
+          #     token \`/login\` leaves in the keychain expires in HOURS and is
+          #     kept alive by a refresh token CI does not have, so pasting that
+          #     one here yields a secret that works for a day and then breaks
+          #     reviews with no signal.
+          #   OPENCODE_AUTH_JSON      — whole OpenCode auth.json store
+          #   vars.CRYSK_ROUTING      — person-layer routing JSON; quoted so an
+          #     unset var is the empty string rather than broken YAML. The
+          #     older vars.PRHERO_ROUTING is read when this one is unset.
+          anthropic-api-key: \${{ secrets.ANTHROPIC_API_KEY }}
+          claude-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"
+          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}`;
 
 export function generateCiWorkflowTemplate(
   options: CiWorkflowTemplateOptions = {},
@@ -464,28 +517,7 @@ ${gateStep}      - name: Checkout${checkoutGate}
         uses: ${actionRef}
         with:
           github-token: \${{ secrets.GITHUB_TOKEN }}
-          # Provide a Claude credential and/or OpenCode auth (never leave every
-          # credential blank). Inputs are wired unconditionally: an unset secret
-          # or var expands to empty, which the action treats as absent, so
-          # leaving the one you do not use in place costs nothing. Deleting the
-          # line for the secret you DID set is what breaks — the credential
-          # never reaches the action, and it fails to authenticate silently.
-          #   ANTHROPIC_API_KEY       — pay-as-you-go key (billed per token via Anthropic Console), or
-          #   CLAUDE_CODE_OAUTH_TOKEN — from \`claude setup-token\`: a long-lived
-          #     (~1 year) token that draws on your Claude subscription at no
-          #     extra API cost. It must come from that command. The session
-          #     token \`/login\` leaves in the keychain expires in HOURS and is
-          #     kept alive by a refresh token CI does not have, so pasting that
-          #     one here yields a secret that works for a day and then breaks
-          #     reviews with no signal.
-          #   OPENCODE_AUTH_JSON      — whole OpenCode auth.json store
-          #   vars.CRYSK_ROUTING      — person-layer routing JSON; quoted so an
-          #     unset var is the empty string rather than broken YAML. The
-          #     older vars.PRHERO_ROUTING is read when this one is unset.
-          anthropic-api-key: \${{ secrets.ANTHROPIC_API_KEY }}
-          claude-token: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"
-          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}${sizeGateLine}${filesGateLine}${budgetLine}${modeLine}
+${credentialWithLines(options)}${sizeGateLine}${filesGateLine}${budgetLine}${modeLine}
 `;
 }
 

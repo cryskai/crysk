@@ -25,7 +25,7 @@ import os from "node:os";
 import path from "node:path";
 import { classifyCliError } from "#ci/classify-error";
 import { writeFatalCliRecord } from "#ci/cli-record";
-import { chooseOpenCodeSecret } from "#ci/crysk-secrets";
+import { chooseOpenCodeSecret, parseCryskSecrets } from "#ci/crysk-secrets";
 import {
   CLI_RECORD_FILE,
   type CliRecord,
@@ -478,9 +478,14 @@ describe("decidePublication — the pure table", () => {
           p.commentBody,
         ].join("\n");
 
-      test.each(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"])(
-        "auth_invalid on %s renders PRH-CRED-REJECTED naming that secret",
-        (credential) => {
+      // U5: the hunter records the Claude CLI's variable; in the action that variable
+      // was filled from the CRYSK_* secret the workflow passes, which the fix names.
+      test.each([
+        ["ANTHROPIC_API_KEY", "CRYSK_CLAUDE_API_KEY"],
+        ["CLAUDE_CODE_OAUTH_TOKEN", "CRYSK_CLAUDE_OAUTH_TOKEN"],
+      ])(
+        "auth_invalid on %s renders PRH-CRED-REJECTED naming its CRYSK_* secret, %s",
+        (credential, secret) => {
           const entry = {
             cause: "auth_invalid",
             provider: "anthropic",
@@ -490,7 +495,11 @@ describe("decidePublication — the pure table", () => {
           };
           const p = plan([entry, entry]);
           expect(p.rendered.code).toBe("PRH-CRED-REJECTED");
-          expect(p.rendered.annotation).toContain(credential);
+          expect(p.rendered.annotation).toContain(
+            `rejected the credential in ${secret}`,
+          );
+          expect(p.rendered.annotation).toContain(`gh secret set ${secret}`);
+          expect(p.rendered.annotation).not.toContain(credential);
           expect(p.rendered.annotation).toContain("Provider anthropic");
           expect(p.status?.description).toStartWith("PRH-CRED-REJECTED: ");
           expect(texts(p)).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
@@ -522,8 +531,9 @@ describe("decidePublication — the pure table", () => {
         const all = texts(p);
         expect(all).toContain("Credit balance is too low");
         expect(all).toContain(
-          "Add credit to the Anthropic account behind ANTHROPIC_API_KEY",
+          "Add credit to the Anthropic account behind the API key",
         );
+        expect(all).not.toContain("ANTHROPIC_API_KEY");
         expect(all).toContain("credentials.claude");
         expect(all).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
         expect(all).not.toContain("gh secret delete");
@@ -546,11 +556,12 @@ describe("decidePublication — the pure table", () => {
         expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
         const all = texts(p);
         expect(all).toContain(
-          "CLAUDE_CODE_OAUTH_TOKEN reached its usage limit",
+          "the Claude subscription reached its usage limit",
         );
         expect(all).toContain("resets 12:40pm (Asia/Tokyo)");
         expect(all).toContain("Re-run after");
-        expect(all).toContain("set ANTHROPIC_API_KEY");
+        expect(all).toContain("gh secret set CRYSK_CLAUDE_API_KEY");
+        expect(all).not.toContain("ANTHROPIC_API_KEY");
         // Setting the key alone changes nothing under the default order (S5).
         expect(all).toContain("put api_key first in `credentials.claude`");
         expect(all).toContain("CRYSK_CLAUDE_API_KEY");
@@ -628,7 +639,7 @@ describe("decidePublication — the pure table", () => {
           const p = rejected("ANTHROPIC_API_KEY");
           const summary = p.rendered.summary.join("\n");
           expect(
-            summary.indexOf("gh secret set ANTHROPIC_API_KEY"),
+            summary.indexOf("gh secret set CRYSK_CLAUDE_API_KEY"),
           ).toBeGreaterThan(-1);
           expect(summary).not.toContain("gh secret delete");
           expect(summary).toContain("credentials.claude");
@@ -1208,8 +1219,9 @@ describe("decidePublication — the pure table", () => {
       "PRH-CRED-MISSING: No credential for the claude route reached the action",
     );
     expect(plan.rendered.annotation).toContain(
-      "gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+      "gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
     );
+    expect(plan.rendered.annotation).toContain("crysk-secrets input");
   });
 
   // U5: a workflow still passing a removed input is stopped by the trigger, and its
@@ -1262,8 +1274,9 @@ describe("decidePublication — the pure table", () => {
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
     expect(plan.rendered.annotation).toContain(
-      "set the OPENCODE_AUTH_JSON secret",
+      "gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY",
     );
+    expect(plan.rendered.annotation).not.toContain("OPENCODE_AUTH_JSON");
   });
 
   test("no credentials without a PR is annotation only, and the cause stays CRED-MISSING", () => {
@@ -1463,7 +1476,39 @@ describe("decidePublication — the pure table", () => {
     expect(summary).not.toContain("OPENCODE_AUTH_JSON");
   });
 
-  test("a malformed opencode-auth setup record keeps its OpenCode store fix", () => {
+  // U5 (L27 open item): the platform's stub forwards OpenCode keys through provider
+  // slots. A slot with a key and no provider is refused by the grammar, and its fix is
+  // the platform's slot list, not "re-set the secret" with the openai jq line, which
+  // would fail again. The detail is the grammar's own text, so the two cannot drift.
+  test("an OpenCode slot with a key and no provider gets the platform slot fix, not the re-set fix", () => {
+    const detail =
+      parseCryskSecrets("CRYSK_OPENCODE__API_KEY=SENTINEL-SLOT-41")
+        .problems[0] ?? "";
+    expect(detail.startsWith("CRYSK_OPENCODE__API_KEY ")).toBe(true);
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail,
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+    expect(plan.rendered.annotation).toContain(
+      "forwarded an OpenCode key in a slot with no provider",
+    );
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("provider slots for this run are empty");
+    expect(summary).toContain("model settings on the Crysk platform");
+    expect(summary).not.toContain("jq -c .openai");
+    expect(summary).not.toContain("Re-set the CRYSK_* secret");
+    expect(`${summary}${plan.rendered.annotation}`).not.toContain("SENTINEL");
+  });
+
+  test("a malformed auth-store record keeps its OpenCode store fix, pointing CI at the CRYSK_OPENCODE_* secret", () => {
     const plan = decidePublication({
       record: record(),
       cliStarted: false,
@@ -1476,7 +1521,7 @@ describe("decidePublication — the pure table", () => {
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
     expect(plan.rendered.annotation).toContain(
-      "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
+      "make the OpenCode auth store a JSON object (in CI, re-set the provider's CRYSK_OPENCODE_* secret)",
     );
     expect(plan.rendered.summary.join("\n")).toContain(
       "jq -e 'type==\"object\"'",

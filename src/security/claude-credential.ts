@@ -70,6 +70,9 @@ export interface ClaudeCredentialPresence {
   readonly api_key?: ClaudeCredentialSource;
   // Set when ANTHROPIC_AUTH_TOKEN holds a value: it is stripped, and a refusal says so.
   readonly authTokenIgnored?: true;
+  // Set when the env came from the crysk-secrets intake (the action, U5): the only
+  // sources were the CRYSK_* secrets in that input, so a refusal names those.
+  readonly fromCryskSecrets?: true;
 }
 
 export type ClaudeCredentialSelection =
@@ -134,8 +137,13 @@ export function selectClaudeCredential(
   return { status: "none", order: effective, orderDefaulted, presence };
 }
 
-function describeSources(kind: ClaudeCredentialKind): string {
-  const names = ENV_SOURCES[kind].join(" or ");
+function describeSources(
+  kind: ClaudeCredentialKind,
+  fromCryskSecrets: boolean,
+): string {
+  const names = fromCryskSecrets
+    ? `${ENV_SOURCES[kind][0]} in the crysk-secrets input`
+    : ENV_SOURCES[kind].join(" or ");
   return kind === "subscription"
     ? `${names}, or a Claude login on this machine`
     : names;
@@ -152,7 +160,10 @@ export function claudeCredentialRefusal(
   if (selection.status === "chosen" || !planHasClaudeRoute) return undefined;
   const order = `credentials.claude is [${selection.order.join(", ")}]${selection.orderDefaulted ? " (the default)" : ""}`;
   const missing = selection.order
-    .map((kind) => `${kind} (${describeSources(kind)})`)
+    .map(
+      (kind) =>
+        `${kind} (${describeSources(kind, selection.presence.fromCryskSecrets === true)})`,
+    )
     .join("; ");
   const unlisted = (["subscription", "api_key"] as const).filter(
     (kind) =>
@@ -260,15 +271,19 @@ export function resolveRunClaudeCredential(input: {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly loginPresent?: boolean;
 }): RunClaudeCredential {
+  const fromIntake = input.env === undefined && cryskClaudeIntake !== undefined;
   const env =
     input.env ??
     (cryskClaudeIntake === undefined
       ? process.env
       : cryskIntakeEnv(process.env, cryskClaudeIntake));
-  const presence = claudeCredentialPresence(
+  const found = claudeCredentialPresence(
     env,
     input.loginPresent ?? defaultClaudeLoginPresent(env),
   );
+  const presence: ClaudeCredentialPresence = fromIntake
+    ? { ...found, fromCryskSecrets: true }
+    : found;
   const selection = selectClaudeCredential(input.credentials?.claude, presence);
   return {
     selection,

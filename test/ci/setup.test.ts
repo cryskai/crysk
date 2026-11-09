@@ -457,6 +457,50 @@ describe("generateCiWorkflowTemplate (pure)", () => {
   });
 });
 
+// U5 (odd/tasks/role-model-routing.md, S8): this repository's own workflow passes
+// its credentials as CRYSK_* secrets in the crysk-secrets input, since the action
+// stops a run that still passes the removed inputs. The scaffolded template is
+// not changed here (E-f moves it).
+describe("this repo's own workflow passes the CRYSK_* secrets", () => {
+  function runCryskWith(template: string): Record<string, string> {
+    const parsed = Bun.YAML.parse(template) as {
+      jobs: { review: { steps: Array<Record<string, unknown>> } };
+    };
+    const step = parsed.jobs.review.steps.find((s) => s.name === "Run Crysk") as
+      | { with?: Record<string, string> }
+      | undefined;
+    return step?.with ?? {};
+  }
+
+  test("its Run Crysk step passes the Claude pair in crysk-secrets and no removed input", () => {
+    const withBlock = runCryskWith(own());
+    for (const removed of [
+      "anthropic-api-key",
+      "claude-token",
+      "opencode-auth",
+      "routing",
+    ]) {
+      expect(withBlock[removed], removed).toBeUndefined();
+    }
+    const lines = (withBlock["crysk-secrets"] ?? "").split("\n");
+    expect(lines).toContain(
+      "CRYSK_CLAUDE_OAUTH_TOKEN=$" + "{{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}",
+    );
+    expect(lines).toContain(
+      "CRYSK_CLAUDE_API_KEY=$" + "{{ secrets.CRYSK_CLAUDE_API_KEY }}",
+    );
+    expect(own()).not.toContain("toJSON(secrets)");
+  });
+
+  test("the scaffolded template still passes the old inputs until it moves (E-f)", () => {
+    const withBlock = runCryskWith(generateCiWorkflowTemplate());
+    expect(withBlock["claude-token"]).toBe(
+      "$" + "{{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+    );
+    expect(withBlock["crysk-secrets"]).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------
 // This repo's own comment runs (forceEngineFromPr).
 //

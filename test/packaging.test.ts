@@ -547,6 +547,26 @@ describe("Packaging & distribution configuration", () => {
       // healthy. A `with:` key with no matching input is silently ignored by
       // GitHub Actions; nothing else in this repo would notice.
       const declared = Object.keys(parsedAction().inputs);
+      const keysOf = (template: string): string[] => {
+        const workflow = Bun.YAML.parse(template) as {
+          jobs: {
+            review: {
+              steps: Array<{ uses?: string; with?: Record<string, string> }>;
+            };
+          };
+        };
+        return workflow.jobs.review.steps.flatMap((step) =>
+          (step.uses === "./" || step.uses?.startsWith("cryskai/crysk@")) &&
+          step.with !== undefined
+            ? Object.keys(step.with)
+            : [],
+        );
+      };
+      // The scaffolded template (E-f moves it): still the removed inputs, which
+      // stay declared so the trigger can name them.
+      const scaffolded = keysOf(generateCiWorkflowTemplate());
+      expect(scaffolded.length).toBeGreaterThan(0);
+      for (const key of scaffolded) expect(declared).toContain(key);
       const workflow = Bun.YAML.parse(
         generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS),
       ) as {
@@ -572,9 +592,17 @@ describe("Packaging & distribution configuration", () => {
       for (const key of ours) {
         expect(declared).toContain(key);
       }
-      // And both credential paths are actually wired, not just declared.
-      expect(ours).toContain("anthropic-api-key");
-      expect(ours).toContain("claude-token");
+      // This repo's own workflow passes its credentials in crysk-secrets (U5),
+      // and none of the removed inputs.
+      expect(ours).toContain("crysk-secrets");
+      for (const removed of [
+        "anthropic-api-key",
+        "claude-token",
+        "opencode-auth",
+        "routing",
+      ]) {
+        expect(ours).not.toContain(removed);
+      }
     });
 
     // U5: the step runs src/ci/run.ts, which takes the crysk-secrets input and

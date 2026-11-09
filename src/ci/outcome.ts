@@ -1159,21 +1159,29 @@ const REVIEW_AGAIN = '$ gh pr comment {pr} --body "/crysk review"';
 // floating action tag still delivers this text to it.
 const LEGACY_REVIEW_NOTE =
   "On a workflow set up before the rename, comment `/pr-hero review` instead.";
-const OPENCODE_STORE =
-  "$ gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json";
+// The OpenCode secrets (S8): one per provider, <PROVIDER> being the provider id
+// uppercased with `-` and `.` as `_` (opencodeSecretToken in crysk-secrets.ts,
+// which this module cannot import: see the builtins-only guard).
+const OPENCODE_API_KEY_SECRET =
+  "$ gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY";
+const OPENCODE_PROVIDER_TOKEN_NOTE =
+  "<PROVIDER> is the provider id uppercased with `-` and `.` as `_` (`deepseek` is DEEPSEEK).";
+const OPENAI_OAUTH_SECRET =
+  "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH";
 const CRED_STORE_WHY =
   "the credential store does not hold what this route needs";
 // missing_subscription_record is raised for a Claude keychain record and for an
 // OpenAI OAuth record alike, so each route's fix names the login it really uses.
 const CLAUDE_SUBSCRIPTION_FIXES = [
-  "Log in again with `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`:",
-  "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+  "Log in again with `claude setup-token`, then set `CRYSK_CLAUDE_OAUTH_TOKEN`:",
+  "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
 ];
 const OPENCODE_SUBSCRIPTION_FIXES = [
-  "Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then re-set the secret:",
+  "Provider `openai` expects a ChatGPT login: run `opencode auth login` and choose ChatGPT, then set its record, base64 on one line (on macOS, drop -w0):",
   "$ opencode auth login",
-  OPENCODE_STORE,
-  "Or rename the provider in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
+  OPENAI_OAUTH_SECRET,
+  "Or bill per token with an OpenAI API key instead:",
+  "$ gh secret set CRYSK_OPENCODE_OPENAI_API_KEY",
 ];
 // Only the OpenCode route stores a ChatGPT login; any other backend, or none, is
 // the Claude route.
@@ -1192,8 +1200,24 @@ function isCryskSecretsDetail(params: ErrorParams): boolean {
 }
 const CRYSK_SECRETS_FIXES = [
   "Re-set the CRYSK_* secret the message names. An _OAUTH secret is the provider's record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
-  "$ jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+  OPENAI_OAUTH_SECRET,
   "Each line of the crysk-secrets input is NAME=value, one CRYSK_* secret per line.",
+];
+// U5: the platform's stub forwards OpenCode API keys through provider slots,
+// `CRYSK_OPENCODE_<TOKEN>_API_KEY`, the token coming from the dispatch. A slot
+// that arrived with a key and no token (src/ci/crysk-secrets.ts refuses it) is the
+// platform's slot list, not the secret: re-setting the secret would fail again.
+// The text is parseCryskSecrets's, matched here for the same reason as below.
+const EMPTY_SLOT_DETAIL =
+  "CRYSK_OPENCODE__API_KEY has a value but no provider: an unused OpenCode slot must be empty";
+function isEmptySlotDetail(detail: string): boolean {
+  return detail.trim() === EMPTY_SLOT_DETAIL;
+}
+const EMPTY_SLOT_FIXES = [
+  "The Crysk platform passed an OpenCode key through a provider slot with no provider name, so Crysk cannot tell whose key it is. The platform's provider slots for this run are empty while a key was forwarded:",
+  "Open the repository's model settings on the Crysk platform, save the OpenCode provider whose key this is again so its slot names the provider, then re-run the workflow:",
+  "$ gh run rerun {runId}",
+  "In a workflow you wrote yourself, name the provider in the line: CRYSK_OPENCODE_<PROVIDER>_API_KEY, and leave an unused slot as CRYSK_OPENCODE__API_KEY= with nothing after it.",
 ];
 // U3: an _OAUTH secret for a provider other than openai is refused, since
 // only openai's subscription record can be projected. Re-setting it would fail
@@ -1208,6 +1232,7 @@ function unsupportedOAuthApiKeyName(detail: string): string | undefined {
   return UNSUPPORTED_OAUTH_DETAIL_RE.exec(detail.trim())?.[1];
 }
 function cryskSecretsFixes(params: ErrorParams): string[] {
+  if (isEmptySlotDetail(params.detail ?? "")) return [...EMPTY_SLOT_FIXES];
   const apiKey = unsupportedOAuthApiKeyName(params.detail ?? "");
   if (apiKey === undefined) return CRYSK_SECRETS_FIXES;
   return [
@@ -1217,19 +1242,22 @@ function cryskSecretsFixes(params: ErrorParams): string[] {
   ];
 }
 function cryskSecretsAnnotationFix(params: ErrorParams): string {
+  if (isEmptySlotDetail(params.detail ?? "")) {
+    return "the Crysk platform forwarded an OpenCode key in a slot with no provider: save that OpenCode provider again in the platform's model settings, then re-run";
+  }
   return unsupportedOAuthApiKeyName(params.detail ?? "") === undefined
     ? "re-set the CRYSK_* secret it names (an _OAUTH secret is base64 -w0 of the provider's OpenCode record)"
     : "remove that _OAUTH secret from the crysk-secrets input and set the provider's _API_KEY secret instead (only openai reads an _OAUTH secret for now)";
 }
 const MODEL_NOT_SERVED: CatalogVariant = {
-  why: "the routing names a model this provider does not offer",
+  why: "the configured models name a model this provider does not offer",
   fixes: [
-    "Fix the `modelSnapshot` for this step in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename).",
+    "Set a model this provider serves for this step's role in `models` (on the Crysk platform, the model settings).",
     "List the models this provider serves:",
     "$ opencode models {provider}",
   ],
   annotationFix:
-    "fix the `modelSnapshot` for {step} in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename) to a model that {provider} serves",
+    "set a model that {provider} serves for {step}'s role in `models` (the Crysk platform's model settings)",
 };
 
 const ROUTE_WHY = "every agent needs exactly one backend, provider and model";
@@ -1245,26 +1273,17 @@ const UNCLASSIFIED_FIX =
 // The GitHub Actions expression is spliced in from two literals so the source
 // never holds a `${` pair that reads as a template placeholder here.
 const GITHUB_TOKEN_INPUT = "github-token: $" + "{{ secrets.GITHUB_TOKEN }}";
-// The `with:` line that hands the Claude secret to the action, spliced the same way.
-const CLAUDE_TOKEN_INPUT =
-  "claude-token: $" + "{{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}";
-// The `with:` line that hands the OpenCode auth store to the action, spliced the same way.
-const OPENCODE_AUTH_INPUT =
-  "opencode-auth: $" + "{{ secrets.OPENCODE_AUTH_JSON }}";
-// The `with:` line for the Claude API key, the alternative to the OAuth token.
-const ANTHROPIC_API_KEY_INPUT =
-  "anthropic-api-key: $" + "{{ secrets.ANTHROPIC_API_KEY }}";
-// The fix for a missing credential, by route. A Claude route names only the Claude
-// secrets. An OpenCode route leads with the OpenCode secret, and names the Claude
-// token only as the route it does not use (odd/tasks/agent-first-ci.md, A5).
+// The fix for a missing credential, by route (S8, U5): the CRYSK_* secrets, passed
+// in the crysk-secrets input. A Claude route names only the Claude secrets. An
+// OpenCode route leads with the OpenCode secrets, and names the Claude token only
+// as the route it does not use (odd/tasks/agent-first-ci.md, A5).
 const CLAUDE_CREDENTIAL_FIXES = [
   "Set one credential for the route you use:",
-  "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
-  "$ gh secret set ANTHROPIC_API_KEY",
-  "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${CLAUDE_TOKEN_INPUT}\` or \`${ANTHROPIC_API_KEY_INPUT}\`: a secret the workflow does not pass never reaches Crysk.`,
+  "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
+  "$ gh secret set CRYSK_CLAUDE_API_KEY",
+  `If the secret is already set, check that the workflow passes it to the action in the \`crysk-secrets\` input, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_CLAUDE_OAUTH_TOKEN")}\`: a secret the workflow does not pass never reaches Crysk.`,
   "Dependabot PRs read Dependabot secrets, so set this one too:",
-  "$ gh secret set --app dependabot CLAUDE_CODE_OAUTH_TOKEN",
+  "$ gh secret set --app dependabot CRYSK_CLAUDE_OAUTH_TOKEN",
   "Then re-run the workflow:",
   "$ gh run rerun {runId}",
 ] as const;
@@ -1274,15 +1293,15 @@ const CLAUDE_CREDENTIAL_FIXES = [
 const LEGACY_ROUTING_NOTE =
   "A workflow set up before the rename reads PRHERO_ROUTING instead: set that one, or run `crysk ci init --force` so the workflow also reads CRYSK_ROUTING.";
 const OPENCODE_CREDENTIAL_FIXES = [
-  "Set the OpenCode credential for the route you use:",
-  "$ opencode auth login && gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-  `If the secret is already set, check that the workflow passes it to the action under \`with:\`, for example \`${OPENCODE_AUTH_INPUT}\`: a secret the workflow does not pass never reaches Crysk.`,
-  "An OpenCode route also needs the routing variable:",
-  "$ gh variable set CRYSK_ROUTING --body '<routing-object-json>'",
-  LEGACY_ROUTING_NOTE,
+  "Set the OpenCode credential of each provider your models use:",
+  OPENCODE_API_KEY_SECRET,
+  OPENCODE_PROVIDER_TOKEN_NOTE,
+  "For an OpenAI subscription, set its record from your OpenCode auth file, base64 on one line (on macOS, drop -w0):",
+  OPENAI_OAUTH_SECRET,
+  `If the secret is already set, check that the workflow passes it to the action in the \`crysk-secrets\` input, one NAME=value line per secret, for example \`${cryskSecretsLine("CRYSK_OPENCODE_DEEPSEEK_API_KEY")}\`: a secret the workflow does not pass never reaches Crysk.`,
   "Dependabot PRs read Dependabot secrets, so set this one too:",
-  "$ gh secret set --app dependabot OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json",
-  "A Claude route uses `CLAUDE_CODE_OAUTH_TOKEN` instead, from `claude setup-token`.",
+  "$ gh secret set --app dependabot CRYSK_OPENCODE_<PROVIDER>_API_KEY",
+  "A Claude route uses `CRYSK_CLAUDE_OAUTH_TOKEN` instead, from `claude setup-token`.",
   "Then re-run the workflow:",
   "$ gh run rerun {runId}",
 ] as const;
@@ -1373,8 +1392,8 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           : CLAUDE_CREDENTIAL_FIXES,
       (params) =>
         params.backend?.trim() === "opencode"
-          ? "set the OPENCODE_AUTH_JSON secret: `gh secret set OPENCODE_AUTH_JSON < ~/.local/share/opencode/auth.json`"
-          : "set a Claude credential: `claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN`",
+          ? "set the provider's CRYSK_OPENCODE_<PROVIDER>_API_KEY secret (`gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY`) and pass it in the crysk-secrets input"
+          : "set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input",
     ),
   },
   "PRH-INPUT-REMOVED": {
@@ -1402,12 +1421,12 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           "The {backend}/{provider} route for {step} has no usable credential ({detail})",
         why: CRED_STORE_WHY,
         fixes: [
-          "Add {provider} to the OpenCode store, then re-set the secret:",
-          "$ opencode auth login",
-          OPENCODE_STORE,
+          "Set {provider}'s secret and pass it in the crysk-secrets input:",
+          OPENCODE_API_KEY_SECRET,
+          OPENCODE_PROVIDER_TOKEN_NOTE,
         ],
         annotationFix:
-          "add {provider} to the OpenCode store with `opencode auth login`, then set OPENCODE_AUTH_JSON again",
+          "set {provider}'s CRYSK_OPENCODE_<PROVIDER>_API_KEY secret and pass it in the crysk-secrets input",
       },
       missing_subscription_record: {
         why: CRED_STORE_WHY,
@@ -1417,8 +1436,8 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
             : CLAUDE_SUBSCRIPTION_FIXES,
         annotationFix: (params) =>
           isOpencodeRoute(params)
-            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then re-set OPENCODE_AUTH_JSON, or rename the provider in CRYSK_ROUTING (PRHERO_ROUTING on a workflow set up before the rename)"
-            : "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
+            ? "run `opencode auth login` and choose ChatGPT for provider `openai`, then set CRYSK_OPENCODE_OPENAI_OAUTH from its record, or set CRYSK_OPENCODE_OPENAI_API_KEY to bill per token"
+            : "log in again with `claude setup-token` and set `CRYSK_CLAUDE_OAUTH_TOKEN` (`gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`)",
       },
       malformed_payload: {
         // WHY no route in the sentence: this class is raised for the OpenCode auth
@@ -1431,13 +1450,13 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
             : [
                 "Check that the store is a JSON object:",
                 "$ jq -e 'type==\"object\"' ~/.local/share/opencode/auth.json",
-                "Then re-set the secret:",
-                OPENCODE_STORE,
+                "In CI the action builds this file from the CRYSK_OPENCODE_* secrets: re-set the one for this provider.",
+                OPENCODE_API_KEY_SECRET,
               ],
         annotationFix: (params) =>
           isCryskSecretsDetail(params)
             ? cryskSecretsAnnotationFix(params)
-            : "make the OpenCode auth store a JSON object, then set OPENCODE_AUTH_JSON again",
+            : "make the OpenCode auth store a JSON object (in CI, re-set the provider's CRYSK_OPENCODE_* secret)",
       },
       source_read_failed: CREDENTIAL_UNUSABLE_ENV,
       "env-absent": CREDENTIAL_UNUSABLE_ENV,
@@ -1459,33 +1478,33 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         fixes: [
           "Create a new key in the Claude Console and set it:",
           "$ gh secret set {secret}",
-          "Or run on the subscription: set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN under the new names) and put subscription first in `credentials.claude` (the default order).",
+          "Or run on the subscription: set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order).",
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "create a new key and run `gh secret set {secret}`, or set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN) and put subscription first in `credentials.claude` (the default order)",
+          "create a new key and run `gh secret set {secret}`, or set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order)",
       },
       oauth: {
         why: "it is expired, revoked, or a short-lived /login session token",
         fixes: [
-          "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+          "$ claude setup-token && gh secret set {secret}",
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "log in again with `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`)",
+          "log in again with `claude setup-token` and set `{secret}` (`gh secret set {secret}`)",
       },
       default: {
         why: "it is expired, revoked, or a short-lived /login session token",
         fixes: [
-          "$ claude setup-token && gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+          "$ claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
           "Or, for an API key, create a new key in the Claude Console and set it:",
-          "$ gh secret set ANTHROPIC_API_KEY",
-          "Or, for OpenCode, re-export the auth store and re-set the secret:",
-          OPENCODE_STORE,
+          "$ gh secret set CRYSK_CLAUDE_API_KEY",
+          "Or, for OpenCode, set the provider's key again:",
+          OPENCODE_API_KEY_SECRET,
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
@@ -1774,31 +1793,31 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       // credential this run chose from credentials.claude, S5). Waiting does not help:
       // the fix is to top up, or to move the run to the subscription through that order.
       api_key: {
-        what: "{detail}: the Anthropic account behind ANTHROPIC_API_KEY has no credit left or reached its spend limit",
+        what: "{detail}: the Anthropic account behind the API key has no credit left or reached its spend limit",
         why: "the provider refuses every request until the account has credit again, so a retry would fail the same way",
         fixes: [
-          "Add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or run on the subscription: set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN under the new names) and put subscription first in `credentials.claude` (the default order).",
+          "Add credit to the Anthropic account behind the API key (Claude Console → Plans & Billing), or run on the subscription: set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order).",
           "Then ask for a new review:",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
         ],
         annotationFix:
-          "add credit to the Anthropic account behind ANTHROPIC_API_KEY (Claude Console → Plans & Billing), or set CLAUDE_CODE_OAUTH_TOKEN (CRYSK_CLAUDE_OAUTH_TOKEN) and put subscription first in `credentials.claude` (the default order)",
+          "add credit to the Anthropic account behind the API key (Claude Console → Plans & Billing), or set CRYSK_CLAUDE_OAUTH_TOKEN and put subscription first in `credentials.claude` (the default order)",
       },
       // The Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached a usage window. The
       // provider's own sentence carries the reset time, so the what quotes it.
       subscription: {
-        what: "{detail}: the Claude subscription behind CLAUDE_CODE_OAUTH_TOKEN reached its usage limit",
+        what: "{detail}: the Claude subscription reached its usage limit",
         why: "the subscription refuses requests until its usage window resets, so an immediate retry would fail the same way",
         fixes: [
           "Re-run after the limit resets (the reset time is in the sentence above):",
           REVIEW_AGAIN,
           LEGACY_REVIEW_NOTE,
-          "Or bill per token: set ANTHROPIC_API_KEY (CRYSK_CLAUDE_API_KEY under the new names) and put api_key first in `credentials.claude` (the default order uses the subscription while it is set):",
-          "$ gh secret set ANTHROPIC_API_KEY",
+          "Or bill per token: set CRYSK_CLAUDE_API_KEY and put api_key first in `credentials.claude` (the default order uses the subscription while it is set):",
+          "$ gh secret set CRYSK_CLAUDE_API_KEY",
         ],
         annotationFix:
-          "re-run after the limit resets, or set ANTHROPIC_API_KEY (CRYSK_CLAUDE_API_KEY) and put api_key first in `credentials.claude` to bill per token",
+          "re-run after the limit resets, or set CRYSK_CLAUDE_API_KEY and put api_key first in `credentials.claude` to bill per token",
       },
     },
   },
@@ -1944,7 +1963,7 @@ export function renderHunterCause(
     }
     return renderCode(
       "PRH-CRED-REJECTED",
-      { ...params, secret: shared.credential },
+      { ...params, secret: secretNameOf(shared.credential, ctx) },
       ctx,
     );
   }
@@ -1977,6 +1996,25 @@ export function renderHunterCause(
     return renderError({ kind: "transport", cause }, params, ctx);
   }
   return undefined;
+}
+
+// The secret a rejected credential came from, as the reader sets it. A hunter
+// records the Claude CLI's own variable (FailureCredential); in the action that
+// variable was filled from the CRYSK_* secret the workflow passes in the
+// crysk-secrets input (S8, U5), so `gh secret set` must name that secret. A local
+// run exports the CLI's variable itself, so it keeps that name.
+const CRYSK_SECRET_OF_CREDENTIAL: Readonly<
+  Partial<Record<FailureCredential, string>>
+> = {
+  ANTHROPIC_API_KEY: "CRYSK_CLAUDE_API_KEY",
+  CLAUDE_CODE_OAUTH_TOKEN: "CRYSK_CLAUDE_OAUTH_TOKEN",
+};
+function secretNameOf(
+  credential: FailureCredential,
+  ctx: OutcomeContext,
+): string {
+  if (ctx !== "action") return credential;
+  return CRYSK_SECRET_OF_CREDENTIAL[credential] ?? credential;
 }
 
 // For a code the caller requests directly. `variant` picks the sub-class, which
@@ -2049,11 +2087,17 @@ function paramVariant(
   if (code === "PRH-CRED-REJECTED" && variant === undefined) {
     if (
       params.secret === "ANTHROPIC_API_KEY" ||
-      params.secret === "ANTHROPIC_AUTH_TOKEN"
+      params.secret === "ANTHROPIC_AUTH_TOKEN" ||
+      params.secret === "CRYSK_CLAUDE_API_KEY"
     ) {
       return "api_key";
     }
-    if (params.secret === "CLAUDE_CODE_OAUTH_TOKEN") return "oauth";
+    if (
+      params.secret === "CLAUDE_CODE_OAUTH_TOKEN" ||
+      params.secret === "CRYSK_CLAUDE_OAUTH_TOKEN"
+    ) {
+      return "oauth";
+    }
   }
   // A caller that names a variant keeps it, so the default wording stays
   // reachable with a detail present.
