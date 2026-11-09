@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   buildFindingsUpload,
   buildRunReport,
+  type RunDirFacts,
   type RunReportBody,
   readRunDir,
   runReportStep,
@@ -566,6 +567,377 @@ describe("buildRunReport", () => {
     const dir = fixtureDir({});
     writeFileSync(path.join(dir, "findings.json"), "{not json");
     expect(readRunDir(dir)).toEqual({});
+  });
+});
+
+// The report the base code (before the cache split) sent for FINDINGS + PIPELINE, byte for byte.
+const LEGACY_REPORT =
+  '{"outcome":"reviewed","pr_number":7,"head_sha":"067297acd7e7aac125a156bf597f4d05d255659e","base_sha":"b4efc4c2c2e3b37445b4505171006ed05130c2cc","run_status":"complete","schema_version":"1.1.0","engine_version":"1.4.2","model":"sonnet","counts":{"blocking":1,"advisory":2,"refuted_by_hunter":{}},"usage":{"tokens_in":1000,"tokens_out":500,"cost_usd":0.75,"cost_is_floor":true,"wall_ms":5000,"index_ms":1},"agents":[{"agent_key":"reliability","model":"claude-sonnet-4-5","tokens_in":600,"tokens_out":300,"cost_usd":0.4,"duration_ms":3000,"attempts":2,"status":"ok"},{"agent_key":"refuter","model":"claude-opus-4-1","tokens_in":400,"tokens_out":200,"cost_usd":0.35,"duration_ms":1000,"attempts":1,"status":"ok"}]}';
+
+// One step's or one run's `usage_v2` as the Claude CLI transport writes it: the four disjoint leaves, and
+// the list total in cash on a per-token key or in notional on a subscription, never both.
+function usageV2(
+  billingMode: string,
+  leaves: [number, number, number, number],
+  listUsd: number,
+): Record<string, unknown> {
+  const [inputUncached, inputCacheRead, inputCacheWrite, outputVisible] =
+    leaves;
+  return {
+    wallMs: 1000,
+    tokens: { inputUncached, inputCacheRead, inputCacheWrite, outputVisible },
+    completeness: "complete",
+    billingMode,
+    ...(billingMode === "metered"
+      ? { cashCostUsd: listUsd }
+      : { cashCostUsd: 0, notionalCostUsd: listUsd }),
+    costSource: billingMode === "metered" ? "provider" : "subscription",
+  };
+}
+
+const tokensOf = (leaves: [number, number, number, number]) => ({
+  input_uncached: leaves[0],
+  input_cache_read: leaves[1],
+  input_cache_write: leaves[2],
+  output: leaves[3],
+});
+
+// A hunter, a refuter fanned out over two findings, the summary row (whose step is `summarizer`), and a
+// warmup step no agent row owns.
+function cachedRun(billingMode: "subscription" | "metered") {
+  return {
+    findings: {
+      ...FINDINGS,
+      telemetry: {
+        ...FINDINGS.telemetry,
+        per_agent: {
+          ...FINDINGS.telemetry.per_agent,
+          summary: { tokens_in: 1, tokens_out: 1, cost_usd_est: 0 },
+        },
+      },
+    },
+    pipeline: {
+      usage_v2: usageV2(billingMode, [10, 5000, 700, 300], 2.5),
+      steps: [
+        {
+          name: "warmup-1",
+          model: "m-warm",
+          usage_v2: usageV2(billingMode, [1, 0, 400, 1], 0.5),
+        },
+        {
+          name: "hunter-reliability",
+          model: "claude-sonnet-4-5",
+          usage_v2: usageV2(billingMode, [5, 3000, 200, 200], 1.25),
+        },
+        {
+          name: "refuter-F001",
+          model: "claude-opus-4-1",
+          usage_v2: usageV2(billingMode, [2, 1000, 50, 50], 0.375),
+        },
+        {
+          name: "refuter-F002",
+          model: "claude-opus-4-1",
+          usage_v2: usageV2(billingMode, [1, 900, 40, 40], 0.25),
+        },
+        {
+          name: "summarizer",
+          model: "m-summary",
+          usage_v2: usageV2(billingMode, [1, 100, 10, 9], 0.125),
+        },
+      ],
+    },
+  };
+}
+
+describe("buildRunReport: the cache split and the list-price cost", () => {
+  const report = (run: RunDirFacts) =>
+    buildRunReport({
+      outcome: "reviewed",
+      prNumber: 7,
+      triggerHeadSha: TRIGGER_HEAD,
+      run,
+    });
+  const agent = (body: RunReportBody | null, key: string) =>
+    body?.agents.find((row) => row.agent_key === key);
+
+  test("a subscription run sends its token split, its notional cost as the list cost, and its billing", () => {
+    const body = report(cachedRun("subscription"));
+    expect(body?.usage).toMatchObject({
+      tokens: tokensOf([10, 5000, 700, 300]),
+      list_cost_usd: 2.5,
+      billing: "subscription",
+    });
+    expect(agent(body, "reliability")).toMatchObject({
+      tokens: tokensOf([5, 3000, 200, 200]),
+      list_cost_usd: 1.25,
+    });
+    // Both refuter steps sum into the one refuter row.
+    expect(agent(body, "refuter")).toMatchObject({
+      tokens: tokensOf([3, 1900, 90, 90]),
+      list_cost_usd: 0.625,
+    });
+    // The summary row owns the `summarizer` step through the alias.
+    expect(agent(body, "summary")).toMatchObject({
+      tokens: tokensOf([1, 100, 10, 9]),
+      list_cost_usd: 0.125,
+    });
+  });
+
+  test("a metered run sends its cash cost as the list cost", () => {
+    const body = report(cachedRun("metered"));
+    expect(body?.usage).toMatchObject({
+      tokens: tokensOf([10, 5000, 700, 300]),
+      list_cost_usd: 2.5,
+      billing: "metered",
+    });
+    expect(agent(body, "refuter")).toMatchObject({
+      tokens: tokensOf([3, 1900, 90, 90]),
+      list_cost_usd: 0.625,
+    });
+  });
+
+  test("a step no agent row owns stays in the run totals and in no agent's", () => {
+    const body = report(cachedRun("subscription"));
+    const summed = (body?.agents ?? []).reduce(
+      (total, row) => total + (row.list_cost_usd ?? 0),
+      0,
+    );
+    // 2.5 for the run, 0.5 of it the warmup's.
+    expect(summed).toBe(2);
+    const cacheWrite = (body?.agents ?? []).reduce(
+      (total, row) => total + (row.tokens?.input_cache_write ?? 0),
+      0,
+    );
+    expect(cacheWrite).toBe(300);
+  });
+
+  test("the existing fields keep their values and meaning beside the new ones", () => {
+    const body = report(cachedRun("subscription"));
+    expect(body?.usage).toMatchObject({
+      tokens_in: 1000,
+      tokens_out: 500,
+      cost_usd: 0.75,
+      cost_is_floor: true,
+    });
+    expect(agent(body, "refuter")).toMatchObject({
+      model: "claude-opus-4-1",
+      tokens_in: 400,
+      tokens_out: 200,
+      cost_usd: 0.35,
+    });
+  });
+
+  test("a run from before usage_v2 sends exactly what it sent before", () => {
+    const body = report(
+      readRunDir(
+        fixtureDir({ "findings.json": FINDINGS, "pipeline.json": PIPELINE }),
+      ),
+    );
+    expect(JSON.stringify(body)).toBe(LEGACY_REPORT);
+  });
+
+  test("adding usage_v2 changes no existing field: without the new keys the report is the old one", () => {
+    const pipeline = {
+      usage_v2: usageV2("subscription", [1, 2, 3, 4], 1),
+      steps: PIPELINE.steps.map((step) => ({
+        ...step,
+        usage_v2: usageV2("subscription", [1, 2, 3, 4], 0.5),
+      })),
+    };
+    const body = report({ findings: FINDINGS, pipeline });
+    const stripped = JSON.parse(JSON.stringify(body), (key, value) =>
+      ["tokens", "list_cost_usd", "billing"].includes(key) ? undefined : value,
+    );
+    expect(JSON.stringify(stripped)).toBe(LEGACY_REPORT);
+    expect(body?.usage.tokens).toBeDefined();
+  });
+
+  test("a run with no pipeline.json, or one without usage_v2, sends none of the new fields", () => {
+    for (const pipeline of [
+      undefined,
+      PIPELINE,
+      { usage_v2: null, steps: [] },
+    ]) {
+      const body = report({ findings: FINDINGS, pipeline });
+      const text = JSON.stringify(body);
+      for (const key of ["tokens", "list_cost_usd", "billing"]) {
+        expect(text).not.toContain(`"${key}"`);
+      }
+    }
+  });
+
+  test("a malformed field costs only that field, never the report", () => {
+    const run = cachedRun("subscription");
+    const pipeline = {
+      usage_v2: {
+        ...usageV2("subscription", [10, 5000, 700, 300], 2.5),
+        tokens: {
+          inputUncached: 10,
+          inputCacheRead: "lots",
+          inputCacheWrite: -1,
+          outputVisible: 300.4,
+        },
+        notionalCostUsd: Number.NaN,
+        billingMode: "barter",
+      },
+      steps: [
+        { name: "hunter-reliability", model: "m", usage_v2: "not usage" },
+        {
+          name: "refuter-F001",
+          model: "m",
+          usage_v2: { ...usageV2("subscription", [1, 1, 1, 1], 1), tokens: 7 },
+        },
+      ],
+    };
+    const body = report({ findings: run.findings, pipeline });
+    expect(body?.usage.tokens).toEqual({ input_uncached: 10, output: 300 });
+    expect(body?.usage).not.toHaveProperty("list_cost_usd");
+    expect(body?.usage).not.toHaveProperty("billing");
+    expect(agent(body, "reliability")).not.toHaveProperty("tokens");
+    expect(agent(body, "reliability")).not.toHaveProperty("list_cost_usd");
+    // The refuter's tokens are not an object, but its cost still is.
+    expect(agent(body, "refuter")).not.toHaveProperty("tokens");
+    expect(agent(body, "refuter")?.list_cost_usd).toBe(1);
+    expect(body?.usage.tokens_in).toBe(1000);
+  });
+
+  test("an empty token record sends no tokens object", () => {
+    const pipeline = {
+      usage_v2: { ...usageV2("subscription", [0, 0, 0, 0], 0), tokens: {} },
+      steps: [],
+    };
+    const body = report({ findings: FINDINGS, pipeline });
+    expect(body?.usage).not.toHaveProperty("tokens");
+    expect(body?.usage.list_cost_usd).toBe(0);
+  });
+
+  test("free or unknown billing sends no billing and no list cost, since neither field can be read", () => {
+    for (const billingMode of ["free", "unknown"]) {
+      const pipeline = {
+        usage_v2: { ...usageV2(billingMode, [1, 2, 3, 4], 1), cashCostUsd: 1 },
+        steps: [
+          {
+            name: "hunter-reliability",
+            model: "m",
+            usage_v2: {
+              ...usageV2(billingMode, [1, 2, 3, 4], 1),
+              cashCostUsd: 1,
+            },
+          },
+        ],
+      };
+      const body = report({ findings: FINDINGS, pipeline });
+      expect(body?.usage.tokens).toEqual(tokensOf([1, 2, 3, 4]));
+      expect(body?.usage).not.toHaveProperty("billing");
+      expect(body?.usage).not.toHaveProperty("list_cost_usd");
+      expect(agent(body, "reliability")).not.toHaveProperty("list_cost_usd");
+    }
+  });
+
+  test("a run that mixes billing sums each step's own list cost, and a multi-model step each model's", () => {
+    const pipeline = {
+      // sumNormalizedUsage says unknown once two steps disagree.
+      usage_v2: { ...usageV2("unknown", [3, 3, 3, 3], 0), cashCostUsd: 2 },
+      steps: [
+        {
+          name: "hunter-reliability",
+          model: "m",
+          usage_v2: usageV2("subscription", [1, 1, 1, 1], 1.5),
+        },
+        {
+          name: "refuter-F001",
+          model: "m",
+          usage_v2: { ...usageV2("unknown", [2, 2, 2, 2], 0), cashCostUsd: 2 },
+          model_attempts: [
+            { model: "a", usage_v2: usageV2("subscription", [1, 1, 1, 1], 1) },
+            { model: "b", usage_v2: usageV2("metered", [1, 1, 1, 1], 2) },
+          ],
+        },
+      ],
+    };
+    const body = report({ findings: FINDINGS, pipeline });
+    expect(body?.usage).not.toHaveProperty("billing");
+    expect(body?.usage.list_cost_usd).toBe(4.5);
+    expect(agent(body, "reliability")?.list_cost_usd).toBe(1.5);
+    expect(agent(body, "refuter")?.list_cost_usd).toBe(3);
+  });
+
+  test("a mixed run whose steps cannot all be priced sends no run list cost", () => {
+    const pipeline = {
+      usage_v2: usageV2("unknown", [2, 2, 2, 2], 0),
+      steps: [
+        {
+          name: "hunter-reliability",
+          model: "m",
+          usage_v2: usageV2("subscription", [1, 1, 1, 1], 1.5),
+        },
+        {
+          name: "refuter-F001",
+          model: "m",
+          usage_v2: usageV2("free", [1, 1, 1, 1], 0),
+        },
+      ],
+    };
+    const body = report({ findings: FINDINGS, pipeline });
+    expect(body?.usage).not.toHaveProperty("list_cost_usd");
+    expect(agent(body, "reliability")?.list_cost_usd).toBe(1.5);
+  });
+
+  test("reasoning output counts as output and an inclusive total's uncached residual as uncached input", () => {
+    const pipeline = {
+      usage_v2: {
+        ...usageV2("metered", [0, 0, 0, 0], 1),
+        tokens: {
+          inputUncached: 4,
+          inputOther: 6,
+          inputCacheRead: 20,
+          outputVisible: 7,
+          outputReasoning: 3,
+          outputOther: 1,
+          inputKnown: 30,
+          outputKnown: 11,
+          totalKnown: 41,
+        },
+      },
+      steps: [],
+    };
+    const body = report({ findings: FINDINGS, pipeline });
+    expect(body?.usage.tokens).toEqual({
+      input_uncached: 10,
+      input_cache_read: 20,
+      output: 11,
+    });
+  });
+
+  test("a step is summed into one agent row at most, the exact name winning over a prefix", () => {
+    const pipeline = {
+      steps: [
+        {
+          name: "materiality-F001",
+          model: "m",
+          usage_v2: usageV2("metered", [1, 1, 1, 1], 1),
+        },
+      ],
+    };
+    const findings = {
+      ...FINDINGS,
+      telemetry: {
+        ...FINDINGS.telemetry,
+        per_agent: {
+          materiality: { tokens_in: 1, tokens_out: 1 },
+          "materiality-F001": { tokens_in: 1, tokens_out: 1 },
+        },
+      },
+    };
+    const body = report({ findings, pipeline });
+    expect(agent(body, "materiality")).not.toHaveProperty("list_cost_usd");
+    expect(agent(body, "materiality-F001")?.list_cost_usd).toBe(1);
+  });
+
+  test("the zero report of a run that wrote no findings stays zero, whatever pipeline.json says", () => {
+    const body = report({ pipeline: cachedRun("metered").pipeline });
+    expect(body?.usage).toEqual({ tokens_in: 0, tokens_out: 0, cost_usd: 0 });
+    expect(body?.agents).toEqual([]);
   });
 });
 

@@ -602,7 +602,19 @@ The report body is metadata only: the action's `status` as `outcome`, the PR num
 run status, schema and engine versions, the model, the blocking and advisory counts, the token, cost
 and wall-time totals (`cost_is_floor` when the cost is a floor of known spend), and one row per agent (key,
 model, tokens, cost, duration, attempts, status). It never carries findings, claims, summary text, hop trails
-or any other text that can quote your code. A review whose run directory the action never published
+or any other text that can quote your code.
+
+The run's `usage` and each agent row also carry, when `pipeline.json` has them, the token split and the
+list-price cost. `tokens` is `{ input_uncached, input_cache_read, input_cache_write, output }`, where
+`output` includes reasoning tokens, and each key is sent only when the engine measured it. `list_cost_usd` is
+what those tokens cost at list price: the notional cost on a Claude subscription, the cash cost on a per-token
+key. `cost_usd` keeps its meaning, the cash cost, which is 0 on a subscription. The run's `usage` also says
+`billing`, `subscription` or `metered`, and omits it when the run's steps billed differently or on a free
+route. A run whose steps billed differently still gets a list cost, summed from each step's own, when
+every step can be priced. An agent row sums the steps it owns: every `refuter-<id>` step goes to `refuter`,
+`summarizer` to `summary`, `verify-<id>` to `verifier`, `adjudicate-<id>` to `adjudicator` and
+`hunter-<key>` to `<key>`. Steps no row owns, such as the warmups, count only in the run's totals. A missing
+or malformed figure leaves out that field and nothing else. A review whose run directory the action never published
 (skipped, size-gated, failed before writing, and the cases in the known gap under "Downloading the run
 directory": every hunter died, a fatal error, a cancelled job) is reported with zero counts and usage, even
 if the CLI wrote a `findings.json` that run, from the head the trigger resolved; an empty status
