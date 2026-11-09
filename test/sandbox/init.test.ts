@@ -1,9 +1,9 @@
 // init is idempotent: a second run with the same ref writes nothing, a run with
-// another ref commits only the workflow pin, and the route decides the routing
-// variable. The default claude route deletes a present variable and refuses when
-// the subscription token is missing; the opencode route sets the variable to its
-// snapshot. A missing OpenCode secret is set, and a present one is left alone (a
-// secret's value cannot be read back, so presence is all init can check).
+// another ref commits only the workflow pin, and the route decides the models
+// variable. The default claude route deletes a present CRYSK_MODELS; the opencode
+// route sets it to its snapshot. Every route refuses when the subscription token
+// CRYSK_CLAUDE_OAUTH_TOKEN is missing, or when CRYSK_CLAUDE_API_KEY is present. init
+// sets no secret: a secret's value is the owner's, and presence is all it can check.
 
 import { describe, expect, test } from "bun:test";
 import { runInit } from "../../scripts/sandbox/init";
@@ -13,12 +13,11 @@ import {
   SANDBOX_REPO,
 } from "../../scripts/sandbox/rails";
 import {
+  API_KEY_SECRET,
   CLAUDE_TOKEN_SECRET,
-  OPENCODE_AUTH_SECRET,
-  OPENCODE_AUTH_VALUE,
+  MODELS_VARIABLE,
+  modelsValueFor,
   REPO_DESCRIPTION,
-  ROUTING_VARIABLE,
-  routingValueFor,
   sandboxFiles,
   WORKFLOW_PATH,
 } from "../../scripts/sandbox/seed";
@@ -45,7 +44,7 @@ function world(overrides: Partial<World> = {}): World {
     hasCommits: true,
     remoteUrl: SANDBOX_REMOTE_URL,
     remoteFiles: new Map(),
-    secretNames: [OPENCODE_AUTH_SECRET, CLAUDE_TOKEN_SECRET],
+    secretNames: [CLAUDE_TOKEN_SECRET],
     variable: undefined,
     secretsSet: [],
     variablesSet: [],
@@ -95,7 +94,7 @@ function scriptFor(w: World) {
       if (args[0] === "variable" && args[1] === "get") {
         return w.variable === undefined
           ? fail(
-              "HTTP 404: Not Found (https://api.github.com/repos/x/actions/variables/PRHERO_ROUTING)",
+              "HTTP 404: Not Found (https://api.github.com/repos/x/actions/variables/CRYSK_MODELS)",
             )
           : ok(`${w.variable}\n`);
       }
@@ -253,101 +252,84 @@ describe("init: main", () => {
 });
 
 describe("init: route", () => {
-  test("the default route is claude: a present routing variable is deleted, and no routing value is written", async () => {
+  test("the default route is claude: a present models variable is deleted, and no models value is written", async () => {
     const w = world({
-      variable: routingValueFor("big-pickle"),
+      variable: modelsValueFor("big-pickle"),
       remoteFiles: sandboxFiles(REF),
     });
     await runInit(harness(scriptFor(w)).deps, REF);
     expect(w.variablesDeleted).toEqual([
-      ["variable", "delete", ROUTING_VARIABLE, "--repo", SANDBOX_REPO],
+      ["variable", "delete", MODELS_VARIABLE, "--repo", SANDBOX_REPO],
     ]);
     expect(w.variablesSet).toEqual([]);
   });
 
-  test("the claude route refuses, before the routing variable changes, when the subscription token is missing, and names the command", async () => {
+  for (const route of [undefined, OPENCODE_ROUTE]) {
+    const name = route === undefined ? "claude" : "opencode";
+    test(`the ${name} route refuses, before the models variable changes, when the subscription token is missing, and names the command`, async () => {
+      const w = world({
+        secretNames: ["CLAUDE_CODE_OAUTH_TOKEN", "OPENCODE_AUTH_JSON"],
+        variable: "{}",
+        remoteFiles: sandboxFiles(REF),
+      });
+      const run = runInit(harness(scriptFor(w)).deps, REF, route);
+      await expect(run).rejects.toThrow(
+        `gh secret set ${CLAUDE_TOKEN_SECRET} --repo ${SANDBOX_REPO}`,
+      );
+      expect(w.variablesDeleted).toEqual([]);
+      expect(w.variablesSet).toEqual([]);
+    });
+
+    test(`the ${name} route refuses before any write when ${API_KEY_SECRET} is set on the sandbox, and names the removal command`, async () => {
+      const w = world({
+        exists: true,
+        hasCommits: false,
+        secretNames: [CLAUDE_TOKEN_SECRET, API_KEY_SECRET],
+        remoteFiles: new Map(),
+      });
+      const h = harness(scriptFor(w));
+      await expect(runInit(h.deps, REF, route)).rejects.toThrow(
+        `${API_KEY_SECRET} is set on the sandbox; its reviews run Claude on the subscription and must not be able to bill per token. Remove it: gh secret delete ${API_KEY_SECRET} --repo ${SANDBOX_REPO}`,
+      );
+      // Nothing was written: no repo, no push, no secret, no variable.
+      expect(w.reposCreated).toEqual([]);
+      expect(h.gitCalls.some((c) => c.args[0] === "push")).toBe(false);
+      expect(w.secretsSet).toEqual([]);
+      expect(w.variablesSet).toEqual([]);
+      expect(w.variablesDeleted).toEqual([]);
+    });
+  }
+
+  test("the old ANTHROPIC_API_KEY is not refused: the scaffold no longer passes it, so it cannot bill", async () => {
     const w = world({
-      secretNames: [OPENCODE_AUTH_SECRET],
-      variable: routingValueFor("big-pickle"),
+      secretNames: [CLAUDE_TOKEN_SECRET, "ANTHROPIC_API_KEY"],
       remoteFiles: sandboxFiles(REF),
     });
-    await expect(runInit(harness(scriptFor(w)).deps, REF)).rejects.toThrow(
-      `gh secret set ${CLAUDE_TOKEN_SECRET} --repo ${SANDBOX_REPO}`,
-    );
-    expect(w.variablesDeleted).toEqual([]);
-    expect(w.variablesSet).toEqual([]);
-  });
-
-  test("the claude route refuses before any write when ANTHROPIC_API_KEY is set on the sandbox, and names the removal command", async () => {
-    const w = world({
-      exists: true,
-      hasCommits: false,
-      secretNames: [
-        OPENCODE_AUTH_SECRET,
-        CLAUDE_TOKEN_SECRET,
-        "ANTHROPIC_API_KEY",
-      ],
-      remoteFiles: new Map(),
-    });
-    const h = harness(scriptFor(w));
-    await expect(runInit(h.deps, REF)).rejects.toThrow(
-      `ANTHROPIC_API_KEY is set on the sandbox; the claude route runs on the subscription and must not be able to bill per token. Remove it: gh secret delete ANTHROPIC_API_KEY --repo ${SANDBOX_REPO}`,
-    );
-    // Nothing was written: no repo, no push, no secret, no variable.
-    expect(w.reposCreated).toEqual([]);
-    expect(h.gitCalls.some((c) => c.args[0] === "push")).toBe(false);
-    expect(w.secretsSet).toEqual([]);
-    expect(w.variablesSet).toEqual([]);
-    expect(w.variablesDeleted).toEqual([]);
-  });
-
-  test("the claude route with ANTHROPIC_API_KEY absent is not refused, as before", async () => {
-    const w = world({ remoteFiles: sandboxFiles(REF) });
     await expect(
       runInit(harness(scriptFor(w)).deps, REF),
     ).resolves.toBeUndefined();
-    expect(w.secretsSet).toEqual([]);
   });
 
-  test("the claude route still writes the OpenCode auth secret, which is harmless while routing is unset", async () => {
-    const w = world({
-      secretNames: [CLAUDE_TOKEN_SECRET],
-      remoteFiles: sandboxFiles(REF),
-    });
-    await runInit(harness(scriptFor(w)).deps, REF);
-    expect(w.secretsSet).toEqual([
-      [
-        "secret",
-        "set",
-        OPENCODE_AUTH_SECRET,
-        "-R",
-        SANDBOX_REPO,
-        "--body",
-        OPENCODE_AUTH_VALUE,
-      ],
-    ]);
-  });
-
-  test("the opencode route writes the routing value with the given snapshot", async () => {
+  test("the opencode route writes the models value with the given snapshot", async () => {
     const w = world({ variable: undefined, remoteFiles: sandboxFiles(REF) });
     await runInit(harness(scriptFor(w)).deps, REF, OPENCODE_ROUTE);
     expect(w.variablesSet).toEqual([
       [
         "variable",
         "set",
-        ROUTING_VARIABLE,
+        MODELS_VARIABLE,
         "-R",
         SANDBOX_REPO,
         "--body",
-        routingValueFor("deepseek-v4.1-flash-free"),
+        '{"default":["opencode:opencode/deepseek-v4.1-flash-free"]}',
       ],
     ]);
     expect(w.variablesDeleted).toEqual([]);
   });
 
-  test("the opencode route leaves a routing variable alone when it already holds the snapshot", async () => {
+  test("the opencode route leaves a models variable alone when it already holds the snapshot", async () => {
     const w = world({
-      variable: routingValueFor("deepseek-v4.1-flash-free"),
+      variable: modelsValueFor("deepseek-v4.1-flash-free"),
       remoteFiles: sandboxFiles(REF),
     });
     await runInit(harness(scriptFor(w)).deps, REF, OPENCODE_ROUTE);
@@ -367,54 +349,41 @@ describe("init: route", () => {
   });
 });
 
-describe("init: secret and variable", () => {
-  test("on the opencode route, sets a missing OpenCode secret to {} and a missing routing variable", async () => {
-    const w = world({
-      secretNames: [],
-      variable: undefined,
-      remoteFiles: sandboxFiles(REF),
-    });
-    await runInit(harness(scriptFor(w)).deps, REF, OPENCODE_ROUTE);
-    expect(w.secretsSet).toEqual([
-      [
-        "secret",
-        "set",
-        OPENCODE_AUTH_SECRET,
-        "-R",
-        SANDBOX_REPO,
-        "--body",
-        OPENCODE_AUTH_VALUE,
-      ],
-    ]);
-    expect(w.variablesSet).toEqual([
-      [
-        "variable",
-        "set",
-        ROUTING_VARIABLE,
-        "-R",
-        SANDBOX_REPO,
-        "--body",
-        routingValueFor("deepseek-v4.1-flash-free"),
-      ],
-    ]);
+describe("init: secrets and variable", () => {
+  test("sets no secret on either route, the old OpenCode auth secret included", async () => {
+    for (const route of [undefined, OPENCODE_ROUTE]) {
+      const w = world({ remoteFiles: sandboxFiles(REF) });
+      const h = harness(scriptFor(w));
+      await runInit(h.deps, REF, route);
+      expect(w.secretsSet).toEqual([]);
+      expect(h.ghCalls.some((c) => c[0] === "secret" && c[1] === "set")).toBe(
+        false,
+      );
+    }
   });
 
-  test("on the opencode route, replaces a routing variable whose value differs, and leaves a matching one alone", async () => {
+  test("on the opencode route, replaces a models variable whose value differs, and leaves a matching one alone", async () => {
     const differs = world({ variable: "{}", remoteFiles: sandboxFiles(REF) });
     await runInit(harness(scriptFor(differs)).deps, REF, OPENCODE_ROUTE);
     expect(differs.variablesSet.length).toBe(1);
 
     const matches = world({
-      variable: routingValueFor("deepseek-v4.1-flash-free"),
+      variable: modelsValueFor("deepseek-v4.1-flash-free"),
       remoteFiles: sandboxFiles(REF),
     });
     await runInit(harness(scriptFor(matches)).deps, REF, OPENCODE_ROUTE);
     expect(matches.variablesSet).toEqual([]);
   });
 
-  test("never rewrites a secret that is already present, since its value cannot be read", async () => {
-    const w = world({ remoteFiles: sandboxFiles(REF) });
-    await runInit(harness(scriptFor(w)).deps, REF);
-    expect(w.secretsSet).toEqual([]);
+  test("touches no other variable: the old routing one, the credentials and the providers stay as they are", async () => {
+    for (const route of [undefined, OPENCODE_ROUTE]) {
+      const w = world({ variable: "{}", remoteFiles: sandboxFiles(REF) });
+      const h = harness(scriptFor(w));
+      await runInit(h.deps, REF, route);
+      const named = h.ghCalls
+        .filter((c) => c[0] === "variable")
+        .map((c) => c[2]);
+      expect(new Set(named)).toEqual(new Set([MODELS_VARIABLE]));
+    }
   });
 });

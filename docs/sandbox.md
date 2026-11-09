@@ -23,22 +23,32 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
 ```
 
 - `<ref>` is a tag or branch of `cryskai/crysk`, pinned into the sandbox workflow.
-  Letters, digits, `.`, `_`, `/`, `-`. The sandbox reads error codes as `CRYSK-*`, so a
-  scenario that expects one needs a ref at or after their rename (`fd28303`): an older ref
-  names its codes the old way, which reads as no code.
-- `init` creates the public repo if it is absent, seeds `main` with the fixture's correct
-  sources, the product's scaffolded workflow, the repo config and the gotchas, and sets the
-  `OPENCODE_AUTH_JSON` secret to `{}` (harmless while routing is unset). The planted bug is
-  not on `main`; each scenario commits it on its own branch. A second run with the same ref
-  writes nothing. A present secret is left alone, because GitHub never returns its value.
-- `--route` sets the model route of every review in the sandbox. The default, `claude`,
-  needs the repo secret `CLAUDE_CODE_OAUTH_TOKEN`: `init` checks that it is present, and
-  refuses before it changes the routing when it is not, with the command the owner runs:
-  `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo juanmaagd/pr-hero-sandbox`. Under `claude`,
-  `init` deletes the `PRHERO_ROUTING` variable if it is set, so the scaffolded workflow runs
-  the engine's default stack (sonnet hunters, opus refuter, haiku summarizer), which is
-  production's. `opencode:<modelSnapshot>` sets `PRHERO_ROUTING` to that OpenCode model
-  instead. The snapshot takes letters, digits, `.` and `-`; anything else is refused.
+  Letters, digits, `.`, `_`, `/`, `-`. The workflow is this tree's scaffold, which passes the
+  action the `crysk-secrets`, `models` and `credentials` inputs, so the ref must have them:
+  at or after `735ff75`. An older action does not read them (GitHub warns about each
+  unexpected input), so it does not run this contract. The sandbox reads an error code under
+  either prefix: a ref from before the rename (`fd28303`) writes `PRH-*`, which reads as the
+  `CRYSK-*` code it became.
+- `init` creates the public repo if it is absent, and seeds `main` with the fixture's correct
+  sources, the product's scaffolded workflow, the repo config and the gotchas. The planted
+  bug is not on `main`; each scenario commits it on its own branch. `init` sets no secret: it
+  checks that `CRYSK_CLAUDE_OAUTH_TOKEN` is present and that `CRYSK_CLAUDE_API_KEY` is not
+  (GitHub never returns a secret's value, so presence is all it can check), then sets or
+  deletes the one variable it owns, `CRYSK_MODELS`. A second run with the same ref writes
+  nothing.
+- Every route needs the repo secret `CRYSK_CLAUDE_OAUTH_TOKEN` (from `claude setup-token`):
+  the action's credential check counts only a `CRYSK_*` secret, and the Claude steps of every
+  route run on it. `init` refuses before it changes the variable when the token is missing,
+  with the commands the owner runs: `claude setup-token`, then
+  `gh secret set CRYSK_CLAUDE_OAUTH_TOKEN --repo juanmaagd/pr-hero-sandbox`.
+- `--route` sets the models of every review in the sandbox. Under the default, `claude`,
+  `init` deletes the `CRYSK_MODELS` variable if it is set, so every role runs the engine's
+  default Claude models, which is production's stack. `opencode:<modelSnapshot>` sets
+  `CRYSK_MODELS` to `{"default":["opencode:opencode/<modelSnapshot>"]}`: every role runs that
+  free OpenCode model except the materiality judge, which never inherits `default` and stays
+  on Claude. The free provider needs no `CRYSK_OPENCODE_*` secret, so `init` leaves
+  `CRYSK_OPENCODE_PROVIDERS` and `CRYSK_CREDENTIALS` alone. The snapshot takes letters,
+  digits, `.` and `-`; anything else is refused.
 - `run` exits 1 on any failed expectation, any S7 violation, or a refused run. The table
   at the end names each scenario's path and prints every expectation as PASS or FAIL. Run
   does not take `--route`: it runs on the route `init` set.
@@ -62,11 +72,14 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
 - The pre-model scenarios, `no-credential`, `bad-routing`, and the first phase of `size-skip`, cost $0.
   No model is reached.
 - The default `claude` route is subscription-backed, $0 cash, and uses subscription quota.
-  Reviews run on the `CLAUDE_CODE_OAUTH_TOKEN` subscription. `init` never sets an Anthropic
-  API key, so no review is billed per token. `init` refuses the `claude` route while
-  `ANTHROPIC_API_KEY` is set on the sandbox, before it writes anything; remove it with
-  `gh secret delete ANTHROPIC_API_KEY --repo juanmaagd/pr-hero-sandbox`.
-- The `opencode:<modelSnapshot>` route runs reviews on one OpenCode model at cost 0. The
+  Reviews run on the `CRYSK_CLAUDE_OAUTH_TOKEN` subscription. `init` never sets an API key,
+  so no review is billed per token. `init` refuses every route while `CRYSK_CLAUDE_API_KEY`
+  is set on the sandbox, before it writes anything, because both routes run Claude and a
+  `credentials` order that lists `api_key` would bill it; remove it with
+  `gh secret delete CRYSK_CLAUDE_API_KEY --repo juanmaagd/pr-hero-sandbox`. The old
+  `ANTHROPIC_API_KEY` is not checked: the scaffold no longer passes it.
+- The `opencode:<modelSnapshot>` route runs reviews on one OpenCode model at cost 0, and its
+  materiality judge on the Claude subscription's quota. The
   sandbox used `opencode/big-pickle` until 2026-10-17: it leaks its reasoning into its
   answers, and in about half of its live runs every hunter failed. `deepseek-v4.1-flash-free`
   and `glm-5.3-flash-free` answered cleanly in a probe.
@@ -76,7 +89,7 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   is a finding until a re-run shows otherwise. A flake is re-run once automatically (see
   Commands). The label names the free model, but the re-run rule keys on the cause alone, so
   a hunters-failed run on the claude route is re-run the same way. The hunters-failed
-  tolerance and this label need an action ref that renders `CRYSK-HUNTERS-FAILED`, at or after the rename of the error codes (`fd28303`). Before T2c (`98569d1`) an all-hunters-failed run shows `review did not finish` with no code, and before the rename its code reads as no code; S7 reports either.
+  tolerance and this label need an action ref that renders the code: `CRYSK-HUNTERS-FAILED`, or `PRH-HUNTERS-FAILED` before the rename of the error codes (`fd28303`), which reads as the same code. Before T2c (`98569d1`) an all-hunters-failed run shows `review did not finish` with no code; S7 reports it.
 
 ## Scenarios
 
@@ -85,7 +98,7 @@ one observation of the PR. S7 invariants are checked on every observation.
 
 | Scenario | What it proves | Expectations | Cost |
 |---|---|---|---|
-| `no-credential` | With no model credential input, the action stops before any model. | Outcome comment `CRYSK-CRED-MISSING`; status `error` with that code; no report on the head. | $0 |
+| `no-credential` | With no `crysk-secrets` input, the action stops before any model. | Outcome comment `CRYSK-CRED-MISSING`; status `error` with that code; no report on the head. | $0 |
 | `bad-routing` | A workflow that passes the removed routing input is stopped before any model runs. | Outcome comment `CRYSK-INPUT-REMOVED`; status `error` with that code; no report on the head. | $0 |
 | `bad-gotchas` | A scaffold `.crysk/gotchas.md` on the branch is refused before admission and spend, and the outcome names its owner. | Outcome comment `CRYSK-GOTCHAS-MISSING` with the owner lead `Your configuration:`; status `error` with that code; no report on the head. The branch commits the scaffold on top of the planted volume (the scenario's file override). | $0 |
 | `review-free` | The normal workflow on the claude route reviews the planted bug end to end, its gate status agrees with the findings it posted, the review reports the planted bug, and no hunter failed. | Path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings on the PR (see Gate status below); at least one report on the head; no outcome comment; a finding anchored in `src/volume.ts` (lines 1-5, the planted file) on the head (`PLANTED_SITE` in `scripts/sandbox/seed.ts`); no `hunter <name>: failed` line in the run's log. | $0 (claude route, subscription quota) |
@@ -132,7 +145,7 @@ its skip marker, not its step: the composite `Run Crysk` step (`Run pr-hero` on 
 created, so a `CRYSK-HUNTERS-FAILED` outcome from phase 1 does not fail it.
 
 The S7 invariants, checked on every observation, are: an `error` status without a `CRYSK-`
-code; an outcome comment on a head whose status is `success`; a status still `pending`
+(or `PRH-`) code; an outcome comment on a head whose status is `success`; a status still `pending`
 after its run completed.
 
 ## Rails
@@ -141,9 +154,9 @@ The runner can reach one repository, and nothing else.
 
 - The target is hardcoded to `juanmaagd/pr-hero-sandbox`. Every `gh` and `git` call goes
   through an allowlist (`scripts/sandbox/rails.ts`). A verb that is not listed is refused.
-- `gh` may view, create or clone only the sandbox repo, list and set its secrets, read and
-  set its variables, delete exactly `PRHERO_ROUTING` (the claude route's one delete, in
-  `--repo <sandbox>` form), list, create, view, close and comment on its PRs, and list, view (with
+- `gh` may view, create or clone only the sandbox repo, list its secrets (never set one), read
+  its variables, set exactly `CRYSK_MODELS` (`-R <sandbox> --body <value>`) and delete exactly
+  `CRYSK_MODELS` (`--repo <sandbox>`), list, create, view, close and comment on its PRs, and list, view (with
   `--log`, for the hunter check) and rerun its runs. `gh api`
   is GET under the sandbox (the reactions read of a comment phase included), plus one DELETE
   of a `sandbox/` branch ref. Field flags are refused, and so is a POST to a reactions path.
@@ -170,9 +183,12 @@ The runner can reach one repository, and nothing else.
 
 Faults enter only through the sandbox workflow's own inputs and steps, never through
 product code. The workflow is the product's scaffold, with `uses: cryskai/crysk@<ref>`.
-The `advisory` variant replaces the scaffold's `mode: gate` line, and `size-skip` adds
-`max-changed-lines: 1` after `opencode-auth`. Each refuses unless its anchor line appears exactly
-once, so a scaffold change fails the run loudly instead of testing a different workflow.
+The `advisory` variant replaces the scaffold's `mode: gate` line, `size-skip` adds
+`max-changed-lines: 1` and `bad-routing` adds `routing: "{not json"` after the `credentials:`
+line, and `no-credential` removes the `crysk-secrets: |` line with every `CRYSK_*` line of its
+block. Each refuses unless its anchor line appears exactly once (and `no-credential` unless its
+block holds only `CRYSK_*` lines), so a scaffold change fails the run loudly instead of testing a
+different workflow.
 
 ## Adding a scenario
 

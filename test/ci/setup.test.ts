@@ -2349,7 +2349,7 @@ describe("checkCiConfiguration (pure diagnostic, system-tools.ts)", () => {
       exists: () => false,
     });
     expect(status.configured).toBe(false);
-    expect(status.message).toContain("ANTHROPIC_API_KEY");
+    expect(status.message).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
     expect(status.message).not.toContain("ghs_realtoken12345");
   });
 
@@ -2361,7 +2361,7 @@ describe("checkCiConfiguration (pure diagnostic, system-tools.ts)", () => {
     });
     expect(status.configured).toBe(false);
     expect(status.message).toContain("GITHUB_TOKEN");
-    expect(status.message).toContain("ANTHROPIC_API_KEY");
+    expect(status.message).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
   });
 
   test("GitHub Actions context: OpenCode auth file satisfies review auth without Anthropic", () => {
@@ -2543,7 +2543,7 @@ describe("doctor CI diagnostics (Pillar 3)", () => {
     });
     const ciCheck = report.checks.find((c) => c.name === "ci");
     expect(ciCheck?.severity).toBe("blocking");
-    expect(ciCheck?.message).toContain("ANTHROPIC_API_KEY");
+    expect(ciCheck?.message).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
     expect(ciCheck?.message).not.toContain("ghs_realtoken12345");
     expect(report.overall).toBe("blocking");
   });

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { checkSystemTools, installSystemTool } from "../src/system-tools";
+import {
+  checkCiConfiguration,
+  checkSystemTools,
+  installSystemTool,
+} from "../src/system-tools";
 
 describe("checkSystemTools (offline with injected fakes)", () => {
   test("all tools installed and healthy", async () => {
@@ -356,5 +360,72 @@ describe("checkSystemTools (offline with injected fakes)", () => {
       expect(result.ok).toBe(false);
       expect(result.manualCommand).toBeDefined();
     });
+  });
+});
+
+// Inside GitHub Actions the review reads its Claude credential from the action's
+// crysk-secrets input as CRYSK_CLAUDE_* (U5), and the doctor counts a credential by
+// U2's rule (claudeCredentialPresence): the CRYSK_* names first, then the CLI's, a
+// whitespace-only value is absent, and ANTHROPIC_AUTH_TOKEN never counts.
+describe("checkCiConfiguration inside GitHub Actions: the CRYSK_CLAUDE_* credentials", () => {
+  const GITHUB_TOKEN = "ghs_fixture";
+  const noFile = () => false;
+
+  test("CRYSK_CLAUDE_OAUTH_TOKEN alone is a review credential", () => {
+    const status = checkCiConfiguration({
+      isCi: true,
+      env: { GITHUB_TOKEN, CRYSK_CLAUDE_OAUTH_TOKEN: "SENTINEL_OAUTH" },
+      exists: noFile,
+    });
+    expect(status.configured).toBe(true);
+    expect(status.message).not.toContain("SENTINEL_OAUTH");
+  });
+
+  test("CRYSK_CLAUDE_API_KEY alone is a review credential", () => {
+    const status = checkCiConfiguration({
+      isCi: true,
+      env: { GITHUB_TOKEN, CRYSK_CLAUDE_API_KEY: "SENTINEL_KEY" },
+      exists: noFile,
+    });
+    expect(status.configured).toBe(true);
+    expect(status.message).not.toContain("SENTINEL_KEY");
+  });
+
+  test("a whitespace-only CRYSK_CLAUDE_* value, or ANTHROPIC_AUTH_TOKEN, is no credential", () => {
+    for (const env of [
+      { GITHUB_TOKEN, CRYSK_CLAUDE_OAUTH_TOKEN: "  " },
+      { GITHUB_TOKEN, CRYSK_CLAUDE_API_KEY: "\t" },
+      { GITHUB_TOKEN, ANTHROPIC_AUTH_TOKEN: "SENTINEL_AUTH" },
+    ]) {
+      const status = checkCiConfiguration({ isCi: true, env, exists: noFile });
+      expect(status.configured).toBe(false);
+      expect(status.message).not.toContain("SENTINEL_AUTH");
+    }
+  });
+
+  test("a missing credential names the CRYSK_CLAUDE_* secrets and the crysk-secrets input, not the old names", () => {
+    const status = checkCiConfiguration({
+      isCi: true,
+      env: { GITHUB_TOKEN },
+      exists: noFile,
+    });
+    expect(status.configured).toBe(false);
+    expect(status.message).toBe(
+      "Missing required CI secret(s): CRYSK_CLAUDE_OAUTH_TOKEN (or CRYSK_CLAUDE_API_KEY)",
+    );
+    expect(status.message).not.toContain("ANTHROPIC_API_KEY");
+    expect(status.hint).toContain("crysk-secrets");
+    expect(status.hint).toContain("gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
+  });
+
+  test("a present credential reads as the CRYSK_* secrets in the message", () => {
+    const status = checkCiConfiguration({
+      isCi: true,
+      env: { GITHUB_TOKEN, CRYSK_CLAUDE_OAUTH_TOKEN: "x" },
+      exists: noFile,
+    });
+    expect(status.message).toBe(
+      "Required CI secrets are present (GITHUB_TOKEN, a CRYSK_CLAUDE_* credential or OpenCode auth)",
+    );
   });
 });
