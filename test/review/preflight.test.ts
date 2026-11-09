@@ -939,7 +939,6 @@ describe("assertBasenameOnly", () => {
 
 describe("agentsDirProblems", () => {
   const CLEAN_SET = [
-    "deep-review-lifecycle.md",
     "deep-review-logic.md",
     "deep-review-parity.md",
     "deep-review-reliability.md",
@@ -960,16 +959,47 @@ describe("agentsDirProblems", () => {
     expect(problems[0]).toContain("deep-review-parity.md");
   });
 
-  // THE check: the default 4-agent spec against the 5-file clean set silently
-  // drops the lifecycle hunter, and nothing downstream notices.
+  // THE check: a spec that omits a file the dir carries silently drops that
+  // hunter, and nothing downstream notices.
   test("an unreferenced agent file in the dir is reported", () => {
-    const fourAgentSpec = CLEAN_SET.filter(
-      (f) => f !== "deep-review-lifecycle.md",
+    const specWithoutParity = CLEAN_SET.filter(
+      (f) => f !== "deep-review-parity.md",
     );
-    const problems = agentsDirProblems(fourAgentSpec, CLEAN_SET);
+    const problems = agentsDirProblems(specWithoutParity, CLEAN_SET);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("deep-review-parity.md");
+    expect(problems[0]).toContain("would never run");
+  });
+
+  // The lifecycle hunter was retired from the default spec. A custom set
+  // copied from an older default still carries its file, and the error has to
+  // say why and how to keep it, not only that it would never run.
+  test("a set that still carries the retired lifecycle file says how to keep or drop it", () => {
+    const problems = agentsDirProblems(CLEAN_SET, [
+      ...CLEAN_SET,
+      "deep-review-lifecycle.md",
+    ]);
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("deep-review-lifecycle.md");
     expect(problems[0]).toContain("would never run");
+    expect(problems[0]).toContain("retired");
+    expect(problems[0]).toContain(
+      "CRYSK_EXTRA_HUNTERS=lifecycle:deep-review-lifecycle.md",
+    );
+  });
+
+  test("a custom set keeps the lifecycle hunter through CRYSK_EXTRA_HUNTERS", () => {
+    const spec = validateReviewSpec(
+      localReviewSpec({
+        CRYSK_EXTRA_HUNTERS: "lifecycle:deep-review-lifecycle.md",
+      }),
+    );
+    expect(
+      agentsDirProblems(
+        spec.agents.map((a) => a.file),
+        [...CLEAN_SET, "deep-review-lifecycle.md"],
+      ),
+    ).toEqual([]);
   });
 
   test("problems are sorted, so the message is deterministic", () => {
@@ -980,13 +1010,12 @@ describe("agentsDirProblems", () => {
 });
 
 describe("localReviewSpec", () => {
-  test("is valid and carries the lifecycle and logic hunters the default spec omits", () => {
+  test("is valid, carries the logic hunter the default spec omits, and no longer runs lifecycle", () => {
     const spec = validateReviewSpec(localReviewSpec());
     const keys = spec.agents.map((a) => a.key);
     expect(keys).toEqual([
       "reliability",
       "resilience",
-      "lifecycle",
       "logic",
       "parity",
       "refuter",
@@ -1018,7 +1047,6 @@ describe("localReviewSpec", () => {
           file: "deep-review-resilience.md",
           role: "hunter",
         },
-        { key: "lifecycle", file: "deep-review-lifecycle.md", role: "hunter" },
         { key: "logic", file: "deep-review-logic.md", role: "hunter" },
         {
           key: "parity",
@@ -1045,7 +1073,6 @@ describe("localReviewSpec", () => {
     expect(keys).toEqual([
       "reliability",
       "resilience",
-      "lifecycle",
       "logic",
       "parity",
       "reliability-b",
@@ -1068,7 +1095,6 @@ describe("localReviewSpec", () => {
     expect(keys).toEqual([
       "reliability",
       "resilience",
-      "lifecycle",
       "logic",
       "parity",
       "reliability-b",

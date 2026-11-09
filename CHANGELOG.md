@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The `lifecycle` hunter is retired from the default review. Measured before the decision: on
+  ReviewBench (6 PRs, 2 replicates) a review without it cost 39% less and took 38% less wall time,
+  for about 2 valid findings lost per run and none of high severity; on the Martian 50 judgments it
+  was the only hunter behind 0 of 52 High+Critical findings. One real case argued the other way: on
+  a musive PR it was the only hunter to find a known blocker, once in two runs. A custom prompt set
+  that still carries `deep-review-lifecycle.md` now fails the prompt-set check with a message that
+  says to delete the file, or to keep the hunter with
+  `CRYSK_EXTRA_HUNTERS=lifecycle:deep-review-lifecycle.md`.
+
+## [0.4.0] - 2026-11-06
+
 ### Security
 - **Model text is made safe before it is published.** A pull request can steer what a model writes about it, and findings, the review summary, CI adjudication evidence and triage replies were posted as written. Credential-shaped text is now redacted, and mentions, Markdown images, raw HTML and HTML comments are defused, in PR comments, the step summary and the state block. A finding or path can no longer spell a marker that hides the real state block. `findings.json` in the run artifact still holds the original text.
 
@@ -74,7 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/runs/report`, so each run is recorded with its cost. The body is metadata only: no finding, claim,
   summary or hop trail. Failed and skipped reviews are reported too (zero counts when the action
   published no run directory). A report failure, including one while reading or shaping the run
-  directory, is a `::warning::` and never turns the job red. Standalone runs are unchanged.
+  directory, is a `::warning::` and never turns the job red. Standalone runs are unchanged. The report also
+  carries the gate's own count of open blocking findings and each finding's state under the ids that last
+  across runs, so the platform tells new, still-open and resolved findings apart without guessing, and the
+  number of findings the refuter removed per hunter (counts only) with how long indexing took.
 - **Platform mode: the run's findings are uploaded to the Crysk platform.** Right after a successful
   `/runs/report`, the `Report to Crysk` step POSTs `{ schema_version, findings }` to `/runs/findings` with
   the same run token: the `findings` array of `findings.json`, each object as the engine wrote it, at most
@@ -823,7 +839,8 @@ above). `0.1.0` below was originally published as `v1.0.0`._
 - **Spend & Size Safety Gates**: Automated budget guards (`max-changed-lines`, `max-changed-files`, `budget-usd`) skipping oversized or cost-prohibitive PRs cleanly with explicit skip status annotations.
 - **CI Automated Scaffolding**: `pr-hero setup --ci` and `pr-hero ci init` commands generating byte-accurate `.github/workflows/pr-hero.yml` configurations, complemented by the `pr-hero-ci-setup` agent skill.
 
-[Unreleased]: https://github.com/cryskai/crysk/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/cryskai/crysk/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cryskai/crysk/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/cryskai/crysk/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/cryskai/crysk/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/cryskai/crysk/compare/v0.3.0...v0.3.1
