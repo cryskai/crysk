@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { armOfRun, scoutFailed } from "#compare/floor-test";
-import { aliasCanonical } from "#model/catalog";
 import {
+  computeRouteFingerprint,
   createResolvedRoutePlan,
-  type RoutingConfig,
+  type ResolvedStepRoute,
   resolveStepRoute,
 } from "#model/routing";
 import { type PipelineInput, runPipeline } from "#review/pipeline";
@@ -184,30 +184,40 @@ function createCapableOpenCodeTransport(): ProviderTransport {
 // The live-failure topology: an explicit caller-supplied plan whose steps are
 // routed at opencode, exactly as the CLI hands one to runPipeline.
 function openCodeRoutePlan() {
-  const routingConfig: RoutingConfig = {
-    mappings: {
-      "openai/gpt-4o": {
-        backend: "opencode",
-        provider: "openai",
-        modelFamily: "gpt-4o",
-        modelSnapshot: "gpt-4o",
-      },
-    },
-  };
   return createResolvedRoutePlan([
     resolveStepRoute({
       stepKey: "hunter-reliability",
       role: "hunter",
-      cliModel: "openai/gpt-4o",
-      routingConfig,
+      cliModel: "opencode:openai/gpt-4o",
     }),
     resolveStepRoute({
       stepKey: "refuter",
       role: "refuter",
-      cliModel: "openai/gpt-4o",
-      routingConfig,
+      cliModel: "opencode:openai/gpt-4o",
     }),
   ]);
+}
+
+// A caller-supplied plan whose one hunter step runs on a backend no model name
+// can say, for the admission gate to refuse.
+function unregisteredBackendPlan() {
+  const route = {
+    backend: "unregistered" as RunnerBackend,
+    provider: "unknown",
+    modelFamily: "unknown-model",
+    modelSnapshot: "unknown-model",
+  };
+  const step: ResolvedStepRoute = {
+    stepKey: "hunter-reliability",
+    role: "hunter",
+    logicalIdentity: "unregistered:unknown/unknown-model",
+    route,
+    routeFingerprint: computeRouteFingerprint(
+      "unregistered:unknown/unknown-model",
+      route,
+    ),
+  };
+  return createResolvedRoutePlan([step]);
 }
 
 async function setupTestEnvironment() {
@@ -244,15 +254,12 @@ async function setupTestEnvironment() {
   const mcpConfigPath = path.join(runDir, "mcp.json");
   await Bun.write(mcpConfigPath, "{}");
 
+  // No spec models: the prompts' frontmatter (sonnet, opus) decides, so a
+  // test's `models` can move a role (a spec model would beat it).
   const spec: ReviewSpec = {
     agents: [
-      {
-        key: "reliability",
-        file: "reliability.md",
-        role: "hunter",
-        model: "sonnet",
-      },
-      { key: "refuter", file: "refuter.md", role: "refuter", model: "opus" },
+      { key: "reliability", file: "reliability.md", role: "hunter" },
+      { key: "refuter", file: "refuter.md", role: "refuter" },
     ],
   };
 
@@ -318,21 +325,14 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
   test("refuter steps inherit resolved refuter route from the plan", async () => {
     const env = await setupTestEnvironment();
     try {
-      const routingConfig: RoutingConfig = {
-        mappings: [
-          {
-            logical: "opus",
-            backend: "claude-code",
-            provider: "anthropic",
-            gateway: "direct",
-            modelFamily: "opus",
-            modelSnapshot: "claude-opus-5-20240229",
-          },
-        ],
-      };
-
       const runner = new RecordingStepRunner();
-      await runPipeline({ ...env.input, routingConfig }, { runner });
+      await runPipeline(
+        {
+          ...env.input,
+          models: { refuter: ["claude:claude-opus-5-20240229"] },
+        },
+        { runner },
+      );
 
       const refuterSteps = runner.executedSteps.filter((s) =>
         s.name.startsWith("refuter-"),
@@ -340,10 +340,18 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
       expect(refuterSteps.length).toBeGreaterThanOrEqual(1);
 
       for (const refuterStep of refuterSteps) {
-        expect(refuterStep.route).toBeDefined();
-        expect(refuterStep.route?.modelFamily).toBe("opus");
-        expect(refuterStep.route?.modelSnapshot).toBe("claude-opus-5-20240229");
+        expect(refuterStep.route).toEqual({
+          backend: "claude-code",
+          provider: "anthropic",
+          modelFamily: "claude-opus-5-20240229",
+          modelSnapshot: "claude-opus-5-20240229",
+        });
       }
+      // The hunter had no role in `models`: its prompt's sonnet.
+      const hunter = runner.executedSteps.find(
+        (s) => s.name === "hunter-reliability",
+      );
+      expect(hunter?.route?.modelSnapshot).toBe("sonnet");
     } finally {
       await env.cleanup();
     }
@@ -393,24 +401,21 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
     }
   });
 
+  // #186 and E-c: the step's recorded model is what its backend is sent, the
+  // role's model, never the prompt's alias.
   test("pipeline.json records routed execution model in step.model instead of frontmatter model (#186)", async () => {
     const env = await setupTestEnvironment();
     try {
-      const routingConfig: RoutingConfig = {
-        mappings: [
-          {
-            logical: "sonnet",
-            backend: "claude-code",
-            provider: "anthropic",
-            gateway: "configured",
-            modelFamily: "claude-3-5-sonnet",
-            modelSnapshot: "claude-3-5-sonnet-20241022",
-          },
-        ],
-      };
-
       const runner = new RecordingStepRunner();
-      await runPipeline({ ...env.input, routingConfig }, { runner });
+      await runPipeline(
+        {
+          ...env.input,
+          models: {
+            "hunter.reliability": ["claude:claude-3-5-sonnet-20241022"],
+          },
+        },
+        { runner },
+      );
 
       const pipelineJson = JSON.parse(
         await Bun.file(path.join(env.runDir, "pipeline.json")).text(),
@@ -422,8 +427,11 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
       );
       expect(reliabilityMeta).toBeDefined();
       expect(reliabilityMeta.route).toBeDefined();
-      // On non-direct gateway, StepMeta.model MUST record the routed modelSnapshot
       expect(reliabilityMeta.model).toBe("claude-3-5-sonnet-20241022");
+      const plan = pipelineJson.routePlan.steps.find(
+        (s: { stepKey: string }) => s.stepKey === "hunter-reliability",
+      );
+      expect(plan.logicalIdentity).toBe("claude:claude-3-5-sonnet-20241022");
     } finally {
       await env.cleanup();
     }
@@ -432,29 +440,12 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
   test("route admission gate rejects unregistered backend before step execution", async () => {
     const env = await setupTestEnvironment();
     try {
-      // The explicit `modelSnapshot` is load-bearing for the ADMISSION gate
-      // being tested here, not decoration: #175's follow-up refuses an alias
-      // route whose consumer cannot resolve the alias (anything but the Claude
-      // CLI over a `direct` gateway) and that supplies no snapshot, and it
-      // refuses during route resolution — before admission runs. Without it
-      // this fixture never reaches the gate it exists to exercise.
-      const routingConfig: RoutingConfig = {
-        mappings: [
-          {
-            logical: aliasCanonical("sonnet"),
-            backend: "unregistered" as RunnerBackend,
-            provider: "unknown",
-            modelSnapshot: "unknown-model",
-          },
-        ],
-      };
-
       const runner = new RecordingStepRunner();
       const registry = new DefaultTransportRegistry();
 
       await expect(
         runPipeline(
-          { ...env.input, routingConfig },
+          { ...env.input, routePlan: unregisteredBackendPlan() },
           { runner, transportRegistry: registry },
         ),
       ).rejects.toThrow(RouteAdmissionError);
@@ -469,26 +460,12 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
   test("route admission gate blocks opencode in production mode when missing D1-11 evidence", async () => {
     const env = await setupTestEnvironment();
     try {
-      const routingConfig: RoutingConfig = {
-        mappings: [
-          {
-            // Explicit snapshot for the same reason as the fixture above:
-            // route resolution refuses a snapshot-less alias route whose
-            // consumer resolves no aliases, before the D1-11 gate can speak.
-            logical: aliasCanonical("sonnet"),
-            backend: "opencode",
-            provider: "openai",
-            modelSnapshot: "gpt-4o",
-          },
-        ],
-      };
-
       const runner = new RecordingStepRunner();
       const registry = new DefaultTransportRegistry();
 
       await expect(
         runPipeline(
-          { ...env.input, routingConfig },
+          { ...env.input, models: { default: ["opencode:openai/gpt-4o"] } },
           { runner, transportRegistry: registry },
         ),
       ).rejects.toThrow(OpenCodeProductionGatedError);
@@ -613,6 +590,21 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
     }
   });
 
+  test("a new-form model that does not parse stops the run with its hint", async () => {
+    const env = await setupTestEnvironment();
+    try {
+      const runner = new RecordingStepRunner();
+      await expect(
+        runPipeline({ ...env.input, model: "claude:sonnet" }, { runner }),
+      ).rejects.toThrow(
+        '--model: "claude:sonnet" is not a model name: write "claude:sonnet-latest"',
+      );
+      expect(runner.executedSteps).toHaveLength(0);
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   test("legacy Claude-only model strings run without D2 routes or provenance", async () => {
     const env = await setupTestEnvironment();
     try {
@@ -702,39 +694,24 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
   test("legacy parsers consume a real mixed-route pipeline.json without requiring new fields", async () => {
     const env = await setupTestEnvironment();
     try {
-      const routingConfig: RoutingConfig = {
-        mappings: [
-          {
-            logical: aliasCanonical("opus"),
-            backend: "claude-code",
-            provider: "openrouter",
-            gateway: "openrouter",
-            modelFamily: "opus",
-            modelSnapshot: "opus",
-            modelVariant: "high",
-          },
-        ],
-      };
-
       const runner = new RecordingStepRunner();
-      await runPipeline({ ...env.input, routingConfig }, { runner });
+      await runPipeline(
+        { ...env.input, models: { refuter: ["claude:claude-opus-5-5"] } },
+        { runner },
+      );
 
       const raw = await Bun.file(path.join(env.runDir, "pipeline.json")).text();
       const produced = JSON.parse(raw);
 
       // The artifact really does carry more than one distinct route.
       const routes = produced.routePlan.steps.map(
-        (s: { route: { gateway?: string; modelVariant?: string } }) => s.route,
+        (s: { route: { modelSnapshot: string } }) => s.route,
       );
       expect(routes.length).toBeGreaterThanOrEqual(2);
       expect(
-        new Set(routes.map((r: { gateway?: string }) => r.gateway)).size,
+        new Set(routes.map((r: { modelSnapshot: string }) => r.modelSnapshot))
+          .size,
       ).toBeGreaterThan(1);
-      expect(
-        routes.some(
-          (r: { modelVariant?: string }) => r.modelVariant === "high",
-        ),
-      ).toBe(true);
 
       // Legacy parsers read it without knowing any of those fields exist.
       const head = "2222222222222222222222222222222222222222";
@@ -840,89 +817,6 @@ describe("Pipeline Model Routing & Provenance (D2 PR3)", () => {
       modelSnapshot: "gpt-4o-2024",
       modelVariant: "high",
     });
-  });
-
-  // SUGGESTION-3 (opencode-production-runtime PR3 verify #4997): the
-  // FindingObservation record already carries `gateway` when the frozen
-  // route names one (pipeline-integration.ts:298-312), but
-  // diversityDebugFromLedger's observation projection dropped it — the D3
-  // debug artifact could not distinguish a "configured"/"openrouter" gateway
-  // leg from a direct one.
-  test("D3 debug observations project gateway when the frozen route names one", () => {
-    const spec = validateReviewSpec({
-      multiModelDiversity: {
-        enabled: true,
-        armId: "arm",
-        maxLegs: 3,
-        cashCapUsd: 10,
-      },
-      agents: [
-        {
-          key: "reliability",
-          file: "deep-review-reliability.md",
-          role: "hunter",
-          models: ["sonnet"],
-        },
-        { key: "refuter", file: "review-refuter.md", role: "refuter" },
-      ],
-    });
-    const plan = buildDiversityPlan({ spec, c2SchemaVersion: "1.1.0" });
-    const [leg] = plan.legs;
-    const [agent] = spec.agents;
-    if (!leg || !agent) throw new Error("missing diversity fixtures");
-    const ledger = recordDiversityHunterResult(
-      emptyDiversityLedger(),
-      plan,
-      agent,
-      {
-        name: "hunter-reliability",
-        status: "ok",
-        output: {
-          findings: [
-            {
-              id: "REL-1",
-              category: 1,
-              path: "src/app.ts",
-              line: 1,
-              severity: "BLOCKER",
-              evidence_class: "deterministic",
-              causal_disposition: "introduced",
-              claim: "bad",
-              proof_refs: ["src/app.ts:1"],
-              hunter: "reliability",
-              hops_used: 0,
-              hop_trail: [],
-              dedupe_key: "k1",
-            },
-          ],
-        },
-        usage: {
-          tokens_total: 10,
-          tokens_in: 8,
-          tokens_out: 2,
-          cost_usd_est: 0.001,
-          wall_ms: 1,
-        },
-        attempts: 1,
-        stderrTail: "",
-        resultText: "",
-      },
-      leg,
-      {
-        backend: "opencode",
-        provider: "openai",
-        modelFamily: "gpt-4o",
-        modelSnapshot: "gpt-4o-2024",
-        gateway: "openrouter",
-      },
-    );
-    const [observation] = (diversityDebugFromLedger({
-      enabled: true,
-      plan,
-      ledger,
-      routeAgents: spec.agents,
-    })?.observations ?? []) as { gateway?: string }[];
-    expect(observation?.gateway).toBe("openrouter");
   });
 });
 

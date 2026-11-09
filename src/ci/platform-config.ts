@@ -3,8 +3,8 @@
 // mergeConfig + CONFIG_DIRECTION) resolves it against the repository's
 // `.crysk/config.json` with each key's own rule.
 //
-// `person` is the runner's personal layer: setup.ts writes it into the personal
-// config file it already writes `routing` to (see materializeCiOpenCodeData).
+// `person` is the runner's personal layer: setup.ts writes it as the personal
+// config file (see materializeCiOpenCodeData).
 // `repo` is used ONLY when the checkout has no repo config of its own, and then
 // it reaches the engine through the existing `--config` override, which
 // repoints the repo layer and nothing else. The file lives next to the platform

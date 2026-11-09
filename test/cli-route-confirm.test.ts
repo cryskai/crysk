@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
+import {
+  buildResolvedRoutePlan,
+  computeRouteFingerprint,
+  createResolvedRoutePlan,
+  resolveStepRoute,
+} from "#model/routing";
 import { resolveRoutePlanAtConfirm } from "../src/cli";
 import {
   DefaultTransportRegistry,
@@ -18,7 +23,7 @@ describe("resolveRoutePlanAtConfirm", () => {
 
   test("returns undefined when build fails and routing is not configured", async () => {
     const result = await resolveRoutePlanAtConfirm({
-      routingConfigured: false,
+      modelsConfigured: false,
       buildRoutePlan: async () => {
         throw new Error("unmapped model");
       },
@@ -26,10 +31,10 @@ describe("resolveRoutePlanAtConfirm", () => {
     expect(result).toBeUndefined();
   });
 
-  test("rethrows build failures when routing is configured", async () => {
+  test("rethrows build failures when models are configured", async () => {
     await expect(
       resolveRoutePlanAtConfirm({
-        routingConfigured: true,
+        modelsConfigured: true,
         buildRoutePlan: async () => {
           throw new Error("unmapped model");
         },
@@ -37,65 +42,90 @@ describe("resolveRoutePlanAtConfirm", () => {
     ).rejects.toThrow("unmapped model");
   });
 
-  test("rethrows admission failures even when routing is not configured", async () => {
+  test("rethrows admission failures even when models are not configured", async () => {
     const opencodePlan = createResolvedRoutePlan([
       resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "opencode",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
+        cliModel: "opencode:openai/gpt-4o",
       }),
     ]);
 
     await expect(
       resolveRoutePlanAtConfirm({
-        routingConfigured: false,
+        modelsConfigured: false,
         buildRoutePlan: async () => opencodePlan,
         registry: new DefaultTransportRegistry(),
       }),
     ).rejects.toThrow(OpenCodeProductionGatedError);
   });
 
-  test("rethrows unregistered backend admission failures without routing config", async () => {
+  test("rethrows unregistered backend admission failures without models", async () => {
+    // `codex` is no backend a model name can say: the route is built by hand.
+    const route = {
+      backend: "codex" as const,
+      provider: "openai",
+      modelFamily: "gpt-4o",
+      modelSnapshot: "gpt-4o",
+    };
     const codexPlan = createResolvedRoutePlan([
-      resolveStepRoute({
+      {
         stepKey: "hunter-reliability",
         role: "hunter",
-        specModel: "openai/gpt-4o",
-        routingConfig: {
-          mappings: {
-            "openai/gpt-4o": {
-              backend: "codex",
-              provider: "openai",
-              modelFamily: "gpt-4o",
-              modelSnapshot: "gpt-4o",
-            },
-          },
-        },
-      }),
+        logicalIdentity: "codex:openai/gpt-4o",
+        route: route as unknown as Parameters<
+          typeof computeRouteFingerprint
+        >[1],
+        routeFingerprint: computeRouteFingerprint(
+          "codex:openai/gpt-4o",
+          route as unknown as Parameters<typeof computeRouteFingerprint>[1],
+        ),
+      },
     ]);
 
     await expect(
       resolveRoutePlanAtConfirm({
-        routingConfigured: false,
+        modelsConfigured: false,
         buildRoutePlan: async () => codexPlan,
         registry: new DefaultTransportRegistry(),
       }),
     ).rejects.toThrow(RouteAdmissionError);
   });
 
+  // A model written in the new form is the operator's words, never a legacy
+  // id to pass through: `--model claude:sonnet` must stop with the hint.
+  test("rethrows an invalid new-form model even when models are not configured", async () => {
+    await expect(
+      resolveRoutePlanAtConfirm({
+        modelsConfigured: false,
+        buildRoutePlan: async () =>
+          buildResolvedRoutePlan({
+            agents: [{ key: "reliability", role: "hunter" }],
+            cliModel: "claude:sonnet",
+          }),
+        registry: new DefaultTransportRegistry({ mode: "conformance" }),
+      }),
+    ).rejects.toThrow(
+      '--model: "claude:sonnet" is not a model name: write "claude:sonnet-latest"',
+    );
+  });
+
+  test("a legacy raw id still falls back to the no-plan path", async () => {
+    const result = await resolveRoutePlanAtConfirm({
+      modelsConfigured: false,
+      buildRoutePlan: async () =>
+        buildResolvedRoutePlan({
+          agents: [{ key: "reliability", role: "hunter" }],
+          cliModel: "claude-opus-4-5",
+        }),
+      registry: new DefaultTransportRegistry({ mode: "conformance" }),
+    });
+    expect(result).toBeUndefined();
+  });
+
   test("returns the plan when build and admission succeed", async () => {
     const result = await resolveRoutePlanAtConfirm({
-      routingConfigured: false,
+      modelsConfigured: false,
       buildRoutePlan: async () => sonnetPlan,
       registry: new DefaultTransportRegistry({ mode: "conformance" }),
     });

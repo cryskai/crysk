@@ -114,6 +114,49 @@ describe("models and credentials are person-only keys (S1, S5)", () => {
   });
 });
 
+describe("models.judge (L6 item 5)", () => {
+  test("models the judge was not measured on are named in a warning", () => {
+    const warnings: string[] = [];
+    const layer = parseGlobalConfig(
+      JSON.stringify({
+        models: { judge: ["claude:haiku-latest", "claude:opus-latest"] },
+      }),
+      undefined,
+      warnings,
+    );
+    // Kept as written: the plan drops them, so a later measured model works.
+    expect(layer.models?.judge).toEqual([
+      "claude:haiku-latest",
+      "claude:opus-latest",
+    ]);
+    expect(warnings).toEqual([
+      "~/.crysk/config.json: models.judge skips claude:haiku-latest: the materiality judge runs only on claude:sonnet-latest or claude:opus-latest.",
+    ]);
+  });
+
+  test("with none left, the warning says the judge stands down", () => {
+    const warnings: string[] = [];
+    parseGlobalConfig(
+      JSON.stringify({ models: { judge: ["opencode:openai/gpt-5"] } }),
+      undefined,
+      warnings,
+    );
+    expect(warnings).toEqual([
+      "~/.crysk/config.json: models.judge skips opencode:openai/gpt-5: the materiality judge runs only on claude:sonnet-latest or claude:opus-latest, so it stands down.",
+    ]);
+  });
+
+  test("measured models only: no warning", () => {
+    const warnings: string[] = [];
+    parseGlobalConfig(
+      JSON.stringify({ models: { judge: ["claude:opus-latest"] } }),
+      undefined,
+      warnings,
+    );
+    expect(warnings).toEqual([]);
+  });
+});
+
 describe("credentials values (S5)", () => {
   test("one kind, or both in either order", () => {
     for (const claude of [

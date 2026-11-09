@@ -418,7 +418,7 @@ export class OpenCodeAuthBroker implements CredentialBroker {
     // an `openai` entry holding an API key still resolves to this OAuth kind —
     // and lands here, refused, rather than being silently routed metered. A
     // bounded, stated limit, not a bug: the failure is loud and the fix is to
-    // name that provider differently in the routing config.
+    // name that provider differently in the model name (`opencode:<provider>/...`).
     if ((record as Record<string, unknown>).type !== "oauth") {
       throw new CredentialProjectionError("missing_subscription_record");
     }

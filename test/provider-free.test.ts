@@ -86,26 +86,18 @@ function freeStdout(
   return `${provider}/${model}\n{\n  "id": "${model}",\n  "providerID": "${provider}",\n  "status": ${JSON.stringify(overrides.status ?? "active")}${cost}\n}\n`;
 }
 
+// `_logical` is the name the step used to be routed from; the model name now
+// carries the backend, so the route comes from provider and model alone.
 function opencodeStep(
   stepKey: string,
-  cliModel: string,
+  _logical: string,
   provider: string,
   modelSnapshot: string,
 ) {
   return resolveStepRoute({
     stepKey,
     role: "hunter",
-    cliModel,
-    routingConfig: {
-      mappings: {
-        [cliModel]: {
-          backend: "opencode",
-          provider,
-          modelFamily: modelSnapshot,
-          modelSnapshot,
-        },
-      },
-    },
+    cliModel: `opencode:${provider}/${modelSnapshot}`,
   });
 }
 

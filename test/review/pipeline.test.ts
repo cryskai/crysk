@@ -1174,7 +1174,8 @@ describe("engine-owned effort", () => {
   });
 
   // The verifier runs as the refuter's agent, so it must run on the refuter's
-  // admitted route. Without it a routed run (any non-default `routing`) left
+  // admitted route, and `models.refuter` covers it (S1). Without it a routed
+  // run (then: any non-default `routing`) left
   // `route` unset, the production runner found no binding for it, and every
   // verify step failed "No admitted binding for step route" — observed live on
   // an ai&/OpenCode re-review of musive #1717, 2026-10-21.
@@ -1211,14 +1212,7 @@ describe("engine-owned effort", () => {
     const result = await runPipeline(
       {
         ...input,
-        routingConfig: {
-          default: {
-            backend: "claude-code",
-            provider: "anthropic",
-            gateway: "direct",
-            modelSnapshot: "claude-routed-snapshot",
-          },
-        },
+        models: { refuter: ["claude:claude-routed-snapshot"] },
       },
       { runner },
     );
@@ -2583,7 +2577,6 @@ describe("assembly", () => {
         parity_trigger_paths: "default" as const,
         suspicion_priors: "default" as const,
         summary: { enabled: "capped" as const },
-        routing: "default" as const,
         models: "default" as const,
         credentials: "default" as const,
         max_verification_steps: "capped" as const,

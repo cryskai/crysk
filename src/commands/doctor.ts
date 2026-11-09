@@ -1,7 +1,6 @@
 import os from "node:os";
 import { loadEffectiveConfig, resolveOptionalRepoRoot } from "#config/config";
 import { type ModelsConfig, modelsNeedOpenCode } from "#model/model-name";
-import type { RoutingConfig } from "#model/routing";
 import type { CliOptions } from "#review/preflight";
 import { styleEnabled, terminalWidth } from "#ui/primitives";
 import {
@@ -39,7 +38,6 @@ export async function runDoctorCommand(input: {
   // the loader share. Tests pass a version without resolving a package.
   readSdkVersion?: () => Promise<string | undefined>;
 }): Promise<{ report: DoctorReport; lines: string[] }> {
-  let routingConfig: RoutingConfig | undefined;
   let models: ModelsConfig | undefined;
   let configCheck: DoctorCheckItem | undefined;
   try {
@@ -48,7 +46,6 @@ export async function runDoctorCommand(input: {
       home: input.home,
       configFlag: input.configFlag,
     });
-    routingConfig = loaded.effective.routing;
     models = loaded.effective.models;
     // A config that loads with warnings works today and will not after the
     // key it uses is removed: degraded, with the warning as its message.
@@ -75,7 +72,7 @@ export async function runDoctorCommand(input: {
     probeExactBindings: () =>
       collectDoctorExactBindingReports({
         workspaceRoot: input.workspaceRoot,
-        routingConfig,
+        models,
       }),
   });
   // Same home the command was given. The no-arg reader uses os.homedir().

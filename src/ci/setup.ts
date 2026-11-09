@@ -653,13 +653,14 @@ export async function appendIgnorePatterns(
 }
 
 export interface MaterializeCiOpenCodeDataOptions {
+  // The removed `routing` input (S2): non-empty fails the step.
   routing?: string;
   opencodeAuth?: string;
   home?: string;
   env?: Readonly<Record<string, string | undefined>>;
   // Platform mode: the person layer the Crysk platform returned (`{}` when it
-  // sent none). Written into the same personal file as `routing`; its own
-  // `routing` wins over the input. Present means platform mode, in which the
+  // sent none), written as the personal file; its `models` win over a stale
+  // `routing` input. Present means platform mode, in which the
   // personal file belongs to this run: a file an earlier run left behind is
   // removed when nothing is to be written, so it can never be read as this run's
   // person layer on a runner whose HOME outlives the job.

@@ -5,13 +5,9 @@
 //
 // Each mapping is justified by the throw site and by the catalog text of its code
 // (src/ci/outcome.ts ERROR_CATALOG):
-// - UnmappedRouteError (src/model/routing.ts) -> route/unmapped: "No route mapping
-//   found" and "supplies no modelSnapshot"; PRH-ROUTE-UNRESOLVABLE's unmapped text
-//   asks for a modelSnapshot in CRYSK_ROUTING.
-// - AmbiguousMappingError (src/model/routing.ts) -> route/ambiguous: "found N
-//   duplicate mappings"; its text asks to remove the duplicate.
-// - UnauthorizedRouteError (src/model/routing.ts) -> route/spend-disabled: every
-//   throw says "Spend is disabled"; its text asks to enable spend.
+// - The route classes (unmapped, ambiguous, spend-disabled) have no throw site
+//   since the alias-keyed routing was removed (odd/tasks/role-model-routing.md S2):
+//   a model is now a name that parses or a usage error that says how to write it.
 // - OpenCodeVersionAdmissionError (src/transport-registry.ts) with reason "version"
 //   -> capability/version_unsupported: the pinned version-pair checks
 //   (admitOpenCodeVersionPair, loadOpenCodeSdk); PRH-RUNTIME-UNAVAILABLE calls the
@@ -23,7 +19,8 @@
 // - OpenCodeSdkUnavailableError (src/transports/opencode-admission.ts) -> capability/
 //   sdk_unavailable: "is not installed"; the same code, the local text says reconcile.
 //
-// Not mapped, on purpose: ModelRoutingError (its own throws name no route fault),
+// Not mapped, on purpose: ModelRoutingError and InvalidModelError (their message is
+// the fix, and no catalog text names it),
 // RouteAdmissionError and OpenCodeProductionGatedError (a readiness gate, which no
 // capability issue names), CliError and everything else.
 //
@@ -32,11 +29,6 @@
 // that runs before it.
 
 import { CliError, CliUsageError, recordClassOf } from "../errors";
-import {
-  AmbiguousMappingError,
-  UnauthorizedRouteError,
-  UnmappedRouteError,
-} from "../model/routing";
 import { OpenCodeVersionAdmissionError } from "../transport-registry";
 import { OpenCodeSdkUnavailableError } from "../transports/opencode-admission";
 import type { CliErrorClass } from "./outcome";
@@ -51,15 +43,6 @@ export function classifyCliError(error: unknown): CliErrorClass {
     error.cls !== undefined
   ) {
     return error.cls;
-  }
-  if (error instanceof UnmappedRouteError) {
-    return { kind: "route", reason: "unmapped" };
-  }
-  if (error instanceof AmbiguousMappingError) {
-    return { kind: "route", reason: "ambiguous" };
-  }
-  if (error instanceof UnauthorizedRouteError) {
-    return { kind: "route", reason: "spend-disabled" };
   }
   if (error instanceof OpenCodeVersionAdmissionError) {
     return error.reason === "identity"

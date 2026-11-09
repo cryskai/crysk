@@ -7,12 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { classifyCliError } from "#ci/classify-error";
 import { parseGlobalConfig } from "#review/preflight";
 import { CliError, CliUsageError, withRecordClass } from "../../src/errors";
-import {
-  AmbiguousMappingError,
-  ModelRoutingError,
-  UnauthorizedRouteError,
-  UnmappedRouteError,
-} from "../../src/model/routing";
+import { InvalidModelError, ModelRoutingError } from "../../src/model/routing";
 import {
   admitOpenCodeVersionPair,
   DefaultTransportRegistry,
@@ -25,24 +20,15 @@ import {
 import { OpenCodeSdkUnavailableError } from "../../src/transports/opencode-admission";
 
 describe("classifyCliError: the mapped classes", () => {
-  test("an unmapped route is route/unmapped", () => {
-    expect(classifyCliError(new UnmappedRouteError("x"))).toEqual({
-      kind: "route",
-      reason: "unmapped",
+  // The route classes lost their throw sites with the alias-keyed routing
+  // (odd/tasks/role-model-routing.md S2): a bad model is an error whose
+  // message is the fix, and no catalog text names it.
+  test("a model that does not resolve is unclassified", () => {
+    expect(classifyCliError(new InvalidModelError("x"))).toEqual({
+      kind: "unknown",
     });
-  });
-
-  test("a duplicate mapping is route/ambiguous", () => {
-    expect(classifyCliError(new AmbiguousMappingError("x"))).toEqual({
-      kind: "route",
-      reason: "ambiguous",
-    });
-  });
-
-  test("a route whose spend is disabled is route/spend-disabled", () => {
-    expect(classifyCliError(new UnauthorizedRouteError("x"))).toEqual({
-      kind: "route",
-      reason: "spend-disabled",
+    expect(classifyCliError(new ModelRoutingError("x"))).toEqual({
+      kind: "unknown",
     });
   });
 

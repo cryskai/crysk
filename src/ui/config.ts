@@ -108,36 +108,6 @@ function priorsCell(
   );
 }
 
-function routingCell(
-  routing: LocalConfig["routing"],
-  source: ConfigSource,
-): ConfigCell {
-  if (source === "default" || routing === undefined) {
-    return { value: UNSET, source };
-  }
-  const mappingsCount = routing.mappings
-    ? Array.isArray(routing.mappings)
-      ? routing.mappings.length
-      : Object.keys(routing.mappings).length
-    : 0;
-  if (mappingsCount === 0 && routing.default) {
-    return {
-      value: "default route",
-      source,
-    };
-  }
-  if (mappingsCount > 0 && routing.default) {
-    return {
-      value: `${mappingsCount} mapping${mappingsCount === 1 ? "" : "s"} (+ default)`,
-      source,
-    };
-  }
-  return {
-    value: `${mappingsCount} mapping${mappingsCount === 1 ? "" : "s"}`,
-    source,
-  };
-}
-
 // One cell for the whole object, one `role=model,model` entry per role, in
 // the order the file wrote them: the list order is the fallback order.
 function modelsCell(
@@ -187,7 +157,6 @@ export function configRows(
       effective.suspicion_priors,
       sources.suspicion_priors,
     ),
-    routing: routingCell(effective.routing, sources.routing),
     models: modelsCell(effective.models, sources.models),
     credentials: credentialsCell(effective.credentials, sources.credentials),
     max_verification_steps: cell(

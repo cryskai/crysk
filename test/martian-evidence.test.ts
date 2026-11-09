@@ -441,6 +441,8 @@ test("missing scheduled hunter and altered frozen prompt cannot qualify", async 
   expect((await loadQualifiedReview(x.root, x.identity)).qualified).toBe(false);
 });
 
+// The OpenCode route now comes from a model name (the routing config is gone,
+// odd/tasks/role-model-routing.md S2), so the benchmark's `model` input says it.
 test("positive OpenCode frozen identity supplies the actual installed SDK reader", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "prhero-freeze-opencode-"));
   const agents = path.join(root, "agents");
@@ -460,7 +462,7 @@ test("positive OpenCode frozen identity supplies the actual installed SDK reader
   const script = path.join(root, "test.ts");
   await writeFile(
     script,
-    `import {mock} from 'bun:test';import * as admission from ${JSON.stringify(path.join(import.meta.dir, "../src/transports/opencode-admission.ts"))};mock.module(${JSON.stringify(path.join(import.meta.dir, "../src/config/config.ts"))},()=>({loadEffectiveConfig:async()=>({effective:{routing:{default:{backend:'opencode',provider:'openai',modelSnapshot:'model'}}}})}));mock.module(${JSON.stringify(path.join(import.meta.dir, "../src/transports/opencode-admission.ts"))},()=>({...admission,observeOpenCodeExecutable:async(executable,signal,deps)=>{const sdkVersion=await deps?.sdkVersion?.();if(sdkVersion!=='1.18.25')throw Error('SDK reader missing');return {sdkVersion,serverVersion:'1.18.30',executableSha256:executable.sha256};}}));Bun.which=()=>${JSON.stringify(path.join(root, "binary"))};Bun.spawnSync=(argv)=>({exitCode:0,stdout:Buffer.from(argv.includes('ls-files')?'':'fixture-head'),stderr:Buffer.from('')});Bun.spawn=()=>{throw Error('No inference')};globalThis.fetch=()=>{throw Error('No network')};const {freezeBenchmarkIdentity}=await import(${JSON.stringify(modulePath)});const result=await freezeBenchmarkIdentity(${JSON.stringify({ engineRoot: root, repo: root, agentsDir: agents, gotchasPath: path.join(root, "gotchas.md"), pr: 1, headSha: "head", baseSha: "base" })});console.log(JSON.stringify(result));`,
+    `import {mock} from 'bun:test';import * as admission from ${JSON.stringify(path.join(import.meta.dir, "../src/transports/opencode-admission.ts"))};mock.module(${JSON.stringify(path.join(import.meta.dir, "../src/config/config.ts"))},()=>({loadEffectiveConfig:async()=>({effective:{}})}));mock.module(${JSON.stringify(path.join(import.meta.dir, "../src/transports/opencode-admission.ts"))},()=>({...admission,observeOpenCodeExecutable:async(executable,signal,deps)=>{const sdkVersion=await deps?.sdkVersion?.();if(sdkVersion!=='1.18.25')throw Error('SDK reader missing');return {sdkVersion,serverVersion:'1.18.30',executableSha256:executable.sha256};}}));Bun.which=()=>${JSON.stringify(path.join(root, "binary"))};Bun.spawnSync=(argv)=>({exitCode:0,stdout:Buffer.from(argv.includes('ls-files')?'':'fixture-head'),stderr:Buffer.from('')});Bun.spawn=()=>{throw Error('No inference')};globalThis.fetch=()=>{throw Error('No network')};const {freezeBenchmarkIdentity}=await import(${JSON.stringify(modulePath)});const result=await freezeBenchmarkIdentity(${JSON.stringify({ engineRoot: root, repo: root, agentsDir: agents, gotchasPath: path.join(root, "gotchas.md"), pr: 1, headSha: "head", baseSha: "base", model: "opencode:openai/model" })});console.log(JSON.stringify(result));`,
   );
   const proc = Bun.spawn([process.execPath, script], {
     stdout: "pipe",

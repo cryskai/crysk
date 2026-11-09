@@ -4,7 +4,7 @@
 // EXACTLY the wiring the engine used to hard-code (prose Step 4), so a caller
 // that passes nothing gets byte-identical behavior.
 
-import { parseLogicalIdentity } from "#model/routing";
+import { modelNameFromAlias } from "#model/model-name";
 
 const SAFE_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -149,7 +149,7 @@ export function validateReviewSpec(candidate: unknown): ReviewSpec {
     if (diversityEnabled && Array.isArray(a.models)) {
       for (const model of a.models as string[]) {
         try {
-          parseLogicalIdentity(model);
+          modelNameFromAlias(model);
         } catch (error) {
           must(
             false,
@@ -165,7 +165,7 @@ export function validateReviewSpec(candidate: unknown): ReviewSpec {
     );
     if (a.model !== undefined) {
       try {
-        parseLogicalIdentity(a.model as string);
+        modelNameFromAlias(a.model as string);
       } catch (error) {
         must(
           false,

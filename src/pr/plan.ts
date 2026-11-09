@@ -204,12 +204,12 @@ export async function resolvePrPlanAndConfirm(params: {
     }
   }
   const productionRoute = await resolvePipelineRoute({
-    routingConfigured: params.config.routing !== undefined,
+    modelsConfigured: params.config.models !== undefined,
     workspaceRoot: params.worktreePath,
     spec: params.spec,
     options: params.options,
     agentFiles: params.agentFiles,
-    routingConfig: params.config.routing,
+    models: params.config.models,
     summary: params.summary,
     summarizerEnabled: params.summary.enabled && !params.skipDiscovery,
     scoutEnabled: params.options.scout && !params.skipDiscovery,

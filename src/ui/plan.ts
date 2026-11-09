@@ -300,15 +300,32 @@ function agentRow(
           (s.role === "refuter" || s.stepKey === "refuter")),
     );
     if (stepRoute) {
-      const formatted = formatStepRoute(stepRoute, model);
+      const formatted = formatStepRoute(stepRoute);
       return `${agent.key.padEnd(12)} ${formatted.padEnd(8)} ${fires}`;
     }
   }
   return `${agent.key.padEnd(12)} ${model.padEnd(8)} ${fires}`;
 }
 
-function summarizerRow(summary: SummarySettings): string {
-  const model = summary.model ?? DEFAULT_SUMMARY_MODEL;
+// The model a step will run, as the plan resolved it (`models`, `--model`, the
+// prompt), or undefined with no plan or no such step. A row that guessed from
+// the prompt's default would name `haiku` while `models.summary` runs another.
+function plannedModel(
+  routePlan: ResolvedRoutePlan | undefined,
+  stepKey: string,
+): string | undefined {
+  const step = routePlan?.steps.find((s) => s.stepKey === stepKey);
+  return step === undefined ? undefined : formatStepRoute(step);
+}
+
+function summarizerRow(
+  summary: SummarySettings,
+  routePlan?: ResolvedRoutePlan,
+): string {
+  const model =
+    plannedModel(routePlan, "summarizer") ??
+    summary.model ??
+    DEFAULT_SUMMARY_MODEL;
   return (
     `summarizer`.padEnd(12) +
     `${model}`.padEnd(8) +
@@ -326,13 +343,18 @@ export function summarizerLabel(summary: SummarySettings): string {
 // only appears when it is on is a stage nobody notices arriving.
 function scoutRow(
   options: Pick<CliOptions, "scout" | "scoutModel" | "model">,
+  routePlan?: ResolvedRoutePlan,
 ): string {
   const label = "scout".padEnd(12);
   if (!options.scout) return `${label}${"-".padEnd(8)}disabled`;
   // The same chain the pipeline resolves, printed before the money is spent:
   // --model > --scout-model > the engine default (the bundled prompt pins no
   // model, so there is no frontmatter seat to show here).
-  const model = options.model ?? options.scoutModel ?? DEFAULT_SCOUT_MODEL;
+  const model =
+    plannedModel(routePlan, "scout") ??
+    options.model ??
+    options.scoutModel ??
+    DEFAULT_SCOUT_MODEL;
   return `${label}${model.padEnd(8)}diff-only, before the hunters (experimental)`;
 }
 
@@ -540,20 +562,7 @@ export function planDetails(ctx: PlanContext, styles: boolean): string[] {
   push("agents dir", ctx.agentsDir);
   if (ctx.routePlan) {
     for (const step of ctx.routePlan.steps) {
-      const rawModel =
-        step.role === "hunter"
-          ? (ctx.options.model ??
-            ctx.spec.agents.find(
-              (a) =>
-                a.key === step.stepKey || `hunter-${a.key}` === step.stepKey,
-            )?.model ??
-            ctx.agentFiles.get(step.stepKey.replace(/^hunter-/, ""))?.model)
-          : step.role === "refuter"
-            ? (ctx.options.model ??
-              ctx.spec.agents.find((a) => a.role === "refuter")?.model ??
-              ctx.agentFiles.get(step.stepKey)?.model)
-            : undefined;
-      push(`route ${step.stepKey}`, formatStepRoute(step, rawModel));
+      push(`route ${step.stepKey}`, formatStepRoute(step));
     }
   }
   if (ctx.configProvenance) {
@@ -561,8 +570,8 @@ export function planDetails(ctx: PlanContext, styles: boolean): string[] {
   }
   push("run dir", ctx.runDir);
   push("hop budget", String(ctx.options.hopBudget));
-  push("summarizer", summarizerRow(ctx.summary));
-  push("scout", scoutRow(ctx.options));
+  push("summarizer", summarizerRow(ctx.summary, ctx.routePlan));
+  push("scout", scoutRow(ctx.options, ctx.routePlan));
   push(
     "parity",
     ctx.config.parity_trigger_paths.length === 0
@@ -614,8 +623,12 @@ export function renderPlan(ctx: PlanContext, styles: boolean): string[] {
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";
   }
-  lines.push(...row(label, summarizerRow(ctx.summary), { styles, width }));
-  lines.push(...row("", scoutRow(ctx.options), { styles, width }));
+  lines.push(
+    ...row(label, summarizerRow(ctx.summary, ctx.routePlan), { styles, width }),
+  );
+  lines.push(
+    ...row("", scoutRow(ctx.options, ctx.routePlan), { styles, width }),
+  );
   label = "";
   lines.push(
     "",
@@ -826,20 +839,7 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
   push("agents dir", ctx.agentsDir);
   if (ctx.routePlan) {
     for (const step of ctx.routePlan.steps) {
-      const rawModel =
-        step.role === "hunter"
-          ? (ctx.options.model ??
-            ctx.spec.agents.find(
-              (a) =>
-                a.key === step.stepKey || `hunter-${a.key}` === step.stepKey,
-            )?.model ??
-            ctx.agentFiles.get(step.stepKey.replace(/^hunter-/, ""))?.model)
-          : step.role === "refuter"
-            ? (ctx.options.model ??
-              ctx.spec.agents.find((a) => a.role === "refuter")?.model ??
-              ctx.agentFiles.get(step.stepKey)?.model)
-            : undefined;
-      push(`route ${step.stepKey}`, formatStepRoute(step, rawModel));
+      push(`route ${step.stepKey}`, formatStepRoute(step));
     }
   }
   if (ctx.configProvenance) {
@@ -849,8 +849,8 @@ export function prPlanDetails(ctx: PrPlanContext, styles: boolean): string[] {
   }
   push("run dir", ctx.runDir);
   push("hop budget", String(ctx.options.hopBudget));
-  push("summarizer", summarizerRow(ctx.summary));
-  push("scout", scoutRow(ctx.options));
+  push("summarizer", summarizerRow(ctx.summary, ctx.routePlan));
+  push("scout", scoutRow(ctx.options, ctx.routePlan));
   if (ctx.rereview) {
     const last =
       ctx.rereview.lastHead === null
@@ -934,8 +934,12 @@ export function renderPrPlan(ctx: PrPlanContext, styles: boolean): string[] {
     lines.push(...row(label, agentRow(ctx, agent, fires), { styles, width }));
     label = "";
   }
-  lines.push(...row(label, summarizerRow(ctx.summary), { styles, width }));
-  lines.push(...row("", scoutRow(ctx.options), { styles, width }));
+  lines.push(
+    ...row(label, summarizerRow(ctx.summary, ctx.routePlan), { styles, width }),
+  );
+  lines.push(
+    ...row("", scoutRow(ctx.options, ctx.routePlan), { styles, width }),
+  );
   if (ctx.rereview) {
     lines.push(
       ...row(

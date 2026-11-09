@@ -4,17 +4,19 @@ import {
   type FreeModelProbe,
   freeVerdictKey,
 } from "#model/free-discovery";
+import type { ModelsConfig } from "#model/model-name";
 import type { ProviderCapabilityReport } from "#model/provider-capabilities";
 import {
   type CapabilityGateDecision,
   exactBindingCapabilityGate,
 } from "#model/provider-capabilities";
-import type {
-  ResolvedRoutePlan,
-  ResolvedStepRoute,
-  RoutingConfig,
+import type { ResolvedRoutePlan, ResolvedStepRoute } from "#model/routing";
+import {
+  buildResolvedRoutePlan,
+  createResolvedRoutePlan,
+  freezeRoutePlan,
+  resolveStepRoute,
 } from "#model/routing";
-import { buildResolvedRoutePlan, freezeRoutePlan } from "#model/routing";
 import {
   ClaudeCodeRunner,
   type StepResult,
@@ -798,21 +800,34 @@ export async function probeBindingsReadiness(
   };
 }
 
-export function buildDoctorRoutePlan(
-  routingConfig?: RoutingConfig,
-): ResolvedRoutePlan {
-  return buildResolvedRoutePlan({
+// The plan `crysk doctor` probes: the two default models a zero-config review
+// runs (a sonnet hunter, an opus refuter), plus one step per distinct model
+// `models` names, fallbacks included, so every binding a configured review
+// could open is checked before a review needs it.
+export function buildDoctorRoutePlan(models?: ModelsConfig): ResolvedRoutePlan {
+  const base = buildResolvedRoutePlan({
     agents: [
       { key: "reliability", role: "hunter", model: "sonnet" },
       { key: "refuter", role: "refuter", model: "opus" },
     ],
-    ...(routingConfig === undefined ? {} : { routingConfig }),
   });
+  if (models === undefined) return base;
+  const configured = [...new Set(Object.values(models).flat())];
+  return createResolvedRoutePlan([
+    ...base.steps,
+    ...configured.map((model, i) =>
+      resolveStepRoute({
+        stepKey: `doctor-model-${i + 1}`,
+        role: "other",
+        specModel: model,
+      }),
+    ),
+  ]);
 }
 
 export async function collectDoctorExactBindingReports(input: {
   readonly workspaceRoot: string;
-  readonly routingConfig?: RoutingConfig;
+  readonly models?: ModelsConfig;
   readonly authorityDeps?: ResolveRunnerAuthorityDeps;
   readonly env?: RunnerAuthorityOptions["env"];
   readonly observeOpenCodeIdentity?: OpenCodeIdentityObserver;
@@ -820,7 +835,7 @@ export async function collectDoctorExactBindingReports(input: {
     import("./transports/opencode-client").OpenCodeSdkLike
   >;
 }): Promise<readonly ExactBindingCapabilityReport[]> {
-  const plan = buildDoctorRoutePlan(input.routingConfig);
+  const plan = buildDoctorRoutePlan(input.models);
   const authority = await prepareProductionRunnerAuthority(
     input.workspaceRoot,
     plan,
@@ -1275,8 +1290,7 @@ export class MultiProviderRunner implements StepRunner {
           binding.route.provider === step.route.provider &&
           binding.route.modelFamily === step.route.modelFamily &&
           binding.route.modelSnapshot === step.route.modelSnapshot &&
-          binding.route.modelVariant === step.route.modelVariant &&
-          (binding.route.gateway ?? "") === (step.route.gateway ?? "")
+          binding.route.modelVariant === step.route.modelVariant
         ) {
           return binding;
         }
