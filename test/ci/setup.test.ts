@@ -32,6 +32,7 @@ import { parseArgs } from "#review/preflight";
 import { runDoctor } from "../../src/doctor";
 import { prheroLayout } from "../../src/home-preflight";
 import { resolveOpenCodeAuthPath } from "../../src/security/credential-broker";
+import { openCodeSecretManifestPath } from "../../src/security/opencode-secret-manifest";
 import { checkCiConfiguration } from "../../src/system-tools";
 
 const OPENCODE_CI_ROUTING = JSON.stringify({
@@ -1061,6 +1062,8 @@ describe("setup.ts reads the crysk-secrets input", () => {
       fakeGit?: boolean;
       // Run bun on setup.ts directly with `env`, bypassing the step's script.
       direct?: boolean;
+      // Seeds the home before the step runs (a file an earlier run left).
+      prepareHome?: (home: string) => Promise<void>;
     } = {},
   ) {
     const root = await mkdtemp(path.join(tmpdir(), "pr-hero-setup-secrets-"));
@@ -1074,6 +1077,7 @@ describe("setup.ts reads the crysk-secrets input", () => {
     await mkdir(workspace, { recursive: true });
     await writeFile(githubOutput, "");
     await writeFile(githubEnv, "PRE_EXISTING=1\n");
+    if (options.prepareHome !== undefined) await options.prepareHome(home);
     Bun.spawnSync(["git", "init", "-q"], { cwd: workspace });
     let pathEnv = process.env.PATH ?? "";
     if (options.fakeGit === true) {
@@ -1121,6 +1125,9 @@ describe("setup.ts reads the crysk-secrets input", () => {
           GITHUB_ENV: githubEnv,
           CRYSK_PLATFORM_CONFIG_FILE: platformFile,
           CRYSK_SECRETS_INPUT: "",
+          // Empty, so the OpenCode auth file resolves under this test's HOME
+          // and never at a data home the host may have set.
+          XDG_DATA_HOME: "",
           ...env,
         },
         stdout: "pipe",
@@ -1139,6 +1146,11 @@ describe("setup.ts reads the crysk-secrets input", () => {
       })) {
         homeFiles.push(await readFile(path.join(home, entry), "utf8"));
       }
+      const authPath = resolveOpenCodeAuthPath({ HOME: home }, home);
+      const manifestPath = openCodeSecretManifestPath(authPath);
+      const authText = existsSync(authPath)
+        ? await readFile(authPath, "utf8")
+        : undefined;
       return {
         exitCode,
         stdout,
@@ -1152,6 +1164,20 @@ describe("setup.ts reads the crysk-secrets input", () => {
           ? await readFile(gitDump, "utf8")
           : undefined,
         homeFiles,
+        authText,
+        auth:
+          authText === undefined
+            ? undefined
+            : (JSON.parse(authText) as Record<string, Record<string, unknown>>),
+        authMode: existsSync(authPath)
+          ? statSync(authPath).mode & 0o777
+          : undefined,
+        manifestText: existsSync(manifestPath)
+          ? await readFile(manifestPath, "utf8")
+          : undefined,
+        manifestMode: existsSync(manifestPath)
+          ? statSync(manifestPath).mode & 0o777
+          : undefined,
       };
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -1191,7 +1217,9 @@ describe("setup.ts reads the crysk-secrets input", () => {
       ].join("\n"),
     );
     expect(result.envFile).toBe("PRE_EXISTING=1\n");
-    // U1 parses only: nothing is written under HOME from these secrets.
+    // No models name an OpenCode provider (no platform layer), so nothing is
+    // written under HOME from these secrets (U3 writes only plan providers).
+    expect(result.authText).toBeUndefined();
     expect(result.homeFiles.join("\n")).not.toContain("SENTINEL");
     expect(result.homeFiles.join("\n")).not.toContain(OAUTH_VALUE);
   });
@@ -1269,6 +1297,203 @@ describe("setup.ts reads the crysk-secrets input", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("");
     expect(result.output).toBe("");
+  });
+
+  // U3 (S8/S9, L12 "Building auth.json", L13): the OpenCode auth file is built
+  // from the CRYSK_OPENCODE_* secrets, for the providers the person layer's
+  // models name (fallbacks included). Assertions read keys, types and
+  // booleans, so a failure never prints a credential file.
+  const withModels = (models: Record<string, string[]>) => ({
+    platform: { person: { models }, repo: {} },
+  });
+  const secretsLines = (...lines: string[]) => lines.join("\n");
+
+  test("an _API_KEY becomes an api record, 0600, for the providers the models name only", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: SECRETS_INPUT },
+      withModels({
+        default: ["claude:sonnet-latest"],
+        "hunter.logic": [
+          "claude:sonnet-latest",
+          "opencode:deepseek/deepseek-chat",
+        ],
+      }),
+    );
+    expect(result.exitCode).toBe(0);
+    const auth = result.auth ?? {};
+    // openai has a secret too, but no model names it.
+    expect(Object.keys(auth)).toEqual(["deepseek"]);
+    expect(Object.keys(auth.deepseek ?? {}).sort()).toEqual(["key", "type"]);
+    expect(auth.deepseek?.type).toBe("api");
+    expect(auth.deepseek?.key === "SENTINEL-DEEPSEEK-55aa").toBe(true);
+    expect(result.authMode).toBe(0o600);
+    expect(result.manifestMode).toBe(0o600);
+    expect(JSON.parse(result.manifestText ?? "null")).toEqual({
+      v: 1,
+      source: "crysk-secrets",
+      providers: {
+        deepseek: {
+          secret: "CRYSK_OPENCODE_DEEPSEEK_API_KEY",
+          kind: "api_key",
+        },
+      },
+    });
+    expect(result.stderr).toContain(
+      "::notice::OpenCode provider deepseek: CRYSK_OPENCODE_DEEPSEEK_API_KEY (API key) builds its auth record.",
+    );
+    expect(result.stderr.includes("SENTINEL")).toBe(false);
+    expect(
+      result.stdout
+        .split("\n")
+        .every((l) => l === "" || l.startsWith("::add-mask::")),
+    ).toBe(true);
+  });
+
+  test("an openai _OAUTH record is written whole, so the child can refresh it", async () => {
+    const result = await runSetup(
+      { CRYSK_SECRETS_INPUT: SECRETS_INPUT },
+      withModels({ refuter: ["opencode:openai/gpt-5"] }),
+    );
+    expect(result.exitCode).toBe(0);
+    const auth = result.auth ?? {};
+    expect(Object.keys(auth)).toEqual(["openai"]);
+    const record = auth.openai ?? {};
+    expect(Object.keys(record).sort()).toEqual([
+      "access",
+      "expires",
+      "refresh",
+      "type",
+    ]);
+    expect(record.type).toBe("oauth");
+    expect(record.access === "SENTINEL-ACCESS-55aa").toBe(true);
+    expect(record.refresh === "SENTINEL-REFRESH-55aa").toBe(true);
+    expect(record.expires === 1_900_000_000_000).toBe(true);
+    expect(result.authMode).toBe(0o600);
+  });
+
+  test("with an openai _API_KEY and _OAUTH, the subscription comes first and the choice is recorded", async () => {
+    const result = await runSetup(
+      {
+        CRYSK_SECRETS_INPUT: secretsLines(
+          "CRYSK_OPENCODE_OPENAI_API_KEY=SENTINEL-OPENAI-KEY-55aa",
+          `CRYSK_OPENCODE_OPENAI_OAUTH=${OAUTH_VALUE}`,
+        ),
+      },
+      withModels({ default: ["opencode:openai/gpt-5"] }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.auth?.openai?.type).toBe("oauth");
+    expect(JSON.parse(result.manifestText ?? "null")?.providers).toEqual({
+      openai: {
+        secret: "CRYSK_OPENCODE_OPENAI_OAUTH",
+        kind: "oauth",
+        unused: "CRYSK_OPENCODE_OPENAI_API_KEY",
+      },
+    });
+    expect(result.stderr).toContain(
+      "::notice::OpenCode provider openai: CRYSK_OPENCODE_OPENAI_OAUTH (subscription) builds its auth record; CRYSK_OPENCODE_OPENAI_API_KEY is not used, because the subscription comes first.",
+    );
+    expect(result.stderr.includes("SENTINEL")).toBe(false);
+  });
+
+  test("another provider's _OAUTH the models use fails the step, naming the secret", async () => {
+    const result = await runSetup(
+      {
+        CRYSK_SECRETS_INPUT: secretsLines(
+          "CRYSK_OPENCODE_DEEPSEEK_API_KEY=SENTINEL-DEEPSEEK-55aa",
+          `CRYSK_OPENCODE_DEEPSEEK_OAUTH=${OAUTH_VALUE}`,
+        ),
+      },
+      withModels({ default: ["opencode:deepseek/deepseek-chat"] }),
+    );
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.record ?? "null")).toEqual({
+      v: 1,
+      cls: { kind: "credential", failureClass: "malformed_payload" },
+      detail:
+        "CRYSK_OPENCODE_DEEPSEEK_OAUTH is an OpenCode subscription record, which Crysk reads only for openai for now; set CRYSK_OPENCODE_DEEPSEEK_API_KEY instead",
+    });
+    expect(result.authText).toBeUndefined();
+    expect(result.manifestText).toBeUndefined();
+    expect(result.stderr.includes("SENTINEL")).toBe(false);
+
+    // Unused by the models, it is not read at all.
+    const unused = await runSetup(
+      {
+        CRYSK_SECRETS_INPUT: secretsLines(
+          `CRYSK_OPENCODE_DEEPSEEK_OAUTH=${OAUTH_VALUE}`,
+          "CRYSK_OPENCODE_ZAI_API_KEY=SENTINEL-ZAI-55aa",
+        ),
+      },
+      withModels({ default: ["opencode:zai/glm-5"] }),
+    );
+    expect(unused.exitCode).toBe(0);
+    expect(Object.keys(unused.auth ?? {})).toEqual(["zai"]);
+  });
+
+  test("a provider the models name with no CRYSK secret gets a notice naming both secrets", async () => {
+    const result = await runSetup(
+      {
+        CRYSK_SECRETS_INPUT:
+          "CRYSK_OPENCODE_DEEPSEEK_API_KEY=SENTINEL-DEEPSEEK-55aa",
+      },
+      withModels({
+        default: ["opencode:deepseek/deepseek-chat", "opencode:zai/glm-5"],
+      }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(Object.keys(result.auth ?? {})).toEqual(["deepseek"]);
+    expect(result.stderr).toContain(
+      "::notice::OpenCode provider zai: no CRYSK_OPENCODE_ZAI_API_KEY or CRYSK_OPENCODE_ZAI_OAUTH secret is set, so the auth file has no record for it.",
+    );
+  });
+
+  test("the old opencode-auth input is unchanged when no CRYSK_OPENCODE_* secret serves the models", async () => {
+    const result = await runSetup(
+      {
+        OPENCODE_AUTH_INPUT: OPENCODE_CI_AUTH,
+        CRYSK_SECRETS_INPUT: "CRYSK_CLAUDE_OAUTH_TOKEN=SENTINEL-OAUTH-55aa",
+      },
+      {
+        ...withModels({ default: ["opencode:deepseek/deepseek-chat"] }),
+        // A manifest an earlier CRYSK run left on a runner whose HOME persists.
+        prepareHome: async (home) => {
+          const file = openCodeSecretManifestPath(
+            resolveOpenCodeAuthPath({ HOME: home }, home),
+          );
+          await mkdir(path.dirname(file), { recursive: true });
+          await writeFile(file, "{}\n");
+        },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.authText === OPENCODE_CI_AUTH).toBe(true);
+    expect(result.authMode).toBe(0o600);
+    // The manifest describes a file this step built from CRYSK secrets only.
+    expect(result.manifestText).toBeUndefined();
+    expect(result.stderr).not.toContain("opencode-auth input is ignored");
+  });
+
+  test("with both inputs, the CRYSK_* secrets win and the opencode-auth input is ignored with a notice", async () => {
+    for (const oldInput of [OPENCODE_CI_AUTH, '{"SENTINEL-not-json": ']) {
+      const result = await runSetup(
+        {
+          OPENCODE_AUTH_INPUT: oldInput,
+          CRYSK_SECRETS_INPUT:
+            "CRYSK_OPENCODE_DEEPSEEK_API_KEY=SENTINEL-DEEPSEEK-55aa",
+        },
+        withModels({ default: ["opencode:deepseek/deepseek-chat"] }),
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.auth?.deepseek?.key === "SENTINEL-DEEPSEEK-55aa").toBe(
+        true,
+      );
+      expect(result.authText?.includes("oc-ci-fixture")).toBe(false);
+      expect(result.stderr).toContain(
+        "::notice::the opencode-auth input is ignored: the CRYSK_OPENCODE_* secrets build the OpenCode auth file.",
+      );
+      expect(result.record).toBeUndefined();
+    }
   });
 });
 

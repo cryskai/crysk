@@ -239,10 +239,10 @@ follows the same rule: it never echoes, logs, or truncates a secret value anywhe
 
 ### `CRYSK_*` secrets (upcoming)
 
-> **Not read by reviews yet.** The action accepts the `crysk-secrets` input and checks it, but a review
-> still authenticates only through `claude-token`, `anthropic-api-key` and `opencode-auth`. A workflow
-> that passes only `crysk-secrets` stops with `PRH-CRED-MISSING`. Keep the inputs above until a release
-> says to switch.
+> **Partly read by reviews.** The action accepts the `crysk-secrets` input and checks it. The
+> `CRYSK_OPENCODE_*` secrets build the OpenCode auth file (see below), but Claude still authenticates only
+> through `claude-token` and `anthropic-api-key`, and a workflow that passes only `crysk-secrets` stops
+> with `PRH-CRED-MISSING` before setup runs. Keep the inputs above until a release says to switch.
 
 Each credential gets one secret, with one name per kind:
 
@@ -290,6 +290,53 @@ What the action does with the input:
   - a line is not `NAME=value`, which is usually a base64 value that wrapped onto a second line.
 - **Other names are ignored**, each with a notice. A `CRYSK_` name is named in the notice. Any other
   name is reported by its line number only, because it may be part of a value.
+
+#### How the OpenCode secrets become the auth file
+
+The setup step builds OpenCode's `auth.json` from the `CRYSK_OPENCODE_*` secrets, in the same place and
+with the same `0600` mode the `opencode-auth` input uses (`$XDG_DATA_HOME/opencode/auth.json`, or
+`~/.local/share/opencode/auth.json`):
+
+- **Only the providers your models use.** The step reads the `opencode:` models in the person layer's
+  `models`, every role and every fallback, and writes one record per provider. A secret for a provider
+  no model names is not read. The judge runs only `claude:` models, so an `opencode:` model listed for
+  `judge` adds nothing. Today the person layer comes from the platform; a standalone workflow has no way
+  to set `models` yet, so there the step writes nothing from these secrets.
+- **`_API_KEY`** becomes OpenCode's own API record, `{"type": "api", "key": "…"}`.
+- **`_OAUTH`** is the provider's login record, decoded and written whole, refresh token included, so
+  OpenCode can renew the access token during the run.
+- **`_OAUTH` is read for `openai` only, for now.** That is the one subscription Crysk can project. An
+  `_OAUTH` secret for another provider your models use fails the step with `PRH-CRED-UNUSABLE`, naming
+  the secret and telling you to set that provider's `_API_KEY` instead.
+- **Subscription first.** When `openai` has both `CRYSK_OPENCODE_OPENAI_OAUTH` and
+  `CRYSK_OPENCODE_OPENAI_API_KEY`, the subscription builds the record and the API key is not used.
+- **The bill follows the secret.** An `openai` model on `CRYSK_OPENCODE_OPENAI_API_KEY` is billed per
+  token like any other API key. Before, an `openai` model was always taken for the ChatGPT subscription,
+  so an API key in its place was refused.
+- **The choice is recorded.** The step prints a notice per provider naming the secret it used and the one
+  it left unused, and writes `crysk-credentials.json` beside `auth.json`: names and kinds only, never a
+  value. The review reads that file to bind each OpenCode model to the right kind of credential. A file
+  built from the `opencode-auth` input has no such record, and an `openai` record there is still taken
+  for the subscription, as before.
+- **A provider your models use with no secret** gets a notice naming both secret names it looked for.
+- **With both `opencode-auth` and these secrets**, the secrets win whenever they serve at least one
+  provider your models use. The `opencode-auth` input is then ignored as a whole, with a notice; the two
+  are never merged into one file. When no `CRYSK_OPENCODE_*` secret serves your models, the
+  `opencode-auth` input works exactly as before.
+
+**A renewed token is not saved.** When the access token in an `_OAUTH` record expires during a run,
+OpenCode renews it with the refresh token, but only inside that run: nothing can write the new token
+back to the GitHub secret. Every run starts again from the record you stored. If the provider rotates
+refresh tokens on use, or the stored refresh token expires, reviews start failing to authenticate. Then
+run `opencode auth login` again on your machine and set the secret anew:
+
+```sh
+jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH
+```
+
+A configuration whose models name several OpenCode providers runs each model on its own provider's secret,
+through its own OpenCode server that sees only that provider's record (see "Several OpenCode providers in
+one review" in [configuration.md](configuration.md)).
 
 ## OpenCode in CI
 
@@ -372,7 +419,7 @@ install and still starts.
 |---|---|
 | Non-openai API token (tested: **deepseek** `type: "api"`) | Executable metered path. Presence of the auth file applies the default spend ceiling — this is an invoice route, not an unlimited subscription. |
 | `openai` with `type: "api"` | **Refused.** The engine maps openai to ChatGPT OAuth; a pay-as-you-go API key is not remapped. Do not put an openai API key in `OPENCODE_AUTH_JSON` and expect it to run. |
-| Mixed OpenCode providers in one run | Out of scope ([#195](https://github.com/cryskai/crysk/issues/195)). One OpenCode provider per run. |
+| Mixed OpenCode providers in one run | Supported: each model runs through its own OpenCode server, projected with only its provider's record ([configuration.md](configuration.md), "Several OpenCode providers in one review"). |
 | `claude-code` + one OpenCode provider | Already works. Mix Claude credentials with one OpenCode `auth.json` entry and routing that names both backends. |
 
 ### Edges

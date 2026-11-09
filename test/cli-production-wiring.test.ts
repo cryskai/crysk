@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
@@ -8,16 +15,25 @@ import { CliError } from "../src/errors";
 import type { ExactBindingCapabilityReport } from "../src/execution/contracts";
 import {
   d1_11EvidenceFromExactBinding,
+  planOpenCodeCredentials,
   prepareProductionAdmissionContext,
   productionFallbackRegistry,
-  soleOpenCodeCredential,
+  soleOpenCodeCredentialOf,
 } from "../src/production-runtime";
 import { enforceProviderCapabilityGate } from "../src/review/route-preflight";
 import {
   ClaudeCredentialRefusalError,
   resolveRunClaudeCredential,
 } from "../src/security/claude-credential";
-import { OpenCodeAuthBroker } from "../src/security/credential-broker";
+import {
+  OpenCodeApiTokenBroker,
+  OpenCodeAuthBroker,
+  resolveOpenCodeAuthPath,
+} from "../src/security/credential-broker";
+import {
+  openCodeSecretManifestPath,
+  serializeOpenCodeSecretManifest,
+} from "../src/security/opencode-secret-manifest";
 import {
   admitRoutePlan,
   type DefaultTransportRegistry,
@@ -244,22 +260,25 @@ describe("CLI production wiring (verify C1/C3)", () => {
     expect(registry.openCodeCredentialBroker).toBeUndefined();
   });
 
-  test("the fallback registry refuses a mixed-provider plan", () => {
+  // U4 (S9): a plan on two OpenCode credentials used to be refused here. It
+  // now builds a registry with no plan-wide default: there is no one answer,
+  // and every binding forwards its own broker and kind on acquire().
+  test("the fallback registry has no default credential for a two-provider plan", () => {
     const step = (stepKey: string, logical: string, provider: string) =>
       resolveStepRoute({
         stepKey,
         role: stepKey === "refuter" ? "refuter" : "hunter",
         cliModel: `opencode:${provider}/${logical.split("/")[1]}`,
       });
-    expect(() =>
-      productionFallbackRegistry({
-        mode: "production",
-        plan: createResolvedRoutePlan([
-          step("hunter-reliability", "openai/gpt-4o", "openai"),
-          step("refuter", "zai/glm-5", "zai"),
-        ]),
-      }),
-    ).toThrow(/one credential/);
+    const registry = productionFallbackRegistry({
+      mode: "production",
+      plan: createResolvedRoutePlan([
+        step("hunter-reliability", "openai/gpt-4o", "openai"),
+        step("refuter", "zai/glm-5", "zai"),
+      ]),
+    }) as DefaultTransportRegistry;
+    expect(registry.openCodeCredentialKind).toBeUndefined();
+    expect(registry.openCodeCredentialBroker).toBeUndefined();
   });
 
   test("resolveProductionRoutePlanAtConfirm wires mixed Claude/OpenCode production admission", async () => {
@@ -502,12 +521,13 @@ describe("CLI production wiring (verify C1/C3)", () => {
     expect(d1_11EvidenceFromExactBinding(report).pricingReady).toBe(true);
   });
 
-  // #133. The OpenCode server is ONE per backend and outlives every step, so
-  // its credential is a whole-plan fact. Two things must hold here, and the
-  // second is what made the api-token route reachable at all:
-  //  1. A plan naming two OpenCode providers is refused BY NAME. Serving it
-  //     would run one provider's steps under the other's credential.
-  //  2. The default broker matches the plan's provider. An unconditional
+  // #133, revised by U4 (S9). Each OpenCode route runs on its own credential
+  // (provider + kind) through its own server. Two things must hold here, and
+  // the second is what made the api-token route reachable at all:
+  //  1. A plan naming two OpenCode providers is admitted with no plan-wide
+  //     broker, each binding on its own (test/opencode-multi-credential.test.ts
+  //     drives it end to end). It used to be refused by name.
+  //  2. For a one-credential plan, the default broker matches its provider. An unconditional
   //     `new OpenCodeAuthBroker()` resolved the right KIND at the authority
   //     and then handed it a broker that refuses that kind — a failure that
   //     would only surface at projection time, mid-run.
@@ -541,18 +561,20 @@ describe("CLI production wiring (verify C1/C3)", () => {
       }
     }
 
-    test("a two-provider plan is refused by name", async () => {
+    test("a two-provider plan is admitted with no plan-wide broker", async () => {
       const plan = createResolvedRoutePlan([
         openCodeStep("hunter-reliability", "openai/gpt-4o", "openai"),
         openCodeStep("refuter", "zai/glm-5", "zai"),
       ]);
       const admission = await admit(plan);
-      if (!("error" in admission)) {
-        throw new Error("expected a refusal");
-      }
-      expect(admission.error).toContain("openai");
-      expect(admission.error).toContain("zai");
-      expect(admission.error).toContain("one credential");
+      if ("error" in admission) throw new Error(admission.error);
+      expect(
+        admission.authorityOptions.credentialBrokers?.opencode,
+      ).toBeUndefined();
+      expect(admission.authorityOptions.openCodeBrokerFor).toBeDefined();
+      expect(
+        (admission.registry as DefaultTransportRegistry).openCodeCredentialKind,
+      ).toBeUndefined();
     });
 
     test("a single-provider plan resolves the sole credential", () => {
@@ -560,7 +582,9 @@ describe("CLI production wiring (verify C1/C3)", () => {
         openCodeStep("hunter-reliability", "zai/glm-5", "zai"),
         openCodeStep("refuter", "zai/glm-5", "zai"),
       ]);
-      expect(soleOpenCodeCredential(plan)).toEqual({
+      expect(
+        soleOpenCodeCredentialOf(planOpenCodeCredentials(plan, undefined)),
+      ).toEqual({
         kind: "provider_api_token",
         provider: "zai",
       });
@@ -576,7 +600,9 @@ describe("CLI production wiring (verify C1/C3)", () => {
           cliModel: "sonnet",
         }),
       ]);
-      expect(soleOpenCodeCredential(plan)).toEqual({
+      expect(
+        soleOpenCodeCredentialOf(planOpenCodeCredentials(plan, undefined)),
+      ).toEqual({
         kind: "opencode_chatgpt_oauth",
         provider: "openai",
       });
@@ -596,6 +622,75 @@ describe("CLI production wiring (verify C1/C3)", () => {
       expect(
         (oauth.registry as DefaultTransportRegistry).openCodeCredentialBroker,
       ).toBe(oauth.authorityOptions.credentialBrokers?.opencode);
+    });
+
+    // U3 (S8, L12 "Building auth.json"): the kind follows which CRYSK_* secret
+    // the setup step built the auth file from, named in its manifest. Without a
+    // manifest the provider literal stands, so the old opencode-auth input and
+    // a local store keep their answer.
+    test("the sole credential follows the CRYSK_* secret names", () => {
+      const plan = createResolvedRoutePlan([
+        openCodeStep("refuter", "openai/gpt-4o", "openai"),
+      ]);
+      const sole = (names: readonly string[] | undefined) =>
+        soleOpenCodeCredentialOf(planOpenCodeCredentials(plan, names));
+      expect(sole(["CRYSK_OPENCODE_OPENAI_API_KEY"])).toEqual({
+        kind: "provider_api_token",
+        provider: "openai",
+      });
+      expect(
+        sole(["CRYSK_OPENCODE_OPENAI_API_KEY", "CRYSK_OPENCODE_OPENAI_OAUTH"]),
+      ).toEqual({ kind: "opencode_chatgpt_oauth", provider: "openai" });
+      expect(sole(undefined)).toEqual({
+        kind: "opencode_chatgpt_oauth",
+        provider: "openai",
+      });
+    });
+
+    test("admission reads the setup step's manifest: openai on an API key binds the API-token broker", async () => {
+      const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-cli-cred-"));
+      const claude = await writeExecutable(
+        tmpDir,
+        "claude",
+        "#!/bin/sh\necho ok\n",
+      );
+      const opencode = await writeExecutable(tmpDir, "opencode", "opencode");
+      const dataHome = path.join(tmpDir, "xdg-data");
+      const authPath = resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome });
+      await mkdir(path.dirname(authPath), { recursive: true });
+      await writeFile(
+        openCodeSecretManifestPath(authPath),
+        serializeOpenCodeSecretManifest([
+          {
+            provider: "openai",
+            secret: "CRYSK_OPENCODE_OPENAI_API_KEY",
+            kind: "api_key",
+          },
+        ]),
+      );
+      try {
+        const admission = await prepareProductionAdmissionContext({
+          workspaceRoot: tmpDir,
+          plan: createResolvedRoutePlan([
+            openCodeStep("refuter", "openai/gpt-4o", "openai"),
+          ]),
+          env: { PATH: tmpDir, XDG_DATA_HOME: dataHome },
+          loadSdk: mockLoadSdk,
+          authorityDeps: fixtureDeps(tmpDir, claude, opencode),
+        });
+        if ("error" in admission) throw new Error(admission.error);
+        expect(admission.authorityOptions.openCodeSecretNames).toEqual([
+          "CRYSK_OPENCODE_OPENAI_API_KEY",
+        ]);
+        const broker = admission.authorityOptions.credentialBrokers?.opencode;
+        expect(broker).toBeInstanceOf(OpenCodeApiTokenBroker);
+        expect(
+          (admission.registry as DefaultTransportRegistry)
+            .openCodeCredentialBroker,
+        ).toBe(broker);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
     });
 
     // SCOPE NOTE, updated by #137 and again on 2026-09-02, asserted rather

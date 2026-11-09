@@ -455,16 +455,13 @@ export async function launchProjectedOpenCodeServer(
     // route by runner-authority.ts's credentialKindForRoute, and this server
     // is handed the one its binding resolved.
     //
-    // SCOPE NOTE, not solved here: this server is ONE per backend and
-    // outlives every step, so a plan mixing an `openai` OAuth route with a
-    // `zai` API-token route needs two credentials behind one server. That
-    // case is refused upstream — the metered route has no pricing table yet,
-    // so the exact-binding gate blocks it per binding before anything
-    // launches (test/production-runtime.test.ts, "a plan mixing an OAuth
-    // provider and an API-token provider is refused per binding"). When #137
-    // prices those routes, this becomes reachable and needs a server per
-    // credential; until then it must fail LOUD, which it does — a broker
-    // handed the wrong kind refuses it by name.
+    // U4 (S9): this server serves ONE route (the registry caches one
+    // transport, so one client and one server, per route fingerprint), and
+    // its broker is that route's own, forwarded by FrozenRuntimeBinding.
+    // acquire(). A plan naming several providers, or a free model beside a
+    // metered one, therefore gets one server per route, each projected with
+    // only its credential's record; a broker handed the wrong kind still
+    // refuses it by name.
     sessionId: "opencode-server",
     credentialRef: "opencode-auth",
     kind: credentialKind,

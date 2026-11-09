@@ -5,11 +5,14 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  chooseOpenCodeSecret,
   cryskSecretsPresence,
+  OPENCODE_OAUTH_SECRET_PROVIDER,
   opencodeSecretsFor,
   opencodeSecretToken,
   parseCryskSecrets,
 } from "#ci/crysk-secrets";
+import { OPENCODE_OAUTH_PROVIDER } from "../../src/security/credential-broker";
 
 const b64 = (value: unknown) =>
   Buffer.from(
@@ -415,5 +418,67 @@ describe("opencodeSecretsFor and cryskSecretsPresence", () => {
       "subscription",
       "api_key",
     ]);
+  });
+});
+
+// U3 (S8/S9, L12 "Building auth.json", decisions 4 and 5): which secret serves an
+// OpenCode provider. One pure rule, read by the setup step that writes the auth
+// file and by credentialKindForRoute, so the record written and the kind bound
+// cannot disagree.
+describe("chooseOpenCodeSecret", () => {
+  test("an API key alone is the api_key choice", () => {
+    expect(
+      chooseOpenCodeSecret("deepseek", ["CRYSK_OPENCODE_DEEPSEEK_API_KEY"]),
+    ).toEqual({ kind: "api_key", secret: "CRYSK_OPENCODE_DEEPSEEK_API_KEY" });
+  });
+
+  test("openai's _OAUTH is the subscription choice", () => {
+    expect(
+      chooseOpenCodeSecret("openai", ["CRYSK_OPENCODE_OPENAI_OAUTH"]),
+    ).toEqual({ kind: "oauth", secret: "CRYSK_OPENCODE_OPENAI_OAUTH" });
+  });
+
+  test("with both, the subscription comes first and the API key is named unused", () => {
+    expect(
+      chooseOpenCodeSecret("openai", [
+        "CRYSK_OPENCODE_OPENAI_API_KEY",
+        "CRYSK_OPENCODE_OPENAI_OAUTH",
+      ]),
+    ).toEqual({
+      kind: "oauth",
+      secret: "CRYSK_OPENCODE_OPENAI_OAUTH",
+      unused: "CRYSK_OPENCODE_OPENAI_API_KEY",
+    });
+  });
+
+  test("another provider's _OAUTH is refused by name, even beside an API key", () => {
+    for (const names of [
+      ["CRYSK_OPENCODE_DEEPSEEK_OAUTH"],
+      ["CRYSK_OPENCODE_DEEPSEEK_API_KEY", "CRYSK_OPENCODE_DEEPSEEK_OAUTH"],
+    ]) {
+      const choice = chooseOpenCodeSecret("deepseek", names);
+      expect(choice?.kind).toBeUndefined();
+      expect(choice?.problem).toBe(
+        "CRYSK_OPENCODE_DEEPSEEK_OAUTH is an OpenCode subscription record, which Crysk reads only for openai for now; set CRYSK_OPENCODE_DEEPSEEK_API_KEY instead",
+      );
+    }
+  });
+
+  test("the provider is normalized, never a secret name reversed", () => {
+    expect(
+      chooseOpenCodeSecret("wafer.ai", ["CRYSK_OPENCODE_WAFER_AI_API_KEY"]),
+    ).toEqual({ kind: "api_key", secret: "CRYSK_OPENCODE_WAFER_AI_API_KEY" });
+    // Another provider's secrets serve nothing here.
+    expect(
+      chooseOpenCodeSecret("deepseek", ["CRYSK_OPENCODE_OPENAI_API_KEY"]),
+    ).toBeUndefined();
+    // A provider id no secret name can carry has no choice.
+    expect(
+      chooseOpenCodeSecret("-bad", ["CRYSK_OPENCODE_BAD_API_KEY"]),
+    ).toBeUndefined();
+  });
+
+  test("the subscription provider is the one the OAuth broker projects", () => {
+    expect(OPENCODE_OAUTH_SECRET_PROVIDER).toBe(OPENCODE_OAUTH_PROVIDER);
   });
 });

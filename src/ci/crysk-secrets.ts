@@ -30,7 +30,7 @@ export type ClaudeCredentialKind = "subscription" | "api_key";
 
 // The `opencode auth login` record of an OAuth provider. Only `type` is checked:
 // the rest is the provider's own shape (access, refresh, expires, ...), carried
-// whole into the OpenCode auth file by a later unit.
+// whole into the OpenCode auth file (U3, setup.ts), so the child can refresh it.
 export interface OpenCodeOAuthRecord {
   readonly type: "oauth";
   readonly [field: string]: unknown;
@@ -117,6 +117,54 @@ export function opencodeSecretsFor(
 ): OpenCodeProviderSecrets | undefined {
   const token = opencodeSecretToken(providerId);
   return token === undefined ? undefined : secrets.opencode.get(token);
+}
+
+// U3 (L12 decision 5): an `_OAUTH` secret is read for this provider only, the
+// one whose subscription record the engine projects (OPENCODE_OAUTH_PROVIDER in
+// security/credential-broker.ts, not imported so this module stays builtins-only;
+// a test pins the two equal). Another provider's OAuth record has no broker yet.
+export const OPENCODE_OAUTH_SECRET_PROVIDER = "openai";
+
+export type OpenCodeSecretChoice =
+  | {
+      readonly kind: "oauth" | "api_key";
+      // The secret whose value builds the provider's auth record.
+      readonly secret: string;
+      // A secret of the same provider that is set but not used.
+      readonly unused?: string;
+      readonly problem?: undefined;
+    }
+  | { readonly problem: string; readonly kind?: undefined };
+
+// Which CRYSK_* secret serves an OpenCode provider, from the secret NAMES alone,
+// so the setup step that writes the auth record and credentialKindForRoute, which
+// binds the kind, read one rule and cannot disagree. Undefined when no secret
+// serves it. The subscription comes first (L12 decision 4), like the Claude
+// order's default. The provider is normalized with opencodeSecretToken; a secret
+// name is never reversed into a provider.
+// outcome.ts matches this refusal to give it its own fix (the provider's
+// _API_KEY); test/ci/publish.test.ts runs this function's text through it.
+const UNSUPPORTED_OAUTH_TEXT = `is an OpenCode subscription record, which Crysk reads only for ${OPENCODE_OAUTH_SECRET_PROVIDER} for now`;
+export function chooseOpenCodeSecret(
+  providerId: string,
+  names: readonly string[],
+): OpenCodeSecretChoice | undefined {
+  const token = opencodeSecretToken(providerId);
+  if (token === undefined) return undefined;
+  const apiKey = `CRYSK_OPENCODE_${token}_API_KEY`;
+  const oauth = `CRYSK_OPENCODE_${token}_OAUTH`;
+  const hasApiKey = names.includes(apiKey);
+  if (names.includes(oauth)) {
+    if (providerId !== OPENCODE_OAUTH_SECRET_PROVIDER) {
+      return {
+        problem: `${oauth} ${UNSUPPORTED_OAUTH_TEXT}; set ${apiKey} instead`,
+      };
+    }
+    return hasApiKey
+      ? { kind: "oauth", secret: oauth, unused: apiKey }
+      : { kind: "oauth", secret: oauth };
+  }
+  return hasApiKey ? { kind: "api_key", secret: apiKey } : undefined;
 }
 
 // What the setup step may tell later steps: names and kinds, never a value.

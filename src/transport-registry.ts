@@ -496,6 +496,10 @@ export interface TransportFactoryOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   // #149: the credential broker the authority resolved for the opencode
   // backend. The server runs under its projection for the servers whole life.
+  // U4: on the registry it is only the default, set when the plan runs on one
+  // OpenCode credential; each binding passes its own on get() (acquire), and
+  // `{ ...defaultOptions, ...options }` lets that one win, so a plan on several
+  // credentials gives each route's server its own broker.
   readonly credentialBroker?: CredentialBroker;
   // #133: the KIND that broker was resolved for. Travels beside it and is
   // only ever meaningful as a pair — see openCodeLaunchServerFor.

@@ -25,10 +25,11 @@ import type {
 import {
   createProductionRuntime,
   d1_11EvidenceFromExactBinding,
+  planOpenCodeCredentials,
   prepareProductionAdmissionContext,
   probeBindingsReadiness,
   productionFallbackRegistry,
-  soleOpenCodeCredential,
+  soleOpenCodeCredentialOf,
 } from "../src/production-runtime";
 import {
   credentialKindBillsMetered,
@@ -660,7 +661,10 @@ describe("#182 wiring: bindings, server, gates", () => {
     }
   });
 
-  test("admission: mixed free/metered plan is refused loudly, never silently OAuth", async () => {
+  // U4 (S9): a free and a metered route used to be refused here, because one
+  // server credential served both. Each route now binds its own kind and
+  // broker, and the registry carries no plan-wide default.
+  test("admission: mixed free/metered plan binds each route by its own kind, never OAuth", async () => {
     const tmpDir = await mkdtemp(path.join(tmpdir(), "pr-hero-free-mix-"));
     try {
       await writeOpenCodeFixture(tmpDir);
@@ -683,11 +687,39 @@ describe("#182 wiring: bindings, server, gates", () => {
           }) as never,
         freeModelProbe: async (_p, m) => m === "free-model",
       });
-      expect("error" in admission).toBe(true);
-      if ("error" in admission) {
-        expect(admission.error).toContain("mixed");
-        expect(admission.error).toContain("free-model");
-        expect(admission.error).toContain("paid-model");
+      if ("error" in admission) throw new Error(admission.error);
+      expect(admission.registry.openCodeCredentialKind).toBeUndefined();
+      expect(admission.registry.openCodeCredentialBroker).toBeUndefined();
+      expect(
+        admission.authorityOptions.credentialBrokers?.opencode,
+      ).toBeUndefined();
+      const runtime = await createProductionRuntime({
+        ...admission.authorityOptions,
+        plan,
+        workspaceRoot: tmpDir,
+        registry: admission.registry,
+        mode: "conformance",
+        ...(admission.freeModelProbe === undefined
+          ? {}
+          : { freeModelProbe: admission.freeModelProbe }),
+      });
+      try {
+        const kinds = [...runtime.bindings.values()]
+          .map((b) => [b.route.modelSnapshot, b.credential.kind])
+          .sort();
+        expect(kinds).toEqual([
+          ["free-model", "provider_free"],
+          ["paid-model", "provider_api_token"],
+        ]);
+        for (const binding of runtime.bindings.values()) {
+          expect(binding.credential.broker).toBeInstanceOf(
+            binding.credential.kind === "provider_free"
+              ? OpenCodeFreeBroker
+              : OpenCodeApiTokenBroker,
+          );
+        }
+      } finally {
+        await runtime.dispose();
       }
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -976,11 +1008,13 @@ describe("#182 wiring: bindings, server, gates", () => {
     }
   });
 
-  test("soleOpenCodeCredential stays provider-based (free needs the async probe)", () => {
+  test("planOpenCodeCredentials stays provider-based without verdicts (free needs the async probe)", () => {
     const plan = createResolvedRoutePlan([
       opencodeStep("h", "opencode/m", "opencode", "m"),
     ]);
-    expect(soleOpenCodeCredential(plan)).toEqual({
+    expect(
+      soleOpenCodeCredentialOf(planOpenCodeCredentials(plan, undefined)),
+    ).toEqual({
       kind: "provider_api_token",
       provider: "opencode",
     });

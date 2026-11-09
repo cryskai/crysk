@@ -203,10 +203,12 @@ the estimate before the run, which does not price fallbacks, and nothing caps do
 
 **Checked before anything spends.** Every model of every list is resolved, bound and admitted with the rest
 of the plan, before the cost confirmation, so a fallback that cannot run (no executable, no credential, a
-backend not admitted) fails the run up front instead of when its turn comes. One OpenCode server holds one
-credential for the whole run, so OpenCode models on two providers, or a free model beside a metered one,
-are refused even when one of them is only a fallback. The confirm menu's free label counts the fallbacks
-too, so a free first model with a metered fallback is not shown as free.
+backend not admitted) fails the run up front instead of when its turn comes. OpenCode models may name
+several providers, and a free model may sit beside a metered one: each model runs through its own OpenCode
+server, projected with only its own credential (see "Several OpenCode providers in one review" below). A
+refused login moves past every other model on the same credential to the next one on another. The confirm
+menu's free label counts the fallbacks too, so a free first model with a metered fallback is not shown as
+free.
 
 **What is recorded.** In `pipeline.json`, a step whose role listed several models has:
 
@@ -297,9 +299,24 @@ loudly, at credential projection — rather than silently billed as if it were t
 subscription. Every other provider (DeepSeek, Z.ai, etc.) resolves to `provider_api_token`
 regardless of what it is named.
 
-Only **one** OpenCode provider is admitted per run — mixing a `provider_free` route with a metered
-one, or two different metered providers, is refused (`#195`): the OpenCode server holds one
-credential for its whole life.
+### Several OpenCode providers in one review
+
+A review's models may name several OpenCode providers, for example a DeepSeek API key as the first model
+and an OpenAI subscription as its fallback, and may mix a `provider_free` model with metered ones. Each
+OpenCode credential is a provider plus its kind (`provider_api_token`, `opencode_chatgpt_oauth` or
+`provider_free`), and every model is decided on its own:
+
+- **One server per model, one record per server.** Each model's steps run through their own OpenCode
+  server, launched under a synthetic home whose `auth.json` holds only that model's provider record. A
+  DeepSeek server never sees the OpenAI record, and the other way round. Steps on different credentials
+  never share a server.
+- **Billing per model.** A metered model reserves spend and can fence its own credential's bucket; a
+  subscription model reserves nothing; a free model settles at zero unless the provider prices it. The
+  usage record of each attempt carries the billing of the credential it ran on.
+- **Closed when done.** A server stops when its last step ends, whether it succeeded, failed or was
+  cancelled, and any server still up stops when the run ends.
+
+A plan on a single OpenCode credential behaves exactly as before.
 
 ### claude-code: one credential per run, in the order you choose
 

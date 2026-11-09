@@ -10,6 +10,7 @@ import {
 import { existsSync } from "node:fs";
 import {
   chmod,
+  mkdir,
   mkdtemp,
   readFile,
   realpath,
@@ -59,8 +60,13 @@ import {
   CredentialProjectionError,
   OpenCodeApiTokenBroker,
   OpenCodeAuthBroker,
+  resolveOpenCodeAuthPath,
 } from "../src/security/credential-broker";
 import { authorizeWorkspaceCwd } from "../src/security/execution-authority";
+import {
+  openCodeSecretManifestPath,
+  serializeOpenCodeSecretManifest,
+} from "../src/security/opencode-secret-manifest";
 import {
   admitRoutePlan,
   type D1_11ReadinessEvidence,
@@ -2002,6 +2008,80 @@ describe("production runtime PR1", () => {
         "claude-code",
         "claude-code",
         "opencode",
+      ]);
+    });
+
+    // U3: the doctor binds an OpenCode model the way a review would, so it
+    // reads the setup step's CRYSK_* manifest too: openai on an API key is the
+    // metered kind there, not the subscription the provider literal assumes.
+    test("collectDoctorExactBindingReports binds an OpenCode route to the CRYSK_* secret behind it", async () => {
+      await writeOpenCodeFixture(tmpDir);
+      const dataHome = path.join(tmpDir, "xdg-data");
+      const manifest = openCodeSecretManifestPath(
+        resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome }),
+      );
+      await mkdir(path.dirname(manifest), { recursive: true });
+      await writeFile(
+        manifest,
+        serializeOpenCodeSecretManifest([
+          {
+            provider: "openai",
+            secret: "CRYSK_OPENCODE_OPENAI_API_KEY",
+            kind: "api_key",
+          },
+        ]),
+      );
+      const reports = await collectDoctorExactBindingReports({
+        workspaceRoot: tmpDir,
+        models: { refuter: ["opencode:openai/gpt-4o"] },
+        env: { PATH: tmpDir, XDG_DATA_HOME: dataHome },
+      });
+      const opencode = reports.find((report) => report.backend === "opencode");
+      expect(opencode?.billing.mode).toBe("metered");
+    });
+
+    // U4: the doctor always bound each configured model on its own, so two
+    // OpenCode providers report two bindings, each with its own kind and
+    // billing. Pinned because U4 rewrote the credential code it shares.
+    test("collectDoctorExactBindingReports reports two OpenCode providers, each by its own credential", async () => {
+      await writeOpenCodeFixture(tmpDir);
+      const dataHome = path.join(tmpDir, "xdg-data");
+      const manifest = openCodeSecretManifestPath(
+        resolveOpenCodeAuthPath({ XDG_DATA_HOME: dataHome }),
+      );
+      await mkdir(path.dirname(manifest), { recursive: true });
+      await writeFile(
+        manifest,
+        serializeOpenCodeSecretManifest([
+          {
+            provider: "openai",
+            secret: "CRYSK_OPENCODE_OPENAI_OAUTH",
+            kind: "oauth",
+          },
+          {
+            provider: "deepseek",
+            secret: "CRYSK_OPENCODE_DEEPSEEK_API_KEY",
+            kind: "api_key",
+          },
+        ]),
+      );
+      const reports = await collectDoctorExactBindingReports({
+        workspaceRoot: tmpDir,
+        models: {
+          refuter: [
+            "opencode:openai/gpt-4o",
+            "opencode:deepseek/deepseek-chat",
+          ],
+        },
+        env: { PATH: tmpDir, XDG_DATA_HOME: dataHome },
+      });
+      const opencode = reports
+        .filter((report) => report.backend === "opencode")
+        .map((report) => [report.auth.kind, report.billing.mode])
+        .sort();
+      expect(opencode).toEqual([
+        ["opencode_chatgpt_oauth", "subscription"],
+        ["provider_api_token", "metered"],
       ]);
     });
 
