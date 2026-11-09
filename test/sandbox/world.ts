@@ -6,8 +6,8 @@
 // checked against what a run would have left behind, not against a script.
 //
 // The product behaviour it encodes is the minimum the scenarios rely on: no model
-// credential input gives PRH-CRED-MISSING, a routing input with a value gives
-// PRH-INPUT-REMOVED, a scaffold gotchas file on the head gives PRH-GOTCHAS-MISSING,
+// credential input gives CRYSK-CRED-MISSING, a routing input with a value gives
+// CRYSK-INPUT-REMOVED, a scaffold gotchas file on the head gives CRYSK-GOTCHAS-MISSING,
 // a review upserts the report for its head and removes the
 // outcome comments of earlier runs. Live runs are the proof of the product; this
 // fake is the proof of the runner's sequencing and its reads.
@@ -104,7 +104,7 @@ interface CommentRow {
 }
 
 // What a run leaves behind. `hunters-failed` is the free model's flake: every
-// hunter returned nothing, so the publisher posts PRH-HUNTERS-FAILED.
+// hunter returned nothing, so the publisher posts CRYSK-HUNTERS-FAILED.
 // `review-advisory` is a review under `mode: advisory`: the same comments, a
 // success status whatever it finds. `size-skip` is a pull_request run over the
 // size gate: the skip marker and a failure status, and no report.
@@ -164,10 +164,10 @@ const OUTCOME_CODE: Record<
   >,
   string
 > = {
-  credential: "PRH-CRED-MISSING",
-  "removed-input": "PRH-INPUT-REMOVED",
-  gotchas: "PRH-GOTCHAS-MISSING",
-  "hunters-failed": "PRH-HUNTERS-FAILED",
+  credential: "CRYSK-CRED-MISSING",
+  "removed-input": "CRYSK-INPUT-REMOVED",
+  gotchas: "CRYSK-GOTCHAS-MISSING",
+  "hunters-failed": "CRYSK-HUNTERS-FAILED",
 };
 
 // The owner lead the real summary opens with (src/ci/outcome.ts). The fake writes it
@@ -205,7 +205,7 @@ export interface WorldOptions {
   ignoreCancel?: boolean;
   // SB3: a pull_request run stays in progress with the head's pr-hero status pending
   // until a `run cancel` arrives; the cancel completes it as cancelled and the head's
-  // status becomes error PRH-CANCELLED (the publisher's cancel settle, runCancelSettle).
+  // status becomes error CRYSK-CANCELLED (the publisher's cancel settle, runCancelSettle).
   pendingThenCancellable?: boolean;
   // SB3: with pendingThenCancellable, the cancel completes the run but leaves the head's
   // status pending: the stuck gate the cancel probe must catch.
@@ -217,7 +217,7 @@ export interface WorldOptions {
   // from the status and report it left behind.
   stepFailsOnReview?: boolean;
   // A hunters-failed run rendered with its hunters' shared cause instead of
-  // PRH-HUNTERS-FAILED (publish.ts huntersFailedRendering): the code and the sentence
+  // CRYSK-HUNTERS-FAILED (publish.ts huntersFailedRendering): the code and the sentence
   // its outcome and status carry.
   huntersFailedAs?: { code: string; sentence: string };
   // S4: a review posts one blocking finding comment. Under the gate (no

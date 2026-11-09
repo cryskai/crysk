@@ -2,7 +2,7 @@
 // renderers. A value that only looks right to this file is not enough: the
 // routing string used to parse through the routing parser (gone, S2: see the
 // OPEN note on the materializer test below), and the repo config must load through parseLocalConfig,
-// because a rejected config burns a live run as PRH-CONFIG-INVALID.
+// because a rejected config burns a live run as CRYSK-CONFIG-INVALID.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
@@ -139,7 +139,7 @@ describe("routing value", () => {
 
   // OPEN (odd/tasks/role-model-routing.md): the routing input is gone (S2),
   // and scripts/sandbox still sets it for the OpenCode route. The trigger stops
-  // a workflow that passes it (PRH-INPUT-REMOVED), and the real CI materializer
+  // a workflow that passes it (CRYSK-INPUT-REMOVED), and the real CI materializer
   // no longer reads it (F0, D6): its value configures nothing. This test says so
   // rather than pretend the route still works, until the sandbox sets models (F7).
   test("configures nothing in the real CI materializer until the sandbox sets models", async () => {

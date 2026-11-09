@@ -948,7 +948,7 @@ describe("setup.ts records a malformed input for the outcome publisher", () => {
   }
 
   // The routing input is gone (S2) and the trigger stops a workflow that passes
-  // one (PRH-INPUT-REMOVED, U5); action.yml does not bind it here. So the step
+  // one (CRYSK-INPUT-REMOVED, U5); action.yml does not bind it here. So the step
   // no longer reads it, and its old backstop and record class are gone (F0, D6).
   test("a routing value in the environment is not read: no failure and no record", async () => {
     const result = await runSetup({
@@ -1621,7 +1621,7 @@ describe("ci init next steps (CLI)", () => {
 // The first-PR walkthrough. Review instructions are optional (S3), so a repo
 // with none is recommended a REVIEW.md, not told it must write one. A file that
 // exists but is empty or still the scaffold turns the first PR red
-// (PRH-GOTCHAS-MISSING), so that one gets the fix steps; real instructions get
+// (CRYSK-GOTCHAS-MISSING), so that one gets the fix steps; real instructions get
 // nothing.
 describe("ci init review-instructions steps (CLI)", () => {
   async function runInit(

@@ -2501,7 +2501,7 @@ describe("parse errors carry their record class (T2d-1)", () => {
   });
 
   test("routing in the person layer stays unclassified, like the rest of that file", () => {
-    // WHY: the routing class renders PRH-ROUTING-INVALID, whose text names the CI
+    // WHY: the routing class renders CRYSK-ROUTING-INVALID, whose text names the CI
     // variable. That is not the fix for a personal file.
     const error = thrownBy(() => parseGlobalConfig('{"routing": "invalid"}'));
     expect(error).toBeInstanceOf(CliUsageError);

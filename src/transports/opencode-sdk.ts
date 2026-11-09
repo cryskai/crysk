@@ -2247,7 +2247,7 @@ export class OpenCodeSdkTransport implements ProviderTransport {
     // true is the provider asking for another attempt; that is the transient
     // budget, never the format one.
     // A refusal whose slot reports HTTP 404 names a model the provider does not
-    // serve: no retry can make it exist, and PRH-MODEL-UNAVAILABLE says so with
+    // serve: no retry can make it exist, and CRYSK-MODEL-UNAVAILABLE says so with
     // the provider's name. Only the status slot decides, never the message.
     if (
       witness.includes(MARKER_PROVIDER_REFUSAL) &&

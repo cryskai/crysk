@@ -1266,7 +1266,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
 
   if (decision.kind === "removed-inputs") {
     // Like a missing credential: the command is accepted, the run is red, and the
-    // PR's comment and status name the inputs to remove (PRH-INPUT-REMOVED).
+    // PR's comment and status name the inputs to remove (CRYSK-INPUT-REMOVED).
     react(deps, base, "eyes");
     const head =
       pr === undefined
@@ -1317,7 +1317,7 @@ export function runCiTrigger(deps: CiTriggerDeps): number {
   }
 
   if (!resolution.ok) {
-    // The publisher renders the class (PRH-PR-UNRESOLVED). The review never
+    // The publisher renders the class (CRYSK-PR-UNRESOLVED). The review never
     // started, so the install step's marker is absent by design. A malformed
     // input carries its fixed detail, so the fix names the input to correct.
     const write = writeRecord(deps, run, {

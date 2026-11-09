@@ -215,7 +215,7 @@ export function decidePublication(input: {
     return { kind: "none" };
   }
   // WHY before the outcome fallthrough below: an override is not an error, and
-  // rendering it as one would publish a false PRH-INSTALL-FAILED.
+  // rendering it as one would publish a false CRYSK-INSTALL-FAILED.
   if (record.decision === "override") return decideOverride(record);
   if (record.decision === "review" && input.cliStarted) {
     return decideCliOutcome(record, input.cliRecord, input.latestStatusState);
@@ -412,7 +412,7 @@ function huntersFailedRendering(
     if (rendered !== undefined) return rendered;
   }
   return renderCode(
-    "PRH-HUNTERS-FAILED",
+    "CRYSK-HUNTERS-FAILED",
     { ...runParams, step: REVIEW_STEP, detail: sharedDetail ?? HUNTERS_DETAIL },
     "action",
     // Every hunter was refused for the size of the request: the fix is a smaller review.
@@ -525,7 +525,7 @@ function clipStatusDescription(text: string): string {
 // before its signal settle lands, so the publisher writes this instead of leaving the head
 // pending. It names the cancel and the way to review the head again.
 export const CANCELLED_STATUS_DESCRIPTION =
-  "PRH-CANCELLED: not reviewed — /pr-hero review reviews this head";
+  "CRYSK-CANCELLED: not reviewed — /crysk review reviews this head";
 
 // The run URL identifies the pending (SB3 follow-up). A pending the CLI posted in Actions carries
 // its run's attempt URL (actionsRunUrl, src/ci/cli-record.ts), and the settle is this run's only
@@ -671,7 +671,7 @@ function statusWriteFailure(
         ? "server"
         : undefined;
   return renderCode(
-    "PRH-STATUS-WRITE-FAILED",
+    "CRYSK-STATUS-WRITE-FAILED",
     {
       detail:
         httpStatus === undefined
@@ -1322,7 +1322,11 @@ export function runPublish(deps: PublishDeps): number {
     if (cliStarted) return 0;
     report(
       deps,
-      renderCode("PRH-UNCLASSIFIED", { step: "the outcome record" }, "action"),
+      renderCode(
+        "CRYSK-UNCLASSIFIED",
+        { step: "the outcome record" },
+        "action",
+      ),
     );
     return 1;
   }
@@ -1534,7 +1538,7 @@ export function runCancelSettle(deps: PublishDeps): number {
     deps.stdout(
       workflowCommand(
         "notice",
-        "the review was cancelled; the crysk status is now PRH-CANCELLED",
+        "the review was cancelled; the crysk status is now CRYSK-CANCELLED",
       ),
     );
   } else {

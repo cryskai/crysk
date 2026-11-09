@@ -68,13 +68,13 @@ bun scripts/sandbox.ts clean                            # close open sandbox/ PR
   sandbox used `opencode/big-pickle` until 2026-10-17: it leaks its reasoning into its
   answers, and in about half of its live runs every hunter failed. `deepseek-v4.1-flash-free`
   and `glm-5.3-flash-free` answered cleanly in a probe.
-- Free-model hunters can fail. When they do, the run posts `PRH-HUNTERS-FAILED`, and
+- Free-model hunters can fail. When they do, the run posts `CRYSK-HUNTERS-FAILED`, and
   the expectations of that run that fail are printed as
   `FAIL (free-model hunters failed: re-run)`. Only that label marks a flake; a plain `FAIL`
   is a finding until a re-run shows otherwise. A flake is re-run once automatically (see
   Commands). The label names the free model, but the re-run rule keys on the cause alone, so
   a hunters-failed run on the claude route is re-run the same way. The hunters-failed
-  tolerance and this label need an action ref at or after T2c (`98569d1`), where the publisher renders `PRH-HUNTERS-FAILED`; on an older ref an all-hunters-failed run shows `review did not finish` with no PRH code, and S7 reports it.
+  tolerance and this label need an action ref at or after T2c (`98569d1`), where the publisher renders `CRYSK-HUNTERS-FAILED`; on an older ref an all-hunters-failed run shows `review did not finish` with no CRYSK code, and S7 reports it.
 
 ## Scenarios
 
@@ -83,13 +83,13 @@ one observation of the PR. S7 invariants are checked on every observation.
 
 | Scenario | What it proves | Expectations | Cost |
 |---|---|---|---|
-| `no-credential` | With no model credential input, the action stops before any model. | Outcome comment `PRH-CRED-MISSING`; status `error` with that code; no report on the head. | $0 |
-| `bad-routing` | A workflow that passes the removed routing input is stopped before any model runs. | Outcome comment `PRH-INPUT-REMOVED`; status `error` with that code; no report on the head. | $0 |
-| `bad-gotchas` | A scaffold `.crysk/gotchas.md` on the branch is refused before admission and spend, and the outcome names its owner. | Outcome comment `PRH-GOTCHAS-MISSING` with the owner lead `Your configuration:`; status `error` with that code; no report on the head. The branch commits the scaffold on top of the planted volume (the scenario's file override). | $0 |
+| `no-credential` | With no model credential input, the action stops before any model. | Outcome comment `CRYSK-CRED-MISSING`; status `error` with that code; no report on the head. | $0 |
+| `bad-routing` | A workflow that passes the removed routing input is stopped before any model runs. | Outcome comment `CRYSK-INPUT-REMOVED`; status `error` with that code; no report on the head. | $0 |
+| `bad-gotchas` | A scaffold `.crysk/gotchas.md` on the branch is refused before admission and spend, and the outcome names its owner. | Outcome comment `CRYSK-GOTCHAS-MISSING` with the owner lead `Your configuration:`; status `error` with that code; no report on the head. The branch commits the scaffold on top of the planted volume (the scenario's file override). | $0 |
 | `review-free` | The normal workflow on the claude route reviews the planted bug end to end, its gate status agrees with the findings it posted, the review reports the planted bug, and no hunter failed. | Path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings on the PR (see Gate status below); at least one report on the head; no outcome comment; a finding anchored in `src/volume.ts` (lines 1-5, the planted file) on the head (`PLANTED_SITE` in `scripts/sandbox/seed.ts`); no `hunter <name>: failed` line in the run's log. | $0 (claude route, subscription quota) |
-| `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `PRH-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings; a report; no outcome comment. | $0 (phase 2 on the claude route) |
+| `cleanup` | An outcome comment from a failed run is removed once a later run on the same branch completes its review. | Phase 1 (`no-credential`): outcome `CRYSK-CRED-MISSING`. Phase 2 (push, normal): path `reviewed`; the run's review step succeeded; the status agrees with the blocking findings; a report; no outcome comment. | $0 (phase 2 on the claude route) |
 | `comment-trigger` | `/pr-hero review` starts an `issue_comment` run that completes the review, and cleans up after a failed first run. | Phase 1 (normal): path `reviewed` or `hunters-failed`; this is a precondition, not the subject. Phase 2 (`/pr-hero review`): the comment run completed; its review step succeeded; the run left its own artifact (`pr-hero-run-<pr>-<sha>`); path `reviewed`; the triggering comment has the `eyes` reaction. Only the run's own review passes: a skip is a failure, because a forced run bypasses admission and budget. Status and report are not asserted here, since phase 1 left them on the same head. If phase 1 posted an outcome comment, phase 2 also expects none left; otherwise that check is printed as `not asserted`. | $0 (claude route, subscription quota) |
-| `near-miss` | A `/pr-hero review` comment that is not the exact command runs no review: it gets the `confused` reaction and no text reply. | Phase 1 (normal): path `reviewed` or `hunters-failed`; a precondition, as in `comment-trigger`. Phase 2 (`/pr-hero review please`): the comment run completed; the triggering comment has the `confused` reaction; the run left no review evidence of its own (no `pr-hero-run-<pr>-<sha>` artifact, and no skip marker posted after its trigger), although its `Run pr-hero` step concludes `success`; this run posted no outcome comment (a `PRH-HUNTERS-FAILED` outcome that phase 1 left may remain). | $0 (phase 1 on the claude route; phase 2 reaches no model) |
+| `near-miss` | A `/pr-hero review` comment that is not the exact command runs no review: it gets the `confused` reaction and no text reply. | Phase 1 (normal): path `reviewed` or `hunters-failed`; a precondition, as in `comment-trigger`. Phase 2 (`/pr-hero review please`): the comment run completed; the triggering comment has the `confused` reaction; the run left no review evidence of its own (no `pr-hero-run-<pr>-<sha>` artifact, and no skip marker posted after its trigger), although its `Run pr-hero` step concludes `success`; this run posted no outcome comment (a `CRYSK-HUNTERS-FAILED` outcome that phase 1 left may remain). | $0 (phase 1 on the claude route; phase 2 reaches no model) |
 | `same-head-rereview` | A blocking finding survives `/pr-hero review` on the same head, so the gate stays red and the author cannot re-run its way to green (S7). | Phase 1 (normal): path `reviewed`; the status agrees with the blocking findings on the PR. Phase 2 (`/pr-hero review`, same head): the comment run completed and its review step succeeded. Its status must still be `failure`, but only when phase 1 posted a blocking finding to carry; otherwise that check is printed as `not asserted: no blocking finding to carry`, because the free model may find nothing to carry. | $0 (claude route, subscription quota) |
 | `rereview-fresh-finding` | A blocking finding first found by a re-review is kept in the state block, so the next re-review still counts it (D3, T5c). | Phase 1 (normal): path `reviewed`. Phase 2 (push adding `src/mute.ts`): the pull_request run completed. Phase 3 (`/pr-hero review`): the comment run completed; its review step succeeded; the status agrees with the findings; the report carries a state row at `src/mute.ts`. | $0 (claude route, subscription quota) |
 | `review-advisory` | With `mode: advisory`, the status stays `success` for a finished review, whatever it finds. | Path `reviewed`; the run's review step succeeded; status `success`; at least one report on the head; no outcome comment. | $0 (claude route, subscription quota) |
@@ -127,9 +127,9 @@ that fails leaves the reactions unread, and the check fails on that; it never pa
 `the run left no review evidence of its own` asserts that a near miss's run reviewed nothing. It reads the run's artifact and
 its skip marker, not its step: the composite `Run Crysk` step (`Run pr-hero` on a ref from before the rename) has no `if:` and always concludes, so a near miss's step reads
 `success` (GitHub reports it that way). The check `this run posted no outcome comment` reads only the outcome comments this run
-created, so a `PRH-HUNTERS-FAILED` outcome from phase 1 does not fail it.
+created, so a `CRYSK-HUNTERS-FAILED` outcome from phase 1 does not fail it.
 
-The S7 invariants, checked on every observation, are: an `error` status without a `PRH-`
+The S7 invariants, checked on every observation, are: an `error` status without a `CRYSK-`
 code; an outcome comment on a head whose status is `success`; a status still `pending`
 after its run completed.
 

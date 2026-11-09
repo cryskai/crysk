@@ -2814,7 +2814,7 @@ describe("the trigger reads credential presence from the crysk-secrets input", (
 
 // U5 clean break (odd/tasks/role-model-routing.md, S2, S8, L19): the old inputs
 // stay declared only so a workflow still passing one stops here, red, before any
-// install, with the replacement named (PRH-INPUT-REMOVED).
+// install, with the replacement named (CRYSK-INPUT-REMOVED).
 describe("the trigger stops a workflow that still passes a removed input", () => {
   const FLAGS = {
     "anthropic-api-key": "HAS_ANTHROPIC_API_KEY",

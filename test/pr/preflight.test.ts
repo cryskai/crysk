@@ -1046,7 +1046,7 @@ describe("settleRequestForCancellation", () => {
   });
 
   // #347 F003: the signal settle and the action's cancel-settle step write one coded text.
-  test("a cancelled run settles as PRH-CANCELLED, the same text the action's cancel step writes", () => {
+  test("a cancelled run settles as CRYSK-CANCELLED, the same text the action's cancel step writes", () => {
     expect(settleRequestForCancellation(lock)?.request).toMatchObject({
       state: "error",
       description: CANCELLED_STATUS_DESCRIPTION,
@@ -1064,7 +1064,7 @@ describe("settleRequestForCancellation", () => {
         state: "error",
         context: COMMIT_STATUS_CONTEXT,
         // #347 F003: a cancel is coded, so the S7 invariant (an error status
-        // carries a PRH- code) holds whichever of the two cancel writers lands.
+        // carries a CRYSK- code) holds whichever of the two cancel writers lands.
         description: CANCELLED_STATUS_DESCRIPTION,
         targetUrl: lock.targetUrl,
       },

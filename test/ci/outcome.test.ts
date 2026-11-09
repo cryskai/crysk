@@ -50,41 +50,41 @@ const CREDENTIAL_EXPECTED: Record<
   CredentialProjectionFailureClass | "env-absent",
   { code: ErrorCode; owner: Owner }
 > = {
-  unsupported_kind: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
-  projection_layout_invalid: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
-  source_read_failed: { code: "PRH-CRED-UNUSABLE", owner: "config" },
-  malformed_payload: { code: "PRH-CRED-UNUSABLE", owner: "config" },
-  missing_subscription_record: { code: "PRH-CRED-UNUSABLE", owner: "config" },
-  missing_provider_record: { code: "PRH-CRED-UNUSABLE", owner: "config" },
-  "env-absent": { code: "PRH-CRED-UNUSABLE", owner: "config" },
+  unsupported_kind: { code: "CRYSK-ENGINE-DEFECT", owner: "pr-hero" },
+  projection_layout_invalid: { code: "CRYSK-ENGINE-DEFECT", owner: "pr-hero" },
+  source_read_failed: { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
+  malformed_payload: { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
+  missing_subscription_record: { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
+  missing_provider_record: { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
+  "env-absent": { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
 };
 
 const TRANSPORT_EXPECTED: Record<
   TransportFailureCause | "legacy_terminal",
   { code: ErrorCode; owner: Owner }
 > = {
-  auth_invalid: { code: "PRH-CRED-REJECTED", owner: "config" },
-  quota_exhausted: { code: "PRH-PROVIDER-LIMITED", owner: "provider" },
-  rate_limit: { code: "PRH-PROVIDER-LIMITED", owner: "provider" },
-  network_transient: { code: "PRH-PROVIDER-UNAVAILABLE", owner: "provider" },
+  auth_invalid: { code: "CRYSK-CRED-REJECTED", owner: "config" },
+  quota_exhausted: { code: "CRYSK-PROVIDER-LIMITED", owner: "provider" },
+  rate_limit: { code: "CRYSK-PROVIDER-LIMITED", owner: "provider" },
+  network_transient: { code: "CRYSK-PROVIDER-UNAVAILABLE", owner: "provider" },
   remote_abort_unconfirmed: {
-    code: "PRH-PROVIDER-UNAVAILABLE",
+    code: "CRYSK-PROVIDER-UNAVAILABLE",
     owner: "provider",
   },
-  safety_refusal: { code: "PRH-PROVIDER-REFUSED", owner: "provider" },
+  safety_refusal: { code: "CRYSK-PROVIDER-REFUSED", owner: "provider" },
   provider_configuration_invalid: {
-    code: "PRH-MODEL-UNAVAILABLE",
+    code: "CRYSK-MODEL-UNAVAILABLE",
     owner: "config",
   },
-  model_unavailable: { code: "PRH-MODEL-UNAVAILABLE", owner: "provider" },
-  missing_provider_record: { code: "PRH-CRED-UNUSABLE", owner: "config" },
-  protocol_truncation: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
-  protocol_mismatch: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
-  protocol_overflow: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
-  output_limit_exceeded: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
-  context_window_exceeded: { code: "PRH-ENGINE-DEFECT", owner: "pr-hero" },
-  runtime_unavailable: { code: "PRH-UNCLASSIFIED", owner: "unclassified" },
-  legacy_terminal: { code: "PRH-UNCLASSIFIED", owner: "unclassified" },
+  model_unavailable: { code: "CRYSK-MODEL-UNAVAILABLE", owner: "provider" },
+  missing_provider_record: { code: "CRYSK-CRED-UNUSABLE", owner: "config" },
+  protocol_truncation: { code: "CRYSK-ENGINE-DEFECT", owner: "pr-hero" },
+  protocol_mismatch: { code: "CRYSK-ENGINE-DEFECT", owner: "pr-hero" },
+  protocol_overflow: { code: "CRYSK-ENGINE-DEFECT", owner: "pr-hero" },
+  output_limit_exceeded: { code: "CRYSK-ENGINE-DEFECT", owner: "pr-hero" },
+  context_window_exceeded: { code: "CRYSK-ENGINE-DEFECT", owner: "pr-hero" },
+  runtime_unavailable: { code: "CRYSK-UNCLASSIFIED", owner: "unclassified" },
+  legacy_terminal: { code: "CRYSK-UNCLASSIFIED", owner: "unclassified" },
 };
 
 const CAPABILITY_ISSUES = [
@@ -95,9 +95,9 @@ const CAPABILITY_ISSUES = [
 
 // Codes no class produces: the caller requests them explicitly.
 const EXPLICIT_ONLY_CODES: ErrorCode[] = [
-  "PRH-STATUS-WRITE-FAILED",
-  "PRH-HUNTERS-FAILED",
-  "PRH-CANCELLED",
+  "CRYSK-STATUS-WRITE-FAILED",
+  "CRYSK-HUNTERS-FAILED",
+  "CRYSK-CANCELLED",
 ];
 
 interface Sample {
@@ -111,121 +111,121 @@ const SAMPLES: Sample[] = [
   {
     name: "trigger no-credential",
     cls: { kind: "trigger", check: "no-credential" },
-    code: "PRH-CRED-MISSING",
+    code: "CRYSK-CRED-MISSING",
     owner: "config",
   },
   {
     name: "trigger removed-input",
     cls: { kind: "trigger", check: "removed-input" },
-    code: "PRH-INPUT-REMOVED",
+    code: "CRYSK-INPUT-REMOVED",
     owner: "config",
   },
   {
     name: "trigger pr-unresolved",
     cls: { kind: "trigger", check: "pr-unresolved" },
-    code: "PRH-PR-UNRESOLVED",
+    code: "CRYSK-PR-UNRESOLVED",
     owner: "config",
   },
   {
     name: "config-parse models-input",
     cls: { kind: "config-parse", source: "models-input" },
-    code: "PRH-CONFIG-INVALID",
+    code: "CRYSK-CONFIG-INVALID",
     owner: "config",
   },
   {
     name: "config-parse repo-config",
     cls: { kind: "config-parse", source: "repo-config" },
-    code: "PRH-CONFIG-INVALID",
+    code: "CRYSK-CONFIG-INVALID",
     owner: "config",
   },
   {
     name: "config-parse person-config",
     cls: { kind: "config-parse", source: "person-config" },
-    code: "PRH-CONFIG-INVALID",
+    code: "CRYSK-CONFIG-INVALID",
     owner: "config",
   },
   {
     name: "config-parse extra-hunters",
     cls: { kind: "config-parse", source: "extra-hunters" },
-    code: "PRH-PROMPTSET-INVALID",
+    code: "CRYSK-PROMPTSET-INVALID",
     owner: "config",
   },
   {
     name: "prompt-set",
     cls: { kind: "prompt-set" },
-    code: "PRH-PROMPTSET-INVALID",
+    code: "CRYSK-PROMPTSET-INVALID",
     owner: "config",
   },
   {
     name: "gotchas empty",
     cls: { kind: "gotchas", reason: "empty" },
-    code: "PRH-GOTCHAS-MISSING",
+    code: "CRYSK-GOTCHAS-MISSING",
     owner: "config",
   },
   {
     name: "gotchas placeholder",
     cls: { kind: "gotchas", reason: "placeholder" },
-    code: "PRH-GOTCHAS-MISSING",
+    code: "CRYSK-GOTCHAS-MISSING",
     owner: "config",
   },
   {
     name: "github 403",
     cls: { kind: "github", status: 403 },
-    code: "PRH-TOKEN-PERMISSION",
+    code: "CRYSK-TOKEN-PERMISSION",
     owner: "config",
   },
   {
     name: "github 401",
     cls: { kind: "github", status: 401 },
-    code: "PRH-GITHUB-TOKEN-INVALID",
+    code: "CRYSK-GITHUB-TOKEN-INVALID",
     owner: "config",
   },
   {
     name: "github 403 rate limited",
     cls: { kind: "github", status: 403, rateLimited: true },
-    code: "PRH-GITHUB-UNAVAILABLE",
+    code: "CRYSK-GITHUB-UNAVAILABLE",
     owner: "provider",
   },
   {
     name: "github 404",
     cls: { kind: "github", status: 404 },
-    code: "PRH-UNCLASSIFIED",
+    code: "CRYSK-UNCLASSIFIED",
     owner: "unclassified",
   },
   {
     name: "github 422",
     cls: { kind: "github", status: 422 },
-    code: "PRH-UNCLASSIFIED",
+    code: "CRYSK-UNCLASSIFIED",
     owner: "unclassified",
   },
   {
     name: "github 500",
     cls: { kind: "github", status: 500 },
-    code: "PRH-GITHUB-UNAVAILABLE",
+    code: "CRYSK-GITHUB-UNAVAILABLE",
     owner: "provider",
   },
   {
     name: "github 429",
     cls: { kind: "github", status: 429 },
-    code: "PRH-GITHUB-UNAVAILABLE",
+    code: "CRYSK-GITHUB-UNAVAILABLE",
     owner: "provider",
   },
   {
     name: "install",
     cls: { kind: "install", step: "install bun" },
-    code: "PRH-INSTALL-FAILED",
+    code: "CRYSK-INSTALL-FAILED",
     owner: "unclassified",
   },
   {
     name: "invariant",
     cls: { kind: "invariant" },
-    code: "PRH-ENGINE-DEFECT",
+    code: "CRYSK-ENGINE-DEFECT",
     owner: "pr-hero",
   },
   {
     name: "unknown",
     cls: { kind: "unknown" },
-    code: "PRH-UNCLASSIFIED",
+    code: "CRYSK-UNCLASSIFIED",
     owner: "unclassified",
   },
   ...(
@@ -417,17 +417,17 @@ describe("codeOf and ownerOf: every class variant", () => {
   test("capability is the only class whose owner depends on the context", () => {
     for (const issue of CAPABILITY_ISSUES) {
       const cls: ErrorClass = { kind: "capability", issue };
-      expect(codeOf(cls), issue).toBe("PRH-RUNTIME-UNAVAILABLE");
+      expect(codeOf(cls), issue).toBe("CRYSK-RUNTIME-UNAVAILABLE");
       expect(ownerOf(cls, "action"), `${issue} action`).toBe("pr-hero");
       expect(ownerOf(cls, "local"), `${issue} local`).toBe("config");
     }
   });
 
-  test("only legacy_terminal and runtime_unavailable name PRH-UNCLASSIFIED among the transport causes", () => {
+  test("only legacy_terminal and runtime_unavailable name CRYSK-UNCLASSIFIED among the transport causes", () => {
     const unclassified = (
       Object.keys(TRANSPORT_EXPECTED) as Array<keyof typeof TRANSPORT_EXPECTED>
     ).filter(
-      (cause) => codeOf({ kind: "transport", cause }) === "PRH-UNCLASSIFIED",
+      (cause) => codeOf({ kind: "transport", cause }) === "CRYSK-UNCLASSIFIED",
     );
     expect([...unclassified].sort()).toEqual([
       "legacy_terminal",
@@ -435,12 +435,12 @@ describe("codeOf and ownerOf: every class variant", () => {
     ]);
   });
 
-  test("a value outside the union at runtime reports PRH-UNCLASSIFIED, never a guessed owner", () => {
+  test("a value outside the union at runtime reports CRYSK-UNCLASSIFIED, never a guessed owner", () => {
     const unknownCause: ErrorClass = {
       kind: "transport",
       cause: "a_future_cause" as unknown as TransportFailureCause,
     };
-    expect(codeOf(unknownCause)).toBe("PRH-UNCLASSIFIED");
+    expect(codeOf(unknownCause)).toBe("CRYSK-UNCLASSIFIED");
     expect(ownerOf(unknownCause, "action")).toBe("unclassified");
 
     const unknownFailureClass: ErrorClass = {
@@ -448,11 +448,11 @@ describe("codeOf and ownerOf: every class variant", () => {
       failureClass:
         "a_future_class" as unknown as CredentialProjectionFailureClass,
     };
-    expect(codeOf(unknownFailureClass)).toBe("PRH-UNCLASSIFIED");
+    expect(codeOf(unknownFailureClass)).toBe("CRYSK-UNCLASSIFIED");
     expect(ownerOf(unknownFailureClass, "local")).toBe("unclassified");
 
     const unknownKind = { kind: "novel" } as unknown as ErrorClass;
-    expect(codeOf(unknownKind)).toBe("PRH-UNCLASSIFIED");
+    expect(codeOf(unknownKind)).toBe("CRYSK-UNCLASSIFIED");
     expect(ownerOf(unknownKind, "action")).toBe("unclassified");
   });
 
@@ -467,7 +467,7 @@ describe("codeOf and ownerOf: every class variant", () => {
       const entry = entryOf(codeOf(cls));
       for (const ctx of CONTEXTS) {
         // WHY an explicit exception: provider_configuration_invalid shares
-        // PRH-MODEL-UNAVAILABLE with model_unavailable, whose owner is provider.
+        // CRYSK-MODEL-UNAVAILABLE with model_unavailable, whose owner is provider.
         // The shared code's catalog owner is the provider's; the cause keeps
         // config through the code's variant (see ERROR_CATALOG).
         const expected =
@@ -497,7 +497,8 @@ describe("the code list and its catalog", () => {
   test("ERROR_CODES holds the 22 distinct codes", () => {
     expect(ERROR_CODES).toHaveLength(22);
     expect(new Set(ERROR_CODES).size).toBe(22);
-    for (const code of ERROR_CODES) expect(code.startsWith("PRH-")).toBe(true);
+    for (const code of ERROR_CODES)
+      expect(code.startsWith("CRYSK-")).toBe(true);
   });
 
   test("every code has a catalog entry with a default variant and clean text", () => {
@@ -523,11 +524,11 @@ describe("the code list and its catalog", () => {
   });
 
   test("the cancelled code is a notice under the Not reviewed lead, not an error", () => {
-    const entry = entryOf("PRH-CANCELLED");
+    const entry = entryOf("CRYSK-CANCELLED");
     expect(entry.level).toBe("notice");
     expect(entry.lead).toBe("Not reviewed:");
     expect(entry.owner).toBe("unclassified");
-    expect(entryOf("PRH-HUNTERS-FAILED").level).toBe("error");
+    expect(entryOf("CRYSK-HUNTERS-FAILED").level).toBe("error");
   });
 });
 
@@ -548,7 +549,7 @@ describe("wording: no invented scope, and the credential text names the route th
 
   test("the opencode route's fix leads with the OpenCode secret, and no Claude secret command is offered as its fix", () => {
     const rendered = renderCode(
-      "PRH-CRED-MISSING",
+      "CRYSK-CRED-MISSING",
       { ...FULL, backend: "opencode" },
       "action",
     );
@@ -576,7 +577,7 @@ describe("wording: no invented scope, and the credential text names the route th
   // no fix names an old input or an old secret name.
   test("the claude route's fix names both CRYSK_CLAUDE_* secrets and the crysk-secrets line that passes one", () => {
     const rendered = renderCode(
-      "PRH-CRED-MISSING",
+      "CRYSK-CRED-MISSING",
       { ...FULL, backend: "claude-code" },
       "action",
     );
@@ -617,7 +618,7 @@ describe("wording: no invented scope, and the credential text names the route th
   test("no missing-credential fix names a removed input or an old secret name", () => {
     for (const backend of ["claude-code", "opencode", ""]) {
       const rendered = renderCode(
-        "PRH-CRED-MISSING",
+        "CRYSK-CRED-MISSING",
         { ...FULL, backend },
         "action",
       );
@@ -670,8 +671,8 @@ describe("docs parity: ## Error codes in docs/github-actions.md", () => {
     expect([...section.matchAll(/^## /gm)]).toHaveLength(1);
   });
 
-  test("every PRH heading in the docs is one of the codes, in the section, once each", () => {
-    const headings = [...docs.matchAll(/^### (PRH-[A-Z-]+)$/gm)];
+  test("every CRYSK heading in the docs is one of the codes, in the section, once each", () => {
+    const headings = [...docs.matchAll(/^### (CRYSK-[A-Z-]+)$/gm)];
     const names = headings.map((match) => match[1] ?? "");
     expect(names.sort()).toEqual([...ERROR_CODES].sort());
     for (const match of headings) {
@@ -774,8 +775,8 @@ describe("renderCode and renderError: the annotation", () => {
       "action",
     );
     expect(rendered.annotation).toBe(
-      "::error title=crysk PRH-CRED-MISSING::Your configuration: No credential for the <backend> route reached the action. Why: Crysk cannot authenticate, so it cannot review this PR. Fix: set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input. Docs: " +
-        `${DOCS_URL_PREFIX}prh-cred-missing`,
+      "::error title=crysk CRYSK-CRED-MISSING::Your configuration: No credential for the <backend> route reached the action. Why: Crysk cannot authenticate, so it cannot review this PR. Fix: set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input. Docs: " +
+        `${DOCS_URL_PREFIX}crysk-cred-missing`,
     );
   });
 
@@ -835,10 +836,10 @@ describe("renderCode and renderError: the annotation", () => {
 
   test("a what that starts with the product name reads Crysk, never Pr-hero", () => {
     const codes: ErrorCode[] = [
-      "PRH-PR-UNRESOLVED",
-      "PRH-STATUS-WRITE-FAILED",
-      "PRH-ENGINE-DEFECT",
-      "PRH-UNCLASSIFIED",
+      "CRYSK-PR-UNRESOLVED",
+      "CRYSK-STATUS-WRITE-FAILED",
+      "CRYSK-ENGINE-DEFECT",
+      "CRYSK-UNCLASSIFIED",
     ];
     for (const code of codes) {
       for (const ctx of CONTEXTS) {
@@ -859,7 +860,7 @@ describe("renderCode and renderError: the annotation", () => {
 
   test("percent, CR and LF in detail are escaped so the annotation stays one line", () => {
     const rendered = renderCode(
-      "PRH-ENGINE-DEFECT",
+      "CRYSK-ENGINE-DEFECT",
       { detail: "50%\r\nsecond line", step: "review" },
       "action",
     );
@@ -892,10 +893,10 @@ describe("renderCode and renderError: the annotation", () => {
   });
 
   test("the cancelled code renders as a notice under the Not reviewed lead, and its summary says so", () => {
-    const rendered = renderCode("PRH-CANCELLED", { pr: 7 }, "action");
+    const rendered = renderCode("CRYSK-CANCELLED", { pr: 7 }, "action");
     expect(
       rendered.annotation.startsWith(
-        "::notice title=crysk PRH-CANCELLED::Not reviewed: The review was cancelled or superseded by a newer push.",
+        "::notice title=crysk CRYSK-CANCELLED::Not reviewed: The review was cancelled or superseded by a newer push.",
       ),
       rendered.annotation,
     ).toBe(true);
@@ -907,7 +908,7 @@ describe("renderCode and renderError: the annotation", () => {
 
   test("explicitly requested codes take the owner the caller passes", () => {
     const hunters = renderCode(
-      "PRH-HUNTERS-FAILED",
+      "CRYSK-HUNTERS-FAILED",
       { detail: "dedupe: pr-hero" },
       "action",
     );
@@ -915,14 +916,14 @@ describe("renderCode and renderError: the annotation", () => {
     expect(hunters.owner).toBe("unclassified");
     expect(
       hunters.annotation.startsWith(
-        "::error title=crysk PRH-HUNTERS-FAILED::Not reviewed: ",
+        "::error title=crysk CRYSK-HUNTERS-FAILED::Not reviewed: ",
       ),
     ).toBe(true);
   });
 
-  test("PRH-STATUS-WRITE-FAILED takes its owner and fix from the variant", () => {
+  test("CRYSK-STATUS-WRITE-FAILED takes its owner and fix from the variant", () => {
     const permission = renderCode(
-      "PRH-STATUS-WRITE-FAILED",
+      "CRYSK-STATUS-WRITE-FAILED",
       { detail: "403" },
       "action",
       "permission",
@@ -930,14 +931,14 @@ describe("renderCode and renderError: the annotation", () => {
     expect(permission.owner).toBe("config");
     expect(
       permission.annotation.startsWith(
-        "::error title=crysk PRH-STATUS-WRITE-FAILED::Your configuration: ",
+        "::error title=crysk CRYSK-STATUS-WRITE-FAILED::Your configuration: ",
       ),
     ).toBe(true);
     expect(permission.annotation).toContain(
       "Fix: add `statuses: write` under the job's `permissions:` in the workflow. Docs: ",
     );
     const server = renderCode(
-      "PRH-STATUS-WRITE-FAILED",
+      "CRYSK-STATUS-WRITE-FAILED",
       { detail: "502" },
       "action",
       "server",
@@ -945,7 +946,7 @@ describe("renderCode and renderError: the annotation", () => {
     expect(server.owner).toBe("provider");
     expect(
       server.annotation.startsWith(
-        "::error title=crysk PRH-STATUS-WRITE-FAILED::Provider GitHub: ",
+        "::error title=crysk CRYSK-STATUS-WRITE-FAILED::Provider GitHub: ",
       ),
     ).toBe(true);
   });
@@ -971,7 +972,7 @@ describe("renderCode and renderError: the annotation", () => {
       );
       expect(
         rendered.annotation.startsWith(
-          `::error title=crysk PRH-GITHUB-UNAVAILABLE::Provider GitHub: The GitHub API failed (HTTP ${status}). Why: the failure happened on GitHub's side, and a retry may succeed. Fix: re-run the workflow once GitHub is serving requests again. Docs: `,
+          `::error title=crysk CRYSK-GITHUB-UNAVAILABLE::Provider GitHub: The GitHub API failed (HTTP ${status}). Why: the failure happened on GitHub's side, and a retry may succeed. Fix: re-run the workflow once GitHub is serving requests again. Docs: `,
         ),
         rendered.annotation,
       ).toBe(true);
@@ -1000,7 +1001,7 @@ describe("renderCode and renderError: the annotation", () => {
     ).annotation;
     expect(
       notFound.startsWith(
-        "::error title=crysk PRH-UNCLASSIFIED::Unclassified: GitHub returned 404 at this step, and Crysk cannot tell whose fix it is. Why: ",
+        "::error title=crysk CRYSK-UNCLASSIFIED::Unclassified: GitHub returned 404 at this step, and Crysk cannot tell whose fix it is. Why: ",
       ),
       notFound,
     ).toBe(true);
@@ -1015,7 +1016,7 @@ describe("renderCode and renderError: the annotation", () => {
     );
     expect(
       rendered.annotation.startsWith(
-        "::error title=crysk PRH-CRED-REJECTED::Your configuration: Provider openai rejected the credential in SECRET_NAME. Why: it is expired, revoked, or a short-lived /login session token. Fix: ",
+        "::error title=crysk CRYSK-CRED-REJECTED::Your configuration: Provider openai rejected the credential in SECRET_NAME. Why: it is expired, revoked, or a short-lived /login session token. Fix: ",
       ),
       rendered.annotation,
     ).toBe(true);
@@ -1023,19 +1024,21 @@ describe("renderCode and renderError: the annotation", () => {
 
   test("provider leads use the provider name when given and fall back to Provider:", () => {
     expect(
-      renderCode("PRH-PROVIDER-LIMITED", { provider: "openai" }, "action")
+      renderCode("CRYSK-PROVIDER-LIMITED", { provider: "openai" }, "action")
         .annotation,
-    ).toContain("::error title=crysk PRH-PROVIDER-LIMITED::Provider openai: ");
+    ).toContain(
+      "::error title=crysk CRYSK-PROVIDER-LIMITED::Provider openai: ",
+    );
     expect(
-      renderCode("PRH-PROVIDER-LIMITED", {}, "action").annotation,
-    ).toContain("::error title=crysk PRH-PROVIDER-LIMITED::Provider: ");
+      renderCode("CRYSK-PROVIDER-LIMITED", {}, "action").annotation,
+    ).toContain("::error title=crysk CRYSK-PROVIDER-LIMITED::Provider: ");
   });
 
   test("a provider-owned code names the provider once: the lead carries it, the what does not repeat it", () => {
     const codes = [
-      "PRH-PROVIDER-LIMITED",
-      "PRH-PROVIDER-UNAVAILABLE",
-      "PRH-PROVIDER-REFUSED",
+      "CRYSK-PROVIDER-LIMITED",
+      "CRYSK-PROVIDER-UNAVAILABLE",
+      "CRYSK-PROVIDER-REFUSED",
     ] as const;
     for (const code of codes) {
       const { annotation } = renderCode(code, { provider: "openai" }, "action");
@@ -1048,19 +1051,19 @@ describe("renderCode and renderError: the annotation", () => {
     const action = renderError(issue, { detail: "the OpenCode SDK" }, "action");
     expect(
       action.annotation.startsWith(
-        "::error title=crysk PRH-RUNTIME-UNAVAILABLE::Crysk defect: ",
+        "::error title=crysk CRYSK-RUNTIME-UNAVAILABLE::Crysk defect: ",
       ),
     ).toBe(true);
     expect(action.annotation).toContain(
       "the action installs this runtime itself",
     );
     expect(action.summary.join("\n")).toContain(
-      'gh issue create -R cryskai/crysk --title "PRH-RUNTIME-UNAVAILABLE" --body "<run-url>"',
+      'gh issue create -R cryskai/crysk --title "CRYSK-RUNTIME-UNAVAILABLE" --body "<run-url>"',
     );
     const local = renderError(issue, { detail: "the OpenCode SDK" }, "local");
     expect(
       local.annotation.startsWith(
-        "::error title=crysk PRH-RUNTIME-UNAVAILABLE::Your configuration: ",
+        "::error title=crysk CRYSK-RUNTIME-UNAVAILABLE::Your configuration: ",
       ),
     ).toBe(true);
     expect(local.summary.join("\n")).toContain("crysk upgrade --reconcile");
@@ -1184,31 +1187,31 @@ describe("renderCode and renderError: the annotation", () => {
     }
     const expected: Array<[string, string]> = [
       [
-        renderCode("PRH-PROVIDER-LIMITED", FULL, "action").annotation,
+        renderCode("CRYSK-PROVIDER-LIMITED", FULL, "action").annotation,
         "wait for the limit to reset or raise the quota, then comment /crysk review (or /pr-hero review on a workflow set up before the rename) on the PR",
       ],
       [
-        renderCode("PRH-TOKEN-PERMISSION", FULL, "action").annotation,
+        renderCode("CRYSK-TOKEN-PERMISSION", FULL, "action").annotation,
         "add `SCOPE: write` under the job's `permissions:` in the workflow",
       ],
       [
-        renderCode("PRH-CONFIG-INVALID", FULL, "action").annotation,
+        renderCode("CRYSK-CONFIG-INVALID", FULL, "action").annotation,
         "fix `.crysk/config.json` (DETAIL), then check it with `crysk review --pr 42 --dry-run`",
       ],
       [
-        renderCode("PRH-PROMPTSET-INVALID", FULL, "action").annotation,
+        renderCode("CRYSK-PROMPTSET-INVALID", FULL, "action").annotation,
         "fix the agent file or `agents_dir` (DETAIL), then check it with `crysk review --pr 42 --dry-run`",
       ],
       [
         renderCode(
-          "PRH-CRED-MISSING",
+          "CRYSK-CRED-MISSING",
           { ...FULL, backend: "opencode" },
           "action",
         ).annotation,
         "set the provider's CRYSK_OPENCODE_<PROVIDER>_API_KEY secret (`gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY`) and pass it in the crysk-secrets input",
       ],
       [
-        renderCode("PRH-CRED-MISSING", FULL, "action").annotation,
+        renderCode("CRYSK-CRED-MISSING", FULL, "action").annotation,
         "set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input",
       ],
     ];
@@ -1216,7 +1219,7 @@ describe("renderCode and renderError: the annotation", () => {
       expect(fixOf(annotation)).toBe(fix);
     }
     const scopeless = renderCode(
-      "PRH-TOKEN-PERMISSION",
+      "CRYSK-TOKEN-PERMISSION",
       { detail: "x" },
       "action",
     ).annotation;
@@ -1265,14 +1268,14 @@ describe("renderCode and renderError: the annotation", () => {
 
   test("a detail written into a command keeps only shell-safe characters", () => {
     const rendered = renderCode(
-      "PRH-ENGINE-DEFECT",
+      "CRYSK-ENGINE-DEFECT",
       { detail: 'x"; $(rm -rf ~) `id`;y', step: "review" },
       "action",
     );
     const command =
       rendered.summary.find((line) => line.startsWith("gh issue create")) ?? "";
     expect(command).toBe(
-      'gh issue create -R cryskai/crysk --title "PRH-ENGINE-DEFECT x rm -rf  idy" --body "<run-url>"',
+      'gh issue create -R cryskai/crysk --title "CRYSK-ENGINE-DEFECT x rm -rf  idy" --body "<run-url>"',
     );
   });
 
@@ -1317,7 +1320,7 @@ describe("renderCode and renderError: the annotation", () => {
   test("an install failure with no step says an install step failed, never the placeholder", () => {
     for (const params of [{}, { step: "" }, { step: "   " }] as const) {
       const { annotation, summary } = renderCode(
-        "PRH-INSTALL-FAILED",
+        "CRYSK-INSTALL-FAILED",
         params,
         "action",
       );
@@ -1330,7 +1333,7 @@ describe("renderCode and renderError: the annotation", () => {
       expect(summary.join("\n")).toContain("An install step failed");
     }
     const named = renderCode(
-      "PRH-INSTALL-FAILED",
+      "CRYSK-INSTALL-FAILED",
       { step: "install bun" },
       "action",
     );
@@ -1380,7 +1383,7 @@ describe("renderCode and renderError: the annotation", () => {
         }
       }
     }
-    const providerLimited = renderCode("PRH-PROVIDER-LIMITED", {}, "action");
+    const providerLimited = renderCode("CRYSK-PROVIDER-LIMITED", {}, "action");
     expect(providerLimited.summary.join("\n")).toContain(
       'gh pr comment <pr> --body "/crysk review"',
     );
@@ -1404,7 +1407,7 @@ describe("renderCode and renderError: the annotation", () => {
   test("every rendered docs link points at a heading the docs define", () => {
     const docs = readFileSync(DOCS, "utf8");
     const slugs = new Set(
-      [...docs.matchAll(/^### (PRH-[A-Z-]+)$/gm)].map((match) =>
+      [...docs.matchAll(/^### (CRYSK-[A-Z-]+)$/gm)].map((match) =>
         githubSlug(match[1] ?? ""),
       ),
     );
@@ -1420,7 +1423,7 @@ describe("renderCode and renderError: the annotation", () => {
   });
 });
 
-describe("PRH-PR-UNRESOLVED: the malformed pr-number variant", () => {
+describe("CRYSK-PR-UNRESOLVED: the malformed pr-number variant", () => {
   const DETAIL = "the pr-number input is not a positive integer";
 
   test("a malformed pr-number says to pass a positive integer, and names the cause", () => {
@@ -1608,7 +1611,7 @@ describe("parseTriggerRecord — the trigger.json contract", () => {
     ["a fractional run attempt", { ...documented, run_attempt: 1.5 }],
     ["an unknown class kind", { ...documented, cls: { kind: "magic" } }],
     // The trigger writes only pr-unresolved. A no-credential check on a review
-    // would render PRH-CRED-MISSING for a record the trigger never wrote.
+    // would render CRYSK-CRED-MISSING for a record the trigger never wrote.
     [
       "a no-credential trigger class on a review",
       { ...documented, cls: { kind: "trigger", check: "no-credential" } },
@@ -1629,7 +1632,7 @@ describe("parseTriggerRecord — the trigger.json contract", () => {
 
   test("ignores a code key an older writer left in the record", () => {
     expect(
-      parseTriggerRecord(text({ ...documented, code: "PRH-CRED-MISSING" })),
+      parseTriggerRecord(text({ ...documented, code: "CRYSK-CRED-MISSING" })),
     ).toEqual(documented);
   });
 });
@@ -2054,7 +2057,7 @@ describe("parseCliRecord — the override_cutoff_ms field", () => {
   });
 });
 
-// `pr-hero status` reads the newest outcome comment's PRH-* code. The reader and the
+// `pr-hero status` reads the newest outcome comment's CRYSK-* code. The reader and the
 // publisher share the marker prefix, so a comment the publisher writes reads back.
 describe("parseOutcomeCode", () => {
   test("the marker prefix is the one the publisher writes", () => {
@@ -2067,22 +2070,22 @@ describe("parseOutcomeCode", () => {
   });
 
   test("reads the code from a rendered outcome comment, as the publisher writes it", () => {
-    const rendered = renderCode("PRH-CRED-MISSING", {}, "action");
+    const rendered = renderCode("CRYSK-CRED-MISSING", {}, "action");
     const body = [
       `${OUTCOME_MARKER_PREFIX}v=1 head=${"a".repeat(40)} run=7 attempt=1 -->`,
       "",
       ...rendered.summary,
     ].join("\n");
-    expect(parseOutcomeCode(body)).toBe("PRH-CRED-MISSING");
+    expect(parseOutcomeCode(body)).toBe("CRYSK-CRED-MISSING");
   });
 
   test("a headline that carries a colon still yields the bare code", () => {
-    const body = `${OUTCOME_MARKER_PREFIX}v=1 head=unknown run=7 attempt=1 -->\n\n### PRH-CANCELLED: not reviewed\n\nbody`;
-    expect(parseOutcomeCode(body)).toBe("PRH-CANCELLED");
+    const body = `${OUTCOME_MARKER_PREFIX}v=1 head=unknown run=7 attempt=1 -->\n\n### CRYSK-CANCELLED: not reviewed\n\nbody`;
+    expect(parseOutcomeCode(body)).toBe("CRYSK-CANCELLED");
   });
 
   test("null for a comment without the outcome marker, even when it quotes a code", () => {
-    expect(parseOutcomeCode("### PRH-CRED-MISSING\n\nquoted")).toBeNull();
+    expect(parseOutcomeCode("### CRYSK-CRED-MISSING\n\nquoted")).toBeNull();
   });
 
   test("null for an outcome comment with no code heading, or an unknown one", () => {
@@ -2093,7 +2096,7 @@ describe("parseOutcomeCode", () => {
     ).toBeNull();
     expect(
       parseOutcomeCode(
-        `${OUTCOME_MARKER_PREFIX}v=1 head=unknown -->\n\n### PRH-NOT-A-CODE`,
+        `${OUTCOME_MARKER_PREFIX}v=1 head=unknown -->\n\n### CRYSK-NOT-A-CODE`,
       ),
     ).toBeNull();
   });
@@ -2105,8 +2108,8 @@ describe("a model the provider does not serve", () => {
     cause: "model_unavailable",
   };
 
-  test("renders PRH-MODEL-UNAVAILABLE, owned by the provider", () => {
-    expect(codeOf(modelUnavailable)).toBe("PRH-MODEL-UNAVAILABLE");
+  test("renders CRYSK-MODEL-UNAVAILABLE, owned by the provider", () => {
+    expect(codeOf(modelUnavailable)).toBe("CRYSK-MODEL-UNAVAILABLE");
     expect(ownerOf(modelUnavailable, "action")).toBe("provider");
   });
 
@@ -2116,7 +2119,7 @@ describe("a model the provider does not serve", () => {
       { provider: "openai", step: "the hunter" },
       "action",
     );
-    expect(rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+    expect(rendered.code).toBe("CRYSK-MODEL-UNAVAILABLE");
     expect(rendered.owner).toBe("provider");
     expect(rendered.annotation).toContain("Provider openai: ");
     expect(rendered.annotation).not.toContain("Unclassified");
@@ -2129,7 +2132,7 @@ describe("a model the provider does not serve", () => {
       { provider: "openai", step: "the hunter" },
       "action",
     );
-    expect(rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+    expect(rendered.code).toBe("CRYSK-MODEL-UNAVAILABLE");
     expect(rendered.owner).toBe("config");
     expect(rendered.annotation).toContain("Your configuration: ");
   });
@@ -2265,15 +2268,15 @@ describe("parseCliRecord — the hunter_failures field", () => {
   });
 });
 
-describe("PRH-HUNTERS-FAILED lead", () => {
+describe("CRYSK-HUNTERS-FAILED lead", () => {
   // WHY: the caller requests this code for a condition it observes directly
   // (the hunter set), so "Unclassified:" would blame pr-hero for nothing
   // unknown. Other unclassified codes keep their lead.
   test("names the condition instead of Unclassified", () => {
-    const rendered = renderCode("PRH-HUNTERS-FAILED", FULL, "action");
+    const rendered = renderCode("CRYSK-HUNTERS-FAILED", FULL, "action");
     expect(
       rendered.annotation.startsWith(
-        "::error title=crysk PRH-HUNTERS-FAILED::Not reviewed: ",
+        "::error title=crysk CRYSK-HUNTERS-FAILED::Not reviewed: ",
       ),
     ).toBe(true);
     expect(rendered.annotation.includes("Unclassified:")).toBe(false);
@@ -2281,7 +2284,7 @@ describe("PRH-HUNTERS-FAILED lead", () => {
   });
 
   test("other unclassified codes still lead with Unclassified", () => {
-    const rendered = renderCode("PRH-UNCLASSIFIED", FULL, "action");
+    const rendered = renderCode("CRYSK-UNCLASSIFIED", FULL, "action");
     expect(rendered.annotation.includes("::Unclassified: ")).toBe(true);
   });
 });
@@ -2336,12 +2339,12 @@ describe("actionsRunUrl — the run a pending belongs to", () => {
 
 // F0 (odd/tasks/role-model-routing.md, E-f): the alias-keyed routing is gone (S2), and
 // its codes with it. A malformed `models` input, which the setup step reads from
-// vars.CRYSK_MODELS (D1), is a variant of PRH-CONFIG-INVALID.
-describe("the routing codes are gone, and a malformed models input is PRH-CONFIG-INVALID", () => {
+// vars.CRYSK_MODELS (D1), is a variant of CRYSK-CONFIG-INVALID.
+describe("the routing codes are gone, and a malformed models input is CRYSK-CONFIG-INVALID", () => {
   const REMOVED = [
-    "PRH-ROUTING-MISSING",
-    "PRH-ROUTING-INVALID",
-    "PRH-ROUTE-UNRESOLVABLE",
+    "CRYSK-ROUTING-MISSING",
+    "CRYSK-ROUTING-INVALID",
+    "CRYSK-ROUTE-UNRESOLVABLE",
   ];
 
   test("no catalogued code is a removed routing code", () => {
@@ -2404,13 +2407,13 @@ describe("the routing codes are gone, and a malformed models input is PRH-CONFIG
     ).toBeUndefined();
   });
 
-  test("a malformed models input renders PRH-CONFIG-INVALID, naming the input and vars.CRYSK_MODELS", () => {
+  test("a malformed models input renders CRYSK-CONFIG-INVALID, naming the input and vars.CRYSK_MODELS", () => {
     const rendered = renderError(
       { kind: "config-parse", source: "models-input" },
       { detail: "the models input is not valid JSON", runId: "123" },
       "action",
     );
-    expect(rendered.code).toBe("PRH-CONFIG-INVALID");
+    expect(rendered.code).toBe("CRYSK-CONFIG-INVALID");
     expect(rendered.owner).toBe("config");
     expect(rendered.what).toBe(
       "The models input is invalid: the models input is not valid JSON",
@@ -2429,7 +2432,7 @@ describe("the routing codes are gone, and a malformed models input is PRH-CONFIG
       { detail: "bad key" },
       "action",
     );
-    expect(rendered.code).toBe("PRH-CONFIG-INVALID");
+    expect(rendered.code).toBe("CRYSK-CONFIG-INVALID");
     expect(rendered.what).toBe(".crysk/config.json is invalid: bad key");
   });
 });

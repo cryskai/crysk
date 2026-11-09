@@ -249,7 +249,7 @@ describe("routing is gone (S2)", () => {
   });
 
   // The setup step's routing backstop is gone (E-f F0, D6): the trigger stops a
-  // workflow that still passes the input with PRH-INPUT-REMOVED, and setup
+  // workflow that still passes the input with CRYSK-INPUT-REMOVED, and setup
   // never receives it.
   test("an empty CI routing input is still Claude-default CI", async () => {
     const { dir, cleanup } = await scratch();

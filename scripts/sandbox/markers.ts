@@ -77,8 +77,8 @@ export const SKIP_MARKERS = {
 
 export type SkipReason = keyof typeof SKIP_MARKERS;
 
-// A PRH code as it appears in an outcome body's heading and a status description.
-export const PRH_CODE = /PRH-[A-Z]+(?:-[A-Z]+)*/;
+// A CRYSK code as it appears in an outcome body's heading and a status description.
+export const CRYSK_CODE = /CRYSK-[A-Z]+(?:-[A-Z]+)*/;
 
 // The workflow the sandbox scaffolds, and the step that runs the action. A
 // composite action is one step to the jobs API, so the classifier reads this step.

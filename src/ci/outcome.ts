@@ -30,7 +30,7 @@ import type { CredentialProjectionFailureClass } from "../security/credential-br
 
 export type Owner = "config" | "provider" | "pr-hero" | "unclassified";
 export type OutcomeContext = "action" | "local";
-// An owner is fixed, or depends on the context (PRH-RUNTIME-UNAVAILABLE).
+// An owner is fixed, or depends on the context (CRYSK-RUNTIME-UNAVAILABLE).
 type OwnerRule = Owner | Readonly<Record<OutcomeContext, Owner>>;
 
 type CapabilityIssue =
@@ -71,28 +71,28 @@ export type ErrorClass =
 type GithubClass = Extract<ErrorClass, { kind: "github" }>;
 
 export const ERROR_CODES = [
-  "PRH-CRED-MISSING",
-  "PRH-INPUT-REMOVED",
-  "PRH-CRED-UNUSABLE",
-  "PRH-CRED-REJECTED",
-  "PRH-MODEL-UNAVAILABLE",
-  "PRH-PROMPTSET-INVALID",
-  "PRH-GOTCHAS-MISSING",
-  "PRH-CONFIG-INVALID",
-  "PRH-TOKEN-PERMISSION",
-  "PRH-GITHUB-TOKEN-INVALID",
-  "PRH-GITHUB-UNAVAILABLE",
-  "PRH-PR-UNRESOLVED",
-  "PRH-STATUS-WRITE-FAILED",
-  "PRH-RUNTIME-UNAVAILABLE",
-  "PRH-INSTALL-FAILED",
-  "PRH-PROVIDER-LIMITED",
-  "PRH-PROVIDER-UNAVAILABLE",
-  "PRH-PROVIDER-REFUSED",
-  "PRH-ENGINE-DEFECT",
-  "PRH-HUNTERS-FAILED",
-  "PRH-UNCLASSIFIED",
-  "PRH-CANCELLED",
+  "CRYSK-CRED-MISSING",
+  "CRYSK-INPUT-REMOVED",
+  "CRYSK-CRED-UNUSABLE",
+  "CRYSK-CRED-REJECTED",
+  "CRYSK-MODEL-UNAVAILABLE",
+  "CRYSK-PROMPTSET-INVALID",
+  "CRYSK-GOTCHAS-MISSING",
+  "CRYSK-CONFIG-INVALID",
+  "CRYSK-TOKEN-PERMISSION",
+  "CRYSK-GITHUB-TOKEN-INVALID",
+  "CRYSK-GITHUB-UNAVAILABLE",
+  "CRYSK-PR-UNRESOLVED",
+  "CRYSK-STATUS-WRITE-FAILED",
+  "CRYSK-RUNTIME-UNAVAILABLE",
+  "CRYSK-INSTALL-FAILED",
+  "CRYSK-PROVIDER-LIMITED",
+  "CRYSK-PROVIDER-UNAVAILABLE",
+  "CRYSK-PROVIDER-REFUSED",
+  "CRYSK-ENGINE-DEFECT",
+  "CRYSK-HUNTERS-FAILED",
+  "CRYSK-UNCLASSIFIED",
+  "CRYSK-CANCELLED",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -101,13 +101,13 @@ interface CatalogVariant {
   // Replaces the entry's `what` for this sub-class.
   readonly what?: string;
   // Replaces `what` when no model is given, so the sentence never names a placeholder
-  // (PRH-MODEL-UNAVAILABLE's every_hunter variant). Filled like `what`.
+  // (CRYSK-MODEL-UNAVAILABLE's every_hunter variant). Filled like `what`.
   readonly whatWithoutModel?: string;
   // Replaces the entry's owner for this sub-class.
   readonly owner?: OwnerRule;
   readonly why: string;
   // A list of fix lines, or a function of the params when the steps depend on
-  // them (the backend: missing_subscription_record, and PRH-CRED-MISSING's
+  // them (the backend: missing_subscription_record, and CRYSK-CRED-MISSING's
   // route).
   readonly fixes:
     | readonly string[]
@@ -132,7 +132,7 @@ export interface CatalogEntry {
   // placeholder ("The this step step failed"). Filled like `what`.
   readonly whatWithoutStep?: string;
   // "default" is always present. Keys "action" / "local" select by context
-  // (PRH-RUNTIME-UNAVAILABLE); other keys are the failure's sub-class
+  // (CRYSK-RUNTIME-UNAVAILABLE); other keys are the failure's sub-class
   // (credential failureClass, route reason, GitHub status family), chosen by
   // renderError or by the caller through renderCode.
   readonly variants: Readonly<Record<string, CatalogVariant>>;
@@ -148,7 +148,7 @@ export interface ErrorParams {
   runId?: string;
   runUrl?: string;
   detail?: string;
-  // The model a provider does not serve, when the record names it (PRH-MODEL-UNAVAILABLE).
+  // The model a provider does not serve, when the record names it (CRYSK-MODEL-UNAVAILABLE).
   model?: string;
 }
 
@@ -780,27 +780,27 @@ export function codeOf(cls: ErrorClass): ErrorCode {
     case "trigger":
       switch (cls.check) {
         case "no-credential":
-          return "PRH-CRED-MISSING";
+          return "CRYSK-CRED-MISSING";
         case "removed-input":
-          return "PRH-INPUT-REMOVED";
+          return "CRYSK-INPUT-REMOVED";
         case "pr-unresolved":
-          return "PRH-PR-UNRESOLVED";
+          return "CRYSK-PR-UNRESOLVED";
         default:
-          return unmapped(cls.check, "PRH-UNCLASSIFIED");
+          return unmapped(cls.check, "CRYSK-UNCLASSIFIED");
       }
     case "config-parse":
       switch (cls.source) {
         case "models-input":
         case "repo-config":
         case "person-config":
-          return "PRH-CONFIG-INVALID";
+          return "CRYSK-CONFIG-INVALID";
         case "extra-hunters":
-          return "PRH-PROMPTSET-INVALID";
+          return "CRYSK-PROMPTSET-INVALID";
         default:
-          return unmapped(cls.source, "PRH-UNCLASSIFIED");
+          return unmapped(cls.source, "CRYSK-UNCLASSIFIED");
       }
     case "prompt-set":
-      return "PRH-PROMPTSET-INVALID";
+      return "CRYSK-PROMPTSET-INVALID";
     // `reason` is captured in a local, so narrowing on `cls.reason` in the inner
     // default does not collapse `cls` itself to never.
     case "gotchas": {
@@ -808,9 +808,9 @@ export function codeOf(cls: ErrorClass): ErrorCode {
       switch (reason) {
         case "empty":
         case "placeholder":
-          return "PRH-GOTCHAS-MISSING";
+          return "CRYSK-GOTCHAS-MISSING";
         default:
-          return unmapped(reason, "PRH-UNCLASSIFIED");
+          return unmapped(reason, "CRYSK-UNCLASSIFIED");
       }
     }
     case "credential":
@@ -820,34 +820,34 @@ export function codeOf(cls: ErrorClass): ErrorCode {
         case "malformed_payload":
         case "source_read_failed":
         case "env-absent":
-          return "PRH-CRED-UNUSABLE";
+          return "CRYSK-CRED-UNUSABLE";
         case "unsupported_kind":
         case "projection_layout_invalid":
-          return "PRH-ENGINE-DEFECT";
+          return "CRYSK-ENGINE-DEFECT";
         default:
-          return unmapped(cls.failureClass, "PRH-UNCLASSIFIED");
+          return unmapped(cls.failureClass, "CRYSK-UNCLASSIFIED");
       }
     case "capability":
       switch (cls.issue) {
         case "binary_unresolved":
         case "sdk_unavailable":
         case "version_unsupported":
-          return "PRH-RUNTIME-UNAVAILABLE";
+          return "CRYSK-RUNTIME-UNAVAILABLE";
         default:
-          return unmapped(cls.issue, "PRH-UNCLASSIFIED");
+          return unmapped(cls.issue, "CRYSK-UNCLASSIFIED");
       }
     case "transport":
       return transportCode(cls.cause);
     case "github":
       return githubCode(cls);
     case "install":
-      return "PRH-INSTALL-FAILED";
+      return "CRYSK-INSTALL-FAILED";
     case "invariant":
-      return "PRH-ENGINE-DEFECT";
+      return "CRYSK-ENGINE-DEFECT";
     case "unknown":
-      return "PRH-UNCLASSIFIED";
+      return "CRYSK-UNCLASSIFIED";
     default:
-      return unmapped(cls, "PRH-UNCLASSIFIED");
+      return unmapped(cls, "CRYSK-UNCLASSIFIED");
   }
 }
 
@@ -856,14 +856,15 @@ export function codeOf(cls: ErrorClass): ErrorCode {
 // 403 without the flag is a permission problem. A 429 is always a rate limit.
 // A status outside the mapped families is unclassified, never an outage.
 function githubCode(cls: GithubClass): ErrorCode {
-  if (cls.status === 401) return "PRH-GITHUB-TOKEN-INVALID";
+  if (cls.status === 401) return "CRYSK-GITHUB-TOKEN-INVALID";
   if (cls.status === 403) {
     return cls.rateLimited === true
-      ? "PRH-GITHUB-UNAVAILABLE"
-      : "PRH-TOKEN-PERMISSION";
+      ? "CRYSK-GITHUB-UNAVAILABLE"
+      : "CRYSK-TOKEN-PERMISSION";
   }
-  if (cls.status === 429 || cls.status >= 500) return "PRH-GITHUB-UNAVAILABLE";
-  return "PRH-UNCLASSIFIED";
+  if (cls.status === 429 || cls.status >= 500)
+    return "CRYSK-GITHUB-UNAVAILABLE";
+  return "CRYSK-UNCLASSIFIED";
 }
 
 function transportCode(
@@ -871,26 +872,26 @@ function transportCode(
 ): ErrorCode {
   switch (cause) {
     case "auth_invalid":
-      return "PRH-CRED-REJECTED";
+      return "CRYSK-CRED-REJECTED";
     case "quota_exhausted":
     case "rate_limit":
-      return "PRH-PROVIDER-LIMITED";
+      return "CRYSK-PROVIDER-LIMITED";
     case "network_transient":
     case "remote_abort_unconfirmed":
-      return "PRH-PROVIDER-UNAVAILABLE";
+      return "CRYSK-PROVIDER-UNAVAILABLE";
     case "safety_refusal":
-      return "PRH-PROVIDER-REFUSED";
+      return "CRYSK-PROVIDER-REFUSED";
     case "provider_configuration_invalid":
     case "model_unavailable":
-      return "PRH-MODEL-UNAVAILABLE";
+      return "CRYSK-MODEL-UNAVAILABLE";
     case "missing_provider_record":
-      return "PRH-CRED-UNUSABLE";
+      return "CRYSK-CRED-UNUSABLE";
     case "protocol_truncation":
     case "protocol_mismatch":
     case "protocol_overflow":
     case "output_limit_exceeded":
     case "context_window_exceeded":
-      return "PRH-ENGINE-DEFECT";
+      return "CRYSK-ENGINE-DEFECT";
     // WHY runtime_unavailable is unclassified, not an engine defect: one cause
     // covers failures with different owners. OpenCodeSdkTransport raises it
     // from classifyFailure for a provider refusal the provider marked not
@@ -903,9 +904,9 @@ function transportCode(
     // this contract exists to prevent.
     case "runtime_unavailable":
     case "legacy_terminal":
-      return "PRH-UNCLASSIFIED";
+      return "CRYSK-UNCLASSIFIED";
     default:
-      return unmapped(cause, "PRH-UNCLASSIFIED");
+      return unmapped(cause, "CRYSK-UNCLASSIFIED");
   }
 }
 
@@ -975,10 +976,10 @@ export function ownerOf(cls: ErrorClass, ctx: OutcomeContext): Owner {
 
 function githubOwner(cls: GithubClass): Owner {
   switch (githubCode(cls)) {
-    case "PRH-TOKEN-PERMISSION":
-    case "PRH-GITHUB-TOKEN-INVALID":
+    case "CRYSK-TOKEN-PERMISSION":
+    case "CRYSK-GITHUB-TOKEN-INVALID":
       return "config";
-    case "PRH-GITHUB-UNAVAILABLE":
+    case "CRYSK-GITHUB-UNAVAILABLE":
       return "provider";
     default:
       return "unclassified";
@@ -1104,7 +1105,7 @@ const DOCS_BASE =
   "https://github.com/cryskai/crysk/blob/v0/docs/github-actions.md#";
 
 const ENGINE_DEFECT_ISSUE =
-  'gh issue create -R cryskai/crysk --title "PRH-ENGINE-DEFECT {detail}" --body "{runUrl}"';
+  'gh issue create -R cryskai/crysk --title "CRYSK-ENGINE-DEFECT {detail}" --body "{runUrl}"';
 const RERUN_FAILED = "$ gh run rerun {runId} --failed";
 const REVIEW_AGAIN = '$ gh pr comment {pr} --body "/crysk review"';
 // A workflow set up before the rename filters only `/pr-hero`, and the
@@ -1312,12 +1313,12 @@ const GITHUB_SERVER: CatalogVariant = {
   annotationFix: "re-run the workflow once GitHub is serving requests again",
 };
 
-// WHY no class maps to PRH-STATUS-WRITE-FAILED, PRH-HUNTERS-FAILED or
-// PRH-CANCELLED: each is a condition the caller observes directly (a status
+// WHY no class maps to CRYSK-STATUS-WRITE-FAILED, CRYSK-HUNTERS-FAILED or
+// CRYSK-CANCELLED: each is a condition the caller observes directly (a status
 // write, the hunter set, a superseded run), so the caller requests the code
 // through renderCode. The class-to-code table cannot see those conditions.
 export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
-  "PRH-CRED-MISSING": {
+  "CRYSK-CRED-MISSING": {
     level: "error",
     owner: "config",
     what: "No credential for the {backend} route reached the action",
@@ -1333,7 +1334,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
           : "set a Claude credential (`claude setup-token && gh secret set CRYSK_CLAUDE_OAUTH_TOKEN`) and pass it in the crysk-secrets input",
     ),
   },
-  "PRH-INPUT-REMOVED": {
+  "CRYSK-INPUT-REMOVED": {
     level: "error",
     owner: "config",
     what: "The workflow passes inputs Crysk no longer reads: {detail}",
@@ -1343,7 +1344,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "delete the {detail} input lines from the workflow and pass the CRYSK_* secrets in the crysk-secrets input instead (a routing input becomes the models input, from `vars.CRYSK_MODELS`)",
     ),
   },
-  "PRH-CRED-UNUSABLE": {
+  "CRYSK-CRED-UNUSABLE": {
     level: "error",
     owner: "config",
     what: "The {backend}/{provider} route for {step} has no usable credential ({detail})",
@@ -1400,7 +1401,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       default: CREDENTIAL_UNUSABLE_ENV,
     },
   },
-  "PRH-CRED-REJECTED": {
+  "CRYSK-CRED-REJECTED": {
     level: "error",
     owner: "config",
     what: "provider {provider} rejected the credential in {secret}",
@@ -1454,7 +1455,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
   // WHY provider-owned: the provider refused the model, so the lead reads
   // "Provider <name>:". provider_configuration_invalid shares this code and keeps
   // its own owner (config) through its variant, so its rendering is unchanged.
-  "PRH-MODEL-UNAVAILABLE": {
+  "CRYSK-MODEL-UNAVAILABLE": {
     level: "error",
     owner: "provider",
     what: "Provider {provider} does not serve the model configured for {step}",
@@ -1471,7 +1472,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       provider_configuration_invalid: { ...MODEL_NOT_SERVED, owner: "config" },
     },
   },
-  "PRH-PROMPTSET-INVALID": {
+  "CRYSK-PROMPTSET-INVALID": {
     level: "error",
     owner: "config",
     what: "The prompt set is invalid: {detail}",
@@ -1484,7 +1485,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "fix the agent file or `agents_dir` ({detail}), then check it with `crysk review --pr {pr} --dry-run`",
     ),
   },
-  "PRH-GOTCHAS-MISSING": {
+  "CRYSK-GOTCHAS-MISSING": {
     level: "error",
     owner: "config",
     what: "the review instructions file (REVIEW.md or .crysk/gotchas.md) is empty or still the scaffold",
@@ -1496,7 +1497,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "write real rules into REVIEW.md or .crysk/gotchas.md (remove the scaffold marker line if present) and commit it to the base branch, or delete the file",
     ),
   },
-  "PRH-CONFIG-INVALID": {
+  "CRYSK-CONFIG-INVALID": {
     level: "error",
     owner: "config",
     what: ".crysk/config.json is invalid: {detail}",
@@ -1523,7 +1524,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-TOKEN-PERMISSION": {
+  "CRYSK-TOKEN-PERMISSION": {
     level: "error",
     owner: "config",
     what: "The workflow token lacks `{scope}: write`",
@@ -1549,7 +1550,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-GITHUB-TOKEN-INVALID": {
+  "CRYSK-GITHUB-TOKEN-INVALID": {
     level: "error",
     owner: "config",
     what: "The github-token input is invalid",
@@ -1559,7 +1560,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       `set \`${GITHUB_TOKEN_INPUT}\` on the action step`,
     ),
   },
-  "PRH-GITHUB-UNAVAILABLE": {
+  "CRYSK-GITHUB-UNAVAILABLE": {
     level: "error",
     owner: "provider",
     providerName: "GitHub",
@@ -1579,7 +1580,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       default: GITHUB_SERVER,
     },
   },
-  "PRH-PR-UNRESOLVED": {
+  "CRYSK-PR-UNRESOLVED": {
     level: "error",
     owner: "config",
     what: "Crysk could not determine the pull request number or head",
@@ -1601,7 +1602,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-STATUS-WRITE-FAILED": {
+  "CRYSK-STATUS-WRITE-FAILED": {
     level: "error",
     owner: "unclassified",
     providerName: "GitHub",
@@ -1635,7 +1636,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-RUNTIME-UNAVAILABLE": {
+  "CRYSK-RUNTIME-UNAVAILABLE": {
     level: "error",
     owner: { action: "pr-hero", local: "config" },
     what: "a runtime Crysk depends on is unusable: {detail}",
@@ -1644,7 +1645,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
         why: "the action installs this runtime itself, so this is a Crysk defect",
         fixes: [
           "Report it with this run:",
-          '$ gh issue create -R cryskai/crysk --title "PRH-RUNTIME-UNAVAILABLE" --body "{runUrl}"',
+          '$ gh issue create -R cryskai/crysk --title "CRYSK-RUNTIME-UNAVAILABLE" --body "{runUrl}"',
         ],
         annotationFix: "report it at cryskai/crysk with this run's URL",
       },
@@ -1652,7 +1653,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       default: RUNTIME_LOCAL,
     },
   },
-  "PRH-INSTALL-FAILED": {
+  "CRYSK-INSTALL-FAILED": {
     level: "error",
     owner: "unclassified",
     what: "The {step} step failed",
@@ -1667,7 +1668,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "re-run only the failed jobs with `gh run rerun {runId} --failed`",
     ),
   },
-  "PRH-PROVIDER-LIMITED": {
+  "CRYSK-PROVIDER-LIMITED": {
     level: "error",
     owner: "provider",
     what: "rate limit or quota reached",
@@ -1714,7 +1715,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-PROVIDER-UNAVAILABLE": {
+  "CRYSK-PROVIDER-UNAVAILABLE": {
     level: "error",
     owner: "provider",
     what: "unreachable",
@@ -1724,7 +1725,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "re-run the workflow with `gh run rerun {runId}`",
     ),
   },
-  "PRH-PROVIDER-REFUSED": {
+  "CRYSK-PROVIDER-REFUSED": {
     level: "error",
     owner: "provider",
     what: "the request was refused",
@@ -1739,7 +1740,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "ask for a new review once, and report it if the provider refuses again",
     ),
   },
-  "PRH-ENGINE-DEFECT": {
+  "CRYSK-ENGINE-DEFECT": {
     level: "error",
     owner: "pr-hero",
     what: "Crysk hit an internal error ({detail}) in {step}",
@@ -1749,7 +1750,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       "report it at cryskai/crysk with this run's URL",
     ),
   },
-  "PRH-HUNTERS-FAILED": {
+  "CRYSK-HUNTERS-FAILED": {
     level: "error",
     owner: "unclassified",
     // WHY a lead of its own: the caller requests this code for a condition it
@@ -1781,7 +1782,7 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-UNCLASSIFIED": {
+  "CRYSK-UNCLASSIFIED": {
     level: "error",
     owner: "unclassified",
     what: "Crysk stopped at {step} and could not tell why",
@@ -1799,11 +1800,11 @@ export const ERROR_CATALOG: Readonly<Record<ErrorCode, CatalogEntry>> = {
       },
     },
   },
-  "PRH-CANCELLED": {
+  "CRYSK-CANCELLED": {
     level: "notice",
     owner: "unclassified",
     lead: "Not reviewed:",
-    headline: "PRH-CANCELLED: not reviewed",
+    headline: "CRYSK-CANCELLED: not reviewed",
     what: "The review was cancelled or superseded by a newer push",
     variants: single(
       "a newer run replaces this one, so this result would describe an outdated head",
@@ -1836,7 +1837,7 @@ export function renderError(
 // have (the secret, the backend, the step) and would ship a placeholder to the PR. A cause
 // is rendered only when its message is complete with the params the path has: provider,
 // model, pr, runId, runUrl, step and detail. Every other cause, or a missing param, keeps the
-// caller's generic PRH-HUNTERS-FAILED.
+// caller's generic CRYSK-HUNTERS-FAILED.
 export function renderHunterCause(
   cause: TransportFailureCause,
   params: ErrorParams,
@@ -1855,7 +1856,7 @@ export function renderHunterCause(
       return undefined;
     }
     return renderCode(
-      "PRH-CRED-REJECTED",
+      "CRYSK-CRED-REJECTED",
       { ...params, secret: secretNameOf(shared.credential, ctx) },
       ctx,
     );
@@ -1866,7 +1867,7 @@ export function renderHunterCause(
   // stands.
   if (cause === "quota_exhausted") {
     if (shared.detail === undefined) {
-      return renderCode("PRH-PROVIDER-LIMITED", params, ctx);
+      return renderCode("CRYSK-PROVIDER-LIMITED", params, ctx);
     }
     const quoted = { ...params, detail: shared.detail };
     const variant =
@@ -1875,13 +1876,13 @@ export function renderHunterCause(
         : shared.credential === "CLAUDE_CODE_OAUTH_TOKEN"
           ? "subscription"
           : "every_hunter";
-    return renderCode("PRH-PROVIDER-LIMITED", quoted, ctx, variant);
+    return renderCode("CRYSK-PROVIDER-LIMITED", quoted, ctx, variant);
   }
   // The provider's 404 names the model, so the every_hunter wording keeps it. Its fixes name
   // the provider, so the provider must be known; the model is optional (whatWithoutModel).
   if (cause === "model_unavailable") {
     if (isBlank(params.provider)) return undefined;
-    return renderCode("PRH-MODEL-UNAVAILABLE", params, ctx, "every_hunter");
+    return renderCode("CRYSK-MODEL-UNAVAILABLE", params, ctx, "every_hunter");
   }
   // The credential sentence and its fixes name both the route's provider and model.
   if (cause === "missing_provider_record") {
@@ -1972,12 +1973,12 @@ function paramVariant(
   params: ErrorParams,
   variant: string | undefined,
 ): string | undefined {
-  if (code === "PRH-TOKEN-PERMISSION" && isBlank(params.scope)) {
+  if (code === "CRYSK-TOKEN-PERMISSION" && isBlank(params.scope)) {
     return "no-scope";
   }
   // The credential in the secret picks the fix: a rejected API key and a rejected OAuth
   // token are replaced differently.
-  if (code === "PRH-CRED-REJECTED" && variant === undefined) {
+  if (code === "CRYSK-CRED-REJECTED" && variant === undefined) {
     if (
       params.secret === "ANTHROPIC_API_KEY" ||
       params.secret === "ANTHROPIC_AUTH_TOKEN" ||
@@ -1996,7 +1997,7 @@ function paramVariant(
   // reachable with a detail present.
   if (
     variant === undefined &&
-    code === "PRH-PR-UNRESOLVED" &&
+    code === "CRYSK-PR-UNRESOLVED" &&
     !isBlank(params.detail)
   ) {
     return "malformed-input";
@@ -2025,14 +2026,14 @@ function variantOf(cls: ErrorClass): string | undefined {
   switch (cls.kind) {
     case "credential":
       return cls.failureClass;
-    // Only the models input has a variant of its own (PRH-CONFIG-INVALID); the other
+    // Only the models input has a variant of its own (CRYSK-CONFIG-INVALID); the other
     // sources find none and render their code's default.
     case "config-parse":
       return cls.source;
     case "github":
       return githubVariant(cls);
     // The transport cause picks its own sub-class where the code shares one:
-    // PRH-MODEL-UNAVAILABLE serves provider_configuration_invalid (config) and
+    // CRYSK-MODEL-UNAVAILABLE serves provider_configuration_invalid (config) and
     // model_unavailable (provider). Other codes have no such variant and fall
     // back to their default.
     case "transport":
@@ -2049,7 +2050,7 @@ function githubVariant(cls: GithubClass): string | undefined {
     return "rate_limit";
   }
   if (cls.status >= 500) return "server";
-  return githubCode(cls) === "PRH-UNCLASSIFIED" ? "github" : undefined;
+  return githubCode(cls) === "CRYSK-UNCLASSIFIED" ? "github" : undefined;
 }
 
 function classDetail(cls: ErrorClass): string | undefined {
@@ -2189,15 +2190,17 @@ function escapeCommandData(text: string): string {
 // keeps a lookalike marker from matching.
 export const OUTCOME_MARKER_PREFIX = `${MARKER_OPEN}outcome `;
 
-// The PRH-* code an outcome comment names, or null. renderError's summary opens with
+// The CRYSK-* code an outcome comment names, or null. renderError's summary opens with
 // `### <headline>`, and a headline is the bare code or the code then a colon and a sentence
-// (`PRH-CANCELLED: not reviewed`), so the code is the token at the start of that heading. The
+// (`CRYSK-CANCELLED: not reviewed`), so the code is the token at the start of that heading. The
 // token must be a catalogued code: a heading that merely looks like one reads as no code.
+// WHY PRH-* too: the codes were PRH-* before the rename, and comments already posted keep
+// them. An old code reads as the CRYSK-* code it became; a code removed since reads as none.
 export function parseOutcomeCode(body: string): ErrorCode | null {
   if (matchMarkerPrefix(body, OUTCOME_MARKER_PREFIX) === undefined) return null;
-  const heading = /^### (PRH-[A-Z0-9-]+)(?=[:\s]|$)/m.exec(body);
-  const code = heading?.[1];
-  if (code === undefined) return null;
+  const heading = /^### (?:CRYSK|PRH)-([A-Z0-9-]+)(?=[:\s]|$)/m.exec(body);
+  if (heading === null) return null;
+  const code = `CRYSK-${heading[1]}`;
   return (ERROR_CODES as readonly string[]).includes(code)
     ? (code as ErrorCode)
     : null;

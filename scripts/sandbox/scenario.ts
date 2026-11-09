@@ -302,12 +302,12 @@ export function isFreeModelFlake(result: ScenarioResult): boolean {
 }
 
 // The hunters-failed flake belongs to this phase only when this run posted the
-// PRH-HUNTERS-FAILED outcome on the observed head. A failed review step is not enough:
+// CRYSK-HUNTERS-FAILED outcome on the observed head. A failed review step is not enough:
 // a later phase whose step fails for another reason posts no outcome of its own, and
 // the path it reads is an earlier phase's outcome, which is no flake of this phase.
 // The code family is observe.ts's own (isHuntersFailed), so a run rendered with its
-// shared hunter cause (PRH-MODEL-UNAVAILABLE, a hunter-route PRH-CRED-UNUSABLE) is the
-// same flake as PRH-HUNTERS-FAILED, exactly as classifyPath reads it. Any outcome
+// shared hunter cause (CRYSK-MODEL-UNAVAILABLE, a hunter-route CRYSK-CRED-UNUSABLE) is the
+// same flake as CRYSK-HUNTERS-FAILED, exactly as classifyPath reads it. Any outcome
 // of this run with that code counts, not only the first one on the head, because an
 // earlier phase's outcome may still sit on the PR above it. A phase with no trigger
 // has no window, so its outcome counts (postedByThisRun reads it as this run's).

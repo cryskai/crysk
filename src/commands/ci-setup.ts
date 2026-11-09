@@ -345,7 +345,7 @@ export async function ciSetupCommand(
   // Review instructions are optional (odd/tasks/review-md.md S3): with none
   // the review runs on the default guidance, so a repo without a file gets a
   // recommendation, not a required step. A file that exists but is empty or
-  // still the scaffold turns the first PR red (PRH-GOTCHAS-MISSING), so that
+  // still the scaffold turns the first PR red (CRYSK-GOTCHAS-MISSING), so that
   // one gets the fix steps. Asked through the resolver and the gate the review
   // itself uses, so this advice cannot disagree with the run.
   const instructions = resolveReviewInstructions(undefined, repoRoot);

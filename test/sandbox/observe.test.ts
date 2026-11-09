@@ -94,25 +94,25 @@ describe("classifyComment", () => {
     });
   });
 
-  test("reads the PRH code of a real outcome comment", () => {
+  test("reads the CRYSK code of a real outcome comment", () => {
     const body = realOutcomeBody();
     expect(classifyComment(body, "issue")).toEqual({
       source: "issue",
       kind: "outcome",
-      code: "PRH-CRED-MISSING",
+      code: "CRYSK-CRED-MISSING",
       head: SHA,
       // T2d-1 (S2): the owner lead the reader sees, read off the same body.
       lead: "Your configuration:",
     });
-    expect(outcomeCodeOf(body)).toBe("PRH-CRED-MISSING");
+    expect(outcomeCodeOf(body)).toBe("CRYSK-CRED-MISSING");
   });
 
   test("reads the owner lead of a pr-hero defect outcome, and no lead from a report", () => {
-    const defect = `<!-- pr-hero-outcome v=1 head=${SHA} run=1 attempt=1 -->\n\n### PRH-ENGINE-DEFECT\n\npr-hero defect: pr-hero hit an internal error\n`;
+    const defect = `<!-- pr-hero-outcome v=1 head=${SHA} run=1 attempt=1 -->\n\n### CRYSK-ENGINE-DEFECT\n\npr-hero defect: pr-hero hit an internal error\n`;
     expect(classifyComment(defect, "issue")).toEqual({
       source: "issue",
       kind: "outcome",
-      code: "PRH-ENGINE-DEFECT",
+      code: "CRYSK-ENGINE-DEFECT",
       head: SHA,
       lead: "pr-hero defect:",
     });
@@ -336,38 +336,38 @@ describe("classifyPath", () => {
     expect(classifyPath(obs)).toBe("no-outcome");
   });
 
-  test("error: an outcome comment names its PRH code", () => {
+  test("error: an outcome comment names its CRYSK code", () => {
     const obs = observation({
       comments: [
-        { source: "issue", kind: "outcome", code: "PRH-CRED-MISSING" },
+        { source: "issue", kind: "outcome", code: "CRYSK-CRED-MISSING" },
       ],
       status: {
         state: "error",
-        description: "PRH-CRED-MISSING: no credential",
+        description: "CRYSK-CRED-MISSING: no credential",
       },
     });
-    expect(classifyPath(obs)).toBe("error:PRH-CRED-MISSING");
+    expect(classifyPath(obs)).toBe("error:CRYSK-CRED-MISSING");
   });
 
-  test("error: an error status with a PRH code and no outcome comment still names the code", () => {
+  test("error: an error status with a CRYSK code and no outcome comment still names the code", () => {
     const obs = observation({
       comments: [],
       status: {
         state: "error",
-        description: "PRH-CONFIG-INVALID: bad config",
+        description: "CRYSK-CONFIG-INVALID: bad config",
       },
     });
-    expect(classifyPath(obs)).toBe("error:PRH-CONFIG-INVALID");
+    expect(classifyPath(obs)).toBe("error:CRYSK-CONFIG-INVALID");
   });
 
   test("hunters-failed: an outcome comment that names it", () => {
     const obs = observation({
       comments: [
-        { source: "issue", kind: "outcome", code: "PRH-HUNTERS-FAILED" },
+        { source: "issue", kind: "outcome", code: "CRYSK-HUNTERS-FAILED" },
       ],
       status: {
         state: "error",
-        description: "PRH-HUNTERS-FAILED: every hunter failed",
+        description: "CRYSK-HUNTERS-FAILED: every hunter failed",
       },
     });
     expect(classifyPath(obs)).toBe("hunters-failed");
@@ -378,7 +378,7 @@ describe("classifyPath", () => {
       comments: [],
       status: {
         state: "error",
-        description: "PRH-HUNTERS-FAILED: every hunter failed",
+        description: "CRYSK-HUNTERS-FAILED: every hunter failed",
       },
     });
     expect(classifyPath(obs)).toBe("hunters-failed");
@@ -386,7 +386,7 @@ describe("classifyPath", () => {
 
   test("a failed step and an uploaded run directory are not positive evidence of hunters-failed", () => {
     // The run directory is uploaded only when a hunter ran, and a finished
-    // pipeline whose post threw looks the same from here. Without a PRH code
+    // pipeline whose post threw looks the same from here. Without a CRYSK code
     // on the PR the path is no-outcome.
     const obs = observation({
       run: {
@@ -428,12 +428,12 @@ describe("classifyPath", () => {
   test("hunters-failed from the status alone: the error status names the code and no comment is visible yet", () => {
     // The status and the outcome comment are separate writes, so a read can
     // see the status first. It names the same failure as the comment does, so
-    // it must not fall through to `error:PRH-HUNTERS-FAILED`.
+    // it must not fall through to `error:CRYSK-HUNTERS-FAILED`.
     const obs = observation({
       comments: [],
       status: {
         state: "error",
-        description: "PRH-HUNTERS-FAILED: every hunter failed in review",
+        description: "CRYSK-HUNTERS-FAILED: every hunter failed in review",
       },
     });
     expect(classifyPath(obs)).toBe("hunters-failed");
@@ -473,14 +473,14 @@ describe("S7 invariants", () => {
     expect(invariantViolations(observation())).toEqual([]);
   });
 
-  test("an error status must carry a PRH- code", () => {
+  test("an error status must carry a CRYSK- code", () => {
     const v = invariantViolations(
       observation({
         status: { state: "error", description: "review did not finish" },
       }),
     );
     expect(
-      v.some((line) => line.includes("error status without a PRH- code")),
+      v.some((line) => line.includes("error status without a CRYSK- code")),
     ).toBe(true);
   });
 
@@ -488,7 +488,7 @@ describe("S7 invariants", () => {
     const obs = observation({
       comments: [
         { source: "issue", kind: "report", head: SHA },
-        { source: "issue", kind: "outcome", code: "PRH-CRED-MISSING" },
+        { source: "issue", kind: "outcome", code: "CRYSK-CRED-MISSING" },
       ],
     });
     expect(
@@ -525,7 +525,7 @@ describe("S7 invariants", () => {
     ).toEqual([]);
   });
 
-  test("an error status without a PRH code trips S7 and, with no other evidence, exits 1", () => {
+  test("an error status without a CRYSK code trips S7 and, with no other evidence, exits 1", () => {
     const obs = observation({
       run: {
         id: 42,
@@ -547,11 +547,11 @@ describe("the head an outcome belongs to", () => {
   const OLD = "e".repeat(40);
 
   test("an outcome comment names the head it was written for", () => {
-    const body = `<!-- pr-hero-outcome v=1 head=${OLD} run=1 attempt=1 -->\n\n## PRH-CRED-MISSING`;
+    const body = `<!-- pr-hero-outcome v=1 head=${OLD} run=1 attempt=1 -->\n\n## CRYSK-CRED-MISSING`;
     expect(classifyComment(body, "issue")).toEqual({
       source: "issue",
       kind: "outcome",
-      code: "PRH-CRED-MISSING",
+      code: "CRYSK-CRED-MISSING",
       head: OLD,
     });
   });
@@ -562,13 +562,13 @@ describe("the head an outcome belongs to", () => {
         {
           source: "issue",
           kind: "outcome",
-          code: "PRH-CRED-MISSING",
+          code: "CRYSK-CRED-MISSING",
           head: OLD,
         },
       ],
       status: {
         state: "error",
-        description: "PRH-HUNTERS-FAILED: every hunter failed",
+        description: "CRYSK-HUNTERS-FAILED: every hunter failed",
       },
     });
     expect(classifyPath(obs)).toBe("hunters-failed");
@@ -604,7 +604,7 @@ describe("exit code (adapted from exitCodeFor)", () => {
           comments: [],
           status: {
             state: "error",
-            description: "PRH-HUNTERS-FAILED: every hunter failed",
+            description: "CRYSK-HUNTERS-FAILED: every hunter failed",
           },
         }),
       ),
@@ -617,11 +617,11 @@ describe("exit code (adapted from exitCodeFor)", () => {
             {
               source: "issue",
               kind: "outcome",
-              code: "PRH-CRED-MISSING",
+              code: "CRYSK-CRED-MISSING",
               head: SHA,
             },
           ],
-          status: { state: "error", description: "PRH-CRED-MISSING: no key" },
+          status: { state: "error", description: "CRYSK-CRED-MISSING: no key" },
         }),
       ),
     ).toBe(1);
@@ -652,7 +652,7 @@ describe("exit code (adapted from exitCodeFor)", () => {
             {
               source: "issue",
               kind: "outcome",
-              code: "PRH-CRED-MISSING",
+              code: "CRYSK-CRED-MISSING",
               head: "e".repeat(40),
             },
           ],
@@ -662,9 +662,9 @@ describe("exit code (adapted from exitCodeFor)", () => {
   });
 });
 
-// WHY these tests name the codes: the hunters-failed path renders PRH-MODEL-UNAVAILABLE and
-// the hunter-route PRH-CRED-UNUSABLE (src/ci/outcome.ts renderHunterCause), so a run that
-// the flake tolerance accepts shows those codes, not PRH-HUNTERS-FAILED. Read as `error:`,
+// WHY these tests name the codes: the hunters-failed path renders CRYSK-MODEL-UNAVAILABLE and
+// the hunter-route CRYSK-CRED-UNUSABLE (src/ci/outcome.ts renderHunterCause), so a run that
+// the flake tolerance accepts shows those codes, not CRYSK-HUNTERS-FAILED. Read as `error:`,
 // the sandbox would take an all-hunters-dead run for a different path.
 function hunterRouteOutcomeBody(): string {
   const publication = decidePublication({
@@ -704,67 +704,68 @@ function hunterRouteOutcomeBody(): string {
 }
 
 describe("the hunters-failed family", () => {
-  test("PRH-MODEL-UNAVAILABLE on an outcome comment is hunters-failed", () => {
+  test("CRYSK-MODEL-UNAVAILABLE on an outcome comment is hunters-failed", () => {
     const obs = observation({
       comments: [
-        { source: "issue", kind: "outcome", code: "PRH-MODEL-UNAVAILABLE" },
+        { source: "issue", kind: "outcome", code: "CRYSK-MODEL-UNAVAILABLE" },
       ],
       status: {
         state: "error",
         description:
-          "PRH-MODEL-UNAVAILABLE: the configured model is not served",
+          "CRYSK-MODEL-UNAVAILABLE: the configured model is not served",
       },
     });
     expect(classifyPath(obs)).toBe("hunters-failed");
   });
 
-  test("PRH-MODEL-UNAVAILABLE on the status alone is hunters-failed", () => {
+  test("CRYSK-MODEL-UNAVAILABLE on the status alone is hunters-failed", () => {
     const obs = observation({
       comments: [],
       status: {
         state: "error",
         description:
-          "PRH-MODEL-UNAVAILABLE: Provider opencode: the configured model",
+          "CRYSK-MODEL-UNAVAILABLE: Provider opencode: the configured model",
       },
     });
     expect(classifyPath(obs)).toBe("hunters-failed");
   });
 
-  test("a PRH-CRED-UNUSABLE that names a hunter route is hunters-failed, from the real publisher's comment", () => {
+  test("a CRYSK-CRED-UNUSABLE that names a hunter route is hunters-failed, from the real publisher's comment", () => {
     const obs = observation({
       comments: [classifyComment(hunterRouteOutcomeBody(), "issue")],
       status: {
         state: "error",
         description:
-          "PRH-CRED-UNUSABLE: The route opencode/gpt-4o has no usable credential record",
+          "CRYSK-CRED-UNUSABLE: The route opencode/gpt-4o has no usable credential record",
       },
     });
     expect(classifyPath(obs)).toBe("hunters-failed");
   });
 
-  test("a PRH-CRED-UNUSABLE outcome without a hunter route stays error:PRH-CRED-UNUSABLE", () => {
+  test("a CRYSK-CRED-UNUSABLE outcome without a hunter route stays error:CRYSK-CRED-UNUSABLE", () => {
     const obs = observation({
       comments: [
-        { source: "issue", kind: "outcome", code: "PRH-CRED-UNUSABLE" },
+        { source: "issue", kind: "outcome", code: "CRYSK-CRED-UNUSABLE" },
       ],
       status: {
         state: "error",
         description:
-          "PRH-CRED-UNUSABLE: The credential store is not usable: the auth store is not a JSON object",
+          "CRYSK-CRED-UNUSABLE: The credential store is not usable: the auth store is not a JSON object",
       },
     });
-    expect(classifyPath(obs)).toBe("error:PRH-CRED-UNUSABLE");
+    expect(classifyPath(obs)).toBe("error:CRYSK-CRED-UNUSABLE");
   });
 
-  test("a PRH-CRED-REJECTED is not in the family", () => {
+  test("a CRYSK-CRED-REJECTED is not in the family", () => {
     const obs = observation({
       comments: [],
       status: {
         state: "error",
-        description: "PRH-CRED-REJECTED: the provider rejected the credential",
+        description:
+          "CRYSK-CRED-REJECTED: the provider rejected the credential",
       },
     });
-    expect(classifyPath(obs)).toBe("error:PRH-CRED-REJECTED");
+    expect(classifyPath(obs)).toBe("error:CRYSK-CRED-REJECTED");
   });
 });
 
