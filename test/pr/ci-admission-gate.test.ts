@@ -36,6 +36,7 @@ import {
   type CiAdmissionLedgerState,
   settleCiAdmissionLedger,
   settleCiGateSkip,
+  settleClaudeCredentialRefusal,
 } from "#pr/admission";
 import {
   evaluateCiAdmissionGate,
@@ -58,6 +59,7 @@ import {
 } from "#review/preflight";
 import { triageMarker } from "#triage/triage";
 import { CliError } from "../../src/errors";
+import { ClaudeCredentialRefusalError } from "../../src/security/claude-credential";
 
 const PR = 42;
 const HEAD_A = "a".repeat(40);
@@ -996,6 +998,64 @@ describe("settleCiGateSkip — a size or budget skip settles as gate-skipped (#3
 
     await settleCiGateSkip(null, GATE_REASON, { spawnFn });
 
+    expect(calls).toEqual([]);
+  });
+});
+
+// R003 (#494): the Claude credential refusal stops a CI run after the reservation
+// and before any provider spend, so its row is gate-skipped like the budget gate's,
+// not the "failed" teardown would write (which counts as a spent attempt).
+describe("settleClaudeCredentialRefusal — a refused credential spends no attempt", () => {
+  test("the refusal settles the reserved row as gate-skipped", async () => {
+    const state = gateLedgerState("reserved");
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await settleClaudeCredentialRefusal(
+      state,
+      new ClaudeCredentialRefusalError(
+        "no Claude credential this run may use is set",
+      ),
+      { spawnFn },
+    );
+
+    expect(state.record.status).toBe("gate-skipped");
+    expect(state.record.decisionReason).toBe(
+      "no Claude credential the run may use is set; refused before any provider spend",
+    );
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toContain("output[summary]=gate-skipped (attempt 1)");
+  });
+
+  test("any other error leaves the row for teardown, which still settles it failed", async () => {
+    const state = gateLedgerState("reserved");
+    const calls: string[][] = [];
+    const spawnFn = makeFakeGh(
+      [{ match: ["check-runs"], response: { stdout: '{"id":99}' } }],
+      calls,
+    );
+
+    await settleClaudeCredentialRefusal(
+      state,
+      new CliError("claude binary not found on PATH"),
+      { spawnFn },
+    );
+    await settleClaudeCredentialRefusal(state, new Error("boom"), { spawnFn });
+
+    expect(state.record.status).toBe("reserved");
+    expect(calls).toEqual([]);
+  });
+
+  test("outside CI (no ledger) it is a no-op", async () => {
+    const calls: string[][] = [];
+    await settleClaudeCredentialRefusal(
+      null,
+      new ClaudeCredentialRefusalError("refused"),
+      { spawnFn: makeFakeGh([], calls) },
+    );
     expect(calls).toEqual([]);
   });
 });

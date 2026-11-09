@@ -48,6 +48,7 @@ import {
 import { publishFinalCommitStatus } from "#pr/status";
 import { log } from "#ui/primitives";
 import { canonicalStatusText, STATUS_CONTEXT } from "../brand";
+import { ClaudeCredentialRefusalError } from "../security/claude-credential";
 
 // ROADMAP Pillar 3 (GitHub Actions CI). The mechanical glue behind a gate
 // skip in CI mode: every DECISION (what to say, which marker, what the
@@ -178,6 +179,24 @@ export async function settleCiGateSkip(
   options?: { spawnFn?: typeof Bun.spawn },
 ): Promise<void> {
   await settleCiAdmissionLedger(state, "gate-skipped", reason, options);
+}
+
+// R003 (#494): the Claude credential refusal (ClaudeCredentialRefusalError) stops a
+// CI run after the reservation and before any binding, probe or provider call, so it
+// spent nothing: its row settles as gate-skipped, like the budget gate it follows.
+// Any other error is left for teardown, which settles it `failed`. The caller
+// rethrows the error unchanged.
+export async function settleClaudeCredentialRefusal(
+  state: CiAdmissionLedgerState | null,
+  error: unknown,
+  options?: { spawnFn?: typeof Bun.spawn },
+): Promise<void> {
+  if (!(error instanceof ClaudeCredentialRefusalError)) return;
+  await settleCiGateSkip(
+    state,
+    "no Claude credential the run may use is set; refused before any provider spend",
+    options,
+  );
 }
 
 export async function reserveCiAdmissionLedger(input: {
