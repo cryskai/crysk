@@ -123,8 +123,15 @@ export interface StepResult {
   // included: `failureCause` above keeps transport causes only, so a timeout
   // (`watchdog_timeout`) or a bad answer (`format_violation`) was invisible to
   // anything reading the result. The fallback reads this one. Absent on
-  // success, on cancellation, and when no cause was resolved.
+  // success, on cancellation, and when no cause was resolved. An attempt
+  // refused by a fenced spend bucket never reached the provider and has no
+  // cause, so after one this is the cause of the attempt before it.
   finalCause?: FailureCause;
+  // The final attempt was refused by a fenced spend bucket (an earlier
+  // attempt on it left a cost nobody knows), before the transport was called.
+  // That attempt is counted in `attempts` but wrote no log or receipt. Read
+  // only by the fallback (model-fallback.ts); never recorded.
+  spendFenced?: true;
   // The final failed attempt's one-line explanation (TransportOutcome.failureDetail),
   // when the transport gave one. Absent on success.
   failureDetail?: string;
@@ -143,11 +150,15 @@ export interface StepResult {
 // the step's total sums them, and only these entries keep each one's billing.
 export interface ModelAttempt {
   route: ResolvedModelRoute;
-  // `skipped`: never run, because an earlier model on the same credential
-  // was refused its login (`auth_invalid`).
+  // `skipped`: never reached its provider. Either an earlier model on the
+  // same credential was refused its login (cause `auth_invalid`), or it was
+  // stopped before any request: its spend bucket was fenced, or it failed
+  // before its first attempt (no cause).
   status: "ok" | "failed" | "skipped";
+  // Attempts that reached the provider: 0 for a skipped model.
   attempts: number;
-  // Why it failed, or `auth_invalid` for a skipped one. Absent on `ok`.
+  // Why it failed, or `auth_invalid` for a model skipped after a refused
+  // login. Absent on `ok`, and on a model skipped for any other reason.
   cause?: FailureCause;
   usageV2?: NormalizedUsage;
 }

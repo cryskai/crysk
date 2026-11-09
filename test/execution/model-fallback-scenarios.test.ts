@@ -34,6 +34,7 @@ import type {
   TransportOutcome,
   TransportRequest,
 } from "../../src/execution/contracts";
+import { ranRoute } from "../../src/execution/model-fallback";
 import {
   attemptLogPath,
   settlementReceiptPath,
@@ -546,26 +547,29 @@ describe("fallback scenarios: numbering, spend, cancellation and the recorded mo
     });
   }
 
+  // A partial usage record with no cost: the shape a provider gives when it
+  // cannot price an attempt. It leaves the reservation unresolved, which
+  // fences the bucket for the rest of the run.
+  const UNKNOWN_COST = {
+    wallMs: 10,
+    tokens: { totalKnown: 5 },
+    completeness: "partial",
+    billingMode: "metered",
+    costSource: "unavailable",
+  } as unknown as NormalizedUsage;
+
   test("R7 unresolved metered cost fences the bucket: the fallback on the same bucket spends nothing", async () => {
     const requests: TransportRequest[] = [];
     const route = hunterRoute([
       "opencode:openai/gpt-4o",
       "opencode:openai/gpt-4.1",
     ]);
-    // A partial usage record with no cost: the shape a provider gives when it cannot price an attempt.
-    const unknownCost = {
-      wallMs: 10,
-      tokens: { totalKnown: 5 },
-      completeness: "partial",
-      billingMode: "metered",
-      costSource: "unavailable",
-    } as unknown as NormalizedUsage;
     const runtime = await runtimeFor([route], {
       opencode: scriptedTransport(
         "opencode",
         (r) =>
           r.route.modelSnapshot === "gpt-4o"
-            ? fail("rate_limit", unknownCost)
+            ? fail("rate_limit", UNKNOWN_COST)
             : ok(metered(0.2)),
         requests,
         { mode: "metered", pricingReady: true },
@@ -575,23 +579,185 @@ describe("fallback scenarios: numbering, spend, cancellation and the recorded mo
       const result = await runtime.runner.run(
         stepFor(route, { maxAttempts: 1 }),
       );
-      console.log(
-        "R7 sent",
-        sent(requests),
-        "status",
-        result.status,
-        "reservations",
-        result.reservations?.map((r) => [r.attempt, r.state]),
-        "attempts",
+      expect(sent(requests)).toEqual(["opencode:gpt-4o"]);
+      expect(result.reservations?.map((r) => [r.attempt, r.state])).toEqual([
+        [1, "unresolved_remote"],
+      ]);
+      // gpt-4.1 never reached its provider: it is not the model that ran,
+      // and the step keeps the cause gpt-4o failed on.
+      expect(
         result.modelAttempts?.map((a) => [
           a.route.modelSnapshot,
           a.status,
           a.attempts,
           a.cause,
         ]),
-        "tail",
-        result.stderrTail.slice(-200),
+      ).toEqual([
+        ["gpt-4o", "failed", 1, "rate_limit"],
+        ["gpt-4.1", "skipped", 0, undefined],
+      ]);
+      expect(ranRoute(result)?.modelSnapshot).toBe("gpt-4o");
+      expect(result.status).toBe("failed");
+      expect(result.failureCause).toBe("rate_limit");
+      expect(result.finalCause).toBe("rate_limit");
+      expect(result.attempts).toBe(1);
+      expect(result.stderrTail).toContain("provider error: rate_limit");
+      expect(result.stderrTail).toContain("is fenced");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  test("R7b a fenced bucket skips its models and the list goes on to another credential", async () => {
+    const openRequests: TransportRequest[] = [];
+    const claudeRequests: TransportRequest[] = [];
+    const route = hunterRoute([
+      "opencode:openai/gpt-4o",
+      "opencode:openai/gpt-4.1",
+      "claude:sonnet-latest",
+    ]);
+    const runtime = await runtimeFor([route], {
+      opencode: scriptedTransport(
+        "opencode",
+        (r) =>
+          r.route.modelSnapshot === "gpt-4o"
+            ? fail("rate_limit", UNKNOWN_COST)
+            : ok(metered(0.2)),
+        openRequests,
+        { mode: "metered", pricingReady: true },
+      ),
+      "claude-code": scriptedTransport(
+        "claude-code",
+        () => ok(),
+        claudeRequests,
+      ),
+    });
+    try {
+      const result = await runtime.runner.run(
+        stepFor(route, { maxAttempts: 1 }),
       );
+      expect(sent(openRequests)).toEqual(["opencode:gpt-4o"]);
+      expect(sent(claudeRequests)).toEqual(["claude-code:sonnet"]);
+      expect(result.status).toBe("ok");
+      expect(
+        result.modelAttempts?.map((a) => [
+          a.route.modelSnapshot,
+          a.status,
+          a.attempts,
+        ]),
+      ).toEqual([
+        ["gpt-4o", "failed", 1],
+        ["gpt-4.1", "skipped", 0],
+        ["sonnet", "ok", 1],
+      ]);
+      expect(ranRoute(result)?.modelSnapshot).toBe("sonnet");
+      // The refused attempt wrote nothing, so it takes no number.
+      expect(result.attempts).toBe(2);
+      expect(claudeRequests[0]?.attempt).toBe(2);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  test("R7c a model whose own retry is fenced still moves on the cause it failed on", async () => {
+    const openRequests: TransportRequest[] = [];
+    const claudeRequests: TransportRequest[] = [];
+    const route = hunterRoute([
+      "opencode:openai/gpt-4o",
+      "claude:sonnet-latest",
+    ]);
+    const runtime = await runtimeFor([route], {
+      opencode: scriptedTransport(
+        "opencode",
+        () => fail("rate_limit", UNKNOWN_COST),
+        openRequests,
+        { mode: "metered", pricingReady: true },
+      ),
+      "claude-code": scriptedTransport(
+        "claude-code",
+        () => ok(),
+        claudeRequests,
+      ),
+    });
+    try {
+      const result = await runtime.runner.run(
+        stepFor(route, { maxAttempts: 2 }),
+      );
+      // gpt-4o's retry is refused by the fence its first attempt left.
+      expect(sent(openRequests)).toEqual(["opencode:gpt-4o"]);
+      expect(sent(claudeRequests)).toEqual(["claude-code:sonnet"]);
+      expect(result.status).toBe("ok");
+      expect(
+        result.modelAttempts?.map((a) => [
+          a.route.modelSnapshot,
+          a.status,
+          a.attempts,
+          a.cause,
+        ]),
+      ).toEqual([
+        ["gpt-4o", "failed", 1, "rate_limit"],
+        ["sonnet", "ok", 1, undefined],
+      ]);
+      expect(result.attempts).toBe(2);
+      expect(claudeRequests[0]?.attempt).toBe(2);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  test("R7d a bad answer that fences its own retry still stops the list", async () => {
+    const openRequests: TransportRequest[] = [];
+    const claudeRequests: TransportRequest[] = [];
+    const route = hunterRoute([
+      "opencode:openai/gpt-4o",
+      "claude:sonnet-latest",
+    ]);
+    const runtime = await runtimeFor([route], {
+      opencode: scriptedTransport(
+        "opencode",
+        () => ({ ...ok(UNKNOWN_COST), finalText: "not json" }),
+        openRequests,
+        { mode: "metered", pricingReady: true },
+      ),
+      "claude-code": scriptedTransport(
+        "claude-code",
+        () => ok(),
+        claudeRequests,
+      ),
+    });
+    try {
+      const result = await runtime.runner.run(
+        stepFor(route, { maxAttempts: 2 }),
+      );
+      expect(sent(openRequests)).toEqual(["opencode:gpt-4o"]);
+      expect(sent(claudeRequests)).toEqual([]);
+      expect(result.status).toBe("failed");
+      expect(result.modelAttempts?.map((a) => a.status)).toEqual(["failed"]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  test("R9 each model's request names its own execution model", async () => {
+    const requests: TransportRequest[] = [];
+    const route = hunterRoute(THREE);
+    const runtime = await runtimeFor([route], {
+      "claude-code": scriptedTransport(
+        "claude-code",
+        (r) => (r.route.modelSnapshot === "haiku" ? ok() : fail("rate_limit")),
+        requests,
+      ),
+    });
+    try {
+      const result = await runtime.runner.run(
+        stepFor(route, { maxAttempts: 1 }),
+      );
+      expect(result.status).toBe("ok");
+      expect(requests.map((r) => r.executionModel)).toEqual([
+        "sonnet",
+        "opus",
+        "haiku",
+      ]);
     } finally {
       await runtime.dispose();
     }
