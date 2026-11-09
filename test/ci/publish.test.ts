@@ -25,11 +25,13 @@ import os from "node:os";
 import path from "node:path";
 import { classifyCliError } from "#ci/classify-error";
 import { writeFatalCliRecord } from "#ci/cli-record";
+import { chooseOpenCodeSecret, parseCryskSecrets } from "#ci/crysk-secrets";
 import {
   CLI_RECORD_FILE,
   type CliRecord,
   PENDING_AT_FILE,
   parseCliRecord,
+  parseTriggerRecord,
   type TriggerRecord,
 } from "#ci/outcome";
 import {
@@ -281,9 +283,9 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
       expect(plan.rendered.annotation).toStartWith(
-        "::error title=crysk PRH-HUNTERS-FAILED::",
+        "::error title=crysk CRYSK-HUNTERS-FAILED::",
       );
       expect(plan.rendered.annotation).toContain(
         "each hunter's session ended without a result",
@@ -300,10 +302,10 @@ describe("decidePublication — the pure table", () => {
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
       expect(plan.headSha).toBe(REVIEWED_HEAD);
-      expect(plan.status?.description).toStartWith("PRH-HUNTERS-FAILED: ");
+      expect(plan.status?.description).toStartWith("CRYSK-HUNTERS-FAILED: ");
     });
 
-    test("every failed hunter model_unavailable renders PRH-MODEL-UNAVAILABLE with the provider and model", () => {
+    test("every failed hunter model_unavailable renders CRYSK-MODEL-UNAVAILABLE with the provider and model", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -327,10 +329,10 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+      expect(plan.rendered.code).toBe("CRYSK-MODEL-UNAVAILABLE");
       expect(plan.rendered.annotation).toContain("Provider opencode: ");
       expect(plan.rendered.annotation).toContain("gpt-4o");
-      expect(plan.status?.description).toStartWith("PRH-MODEL-UNAVAILABLE: ");
+      expect(plan.status?.description).toStartWith("CRYSK-MODEL-UNAVAILABLE: ");
     });
 
     test("every failed hunter sharing one detail puts it in the status, annotation and summary", () => {
@@ -352,14 +354,14 @@ describe("decidePublication — the pure table", () => {
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
       // The credential's secret name is unknown here, so the generic code carries the detail.
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
       expect(plan.rendered.annotation).toContain("Invalid API key");
       expect(plan.rendered.annotation).not.toContain(
         "each hunter's session ended without a result",
       );
       expect(plan.rendered.summary.join("\n")).toContain("Invalid API key");
       const description = plan.status?.description ?? "";
-      expect(description).toStartWith("PRH-HUNTERS-FAILED: ");
+      expect(description).toStartWith("CRYSK-HUNTERS-FAILED: ");
       expect(description).toContain("Anthropic API: Invalid API key");
       expect(description.length).toBeLessThanOrEqual(140);
     });
@@ -383,7 +385,7 @@ describe("decidePublication — the pure table", () => {
       expect(description).toContain("Anthropic API: word");
     });
 
-    test("every failed hunter out of quota renders PRH-PROVIDER-LIMITED with the provider's words", () => {
+    test("every failed hunter out of quota renders CRYSK-PROVIDER-LIMITED with the provider's words", () => {
       const detail =
         "Anthropic API: Credit balance is too low to access the Anthropic API. (HTTP 400)";
       const plan = decidePublication({
@@ -401,9 +403,9 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+      expect(plan.rendered.code).toBe("CRYSK-PROVIDER-LIMITED");
       expect(plan.rendered.annotation).toContain("Credit balance is too low");
-      expect(plan.status?.description).toStartWith("PRH-PROVIDER-LIMITED: ");
+      expect(plan.status?.description).toStartWith("CRYSK-PROVIDER-LIMITED: ");
     });
 
     test("hunters that failed with different details keep the generic text", () => {
@@ -422,7 +424,7 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
       expect(plan.rendered.annotation).toContain(
         "each hunter's session ended without a result",
       );
@@ -476,9 +478,14 @@ describe("decidePublication — the pure table", () => {
           p.commentBody,
         ].join("\n");
 
-      test.each(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"])(
-        "auth_invalid on %s renders PRH-CRED-REJECTED naming that secret",
-        (credential) => {
+      // U5: the hunter records the Claude CLI's variable; in the action that variable
+      // was filled from the CRYSK_* secret the workflow passes, which the fix names.
+      test.each([
+        ["ANTHROPIC_API_KEY", "CRYSK_CLAUDE_API_KEY"],
+        ["CLAUDE_CODE_OAUTH_TOKEN", "CRYSK_CLAUDE_OAUTH_TOKEN"],
+      ])(
+        "auth_invalid on %s renders CRYSK-CRED-REJECTED naming its CRYSK_* secret, %s",
+        (credential, secret) => {
           const entry = {
             cause: "auth_invalid",
             provider: "anthropic",
@@ -487,10 +494,14 @@ describe("decidePublication — the pure table", () => {
               "Anthropic API: Invalid API key · Fix external API key (HTTP 401)",
           };
           const p = plan([entry, entry]);
-          expect(p.rendered.code).toBe("PRH-CRED-REJECTED");
-          expect(p.rendered.annotation).toContain(credential);
+          expect(p.rendered.code).toBe("CRYSK-CRED-REJECTED");
+          expect(p.rendered.annotation).toContain(
+            `rejected the credential in ${secret}`,
+          );
+          expect(p.rendered.annotation).toContain(`gh secret set ${secret}`);
+          expect(p.rendered.annotation).not.toContain(credential);
           expect(p.rendered.annotation).toContain("Provider anthropic");
-          expect(p.status?.description).toStartWith("PRH-CRED-REJECTED: ");
+          expect(p.status?.description).toStartWith("CRYSK-CRED-REJECTED: ");
           expect(texts(p)).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
         },
       );
@@ -502,11 +513,13 @@ describe("decidePublication — the pure table", () => {
           detail: "Anthropic API: Invalid API key (HTTP 401)",
         };
         const p = plan([entry, entry]);
-        expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+        expect(p.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
         expect(p.rendered.annotation).toContain("Invalid API key");
       });
 
-      test("an empty credit balance on an API key says to add credit or delete the secret", () => {
+      // S5: the run uses the credential credentials.claude chose, so the way off the key
+      // is to change that order, never to delete the secret.
+      test("an empty credit balance on an API key says to add credit or change credentials.claude", () => {
         const entry = {
           cause: "quota_exhausted",
           provider: "anthropic",
@@ -514,13 +527,16 @@ describe("decidePublication — the pure table", () => {
           detail: "Anthropic API: Credit balance is too low (HTTP 400)",
         };
         const p = plan([entry, entry]);
-        expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+        expect(p.rendered.code).toBe("CRYSK-PROVIDER-LIMITED");
         const all = texts(p);
         expect(all).toContain("Credit balance is too low");
         expect(all).toContain(
-          "Add credit to the Anthropic account behind ANTHROPIC_API_KEY",
+          "Add credit to the Anthropic account behind the API key",
         );
-        expect(all).toContain("delete the ANTHROPIC_API_KEY secret");
+        expect(all).not.toContain("ANTHROPIC_API_KEY");
+        expect(all).toContain("credentials.claude");
+        expect(all).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
+        expect(all).not.toContain("gh secret delete");
         expect(all).not.toContain("Wait, or raise the quota");
         expect(all).not.toContain(
           "wait for the limit to reset or raise the quota",
@@ -537,14 +553,18 @@ describe("decidePublication — the pure table", () => {
             "Anthropic API: You've hit your 5-hour limit · resets 12:40pm (Asia/Tokyo) (HTTP 429)",
         };
         const p = plan([entry, entry]);
-        expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+        expect(p.rendered.code).toBe("CRYSK-PROVIDER-LIMITED");
         const all = texts(p);
         expect(all).toContain(
-          "CLAUDE_CODE_OAUTH_TOKEN reached its usage limit",
+          "the Claude subscription reached its usage limit",
         );
         expect(all).toContain("resets 12:40pm (Asia/Tokyo)");
         expect(all).toContain("Re-run after");
-        expect(all).toContain("set ANTHROPIC_API_KEY");
+        expect(all).toContain("gh secret set CRYSK_CLAUDE_API_KEY");
+        expect(all).not.toContain("ANTHROPIC_API_KEY");
+        // Setting the key alone changes nothing under the default order (S5).
+        expect(all).toContain("put api_key first in `credentials.claude`");
+        expect(all).toContain("CRYSK_CLAUDE_API_KEY");
         expect(all).not.toContain("raise the quota");
         expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
       });
@@ -564,7 +584,7 @@ describe("decidePublication — the pure table", () => {
             detail: CREDIT,
           };
           const description = plan([entry, entry]).status?.description ?? "";
-          expect(description).toStartWith(`PRH-PROVIDER-LIMITED: ${CREDIT}`);
+          expect(description).toStartWith(`CRYSK-PROVIDER-LIMITED: ${CREDIT}`);
           expect(description.length).toBeLessThanOrEqual(140);
         });
 
@@ -576,7 +596,7 @@ describe("decidePublication — the pure table", () => {
             detail: LIMIT,
           };
           const description = plan([entry, entry]).status?.description ?? "";
-          expect(description).toStartWith(`PRH-PROVIDER-LIMITED: ${LIMIT}`);
+          expect(description).toStartWith(`CRYSK-PROVIDER-LIMITED: ${LIMIT}`);
           expect(description).toContain("resets 12:40pm (Asia/Tokyo)");
         });
 
@@ -596,13 +616,13 @@ describe("decidePublication — the pure table", () => {
         test("the generic code keeps it for any other shared detail", () => {
           const entry = { cause: "network_transient", detail: LIMIT };
           const description = plan([entry, entry]).status?.description ?? "";
-          expect(description).toStartWith("PRH-HUNTERS-FAILED: ");
+          expect(description).toStartWith("CRYSK-HUNTERS-FAILED: ");
           expect(description).toContain("resets 12:40pm (Asia/Tokyo)");
         });
       });
 
       // F003: the fix list starts with the fix for the secret that was rejected.
-      describe("PRH-CRED-REJECTED leads with the fix for the secret it names", () => {
+      describe("CRYSK-CRED-REJECTED leads with the fix for the secret it names", () => {
         function rejected(credential: string) {
           const entry = {
             cause: "auth_invalid",
@@ -611,27 +631,22 @@ describe("decidePublication — the pure table", () => {
             detail: "Anthropic API: Invalid API key (HTTP 401)",
           };
           const p = plan([entry, entry]);
-          expect(p.rendered.code).toBe("PRH-CRED-REJECTED");
+          expect(p.rendered.code).toBe("CRYSK-CRED-REJECTED");
           return p;
         }
 
-        test("ANTHROPIC_API_KEY: a new key, or delete it, and the OAuth token alone changes nothing", () => {
+        test("ANTHROPIC_API_KEY: a new key, or change credentials.claude to the subscription", () => {
           const p = rejected("ANTHROPIC_API_KEY");
           const summary = p.rendered.summary.join("\n");
           expect(
-            summary.indexOf("gh secret set ANTHROPIC_API_KEY"),
+            summary.indexOf("gh secret set CRYSK_CLAUDE_API_KEY"),
           ).toBeGreaterThan(-1);
-          expect(summary).toContain("gh secret delete ANTHROPIC_API_KEY");
-          expect(summary).toContain(
-            "changes nothing while ANTHROPIC_API_KEY is set",
-          );
+          expect(summary).not.toContain("gh secret delete");
+          expect(summary).toContain("credentials.claude");
+          expect(summary).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
           expect(summary).not.toContain("claude setup-token");
-          expect(p.rendered.annotation).toContain(
-            "delete the ANTHROPIC_API_KEY secret",
-          );
-          expect(p.rendered.annotation).toContain(
-            "changes nothing while the key is set",
-          );
+          expect(p.rendered.annotation).toContain("credentials.claude");
+          expect(p.rendered.annotation).not.toContain("delete");
         });
 
         test("CLAUDE_CODE_OAUTH_TOKEN: claude setup-token first", () => {
@@ -643,19 +658,18 @@ describe("decidePublication — the pure table", () => {
           expect(p.rendered.annotation).toContain("claude setup-token");
         });
 
-        // The set and delete commands are alternatives: one copied block must never run both.
-        test("the per-token fix keeps set and delete in separate code blocks", () => {
+        // The per-token fix has one command, the new key: the other way out is a config
+        // change, so nothing a copied block runs can undo the key it just set.
+        test("the per-token fix has no delete command at all", () => {
           const summary =
             rejected("ANTHROPIC_API_KEY").rendered.summary.join("\n");
           const blocks = summary.split("```").filter((_, i) => i % 2 === 1);
+          expect(blocks.some((block) => block.includes("gh secret set"))).toBe(
+            true,
+          );
           expect(
-            blocks.some(
-              (block) =>
-                block.includes("gh secret set") &&
-                block.includes("gh secret delete"),
-            ),
+            blocks.some((block) => block.includes("gh secret delete")),
           ).toBe(false);
-          expect(summary).toContain("gh secret delete ANTHROPIC_API_KEY");
         });
 
         // Per-token credentials win over the OAuth token in the CLI, so a rejected
@@ -664,7 +678,7 @@ describe("decidePublication — the pure table", () => {
           const p = rejected("ANTHROPIC_AUTH_TOKEN");
           const summary = p.rendered.summary.join("\n");
           expect(p.rendered.annotation).toContain("ANTHROPIC_AUTH_TOKEN");
-          expect(summary).toContain("gh secret delete ANTHROPIC_AUTH_TOKEN");
+          expect(summary).toContain("gh secret set ANTHROPIC_AUTH_TOKEN");
           expect(summary).not.toContain("claude setup-token");
           expect(summary).not.toContain("ANTHROPIC_API_KEY");
         });
@@ -677,7 +691,7 @@ describe("decidePublication — the pure table", () => {
           detail: "Anthropic API: Credit balance is too low (HTTP 400)",
         };
         const p = plan([entry, entry]);
-        expect(p.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+        expect(p.rendered.code).toBe("CRYSK-PROVIDER-LIMITED");
         expect(texts(p)).toContain("Credit balance is too low");
       });
 
@@ -691,7 +705,7 @@ describe("decidePublication — the pure table", () => {
           { ...base, credential: "ANTHROPIC_API_KEY" },
           { ...base, credential: "CLAUDE_CODE_OAUTH_TOKEN" },
         ]);
-        expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+        expect(p.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
       });
 
       test("a request too large for the model says to lower the size gate or exclude paths", () => {
@@ -701,7 +715,7 @@ describe("decidePublication — the pure table", () => {
           detail: "Anthropic API: Prompt is too long",
         };
         const p = plan([entry, entry]);
-        expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+        expect(p.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
         const all = texts(p);
         expect(all).toContain("Prompt is too long");
         expect(all).toContain("max-changed-lines");
@@ -710,7 +724,7 @@ describe("decidePublication — the pure table", () => {
         expect(all).not.toMatch(/[{}]|<[a-z][a-z-]*>/);
       });
 
-      test("a model the credential cannot reach (404) renders PRH-MODEL-UNAVAILABLE", () => {
+      test("a model the credential cannot reach (404) renders CRYSK-MODEL-UNAVAILABLE", () => {
         const entry = {
           cause: "model_unavailable",
           provider: "anthropic",
@@ -719,24 +733,24 @@ describe("decidePublication — the pure table", () => {
             "Anthropic API: There's an issue with the selected model (HTTP 404)",
         };
         const p = plan([entry, entry]);
-        expect(p.rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+        expect(p.rendered.code).toBe("CRYSK-MODEL-UNAVAILABLE");
       });
 
-      test("transient causes keep PRH-HUNTERS-FAILED with the provider's words and the re-run fix", () => {
+      test("transient causes keep CRYSK-HUNTERS-FAILED with the provider's words and the re-run fix", () => {
         for (const cause of ["rate_limit", "network_transient"]) {
           const entry = {
             cause,
             detail: "Anthropic API: Overloaded (HTTP 529)",
           };
           const p = plan([entry, entry]);
-          expect(p.rendered.code).toBe("PRH-HUNTERS-FAILED");
+          expect(p.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
           expect(texts(p)).toContain("Overloaded");
           expect(p.rendered.annotation).toContain("gh run rerun");
         }
       });
     });
 
-    test("every failed hunter with a missing provider record renders PRH-CRED-UNUSABLE, owned by the configuration", () => {
+    test("every failed hunter with a missing provider record renders CRYSK-CRED-UNUSABLE, owned by the configuration", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -760,16 +774,16 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+      expect(plan.rendered.code).toBe("CRYSK-CRED-UNUSABLE");
       expect(plan.rendered.owner).toBe("config");
       expect(plan.rendered.annotation).toContain("Your configuration: ");
       expect(plan.rendered.annotation).toContain(
         "route opencode/no-such-model-free has no usable credential record",
       );
-      expect(plan.status?.description).toStartWith("PRH-CRED-UNUSABLE: ");
+      expect(plan.status?.description).toStartWith("CRYSK-CRED-UNUSABLE: ");
     });
 
-    test("a missing provider record with no provider or model falls back to PRH-HUNTERS-FAILED, with no placeholder", () => {
+    test("a missing provider record with no provider or model falls back to CRYSK-HUNTERS-FAILED, with no placeholder", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -782,11 +796,11 @@ describe("decidePublication — the pure table", () => {
       if (plan.kind !== "remote") throw new Error("expected a remote plan");
       // WHY the fallback: the credential sentence names the backend, provider and step, and
       // this path knows none of them, so its own rendering would ship "<backend>/<provider>".
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
       expect(plan.rendered.annotation).not.toMatch(/<[a-z][a-z-]*>/);
     });
 
-    test("a mix of a missing provider record and model_unavailable stays PRH-HUNTERS-FAILED", () => {
+    test("a mix of a missing provider record and model_unavailable stays CRYSK-HUNTERS-FAILED", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -800,10 +814,10 @@ describe("decidePublication — the pure table", () => {
         },
       });
       if (plan.kind !== "remote") throw new Error("expected a remote plan");
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
     });
 
-    test("every failed hunter with an unclassified runtime cause stays PRH-HUNTERS-FAILED", () => {
+    test("every failed hunter with an unclassified runtime cause stays CRYSK-HUNTERS-FAILED", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -817,10 +831,10 @@ describe("decidePublication — the pure table", () => {
         },
       });
       if (plan.kind !== "remote") throw new Error("expected a remote plan");
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
     });
 
-    test("a model_unavailable with no provider or model falls back to PRH-HUNTERS-FAILED, since its fix names the provider", () => {
+    test("a model_unavailable with no provider or model falls back to CRYSK-HUNTERS-FAILED, since its fix names the provider", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -833,11 +847,11 @@ describe("decidePublication — the pure table", () => {
       if (plan.kind !== "remote") throw new Error("expected a remote plan");
       // WHY the fallback: "$ opencode models {provider}" and "a model that {provider} serves"
       // would name "<provider>" without a provider.
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
       expect(plan.rendered.annotation).not.toMatch(/<[a-z][a-z-]*>/);
     });
 
-    test("a mix of model_unavailable and another cause stays PRH-HUNTERS-FAILED", () => {
+    test("a mix of model_unavailable and another cause stays CRYSK-HUNTERS-FAILED", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -851,10 +865,10 @@ describe("decidePublication — the pure table", () => {
         },
       });
       if (plan.kind !== "remote") throw new Error("expected a remote plan");
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
     });
 
-    test("an entry with no cause keeps PRH-HUNTERS-FAILED even beside model_unavailable entries", () => {
+    test("an entry with no cause keeps CRYSK-HUNTERS-FAILED even beside model_unavailable entries", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
@@ -865,38 +879,38 @@ describe("decidePublication — the pure table", () => {
         },
       });
       if (plan.kind !== "remote") throw new Error("expected a remote plan");
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
     });
 
-    test("a record without the new fields renders PRH-HUNTERS-FAILED, unchanged", () => {
+    test("a record without the new fields renders CRYSK-HUNTERS-FAILED, unchanged", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
         cliRecord: { v: 1, outcome: "hunters-failed" },
       });
       if (plan.kind !== "remote") throw new Error("expected a remote plan");
-      expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
     });
 
-    test("a CLI error is rendered from its class: a route class names the route code and its owner", () => {
+    test("a CLI error is rendered from its class: a config class names its code and its owner", () => {
       const plan = decidePublication({
         record: record(),
         cliStarted: true,
         cliRecord: {
           v: 1,
           outcome: "error",
-          cls: { kind: "route", reason: "unmapped" },
+          cls: { kind: "config-parse", source: "extra-hunters" },
         },
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-ROUTE-UNRESOLVABLE");
+      expect(plan.rendered.code).toBe("CRYSK-PROMPTSET-INVALID");
       expect(plan.rendered.owner).toBe("config");
     });
 
     // T2d-1 (S2), end to end: the CLI's fatal writer leaves cli.json, the publisher
     // reads it back, and the config-owned code and its owner lead reach the PR.
-    test("a gotchas error written by the CLI renders PRH-GOTCHAS-MISSING under 'Your configuration:'", () => {
+    test("a gotchas error written by the CLI renders CRYSK-GOTCHAS-MISSING under 'Your configuration:'", () => {
       const dir = mkdtempSync(path.join(os.tmpdir(), "pr-hero-gotchas-e2e-"));
       try {
         const env = { CRYSK_OUTCOME_DIR: dir };
@@ -918,13 +932,13 @@ describe("decidePublication — the pure table", () => {
         });
         expect(plan.kind).toBe("remote");
         if (plan.kind !== "remote") return;
-        expect(plan.rendered.code).toBe("PRH-GOTCHAS-MISSING");
+        expect(plan.rendered.code).toBe("CRYSK-GOTCHAS-MISSING");
         expect(plan.rendered.owner).toBe("config");
         expect(plan.rendered.summary.join("\n")).toContain(
           "Your configuration: The review instructions file (REVIEW.md or .crysk/gotchas.md) is empty or still the scaffold",
         );
         expect(plan.status?.state).toBe("error");
-        expect(plan.status?.description).toStartWith("PRH-GOTCHAS-MISSING");
+        expect(plan.status?.description).toStartWith("CRYSK-GOTCHAS-MISSING");
         expect(plan.headSha).toBe(SHA);
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -943,7 +957,7 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-RUNTIME-UNAVAILABLE");
+      expect(plan.rendered.code).toBe("CRYSK-RUNTIME-UNAVAILABLE");
       expect(plan.rendered.owner).toBe("pr-hero");
     });
 
@@ -955,11 +969,11 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+      expect(plan.rendered.code).toBe("CRYSK-UNCLASSIFIED");
       expect(plan.rendered.annotation).toContain(
         "Crysk stopped at the review and could not tell why",
       );
-      expect(plan.status?.description).toStartWith("PRH-UNCLASSIFIED: ");
+      expect(plan.status?.description).toStartWith("CRYSK-UNCLASSIFIED: ");
     });
 
     // WHY the step is named: a posting failure is the CLI's own error, and the
@@ -989,7 +1003,7 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("local");
       if (plan.kind !== "local") return;
-      expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+      expect(plan.rendered.code).toBe("CRYSK-UNCLASSIFIED");
     });
 
     // WHY stopped-before-reporting: no record after cli-started means the CLI
@@ -1002,7 +1016,7 @@ describe("decidePublication — the pure table", () => {
     // settled status means the CLI finished, so the publisher never overrides it (F004).
     // CHANGED: this case used to be a run with no record at all. A no-record run
     // took no lock, so it now gets the comment alone (see the test.each below).
-    test("a reviewing record whose head's pr-hero status is still pending replaces the lock on the record's head: PRH-UNCLASSIFIED as the status and the comment", () => {
+    test("a reviewing record whose head's pr-hero status is still pending replaces the lock on the record's head: CRYSK-UNCLASSIFIED as the status and the comment", () => {
       const plan = decidePublication({
         record: record({ head_sha: TRIGGER_HEAD }),
         cliStarted: true,
@@ -1011,7 +1025,7 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+      expect(plan.rendered.code).toBe("CRYSK-UNCLASSIFIED");
       expect(plan.rendered.owner).toBe("unclassified");
       expect(plan.rendered.annotation).toContain(
         "Crysk stopped at the review before it reported an outcome and could not tell why",
@@ -1020,7 +1034,7 @@ describe("decidePublication — the pure table", () => {
       expect(plan.status?.state).toBe("error");
       expect(plan.status?.context).toBe("crysk");
       expect(plan.status?.targetUrl).toBe(RUN_URL);
-      expect(plan.status?.description.startsWith("PRH-UNCLASSIFIED: ")).toBe(
+      expect(plan.status?.description.startsWith("CRYSK-UNCLASSIFIED: ")).toBe(
         true,
       );
       expect(plan.commentBody.split("\n")[0]).toBe(
@@ -1040,7 +1054,7 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+      expect(plan.rendered.code).toBe("CRYSK-UNCLASSIFIED");
       expect(plan.headSha).toBe(REVIEWED_HEAD);
       expect(plan.status?.state).toBe("error");
       expect(plan.commentBody.split("\n")[0]).toBe(
@@ -1057,7 +1071,7 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+      expect(plan.rendered.code).toBe("CRYSK-UNCLASSIFIED");
       expect(plan.rendered.owner).toBe("unclassified");
       expect(plan.rendered.annotation).toContain(
         "Crysk stopped at the review before it reported an outcome and could not tell why",
@@ -1082,7 +1096,7 @@ describe("decidePublication — the pure table", () => {
         });
         expect(plan.kind).toBe("remote");
         if (plan.kind !== "remote") return;
-        expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+        expect(plan.rendered.code).toBe("CRYSK-UNCLASSIFIED");
         expect(plan.headSha).toBeUndefined();
         expect(plan.status).toBeUndefined();
       },
@@ -1096,7 +1110,7 @@ describe("decidePublication — the pure table", () => {
       });
       expect(plan.kind).toBe("remote");
       if (plan.kind !== "remote") return;
-      expect(plan.rendered.code).toBe("PRH-INSTALL-FAILED");
+      expect(plan.rendered.code).toBe("CRYSK-INSTALL-FAILED");
     });
   });
 
@@ -1112,9 +1126,9 @@ describe("decidePublication — the pure table", () => {
     const plan = decidePublication({ record: record(), cliStarted: false });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-INSTALL-FAILED");
+    expect(plan.rendered.code).toBe("CRYSK-INSTALL-FAILED");
     expect(plan.rendered.annotation).toStartWith(
-      "::error title=crysk PRH-INSTALL-FAILED::",
+      "::error title=crysk CRYSK-INSTALL-FAILED::",
     );
     expect(plan.rendered.annotation).toContain("An install step failed");
     expect(plan.rendered.annotation).toContain("gh run rerun 4242 --failed");
@@ -1130,7 +1144,7 @@ describe("decidePublication — the pure table", () => {
     expect(plan.status).toEqual({
       state: "error",
       context: "crysk",
-      description: "PRH-INSTALL-FAILED: An install step failed",
+      description: "CRYSK-INSTALL-FAILED: An install step failed",
       targetUrl: RUN_URL,
     });
   });
@@ -1142,7 +1156,7 @@ describe("decidePublication — the pure table", () => {
     const [first, blank, heading] = plan.commentBody.split("\n");
     expect(first).toBe(MARKER);
     expect(blank).toBe("");
-    expect(heading).toBe("### PRH-INSTALL-FAILED");
+    expect(heading).toBe("### CRYSK-INSTALL-FAILED");
   });
 
   test("a review whose PR could not be resolved is posted nowhere: annotation only", () => {
@@ -1158,7 +1172,7 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("local");
     if (plan.kind !== "local") return;
-    expect(plan.rendered.code).toBe("PRH-PR-UNRESOLVED");
+    expect(plan.rendered.code).toBe("CRYSK-PR-UNRESOLVED");
     expect(plan.rendered.owner).toBe("config");
     expect(plan.rendered.annotation).toContain(
       "Crysk could not determine the pull request number or head",
@@ -1172,7 +1186,7 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("local");
     if (plan.kind !== "local") return;
-    expect(plan.rendered.code).toBe("PRH-INSTALL-FAILED");
+    expect(plan.rendered.code).toBe("CRYSK-INSTALL-FAILED");
   });
 
   test("a PR number without a sha posts its comment, marked head=unknown, and no status", () => {
@@ -1189,7 +1203,7 @@ describe("decidePublication — the pure table", () => {
     );
   });
 
-  test("no credentials on a claude route is PRH-CRED-MISSING with the route named", () => {
+  test("no credentials on a claude route is CRYSK-CRED-MISSING with the route named", () => {
     const plan = decidePublication({
       record: record({
         decision: "no-credentials",
@@ -1199,14 +1213,55 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-CRED-MISSING");
+    expect(plan.rendered.code).toBe("CRYSK-CRED-MISSING");
     expect(plan.rendered.owner).toBe("config");
     expect(plan.status?.description).toBe(
-      "PRH-CRED-MISSING: No credential for the claude route reached the action",
+      "CRYSK-CRED-MISSING: No credential for the claude route reached the action",
     );
     expect(plan.rendered.annotation).toContain(
-      "gh secret set CLAUDE_CODE_OAUTH_TOKEN",
+      "gh secret set CRYSK_CLAUDE_OAUTH_TOKEN",
     );
+    expect(plan.rendered.annotation).toContain("crysk-secrets input");
+  });
+
+  // U5: a workflow still passing a removed input is stopped by the trigger, and its
+  // record names the inputs. The publisher posts the status and comment like a
+  // missing credential, under its own code.
+  test("a removed-inputs record is CRYSK-INPUT-REMOVED, naming the inputs and the CRYSK_* replacement", () => {
+    const plan = decidePublication({
+      record: record({
+        decision: "removed-inputs",
+        params: { detail: "claude-token, routing" },
+      }),
+      cliStarted: false,
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.code).toBe("CRYSK-INPUT-REMOVED");
+    expect(plan.rendered.owner).toBe("config");
+    expect(plan.status?.state).toBe("error");
+    expect(plan.status?.description).toBe(
+      "CRYSK-INPUT-REMOVED: The workflow passes inputs Crysk no longer reads: claude-token, routing",
+    );
+    expect(plan.rendered.annotation).toContain(
+      "delete the claude-token, routing input lines from the workflow",
+    );
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
+    expect(summary).toContain(
+      "The routing input becomes the `models` input: set your models per role in the CRYSK_MODELS variable",
+    );
+    expect(plan.rendered.annotation).toContain("vars.CRYSK_MODELS");
+  });
+
+  test("a removed-inputs record survives the publisher's own reading of trigger.json", () => {
+    const text = JSON.stringify(
+      record({
+        decision: "removed-inputs",
+        params: { detail: "opencode-auth" },
+      }),
+    );
+    expect(parseTriggerRecord(text)?.decision).toBe("removed-inputs");
   });
 
   test("no credentials on an opencode route names the OpenCode secret", () => {
@@ -1220,8 +1275,9 @@ describe("decidePublication — the pure table", () => {
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
     expect(plan.rendered.annotation).toContain(
-      "set the OPENCODE_AUTH_JSON secret",
+      "gh secret set CRYSK_OPENCODE_<PROVIDER>_API_KEY",
     );
+    expect(plan.rendered.annotation).not.toContain("OPENCODE_AUTH_JSON");
   });
 
   test("no credentials without a PR is annotation only, and the cause stays CRED-MISSING", () => {
@@ -1236,10 +1292,10 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("local");
     if (plan.kind !== "local") return;
-    expect(plan.rendered.code).toBe("PRH-CRED-MISSING");
+    expect(plan.rendered.code).toBe("CRYSK-CRED-MISSING");
   });
 
-  test("a 5xx from the permission lookup is PRH-GITHUB-UNAVAILABLE, the server variant", () => {
+  test("a 5xx from the permission lookup is CRYSK-GITHUB-UNAVAILABLE, the server variant", () => {
     const plan = decidePublication({
       record: record({
         decision: "unverifiable",
@@ -1249,7 +1305,7 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-GITHUB-UNAVAILABLE");
+    expect(plan.rendered.code).toBe("CRYSK-GITHUB-UNAVAILABLE");
     expect(plan.rendered.owner).toBe("provider");
     expect(plan.rendered.annotation).toContain("HTTP 503");
     expect(plan.rendered.annotation).toContain(
@@ -1257,7 +1313,7 @@ describe("decidePublication — the pure table", () => {
     );
   });
 
-  test("a rate-limited lookup is PRH-GITHUB-UNAVAILABLE with the rate-limit wording", () => {
+  test("a rate-limited lookup is CRYSK-GITHUB-UNAVAILABLE with the rate-limit wording", () => {
     const plan = decidePublication({
       record: record({
         decision: "unverifiable",
@@ -1267,7 +1323,7 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-GITHUB-UNAVAILABLE");
+    expect(plan.rendered.code).toBe("CRYSK-GITHUB-UNAVAILABLE");
     expect(plan.rendered.annotation).toContain("rate limit");
   });
 
@@ -1281,17 +1337,17 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-TOKEN-PERMISSION");
+    expect(plan.rendered.code).toBe("CRYSK-TOKEN-PERMISSION");
   });
 
-  test("an unverifiable lookup with no captured status is PRH-UNCLASSIFIED, never a guessed outage", () => {
+  test("an unverifiable lookup with no captured status is CRYSK-UNCLASSIFIED, never a guessed outage", () => {
     const plan = decidePublication({
       record: record({ decision: "unverifiable" }),
       cliStarted: false,
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-UNCLASSIFIED");
+    expect(plan.rendered.code).toBe("CRYSK-UNCLASSIFIED");
     expect(plan.rendered.annotation).toContain(
       "the commenter permission check",
     );
@@ -1323,20 +1379,20 @@ describe("decidePublication — the pure table", () => {
       cliStarted: false,
       setup: {
         v: 1,
-        cls: { kind: "config-parse", source: "routing" },
-        detail: "the routing input is not valid JSON",
+        cls: { kind: "config-parse", source: "models-input" },
+        detail: "the models input is not valid JSON",
       },
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-ROUTING-INVALID");
+    expect(plan.rendered.code).toBe("CRYSK-CONFIG-INVALID");
     expect(plan.rendered.owner).toBe("config");
     expect(plan.rendered.annotation).toContain(
-      "the routing input is not valid JSON",
+      "the models input is not valid JSON",
     );
   });
 
-  test("a setup record for a malformed auth input is PRH-CRED-UNUSABLE, owned by configuration, with no route placeholder", () => {
+  test("a setup record for a malformed auth input is CRYSK-CRED-UNUSABLE, owned by configuration, with no route placeholder", () => {
     const plan = decidePublication({
       record: record(),
       cliStarted: false,
@@ -1348,10 +1404,183 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+    expect(plan.rendered.code).toBe("CRYSK-CRED-UNUSABLE");
     expect(plan.rendered.owner).toBe("config");
     expect(plan.rendered.annotation).not.toContain("<backend>");
     expect(plan.rendered.annotation).not.toContain("<provider>");
+  });
+
+  // U1 (odd/tasks/role-model-routing.md, S8): a refused crysk-secrets input
+  // records the same class with a detail naming the secret or the line. The
+  // fix must point at that secret, not at the OpenCode auth store.
+  test("a setup record for a refused crysk-secrets input is CRYSK-CRED-UNUSABLE and points at the CRYSK_* secret", () => {
+    for (const detail of [
+      "CRYSK_OPENCODE_OPENAI_OAUTH is not base64 (encode the OpenCode auth record with base64 -w0)",
+      "CRYSK_CLAUDE_API_KEY is given more than once",
+      "line 3 of the crysk-secrets input is not NAME=value (a value split across lines? encode _OAUTH secrets with base64 -w0)",
+    ]) {
+      const plan = decidePublication({
+        record: record(),
+        cliStarted: false,
+        setup: {
+          v: 1,
+          cls: { kind: "credential", failureClass: "malformed_payload" },
+          detail,
+        },
+      });
+      expect(plan.kind).toBe("remote");
+      if (plan.kind !== "remote") return;
+      expect(plan.rendered.code).toBe("CRYSK-CRED-UNUSABLE");
+      expect(plan.rendered.owner).toBe("config");
+      expect(plan.rendered.annotation).toContain(detail);
+      expect(plan.rendered.annotation).toContain(
+        "re-set the CRYSK_* secret it names",
+      );
+      expect(plan.rendered.annotation).not.toContain("OPENCODE_AUTH_JSON");
+      const summary = plan.rendered.summary.join("\n");
+      expect(summary).toContain(
+        "jq -c .openai ~/.local/share/opencode/auth.json | base64 -w0 | gh secret set CRYSK_OPENCODE_OPENAI_OAUTH",
+      );
+      expect(summary).not.toContain("jq -e 'type==\"object\"'");
+    }
+  });
+
+  // U3: another provider's _OAUTH is refused because only openai reads one, so
+  // re-setting that secret would fail again. The fix is the provider's _API_KEY.
+  test("a refused non-openai _OAUTH points at the provider's _API_KEY, never at re-setting the _OAUTH", () => {
+    // The refusal's own text, so the publisher's match cannot drift from it.
+    const detail =
+      chooseOpenCodeSecret("deepseek", ["CRYSK_OPENCODE_DEEPSEEK_OAUTH"])
+        ?.problem ?? "";
+    expect(detail.startsWith("CRYSK_OPENCODE_DEEPSEEK_OAUTH ")).toBe(true);
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail,
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.code).toBe("CRYSK-CRED-UNUSABLE");
+    expect(plan.rendered.owner).toBe("config");
+    expect(plan.rendered.annotation).toContain(detail);
+    expect(plan.rendered.annotation).toContain(
+      "remove that _OAUTH secret from the crysk-secrets input and set the provider's _API_KEY secret instead",
+    );
+    expect(plan.rendered.annotation).not.toContain("re-set the CRYSK_* secret");
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY");
+    expect(summary).not.toContain("gh secret set CRYSK_OPENCODE_OPENAI_OAUTH");
+    expect(summary).not.toContain("OPENCODE_AUTH_JSON");
+  });
+
+  // U5 (L27 open item): the platform's stub forwards OpenCode keys through provider
+  // slots. A slot with a key and no provider is refused by the grammar, and its fix is
+  // the platform's slot list, not "re-set the secret" with the openai jq line, which
+  // would fail again. The detail is the grammar's own text, so the two cannot drift.
+  // Each unused slot that carries a value is its own refusal, and setup joins
+  // them with "; ", so two such slots must still get the platform slot fix.
+  test("two OpenCode slots with a key and no provider still get the platform slot fix", () => {
+    const detail = parseCryskSecrets(
+      "CRYSK_OPENCODE__API_KEY=SENTINEL-A\nCRYSK_OPENCODE__API_KEY=SENTINEL-B",
+    ).problems.join("; ");
+    expect(detail.split("; CRYSK_OPENCODE__API_KEY ").length).toBe(2);
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail,
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.annotation).toContain(
+      "forwarded an OpenCode key in a slot with no provider",
+    );
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("provider slots for this run are empty");
+    expect(summary).not.toContain("jq -c .openai");
+    expect(`${summary}${plan.rendered.annotation}`).not.toContain("SENTINEL");
+  });
+
+  test("an OpenCode slot with a key and no provider gets the platform slot fix, not the re-set fix", () => {
+    const detail =
+      parseCryskSecrets("CRYSK_OPENCODE__API_KEY=SENTINEL-SLOT-41")
+        .problems[0] ?? "";
+    expect(detail.startsWith("CRYSK_OPENCODE__API_KEY ")).toBe(true);
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail,
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.code).toBe("CRYSK-CRED-UNUSABLE");
+    expect(plan.rendered.annotation).toContain(
+      "forwarded an OpenCode key in a slot with no provider",
+    );
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("provider slots for this run are empty");
+    expect(summary).toContain("model settings on the Crysk platform");
+    expect(summary).not.toContain("jq -c .openai");
+    expect(summary).not.toContain("Re-set the CRYSK_* secret");
+    expect(`${summary}${plan.rendered.annotation}`).not.toContain("SENTINEL");
+  });
+
+  // Setup joins one refusal per provider with "; ", so two refused _OAUTH
+  // secrets must each still point at their own provider's _API_KEY.
+  test("two refused non-openai _OAUTH secrets each point at their own _API_KEY", () => {
+    const detail = ["deepseek", "zai"]
+      .map(
+        (p) =>
+          chooseOpenCodeSecret(p, [`CRYSK_OPENCODE_${p.toUpperCase()}_OAUTH`])
+            ?.problem ?? "",
+      )
+      .join("; ");
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail,
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.annotation).not.toContain("re-set the CRYSK_* secret");
+    const summary = plan.rendered.summary.join("\n");
+    expect(summary).toContain("gh secret set CRYSK_OPENCODE_DEEPSEEK_API_KEY");
+    expect(summary).toContain("gh secret set CRYSK_OPENCODE_ZAI_API_KEY");
+  });
+
+  test("a malformed auth-store record keeps its OpenCode store fix, pointing CI at the CRYSK_OPENCODE_* secret", () => {
+    const plan = decidePublication({
+      record: record(),
+      cliStarted: false,
+      setup: {
+        v: 1,
+        cls: { kind: "credential", failureClass: "malformed_payload" },
+        detail: "the opencode-auth input is not valid JSON",
+      },
+    });
+    expect(plan.kind).toBe("remote");
+    if (plan.kind !== "remote") return;
+    expect(plan.rendered.annotation).toContain(
+      "make the OpenCode auth store a JSON object (in CI, re-set the provider's CRYSK_OPENCODE_* secret)",
+    );
+    expect(plan.rendered.summary.join("\n")).toContain(
+      "jq -e 'type==\"object\"'",
+    );
   });
 
   test("an unverifiable 403 with no scope names the refused token, never a scope pr-hero does not know", () => {
@@ -1365,7 +1594,7 @@ describe("decidePublication — the pure table", () => {
     });
     expect(plan.kind).toBe("remote");
     if (plan.kind !== "remote") return;
-    expect(plan.rendered.code).toBe("PRH-TOKEN-PERMISSION");
+    expect(plan.rendered.code).toBe("CRYSK-TOKEN-PERMISSION");
     expect(plan.rendered.annotation).toContain(
       "GitHub refused the workflow token (HTTP 403) during the commenter permission check",
     );
@@ -1394,7 +1623,7 @@ describe("decidePublication — the pure table", () => {
     if (plan.kind !== "remote") return;
     expect(plan.status?.description.length).toBeLessThanOrEqual(140);
     expect(plan.status?.description).not.toContain("\n");
-    expect(plan.status?.description.startsWith("PRH-CRED-MISSING: ")).toBe(
+    expect(plan.status?.description.startsWith("CRYSK-CRED-MISSING: ")).toBe(
       true,
     );
   });
@@ -1635,20 +1864,20 @@ describe("runPublish — the shell", () => {
       cliRecord: {
         v: 1,
         outcome: "error",
-        cls: { kind: "route", reason: "unmapped" },
+        cls: { kind: "config-parse", source: "extra-hunters" },
       },
     });
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain(
-      "::error title=crysk PRH-ROUTE-UNRESOLVABLE::",
+      "::error title=crysk CRYSK-PROMPTSET-INVALID::",
     );
-    expect(run.summary).toContain("### PRH-ROUTE-UNRESOLVABLE");
+    expect(run.summary).toContain("### CRYSK-PROMPTSET-INVALID");
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
     expect(status?.args).toContain("state=error");
     expect(
       status?.args.some((arg) =>
-        arg.startsWith("description=PRH-ROUTE-UNRESOLVABLE: "),
+        arg.startsWith("description=CRYSK-PROMPTSET-INVALID: "),
       ),
     ).toBe(true);
     expect(commentPost(run.calls)?.args).toContain(
@@ -1663,7 +1892,7 @@ describe("runPublish — the shell", () => {
       cliRecord: {
         v: 1,
         outcome: "error",
-        cls: { kind: "route", reason: "unmapped" },
+        cls: { kind: "config-parse", source: "extra-hunters" },
         head_sha: REVIEWED_HEAD,
       },
     });
@@ -1682,7 +1911,7 @@ describe("runPublish — the shell", () => {
     });
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(`repos/${REPO}/statuses/${SHA}`);
-    expect(run.stdout).toContain("::error title=crysk PRH-HUNTERS-FAILED::");
+    expect(run.stdout).toContain("::error title=crysk CRYSK-HUNTERS-FAILED::");
     expect(commentPost(run.calls)?.stdin).toContain(
       `head=${SHA} run=4242 attempt=1 -->`,
     );
@@ -1714,11 +1943,11 @@ describe("runPublish — the shell", () => {
       list: listing(),
     });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::error title=crysk PRH-UNCLASSIFIED::");
+    expect(run.stdout).toContain("::error title=crysk CRYSK-UNCLASSIFIED::");
     expect(run.stdout).toContain(
       "Crysk stopped at the review before it reported an outcome",
     );
-    expect(run.summary).toContain("### PRH-UNCLASSIFIED");
+    expect(run.summary).toContain("### CRYSK-UNCLASSIFIED");
     expect(statusReadEndpoints(run.calls)).toEqual([]);
     expect(statusCalls(run.calls)).toEqual([]);
     expect(commentPost(run.calls)?.args).toContain(
@@ -2031,7 +2260,7 @@ describe("runPublish — the shell", () => {
       }),
     ],
   ])(
-    "a cli.json that is %s reads as no record: PRH-UNCLASSIFIED, never a silent skip",
+    "a cli.json that is %s reads as no record: CRYSK-UNCLASSIFIED, never a silent skip",
     (_label, cliRecord) => {
       const run = runPublishIn({
         record: record(),
@@ -2039,7 +2268,7 @@ describe("runPublish — the shell", () => {
         cliRecord,
       });
       expect(run.exitCode).toBe(0);
-      expect(run.stdout).toContain("::error title=crysk PRH-UNCLASSIFIED::");
+      expect(run.stdout).toContain("::error title=crysk CRYSK-UNCLASSIFIED::");
       // CHANGED (F001 and F002 on #330): an unreadable cli.json is the same as a
       // missing one, and a missing one has no progress record, so the publisher
       // cannot tell whose lock a head holds. It posts the comment alone: no status
@@ -2054,8 +2283,8 @@ describe("runPublish — the shell", () => {
   test("an install failure writes the annotation and the summary, then posts", () => {
     const run = runPublishIn({ record: record() });
     expect(run.exitCode).toBe(0);
-    expect(run.stdout).toContain("::error title=crysk PRH-INSTALL-FAILED::");
-    expect(run.summary).toContain("### PRH-INSTALL-FAILED");
+    expect(run.stdout).toContain("::error title=crysk CRYSK-INSTALL-FAILED::");
+    expect(run.summary).toContain("### CRYSK-INSTALL-FAILED");
   });
 
   test("the commit status is posted before the comment", () => {
@@ -2075,7 +2304,7 @@ describe("runPublish — the shell", () => {
     expect(status?.args).toContain("state=error");
     expect(status?.args).toContain("context=crysk");
     expect(status?.args).toContain(
-      "description=PRH-INSTALL-FAILED: An install step failed",
+      "description=CRYSK-INSTALL-FAILED: An install step failed",
     );
     expect(status?.args).toContain(`target_url=${RUN_URL}`);
   });
@@ -2104,7 +2333,7 @@ describe("runPublish — the shell", () => {
       call.args.find((arg) => arg.startsWith("context=")),
     );
     expect(contexts).toEqual(["context=crysk", "context=crysk"]);
-    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(run.stdout).toContain("CRYSK-STATUS-WRITE-FAILED");
     expect(run.exitCode).toBe(1);
   });
 
@@ -2290,8 +2519,8 @@ describe("runPublish — the shell", () => {
     });
     expect(run.exitCode).toBe(0);
     expect(run.calls).toEqual([]);
-    expect(run.stdout).toContain("PRH-CRED-MISSING");
-    expect(run.summary).toContain("### PRH-CRED-MISSING");
+    expect(run.stdout).toContain("CRYSK-CRED-MISSING");
+    expect(run.summary).toContain("### CRYSK-CRED-MISSING");
   });
 
   test("a failed status is retried once, and the retry's success is the result", () => {
@@ -2304,24 +2533,24 @@ describe("runPublish — the shell", () => {
     expect(commentPost(run.calls)).toBeDefined();
   });
 
-  test("a status that fails twice is PRH-STATUS-WRITE-FAILED, the comment still posts, exit 1", () => {
+  test("a status that fails twice is CRYSK-STATUS-WRITE-FAILED, the comment still posts, exit 1", () => {
     const run = runPublishIn({
       record: record(),
       status: [fail("gh: Resource not accessible (HTTP 403)")],
     });
     expect(statusCalls(run.calls)).toHaveLength(2);
-    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(run.stdout).toContain("CRYSK-STATUS-WRITE-FAILED");
     expect(run.stdout).toContain("statuses: write");
     expect(commentPost(run.calls)).toBeDefined();
     expect(run.exitCode).toBe(1);
   });
 
-  test("a 5xx on the status is the server variant of PRH-STATUS-WRITE-FAILED", () => {
+  test("a 5xx on the status is the server variant of CRYSK-STATUS-WRITE-FAILED", () => {
     const run = runPublishIn({
       record: record(),
       status: [fail("gh: Server Error (HTTP 503)")],
     });
-    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(run.stdout).toContain("CRYSK-STATUS-WRITE-FAILED");
     expect(run.stdout).toContain("once GitHub accepts commit statuses again");
     expect(run.exitCode).toBe(1);
   });
@@ -2353,8 +2582,8 @@ describe("runPublish — the shell", () => {
     const run = runPublishIn({ record: "{ not json" });
     expect(run.exitCode).toBe(1);
     expect(run.calls).toEqual([]);
-    expect(run.stdout).toContain("::error title=crysk PRH-UNCLASSIFIED::");
-    expect(run.summary).toContain("### PRH-UNCLASSIFIED");
+    expect(run.stdout).toContain("::error title=crysk CRYSK-UNCLASSIFIED::");
+    expect(run.summary).toContain("### CRYSK-UNCLASSIFIED");
   });
 
   test("an unreadable record after the CLI started is still the CLI's to report", () => {
@@ -2383,15 +2612,15 @@ describe("runPublish — the shell", () => {
       record: record(),
       setup: {
         v: 1,
-        cls: { kind: "config-parse", source: "routing" },
-        detail: "the routing input is not valid JSON",
+        cls: { kind: "config-parse", source: "models-input" },
+        detail: "the models input is not valid JSON",
       },
     });
-    expect(run.stdout).toContain("::error title=crysk PRH-ROUTING-INVALID::");
-    expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
+    expect(run.stdout).toContain("::error title=crysk CRYSK-CONFIG-INVALID::");
+    expect(run.stdout).not.toContain("CRYSK-INSTALL-FAILED");
     const [status] = statusCalls(run.calls);
     expect(status?.args).toContain(
-      "description=PRH-ROUTING-INVALID: The routing variable is invalid: the routing input is not valid JSON",
+      "description=CRYSK-CONFIG-INVALID: The models input is invalid: the models input is not valid JSON",
     );
     expect(commentPost(run.calls)).toBeDefined();
   });
@@ -2399,7 +2628,7 @@ describe("runPublish — the shell", () => {
   test("an unreadable setup record falls back to the install failure, with a warning", () => {
     const run = runPublishIn({ record: record(), setup: "{ not json" });
     expect(run.stdout).toContain("::warning title=crysk::");
-    expect(run.stdout).toContain("::error title=crysk PRH-INSTALL-FAILED::");
+    expect(run.stdout).toContain("::error title=crysk CRYSK-INSTALL-FAILED::");
   });
 
   test("a setup record outside the two classes the setup step writes is refused the same way", () => {
@@ -2412,8 +2641,8 @@ describe("runPublish — the shell", () => {
       },
     });
     expect(run.stdout).toContain("::warning title=crysk::");
-    expect(run.stdout).toContain("PRH-INSTALL-FAILED");
-    expect(run.stdout).not.toContain("PRH-CRED-MISSING");
+    expect(run.stdout).toContain("CRYSK-INSTALL-FAILED");
+    expect(run.stdout).not.toContain("CRYSK-CRED-MISSING");
   });
 
   test("a record for another run is refused: nothing is posted", () => {
@@ -2684,7 +2913,7 @@ describe("runPublish — cleanup once the CLI started", () => {
   // WHY one attempt: the teardown already retried the write twice, so the publisher's
   // one more chance is one call. A failure is named as the status write failure, on one
   // annotation line, and the cleanup still runs.
-  test("a failed unsettled status is one attempt on crysk, names PRH-STATUS-WRITE-FAILED on one line, still cleans up, and exits 1", () => {
+  test("a failed unsettled status is one attempt on crysk, names CRYSK-STATUS-WRITE-FAILED on one line, still cleans up, and exits 1", () => {
     const run = runPublishIn({
       record: record(),
       cliStarted: true,
@@ -2705,7 +2934,7 @@ describe("runPublish — cleanup once the CLI started", () => {
       .split("\n")
       .filter((line) => line.startsWith("::error"));
     expect(annotations).toHaveLength(1);
-    expect(annotations[0]).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(annotations[0]).toContain("CRYSK-STATUS-WRITE-FAILED");
     expect(removedIds(run)).toEqual(["10"]);
     expect(run.exitCode).toBe(1);
   });
@@ -2903,7 +3132,7 @@ describe("decidePublication — the override (S8)", () => {
       actor: "maintainer",
       headSha: SHA,
     });
-    expect(JSON.stringify(plan)).not.toContain("PRH-");
+    expect(JSON.stringify(plan)).not.toContain("CRYSK-");
   });
 
   test("an override with no head still publishes, with no head to set a status on", () => {
@@ -2947,7 +3176,7 @@ describe("runPublish — the override (S8)", () => {
       "A new push or a later `/crysk review` (or `/pr-hero review` on a workflow set up before the rename) on this head replaces it",
     );
     expect(run.stdout).toContain("::notice title=crysk::");
-    expect(run.stdout).not.toContain("PRH-INSTALL-FAILED");
+    expect(run.stdout).not.toContain("CRYSK-INSTALL-FAILED");
   });
 
   // The longest login the trigger accepts (91 characters) makes the description
@@ -2983,13 +3212,13 @@ describe("runPublish — the override (S8)", () => {
     expect(body).toContain("no commit status could be set");
   });
 
-  test("a failed status write is PRH-STATUS-WRITE-FAILED and exit 1, and the comment then says no status was set", () => {
+  test("a failed status write is CRYSK-STATUS-WRITE-FAILED and exit 1, and the comment then says no status was set", () => {
     const run = runPublishIn({
       record: overrideRecord(),
       status: [fail("gh: HTTP 500"), fail("gh: HTTP 500")],
     });
     expect(run.exitCode).toBe(1);
-    expect(run.stdout).toContain("PRH-STATUS-WRITE-FAILED");
+    expect(run.stdout).toContain("CRYSK-STATUS-WRITE-FAILED");
     const body = commentPost(run.calls)?.stdin ?? "";
     expect(body).toContain("no commit status could be set");
     expect(body).not.toContain("gate was overridden");
@@ -3237,7 +3466,7 @@ function runtimeImportViolations(
 }
 
 // WHY every cause, not a sample: the hunters-failed path renders a shared cause only from
-// its allowlist, and any cause outside it falls back to PRH-HUNTERS-FAILED. A placeholder
+// its allowlist, and any cause outside it falls back to CRYSK-HUNTERS-FAILED. A placeholder
 // (`<secret>`, `<provider>`, `{model}`) in the rendered text would ship to the PR, so the
 // check runs over the whole transport vocabulary, with and without the params the path
 // may or may not know.
@@ -3318,44 +3547,44 @@ describe("hunters-failed allowlist", () => {
       model: "gpt-4o",
     });
     if (plan.kind !== "remote") throw new Error("expected a remote plan");
-    expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+    expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
     expect(plan.rendered.annotation).not.toContain("rejected the credential");
   });
 
-  test("quota_exhausted with no shared detail renders PRH-PROVIDER-LIMITED in its default wording", () => {
+  test("quota_exhausted with no shared detail renders CRYSK-PROVIDER-LIMITED in its default wording", () => {
     const plan = hunterFailedPlan("quota_exhausted", {});
     if (plan.kind !== "remote") throw new Error("expected a remote plan");
-    expect(plan.rendered.code).toBe("PRH-PROVIDER-LIMITED");
+    expect(plan.rendered.code).toBe("CRYSK-PROVIDER-LIMITED");
     expect(plan.rendered.what).toBe("Rate limit or quota reached");
   });
 
-  test("model_unavailable with a provider renders PRH-MODEL-UNAVAILABLE without a model", () => {
+  test("model_unavailable with a provider renders CRYSK-MODEL-UNAVAILABLE without a model", () => {
     const plan = hunterFailedPlan("model_unavailable", {
       provider: "opencode",
     });
     if (plan.kind !== "remote") throw new Error("expected a remote plan");
-    expect(plan.rendered.code).toBe("PRH-MODEL-UNAVAILABLE");
+    expect(plan.rendered.code).toBe("CRYSK-MODEL-UNAVAILABLE");
     expect(plan.rendered.annotation).toContain(
       "The configured model is not served by this provider",
     );
     expect(plan.rendered.annotation).toContain("Provider opencode: ");
   });
 
-  test("missing_provider_record without a model falls back to PRH-HUNTERS-FAILED", () => {
+  test("missing_provider_record without a model falls back to CRYSK-HUNTERS-FAILED", () => {
     const plan = hunterFailedPlan("missing_provider_record", {
       provider: "opencode",
     });
     if (plan.kind !== "remote") throw new Error("expected a remote plan");
-    expect(plan.rendered.code).toBe("PRH-HUNTERS-FAILED");
+    expect(plan.rendered.code).toBe("CRYSK-HUNTERS-FAILED");
   });
 
-  test("missing_provider_record with a model keeps PRH-CRED-UNUSABLE", () => {
+  test("missing_provider_record with a model keeps CRYSK-CRED-UNUSABLE", () => {
     const plan = hunterFailedPlan("missing_provider_record", {
       provider: "opencode",
       model: "gpt-4o",
     });
     if (plan.kind !== "remote") throw new Error("expected a remote plan");
-    expect(plan.rendered.code).toBe("PRH-CRED-UNUSABLE");
+    expect(plan.rendered.code).toBe("CRYSK-CRED-UNUSABLE");
   });
 });
 
@@ -3689,7 +3918,7 @@ function runCancelSettleIn(options: {
 const liveRecordText = JSON.stringify(reviewingRecord());
 
 describe("runCancelSettle — the shell (SB3)", () => {
-  test("posts one PRH-CANCELLED error on the locked head for this run's pending", () => {
+  test("posts one CRYSK-CANCELLED error on the locked head for this run's pending", () => {
     const run = runCancelSettleIn({
       cliRecord: liveRecordText,
       statuses: statusRows(["pr-hero", "pending", PENDING_ISO]),
@@ -3705,7 +3934,7 @@ describe("runCancelSettle — the shell (SB3)", () => {
     expect(post?.args).toContain(
       "target_url=https://github.com/acme/widgets/actions/runs/4242",
     );
-    expect(run.stdout).toContain("the crysk status is now PRH-CANCELLED");
+    expect(run.stdout).toContain("the crysk status is now CRYSK-CANCELLED");
   });
 
   // A pre-#457 half-landed pair: this run's pending on pr-hero stayed behind a later crysk
@@ -3849,7 +4078,7 @@ describe("runCancelSettle — the run URL and one retry of the status read", () 
     });
     expect(run.exitCode).toBe(0);
     expect(statusCalls(run.calls)).toHaveLength(1);
-    expect(run.stdout).toContain("the crysk status is now PRH-CANCELLED");
+    expect(run.stdout).toContain("the crysk status is now CRYSK-CANCELLED");
   });
 
   test("another run's pending with this run's created_at is not settled", () => {

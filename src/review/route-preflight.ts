@@ -2,14 +2,16 @@
 // enforce executable and provider capability gates, and admit production
 // routes across Claude and OpenCode runners before confirming or spending tokens.
 
+import type { ModelsConfig } from "#model/model-name";
 import {
   capabilityGateDecision,
   produceClaudeCapabilityReport,
 } from "#model/provider-capabilities";
 import {
   buildResolvedRoutePlan,
+  InvalidModelError,
+  planRoutes,
   type ResolvedRoutePlan,
-  type RoutingConfig,
 } from "#model/routing";
 import { resolveEngineAssets } from "../assets";
 import { CliError } from "../errors";
@@ -24,6 +26,11 @@ import type {
   RunnerAuthorityOptions,
   RunnerAuthorityResolution,
 } from "../runner-authority";
+import {
+  ClaudeCredentialRefusalError,
+  claudeCredentialRefusal,
+  type RunClaudeCredential,
+} from "../security/claude-credential";
 import {
   admitRoutePlan,
   createDefaultTransportRegistry,
@@ -111,7 +118,7 @@ export async function buildCliRoutePlan(params: {
   spec: ReviewSpec;
   options: CliOptions;
   agentFiles: Map<string, ParsedAgent>;
-  routingConfig?: RoutingConfig;
+  models?: ModelsConfig;
   summary: SummarySettings;
   summarizerEnabled?: boolean;
   scoutEnabled?: boolean;
@@ -163,7 +170,7 @@ export async function buildCliRoutePlan(params: {
   return buildResolvedRoutePlan({
     agents: params.spec.agents,
     cliModel: params.options.model,
-    routingConfig: params.routingConfig,
+    models: params.models,
     frontmatterModel: (agentKey) => params.agentFiles.get(agentKey)?.model,
     ...(summarizerEnabled
       ? {
@@ -196,11 +203,19 @@ export async function buildCliRoutePlan(params: {
   });
 }
 
-// Pre-confirm route resolution: legacy runs without operator routing may omit
-// route provenance when the plan cannot be built, but admission failures must
+// Whether a plan that failed to build may fall back to the legacy no-plan
+// path (a prompt or `--model` naming a raw Claude id the CLI resolves itself).
+// Never when `models` is set, and never for a model written in the new form:
+// both are the operator's words, and the error is how to fix them.
+function planErrorIsFatal(error: unknown, modelsConfigured: boolean): boolean {
+  return modelsConfigured || error instanceof InvalidModelError;
+}
+
+// Pre-confirm route resolution: legacy runs without `models` may omit route
+// provenance when the plan cannot be built, but admission failures must
 // always surface before confirm — never be swallowed into routePlan = undefined.
 export async function resolveRoutePlanAtConfirm(input: {
-  routingConfigured: boolean;
+  modelsConfigured: boolean;
   buildRoutePlan: () => Promise<ResolvedRoutePlan>;
   registry?: TransportRegistry;
 }): Promise<ResolvedRoutePlan | undefined> {
@@ -210,7 +225,7 @@ export async function resolveRoutePlanAtConfirm(input: {
   try {
     routePlan = await input.buildRoutePlan();
   } catch (error) {
-    if (input.routingConfigured) throw error;
+    if (planErrorIsFatal(error, input.modelsConfigured)) throw error;
     return undefined;
   }
   await admitRoutePlan(routePlan, registry);
@@ -225,27 +240,48 @@ export interface ProductionRoutePlanResult {
 // Production admission: discover per-backend executable authority, derive
 // D1-11 evidence from exact-binding probes, and admit with one shared registry.
 export async function resolveProductionRoutePlanAtConfirm(input: {
-  routingConfigured: boolean;
+  modelsConfigured: boolean;
   workspaceRoot: string;
   buildRoutePlan: () => Promise<ResolvedRoutePlan>;
   authorityDeps?: ResolveRunnerAuthorityDeps;
   loadSdk?: () => Promise<OpenCodeSdkLike>;
   env?: RunnerAuthorityOptions["env"];
+  // S5: the Claude credential chosen at run start. Its env replaces `env` (it is the
+  // process environment with one Claude credential left), and a plan that needs
+  // Claude with no listed credential present is refused here, before admission.
+  claudeRun?: RunClaudeCredential;
 }): Promise<ProductionRoutePlanResult | undefined> {
+  const refuse = (planHasClaudeRoute: boolean): void => {
+    if (input.claudeRun === undefined) return;
+    const refusal = claudeCredentialRefusal(
+      input.claudeRun.selection,
+      planHasClaudeRoute,
+    );
+    if (refusal !== undefined) throw new ClaudeCredentialRefusalError(refusal);
+  };
   let routePlan: ResolvedRoutePlan;
   try {
     routePlan = await input.buildRoutePlan();
   } catch (error) {
-    if (input.routingConfigured) throw error;
+    if (planErrorIsFatal(error, input.modelsConfigured)) throw error;
+    // The legacy no-plan path runs every step on the Claude CLI.
+    refuse(true);
     return undefined;
   }
+  refuse(
+    planRoutes(routePlan).some((step) => step.route.backend === "claude-code"),
+  );
 
+  const env = input.claudeRun?.env ?? input.env;
   const productionAdmission = await prepareProductionAdmissionContext({
     workspaceRoot: input.workspaceRoot,
     plan: routePlan,
     authorityDeps: input.authorityDeps,
     loadSdk: input.loadSdk,
-    env: input.env,
+    ...(env === undefined ? {} : { env }),
+    ...(input.claudeRun?.kind === undefined
+      ? {}
+      : { claudeCredential: input.claudeRun.kind }),
   });
   if ("error" in productionAdmission) {
     throw new CliError(
@@ -273,7 +309,13 @@ export async function enforceProviderCapabilityGate(input: {
         `execution authority unavailable: ${input.runnerAuthority.error}`,
       );
     }
-    const capabilityReport = await produceClaudeCapabilityReport({});
+    // S5: the run env (one Claude credential, under the CLI's name), the same object
+    // the legacy runner hands its child, so the auth check sees the credential the
+    // run chose (a CRYSK_* secret included) and never one it stripped.
+    const runEnv = input.runnerAuthority?.runnerOptions?.childEnv;
+    const capabilityReport = await produceClaudeCapabilityReport(
+      runEnv === undefined ? {} : { env: { ...runEnv } },
+    );
     const capabilityGate = capabilityGateDecision(capabilityReport);
     if (!capabilityGate.ok) {
       throw new CliError(

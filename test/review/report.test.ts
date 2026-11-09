@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { buildResolvedRoutePlan, resolveStepRoute } from "#model/routing";
 import {
   findingMarker,
   PR_COMMENT_COVERAGE_PARTIAL_TOKEN,
@@ -15,8 +16,10 @@ import {
 } from "#rereview/state";
 import type { Finding, FindingsDocument, Telemetry } from "#review/findings";
 import {
+  envelopeModel,
   estimateCost,
   formatElapsed,
+  formatStepRoute,
   incompleteReviewAnnotation,
   parseFindingCommentBadge,
   type ReportMeta,
@@ -3125,5 +3128,83 @@ describe("a token in a model-written finding path", () => {
       undefined,
     );
     expect(body).toContain(`${WEB_URL}/blob/`);
+  });
+});
+
+// E-c: the envelope's model names what the hunters and the refuter RAN. Under
+// `models` that is the route plan's model, not the prompts' frontmatter.
+describe("envelopeModel", () => {
+  const agentFiles = new Map([
+    ["reliability", { model: "sonnet" }],
+    ["refuter", { model: "opus" }],
+  ]);
+
+  test("with no plan, the prompts' models, sorted and joined", () => {
+    expect(envelopeModel({}, agentFiles)).toBe("opus+sonnet");
+  });
+
+  test("a zero-config plan reports exactly what the frontmatter did", () => {
+    const plan = buildResolvedRoutePlan({
+      agents: [
+        { key: "reliability", role: "hunter" },
+        { key: "refuter", role: "refuter" },
+      ],
+      frontmatterModel: (key) => agentFiles.get(key)?.model,
+      summarizer: { frontmatterModel: "haiku" },
+    });
+    expect(envelopeModel({}, agentFiles, plan)).toBe("opus+sonnet");
+  });
+
+  test("under models, the planned models of the hunters and the refuter", () => {
+    const plan = buildResolvedRoutePlan({
+      agents: [
+        { key: "reliability", role: "hunter" },
+        { key: "refuter", role: "refuter" },
+      ],
+      frontmatterModel: (key) => agentFiles.get(key)?.model,
+      models: {
+        "hunter.reliability": ["opencode:openai/gpt-5"],
+        refuter: ["claude:claude-opus-5-5"],
+        summary: ["claude:fable-latest"],
+      },
+      summarizer: { frontmatterModel: "haiku" },
+    });
+    expect(envelopeModel({}, agentFiles, plan)).toBe("claude-opus-5-5+gpt-5");
+  });
+
+  test("--model is reported as typed", () => {
+    expect(envelopeModel({ model: "claude:opus-latest" }, agentFiles)).toBe(
+      "claude:opus-latest",
+    );
+  });
+});
+
+// S7 (E-g, E2): the plan card shows an entry's effort beside its model, in the
+// config row's form; a step with no entry effort reads as before.
+describe("formatStepRoute", () => {
+  const step = (entry: string | { model: string; effort?: string }) =>
+    resolveStepRoute({
+      stepKey: "refuter",
+      role: "refuter",
+      modelRole: "refuter",
+      models: { refuter: [entry] },
+    });
+
+  test("a model with no entry effort is its name", () => {
+    expect(formatStepRoute(step("claude:sonnet-latest"))).toBe(
+      "claude:sonnet-latest",
+    );
+    expect(formatStepRoute(step("opencode:openai/gpt-5"))).toBe(
+      "opencode:openai/gpt-5",
+    );
+  });
+
+  test("an entry effort shows beside the model, on either backend", () => {
+    expect(
+      formatStepRoute(step({ model: "claude:opus-latest", effort: "max" })),
+    ).toBe("claude:opus-latest (effort max)");
+    expect(
+      formatStepRoute(step({ model: "opencode:openai/gpt-5", effort: "high" })),
+    ).toBe("opencode:openai/gpt-5 (effort high)");
   });
 });

@@ -11,23 +11,21 @@ import {
   type MaterialityVerdict,
   parseJudgeVerdict,
 } from "#compare/materiality";
-import {
-  defaultEffortForRole,
-  type Effort,
-  type StepRole,
-} from "#model/catalog";
+import { defaultEffortForRole, type Effort, isEffort } from "#model/catalog";
+import type { ModelsConfig } from "#model/model-name";
 import {
   agentStepKey,
   buildResolvedRoutePlan,
+  claudeCliModel,
+  InvalidModelError,
   isMeasuredJudgeRoute,
   MATERIALITY_JUDGE_MODEL,
   MATERIALITY_STEP_KEY,
   type ResolvedModelRoute,
   type ResolvedRoutePlan,
-  type RoutingConfig,
+  type ResolvedStepRoute,
   type RunnerBackend,
   resolveMaterialityJudgeRoute,
-  spawnModelForClaudeCli,
 } from "#model/routing";
 import {
   composeAdjudicationPrompt,
@@ -140,14 +138,17 @@ import {
   recordDiversityHunterResult,
 } from "../diversity/pipeline-integration";
 import { writeJsonAtomically } from "../execution/atomic-write";
-import type {
-  FailureCredential,
-  TransportFailureCause,
+import {
+  effortApplied,
+  type FailureCredential,
+  type TransportFailureCause,
 } from "../execution/contracts";
+import type { FailureCause } from "../execution/failure-policy";
 // One predicate, owned beside the appends it recognizes. Already in this
 // module's graph through step-runner's value import of the harness, so it
 // adds no weight (the atomic-write WHY above is about a NEW dependency).
 import { isHarnessStderrAnnotation } from "../execution/harness";
+import { ranRoute } from "../execution/model-fallback";
 import {
   DEFAULT_CANCELLATION_DEADLINE_MS,
   HARNESS_GRACE_MARGIN_MS,
@@ -294,9 +295,9 @@ export interface PipelineInput {
   // demotes the immaterial ones to advisory. ABSENT means no judge step and
   // findings exactly as before (the scout's rule); pipeline.json still
   // carries a `materiality` record (`enabled: false`, `status: "skipped"`).
-  // No `model` seat on purpose: the judge is pinned to the model it was
-  // measured on (MATERIALITY_JUDGE_MODEL), and neither `--model` nor a
-  // frontmatter edit may move it.
+  // No `model` seat on purpose: the judge runs only on a model it was
+  // measured on (sonnet by default, opus through `models.judge`), and neither
+  // `--model`, `models.default` nor a frontmatter edit may move it.
   materiality?: { promptPath: string };
   // The PR title the materiality judge reads (S9): PrTarget.title in PR mode,
   // the reviewed head's commit subject in local mode. Author-controlled, so
@@ -352,9 +353,11 @@ export interface PipelineInput {
   // so callers that pass nothing see byte-identical step names, per_agent
   // keys, and parity semantics.
   spec?: ReviewSpec;
-  // D2 PR3: Optional pre-resolved model route plan or config
+  // D2 PR3: Optional pre-resolved model route plan, or the role -> model
+  // lists to build one from (S1). Absent `models` falls back to the merged
+  // config's, as the routing config used to.
   routePlan?: ResolvedRoutePlan;
-  routingConfig?: RoutingConfig;
+  models?: ModelsConfig;
   // Item 7: skip hunter (and scout) fan-out. A re-review whose restricted
   // delta is empty still classifies and verifies (C6); spawning hunters on
   // an empty patch would bill a first-review for nothing. Absent = run
@@ -1090,6 +1093,10 @@ interface StepMeta {
   // when the step carries no route (the legacy Claude-only shape), where the
   // backend is not recorded and guessing it would be fabrication.
   effort_applied?: boolean;
+  // The OpenCode variant the step's backend was sent: its `models` entry's
+  // effort (S7). Absent when none was sent (D1), and on every Claude step,
+  // whose level is `effort` above.
+  variant?: string;
   tools: string[];
   systemPromptPath: string;
   outPath: string;
@@ -1148,8 +1155,26 @@ interface StepMeta {
   // not become a second, shorter copy of them. Redacted — a transport error
   // can carry a token — and capped.
   failure?: string;
-  // D2 PR3: route attached at step construction
+  // D2 PR3: route attached at step construction. On a step whose role listed
+  // several models (S4), overwritten when it settles with the route of the
+  // model that ran, like `model` and `effort_applied`.
   route?: ResolvedModelRoute;
+  // S4: every model the step tried, in order, with its own attempts, cause
+  // and usage (models can bill differently, so only these keep each one's
+  // billing). Absent on a step with one model.
+  model_attempts?: Array<{
+    model: string;
+    route: ResolvedModelRoute;
+    status: "ok" | "failed" | "skipped";
+    attempts: number;
+    // S7: the effort this model was asked to run at, and what its backend
+    // was sent (as on the step itself).
+    effort: Effort;
+    effort_applied: boolean;
+    variant?: string;
+    cause?: FailureCause;
+    usage_v2?: NormalizedUsage;
+  }>;
 }
 
 // pipeline.json's `scout` key (§3.9). Written on EVERY run, including one
@@ -1548,8 +1573,7 @@ async function execute(
   // it is settled long before a survivor exists to tier.
   state.refuterConfigured = reviewSpec.agents.some((a) => a.role === "refuter");
 
-  const effectiveRoutingConfig =
-    input.routingConfig ?? input.config?.effective?.routing;
+  const effectiveModels = input.models ?? input.config?.effective?.models;
 
   const frontmatterByKey = new Map<string, string | undefined>();
   for (const agent of reviewSpec.agents) {
@@ -1566,7 +1590,6 @@ async function execute(
   let diversityCtx = prepareDiversityExecution({
     reviewSpec,
     cliModel: input.model,
-    routingConfig: effectiveRoutingConfig,
     frontmatterModel: (agentKey) => frontmatterByKey.get(agentKey),
     target: input.diversityTarget,
     runtimeTarget: reviewSpec.multiModelDiversity?.enabled
@@ -1617,7 +1640,7 @@ async function execute(
       routePlan = buildResolvedRoutePlan({
         agents: diversityCtx.routeAgents,
         cliModel: input.model,
-        routingConfig: effectiveRoutingConfig,
+        models: effectiveModels,
         frontmatterModel: (agentKey) => frontmatterByKey.get(agentKey),
         ...(input.summarizer === undefined
           ? {}
@@ -1650,9 +1673,13 @@ async function execute(
           : { materiality: true as const }),
       });
     } catch (error) {
-      // Spec: legacy Claude-only runs without operator routing keep today's
-      // direct model passthrough; D2 route dimensions are optional then.
-      if (effectiveRoutingConfig !== undefined) throw error;
+      // Spec: legacy Claude-only runs without `models` keep today's direct
+      // model passthrough (a raw Claude id the CLI resolves itself); D2 route
+      // dimensions are optional then. A model written in the new form never
+      // falls back: its error says how to write it.
+      if (effectiveModels !== undefined || error instanceof InvalidModelError) {
+        throw error;
+      }
       routePlan = undefined;
     }
   }
@@ -1830,14 +1857,17 @@ async function execute(
       tools: agent.tools,
       mcpConfigPath: input.mcpConfigPath,
       model: resolveModel(input, hunter.model, agent.model, hunter.file),
-      effort: resolveEffort(agent.effort, "hunter"),
+      ...stepEffortFields(
+        routePlan,
+        name,
+        agent.effort,
+        defaultEffortForRole("hunter"),
+      ),
       cwd: input.worktree,
       outPath: path.join(stepsDir, `${name}.draft.json`),
       timeoutMs: stepTimeoutMs,
       maxAttempts: DEFAULT_STEP_MAX_ATTEMPTS,
-      ...(routeForStepKey(routePlan, name) === undefined
-        ? {}
-        : { route: routeForStepKey(routePlan, name) }),
+      ...stepRouteFields(routePlan, name),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -1896,7 +1926,13 @@ async function execute(
         agent.model,
         input.summarizer.promptPath,
       );
-      summarizerMeta.effort = resolveEffort(agent.effort, "summarizer");
+      const summarizerEffort = stepEffortFields(
+        routePlan,
+        name,
+        agent.effort,
+        defaultEffortForRole("summarizer"),
+      );
+      summarizerMeta.effort = summarizerEffort.effort;
       summarizerMeta.tools = agent.tools;
       summarizerSpec = {
         name,
@@ -1905,12 +1941,10 @@ async function execute(
         tools: agent.tools,
         mcpConfigPath: input.mcpConfigPath,
         model: summarizerMeta.model,
-        effort: summarizerMeta.effort,
+        ...summarizerEffort,
         cwd: input.worktree,
         outPath,
-        ...(routeForStepKey(routePlan, name) === undefined
-          ? {}
-          : { route: routeForStepKey(routePlan, name) }),
+        ...stepRouteFields(routePlan, name),
         // The summary is a cosmetic barrier ahead of dedupe/refutation. It
         // must not inherit the 30-minute hunter watchdog or its retry budget.
         timeoutMs: 5 * 60 * 1000,
@@ -2473,7 +2507,12 @@ async function runRefuter(
     agent.model,
     options.agent.file,
   );
-  const effort = resolveEffort(agent.effort, "refuter");
+  const effortFields = stepEffortFields(
+    state.routePlan,
+    agentStepKey(options.agent),
+    agent.effort,
+    defaultEffortForRole("refuter"),
+  );
   // A finding's content is composed LONG after the run's nonce was committed
   // — the hunters wrote its `claim` and `proof_refs` from the patch — so it is
   // the one block `selectBoundaryNonce` could not be drawn against. Guarded
@@ -2516,7 +2555,7 @@ async function runRefuter(
       tools: agent.tools,
       mcpConfigPath: input.mcpConfigPath,
       model,
-      effort,
+      ...effortFields,
       cwd: input.worktree,
       outPath: path.join(
         options.stepsDir,
@@ -2524,15 +2563,7 @@ async function runRefuter(
       ),
       timeoutMs: options.stepTimeoutMs,
       maxAttempts: DEFAULT_STEP_MAX_ATTEMPTS,
-      ...(routeForStepKey(state.routePlan, agentStepKey(options.agent)) ===
-      undefined
-        ? {}
-        : {
-            route: routeForStepKey(
-              state.routePlan,
-              agentStepKey(options.agent),
-            ),
-          }),
+      ...stepRouteFields(state.routePlan, agentStepKey(options.agent)),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -2707,7 +2738,12 @@ async function runVerify(
   // The verifier re-reads the REFUTER's prompt file, so a frontmatter `effort:`
   // there applies to it as well; `verifier` is only the fallback for a prompt
   // that omits the key.
-  const effort = resolveEffort(agent.effort, "verifier");
+  const effortFields = stepEffortFields(
+    state.routePlan,
+    agentStepKey(options.agent),
+    agent.effort,
+    defaultEffortForRole("verifier"),
+  );
   const forged: VerifySubject[] = [];
   const specs: Array<{
     subject: VerifySubject;
@@ -2729,7 +2765,7 @@ async function runVerify(
       tools: agent.tools,
       mcpConfigPath: input.mcpConfigPath,
       model,
-      effort,
+      ...effortFields,
       cwd: input.worktree,
       outPath: path.join(dir, "result.json"),
       timeoutMs: options.stepTimeoutMs,
@@ -2738,15 +2774,7 @@ async function runVerify(
       // admitted route, as the refuter and adjudicator legs do. Left unset, a
       // routed run had no binding for these steps and every one failed
       // "No admitted binding for step route" before reaching a provider.
-      ...(routeForStepKey(state.routePlan, agentStepKey(options.agent)) ===
-      undefined
-        ? {}
-        : {
-            route: routeForStepKey(
-              state.routePlan,
-              agentStepKey(options.agent),
-            ),
-          }),
+      ...stepRouteFields(state.routePlan, agentStepKey(options.agent)),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -2906,7 +2934,12 @@ async function runAdjudicate(
     agent.model,
     options.agent.file,
   );
-  const effort = resolveEffort(agent.effort, "refuter");
+  const effortFields = stepEffortFields(
+    state.routePlan,
+    agentStepKey(options.agent),
+    agent.effort,
+    defaultEffortForRole("refuter"),
+  );
   const specs: Array<{
     index: number;
     subject: AdjudicationSubject;
@@ -2927,20 +2960,12 @@ async function runAdjudicate(
       tools: agent.tools,
       mcpConfigPath: input.mcpConfigPath,
       model,
-      effort,
+      ...effortFields,
       cwd: input.worktree,
       outPath: path.join(dir, "result.json"),
       timeoutMs: options.stepTimeoutMs,
       maxAttempts: DEFAULT_STEP_MAX_ATTEMPTS,
-      ...(routeForStepKey(state.routePlan, agentStepKey(options.agent)) ===
-      undefined
-        ? {}
-        : {
-            route: routeForStepKey(
-              state.routePlan,
-              agentStepKey(options.agent),
-            ),
-          }),
+      ...stepRouteFields(state.routePlan, agentStepKey(options.agent)),
       parse: parseAdjudicationResult,
       onRetry: (info) => emit(deps, { kind: "step-retry", ...info }),
     };
@@ -3143,7 +3168,13 @@ async function runScout(
       input.scout.promptPath,
     );
     record.model = meta.model;
-    meta.effort = resolveEffort(agent.effort, "scout");
+    const scoutEffort = stepEffortFields(
+      state.routePlan,
+      name,
+      agent.effort,
+      defaultEffortForRole("scout"),
+    );
+    meta.effort = scoutEffort.effort;
     // FULL sha256, not the 12 chars the probe prints: the probe's artifact
     // stores the full digest too, so a pipeline.json and a scout-probe.json
     // naming the same prompt say the same string.
@@ -3157,14 +3188,12 @@ async function runScout(
       tools: meta.tools,
       mcpConfigPath: input.mcpConfigPath,
       model: meta.model,
-      effort: meta.effort,
+      ...scoutEffort,
       cwd: input.worktree,
       outPath,
       timeoutMs: SCOUT_TIMEOUT_MS,
       maxAttempts: 1,
-      ...(routeForStepKey(state.routePlan, name) === undefined
-        ? {}
-        : { route: routeForStepKey(state.routePlan, name) }),
+      ...stepRouteFields(state.routePlan, name),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -3184,7 +3213,7 @@ async function runScout(
 
   if (spec.route !== undefined) {
     meta.route = spec.route;
-    meta.effort_applied = spec.route.backend === "claude-code";
+    Object.assign(meta, routeEffortFields(spec.route));
     const routedModel = effectiveExecutionModel(spec);
     meta.model = routedModel;
     record.model = routedModel;
@@ -3205,6 +3234,8 @@ async function runScout(
   // BEFORE the verdict branches below, so every road that ends in `abandon`
   // still carries the attempt count and pointers of the session that ran.
   recordSettlement(meta, result, input.runDir);
+  // The model that ran, when the scout fell back to another (S4).
+  record.model = meta.model;
   state.usageTotal = sumUsage(state.usageTotal, result.usage);
   accumulateUsageV2(state, result);
   if (result.status !== "ok") return abandon();
@@ -3413,7 +3444,13 @@ async function runConsolidation(
       input.consolidate.promptPath,
     );
     record.model = meta.model;
-    meta.effort = agent.effort ?? DEFAULT_CONSOLIDATE_EFFORT;
+    const consolidateEffort = stepEffortFields(
+      state.routePlan,
+      name,
+      agent.effort,
+      DEFAULT_CONSOLIDATE_EFFORT,
+    );
+    meta.effort = consolidateEffort.effort;
     record.prompt_sha256 = new Bun.CryptoHasher("sha256")
       .update(raw)
       .digest("hex");
@@ -3424,14 +3461,12 @@ async function runConsolidation(
       tools: meta.tools,
       mcpConfigPath: input.mcpConfigPath,
       model: meta.model,
-      effort: meta.effort,
+      ...consolidateEffort,
       cwd: input.worktree,
       outPath,
       timeoutMs: CONSOLIDATE_TIMEOUT_MS,
       maxAttempts: CONSOLIDATE_MAX_ATTEMPTS,
-      ...(routeForStepKey(state.routePlan, name) === undefined
-        ? {}
-        : { route: routeForStepKey(state.routePlan, name) }),
+      ...stepRouteFields(state.routePlan, name),
       parse: (finalText) => {
         const extracted = extractJsonObject(finalText);
         if (extracted === undefined) {
@@ -3451,7 +3486,7 @@ async function runConsolidation(
 
   if (spec.route !== undefined) {
     meta.route = spec.route;
-    meta.effort_applied = spec.route.backend === "claude-code";
+    Object.assign(meta, routeEffortFields(spec.route));
     const routedModel = effectiveExecutionModel(spec);
     meta.model = routedModel;
     record.model = routedModel;
@@ -3469,6 +3504,8 @@ async function runConsolidation(
   // tokens.
   state.perAgent.consolidate = perAgentEntry(result);
   recordSettlement(meta, result, input.runDir);
+  // The model that ran, when consolidation fell back to another (S4).
+  record.model = meta.model;
   state.usageTotal = sumUsage(state.usageTotal, result.usage);
   accumulateUsageV2(state, result);
   if (result.status !== "ok") {
@@ -3614,12 +3651,14 @@ async function runMaterialityJudge(
       record.reason =
         route !== undefined ||
         resolveMaterialityJudgeRoute(
-          input.routingConfig ?? input.config?.effective?.routing,
+          input.models ?? input.config?.effective?.models,
         ) === undefined
           ? "judge route is not the measured claude-code route"
           : "route plan carries no judge step";
       return;
     }
+    // `models.judge` may pick opus: the record names the model that runs.
+    record.model = route.modelSnapshot;
   }
   if (judge.length === 0) return;
 
@@ -3680,7 +3719,16 @@ async function runMaterialityJudge(
     input.prTitle !== undefined && input.prTitle.trim() !== ""
       ? input.prTitle
       : MATERIALITY_TITLE_FALLBACK;
-  const effort = defaultEffortForRole("other");
+  // models.judge takes no effort (D3), so this is the role default; it goes
+  // through stepEffortFields anyway so no step builds its effort another way.
+  // `.effort` only: the judge's list is chosen whole (judgeModelChoice) and
+  // its step carries no fallbacks to pair efforts with.
+  const { effort } = stepEffortFields(
+    state.routePlan,
+    MATERIALITY_STEP_KEY,
+    undefined,
+    defaultEffortForRole("other"),
+  );
   const specs: Array<{ id: string; spec: StepSpec; meta: StepMeta }> = [];
   // The owner's file as posting policy, or undefined when it holds nothing of
   // the owner's own: template text never reaches the judge (ownerPolicyText).
@@ -3725,9 +3773,10 @@ async function runMaterialityJudge(
       tools: [],
       mcpConfigPath,
       // PINNED, never `input.model` or the frontmatter: the measured judge is
-      // sonnet, and a judge on another model is a different, unmeasured judge
-      // deciding which blockers post.
-      model: MATERIALITY_JUDGE_MODEL,
+      // sonnet or opus (`models.judge`, through the route), and a judge on
+      // another model is a different, unmeasured judge deciding which
+      // blockers post. A run with no route plan sends the measured default.
+      model: route?.modelSnapshot ?? MATERIALITY_JUDGE_MODEL,
       effort,
       cwd: input.worktree,
       outPath: path.join(dir, "result.json"),
@@ -4065,8 +4114,12 @@ function hunterFailureOf(
   result: StepResult | undefined,
 ): HunterFailure {
   const cause = result?.failureCause;
-  const provider = spec.route?.provider.trim();
-  const model = spec.route?.modelSnapshot.trim();
+  // The model that ran, when the role listed several (S4): the provider and
+  // model to name are the ones that failed last, not the first one listed.
+  const route =
+    (result === undefined ? undefined : ranRoute(result)) ?? spec.route;
+  const provider = route?.provider.trim();
+  const model = route?.modelSnapshot.trim();
   const detail = failureDetailOf(result?.failureDetail);
   return {
     name: spec.name,
@@ -4297,14 +4350,56 @@ function resolveModel(
   return model;
 }
 
-// Precedence: the prompt's frontmatter `effort:`, else the engine's per-role
-// default. There is no third seat on purpose: nothing may fall through to the
-// CLI's implicit default, which is what #299 removed.
-function resolveEffort(
+// A step's effort AND each fallback's (S7), from the plan, as StepSpec fields.
+// One spread at every site that builds a step, beside stepRouteFields, so no
+// site can skip it or hand a fallback the first model's effort.
+//
+// Precedence, per model: its `models` entry's effort > the prompt's
+// frontmatter `effort:` > the role's default. There is no fourth seat on
+// purpose: nothing may fall through to the CLI's implicit default, which is
+// what #299 removed. `--model`, a spec model and a prompt alias carry no entry
+// effort (D4), so they keep frontmatter > role default.
+//
+// Only a Claude entry's effort lands in `effort`, the Claude scale the CLI's
+// `--effort` takes. An OpenCode entry's effort is a provider variant, already
+// on its route (`modelVariant`), and its step keeps the frontmatter or role
+// level as intent only, as before.
+//
+// `roleDefault` is a level, not a StepRole, because the consolidation pass has
+// its own default (DEFAULT_CONSOLIDATE_EFFORT) outside the role table.
+function stepEffortFields(
+  routePlan: ResolvedRoutePlan | undefined,
+  stepKey: string,
   frontmatterEffort: Effort | undefined,
-  role: StepRole,
-): Effort {
-  return frontmatterEffort ?? defaultEffortForRole(role);
+  roleDefault: Effort,
+): Pick<StepSpec, "effort" | "fallbackEfforts"> {
+  const base = frontmatterEffort ?? roleDefault;
+  const step = routePlan?.steps.find((s) => s.stepKey === stepKey);
+  if (step === undefined) return { effort: base };
+  return {
+    effort: entryEffort(step, base),
+    ...(step.fallbacks === undefined || step.fallbacks.length === 0
+      ? {}
+      : {
+          fallbackEfforts: step.fallbacks.map((fallback) =>
+            entryEffort(fallback, base),
+          ),
+        }),
+  };
+}
+
+function entryEffort(step: ResolvedStepRoute, base: Effort): Effort {
+  if (step.route.backend !== "claude-code" || step.effort === undefined) {
+    return base;
+  }
+  // parseModelList refused any other level, so this is an invariant, not a
+  // reading: a level that reached here unvalidated must not run as another.
+  if (!isEffort(step.effort)) {
+    throw new Error(
+      `${step.stepKey}: effort ${JSON.stringify(step.effort)} is not a Claude effort level`,
+    );
+  }
+  return step.effort;
 }
 
 function perAgentEntry(result: StepResult): PerAgentUsage {
@@ -4377,17 +4472,42 @@ function routeForStepKey(
   return routePlan?.steps.find((step) => step.stepKey === stepKey)?.route;
 }
 
+// A step's route AND its fallbacks (S4), from the plan, as StepSpec fields.
+// One spread at every site that routes a step, so no site can hand a runner
+// the first model without the rest of the list.
+function stepRouteFields(
+  routePlan: ResolvedRoutePlan | undefined,
+  stepKey: string,
+): Pick<StepSpec, "route" | "fallbackRoutes"> {
+  const step = routePlan?.steps.find((s) => s.stepKey === stepKey);
+  if (step === undefined) return {};
+  return {
+    route: step.route,
+    ...(step.fallbacks === undefined || step.fallbacks.length === 0
+      ? {}
+      : { fallbackRoutes: step.fallbacks.map((fallback) => fallback.route) }),
+  };
+}
+
+// What a route's backend is sent: the Claude CLI's `--model`, or the
+// provider's model id.
+function routeExecutionModel(
+  route: ResolvedModelRoute,
+  fallback: string,
+): string {
+  if (route.backend === "claude-code") {
+    return claudeCliModel(route);
+  }
+  return route.modelSnapshot || fallback;
+}
+
+// What the step's backend is sent, recorded as the step's model in
+// pipeline.json: the route's model when there is a route, else the step's own.
 function effectiveExecutionModel(spec: StepSpec): string {
   if (spec.route === undefined) {
     return spec.model;
   }
-  if (spec.route.backend === "claude-code") {
-    return spawnModelForClaudeCli(spec.route, spec.model);
-  }
-  return (
-    (spec.route as { model?: string } | undefined)?.model ??
-    (spec.route.modelSnapshot || spec.model)
-  );
+  return routeExecutionModel(spec.route, spec.model);
 }
 
 function stepMeta(spec: StepSpec): StepMeta {
@@ -4395,9 +4515,7 @@ function stepMeta(spec: StepSpec): StepMeta {
     name: spec.name,
     model: effectiveExecutionModel(spec),
     effort: spec.effort,
-    ...(spec.route === undefined
-      ? {}
-      : { effort_applied: spec.route.backend === "claude-code" }),
+    ...(spec.route === undefined ? {} : routeEffortFields(spec.route)),
     tools: spec.tools,
     systemPromptPath: spec.systemPromptPath,
     outPath: spec.outPath,
@@ -4406,6 +4524,22 @@ function stepMeta(spec: StepSpec): StepMeta {
     // snapshot at any instant after that. Only a settled step overwrites this.
     status: "unsettled",
     ...(spec.route === undefined ? {} : { route: spec.route }),
+  };
+}
+
+// What pipeline.json says a route's backend was sent for effort (S7): whether
+// it applied one (effortApplied) and, on OpenCode, the variant it was sent.
+// `variant` is absent when none was sent, so a run with no entry effort
+// records what it always recorded.
+function routeEffortFields(route: ResolvedModelRoute): {
+  effort_applied: boolean;
+  variant?: string;
+} {
+  return {
+    effort_applied: effortApplied(route),
+    ...(route.modelVariant === undefined
+      ? {}
+      : { variant: route.modelVariant }),
   };
 }
 
@@ -4438,6 +4572,35 @@ function recordSettlement(
   }
   if (result.reservations !== undefined && result.reservations.length > 0) {
     meta.reservations = result.reservations;
+  }
+  // S4: a step whose role listed several models records the one that ran,
+  // over the first model stamped before the spawn, and every model it tried.
+  // The backend and the effort can change with the model (S7: each runs at
+  // its own), so `effort`, `effort_applied` and `variant` follow the model
+  // that ran. A step with one model carries no `modelAttempts` and records
+  // what it always recorded.
+  if (result.modelAttempts !== undefined) {
+    const firstEffort = meta.effort;
+    const ran = result.modelAttempts.findLast(
+      (entry) => entry.status !== "skipped",
+    );
+    if (ran !== undefined) {
+      meta.route = ran.route;
+      meta.model = routeExecutionModel(ran.route, meta.model);
+      meta.effort = ran.effort ?? firstEffort;
+      delete meta.variant;
+      Object.assign(meta, routeEffortFields(ran.route));
+    }
+    meta.model_attempts = result.modelAttempts.map((entry) => ({
+      model: routeExecutionModel(entry.route, meta.model),
+      route: entry.route,
+      status: entry.status,
+      attempts: entry.attempts,
+      effort: entry.effort ?? firstEffort,
+      ...routeEffortFields(entry.route),
+      ...(entry.cause === undefined ? {} : { cause: entry.cause }),
+      ...(entry.usageV2 === undefined ? {} : { usage_v2: entry.usageV2 }),
+    }));
   }
   meta.status = result.status;
   meta.attempts = result.attempts;

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { checkSystemTools, installSystemTool } from "../src/system-tools";
+import {
+  checkCiConfiguration,
+  checkSystemTools,
+  installSystemTool,
+} from "../src/system-tools";
 
 describe("checkSystemTools (offline with injected fakes)", () => {
   test("all tools installed and healthy", async () => {
@@ -99,18 +103,124 @@ describe("checkSystemTools (offline with injected fakes)", () => {
       expect(status.claude.authOk).toBe(true);
     });
 
-    test("claude installed with session file (~/.claude.json) reports authOk: true", async () => {
-      const status = await checkSystemTools({
-        cwd: "/repo",
-        which: () => "/bin/claude",
-        exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+    // The doctor reads the same credentials a run does (U2,
+    // security/claude-credential.ts): `~/.claude.json` is no credential, every
+    // Claude user has it, API-key users included.
+    const claudeAuth = async (
+      options: Pick<
+        Parameters<typeof checkSystemTools>[0] & object,
+        "exists" | "env" | "platform" | "keychainProbe"
+      >,
+    ) =>
+      (
+        await checkSystemTools({
+          cwd: "/repo",
+          which: () => "/bin/claude",
+          exec: async () => ({ exitCode: 0, stdout: "1.0.0", stderr: "" }),
+          home: "/home/user",
+          platform: "linux",
+          ...options,
+        })
+      ).claude;
+
+    test("~/.claude.json alone is no credential: authOk false with a hint naming the CRYSK_CLAUDE_* secrets", async () => {
+      const status = await claudeAuth({
         exists: (p) => p === "/home/user/.claude.json",
         env: {},
-        home: "/home/user",
       });
 
-      expect(status.claude.installed).toBe(true);
-      expect(status.claude.authOk).toBe(true);
+      expect(status.installed).toBe(true);
+      expect(status.authOk).toBe(false);
+      expect(status.hint).toContain("CRYSK_CLAUDE_OAUTH_TOKEN");
+      expect(status.hint).toContain("CRYSK_CLAUDE_API_KEY");
+    });
+
+    test("~/.claude/session.json alone is no credential either", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/home/user/.claude/session.json",
+        env: {},
+      });
+
+      expect(status.authOk).toBe(false);
+    });
+
+    test("CRYSK_CLAUDE_OAUTH_TOKEN reports authOk: true", async () => {
+      const status = await claudeAuth({
+        exists: () => false,
+        env: { CRYSK_CLAUDE_OAUTH_TOKEN: "oauth-tok" },
+      });
+
+      expect(status.authOk).toBe(true);
+      expect(status.hint).toBeUndefined();
+    });
+
+    test("CRYSK_CLAUDE_API_KEY reports authOk: true", async () => {
+      const status = await claudeAuth({
+        exists: () => false,
+        env: { CRYSK_CLAUDE_API_KEY: "sk-test" },
+      });
+
+      expect(status.authOk).toBe(true);
+    });
+
+    test("a whitespace-only CRYSK_CLAUDE_OAUTH_TOKEN is no credential", async () => {
+      const status = await claudeAuth({
+        exists: () => false,
+        env: { CRYSK_CLAUDE_OAUTH_TOKEN: "  " },
+      });
+
+      expect(status.authOk).toBe(false);
+    });
+
+    test("ANTHROPIC_AUTH_TOKEN alone is no credential (a run strips it)", async () => {
+      const status = await claudeAuth({
+        exists: () => false,
+        env: { ANTHROPIC_AUTH_TOKEN: "bearer" },
+      });
+
+      expect(status.authOk).toBe(false);
+    });
+
+    test("the CLI's OAuth store ~/.claude/.credentials.json reports authOk: true", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/home/user/.claude/.credentials.json",
+        env: {},
+      });
+
+      expect(status.authOk).toBe(true);
+    });
+
+    test("macOS with the Keychain item reports authOk: true", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/usr/bin/security",
+        env: {},
+        platform: "darwin",
+        keychainProbe: () => true,
+      });
+
+      expect(status.authOk).toBe(true);
+    });
+
+    // R001 (#494): `security` is on every Mac; the run counts the item, so the doctor does.
+    test("macOS with the broker but no Keychain item is no login", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/usr/bin/security",
+        env: {},
+        platform: "darwin",
+        keychainProbe: () => false,
+      });
+
+      expect(status.authOk).toBe(false);
+    });
+
+    test("/usr/bin/security off macOS is no Keychain login", async () => {
+      const status = await claudeAuth({
+        exists: (p) => p === "/usr/bin/security",
+        env: {},
+        platform: "linux",
+      });
+
+      expect(status.authOk).toBe(false);
     });
 
     test("claude installed but unauthenticated reports authOk: false with actionable hint", async () => {
@@ -250,5 +360,72 @@ describe("checkSystemTools (offline with injected fakes)", () => {
       expect(result.ok).toBe(false);
       expect(result.manualCommand).toBeDefined();
     });
+  });
+});
+
+// Inside GitHub Actions the review reads its Claude credential from the action's
+// crysk-secrets input as CRYSK_CLAUDE_* (U5), and the doctor counts a credential by
+// U2's rule (claudeCredentialPresence): the CRYSK_* names first, then the CLI's, a
+// whitespace-only value is absent, and ANTHROPIC_AUTH_TOKEN never counts.
+describe("checkCiConfiguration inside GitHub Actions: the CRYSK_CLAUDE_* credentials", () => {
+  const GITHUB_TOKEN = "ghs_fixture";
+  const noFile = () => false;
+
+  test("CRYSK_CLAUDE_OAUTH_TOKEN alone is a review credential", () => {
+    const status = checkCiConfiguration({
+      isCi: true,
+      env: { GITHUB_TOKEN, CRYSK_CLAUDE_OAUTH_TOKEN: "SENTINEL_OAUTH" },
+      exists: noFile,
+    });
+    expect(status.configured).toBe(true);
+    expect(status.message).not.toContain("SENTINEL_OAUTH");
+  });
+
+  test("CRYSK_CLAUDE_API_KEY alone is a review credential", () => {
+    const status = checkCiConfiguration({
+      isCi: true,
+      env: { GITHUB_TOKEN, CRYSK_CLAUDE_API_KEY: "SENTINEL_KEY" },
+      exists: noFile,
+    });
+    expect(status.configured).toBe(true);
+    expect(status.message).not.toContain("SENTINEL_KEY");
+  });
+
+  test("a whitespace-only CRYSK_CLAUDE_* value, or ANTHROPIC_AUTH_TOKEN, is no credential", () => {
+    for (const env of [
+      { GITHUB_TOKEN, CRYSK_CLAUDE_OAUTH_TOKEN: "  " },
+      { GITHUB_TOKEN, CRYSK_CLAUDE_API_KEY: "\t" },
+      { GITHUB_TOKEN, ANTHROPIC_AUTH_TOKEN: "SENTINEL_AUTH" },
+    ]) {
+      const status = checkCiConfiguration({ isCi: true, env, exists: noFile });
+      expect(status.configured).toBe(false);
+      expect(status.message).not.toContain("SENTINEL_AUTH");
+    }
+  });
+
+  test("a missing credential names the CRYSK_CLAUDE_* secrets and the crysk-secrets input, not the old names", () => {
+    const status = checkCiConfiguration({
+      isCi: true,
+      env: { GITHUB_TOKEN },
+      exists: noFile,
+    });
+    expect(status.configured).toBe(false);
+    expect(status.message).toBe(
+      "Missing required CI secret(s): CRYSK_CLAUDE_OAUTH_TOKEN (or CRYSK_CLAUDE_API_KEY)",
+    );
+    expect(status.message).not.toContain("ANTHROPIC_API_KEY");
+    expect(status.hint).toContain("crysk-secrets");
+    expect(status.hint).toContain("gh secret set CRYSK_CLAUDE_OAUTH_TOKEN");
+  });
+
+  test("a present credential reads as the CRYSK_* secrets in the message", () => {
+    const status = checkCiConfiguration({
+      isCi: true,
+      env: { GITHUB_TOKEN, CRYSK_CLAUDE_OAUTH_TOKEN: "x" },
+      exists: noFile,
+    });
+    expect(status.message).toBe(
+      "Required CI secrets are present (GITHUB_TOKEN, a CRYSK_CLAUDE_* credential or OpenCode auth)",
+    );
   });
 });

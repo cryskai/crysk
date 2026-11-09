@@ -18,7 +18,9 @@ import type {
   TransportFailureCause,
 } from "../execution/contracts";
 import type { FailureClass } from "../execution/failure-classification";
+import type { FailureCause } from "../execution/failure-policy";
 import { StepExecutionHarness } from "../execution/harness";
+import { runWithFallback } from "../execution/model-fallback";
 import type { SpendReservation } from "../execution/spend-limiter";
 import type { NormalizedUsage } from "../execution/usage-normalized";
 import type { CredentialBroker } from "../security/credential-broker";
@@ -61,6 +63,20 @@ export interface StepSpec {
   backend?: "claude-code" | "opencode";
   models?: string[];
   route?: ResolvedModelRoute;
+  // The routes tried after `route`, in order, when the provider fails it
+  // (S4; the plan's `fallbacks`, the runner side is model-fallback.ts).
+  // Absent when the step's role names one model.
+  fallbackRoutes?: readonly ResolvedModelRoute[];
+  // The effort each of `fallbackRoutes` runs at, in the same order (S7): its
+  // `models` entry's effort, else the prompt's frontmatter, else the role's
+  // default (the pipeline's stepEffortFields). Absent with no fallbacks. A
+  // step built without it runs every fallback at `effort`.
+  fallbackEfforts?: readonly Effort[];
+  // How many attempts earlier models of this same step already used. The
+  // harness numbers this run's attempts after them, so every model's attempt
+  // logs, receipts and evidence keep their own files instead of overwriting
+  // the first model's. Absent means 0.
+  attemptOffset?: number;
   // Frozen route fingerprint from the admitted plan. Required for routed
   // production execution via createProductionRuntime.
   routeKey?: string;
@@ -108,13 +124,52 @@ export interface StepResult {
   // resolved one (a transport cause, never a harness cause). Absent on success,
   // and on a failure with no transport cause. The CLI record names it per hunter.
   failureCause?: TransportFailureCause;
+  // The cause the step's final failed attempt ended on, harness causes
+  // included: `failureCause` above keeps transport causes only, so a timeout
+  // (`watchdog_timeout`) or a bad answer (`format_violation`) was invisible to
+  // anything reading the result. The fallback reads this one. Absent on
+  // success, on cancellation, and when no cause was resolved. An attempt
+  // refused by a fenced spend bucket never reached the provider and has no
+  // cause, so after one this is the cause of the attempt before it.
+  finalCause?: FailureCause;
+  // The final attempt was refused by a fenced spend bucket (an earlier
+  // attempt on it left a cost nobody knows), before the transport was called.
+  // That attempt is counted in `attempts` but wrote no log or receipt. Read
+  // only by the fallback (model-fallback.ts); never recorded.
+  spendFenced?: true;
   // The final failed attempt's one-line explanation (TransportOutcome.failureDetail),
   // when the transport gave one. Absent on success.
   failureDetail?: string;
   // The secret the final failed attempt ran on (TransportOutcome.failureCredential).
   failureCredential?: FailureCredential;
+  // Each model the step tried, in order, when its role listed more than one
+  // (S4). The last entry not `skipped` is the model that ran. Absent on a
+  // step with one model, which records exactly what it recorded before.
+  modelAttempts?: ModelAttempt[];
   stderrTail: string;
   resultText: string;
+}
+
+// One model of a step's list, as it ended. Usage is kept per model because
+// models can bill differently (a subscription model, then a metered one):
+// the step's total sums them, and only these entries keep each one's billing.
+export interface ModelAttempt {
+  route: ResolvedModelRoute;
+  // `skipped`: never reached its provider. Either an earlier model on the
+  // same credential was refused its login (cause `auth_invalid`), or it was
+  // stopped before any request: its spend bucket was fenced, or it failed
+  // before its first attempt (no cause).
+  status: "ok" | "failed" | "skipped";
+  // Attempts that reached the provider: 0 for a skipped model.
+  attempts: number;
+  // The effort this model was asked to run at (S7; StepSpec.effort or its
+  // entry in `fallbackEfforts`), skipped models included. Optional only so a
+  // runner that predates it still type-checks; runWithFallback always sets it.
+  effort?: Effort;
+  // Why it failed, or `auth_invalid` for a model skipped after a refused
+  // login. Absent on `ok`, and on a model skipped for any other reason.
+  cause?: FailureCause;
+  usageV2?: NormalizedUsage;
 }
 
 export interface StepRunner {
@@ -211,8 +266,10 @@ export interface ClaudeCodeRunnerOptions {
 
 export class ClaudeCodeRunner implements StepRunner {
   private readonly harness: StepExecutionHarness;
+  private readonly signal?: AbortSignal;
 
   constructor(options: ClaudeCodeRunnerOptions = {}) {
+    this.signal = options.signal;
     this.harness = new StepExecutionHarness({
       workspaceRoot: options.workspaceRoot,
       executableAllowlist: options.executableAllowlist,
@@ -227,7 +284,19 @@ export class ClaudeCodeRunner implements StepRunner {
     });
   }
 
+  // A caller that builds its own plan (runPipeline with `models`, as the lab
+  // does) can hand this runner a step with fallbacks (S4). It runs them in
+  // order like the production runner does. Every Claude model here runs on
+  // the one Claude credential this runner holds; a model on another backend
+  // has no transport here, fails before any spawn with no cause, and so ends
+  // the step, recorded in its `modelAttempts`.
   async run(step: StepSpec): Promise<StepResult> {
-    return this.harness.run(step);
+    return runWithFallback({
+      step,
+      runOn: (single) => this.harness.run(single),
+      credentialOf: (route) =>
+        route.backend === "claude-code" ? "claude-code" : undefined,
+      cancelled: () => this.signal?.aborted === true,
+    });
   }
 }

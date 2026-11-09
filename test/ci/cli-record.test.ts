@@ -179,7 +179,10 @@ describe("writeFatalCliRecord", () => {
   });
 
   const reviewed: CliRecord = { v: 1, outcome: "reviewed", head_sha: SHA };
-  const unmapped = { kind: "route", reason: "unmapped" } as const;
+  const versionUnsupported = {
+    kind: "capability",
+    issue: "version_unsupported",
+  } as const;
 
   function onDisk(): string {
     return readFileSync(path.join(dir, CLI_RECORD_FILE), "utf8");
@@ -231,11 +234,13 @@ describe("writeFatalCliRecord", () => {
   );
 
   test("no record yet: the fatal error is written with its class, and nothing is printed", () => {
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, env),
+    );
     expect(parseCliRecord(onDisk())).toEqual({
       v: 1,
       outcome: "error",
-      cls: unmapped,
+      cls: versionUnsupported,
     });
     expect(chunks).toEqual([]);
   });
@@ -243,11 +248,13 @@ describe("writeFatalCliRecord", () => {
   test("a malformed record is replaced by the fatal error, and nothing is printed", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, CLI_RECORD_FILE), "{not json");
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, env),
+    );
     expect(parseCliRecord(onDisk())).toEqual({
       v: 1,
       outcome: "error",
-      cls: unmapped,
+      cls: versionUnsupported,
     });
     expect(chunks).toEqual([]);
   });
@@ -263,7 +270,9 @@ describe("writeFatalCliRecord", () => {
       params: { step: "posting the review" },
     } as const;
     writeCliRecord(posting, env);
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, env),
+    );
     expect(parseCliRecord(onDisk())).toEqual(posting);
     expect(chunks).toEqual([
       "crysk: kept the recorded error outcome; a later step failed\n",
@@ -275,18 +284,22 @@ describe("writeFatalCliRecord", () => {
   // reviewing head, so the publisher posts on the head the lock is on.
   test("a reviewing record is overwritten by the fatal error, which keeps the reviewing head, and nothing is printed", () => {
     recordReviewing(SHA, env);
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, env));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, env),
+    );
     expect(parseCliRecord(onDisk())).toEqual({
       v: 1,
       outcome: "error",
-      cls: unmapped,
+      cls: versionUnsupported,
       head_sha: SHA,
     });
     expect(chunks).toEqual([]);
   });
 
   test("with CRYSK_OUTCOME_DIR unset, nothing is written and nothing is printed", () => {
-    const { chunks } = captureStderr(() => writeFatalCliRecord(unmapped, {}));
+    const { chunks } = captureStderr(() =>
+      writeFatalCliRecord(versionUnsupported, {}),
+    );
     expect(chunks).toEqual([]);
     expect(existsSync(dir)).toBe(false);
   });
@@ -301,7 +314,7 @@ describe("writeFatalCliRecord", () => {
     let chunks: string[] = [];
     try {
       ({ chunks } = captureStderr(() =>
-        writeFatalCliRecord(unmapped, blocked),
+        writeFatalCliRecord(versionUnsupported, blocked),
       ));
     } catch (error) {
       thrown = error;

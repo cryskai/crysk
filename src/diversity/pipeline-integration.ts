@@ -1,4 +1,4 @@
-import type { ResolvedRoutePlan, RoutingConfig } from "#model/routing";
+import type { ResolvedRoutePlan } from "#model/routing";
 import type { DraftFinding } from "#review/drafts";
 import { SCHEMA_VERSION_V1_1 } from "#review/findings";
 import type { AgentSpec, ReviewSpec } from "#review/spec";
@@ -60,7 +60,6 @@ export interface DiversityExecutionContext {
 export interface PrepareDiversityInput {
   readonly reviewSpec: ReviewSpec;
   readonly cliModel?: string;
-  readonly routingConfig?: RoutingConfig;
   readonly frontmatterModel?: (agentKey: string) => string | undefined;
   readonly target?: BenchmarkTarget;
   readonly runtimeTarget?: BenchmarkTarget;
@@ -88,7 +87,6 @@ export function prepareDiversityExecution(
     spec: input.reviewSpec,
     c2SchemaVersion: SCHEMA_VERSION_V1_1,
     cliModel: input.cliModel,
-    routingConfig: input.routingConfig,
     frontmatterModel: input.frontmatterModel,
     target: frozenTarget,
     promptFingerprint: input.promptFingerprint,
@@ -307,9 +305,6 @@ export function recordDiversityHunterResult(
       legId: resolvedLeg.legId,
       backend: routeProvenance.backend,
       provider: routeProvenance.provider,
-      ...(routeProvenance.gateway === undefined
-        ? {}
-        : { gateway: routeProvenance.gateway }),
       modelFamily: routeProvenance.modelFamily,
       modelSnapshot: routeProvenance.modelSnapshot,
       ...(routeProvenance.modelVariant === undefined
@@ -435,9 +430,6 @@ export function diversityDebugFromLedger(
       path: record.observation.path,
       backend: record.observation.backend,
       provider: record.observation.provider,
-      ...(record.observation.gateway === undefined
-        ? {}
-        : { gateway: record.observation.gateway }),
       modelFamily: record.observation.modelFamily,
       modelSnapshot: record.observation.modelSnapshot,
       ...(record.observation.modelVariant === undefined

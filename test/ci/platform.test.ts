@@ -495,33 +495,56 @@ describe("platform review configuration", () => {
       `output:github-token=${GITHUB_TOKEN}\n`,
       `output:run-token=${RUN_TOKEN}\n`,
       `output:config-file=${file}\n`,
+      // A person layer with no models: the default models are in effect.
+      "output:routing-opencode=false\n",
     ]);
     // The token never lands in the config file.
     expect(readFileSync(file, "utf8")).not.toContain(GITHUB_TOKEN);
   });
 
-  test("platform routing that names OpenCode is announced so the CLI gets installed", async () => {
+  test("platform models that name an OpenCode model are announced so the CLI gets installed", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "platform-config-"));
     const h = connect(
-      { person: { routing: { default: { backend: "opencode" } } }, repo: {} },
+      {
+        person: {
+          models: {
+            default: ["claude:sonnet-latest"],
+            "hunter.logic": ["opencode:openai/gpt-5"],
+          },
+        },
+        repo: {},
+      },
       { configDir: dir },
     );
     expect(await h.run()).toBe(0);
     expect(h.events).toContain("output:routing-opencode=true\n");
+    // A model whose NAME holds "opencode" but runs on Claude is not one.
     const claude = connect(
-      { person: { routing: { default: { backend: "claude-code" } } } },
+      { person: { models: { default: ["claude:claude-opencode-1"] } } },
       { configDir: dir },
     );
     expect(await claude.run()).toBe(0);
-    // A platform routing that does not name OpenCode still answers, `false`, so
-    // it overrides an input routing that does.
+    // Platform models that name no OpenCode model still answer, `false`, so
+    // they override an input that does.
     expect(claude.events).toContain("output:routing-opencode=false\n");
-    const none = connect(
+    // A person layer with no models still wins whole over the inputs (the setup
+    // step ignores them), so the default models are in effect: `false`, never
+    // the models input's answer.
+    const noModels = connect(
       { person: { max_changed_lines: 10 } },
       { configDir: dir },
     );
-    expect(await none.run()).toBe(0);
-    expect(none.events.join("")).not.toContain("routing-opencode");
+    expect(await noModels.run()).toBe(0);
+    expect(noModels.events).toContain("output:routing-opencode=false\n");
+    // An empty person layer leaves the inputs in effect, so the output stays
+    // absent and the models input decides.
+    const repoOnly = connect(
+      { person: {}, repo: { max_changed_lines: 10 } },
+      { configDir: dir },
+    );
+    expect(await repoOnly.run()).toBe(0);
+    expect(repoOnly.events.join("")).toContain("output:config-file=");
+    expect(repoOnly.events.join("")).not.toContain("routing-opencode");
   });
 
   test.each([

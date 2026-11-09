@@ -189,6 +189,43 @@ describe("credentialKindForRoute", () => {
     }
   });
 
+  // U3 (S8, L12): an OpenCode route's kind follows which CRYSK_* secret serves
+  // its provider, from the names alone. Absent names keep the provider literal.
+  test("an opencode route's kind follows the CRYSK_* secret names", () => {
+    const kind = (provider: string, names?: readonly string[]) =>
+      credentialKindForRoute("opencode", provider, {}, false, names);
+    expect(kind("openai", ["CRYSK_OPENCODE_OPENAI_API_KEY"])).toBe(
+      "provider_api_token",
+    );
+    expect(kind("openai", ["CRYSK_OPENCODE_OPENAI_OAUTH"])).toBe(
+      "opencode_chatgpt_oauth",
+    );
+    expect(
+      kind("openai", [
+        "CRYSK_OPENCODE_OPENAI_API_KEY",
+        "CRYSK_OPENCODE_OPENAI_OAUTH",
+      ]),
+    ).toBe("opencode_chatgpt_oauth");
+    expect(kind("deepseek", ["CRYSK_OPENCODE_DEEPSEEK_API_KEY"])).toBe(
+      "provider_api_token",
+    );
+    // A refused _OAUTH or another provider's secret decides nothing.
+    expect(kind("deepseek", ["CRYSK_OPENCODE_DEEPSEEK_OAUTH"])).toBe(
+      "provider_api_token",
+    );
+    expect(kind("openai", ["CRYSK_OPENCODE_DEEPSEEK_API_KEY"])).toBe(
+      "opencode_chatgpt_oauth",
+    );
+    expect(kind("openai", [])).toBe("opencode_chatgpt_oauth");
+    expect(kind("openai")).toBe("opencode_chatgpt_oauth");
+    // A claude-code route never reads them.
+    expect(
+      credentialKindForRoute("claude-code", "anthropic", {}, false, [
+        "CRYSK_OPENCODE_OPENAI_API_KEY",
+      ]),
+    ).toBe("claude_subscription_oauth");
+  });
+
   // Fail-closed: metered is the safe default, so a backend nobody has bound
   // must not silently inherit it. It has no credential authority at all.
   test("an unbound backend is refused rather than defaulted", () => {
@@ -403,7 +440,7 @@ describe("resolveBindingAuthority credential identity", () => {
     statFn: () => ({ mode: 0o755 }),
   };
 
-  async function bind(provider: string) {
+  async function bind(provider: string, openCodeSecretNames?: string[]) {
     const result = await resolveBindingAuthority(
       "opencode",
       provider,
@@ -413,6 +450,7 @@ describe("resolveBindingAuthority credential identity", () => {
         executableAllowlists: {
           opencode: [{ absolutePath: canonical, sha256 }],
         },
+        ...(openCodeSecretNames === undefined ? {} : { openCodeSecretNames }),
       },
       deps,
     );
@@ -448,6 +486,22 @@ describe("resolveBindingAuthority credential identity", () => {
     const token = await bind("zai");
     expect(oauth.credentialBroker).toBeInstanceOf(OpenCodeAuthBroker);
     expect(token.credentialBroker).toBeInstanceOf(OpenCodeApiTokenBroker);
+  });
+
+  // U3: the binding reads the CRYSK_* secret names from its options, the same
+  // names the plan's server credential reads (soleOpenCodeCredential), so the
+  // two cannot bind one openai route to two different kinds.
+  test("the binding follows the CRYSK_* secret names in its options", async () => {
+    const apiKey = await bind("openai", ["CRYSK_OPENCODE_OPENAI_API_KEY"]);
+    expect(apiKey.credentialKind).toBe("provider_api_token");
+    expect(apiKey.credentialBroker).toBeInstanceOf(OpenCodeApiTokenBroker);
+    expect(apiKey.credentialRef).toBe("opencode-auth:openai");
+    const both = await bind("openai", [
+      "CRYSK_OPENCODE_OPENAI_API_KEY",
+      "CRYSK_OPENCODE_OPENAI_OAUTH",
+    ]);
+    expect(both.credentialKind).toBe("opencode_chatgpt_oauth");
+    expect(both.credentialBroker).toBeInstanceOf(OpenCodeAuthBroker);
   });
 
   test("an injected broker still overrides both kinds", async () => {
@@ -624,6 +678,108 @@ describe("resolveBindingAuthority claude-code credential kind (#161)", () => {
     );
     expect(withBroker.credentialKind).toBe("claude_subscription_oauth");
     expect(withBroker.credentialBroker).toBe(fake);
+  });
+
+  // S5: the credential chosen at run start decides the binding. An API key attaches
+  // no Keychain broker (on any host), so it bills metered on its own bucket.
+  async function bindChosen(
+    env: Readonly<Record<string, string | undefined>>,
+    claudeCredential: "subscription" | "api_key",
+    credentialBrokers?: { readonly "claude-code": CredentialBroker },
+  ) {
+    const result = await resolveBindingAuthority(
+      "claude-code",
+      "anthropic",
+      {
+        binaryPath: canonical,
+        workspaceRoot: "/fake/ws",
+        executableAllowlists: {
+          "claude-code": [{ absolutePath: canonical, sha256 }],
+        },
+        env,
+        claudeCredential,
+        ...(credentialBrokers === undefined ? {} : { credentialBrokers }),
+      },
+      deps,
+    );
+    if (result.binding === undefined) {
+      throw new Error(result.error ?? "no binding");
+    }
+    return result.binding;
+  }
+
+  test("S5: api_key chosen: metered, no broker even when one is supplied, the API bucket", async () => {
+    const fake: CredentialBroker = {
+      project: async () => {
+        throw new Error("never projected in this test");
+      },
+    };
+    const binding = await bindChosen(
+      { ANTHROPIC_API_KEY: "sk-test" },
+      "api_key",
+      { "claude-code": fake },
+    );
+    expect(binding.credentialKind).toBe("provider_api_token");
+    expect(binding.credentialBroker).toBeUndefined();
+    expect(binding.bucketId).toBe("claude-code-api");
+  });
+
+  test("S5: subscription chosen: subscription kind, the supplied broker attaches", async () => {
+    const fake: CredentialBroker = {
+      project: async () => {
+        throw new Error("never projected in this test");
+      },
+    };
+    const binding = await bindChosen(
+      { CLAUDE_CODE_OAUTH_TOKEN: "oauth" },
+      "subscription",
+      { "claude-code": fake },
+    );
+    expect(binding.credentialKind).toBe("claude_subscription_oauth");
+    expect(binding.credentialBroker).toBe(fake);
+    expect(binding.bucketId).toBe("claude-code");
+  });
+});
+
+describe("resolveRunnerAuthority run env (S5)", () => {
+  const bytes = new TextEncoder().encode("#!/bin/sh\necho hi\n");
+  const canonical = "/fake/bin/claude";
+  const deps = {
+    existsFn: () => true,
+    realpathFn: async (p: string) => p,
+    readFileFn: async () => bytes,
+    statFn: () => ({ mode: 0o755 }),
+  };
+
+  test("an explicit env becomes the runner's childEnv, and api_key drops the broker", async () => {
+    const env = { PATH: "/bin", ANTHROPIC_API_KEY: "sk-test" };
+    const fake: CredentialBroker = {
+      project: async () => {
+        throw new Error("never projected in this test");
+      },
+    };
+    const result = await resolveRunnerAuthority(
+      {
+        binaryPath: canonical,
+        workspaceRoot: "/fake/ws",
+        env,
+        claudeCredential: "api_key",
+        credentialBrokers: { "claude-code": fake },
+      },
+      deps,
+    );
+    if (result.runnerOptions === undefined) throw new Error(result.error);
+    expect(result.runnerOptions.childEnv === env).toBe(true);
+    expect(result.runnerOptions.credentialBroker).toBeUndefined();
+  });
+
+  test("no env given: no childEnv, so the harness keeps reading the process env as before", async () => {
+    const result = await resolveRunnerAuthority(
+      { binaryPath: canonical, workspaceRoot: "/fake/ws" },
+      deps,
+    );
+    if (result.runnerOptions === undefined) throw new Error(result.error);
+    expect("childEnv" in result.runnerOptions).toBe(false);
   });
 });
 

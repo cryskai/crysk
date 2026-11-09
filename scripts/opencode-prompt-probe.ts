@@ -18,7 +18,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { defaultEffortForRole } from "#model/catalog";
-import type { RoutingConfig } from "#model/routing";
+import type { ModelsConfig } from "#model/model-name";
 import { buildResolvedRoutePlan } from "#model/routing";
 import type { ResolvedModelRoute } from "../src/execution/contracts";
 import type { ProductionRuntime } from "../src/production-runtime";
@@ -123,7 +123,8 @@ export function classifyWitnessEvidence(
 interface ArmDef {
   id: string;
   note: string;
-  routing: RoutingConfig | undefined;
+  // The `models` the probe step runs on; absent runs the Claude control.
+  models: ModelsConfig | undefined;
   parallel?: number;
 }
 
@@ -145,48 +146,48 @@ interface RepResult {
 }
 
 if (import.meta.main) {
-  const armRoute = (
-    snapshot: string,
-    variant?: string,
+  // The probe step has no hunter role of its own, so each arm sets `default`.
+  // An effort is the OpenCode variant (S7), sent as the route's modelVariant.
+  const armModels = (
+    model: string,
+    effort?: string,
     provider = "opencode-go",
-  ): RoutingConfig => ({
-    default: {
-      backend: "opencode",
-      provider,
-      gateway: "configured",
-      modelSnapshot: snapshot,
-      ...(variant ? { modelVariant: variant } : {}),
-    },
+  ): ModelsConfig => ({
+    default: [
+      effort === undefined
+        ? `opencode:${provider}/${model}`
+        : { model: `opencode:${provider}/${model}`, effort },
+    ],
   });
 
   const ARMS: ArmDef[] = [
-    { id: "A", note: "claude-code sonnet (control)", routing: undefined },
+    { id: "A", note: "claude-code sonnet (control)", models: undefined },
     {
       id: "B",
-      note: "deepseek-flash#high",
-      routing: armRoute("deepseek-flash", "high"),
+      note: "deepseek-flash, effort high",
+      models: armModels("deepseek-flash", "high"),
     },
-    { id: "C", note: "deepseek-flash", routing: armRoute("deepseek-flash") },
+    { id: "C", note: "deepseek-flash", models: armModels("deepseek-flash") },
     {
       id: "D",
-      note: "glm-5.3-flash#high",
-      routing: armRoute("glm-5.3-flash", "high"),
+      note: "glm-5.3-flash, effort high",
+      models: armModels("glm-5.3-flash", "high"),
     },
     {
       id: "E",
-      note: "glm-5.3-flash#low",
-      routing: armRoute("glm-5.3-flash", "low"),
+      note: "glm-5.3-flash, effort low",
+      models: armModels("glm-5.3-flash", "low"),
     },
     {
       id: "F",
       note: "B x3 parallel",
-      routing: armRoute("deepseek-flash", "high"),
+      models: armModels("deepseek-flash", "high"),
       parallel: 3,
     },
     {
       id: "G",
       note: "direct deepseek-flash",
-      routing: armRoute("deepseek-flash", undefined, "deepseek"),
+      models: armModels("deepseek-flash", undefined, "deepseek"),
     },
   ];
 
@@ -236,8 +237,10 @@ if (import.meta.main) {
   > {
     const plan = buildResolvedRoutePlan({
       agents: [{ key: "probe", role: "hunter" }],
-      cliModel: "sonnet",
-      routingConfig: arm.routing,
+      // A CLI model outranks `models`, so only the control arm passes one.
+      ...(arm.models === undefined
+        ? { cliModel: "sonnet" }
+        : { models: arm.models }),
     });
     const admission = await prepareProductionAdmissionContext({
       workspaceRoot,

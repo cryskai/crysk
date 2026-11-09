@@ -5,14 +5,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { classifyCliError } from "#ci/classify-error";
-import { parseGlobalConfig, parseRoutingConfig } from "#review/preflight";
+import { parseGlobalConfig } from "#review/preflight";
 import { CliError, CliUsageError, withRecordClass } from "../../src/errors";
-import {
-  AmbiguousMappingError,
-  ModelRoutingError,
-  UnauthorizedRouteError,
-  UnmappedRouteError,
-} from "../../src/model/routing";
+import { InvalidModelError, ModelRoutingError } from "../../src/model/routing";
 import {
   admitOpenCodeVersionPair,
   DefaultTransportRegistry,
@@ -25,24 +20,15 @@ import {
 import { OpenCodeSdkUnavailableError } from "../../src/transports/opencode-admission";
 
 describe("classifyCliError: the mapped classes", () => {
-  test("an unmapped route is route/unmapped", () => {
-    expect(classifyCliError(new UnmappedRouteError("x"))).toEqual({
-      kind: "route",
-      reason: "unmapped",
+  // The route classes and their codes went with the alias-keyed routing
+  // (odd/tasks/role-model-routing.md S2, E-f F0): a bad model is an error whose
+  // message is the fix, and no catalog text names it.
+  test("a model that does not resolve is unclassified", () => {
+    expect(classifyCliError(new InvalidModelError("x"))).toEqual({
+      kind: "unknown",
     });
-  });
-
-  test("a duplicate mapping is route/ambiguous", () => {
-    expect(classifyCliError(new AmbiguousMappingError("x"))).toEqual({
-      kind: "route",
-      reason: "ambiguous",
-    });
-  });
-
-  test("a route whose spend is disabled is route/spend-disabled", () => {
-    expect(classifyCliError(new UnauthorizedRouteError("x"))).toEqual({
-      kind: "route",
-      reason: "spend-disabled",
+    expect(classifyCliError(new ModelRoutingError("x"))).toEqual({
+      kind: "unknown",
     });
   });
 
@@ -172,8 +158,8 @@ describe("classifyCliError: the class an error carries", () => {
   });
 });
 
-// The routing class renders PRH-ROUTING-INVALID, whose text names CRYSK_ROUTING. The
-// person file's routing error must not take it; the routing parser itself keeps it.
+// A `routing` key in the person file is refused with the new form, and stays
+// unclassified like the rest of that file: no code's text names the person file.
 describe("classifyCliError: the routing class depends on the layer that parsed", () => {
   function thrownBy(thrower: () => unknown): unknown {
     try {
@@ -188,23 +174,8 @@ describe("classifyCliError: the routing class depends on the layer that parsed",
     const error = thrownBy(() => parseGlobalConfig('{"routing": "invalid"}'));
     expect(error).toBeInstanceOf(CliUsageError);
     expect((error as CliUsageError).message).toBe(
-      "~/.crysk/config.json routing must be an object",
+      '~/.crysk/config.json: `routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`',
     );
     expect(classifyCliError(error)).toEqual({ kind: "unknown" });
-  });
-
-  test("a routing error from the routing parser keeps the routing class, same message", () => {
-    // The repo file cannot reach this parser today: `routing` is not a repo key, so the
-    // repo layer rejects it first as a per-person key. The parser keeps its class anyway.
-    const error = thrownBy(() =>
-      parseRoutingConfig("invalid", ".crysk/config.json"),
-    );
-    expect((error as CliUsageError).message).toBe(
-      ".crysk/config.json routing must be an object",
-    );
-    expect(classifyCliError(error)).toEqual({
-      kind: "config-parse",
-      source: "routing",
-    });
   });
 });

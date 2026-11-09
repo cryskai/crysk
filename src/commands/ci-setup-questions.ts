@@ -193,20 +193,20 @@ export async function askChoices(
         value: "subscription",
         label: "Claude subscription",
         description:
-          "CLAUDE_CODE_OAUTH_TOKEN. Reviews spend quota, not dollars.",
+          "CRYSK_CLAUDE_OAUTH_TOKEN. Reviews spend quota, not dollars.",
       },
       {
         value: "api",
         label: "API key",
         description:
-          "ANTHROPIC_API_KEY or an OpenCode provider. Reviews are billed per token.",
+          "CRYSK_CLAUDE_API_KEY or an OpenCode provider's CRYSK_OPENCODE_* key. Reviews are billed per token.",
       },
     ],
     current.workflow.budgetUsd === undefined ? "subscription" : "api",
   );
   if (choices.billing === "subscription") {
     say(
-      "  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the repo has no ANTHROPIC_API_KEY or OPENCODE_AUTH_JSON secret. Adding either brings back the $10 ceiling.",
+      "  No spend ceiling, and nothing to write: a subscription review spends quota, not dollars, and CI applies no ceiling while the run uses CRYSK_CLAUDE_OAUTH_TOKEN and no OpenCode model with its CRYSK_OPENCODE_* secret. A run on CRYSK_CLAUDE_API_KEY (no subscription set, or api_key first in credentials.claude) or an OpenCode model with its CRYSK_OPENCODE_* secret brings back the $10 ceiling.",
     );
   } else {
     choices.budgetUsd = await askValue(

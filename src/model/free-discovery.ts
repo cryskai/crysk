@@ -1,4 +1,4 @@
-import { OPENCODE_OAUTH_PROVIDER } from "../security/credential-broker";
+import { credentialKindForRoute } from "../runner-authority";
 
 // #182: live free-model discovery. OpenCode free models (backend `opencode`,
 // provider `opencode`, e.g. `muse-spark-1.3-contributor-free`) authenticate
@@ -147,7 +147,10 @@ function headerMatches(
   );
 }
 
-function parseCostBlock(
+// The JSON block `models <provider> --verbose` prints under the model's
+// header: the whole `Model` record (cost, status, variants, ...), parsed, or
+// undefined when the header is absent or the block does not parse.
+function parseModelBlock(
   stdout: string,
   provider: string,
   model: string,
@@ -206,7 +209,7 @@ export async function isFreeModel(input: IsFreeModelInput): Promise<boolean> {
       return false;
     }
     if (result.exitCode !== 0) return false;
-    const parsed = parseCostBlock(result.stdout, input.provider, input.model);
+    const parsed = parseModelBlock(result.stdout, input.provider, input.model);
     if (typeof parsed !== "object" || parsed === null) return false;
     const record = parsed as Record<string, unknown>;
     if (record.status !== "active") return false;
@@ -265,10 +268,12 @@ export function createFreeModelProbe(options: {
 // free verdict covers. Reads only the verdicts admission already decided, so
 // it never spawns — `probe` is the memoised instance admission returned, and a
 // pair admission never probed would spawn here, which is why the gate below
-// is the same one admission applies. Only OpenCode api-token routes can be
-// free: an OAuth provider (OPENCODE_OAUTH_PROVIDER) never probes, and a
-// claude-code step has no free kind at all. A missing probe, or a throwing
-// one, counts as not free: an unknown price is never presented as free.
+// is the same one admission applies (openCodeFreeVerdicts in
+// production-runtime.ts): credentialKindForRoute over the run's CRYSK_OPENCODE_*
+// names (U3), so only a route whose kind is an API token can be free. An OAuth
+// route (`openai` on its `_OAUTH` record, or on no names at all) never probes,
+// and a claude-code step has no free kind at all. A missing probe, or a
+// throwing one, counts as not free: an unknown price is never presented as free.
 export interface FreeRouteBilling {
   readonly free: number;
   readonly total: number;
@@ -283,6 +288,9 @@ export async function countFreeRouteSteps(input: {
     };
   }[];
   readonly probe: FreeModelProbe | undefined;
+  // The names admission read from the setup step's manifest
+  // (productionAdmission.authorityOptions.openCodeSecretNames); absent outside CI.
+  readonly openCodeSecretNames?: readonly string[];
 }): Promise<FreeRouteBilling> {
   const total = input.steps.length;
   if (input.probe === undefined) return { free: 0, total };
@@ -290,7 +298,14 @@ export async function countFreeRouteSteps(input: {
   const verdicts = await Promise.all(
     input.steps.map(async ({ route }) => {
       if (route.backend !== "opencode") return false;
-      if (route.provider === OPENCODE_OAUTH_PROVIDER) return false;
+      const kind = credentialKindForRoute(
+        "opencode",
+        route.provider,
+        {},
+        false,
+        input.openCodeSecretNames,
+      );
+      if (kind !== "provider_api_token") return false;
       try {
         return await probe(route.provider, route.modelSnapshot);
       } catch {
@@ -299,4 +314,98 @@ export async function countFreeRouteSteps(input: {
     }),
   );
   return { free: verdicts.filter((free) => free).length, total };
+}
+
+// S7 (E-g, E2; odd/tasks/role-model-routing.md L34): the variants OpenCode
+// lists for a model, read from the SAME `models <provider> --verbose
+// --refresh` listing the free check reads. OpenCode prints each model's whole
+// `Model` record there (`JSON.stringify(model)` in its `models` command), and
+// that record carries `variants`, keyed by name (SDK v2 `Model.variants`).
+//
+// WHY admission needs it: OpenCode accepts a variant the model does not have
+// without an error, records it as given and runs at the model's default level
+// (the L34 probe, OpenCode 1.19.5). A typo in a `models` entry's `effort`
+// would bill the default and say nothing, so an effort is checked here before
+// the run starts.
+//
+//   listed       the model is in the listing; `variants` may be empty, which
+//                means it has none to choose from;
+//   unavailable  the listing could not be read (spawn error, timeout, non-zero
+//                exit, which includes OpenCode's "Provider not found"), or the
+//                model is not in it. `reason` says which, for the refusal.
+export type ModelVariantsListing =
+  | { readonly kind: "listed"; readonly variants: readonly string[] }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+export type ModelVariantsProbe = (
+  provider: string,
+  model: string,
+) => Promise<ModelVariantsListing>;
+
+// Never throws: every failure is `unavailable`, which admission refuses.
+export function createModelVariantsProbe(options: {
+  readonly binaryPath: string;
+  readonly run?: IsFreeModelInput["run"];
+  readonly timeoutMs?: number;
+}): ModelVariantsProbe {
+  // One listing per provider, however many of its models carry an effort.
+  const listings = new Map<
+    string,
+    Promise<FreeModelDiscoveryRunResult | string>
+  >();
+  const listingOf = (
+    provider: string,
+  ): Promise<FreeModelDiscoveryRunResult | string> => {
+    const cached = listings.get(provider);
+    if (cached !== undefined) return cached;
+    const command = `opencode models ${provider}`;
+    const listing = (async () => {
+      if (!options.binaryPath.startsWith("/")) {
+        return `${command} could not run: no absolute OpenCode binary path`;
+      }
+      const run =
+        options.run ?? ((argv) => defaultRun(argv, options.timeoutMs));
+      try {
+        const result = await run([
+          options.binaryPath,
+          "models",
+          provider,
+          "--verbose",
+          "--refresh",
+        ]);
+        return result.exitCode === 0
+          ? result
+          : `${command} exited ${result.exitCode}`;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        // defaultRun's timeout names the free probe it was written for.
+        return /timed out/.test(detail)
+          ? `${command} timed out`
+          : `${command} failed: ${detail}`;
+      }
+    })();
+    listings.set(provider, listing);
+    return listing;
+  };
+  return async (provider, model) => {
+    const listing = await listingOf(provider);
+    if (typeof listing === "string") {
+      return { kind: "unavailable", reason: listing };
+    }
+    const block = parseModelBlock(listing.stdout, provider, model);
+    if (typeof block !== "object" || block === null) {
+      return {
+        kind: "unavailable",
+        reason: `${provider}/${model} is not in opencode models ${provider}`,
+      };
+    }
+    const variants = (block as Record<string, unknown>).variants;
+    return {
+      kind: "listed",
+      variants:
+        typeof variants === "object" && variants !== null
+          ? Object.keys(variants)
+          : [],
+    };
+  };
 }

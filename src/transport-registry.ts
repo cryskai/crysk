@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { capabilityGateDecision } from "#model/provider-capabilities";
-import type { ResolvedRoutePlan, ResolvedStepRoute } from "#model/routing";
+import {
+  planRoutes,
+  type ResolvedRoutePlan,
+  type ResolvedStepRoute,
+} from "#model/routing";
 import { type AssetMode, detectAssetMode } from "./assets";
 // Route-keyed transport factory/cache: one ProviderTransport instance per
 // `${backend}:${routeFingerprint}`. `release()` drops a lease; teardown order
@@ -492,6 +496,10 @@ export interface TransportFactoryOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   // #149: the credential broker the authority resolved for the opencode
   // backend. The server runs under its projection for the servers whole life.
+  // U4: on the registry it is only the default, set when the plan runs on one
+  // OpenCode credential; each binding passes its own on get() (acquire), and
+  // `{ ...defaultOptions, ...options }` lets that one win, so a plan on several
+  // credentials gives each route's server its own broker.
   readonly credentialBroker?: CredentialBroker;
   // #133: the KIND that broker was resolved for. Travels beside it and is
   // only ever meaningful as a pair — see openCodeLaunchServerFor.
@@ -971,7 +979,9 @@ export async function admitRoutePlan(
   const reports = new Map<RunnerBackend, ProviderCapabilityReport>();
   const mode = options.mode ?? "production";
 
-  for (const step of plan.steps) {
+  // Every route the plan may run, fallbacks included (S4): a fallback on a
+  // backend that is not admissible fails here, before anything spends.
+  for (const step of planRoutes(plan)) {
     const backend = step.route.backend;
 
     if (!registry.has(backend)) {

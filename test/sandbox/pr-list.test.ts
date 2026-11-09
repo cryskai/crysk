@@ -24,7 +24,7 @@ function pr(number: number, headRefName: string, fork = false): Row {
     headRefName,
     url: `https://github.com/${SANDBOX_REPO}/pull/${number}`,
     isCrossRepository: fork,
-    headRepositoryOwner: { login: fork ? "stranger" : "juanmaagd" },
+    headRepositoryOwner: { login: fork ? "stranger" : "cryskai" },
   };
 }
 

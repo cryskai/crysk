@@ -908,22 +908,12 @@ describe("materiality gate: route and ceiling (S14, S5)", () => {
     expect(result.skillOutput.findings[0]?.tier).toBe("advisory");
   });
 
-  test("an in-run plan built over routing that sends sonnet to OpenCode stands down", async () => {
-    // Hunters moved to haiku so the sonnet→OpenCode mapping reaches only the
-    // judge: the hunters share the judge's alias by default.
+  // L6 item 5: `models.judge` keeps only sonnet and opus; with neither left
+  // the plan carries no judge step and the gate stands down.
+  test("an in-run plan whose models.judge names no measured model stands down", async () => {
     const input = await makeInput({
       ...GATE_ON,
-      model: "haiku",
-      routingConfig: {
-        mappings: [
-          {
-            logical: "sonnet",
-            backend: "opencode",
-            provider: "anthropic",
-            modelSnapshot: "claude-sonnet-5-5",
-          },
-        ],
-      },
+      models: { judge: ["opencode:anthropic/claude-sonnet-5-5"] },
     });
     const runner = new FakeStepRunner({
       ...hunters([draft()]),
@@ -940,9 +930,9 @@ describe("materiality gate: route and ceiling (S14, S5)", () => {
     });
   });
 
-  test("a claude-code judge step behind a non-direct gateway stands down", async () => {
-    // claude-code over openrouter passes the snapshot verbatim as --model:
-    // a different, unmeasured judge, so the gate must not run it.
+  test("a claude-code judge step on an unmeasured model stands down", async () => {
+    // A pinned id reaches --model as written: a different, unmeasured judge,
+    // so the gate must not run it.
     const claude = (stepKey: string, role: string) =>
       resolveStepRoute({ stepKey, role, specModel: "sonnet" });
     const judge = claude("materiality", "other");
@@ -955,8 +945,7 @@ describe("materiality gate: route and ceiling (S14, S5)", () => {
         ...judge,
         route: {
           ...judge.route,
-          gateway: "openrouter",
-          modelSnapshot: "other/model",
+          modelSnapshot: "claude-sonnet-5-5",
         },
       },
     ]);
@@ -979,6 +968,36 @@ describe("materiality gate: route and ceiling (S14, S5)", () => {
       status: "unsupported_route",
       reason: "judge route is not the measured claude-code route",
     });
+  });
+
+  test("models.judge may pick opus: the judge runs on it and the record says so", async () => {
+    const input = await makeInput({
+      ...GATE_ON,
+      models: {
+        judge: ["claude:opus-latest"],
+        default: ["claude:haiku-latest"],
+      },
+    });
+    const runner = new FakeStepRunner({
+      ...hunters([draft()]),
+      materiality: (spec) => parsed(spec, verdict("immaterial")),
+    });
+
+    const result = await runPipeline(input, { runner });
+
+    const [judge] = judgeSteps(runner);
+    expect(judge?.route?.modelSnapshot).toBe("opus");
+    expect(judge?.model).toBe("opus");
+    expect(result.skillOutput.findings[0]?.tier).toBe("advisory");
+    expect(await readMaterialityRecord(input.runDir)).toMatchObject({
+      status: "ran",
+      model: "opus",
+    });
+    // models.default moved the hunters, never the judge.
+    expect(
+      runner.specs.find((s) => s.name.startsWith("hunter-"))?.route
+        ?.modelSnapshot,
+    ).toBe("haiku");
   });
 
   test("a queued fan-out judges only what fits the ceiling; the rest stays blocking", async () => {

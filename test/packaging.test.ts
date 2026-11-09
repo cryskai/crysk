@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -547,6 +548,38 @@ describe("Packaging & distribution configuration", () => {
       // healthy. A `with:` key with no matching input is silently ignored by
       // GitHub Actions; nothing else in this repo would notice.
       const declared = Object.keys(parsedAction().inputs);
+      const keysOf = (template: string): string[] => {
+        const workflow = Bun.YAML.parse(template) as {
+          jobs: {
+            review: {
+              steps: Array<{ uses?: string; with?: Record<string, string> }>;
+            };
+          };
+        };
+        return workflow.jobs.review.steps.flatMap((step) =>
+          (step.uses === "./" || step.uses?.startsWith("cryskai/crysk@")) &&
+          step.with !== undefined
+            ? Object.keys(step.with)
+            : [],
+        );
+      };
+      // The scaffolded template (E-f F4): the CRYSK_* secrets and the two
+      // variable-fed inputs, and none of the removed inputs, which stay declared
+      // only so the trigger can name them.
+      const scaffolded = keysOf(generateCiWorkflowTemplate());
+      expect(scaffolded.length).toBeGreaterThan(0);
+      for (const key of scaffolded) expect(declared).toContain(key);
+      for (const key of ["crysk-secrets", "models", "credentials"]) {
+        expect(scaffolded).toContain(key);
+      }
+      for (const removed of [
+        "anthropic-api-key",
+        "claude-token",
+        "opencode-auth",
+        "routing",
+      ]) {
+        expect(scaffolded).not.toContain(removed);
+      }
       const workflow = Bun.YAML.parse(
         generateCiWorkflowTemplate(OWN_CI_WORKFLOW_OPTIONS),
       ) as {
@@ -572,17 +605,34 @@ describe("Packaging & distribution configuration", () => {
       for (const key of ours) {
         expect(declared).toContain(key);
       }
-      // And both credential paths are actually wired, not just declared.
-      expect(ours).toContain("anthropic-api-key");
-      expect(ours).toContain("claude-token");
+      // This repo's own workflow passes its credentials in crysk-secrets (U5),
+      // and none of the removed inputs.
+      expect(ours).toContain("crysk-secrets");
+      for (const removed of [
+        "anthropic-api-key",
+        "claude-token",
+        "opencode-auth",
+        "routing",
+      ]) {
+        expect(ours).not.toContain(removed);
+      }
     });
 
-    test("run step invokes bin/pr-hero.js — the entrypoint verified to actually run", () => {
+    // U5: the step runs src/ci/run.ts, which takes the crysk-secrets input and
+    // then calls the same runCli bin/pr-hero.js calls under Bun.
+    test("run step invokes src/ci/run.ts, which runs the CLI bin/pr-hero.js runs", () => {
       const action = parsedAction();
       const runStep = action.runs.steps.find(
         (step) => step.id === "run-crysk",
       ) as { run?: string } | undefined;
-      expect(runStep?.run).toContain("bin/pr-hero.js");
+      expect(runStep?.run).toContain("src/ci/run.ts");
+      const entry = readFileSync(
+        path.join(rootDir, "src", "ci", "run.ts"),
+        "utf8",
+      );
+      expect(entry).toContain('import { runCli } from "../cli";');
+      const bin = readFileSync(path.join(rootDir, "bin", "pr-hero.js"), "utf8");
+      expect(bin).toContain('await import("../src/cli.ts")');
     });
 
     test("passes --ci unconditionally (--budget-usd/--step-summary require it at parse time)", () => {
@@ -620,8 +670,12 @@ describe("Packaging & distribution configuration", () => {
       // Outputs of the platform connect step (empty in a standalone run).
       platform?: Record<string, string>;
     }
+    // Whether the models in effect name OpenCode: the platform's answer when it
+    // sent models (`true` or `false`), the models input's otherwise (E-f F3, D1).
+    // The routing input no longer counts: a value there stops the run (U5).
     const EFFECTIVE_OPENCODE_ROUTING =
-      "steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode'))";
+      "steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.models, 'opencode:'))";
+
     function resolveEnv(
       env: Record<string, string>,
       ctx: ActionContext,
@@ -652,13 +706,20 @@ describe("Packaging & distribution configuration", () => {
           )?.[1];
         if (fallback !== undefined) return input(fallback);
         if (expr === "steps.platform.outputs.github-actor") return "";
-        // The effective OpenCode routing: the platform's answer when it sent a
-        // routing (`true` or `false`), the input's otherwise.
+        // The setup step's platform bindings, unset in a standalone run.
+        if (expr === "steps.platform.outputs.config-file") {
+          return ctx.platform?.["config-file"] ?? "";
+        }
+        if (expr === "steps.platform.outputs.github-token != ''") {
+          return String((ctx.platform?.["github-token"] ?? "") !== "");
+        }
+        // The models in effect: the platform's answer when it sent models,
+        // the models input's otherwise.
         if (expr === EFFECTIVE_OPENCODE_ROUTING) {
           const platformRouting = ctx.platform?.["routing-opencode"] ?? "";
           return String(
             platformRouting === "true" ||
-              (platformRouting === "" && input("routing").includes("opencode")),
+              (platformRouting === "" && input("models").includes("opencode:")),
           );
         }
         const materialized = /^steps\.materialize\.outputs\.([\w-]+)$/.exec(
@@ -731,14 +792,16 @@ describe("Packaging & distribution configuration", () => {
       const runner = { temp: runnerTemp };
       try {
         let output = "";
+        // The step pipes the crysk-secrets input on stdin and starts bun with
+        // the variable emptied, so the trigger gets it as `cryskSecrets`.
+        const { CRYSK_SECRETS_INPUT: piped = "", ...triggerEnv } = resolveEnv(
+          triggerStep()?.env ?? {},
+          { inputs, github, trigger: {}, runner },
+        );
         const exitCode = runCiTrigger({
+          cryskSecrets: piped,
           env: {
-            ...resolveEnv(triggerStep()?.env ?? {}, {
-              inputs,
-              github,
-              trigger: {},
-              runner,
-            }),
+            ...triggerEnv,
             // Runner defaults every step inherits, not `env:` bindings.
             GITHUB_REPOSITORY: github.repository ?? "",
             GITHUB_RUN_ID: "4242",
@@ -819,7 +882,11 @@ describe("Packaging & distribution configuration", () => {
 
     const REPOSITORY = "acme/widgets";
     const HEAD = "c".repeat(40);
-    const CREDENTIAL = { "claude-token": "oauth-test-token" };
+    // The run's credential, as a workflow passes it since U5: one line of the
+    // crysk-secrets input.
+    const CREDENTIAL = {
+      "crysk-secrets": "CRYSK_CLAUDE_OAUTH_TOKEN=oauth-test-token",
+    };
     const dispatchContext = {
       repository: REPOSITORY,
       event_name: "workflow_dispatch",
@@ -947,15 +1014,43 @@ describe("Packaging & distribution configuration", () => {
       }
     });
 
-    test("platform routing that names OpenCode installs the OpenCode CLI too, and platform routing that does not overrides the input", () => {
+    // L28 decision 3: the CLI is installed when the setup step wrote an OpenCode
+    // auth file from the CRYSK_OPENCODE_* secrets, or when the models in effect
+    // name OpenCode (a self-hosted runner's own auth file, or a free model, still
+    // gets the CLI). E-f F3: the setup step reports the models in effect, the
+    // models input included, as opencode-models.
+    test("the OpenCode CLI is installed when setup wrote its auth file or the models in effect name OpenCode", () => {
       const install = steps().find(
         (step) => step.name === "Install OpenCode CLI",
       );
-      // The same effective test the trigger step binds: the platform's answer
-      // when it sent a routing, the input's only when it sent none.
       expect(String(install?.if)).toBe(
-        `\${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || ${EFFECTIVE_OPENCODE_ROUTING}) }}`,
+        `\${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') }}`,
       );
+      // No input decides it: the setup step read the models input already.
+      expect(String(install?.if)).not.toContain("inputs.");
+    });
+
+    // E-f F3 (D1): the two inputs reach the setup step only, as values. The
+    // trigger learns only whether the models input names OpenCode.
+    test("only the setup step binds the models and credentials inputs as values", () => {
+      for (const input of ["models", "credentials"]) {
+        expect(parsedAction().inputs[input]?.required, input).toBe(false);
+        expect(parsedAction().inputs[input]?.default, input).toBe("");
+        const binders = steps().filter((step) =>
+          JSON.stringify(step).includes(`inputs.${input} }}`),
+        );
+        expect(
+          binders.map((step) => step.id),
+          input,
+        ).toEqual(["materialize"]);
+      }
+      const setup = steps().find((step) => step.id === "materialize");
+      expect(setup?.env?.MODELS_INPUT).toBe(`\${{ inputs.models }}`);
+      expect(setup?.env?.CREDENTIALS_INPUT).toBe(`\${{ inputs.credentials }}`);
+      const mentions = steps()
+        .filter((step) => JSON.stringify(step).includes("inputs.models"))
+        .map((step) => step.id);
+      expect(mentions).toEqual(["trigger", "materialize"]);
     });
 
     test.each([
@@ -968,13 +1063,59 @@ describe("Packaging & distribution configuration", () => {
       ],
       ["platform does not, input names OpenCode", "false", "opencode", "false"],
       ["platform does not, input empty", "false", "", "false"],
-      ["no platform routing, input names OpenCode", "", "opencode", "true"],
+      // The routing input no longer names the backend: a value there is a
+      // removed input, and the trigger stops the run for it.
+      ["no platform routing, input names OpenCode", "", "opencode", "false"],
       ["no platform routing, input empty", "", "", "false"],
     ])(
-      "the trigger's backend flag follows the platform's routing over the input: %s",
+      "the trigger's backend flag never follows the routing input: %s",
       (_label, platformRouting, routing, expected) => {
         const env = resolveEnv(triggerStep()?.env ?? {}, {
           inputs: { routing },
+          github: {},
+          trigger: {},
+          runner: { temp: "/runner/temp" },
+          platform: { "routing-opencode": platformRouting },
+        });
+        expect(env.HAS_OPENCODE_ROUTING).toBe(expected);
+      },
+    );
+
+    // E-f F3 (D1): the models input names the backend when the platform sent no
+    // models; models the platform sent win, `false` included.
+    test.each([
+      [
+        "no platform models, input names OpenCode",
+        "",
+        "opencode:deepseek/deepseek-chat",
+        "true",
+      ],
+      [
+        "no platform models, input names Claude only",
+        "",
+        "claude:sonnet-latest",
+        "false",
+      ],
+      ["no platform models, input empty", "", "", "false"],
+      [
+        "platform names OpenCode, input Claude only",
+        "true",
+        "claude:sonnet-latest",
+        "true",
+      ],
+      [
+        "platform does not, input names OpenCode",
+        "false",
+        "opencode:deepseek/deepseek-chat",
+        "false",
+      ],
+    ])(
+      "the trigger's backend flag follows the models in effect: %s",
+      (_label, platformRouting, model, expected) => {
+        const env = resolveEnv(triggerStep()?.env ?? {}, {
+          inputs: {
+            models: model === "" ? "" : JSON.stringify({ default: [model] }),
+          },
           github: {},
           trigger: {},
           runner: { temp: "/runner/temp" },
@@ -1084,12 +1225,13 @@ describe("Packaging & distribution configuration", () => {
       ]);
     });
 
-    test("credentials reach the trigger as presence booleans, never as values", () => {
+    test("the removed inputs reach the trigger as presence booleans, never as values", () => {
       const env = triggerStep()?.env ?? {};
       for (const input of [
         "anthropic-api-key",
         "claude-token",
         "opencode-auth",
+        "routing",
       ]) {
         const bound = Object.values(env).filter((value) =>
           value.includes(`inputs.${input}`),
@@ -1296,6 +1438,8 @@ describe("Packaging & distribution configuration", () => {
       expect(failed.cliStarted).toBe(true);
     });
 
+    // U5: the last command pipes the crysk-secrets input to src/ci/run.ts, which
+    // reads it, then runs the CLI with the same arguments (test/ci/run.test.ts).
     test("the run step's last command is the CLI itself, so the job's result is the CLI's", () => {
       const run = steps().find((step) => step.id === "run-crysk");
       const lastCommand = String(run?.run ?? "")
@@ -1304,8 +1448,418 @@ describe("Packaging & distribution configuration", () => {
         .filter((line) => line !== "" && !line.startsWith("#"))
         .at(-1);
       expect(lastCommand).toBe(
-        `bun "\${{ github.action_path }}/bin/pr-hero.js" "$@"`,
+        `printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "\${{ github.action_path }}/src/ci/run.ts" "$@"`,
       );
+    });
+
+    // Only the crysk-secrets input carries a Claude credential to the review: the
+    // removed inputs are not bound, so nothing a workflow passes there reaches it,
+    // and the CLI's own variables are bound empty, so a job-level value reaches no
+    // child of the CLI (git, gh, the OpenCode server), as the old bindings ensured.
+    test("Run Crysk binds the Claude variables empty, and only the crysk-secrets input carries a credential", () => {
+      const run = steps().find((step) => step.id === "run-crysk");
+      expect(run?.env?.CRYSK_SECRETS_INPUT).toBe(
+        `\${{ inputs.crysk-secrets }}`,
+      );
+      // E-f F5: the CRYSK_CLAUDE_* names too, so a job-level one is emptied as well.
+      for (const name of [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CRYSK_CLAUDE_OAUTH_TOKEN",
+        "CRYSK_CLAUDE_API_KEY",
+      ]) {
+        expect(run?.env?.[name], name).toBe("");
+      }
+      const raw = JSON.stringify(steps());
+      for (const input of [
+        "anthropic-api-key",
+        "claude-token",
+        "opencode-auth",
+      ]) {
+        expect(raw.includes(`inputs.${input} }}`), input).toBe(false);
+      }
+      expect(raw.includes("inputs.routing }}")).toBe(false);
+    });
+
+    // The fake `bun` prints what reaches it; the run step's pipe must hand the CLI
+    // the input on stdin and an empty variable, never the value in its env.
+    test("the run step pipes the input on stdin and starts bun with the variable empty", () => {
+      const run = steps().find((step) => step.id === "run-crysk");
+      const script = String(run?.run ?? "").replaceAll(
+        `\${{ github.action_path }}`,
+        "/action",
+      );
+      const fakeBun =
+        'bun() { printf "env=[%s]\\n" "$CRYSK_SECRETS_INPUT"; printf "stdin=[%s]\\n" "$(cat)"; }';
+      const dir = mkdtempSync(path.join(os.tmpdir(), "crysk-run-pipe-"));
+      try {
+        const result = Bun.spawnSync(
+          [
+            "bash",
+            "--noprofile",
+            "--norc",
+            "-eo",
+            "pipefail",
+            "-c",
+            `${fakeBun}\n${script}`,
+          ],
+          {
+            env: {
+              CRYSK_OUTCOME_DIR: dir,
+              CRYSK_SECRETS_INPUT: "CRYSK_CLAUDE_OAUTH_TOKEN=pipe-test-token",
+              TRIGGER_PR: "305",
+              PATH: process.env.PATH ?? "",
+            },
+          },
+        );
+        const out = result.stdout.toString();
+        expect(result.exitCode).toBe(0);
+        expect(out).toContain("env=[]\n");
+        expect(out).toContain(
+          "stdin=[CRYSK_CLAUDE_OAUTH_TOKEN=pipe-test-token]\n",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    // U5 clean break: an old input with a value stops the run at the trigger,
+    // through the action's own bindings, even beside a CRYSK_* credential.
+    test.each([
+      ["claude-token", "oauth-test-token"],
+      ["anthropic-api-key", "sk-ant-test"],
+      ["opencode-auth", '{"zai":{"type":"api","key":"k"}}'],
+      ["routing", '{"logical":{}}'],
+    ])(
+      "a workflow still passing %s never reaches the CLI: a removed-inputs record naming it",
+      async (input, value) => {
+        const run = await runAction(
+          { ...CREDENTIAL, "pr-number": "305", [input]: value },
+          { repository: REPOSITORY, event_name: "workflow_dispatch" },
+        );
+        expect(run.exitCode).toBe(1);
+        expect(run.args).toBeUndefined();
+        expect(run.cliStarted).toBe(false);
+        expect(JSON.parse(run.record ?? "{}")).toMatchObject({
+          decision: "removed-inputs",
+          params: { detail: input },
+        });
+        expect(run.record).not.toContain(value);
+      },
+    );
+
+    // E-f F5: a job-level Claude variable must not reach any process the action
+    // starts (git, gh, npm, the OpenCode installer, the engine and its children).
+    // A step `env:` binding of '' is what empties a variable a job set, so every
+    // step with a `run:` binds the five; the engine gets its Claude credential from
+    // the crysk-secrets input instead.
+    describe("every step that starts a process empties the Claude variables", () => {
+      const CLAUDE_VARIABLES = [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CRYSK_CLAUDE_OAUTH_TOKEN",
+        "CRYSK_CLAUDE_API_KEY",
+      ];
+      const processSteps = () =>
+        steps().filter((step) => step.run !== undefined);
+
+      test("each run step binds the five to an empty value", () => {
+        expect(processSteps().length).toBeGreaterThan(5);
+        for (const step of processSteps()) {
+          for (const name of CLAUDE_VARIABLES) {
+            expect(step.env?.[name], `${step.id ?? step.name} ${name}`).toBe(
+              "",
+            );
+          }
+        }
+      });
+
+      // Each step's own script under the runner's bash flags, the job env under
+      // the step's bindings (every expression resolved to empty), and every
+      // command it can start replaced by a function that records whether a
+      // Claude variable reached it.
+      test("with the five set at job level, no process a step starts sees one", () => {
+        const job = Object.fromEntries(
+          CLAUDE_VARIABLES.map((name) => [name, `SENTINEL-JOB-${name}`]),
+        );
+        // Records go to a file: a fake's stdout may be piped (curl | bash).
+        const fakes = ["bun", "gh", "git", "npm", "curl"]
+          .map(
+            (cmd) =>
+              `${cmd}() { for v in ${CLAUDE_VARIABLES.join(" ")}; do if [ -n "\${!v}" ]; then echo "LEAK ${cmd} $v" >> "$F5_RECORD"; fi; done; echo "ran ${cmd}" >> "$F5_RECORD"; }`,
+          )
+          .join("\n");
+        const root = mkdtempSync(path.join(os.tmpdir(), "crysk-f5-"));
+        try {
+          const action = path.join(root, "action");
+          mkdirSync(action);
+          // The install step runs bun install only where package.json exists.
+          writeFileSync(path.join(action, "package.json"), "{}");
+          mkdirSync(path.join(root, "pr-hero-outcome"));
+          const ran: string[] = [];
+          const record = path.join(root, "record");
+          for (const step of processSteps()) {
+            const bindings = Object.fromEntries(
+              Object.entries(step.env ?? {}).map(([name, value]) => [
+                name,
+                String(value)
+                  .replaceAll(`\${{ runner.temp }}`, root)
+                  .replace(/\$\{\{[^}]*\}\}/g, ""),
+              ]),
+            );
+            const script = (step.run ?? "").replaceAll(
+              `\${{ github.action_path }}`,
+              action,
+            );
+            const result = Bun.spawnSync(
+              [
+                "bash",
+                "--noprofile",
+                "--norc",
+                "-eo",
+                "pipefail",
+                "-c",
+                `${fakes}\n${script}`,
+              ],
+              {
+                cwd: root,
+                env: {
+                  // The system's own tools only, so a `claude` the host has
+                  // installed never skips the installer step.
+                  PATH: "/usr/bin:/bin",
+                  HOME: root,
+                  GITHUB_PATH: path.join(root, "github-path"),
+                  CRYSK_OUTCOME_DIR: root,
+                  F5_RECORD: record,
+                  ...job,
+                  ...bindings,
+                },
+              },
+            );
+            expect(result.exitCode, step.id ?? step.name).toBe(0);
+            const out = existsSync(record) ? readFileSync(record, "utf8") : "";
+            rmSync(record, { force: true });
+            expect(out, step.id ?? step.name).not.toContain("LEAK");
+            ran.push(...(out.match(/^ran \w+$/gm) ?? []));
+          }
+          // The fakes really stood in for the processes: the steps started them.
+          expect(ran).toContain("ran bun");
+          expect(ran).toContain("ran npm");
+          expect(ran).toContain("ran curl");
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    });
+
+    // E-f F4 (odd/tasks/role-model-routing.md, D1, D2): the workflow `crysk ci
+    // init` scaffolds, its Run Crysk `with:` evaluated the way GitHub would for a
+    // repository holding every secret the file names, then run through the
+    // action's trigger, setup and run steps. Before F4 the scaffold passed the
+    // removed inputs, so a person who set the secrets it named was stopped with
+    // CRYSK-INPUT-REMOVED.
+    describe("the scaffolded workflow reviews", () => {
+      interface WorkflowContext {
+        secrets: Record<string, string>;
+        vars: Record<string, string>;
+      }
+      // fromJSON(vars.X || '[]')[i]: the i-th token, or null past the end, which
+      // GitHub renders as the empty string.
+      const slotToken = (
+        variable: string,
+        index: string,
+        ctx: WorkflowContext,
+      ): string => {
+        const list = JSON.parse(ctx.vars[variable] || "[]") as unknown[];
+        const token = list[Number(index)];
+        return typeof token === "string" ? token : "";
+      };
+      const SLOT = String.raw`fromJSON\(vars\.(\w+) \|\| '\[\]'\)\[(\d+)\]`;
+      // The expression shapes a scaffolded `with:` uses; anything else throws, so
+      // a new shape fails here instead of resolving to a guess.
+      function resolveWorkflowExpr(expr: string, ctx: WorkflowContext): string {
+        const secret = /^secrets\.(\w+)$/.exec(expr)?.[1];
+        if (secret !== undefined) return ctx.secrets[secret] ?? "";
+        const variable = /^vars\.(\w+)$/.exec(expr)?.[1];
+        if (variable !== undefined) return ctx.vars[variable] ?? "";
+        const either = /^vars\.(\w+) \|\| vars\.(\w+)$/.exec(expr);
+        if (either !== null) {
+          return ctx.vars[either[1] ?? ""] || (ctx.vars[either[2] ?? ""] ?? "");
+        }
+        const slot = new RegExp(`^${SLOT}$`).exec(expr);
+        if (slot !== null) return slotToken(slot[1] ?? "", slot[2] ?? "", ctx);
+        const slotSecret = new RegExp(
+          String.raw`^secrets\[format\('CRYSK_OPENCODE_\{0\}_API_KEY', ${SLOT}\)\]$`,
+        ).exec(expr);
+        if (slotSecret !== null) {
+          const token = slotToken(
+            slotSecret[1] ?? "",
+            slotSecret[2] ?? "",
+            ctx,
+          );
+          return ctx.secrets[`CRYSK_OPENCODE_${token}_API_KEY`] ?? "";
+        }
+        throw new Error(`unsupported expression in a workflow with: ${expr}`);
+      }
+      // The scaffold's Run Crysk `with:` as the action receives it.
+      function scaffoldInputs(ctx: WorkflowContext): Record<string, string> {
+        const workflow = Bun.YAML.parse(generateCiWorkflowTemplate()) as {
+          jobs: {
+            review: {
+              steps: Array<{ uses?: string; with?: Record<string, unknown> }>;
+            };
+          };
+        };
+        const step = workflow.jobs.review.steps.find((s) =>
+          s.uses?.startsWith("cryskai/crysk@"),
+        );
+        return Object.fromEntries(
+          Object.entries(step?.with ?? {}).map(([key, value]) => [
+            key,
+            String(value).replace(
+              /\$\{\{\s*(.+?)\s*\}\}/g,
+              (_m, expr: string) => resolveWorkflowExpr(expr, ctx),
+            ),
+          ]),
+        );
+      }
+      // Every `secrets.NAME` the scaffold names, each holding a value of its
+      // kind (an `_OAUTH` secret is a base64 login record).
+      const OAUTH_RECORD = Buffer.from(
+        JSON.stringify({
+          type: "oauth",
+          access: "value-of-access",
+          refresh: "value-of-refresh",
+          expires: 1_900_000_000_000,
+        }),
+      ).toString("base64");
+      function everyNamedSecret(): Record<string, string> {
+        const names = new Set(
+          [
+            ...generateCiWorkflowTemplate().matchAll(/secrets\.([A-Z]\w*)/g),
+          ].map((m) => m[1] ?? ""),
+        );
+        names.delete("GITHUB_TOKEN");
+        return Object.fromEntries(
+          [...names].map((name) => [
+            name,
+            name.endsWith("_OAUTH") ? OAUTH_RECORD : `value-of-${name}`,
+          ]),
+        );
+      }
+      const pullRequest = {
+        repository: REPOSITORY,
+        event_name: "pull_request",
+        "event.pull_request.number": "12",
+        "event.pull_request.head.repo.full_name": REPOSITORY,
+        "event.pull_request.head.sha": HEAD,
+      };
+
+      // action.yml's own setup step script, under the runner's bash flags, with
+      // the step's own env bindings resolved from the inputs.
+      function runSetupStep(inputs: Record<string, string>): {
+        exitCode: number;
+        output: string;
+        authFile: string | undefined;
+        stderr: string;
+      } {
+        const root = mkdtempSync(path.join(os.tmpdir(), "crysk-scaffold-"));
+        try {
+          const home = path.join(root, "home");
+          const workspace = path.join(root, "workspace");
+          const runnerTemp = path.join(root, "runner");
+          mkdirSync(home);
+          mkdirSync(workspace);
+          mkdirSync(path.join(runnerTemp, "pr-hero-outcome"), {
+            recursive: true,
+          });
+          Bun.spawnSync(["git", "init", "-q"], { cwd: workspace });
+          const githubOutput = path.join(root, "github-output");
+          writeFileSync(githubOutput, "");
+          const setup = steps().find((step) => step.id === "materialize");
+          const env = resolveEnv(setup?.env ?? {}, {
+            inputs,
+            github: pullRequest,
+            trigger: {},
+            runner: { temp: runnerTemp },
+          });
+          const script = (setup?.run ?? "").replaceAll(
+            `\${{ github.action_path }}`,
+            rootDir,
+          );
+          const result = Bun.spawnSync(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+            {
+              cwd: workspace,
+              env: {
+                ...env,
+                PATH: process.env.PATH ?? "",
+                HOME: home,
+                GITHUB_OUTPUT: githubOutput,
+                XDG_DATA_HOME: "",
+              },
+            },
+          );
+          const authPath = path.join(
+            home,
+            ".local",
+            "share",
+            "opencode",
+            "auth.json",
+          );
+          return {
+            exitCode: result.exitCode,
+            output: readFileSync(githubOutput, "utf8"),
+            authFile: existsSync(authPath)
+              ? readFileSync(authPath, "utf8")
+              : undefined,
+            stderr: result.stderr.toString(),
+          };
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }
+
+      test("with every secret it names set and no variables, the trigger lets the review run and setup succeeds", async () => {
+        const inputs = scaffoldInputs({
+          secrets: everyNamedSecret(),
+          vars: {},
+        });
+        const run = await runAction(inputs, pullRequest);
+        expect(JSON.parse(run.record ?? "{}").decision).toBe("review");
+        expect(run.trigger.run).toBe("true");
+        expect(run.args?.slice(0, 3)).toEqual(["review", "--pr", "12"]);
+        const setup = runSetupStep(inputs);
+        expect(setup.stderr).toBe("");
+        expect(setup.exitCode).toBe(0);
+        expect(setup.output).toContain("crysk-secrets=");
+        expect(setup.authFile).toBeUndefined();
+      });
+
+      test("an OpenCode provider listed in vars.CRYSK_OPENCODE_PROVIDERS reaches the setup step through its slot", async () => {
+        const inputs = scaffoldInputs({
+          secrets: {
+            CRYSK_CLAUDE_OAUTH_TOKEN: "value-of-oauth",
+            CRYSK_OPENCODE_DEEPSEEK_API_KEY: "value-of-deepseek",
+          },
+          vars: {
+            CRYSK_MODELS: JSON.stringify({
+              default: ["opencode:deepseek/deepseek-chat"],
+            }),
+            CRYSK_OPENCODE_PROVIDERS: '["DEEPSEEK"]',
+          },
+        });
+        const run = await runAction(inputs, pullRequest);
+        expect(run.trigger.run).toBe("true");
+        const setup = runSetupStep(inputs);
+        expect(setup.exitCode).toBe(0);
+        expect(setup.output).toContain("opencode-auth-file=true");
+        expect(JSON.parse(setup.authFile ?? "{}")).toEqual({
+          deepseek: { type: "api", key: "value-of-deepseek" },
+        });
+      });
     });
 
     test("a run with no credential never reaches the CLI: no marker, and a no-credentials record", async () => {
@@ -1439,7 +1993,7 @@ describe("Packaging & distribution configuration", () => {
       expect(install).toBeDefined();
       expect(install).not.toBe(run);
       expect(install?.id).not.toBe("run-crysk");
-      expect(String(install?.if)).toContain("inputs.");
+      expect(String(install?.if)).toContain("steps.materialize.outputs.");
       expect(String(install?.if)).not.toContain("secrets.");
       expect(install?.run).toContain("--version 1.18.30");
       expect(install?.run).not.toContain("latest");
@@ -1623,10 +2177,11 @@ describe("Packaging & distribution configuration", () => {
     expect(existsSync(refPath)).toBe(true);
     const skill = readFileSync(skillPath, "utf-8");
     expect(skill).toContain("references/opencode-ci.md");
-    expect(skill).toContain("OPENCODE_AUTH_JSON");
-    expect(skill).toContain("CRYSK_ROUTING");
+    expect(skill).toContain("CRYSK_MODELS");
+    expect(skill).toContain("CRYSK_OPENCODE_PROVIDERS");
+    expect(skill).toContain("crysk-secrets");
     const ref = readFileSync(refPath, "utf-8");
-    expect(ref).toContain("modelSnapshot");
+    expect(ref).toContain("CRYSK_OPENCODE_PROVIDERS");
     expect(ref).toContain("Do **not** create `OPENAI_API_KEY`");
   });
 

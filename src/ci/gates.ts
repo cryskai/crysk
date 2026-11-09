@@ -330,44 +330,30 @@ export type CiBillingMode = "subscription" | "metered";
 // ANTHROPIC_AUTH_TOKEN joined the signal in the same move. It was never
 // excluded by a decision — the doctrine below never mentions it — and
 // `ENV_PASSTHROUGH` (harness.ts) projects it into the child immediately beside
-// ANTHROPIC_API_KEY as the same per-token credential class, so the rule stated
-// two paragraphs down ("the mere PRESENCE of a key keeps the ceiling") already
-// covered it. Nil-delta for the shipped action: action.yml binds only
-// ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN, so no generated workflow can
-// newly acquire a ceiling from it.
+// ANTHROPIC_API_KEY as the same per-token credential class, so the presence rule
+// that stood below (retired by S5) already covered it. It cannot reach a run's
+// ceiling any more: the action takes Claude credentials only from the CRYSK_CLAUDE_*
+// secrets in its crysk-secrets input (S8, U5) and empties the CLI's own variables,
+// and the run env (claudeRunEnv) removes ANTHROPIC_AUTH_TOKEN whatever its source.
 //
-// Which credential bills when BOTH CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are
-// present was settled by observation after this rule was written: CLI 2.1.312 prints
-// "claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is
-// set and takes precedence over your claude.ai login", and on this repo's CI with both
-// secrets bound every request used the API key (see credentialOf in
-// transports/claude-code-cli.ts). The rule below still does not depend on that answer,
-// and the gap it describes was real when it was written:
-// action.yml:111-112 binds both into the child env unconditionally,
-// test/harness/env-projection.test.ts:48-56 deliberately asserts both survive
-// the projection with no precedence between them, and `defaultClaudeAuthProbe`
-// (model/provider-capabilities.ts:402-405) ORs them into a single boolean. Whichever
-// one the Claude CLI itself prefers wins, and that fact is recorded nowhere in
-// this codebase.
+// S5 (2026-11-06) retired the rule that stood here: "the mere PRESENCE of a key keeps
+// the ceiling", written while nobody chose which credential billed when both were set
+// (the CLI preferred the key, observed on CLI 2.1.312). Now the run chooses: the first
+// credential in `credentials.claude` (default subscription, then api_key) that is
+// present, once at run start (security/claude-credential.ts). The env this function
+// receives is that run's env, which holds the chosen Claude credential and no other,
+// so `metered` here means the run uses the API key, and a repo holding both secrets
+// with the default order runs on the subscription with no ceiling. A caller that
+// passes the raw process env instead gets the old presence answer.
 //
-// This rule does not need that answer, because the two errors are not
-// symmetric. Guess "unlimited" wrongly and a real invoice arrives that nobody
-// authorized. Guess "ceiling" wrongly and one review is skipped, which the
-// operator clears with a single line of YAML (`budget-usd: 0`). So the mere
-// PRESENCE of a key keeps the ceiling: we cannot rule out that it bills.
-// README.md:38-45 already states the user-facing half of the same rule —
-// sourcing ANTHROPIC_API_KEY into the shell "is what moves a run from quota to
-// invoice".
-//
-// Trimming is load-bearing. 2026-09-02, #177 corrects the overstatement this
-// paragraph used to carry ("without the trim, no route would ever resolve as
-// a subscription in Actions"): action.yml:111 binds the input UNCONDITIONALLY
-// and GitHub renders an unset input as the empty string, so every
-// subscription-route CI run carries `ANTHROPIC_API_KEY=""` — and `""` is
-// already falsy, so that case never needed the trim. What the trim catches is
-// a WHITESPACE-ONLY value, which is truthy and would otherwise impose a
-// ceiling on a subscription route. `test/ci/gates.test.ts` asserts both cases
-// separately, and only the whitespace ones flip when the trim is removed.
+// Trimming is load-bearing. An empty value never needed it: `""` is already
+// falsy, and it is what the action binds the CLI's Claude variables to and how
+// GitHub renders a secret the repository does not have. What the trim catches is
+// a WHITESPACE-ONLY value, which is truthy and would otherwise impose a ceiling
+// on a subscription route, for a caller that passes a raw env (the run env never
+// holds one: claudeCredentialPresence trims the same way and drops it).
+// `test/ci/gates.test.ts` asserts both cases separately, and only the
+// whitespace ones flip when the trim is removed.
 //
 // This is deliberately NOT `model/provider-capabilities.ts`'s
 // `CLAUDE_CAPABILITY_STATICS.billingMode`, and the two must not be "unified"

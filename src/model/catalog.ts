@@ -5,9 +5,9 @@ import type { RunnerBackend } from "../execution/contracts";
 //
 // WHY it used to hold more, and why that was the last version pin in the
 // system: every alias carried `modelFamily`/`modelSnapshot` (`sonnet` ->
-// `claude-sonnet-5`). That pin never decided what RAN — `spawnModelForClaudeCli`
-// sends the bare alias on a `direct` gateway and the Claude CLI resolves it
-// itself (verified live 2026-09-02: `--model sonnet` ran `claude-sonnet-5`).
+// `claude-sonnet-5`). That pin never decided what RAN — the bare alias reaches
+// `--model` and the Claude CLI resolves it itself (verified live 2026-09-02:
+// `--model sonnet` ran `claude-sonnet-5`).
 // It decided only what we ASSERTED had run, in `ResolvedModelRoute`, the route
 // fingerprint and `pipeline.json`. So the day Anthropic repointed an alias,
 // the CLI would run the new model and our provenance artifact would state the
@@ -21,10 +21,9 @@ import type { RunnerBackend } from "../execution/contracts";
 // name now fails AT THE PROVIDER — an error from the party that knows is more
 // honest than a mapping of ours that pretends to.
 //
-// The operator can still pin: a routing config's `modelSnapshot` is passed
-// through verbatim (model/routing.ts) and reaches `--model` on a `configured`
-// gateway. Pinning is a decision an operator makes per run, not a constant we
-// ship.
+// The operator can still pin: `claude:<full model name>` in `models` reaches
+// `--model` as written (model/model-name.ts). Pinning is a decision an operator
+// makes, not a constant we ship. The `-latest` names are these aliases.
 export interface ProviderModelCatalog {
   readonly provider: string;
   readonly defaultBackend?: RunnerBackend;
@@ -103,7 +102,6 @@ export const MODEL_CATALOG = Object.freeze({
 });
 
 const aliasIndex = new Map<string, ResolvedCatalogAlias>();
-const canonicalToAlias = new Map<string, string>();
 
 for (const catalog of Object.values(PROVIDER_CATALOGS)) {
   for (const alias of catalog.aliases) {
@@ -111,22 +109,6 @@ for (const catalog of Object.values(PROVIDER_CATALOGS)) {
       throw new Error(`model catalog: duplicate alias "${alias}"`);
     }
     const canonical = canonicalIdentity(catalog.provider, alias);
-    // The BIJECTION `reverseAliasForCanonical` depends on, asserted where the
-    // map is built rather than inferred from `canonicalIdentity`'s current
-    // shape — which is exactly the shape #175 changed.
-    //
-    // Honest about its reach: while canonical is `provider/alias`, the
-    // duplicate-alias guard above already makes a collision unreachable, so
-    // this throw cannot fire today. It used to be the load-bearing one —
-    // canonical was `provider/modelFamily`, and two aliases pinned to one
-    // family (a `sonnet` and a `sonnet-latest` both on `claude-sonnet-5`)
-    // would have silently made `reverseAliasForCanonical` return whichever
-    // won the loop, so `spawnModelForClaudeCli` would send the other alias's
-    // name. It stays because the invariant, not the current key formula, is
-    // what the reverse lookup is allowed to rely on.
-    if (canonicalToAlias.has(canonical)) {
-      throw new Error(`model catalog: duplicate canonical "${canonical}"`);
-    }
     aliasIndex.set(alias, {
       provider: catalog.provider,
       alias,
@@ -135,18 +117,22 @@ for (const catalog of Object.values(PROVIDER_CATALOGS)) {
         ? {}
         : { defaultBackend: catalog.defaultBackend }),
     });
-    canonicalToAlias.set(canonical, alias);
   }
 }
 
-export type ModelAlias = "sonnet" | "opus" | "haiku";
+export type ModelAlias = "sonnet" | "opus" | "haiku" | "fable";
 
 // Unchanged by #175, and the reason it is unchanged is the whole point of the
 // slice: the alias LIST is ours, so a config that drops one still has to fail
 // loud at import. `ModelAlias` is a compile-time union and the JSON is a
 // runtime file; without this loop a deleted alias would typecheck and then
 // throw `unknown alias` deep inside a run.
-const REQUIRED_ALIASES: readonly ModelAlias[] = ["sonnet", "opus", "haiku"];
+const REQUIRED_ALIASES: readonly ModelAlias[] = [
+  "sonnet",
+  "opus",
+  "haiku",
+  "fable",
+];
 for (const alias of REQUIRED_ALIASES) {
   if (!aliasIndex.has(alias)) {
     throw new Error(`model catalog: missing required alias "${alias}"`);
@@ -171,16 +157,6 @@ export function lookupAlias(alias: ModelAlias): ResolvedCatalogAlias {
 
 export function aliasCanonical(alias: ModelAlias): string {
   return lookupAlias(alias).canonical;
-}
-
-// `spawnModelForClaudeCli` depends on this: on a `direct` gateway it turns a
-// canonical identity back into the bare alias so the CLI — not us — resolves
-// the version. Sound because of the bijection asserted above.
-export function reverseAliasForCanonical(
-  canonical: string,
-): ModelAlias | undefined {
-  const alias = canonicalToAlias.get(canonical);
-  return alias === undefined ? undefined : (alias as ModelAlias);
 }
 
 // The Claude Code CLI's `--effort` vocabulary, closed. Lives beside

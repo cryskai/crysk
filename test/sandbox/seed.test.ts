@@ -1,10 +1,11 @@
 // What init writes and sets, checked against the product's own parsers and
 // renderers. A value that only looks right to this file is not enough: the
-// routing string must parse through parseRoutingConfig and resolve to an
-// OpenCode route, and the repo config must load through parseLocalConfig,
-// because a rejected config burns a live run as PRH-CONFIG-INVALID.
+// models value must go through the CI setup step's own materializer, and the repo
+// config must load through parseLocalConfig, because a rejected config burns a live
+// run as CRYSK-CONFIG-INVALID.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -26,24 +27,25 @@ import {
   actionRefFor,
   BUDGET_ONE_CONFIG_JSON,
   GOTCHAS_PATH,
-  OPENCODE_AUTH_VALUE,
+  MODELS_VARIABLE,
+  modelsValueFor,
   PLANTED_SITE,
   parseRoute,
   REPO_CONFIG_JSON,
-  routingValueFor,
   sandboxFiles,
   VOLUME_PATH,
   WORKFLOW_PATH,
   workflowFor,
 } from "../../scripts/sandbox/seed";
+import { parseCryskSecrets } from "../../src/ci/crysk-secrets";
+import { MODELS_INPUT_LINE } from "../../src/ci/outcome";
 import { decidePublication, runPublish } from "../../src/ci/publish";
 import { materializeCiOpenCodeData } from "../../src/ci/setup";
 import { prheroLayout } from "../../src/home-preflight";
-import { resolveModelRoute } from "../../src/model/routing";
 import {
   gotchasUnusableReason,
+  parseGlobalConfig,
   parseLocalConfig,
-  parseRoutingConfig,
 } from "../../src/review/preflight";
 import { resolveOpenCodeAuthPath } from "../../src/security/credential-broker";
 
@@ -66,7 +68,7 @@ describe("workflow", () => {
     expect(wf).not.toContain("Resolve the pull request head");
   });
 
-  test("wires the routing variable and the OpenCode secret into the action", () => {
+  test("wires the models variable and the Claude subscription secret into the action", () => {
     const parsed = Bun.YAML.parse(workflowFor(REF)) as {
       jobs: {
         review: { steps: { id?: string; with?: Record<string, string> }[] };
@@ -74,14 +76,21 @@ describe("workflow", () => {
     };
     const step = parsed.jobs.review.steps.find((s) => s.id === "pr-hero");
     // GitHub Actions expressions, not JS templates: the braces are literal.
-    expect(step?.with?.routing).toBe(
+    expect(`models: ${step?.with?.models}`).toBe(MODELS_INPUT_LINE);
+    expect(MODELS_INPUT_LINE).toContain(`vars.${MODELS_VARIABLE}`);
+    expect(step?.with?.["crysk-secrets"]).toContain(
       // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression syntax
-      "${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}",
+      "CRYSK_CLAUDE_OAUTH_TOKEN=${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}",
     );
-    expect(step?.with?.["opencode-auth"]).toBe(
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression syntax
-      "${{ secrets.OPENCODE_AUTH_JSON }}",
-    );
+    // The removed inputs are not passed: the trigger would stop the run.
+    for (const removed of [
+      "routing",
+      "opencode-auth",
+      "claude-token",
+      "anthropic-api-key",
+    ]) {
+      expect(step?.with?.[removed]).toBeUndefined();
+    }
   });
 
   test("the sandbox files carry the workflow at its canonical path", () => {
@@ -106,10 +115,10 @@ describe("repo config", () => {
     expect(policy.maxAttempts).toBe(1);
   });
 
-  test("routing is person-layer only, so the repo file must not carry it", () => {
+  test("models are person-layer only, so the repo file must not carry them", () => {
     expect(() =>
       parseLocalConfig(
-        JSON.stringify({ routing: JSON.parse(routingValueFor("big-pickle")) }),
+        JSON.stringify({ models: JSON.parse(modelsValueFor("big-pickle")) }),
       ),
     ).toThrow();
   });
@@ -122,37 +131,21 @@ describe("gotchas", () => {
   });
 });
 
-describe("routing value", () => {
-  test("parses through the real parser and resolves every role to the snapshot it names", () => {
-    for (const snapshot of ["big-pickle", "deepseek-v4.1-flash-free"]) {
-      const routing = parseRoutingConfig(
-        JSON.parse(routingValueFor(snapshot)),
-        "~/.crysk/config.json",
-      );
-      for (const logical of [
-        "sonnet",
-        "opus",
-        "haiku",
-        `opencode/${snapshot}`,
-      ]) {
-        const route = resolveModelRoute(logical, routing);
-        expect({
-          backend: route.backend,
-          provider: route.provider,
-          model: route.modelSnapshot,
-        }).toEqual({
-          backend: "opencode",
-          provider: "opencode",
-          model: snapshot,
-        });
-      }
+describe("models value", () => {
+  test("refuses a snapshot outside letters, digits, . and -, since it is written into the models JSON", () => {
+    for (const bad of ["", "a b", "a/b", "x;y", 'a"b']) {
+      expect(() => modelsValueFor(bad)).toThrow(/not valid/);
     }
   });
 
-  test("refuses a snapshot outside letters, digits, . and -, since it is written into the routing JSON", () => {
-    for (const bad of ["", "a b", "a/b", "x;y", 'a"b']) {
-      expect(() => routingValueFor(bad)).toThrow(/not valid/);
-    }
+  test("routes every role through the default list to one free OpenCode model, and parses through the real config parser", () => {
+    const value = modelsValueFor("deepseek-v4.1-flash-free");
+    expect(JSON.parse(value)).toEqual({
+      default: ["opencode:opencode/deepseek-v4.1-flash-free"],
+    });
+    expect(
+      parseGlobalConfig(JSON.stringify({ models: JSON.parse(value) })).models,
+    ).toEqual(JSON.parse(value));
   });
 
   test("--route parses to claude, or to an OpenCode snapshot, and anything else is an error", () => {
@@ -165,25 +158,32 @@ describe("routing value", () => {
     }
   });
 
-  test("is accepted by the real CI materializer with the {} auth secret", async () => {
-    home = await mkdtemp(path.join(tmpdir(), "pr-hero-sandbox-seed-"));
+  // The variable reaches the setup step as the `models` input (MODELS_INPUT). The
+  // real CI materializer writes it as the person config and reports an OpenCode
+  // model, which turns on the Install OpenCode CLI step; a free model needs no
+  // CRYSK_OPENCODE_* secret, so no auth file is written.
+  test("is what the real CI materializer writes as the person config, with an OpenCode model and no auth file", async () => {
+    home = await mkdtemp(path.join(tmpdir(), "crysk-sandbox-seed-"));
     const env = { HOME: home };
-    await materializeCiOpenCodeData({
-      routing: routingValueFor("big-pickle"),
-      opencodeAuth: OPENCODE_AUTH_VALUE,
+    const result = await materializeCiOpenCodeData({
       home,
       env,
+      modelsInput: modelsValueFor("big-pickle"),
+      // The sandbox's secrets as the scaffold renders them with only the token set:
+      // every other line arrives empty.
+      cryskSecrets: parseCryskSecrets(
+        "CRYSK_CLAUDE_OAUTH_TOKEN=fixture-token\nCRYSK_CLAUDE_API_KEY=\nCRYSK_OPENCODE_OPENAI_OAUTH=\nCRYSK_OPENCODE__API_KEY=\n",
+      ),
     });
-    const layer = JSON.parse(
+    expect(result.openCodeModels).toBe(true);
+    expect(result.openCodeAuthWritten).toBe(false);
+    const written = JSON.parse(
       await readFile(prheroLayout(home).reviewConfigPath, "utf8"),
-    ) as {
-      routing: { default: { backend: string; modelSnapshot: string } };
-    };
-    expect(layer.routing.default.backend).toBe("opencode");
-    expect(layer.routing.default.modelSnapshot).toBe("big-pickle");
-    expect(await readFile(resolveOpenCodeAuthPath(env, home), "utf8")).toBe(
-      "{}",
     );
+    expect(written).toEqual({
+      models: { default: ["opencode:opencode/big-pickle"] },
+    });
+    expect(existsSync(resolveOpenCodeAuthPath(env, home))).toBe(false);
   });
 });
 

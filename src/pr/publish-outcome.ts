@@ -339,7 +339,7 @@ export async function publishRunOutcome(
     findings: doc.findings,
     costUsdEst: result.usage.cost_usd_est,
     wallMs,
-    model: envelopeModel(input.options, input.agentFiles),
+    model: envelopeModel(input.options, input.agentFiles, result.routePlan),
     webUrl,
     delta: posted?.delta,
     runDir: input.runDir,

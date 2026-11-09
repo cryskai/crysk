@@ -6,8 +6,8 @@
 // checked against what a run would have left behind, not against a script.
 //
 // The product behaviour it encodes is the minimum the scenarios rely on: no model
-// credential input gives PRH-CRED-MISSING, a malformed routing literal gives
-// PRH-ROUTING-INVALID, a scaffold gotchas file on the head gives PRH-GOTCHAS-MISSING,
+// credential input gives CRYSK-CRED-MISSING, a routing input with a value gives
+// CRYSK-INPUT-REMOVED, a scaffold gotchas file on the head gives CRYSK-GOTCHAS-MISSING,
 // a review upserts the report for its head and removes the
 // outcome comments of earlier runs. Live runs are the proof of the product; this
 // fake is the proof of the runner's sequencing and its reads.
@@ -104,7 +104,7 @@ interface CommentRow {
 }
 
 // What a run leaves behind. `hunters-failed` is the free model's flake: every
-// hunter returned nothing, so the publisher posts PRH-HUNTERS-FAILED.
+// hunter returned nothing, so the publisher posts CRYSK-HUNTERS-FAILED.
 // `review-advisory` is a review under `mode: advisory`: the same comments, a
 // success status whatever it finds. `size-skip` is a pull_request run over the
 // size gate: the skip marker and a failure status, and no report.
@@ -115,7 +115,7 @@ interface CommentRow {
 // (T2e).
 type Outcome =
   | "credential"
-  | "routing"
+  | "removed-input"
   | "gotchas"
   | "review"
   | "review-advisory"
@@ -164,10 +164,10 @@ const OUTCOME_CODE: Record<
   >,
   string
 > = {
-  credential: "PRH-CRED-MISSING",
-  routing: "PRH-ROUTING-INVALID",
-  gotchas: "PRH-GOTCHAS-MISSING",
-  "hunters-failed": "PRH-HUNTERS-FAILED",
+  credential: "CRYSK-CRED-MISSING",
+  "removed-input": "CRYSK-INPUT-REMOVED",
+  gotchas: "CRYSK-GOTCHAS-MISSING",
+  "hunters-failed": "CRYSK-HUNTERS-FAILED",
 };
 
 // The owner lead the real summary opens with (src/ci/outcome.ts). The fake writes it
@@ -178,6 +178,9 @@ const OUTCOME_LEAD: Partial<Record<Outcome, string>> = {
 
 export interface WorldOptions {
   ref: string;
+  // The action is a ref from before the code rename (fd28303): its outcomes and error
+  // statuses carry PRH-* where this tree writes CRYSK-*.
+  legacyCodes?: boolean;
   // main's workflow; defaults to the scaffold pinned to `ref`.
   mainWorkflow?: string;
   // Every run decides `credential`, whatever its workflow says. Used to make an
@@ -205,7 +208,7 @@ export interface WorldOptions {
   ignoreCancel?: boolean;
   // SB3: a pull_request run stays in progress with the head's pr-hero status pending
   // until a `run cancel` arrives; the cancel completes it as cancelled and the head's
-  // status becomes error PRH-CANCELLED (the publisher's cancel settle, runCancelSettle).
+  // status becomes error CRYSK-CANCELLED (the publisher's cancel settle, runCancelSettle).
   pendingThenCancellable?: boolean;
   // SB3: with pendingThenCancellable, the cancel completes the run but leaves the head's
   // status pending: the stuck gate the cancel probe must catch.
@@ -217,7 +220,7 @@ export interface WorldOptions {
   // from the status and report it left behind.
   stepFailsOnReview?: boolean;
   // A hunters-failed run rendered with its hunters' shared cause instead of
-  // PRH-HUNTERS-FAILED (publish.ts huntersFailedRendering): the code and the sentence
+  // CRYSK-HUNTERS-FAILED (publish.ts huntersFailedRendering): the code and the sentence
   // its outcome and status carry.
   huntersFailedAs?: { code: string; sentence: string };
   // S4: a review posts one blocking finding comment. Under the gate (no
@@ -406,17 +409,16 @@ export class FakeGithub {
     gotchas: string | undefined,
   ): Outcome {
     if (this.options.forceCredentialOutcome === true) return "credential";
-    if (
-      !/^\s+(?:opencode-auth|anthropic-api-key|claude-token):/m.test(workflow)
-    ) {
-      return "credential";
-    }
-    if (/^\s+routing: "\{not json"$/m.test(workflow)) return "routing";
+    // The trigger's credential check reads the crysk-secrets input (U5): with no
+    // such input, no CRYSK_* credential reaches the action.
+    if (!/^\s+crysk-secrets: \|$/m.test(workflow)) return "credential";
+    // The trigger stops a workflow that passes a removed input any value.
+    if (/^\s+routing:\s*\S/m.test(workflow)) return "removed-input";
     if (
       this.options.staleRecordsBreakRun === true &&
       /trigger\.json\.tmp/.test(workflow)
     ) {
-      return "routing";
+      return "removed-input";
     }
     // The CLI's gate reads the gotchas file (review-pr.ts validateGotchas), after
     // routing and before any spend.
@@ -631,7 +633,11 @@ export class FakeGithub {
     } else {
       const as =
         outcome === "hunters-failed" ? this.options.huntersFailedAs : undefined;
-      const code = as?.code ?? OUTCOME_CODE[outcome];
+      const current = as?.code ?? OUTCOME_CODE[outcome];
+      const code =
+        this.options.legacyCodes === true
+          ? current.replace(/^CRYSK-/, "PRH-")
+          : current;
       const lead = OUTCOME_LEAD[outcome];
       const body =
         as?.sentence ??
@@ -732,7 +738,7 @@ export class FakeGithub {
           title,
           createdAt,
           isCrossRepository: false,
-          headRepositoryOwner: { login: "juanmaagd" },
+          headRepositoryOwner: { login: "cryskai" },
         }));
       return ok(JSON.stringify(open));
     }

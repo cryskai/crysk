@@ -24,8 +24,7 @@ export function routesMatch(
     a.provider === b.provider &&
     a.modelFamily === b.modelFamily &&
     a.modelSnapshot === b.modelSnapshot &&
-    a.modelVariant === b.modelVariant &&
-    (a.gateway ?? "") === (b.gateway ?? "")
+    a.modelVariant === b.modelVariant
   );
 }
 

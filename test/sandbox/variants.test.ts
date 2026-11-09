@@ -53,49 +53,55 @@ describe("workflow variants: the real scaffold", () => {
     }
   });
 
-  test("no-credential: no credential input reaches the action, and routing is kept", () => {
+  test("no-credential: no credential input reaches the action, and models and credentials are kept", () => {
     const inputs = actionWith(workflowVariant("no-credential", REF));
     // github-token stays: it is the runner's own GITHUB_TOKEN, which the
     // publisher uses to post the outcome comment and the status. It names no
     // model route, so it is not a credential the variant is testing.
     // `mode` is the scaffold's explicit gate mode (S4): not a credential, kept.
+    // `models` and `credentials` name models and an order, never a credential.
     expect(Object.keys(inputs).sort()).toEqual([
       "budget-usd",
+      "credentials",
       "github-token",
       "mode",
-      "routing",
+      "models",
     ]);
-    expect(inputs.routing).toBe(
-      `\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}`,
+    expect(inputs.models).toBe(`\${{ vars.CRYSK_MODELS }}`);
+    expect(inputs.credentials).toBe(`\${{ vars.CRYSK_CREDENTIALS }}`);
+  });
+
+  test("no-credential removes exactly the crysk-secrets input and its CRYSK_* lines, and nothing else", () => {
+    const before = NORMAL.split("\n");
+    const after = workflowVariant("no-credential", REF).split("\n");
+    const removed = before.filter((line) => !after.includes(line));
+    expect(removed[0]).toBe("          crysk-secrets: |");
+    // The three fixed secrets and the five provider slots.
+    expect(removed).toHaveLength(9);
+    expect(removed.slice(1).every((line) => /^ {12}CRYSK_/.test(line))).toBe(
+      true,
+    );
+    expect(before.length - after.length).toBe(removed.length);
+    expect(after.join("\n")).not.toContain("secrets.CRYSK_");
+  });
+
+  test("bad-routing: the removed routing input is passed as a malformed literal, and the credentials are still wired", () => {
+    const inputs = actionWith(workflowVariant("bad-routing", REF));
+    expect(inputs.routing).toBe("{not json");
+    expect(String(inputs["crysk-secrets"])).toContain(
+      `CRYSK_CLAUDE_OAUTH_TOKEN=\${{ secrets.CRYSK_CLAUDE_OAUTH_TOKEN }}`,
     );
   });
 
-  test("no-credential removes exactly the three credential lines and nothing else", () => {
-    const before = NORMAL.split("\n");
-    const after = workflowVariant("no-credential", REF).split("\n");
-    expect(before.length - after.length).toBe(3);
-    const removed = before.filter((line) => !after.includes(line));
-    expect(removed.map((line) => line.trim().split(":")[0])).toEqual([
-      "anthropic-api-key",
-      "claude-token",
-      "opencode-auth",
-    ]);
-  });
-
-  test("bad-routing: the routing input is a malformed literal, and the credential is still wired", () => {
-    const inputs = actionWith(workflowVariant("bad-routing", REF));
-    expect(inputs.routing).toBe("{not json");
-    expect(inputs["opencode-auth"]).toBe(`\${{ secrets.OPENCODE_AUTH_JSON }}`);
-  });
-
-  test("bad-routing changes one line, and only the routing line", () => {
+  test("bad-routing adds one line, the routing input after the credentials input", () => {
     const before = NORMAL.split("\n");
     const after = workflowVariant("bad-routing", REF).split("\n");
-    expect(after.length).toBe(before.length);
-    const changed = before.filter((line, i) => line !== after[i]);
-    expect(changed).toEqual([
-      `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
-    ]);
+    expect(after.length).toBe(before.length + 1);
+    const at = after.indexOf('          routing: "{not json"');
+    expect(after[at - 1]).toBe(
+      `          credentials: \${{ vars.CRYSK_CREDENTIALS }}`,
+    );
+    expect([...after.slice(0, at), ...after.slice(at + 1)]).toEqual(before);
   });
 
   test("each variant is a pure function of the scaffold: same input, same bytes, input untouched", () => {
@@ -108,32 +114,51 @@ describe("workflow variants: the real scaffold", () => {
 });
 
 describe("workflow variants: a scaffold that changed", () => {
+  const CREDENTIALS = `          credentials: \${{ vars.CRYSK_CREDENTIALS }}`;
+
   test("a missing anchor line throws, and the message names the line", () => {
-    const changed = NORMAL.replace(
-      `          opencode-auth: \${{ secrets.OPENCODE_AUTH_JSON }}\n`,
-      "",
-    );
+    const changed = NORMAL.replace("          crysk-secrets: |\n", "");
     expect(() => applyVariant("no-credential", changed)).toThrow(
       WorkflowVariantError,
     );
     expect(() => applyVariant("no-credential", changed)).toThrow(
-      /opencode-auth: \$\{\{ secrets\.OPENCODE_AUTH_JSON \}\}.*found 0/,
+      /crysk-secrets: \|.*found 0/,
     );
   });
 
   test("a duplicated anchor line throws rather than editing an arbitrary one", () => {
-    const routing = `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`;
-    const changed = NORMAL.replace(routing, `${routing}\n${routing}`);
+    const changed = NORMAL.replace(
+      CREDENTIALS,
+      `${CREDENTIALS}\n${CREDENTIALS}`,
+    );
     expect(() => applyVariant("bad-routing", changed)).toThrow(/found 2/);
+    expect(() => applyVariant("size-skip", changed)).toThrow(/found 2/);
   });
 
-  test("bad-routing refuses a scaffold whose routing input moved to another form", () => {
+  test("bad-routing refuses a scaffold whose credentials input moved to another form", () => {
     const changed = NORMAL.replace(
-      `          routing: "\${{ vars.CRYSK_ROUTING || vars.PRHERO_ROUTING }}"`,
-      `          routing: \${{ vars.PRHERO_ROUTING_V2 }}`,
+      CREDENTIALS,
+      `          credentials: \${{ vars.CRYSK_CREDENTIALS_V2 }}`,
     );
     expect(() => applyVariant("bad-routing", changed)).toThrow(
       WorkflowVariantError,
+    );
+  });
+
+  test("no-credential refuses a crysk-secrets block that holds a line other than a CRYSK_* one", () => {
+    const changed = NORMAL.replace(
+      "          crysk-secrets: |\n",
+      "          crysk-secrets: |\n            OTHER=x\n",
+    );
+    expect(() => applyVariant("no-credential", changed)).toThrow(
+      /not only lines matching.*OTHER=x/,
+    );
+  });
+
+  test("no-credential refuses an empty crysk-secrets block", () => {
+    const lines = NORMAL.split("\n").filter((l) => !/^ {12}CRYSK_/.test(l));
+    expect(() => applyVariant("no-credential", lines.join("\n"))).toThrow(
+      /is empty/,
     );
   });
 });

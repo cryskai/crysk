@@ -28,13 +28,30 @@ export type {
 
 export type DenialCode = WorkspaceDenialCode | ExecutableDenialCode;
 
+// Which backend runs a step, and what it is sent. `modelSnapshot` is the wire
+// model (the Claude CLI's `--model`, OpenCode's model id) and the name
+// pipeline.json has always recorded. There is no gateway any more: a model
+// name says its backend (odd/tasks/role-model-routing.md S3).
 export interface ResolvedModelRoute {
   readonly backend: RunnerBackend;
   readonly provider: string;
-  readonly gateway?: string;
   readonly modelFamily: string;
   readonly modelSnapshot: string;
   readonly modelVariant?: string;
+}
+
+// Whether a route's backend is sent an effort (S7), the ONE answer every
+// report's `effort_applied` reads. The Claude CLI always gets `--effort`.
+// OpenCode gets one only as the model variant a `models` entry's effort sets;
+// with no entry effort it is sent no variant (D1) and runs at the provider's
+// default, so nothing the engine asked for was applied. "Applied" means passed
+// to the backend: the Claude CLI clamps a level the model lacks and reports
+// nothing back.
+export function effortApplied(route: ResolvedModelRoute): boolean {
+  return (
+    route.backend === "claude-code" ||
+    (route.backend === "opencode" && route.modelVariant !== undefined)
+  );
 }
 
 export interface IsolationProjection {
@@ -50,9 +67,9 @@ export interface TransportRequest {
   readonly sessionId: string;
   readonly attempt: number;
   readonly route: ResolvedModelRoute;
-  // The model string the provider CLI/SDK actually receives. For Claude Code
-  // direct routes this is the logical alias (sonnet|opus|haiku); configured
-  // routes use route.modelSnapshot instead.
+  // The model string the step asked for (StepSpec.model), kept for evidence.
+  // What a provider receives is the route's: `route.modelSnapshot` is the
+  // Claude CLI's `--model` (claudeCliModel) and OpenCode's model id.
   readonly executionModel: string;
   // The effort the engine asked for (StepSpec.effort), always present. Only
   // the Claude Code transport can APPLY it (`--effort`); a backend that cannot

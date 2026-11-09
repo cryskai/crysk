@@ -1,5 +1,5 @@
 {
   "provider": "anthropic",
   "defaultBackend": "claude-code",
-  "aliases": ["sonnet", "opus", "haiku"]
+  "aliases": ["sonnet", "opus", "haiku", "fable"]
 }

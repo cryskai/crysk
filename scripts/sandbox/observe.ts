@@ -11,10 +11,10 @@
 import { MARKER_OPEN, matchMarkerPrefix } from "../../src/brand";
 import { isManualReviewHold } from "../../src/pr/preflight";
 import {
+  cryskCodeOf,
   FINDING_MARKER_PREFIX,
   OUTCOME_MARKER_PREFIX,
   OVERRIDE_MARKER_PREFIX,
-  PRH_CODE,
   REPORT_MARKER_PREFIX,
   SKIP_MARKERS,
   type SkipReason,
@@ -22,30 +22,30 @@ import {
 
 // The catalog code of "every hunter failed" (src/ci/outcome.ts, ERROR_CATALOG).
 // Both the outcome comment and the status carry it, and both read as the same path.
-const HUNTERS_FAILED_CODE = "PRH-HUNTERS-FAILED";
+const HUNTERS_FAILED_CODE = "CRYSK-HUNTERS-FAILED";
 
 // WHY this family: a run whose every failed hunter shares one cause with a code of its own
 // is rendered with that code (publish.ts huntersFailedRendering, outcome.ts renderHunterCause),
-// so an all-hunters-dead run can post PRH-MODEL-UNAVAILABLE instead of PRH-HUNTERS-FAILED. The
+// so an all-hunters-dead run can post CRYSK-MODEL-UNAVAILABLE instead of CRYSK-HUNTERS-FAILED. The
 // flake tolerance and its label are about the path, not the code, so the family is one path.
-// PRH-CRED-UNUSABLE is not in the set on its code alone: the credential preflight posts it on
+// CRYSK-CRED-UNUSABLE is not in the set on its code alone: the credential preflight posts it on
 // a run that never reached a hunter. Only the sentence renderHunterCause writes, which names
 // the route's provider and model, marks it as the hunters-failed path.
 const HUNTERS_FAILED_FAMILY: ReadonlySet<string> = new Set([
   HUNTERS_FAILED_CODE,
-  "PRH-MODEL-UNAVAILABLE",
+  "CRYSK-MODEL-UNAVAILABLE",
 ]);
 const HUNTER_ROUTE_SENTENCE =
   /The route [^\s/]+\/\S+ has no usable credential record/;
 // The status description is clipped to 140 characters (publish.ts statusDescription), and a
 // long provider and model push the sentence's tail past the cut. Only its opening is read
-// there: the preflight's own PRH-CRED-UNUSABLE sentence opens "The <backend>/opencode route",
+// there: the preflight's own CRYSK-CRED-UNUSABLE sentence opens "The <backend>/opencode route",
 // never "The route <provider>/", so the opening alone still tells the two apart.
-const HUNTER_ROUTE_STATUS = /^PRH-CRED-UNUSABLE: The route [^\s/]+\//;
+const HUNTER_ROUTE_STATUS = /^CRYSK-CRED-UNUSABLE: The route [^\s/]+\//;
 
 // The error-status half of the hunters-failed path, shared with scenario.ts's flake gate.
 export function isHuntersFailedStatus(description: string): boolean {
-  const code = /^PRH-[A-Z]+(?:-[A-Z]+)*/.exec(description)?.[0];
+  const code = /^CRYSK-[A-Z]+(?:-[A-Z]+)*/.exec(description)?.[0];
   return isHuntersFailed(code, HUNTER_ROUTE_STATUS.test(description));
 }
 
@@ -55,7 +55,7 @@ export function isHuntersFailed(
 ): boolean {
   if (code === undefined) return false;
   if (HUNTERS_FAILED_FAMILY.has(code)) return true;
-  return code === "PRH-CRED-UNUSABLE" && hunterRoute;
+  return code === "CRYSK-CRED-UNUSABLE" && hunterRoute;
 }
 
 // The owner lead an outcome's summary opens with (src/ci/outcome.ts ownerLead). It is
@@ -88,7 +88,7 @@ export interface CommentFact {
   source: "issue" | "inline";
   kind: CommentKind;
   code?: string;
-  // An outcome that names a hunter route's credential record (PRH-CRED-UNUSABLE), so the
+  // An outcome that names a hunter route's credential record (CRYSK-CRED-UNUSABLE), so the
   // hunters-failed path rendered it (see HUNTER_ROUTE_SENTENCE).
   hunterRoute?: true;
   // An outcome's owner lead, when its summary names one (OWNER_LEAD).
@@ -198,7 +198,7 @@ export type SmokePath =
   | "no-outcome";
 
 export function outcomeCodeOf(body: string): string | undefined {
-  return PRH_CODE.exec(body)?.[0];
+  return cryskCodeOf(body);
 }
 
 // The blocking entries in a report's `### Comments Outside Diff` section
@@ -383,7 +383,7 @@ export function classifyComment(
       code,
       ...(head === undefined ? {} : { head }),
       ...(lead === undefined ? {} : { lead }),
-      ...(code === "PRH-CRED-UNUSABLE" && HUNTER_ROUTE_SENTENCE.test(body)
+      ...(code === "CRYSK-CRED-UNUSABLE" && HUNTER_ROUTE_SENTENCE.test(body)
         ? { hunterRoute: true as const }
         : {}),
     };
@@ -470,7 +470,7 @@ export function classifyPath(obs: Observation): SmokePath {
   // The status is written apart from the outcome comment, so a read can see it
   // alone. Its code is the same failure the comment names, so it classifies the
   // same way; an error status with any other code stays `error:<code>`.
-  const statusCode = /^PRH-[A-Z]+(?:-[A-Z]+)*/.exec(
+  const statusCode = /^CRYSK-[A-Z]+(?:-[A-Z]+)*/.exec(
     obs.status?.description ?? "",
   )?.[0];
   // The publisher writes this code on an error status as well as in the outcome
@@ -493,9 +493,9 @@ export function classifyPath(obs: Observation): SmokePath {
 export function invariantViolations(obs: Observation): string[] {
   const violations: string[] = [];
   const status = obs.status;
-  if (status?.state === "error" && !/^PRH-/.test(status.description)) {
+  if (status?.state === "error" && !/^CRYSK-/.test(status.description)) {
     violations.push(
-      `S7 violation: error status without a PRH- code: "${status.description}"`,
+      `S7 violation: error status without a CRYSK- code: "${status.description}"`,
     );
   }
   if (

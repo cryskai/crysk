@@ -78,7 +78,7 @@ bun run benchmarks/martian/martian-judge.ts     # LIVE: Martian Surface A judge 
 ## Project skills
 
 - `skills/martian-bench/SKILL.md` — Martian Code Review Bench (n-vs-n vs Greptile/CodeRabbit on public PRs). Load on Cal.com evals, Surface A/B, or “how did we do” on that corpus. Flow + existing scores: `skills/martian-bench/references/`.
-- `skills/crysk/SKILL.md` — operate or configure pr-hero locally (models/routing, effort, credentials, config keys, gotchas, `.cryskignore`, reviews, watcher/GC, doctor).
+- `skills/crysk/SKILL.md` — operate or configure Crysk locally (models per role and fallbacks, effort, credential order, config keys, gotchas, `.cryskignore`, reviews, watcher/GC, doctor).
 - `skills/crysk-pr/SKILL.md` — open or update a PR with a structured template and auto-subscribe to the pr-hero review loop.
 - `skills/crysk-loop/SKILL.md` — answer posted `<!-- pr-hero-finding` comments on a PR you authored.
 - `skills/crysk-ci-setup/SKILL.md` — scaffold GitHub Actions review workflow and configure repository secrets.

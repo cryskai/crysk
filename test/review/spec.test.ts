@@ -378,9 +378,12 @@ describe("pipeline with a custom spec", () => {
     expect(result.skillOutput.parity_hunter_fired).toBe(true);
   });
 
+  // Full model names (S3): a spec model and a prompt's model are internal
+  // inputs that take a bare alias or a full name; `provider/model` alone no
+  // longer says which backend runs it.
   test("model precedence: input.model > spec.model > frontmatter", async () => {
     const agentsDir = await makeAgentsDir({
-      model: "anthropic/frontmatter-model",
+      model: "claude:claude-frontmatter-model",
     });
     const specWith = (model?: string): ReviewSpec => ({
       agents: [hunter("reliability", model ? { model } : {}), REFUTER],
@@ -391,27 +394,32 @@ describe("pipeline with a custom spec", () => {
     // spec.model beats frontmatter...
     const specWins = new FakeStepRunner(script);
     await runPipeline(
-      await makeInput({ agentsDir, spec: specWith("anthropic/spec-model") }),
+      await makeInput({
+        agentsDir,
+        spec: specWith("claude:claude-spec-model"),
+      }),
       { runner: specWins },
     );
-    expect(specWins.specs[0]?.model).toBe("anthropic/spec-model");
+    expect(specWins.specs[0]?.route?.modelSnapshot).toBe("claude-spec-model");
     // ...input.model beats both...
     const inputWins = new FakeStepRunner(script);
     await runPipeline(
       await makeInput({
         agentsDir,
-        model: "anthropic/cli-model",
-        spec: specWith("anthropic/spec-model"),
+        model: "claude:claude-cli-model",
+        spec: specWith("claude:claude-spec-model"),
       }),
       { runner: inputWins },
     );
-    expect(inputWins.specs[0]?.model).toBe("anthropic/cli-model");
+    expect(inputWins.specs[0]?.route?.modelSnapshot).toBe("claude-cli-model");
     // ...frontmatter is the fallback when neither override exists.
     const frontmatter = new FakeStepRunner(script);
     await runPipeline(await makeInput({ agentsDir, spec: specWith() }), {
       runner: frontmatter,
     });
-    expect(frontmatter.specs[0]?.model).toBe("anthropic/frontmatter-model");
+    expect(frontmatter.specs[0]?.route?.modelSnapshot).toBe(
+      "claude-frontmatter-model",
+    );
   });
 
   test("a spec without a refuter skips the leg, findings not_submitted", async () => {

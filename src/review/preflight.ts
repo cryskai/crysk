@@ -13,12 +13,12 @@ import {
   type CiReviewPolicyMode,
 } from "#ci/review-policy";
 import type { EffectiveConfig } from "#config/config";
-import type {
-  ModelGateway,
-  RouteMapping,
-  RoutingConfig,
-  RunnerBackend,
-} from "#model/routing";
+import {
+  ModelNameError,
+  type ModelsConfig,
+  parseModelsConfig,
+} from "#model/model-name";
+import { judgeModelChoice } from "#model/routing";
 import { POST_MIN_SEVERITIES, type PostMinSeverity } from "#pr/post-floor";
 import type { SuspicionPrior } from "#review/prompt-set";
 import { type AgentSpec, isSafeSlug, type ReviewSpec } from "#review/spec";
@@ -36,7 +36,7 @@ import { REPO_DIR_NAME } from "../brand-paths";
 // imports only the ones it uses itself.
 import { CliError, CliUsageError, withUsageClass } from "../errors";
 import { DEFAULT_BASE_REF, listPaths } from "../git/refs";
-import { redactDiagnostic } from "../security/redact";
+import { redactConfigValue } from "../security/redact";
 // review/size-gate.ts imports only a TYPE from here, so this is not a runtime
 // cycle — the type import is erased and size-gate has no load-time
 // dependency on this module.
@@ -512,7 +512,11 @@ Options:
                       default 8; 0 pauses verification), and optional
                       max_concurrent_steps (cap on steps in flight at once;
                       a positive integer; unset = unlimited)
-  --model <model>     Override every agent's model
+  --model <model>     Override every step's model but the materiality judge's:
+                      claude:<name>-latest, claude:<full model name>,
+                      opencode:<provider>/<model>, or a bare alias (sonnet,
+                      opus, haiku, fable). A model only: per-role models and
+                      their effort go in "models" in ~/.crysk/config.json
   --summary           Enable the engine-owned PR summary (default)
   --no-summary        Disable the engine-owned PR summary
   --scout             review only: run the diff-only scout stage before the
@@ -2184,7 +2188,11 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
   // exists. This row declares the key for the known-key set; the merge
   // descends into it rather than folding the object whole.
   summary: "capped",
-  routing: "person",
+  // Which model runs each role and which Claude credential pays for it are the
+  // operator's decisions: a committed file must not move them onto another
+  // model or another bill. Both are PERSON_ONLY_KEYS, refused in a repo file.
+  models: "person",
+  credentials: "person",
   max_verification_steps: "capped",
   max_concurrent_steps: "capped",
   max_changed_lines: "capped",
@@ -2210,12 +2218,10 @@ export const CONFIG_DIRECTION: Record<keyof LocalConfig, ConfigDirection> = {
 };
 
 // The ONE nested key, so this is a second table and not a pattern. `enabled`
-// takes the cap because it switches spend on; `model` cannot be capped even
-// in principle — "narrower" is undefinable for a string, and a direction that
-// cannot be computed is worse than no direction at all.
+// takes the cap because it switches spend on. `summary.model` is gone: the
+// summary model is the `summary` role under `models` (see parseSummaryConfig).
 export const SUMMARY_DIRECTION: Record<keyof SummaryConfig, ConfigDirection> = {
   enabled: "capped",
-  model: "person",
 };
 
 export interface LocalConfig {
@@ -2227,7 +2233,11 @@ export interface LocalConfig {
   agents_dir?: string;
   default_base?: string;
   summary?: SummaryConfig;
-  routing?: RoutingConfig;
+  // Role -> model list (S1). A role not listed uses `default`, and with no
+  // `default` the step keeps its prompt's model.
+  models?: ModelsConfig;
+  // Which Claude credential is used, in order (S5).
+  credentials?: CredentialsConfig;
   // Item 7: unattended bound on the verify queue. Absent means
   // DEFAULT_MAX_VERIFICATION_STEPS. 0 is legal — every queued prior lands
   // `unconfirmed` (the pause switch, same shape as watch daily_cap).
@@ -2260,7 +2270,16 @@ export interface LocalConfig {
 
 export interface SummaryConfig {
   enabled?: boolean;
-  model?: string;
+}
+
+// The Claude credentials a run may use, in the order they are tried (S5).
+// A closed vocabulary on purpose: this key is exempt from the credential
+// deny-list only because no value it admits can be a secret.
+export const CLAUDE_CREDENTIAL_KINDS = ["subscription", "api_key"] as const;
+export type ClaudeCredentialKind = (typeof CLAUDE_CREDENTIAL_KINDS)[number];
+
+export interface CredentialsConfig {
+  readonly claude?: readonly ClaudeCredentialKind[];
 }
 
 export interface SummarySettings {
@@ -2294,8 +2313,13 @@ export type ConfigLayer = Partial<LocalConfig>;
 // known key.
 const KNOWN_CONFIG_KEYS = new Set<string>(Object.keys(CONFIG_DIRECTION));
 
+// Keys a committed repo file may never set. Wider than "direction is person":
+// `agents_dir` and `post_min_severity` are person-direction keys a repo file
+// may still name. These two choose a model or a bill.
+const PERSON_ONLY_KEYS = new Set<string>(["models", "credentials"]);
+
 const LOCAL_CONFIG_KEYS = new Set<string>(
-  Object.keys(CONFIG_DIRECTION).filter((key) => key !== "routing"),
+  Object.keys(CONFIG_DIRECTION).filter((key) => !PERSON_ONLY_KEYS.has(key)),
 );
 
 const GLOBAL_CONFIG_KEYS = new Set<string>(
@@ -2328,19 +2352,21 @@ const GLOBAL_CONFIG_LABEL = "~/.crysk/config.json";
 // can still see was absent. The `?? []` locals below stay exactly as they
 // are: they feed the validators, and validating an absent key against the
 // empty array is what keeps every error string byte-identical.
-// The repo layer's usage errors carry the repo-config class (T2d-1). It passes the
-// classed routing parser for symmetry only: `routing` is not a repo key, so the file is
-// rejected as a per-person key before any routing value is parsed. The person layer's
-// errors carry no class (see parseGlobalConfig).
+// The repo layer's usage errors carry the repo-config class (T2d-1). The person
+// layer's errors carry no class (see parseGlobalConfig).
 // `label` is the file name an error should show: a repo still on the legacy
 // `.prhero/` passes `.prhero/config.json`, so the message names the file that
 // was actually read.
+// `warnings` collects what the file says that still works but is on its way
+// out (today: `summary.model: "haiku"`). Returned as data, never printed here:
+// this module is the pure half, and the shells decide where a warning goes.
 export function parseLocalConfig(
   raw: string,
   label: string = REPO_CONFIG_LABEL,
+  warnings?: string[],
 ): ConfigLayer {
   return withUsageClass({ kind: "config-parse", source: "repo-config" }, () =>
-    parseConfigLayer(raw, label, LOCAL_CONFIG_KEYS, parseRoutingConfig, true),
+    parseConfigLayer(raw, label, LOCAL_CONFIG_KEYS, true, warnings),
   );
 }
 
@@ -2350,21 +2376,27 @@ export function parseLocalConfig(
 // rejects the three that are, because no global answer to them could be
 // right: two are lists of paths inside one repository and the third selects a
 // commit range ahead of an autodetection that already works.
-// Its routing object is parsed without the routing class. That class renders
-// PRH-ROUTING-INVALID, whose text names CRYSK_ROUTING and `gh variable set`: the
-// fix for the CI routing input, not for this personal file. The message is the same.
 export function parseGlobalConfig(
   raw: string,
   label: string = GLOBAL_CONFIG_LABEL,
+  warnings?: string[],
 ): ConfigLayer {
-  return parseConfigLayer(
-    raw,
-    label,
-    GLOBAL_CONFIG_KEYS,
-    parseRoutingValue,
-    false,
-  );
+  return parseConfigLayer(raw, label, GLOBAL_CONFIG_KEYS, false, warnings);
 }
+
+// S2's clean break: `routing` is not read alongside `models`, it is refused
+// with the one thing that fixes it. Checked BEFORE the unknown-key and the
+// per-person checks, so a repo file gets this message too and not "routing is
+// a per-person key", which would send the operator to move a dead key.
+export const REMOVED_ROUTING_MESSAGE =
+  '`routing` is gone: set models per role, e.g. `"models": {"hunter.logic": ["claude:sonnet-latest"]}`';
+
+// `summary.model` is gone too (L6 item 1), except for the one value `crysk
+// init` used to write, which is accepted with a warning (parseSummaryConfig).
+const SUMMARY_MODEL_EXAMPLE =
+  '`"models": {"summary": ["claude:haiku-latest"]}`';
+const SUMMARY_MODEL_INIT_VALUE = "haiku";
+const SUMMARY_MODEL_CONVERTED = ["claude:haiku-latest"] as const;
 
 // `??` is what makes an explicit `null` mean "absent" for the two arrays, and
 // the returned layer has to agree with it: `{"suspicion_priors": null}`
@@ -2385,14 +2417,12 @@ function parseOptionalBoolean(
   return value;
 }
 
-// `parseRouting` is the layer's routing parser: the classed one for the repo file, the
-// unclassed one for the person file (see parseGlobalConfig for why it differs).
 function parseConfigLayer(
   raw: string,
   file: string,
   admitted: ReadonlySet<string>,
-  parseRouting: typeof parseRoutingConfig,
   isRepoFile: boolean,
+  warnings: string[] | undefined,
 ): ConfigLayer {
   let parsed: unknown;
   try {
@@ -2407,8 +2437,11 @@ function parseConfigLayer(
   }
   const config = parsed as Record<string, unknown>;
   for (const key of Object.keys(config)) {
+    if (key === "routing") {
+      throw new CliUsageError(`${file}: ${REMOVED_ROUTING_MESSAGE}`);
+    }
     if (!KNOWN_CONFIG_KEYS.has(key)) {
-      throw new CliUsageError(`${file} unknown key: ${redactDiagnostic(key)}`);
+      throw new CliUsageError(`${file} unknown key: ${redactConfigValue(key)}`);
     }
     // Templated over the OFFENDING key, never a fixed example: one hardcoded
     // key name across three rejections sends two operators out of three
@@ -2460,8 +2493,39 @@ function parseConfigLayer(
       throw new CliUsageError(`suspicion_priors[${i}].reason required`);
     }
   }
-  const summary = parseSummaryConfig(config.summary, file);
-  const routing = parseRouting(config.routing, file);
+  const summaryParse = parseSummaryConfig(config.summary, file);
+  const summary = summaryParse?.summary;
+  let models = parseModels(config.models, file);
+  if (summaryParse?.initModel === true) {
+    if (isRepoFile) {
+      // L6 item 6: a repo file can no longer pick the summary model, and
+      // `models` is person-only, so the init-written value is dropped. It was
+      // the summarizer prompt's own model, so dropping it changes nothing.
+      warnings?.push(
+        `${file}: summary.model is gone and is ignored here: the summary model is set per person, under models.summary in your person config (~/.crysk/config.json). Delete summary.model from this file.`,
+      );
+    } else if (models?.summary !== undefined) {
+      warnings?.push(
+        `${file}: summary.model is gone and models.summary already sets the summary model. Delete summary.model.`,
+      );
+    } else {
+      models = { ...models, summary: [...SUMMARY_MODEL_CONVERTED] };
+      warnings?.push(
+        `${file}: summary.model is gone; "haiku" is read as ${SUMMARY_MODEL_EXAMPLE}. Write that instead of summary.model.`,
+      );
+    }
+  }
+  // The judge's list is kept as written (the plan skips what it cannot
+  // use), but a model it will never run on is said out loud here, once.
+  if (models?.judge !== undefined) {
+    const { model, dropped } = judgeModelChoice(models);
+    if (dropped.length > 0) {
+      warnings?.push(
+        `${file}: models.judge skips ${dropped.join(", ")}: the materiality judge runs only on claude:sonnet-latest or claude:opus-latest${model === undefined ? ", so it stands down" : ""}.`,
+      );
+    }
+  }
+  const credentials = parseCredentialsConfig(config.credentials, file);
   const maxVerificationSteps = parseNonNegativeInteger(
     config.max_verification_steps,
     "max_verification_steps",
@@ -2545,7 +2609,8 @@ function parseConfigLayer(
     ...optionalString(config, "agents_dir", file),
     ...optionalString(config, "default_base", file),
     ...(summary === undefined ? {} : { summary }),
-    ...(routing === undefined ? {} : { routing }),
+    ...(models === undefined ? {} : { models }),
+    ...(credentials === undefined ? {} : { credentials }),
     ...(maxVerificationSteps === undefined
       ? {}
       : { max_verification_steps: maxVerificationSteps }),
@@ -2589,251 +2654,83 @@ function parseConfigLayer(
   };
 }
 
-const CREDENTIAL_KEY_NAMES = new Set([
-  "apikey",
-  "api_key",
-  "token",
-  "secret",
-  "password",
-  "bearer",
-  "auth",
-  "credential",
-  "credentials",
-]);
-
-function checkNoCredentials(
-  obj: Record<string, unknown>,
-  path: string,
-  file: string,
-): void {
-  for (const key of Object.keys(obj)) {
-    const lower = key.toLowerCase();
-    if (
-      CREDENTIAL_KEY_NAMES.has(lower) ||
-      lower.includes("secret") ||
-      lower.includes("password") ||
-      lower.includes("token") ||
-      lower.includes("apikey") ||
-      lower.includes("api_key")
-    ) {
-      throw new CliUsageError(
-        `${file} ${path}: credentials are not permitted in routing config`,
-      );
+// The `models` object (S1, S3). Its rules live in model/model-name.ts; this
+// adds the file to every message, as every other key's error does.
+function parseModels(value: unknown, file: string): ModelsConfig | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return parseModelsConfig(value);
+  } catch (error) {
+    if (error instanceof ModelNameError) {
+      throw new CliUsageError(`${file} ${error.message}`);
     }
-    const val = obj[key];
-    if (typeof val === "string") {
-      const redacted = redactDiagnostic(val);
-      if (redacted !== val) {
-        throw new CliUsageError(
-          `${file} ${path}: credentials are not permitted in routing config`,
-        );
-      }
-    }
+    throw error;
   }
 }
 
-const KNOWN_ROUTE_MAPPING_KEYS = new Set([
-  "logical",
-  "backend",
-  "provider",
-  "gateway",
-  "modelFamily",
-  "modelSnapshot",
-  "modelVariant",
-  "disabled",
-  "allowSpend",
-]);
+const CREDENTIALS_EXAMPLE =
+  '`"credentials": {"claude": ["subscription", "api_key"]}`';
 
-function parseRouteMapping(
-  m: unknown,
-  path: string,
-  file: string,
-): RouteMapping {
-  if (typeof m !== "object" || m === null || Array.isArray(m)) {
-    throw new CliUsageError(`${file} ${path} must be an object`);
-  }
-  const mapping = m as Record<string, unknown>;
-  checkNoCredentials(mapping, path, file);
-
-  for (const key of Object.keys(mapping)) {
-    if (!KNOWN_ROUTE_MAPPING_KEYS.has(key)) {
-      throw new CliUsageError(
-        `${file} ${path} unknown key: ${redactDiagnostic(key)}`,
-      );
-    }
-  }
-
-  if (mapping.logical !== undefined) {
-    if (
-      typeof mapping.logical !== "string" ||
-      mapping.logical.trim().length === 0
-    ) {
-      throw new CliUsageError(
-        `${file} ${path}.logical must be a non-empty string`,
-      );
-    }
-  }
-
-  if (
-    typeof mapping.backend !== "string" ||
-    (mapping.backend !== "claude-code" && mapping.backend !== "opencode")
-  ) {
-    throw new CliUsageError(
-      `${file} ${path}.backend must be claude-code|opencode`,
-    );
-  }
-
-  if (
-    typeof mapping.provider !== "string" ||
-    mapping.provider.trim().length === 0
-  ) {
-    throw new CliUsageError(
-      `${file} ${path}.provider must be a non-empty string`,
-    );
-  }
-
-  if (mapping.gateway !== undefined) {
-    if (
-      typeof mapping.gateway !== "string" ||
-      (mapping.gateway !== "configured" &&
-        mapping.gateway !== "direct" &&
-        mapping.gateway !== "openrouter")
-    ) {
-      throw new CliUsageError(
-        `${file} ${path}.gateway must be configured|direct|openrouter`,
-      );
-    }
-  }
-
-  if (
-    mapping.modelFamily !== undefined &&
-    typeof mapping.modelFamily !== "string"
-  ) {
-    throw new CliUsageError(`${file} ${path}.modelFamily must be a string`);
-  }
-  if (
-    mapping.modelSnapshot !== undefined &&
-    typeof mapping.modelSnapshot !== "string"
-  ) {
-    throw new CliUsageError(`${file} ${path}.modelSnapshot must be a string`);
-  }
-  if (
-    mapping.modelVariant !== undefined &&
-    typeof mapping.modelVariant !== "string"
-  ) {
-    throw new CliUsageError(`${file} ${path}.modelVariant must be a string`);
-  }
-  if (mapping.disabled !== undefined && typeof mapping.disabled !== "boolean") {
-    throw new CliUsageError(`${file} ${path}.disabled must be a boolean`);
-  }
-  if (
-    mapping.allowSpend !== undefined &&
-    typeof mapping.allowSpend !== "boolean"
-  ) {
-    throw new CliUsageError(`${file} ${path}.allowSpend must be a boolean`);
-  }
-
-  return {
-    ...(mapping.logical ? { logical: mapping.logical as string } : {}),
-    backend: mapping.backend as RunnerBackend,
-    provider: mapping.provider as string,
-    ...(mapping.gateway ? { gateway: mapping.gateway as ModelGateway } : {}),
-    ...(mapping.modelFamily
-      ? { modelFamily: mapping.modelFamily as string }
-      : {}),
-    ...(mapping.modelSnapshot
-      ? { modelSnapshot: mapping.modelSnapshot as string }
-      : {}),
-    ...(mapping.modelVariant
-      ? { modelVariant: mapping.modelVariant as string }
-      : {}),
-    ...(mapping.disabled !== undefined
-      ? { disabled: mapping.disabled as boolean }
-      : {}),
-    ...(mapping.allowSpend !== undefined
-      ? { allowSpend: mapping.allowSpend as boolean }
-      : {}),
-  };
-}
-
-// Every usage error of the routing object carries the routing class (T2d-1). The CI
-// routing input (src/ci/setup.ts) keeps its own class and discards this one. The repo
-// layer passes this parser too, but never reaches a routing value (see
-// parseLocalConfig). The person layer calls parseRoutingValue directly, so its errors
-// carry no class.
-export function parseRoutingConfig(
+// `credentials` (S5): which Claude credential a run uses, in order. Parsed and
+// validated here; choosing a credential at run start is not this parser's job.
+//
+// WHY this key escapes the credential deny-list that used to guard `routing`:
+// it names KINDS of credential, never one. The values are a closed set, and
+// no message echoes a value, so a secret pasted here is refused unseen.
+function parseCredentialsConfig(
   value: unknown,
   file: string,
-): RoutingConfig | undefined {
-  return withUsageClass({ kind: "config-parse", source: "routing" }, () =>
-    parseRoutingValue(value, file),
-  );
-}
-
-function parseRoutingValue(
-  value: unknown,
-  file: string,
-): RoutingConfig | undefined {
+): CredentialsConfig | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new CliUsageError(`${file} routing must be an object`);
+    throw new CliUsageError(
+      `${file} credentials must be an object, e.g. ${CREDENTIALS_EXAMPLE}`,
+    );
   }
-  const routing = value as Record<string, unknown>;
-  checkNoCredentials(routing, "routing", file);
-
-  for (const key of Object.keys(routing)) {
-    if (key !== "mappings" && key !== "default" && key !== "disabled") {
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (key !== "claude") {
       throw new CliUsageError(
-        `${file} routing unknown key: ${redactDiagnostic(key)}`,
+        `${file} credentials has an unknown key "${redactConfigValue(key)}": only claude is supported, e.g. ${CREDENTIALS_EXAMPLE}`,
       );
     }
   }
-
-  let mappings: RouteMapping[] | Record<string, RouteMapping> | undefined;
-  if (routing.mappings !== undefined) {
-    if (Array.isArray(routing.mappings)) {
-      mappings = routing.mappings.map((m, i) =>
-        parseRouteMapping(m, `routing.mappings[${i}]`, file),
-      );
-    } else if (
-      typeof routing.mappings === "object" &&
-      routing.mappings !== null
+  if (record.claude === undefined) return {};
+  const list = record.claude;
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new CliUsageError(
+      `${file} credentials.claude must list subscription, api_key or both, in the order to try them`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const [i, entry] of list.entries()) {
+    if (
+      typeof entry !== "string" ||
+      !(CLAUDE_CREDENTIAL_KINDS as readonly string[]).includes(entry)
     ) {
-      const rec = routing.mappings as Record<string, unknown>;
-      const result: Record<string, RouteMapping> = {};
-      for (const [k, v] of Object.entries(rec)) {
-        result[k] = parseRouteMapping(v, `routing.mappings.${k}`, file);
-      }
-      mappings = result;
-    } else {
       throw new CliUsageError(
-        `${file} routing.mappings must be an array or object`,
+        `${file} credentials.claude[${i}] must be "subscription" or "api_key"`,
       );
     }
+    if (seen.has(entry)) {
+      throw new CliUsageError(
+        `${file} credentials.claude lists "${entry}" twice`,
+      );
+    }
+    seen.add(entry);
   }
-
-  let def: RouteMapping | undefined;
-  if (routing.default !== undefined) {
-    def = parseRouteMapping(routing.default, "routing.default", file);
-  }
-
-  if (routing.disabled !== undefined && typeof routing.disabled !== "boolean") {
-    throw new CliUsageError(`${file} routing.disabled must be a boolean`);
-  }
-
-  return {
-    ...(mappings ? { mappings } : {}),
-    ...(def ? { default: def } : {}),
-    ...(routing.disabled !== undefined
-      ? { disabled: routing.disabled as boolean }
-      : {}),
-  };
+  return { claude: list as ClaudeCredentialKind[] };
 }
 
+// `initModel` is true when the file said `summary.model: "haiku"`, the value
+// `crysk init` wrote into every scaffolded repo file (L6 item 1): accepted with
+// a warning so those repos keep working, and turned into `models.summary` by
+// the caller where the layer may hold `models`. Any other value is refused with
+// the new form.
 function parseSummaryConfig(
   value: unknown,
   file: string,
-): SummaryConfig | undefined {
+): { summary: SummaryConfig; initModel: boolean } | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new CliUsageError(`${file} summary must be an object`);
@@ -2847,15 +2744,14 @@ function parseSummaryConfig(
   if (config.enabled !== undefined && typeof config.enabled !== "boolean") {
     throw new CliUsageError(`${file} summary.enabled must be a boolean`);
   }
-  if (
-    config.model !== undefined &&
-    (typeof config.model !== "string" || config.model.trim().length === 0)
-  ) {
-    throw new CliUsageError(`${file} summary.model must be a non-empty string`);
+  if (config.model !== undefined && config.model !== SUMMARY_MODEL_INIT_VALUE) {
+    throw new CliUsageError(
+      `${file} summary.model is gone: set the summary model per person, under models in your person config, e.g. ${SUMMARY_MODEL_EXAMPLE}`,
+    );
   }
   return {
-    ...(config.enabled === undefined ? {} : { enabled: config.enabled }),
-    ...(config.model === undefined ? {} : { model: config.model as string }),
+    summary: config.enabled === undefined ? {} : { enabled: config.enabled },
+    initModel: config.model !== undefined,
   };
 }
 
@@ -2957,7 +2853,9 @@ export function resolveSummary(
   options: Pick<CliOptions, "summary" | "model">,
   config: Pick<ConfigLayer, "summary">,
 ): SummarySettings {
-  const model = options.model ?? config.summary?.model;
+  // `--model` only: the configured summary model is `models.summary`, which
+  // the route plan reads.
+  const model = options.model;
   return {
     enabled: options.summary ?? config.summary?.enabled ?? true,
     ...(model === undefined ? {} : { model }),
@@ -3110,11 +3008,6 @@ export function mergeConfig(
     (layer) => layer.summary?.enabled,
     (a, b) => a && b,
   );
-  const summaryModel = foldKey(
-    layers,
-    SUMMARY_DIRECTION.model,
-    (layer) => layer.summary?.model,
-  );
   const maxSteps = foldKey(
     layers,
     CONFIG_DIRECTION.max_verification_steps,
@@ -3167,10 +3060,17 @@ export function mergeConfig(
     CONFIG_DIRECTION.post_min_severity,
     (layer) => layer.post_min_severity,
   );
-  const routing = foldKey(
+  // Folded whole, not per role: the person layer is the only one that may
+  // hold either, so there is never a second layer to merge roles from.
+  const models = foldKey(
     layers,
-    CONFIG_DIRECTION.routing,
-    (layer) => layer.routing,
+    CONFIG_DIRECTION.models,
+    (layer) => layer.models,
+  );
+  const credentials = foldKey(
+    layers,
+    CONFIG_DIRECTION.credentials,
+    (layer) => layer.credentials,
   );
   const ciReviewPolicy = foldKey(
     layers,
@@ -3218,7 +3118,6 @@ export function mergeConfig(
     ...(summaryEnabled.value === undefined
       ? {}
       : { enabled: summaryEnabled.value }),
-    ...(summaryModel.value === undefined ? {} : { model: summaryModel.value }),
   };
 
   const effective: LocalConfig = {
@@ -3233,10 +3132,11 @@ export function mergeConfig(
     ...(defaultBase.value === undefined
       ? {}
       : { default_base: defaultBase.value }),
-    ...(summaryEnabled.value === undefined && summaryModel.value === undefined
+    ...(summaryEnabled.value === undefined ? {} : { summary }),
+    ...(models.value === undefined ? {} : { models: models.value }),
+    ...(credentials.value === undefined
       ? {}
-      : { summary }),
-    ...(routing.value === undefined ? {} : { routing: routing.value }),
+      : { credentials: credentials.value }),
     ...(maxSteps.value === undefined
       ? {}
       : { max_verification_steps: maxSteps.value }),
@@ -3289,8 +3189,9 @@ export function mergeConfig(
     default_base: defaultBase.source,
     parity_trigger_paths: triggers.source,
     suspicion_priors: priors.source,
-    summary: { enabled: summaryEnabled.source, model: summaryModel.source },
-    routing: routing.source,
+    summary: { enabled: summaryEnabled.source },
+    models: models.source,
+    credentials: credentials.source,
     max_verification_steps: maxSteps.source,
     max_concurrent_steps: maxConcurrentSteps.source,
     max_changed_lines: maxLines.source,
@@ -3351,7 +3252,6 @@ export interface InitTemplateInput {
 export interface InitTemplateOmissions {
   agentsDir: boolean;
   summaryEnabled: boolean;
-  summaryModel: boolean;
   // The same three facts as config-file key names, for init's log. Derived
   // here rather than rebuilt at the call site, because a scaffold that omits a
   // key and a log that does not mention it is worse than either alone: the
@@ -3380,15 +3280,12 @@ export function initTemplateOmissions(
     (input.global?.agents_dir !== undefined &&
       input.agentsDirFromFlag !== true);
   const summaryEnabled = input.global?.summary?.enabled !== undefined;
-  const summaryModel = input.global?.summary?.model !== undefined;
   return {
     agentsDir,
     summaryEnabled,
-    summaryModel,
     keys: [
       ...(agentsDir ? ["agents_dir"] : []),
       ...(summaryEnabled ? ["summary.enabled"] : []),
-      ...(summaryModel ? ["summary.model"] : []),
     ],
   };
 }
@@ -3403,16 +3300,17 @@ export function initTemplateOmissions(
 // required.
 export function initConfigTemplate(input: InitTemplateInput): string {
   const omit = initTemplateOmissions(input);
+  // No `summary.model` any more: the summary model is a person setting
+  // (`models.summary`), and a repo file that names it gets a warning.
   const summary: SummaryConfig = {
     ...(omit.summaryEnabled ? {} : { enabled: true }),
-    ...(omit.summaryModel ? {} : { model: DEFAULT_SUMMARY_MODEL }),
   };
   return `${JSON.stringify(
     {
       ...(omit.agentsDir ? {} : { agents_dir: input.agentsDir }),
       // Always written, whatever the global file says.
       default_base: input.defaultBase,
-      // Dropped WHOLE when both fields hoisted: `"summary": {}` parses fine
+      // Dropped WHOLE when `enabled` hoisted: `"summary": {}` parses fine
       // and configures nothing, which is a line whose only effect is to make
       // the next reader wonder what it does.
       ...(Object.keys(summary).length === 0 ? {} : { summary }),

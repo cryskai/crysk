@@ -85,9 +85,9 @@ import {
   FORMAT_RETRY_REMINDER,
   settlementReceiptPath,
 } from "./step-artifacts";
-import type { NormalizedUsage } from "./usage-normalized";
 import {
   envBillsMetered,
+  type NormalizedUsage,
   normalizeUnavailableUsage,
   projectLegacyUsage,
   sumNormalizedUsage,
@@ -618,6 +618,22 @@ export class StepExecutionHarness implements StepRunner {
 
   async run(step: StepSpec): Promise<StepResult> {
     let canonicalCwd = step.cwd;
+
+    // S4: a harness binds ONE transport and credential and runs one model.
+    // A step carrying fallbacks belongs to a runner that tries them
+    // (runWithFallback, model-fallback.ts), which hands this harness one
+    // model at a time. Running only the first here would quietly drop the
+    // rest of an explicit list, so the step is refused before any spawn.
+    if (step.fallbackRoutes !== undefined && step.fallbackRoutes.length > 0) {
+      return {
+        name: step.name,
+        status: "failed",
+        usage: zeroUsage(),
+        attempts: 0,
+        stderrTail: `Step "${step.name}" lists ${step.fallbackRoutes.length} fallback model(s), and this runner runs one model per step; run it through a runner that tries fallbacks (MultiProviderRunner, ClaudeCodeRunner)`,
+        resultText: "",
+      };
+    }
 
     // Resolve transport for this step
     const effectiveBackend =
@@ -1376,7 +1392,14 @@ export class StepExecutionHarness implements StepRunner {
             finalText: "",
             usage: normalizeUnavailableUsage({
               wallMs: harnessWatchdogMs ?? 0,
-              billingMode: transport.billingMode,
+              // A Claude child bills on the credential its env holds, which the run chose; the transport's own
+              // answer reads the engine's startup env and could name a credential the run stripped.
+              billingMode:
+                transport.backend === "claude-code"
+                  ? envBillsMetered(this.projectedEnv)
+                    ? "metered"
+                    : "subscription"
+                  : transport.billingMode,
             }),
             stderrTail: `Step timed out after ${harnessWatchdogMs}ms`,
             timedOut: true,
@@ -1624,6 +1647,16 @@ export class StepExecutionHarness implements StepRunner {
     // The transport cause of the most recent failed attempt. Reset by every attempt
     // that fails without one, so the step reports only the cause it ended on.
     let lastFailureCause: TransportFailureCause | undefined;
+    // The same attempt's cause with harness causes kept (watchdog_timeout,
+    // format_violation): what StepResult.finalCause reports, for the fallback.
+    let lastCause: FailureCause | undefined;
+    // The final attempt was refused by a fenced spend bucket (StepResult.spendFenced).
+    let spendFenced = false;
+    // Attempts earlier models of this step already used (StepSpec.attempt-
+    // Offset). Every per-attempt artifact is named by `attemptOffset +
+    // attempts`, so a fallback model never overwrites the first model's logs
+    // and receipts; `attempts` itself stays this run's own count.
+    const attemptOffset = step.attemptOffset ?? 0;
     let cancelHit = false;
     // D1-08 PR5b (§9.1): every attempt that reached the reserve step, in
     // order, each already finalized to a terminal reservation state by the
@@ -1666,9 +1699,10 @@ export class StepExecutionHarness implements StepRunner {
       const kind: "attempt" | "format-retry" =
         pendingFormatPrompt === undefined ? "attempt" : "format-retry";
 
+      const attemptNumber = attemptOffset + attempts;
       const request: TransportRequest = {
-        sessionId: `${step.name}-${Date.now()}-${attempts}`,
-        attempt: attempts,
+        sessionId: `${step.name}-${Date.now()}-${attemptNumber}`,
+        attempt: attemptNumber,
         executionModel: step.model,
         effort: step.effort,
         route:
@@ -1726,7 +1760,7 @@ export class StepExecutionHarness implements StepRunner {
 
       const attemptResult = await this.runAttempt({
         step,
-        attempt: attempts,
+        attempt: attemptNumber,
         kind,
         request,
         deadlineMs,
@@ -1771,6 +1805,17 @@ export class StepExecutionHarness implements StepRunner {
         isTransportFailureCause(attemptResult.resolution.cause)
           ? attemptResult.resolution.cause
           : undefined;
+      // A fenced attempt never reached the provider, so it has no cause of
+      // its own: finalCause stays the one the last attempt that did reach it
+      // ended on, which is what a fallback decides on.
+      if (attemptResult.fenced === true) {
+        spendFenced = true;
+      } else {
+        lastCause =
+          attemptResult.resolution.kind === "cause"
+            ? attemptResult.resolution.cause
+            : undefined;
+      }
       if (attemptResult.resolution.kind === "legacy_terminal") {
         break;
       }
@@ -1840,7 +1885,7 @@ export class StepExecutionHarness implements StepRunner {
       // naming attempt0.json, which would be the same lie in a new font.
       const receiptPointer =
         attempts >= 1
-          ? `see ${receiptPathFor(step, attempts)}`
+          ? `see ${receiptPathFor(step, attemptOffset + attempts)}`
           : "no attempt was admitted, so no receipt was written";
       return {
         name: step.name,
@@ -1875,6 +1920,8 @@ export class StepExecutionHarness implements StepRunner {
       ...(lastFailureCause === undefined
         ? {}
         : { failureCause: lastFailureCause }),
+      ...(lastCause === undefined ? {} : { finalCause: lastCause }),
+      ...(spendFenced ? { spendFenced: true as const } : {}),
       ...(lastOutcome?.failureDetail === undefined
         ? {}
         : { failureDetail: lastOutcome.failureDetail }),
@@ -2116,6 +2163,7 @@ export class StepExecutionHarness implements StepRunner {
             stderrTail: error.message,
           },
           resolution: { kind: "legacy_terminal" },
+          fenced: true,
         };
       }
       throw error;
@@ -2545,4 +2593,7 @@ type AttemptRunResult =
       readonly resolution: CauseResolution;
       readonly parseError?: string;
       readonly reservation?: SpendReservation;
+      // The spend ledger refused the reservation because the bucket is
+      // fenced: the transport was never called.
+      readonly fenced?: true;
     };

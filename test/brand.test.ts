@@ -243,8 +243,8 @@ describe("canonicalStatusText", () => {
       "crysk: review posted",
     );
     expect(canonicalStatusText("review posted")).toBe("review posted");
-    expect(canonicalStatusText("PRH-CANCELLED: not reviewed")).toBe(
-      "PRH-CANCELLED: not reviewed",
+    expect(canonicalStatusText("CRYSK-CANCELLED: not reviewed")).toBe(
+      "CRYSK-CANCELLED: not reviewed",
     );
     // A word that merely starts with the old name is not the old lead.
     expect(canonicalStatusText("pr-heroic: x")).toBe("pr-heroic: x");

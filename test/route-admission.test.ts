@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  computeRouteFingerprint,
   createResolvedRoutePlan,
-  type RoutingConfig,
+  type ResolvedStepRoute,
   resolveStepRoute,
 } from "#model/routing";
 import {
@@ -86,6 +87,24 @@ function createMockTransport(
   };
 }
 
+// A route to a backend no model name can reach, for the admission gate to
+// refuse: built by hand, since `codex` is not a backend a name can say.
+function codexStep(stepKey: string): ResolvedStepRoute {
+  const route = {
+    backend: "codex" as RunnerBackend,
+    provider: "openai",
+    modelFamily: "gpt-4o",
+    modelSnapshot: "gpt-4o",
+  };
+  return {
+    stepKey,
+    role: "hunter",
+    logicalIdentity: "codex:openai/gpt-4o",
+    route,
+    routeFingerprint: computeRouteFingerprint("codex:openai/gpt-4o", route),
+  };
+}
+
 describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
   describe("Pre-confirm route plan admission", () => {
     test("admits a valid route plan with registered capable backends", async () => {
@@ -116,22 +135,7 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
       const registry = new DefaultTransportRegistry();
       registry.register("claude-code", createMockTransport("claude-code"));
 
-      const routingConfig: RoutingConfig = {
-        mappings: [
-          {
-            logical: "openai/gpt-4o",
-            backend: "codex" as RunnerBackend,
-            provider: "openai",
-          },
-        ],
-      };
-
-      const step1 = resolveStepRoute({
-        stepKey: "hunter-resilience",
-        role: "hunter",
-        cliModel: "openai/gpt-4o",
-        routingConfig,
-      });
+      const step1 = codexStep("hunter-resilience");
 
       const plan = createResolvedRoutePlan([step1]);
 
@@ -180,34 +184,20 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
         }),
       );
 
-      const routingConfig: RoutingConfig = {
-        mappings: {
-          "openai/o3-mini": {
-            backend: "opencode",
-            provider: "openai",
-            modelFamily: "o3-mini",
-            modelSnapshot: "o3-mini-2025-01-31",
-          },
-        },
-      };
-
       const hunter1 = resolveStepRoute({
         stepKey: "hunter-reliability",
         role: "hunter",
         cliModel: "sonnet",
-        routingConfig,
       });
       const hunter2 = resolveStepRoute({
         stepKey: "hunter-resilience",
         role: "hunter",
         cliModel: "haiku",
-        routingConfig,
       });
       const refuter = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/o3-mini",
-        routingConfig,
+        cliModel: "opencode:openai/o3-mini-2025-01-31",
       });
 
       const plan = createResolvedRoutePlan([hunter1, hunter2, refuter]);
@@ -220,7 +210,7 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
 
       expect(refuter.route.backend).toBe("opencode");
       expect(refuter.route.provider).toBe("openai");
-      expect(refuter.route.modelFamily).toBe("o3-mini");
+      expect(refuter.route.modelFamily).toBe("o3-mini-2025-01-31");
 
       // Evidence provided for opencode
       const evidence: D1_11ReadinessEvidence = {
@@ -264,22 +254,10 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
     test("D1-11 outcome 1: incomplete prerequisites reject OpenCode in production mode", async () => {
       const registry = createDefaultTransportRegistry({ mode: "production" });
 
-      const routingConfig: RoutingConfig = {
-        mappings: {
-          "openai/gpt-4o": {
-            backend: "opencode",
-            provider: "openai",
-            modelFamily: "gpt-4o",
-            modelSnapshot: "gpt-4o",
-          },
-        },
-      };
-
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig,
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([step]);
 
@@ -354,22 +332,10 @@ describe("Task 2.1 RED: Route Admission & Transport Registry", () => {
         },
       });
 
-      const routingConfig: RoutingConfig = {
-        mappings: {
-          "openai/gpt-4o": {
-            backend: "opencode",
-            provider: "openai",
-            modelFamily: "gpt-4o",
-            modelSnapshot: "gpt-4o",
-          },
-        },
-      };
-
       const step = resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig,
+        cliModel: "opencode:openai/gpt-4o",
       });
       const plan = createResolvedRoutePlan([step]);
 
@@ -455,17 +421,6 @@ describe("admitDiversityRoutePlan independent contract (#142 item 4)", () => {
     pricingReady: false,
   };
 
-  const openCodeRoutingConfig: RoutingConfig = {
-    mappings: {
-      "openai/gpt-4o": {
-        backend: "opencode",
-        provider: "openai",
-        modelFamily: "gpt-4o",
-        modelSnapshot: "gpt-4o",
-      },
-    },
-  };
-
   // An opencode-routed plan is the only shape that makes forwarding OBSERVABLE.
   // `admitRoutePlan`'s D1-11 gate reads `options.evidence` and nothing else, so
   // evidence that fails to arrive is the difference between admission and
@@ -476,8 +431,7 @@ describe("admitDiversityRoutePlan independent contract (#142 item 4)", () => {
       resolveStepRoute({
         stepKey: "refuter",
         role: "refuter",
-        cliModel: "openai/gpt-4o",
-        routingConfig: openCodeRoutingConfig,
+        cliModel: "opencode:openai/gpt-4o",
       }),
     ]);
 
@@ -543,22 +497,7 @@ describe("admitDiversityRoutePlan independent contract (#142 item 4)", () => {
       // asserted behaviourally instead of by spying on call shape.
       const registry = new DefaultTransportRegistry();
       registry.register("claude-code", createMockTransport("claude-code"));
-      const plan = createResolvedRoutePlan([
-        resolveStepRoute({
-          stepKey: "hunter-resilience",
-          role: "hunter",
-          cliModel: "openai/gpt-4o",
-          routingConfig: {
-            mappings: [
-              {
-                logical: "openai/gpt-4o",
-                backend: "codex" as RunnerBackend,
-                provider: "openai",
-              },
-            ],
-          },
-        }),
-      ]);
+      const plan = createResolvedRoutePlan([codexStep("hunter-resilience")]);
 
       const healthy = await rejectionOf(
         admitDiversityRoutePlan(plan, registry, { mode: "production" }),

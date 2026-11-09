@@ -11,36 +11,48 @@ inputs:
     required: false
     default: '${{ github.token }}'
   anthropic-api-key:
-    description: 'Anthropic API key for Claude models. Omit if claude-token is supplied.'
+    description: 'Removed: pass CRYSK_CLAUDE_API_KEY in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   claude-token:
-    description: 'Claude Code OAuth token. Omit if anthropic-api-key is supplied.'
+    description: 'Removed: pass CRYSK_CLAUDE_OAUTH_TOKEN in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
   routing:
-    description: 'Person-layer routing JSON (the config.routing object). Unset or empty leaves Claude-default CI. Written to $HOME/.crysk/config.json (or $HOME/.prhero when that is the one that exists), never the repo file.'
+    description: 'Removed: set the models per role in the models input instead (from vars.CRYSK_MODELS), or in the Crysk platform''s model settings for a connected repository. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
     default: ''
   opencode-auth:
-    description: 'Whole OpenCode auth.json store. Written 0600 at the OpenCode auth path. Never logged.'
+    description: 'Removed: pass one CRYSK_OPENCODE_<PROVIDER>_API_KEY per provider (CRYSK_OPENCODE_OPENAI_OAUTH for an OpenAI subscription) in crysk-secrets instead. Declared only so a workflow that still passes a value stops at the trigger (CRYSK-INPUT-REMOVED) before anything is installed. Leave it out.'
     required: false
+  models:
+    description: 'The models per role, as JSON: the models object of the personal config, from role (default, hunter.logic, judge, ...) to an ordered list of models, the first one tried first, e.g. {"default": ["claude:sonnet-latest"], "hunter.logic": ["opencode:deepseek/deepseek-chat", "claude:sonnet-latest"]}. An entry is a model name or {"model": ..., "effort": ...}. Pass it from a repository variable, models: followed by the vars.CRYSK_MODELS expression. Read by the setup step only, with the engine''s own parser, and written to the runner''s personal config file; a malformed value fails the run (CRYSK-CONFIG-INVALID). A repository connected to the Crysk platform takes its models from the platform''s model settings, which win whole: this input and credentials are then ignored with a warning. Empty: every role runs the default Claude model.'
+    required: false
+    default: ''
+  credentials:
+    description: 'Which Claude credential the review uses, and in what order, as JSON, e.g. {"claude": ["subscription", "api_key"]} (subscription is CRYSK_CLAUDE_OAUTH_TOKEN, api_key is CRYSK_CLAUDE_API_KEY, both in crysk-secrets). Pass it from a repository variable, credentials: followed by the vars.CRYSK_CREDENTIALS expression. Read and written like models, beside it. Empty: the subscription first.'
+    required: false
+    default: ''
+  crysk-secrets:
+    description: 'The Crysk credentials, the only way to pass them: NAME=value lines, one per CRYSK_* secret, each written by the workflow as CRYSK_X= followed by the secrets.CRYSK_X expression, never toJSON(secrets). Names: CRYSK_CLAUDE_OAUTH_TOKEN (claude setup-token), CRYSK_CLAUDE_API_KEY, CRYSK_OPENCODE_<P>_API_KEY and CRYSK_OPENCODE_<P>_OAUTH (base64 -w0 of the provider record, openai only), <P> being the provider id uppercased with - and . as _. A secret the repository does not have arrives empty and counts as absent; an unused platform slot, the line CRYSK_OPENCODE__API_KEY= with nothing after it, is skipped. The trigger stops a run with no CRYSK_* credential (and no login on the runner). The setup step builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets the models need, and the review chooses its Claude credential from the CRYSK_CLAUDE_* secrets in the credentials.claude order (subscription first by default). The input is read on stdin by those three steps only, every value is masked, and none reaches a child process through its environment: the Claude CLI gets only the chosen credential.'
+    required: false
+    default: ''
   pr-number:
     description: 'Pull request number. Defaults to the triggering pull_request/issue_comment event.'
     required: false
   model:
-    description: 'Optional Claude model override for every agent'
+    description: 'Optional model name for every step but the materiality judge (claude:<alias>-latest, claude:claude-<id> or opencode:<provider>/<model>). It overrides models, takes no effort, and has no fallbacks; set models per role in the models input instead.'
     required: false
   scout:
     description: 'Run the experimental diff-only scout stage before hunting'
     required: false
     default: 'false'
   max-changed-lines:
-    description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit. Leave unset to use the repo config value max_changed_lines; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription (a run draws on quota, not a per-token invoice), 4000 on a metered ANTHROPIC_API_KEY route.'
+    description: 'Size gate: skip the review when the diff exceeds this many changed lines. 0 disables the limit. Leave unset to use the repo config value max_changed_lines; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription (a run draws on quota, not a per-token invoice), 4000 on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_* secret).'
     required: false
   max-changed-files:
-    description: 'Size gate: skip the review when the diff exceeds this many changed files. 0 disables the limit. Leave unset to use the repo config value max_changed_files; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription, 50 on a metered ANTHROPIC_API_KEY route.'
+    description: 'Size gate: skip the review when the diff exceeds this many changed files. 0 disables the limit. Leave unset to use the repo config value max_changed_files; when that is unset too, it resolves from the route billing mode - no limit on a Claude subscription, 50 on a metered route.'
     required: false
   budget-usd:
-    description: 'Spend gate: skip the review when its estimated cost exceeds this USD ceiling. Leave unset to resolve the ceiling from the route billing mode - no ceiling on a Claude subscription (a run draws on quota, not a per-token invoice), a default ceiling on a metered ANTHROPIC_API_KEY route. An explicit value is honoured on any route; a value <= 0 disables the ceiling (the size limits above resolve separately).'
+    description: 'Spend gate: skip the review when its estimated cost exceeds this USD ceiling. Leave unset to resolve the ceiling from the route billing mode - no ceiling on a Claude subscription (a run draws on quota, not a per-token invoice), a default ceiling on a metered route (CRYSK_CLAUDE_API_KEY chosen, or an OpenCode model with its CRYSK_OPENCODE_* secret). An explicit value is honoured on any route; a value <= 0 disables the ceiling (the size limits above resolve separately).'
     required: false
     default: ''
   mode:
@@ -120,6 +132,17 @@ runs:
       if: github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != ''
       shell: bash
       env:
+        # E-f F5: the five Claude variables, emptied for every process this step
+        # starts. A job-level value (env: on the job or the workflow) would
+        # otherwise reach every git, gh, npm and bun child; the review takes its
+        # Claude credential from the crysk-secrets input only. A CRYSK_OPENCODE_*
+        # name is per provider and cannot be emptied here, so the trigger and the
+        # run step warn about one instead (src/ci/crysk-secrets.ts).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
         # Where the platform's review configuration is left for the setup step:
         # under the runner's temp directory, never the workspace. Bound here
@@ -135,18 +158,30 @@ runs:
     # comments that do not start with `/crysk review`. This step re-checks
     # all of it instead of trusting the caller: a comment must be exactly
     # `/crysk review` or `/crysk review --full`, from a user with write
-    # or admin access, and at least one credential must be set. A same-repo
-    # run with none goes RED here instead of skipping green. It also resolves
+    # or admin access, no removed input may hold a value, and at least one
+    # credential must be set. A same-repo run that fails either goes RED here
+    # instead of skipping green. It also resolves
     # the PR number, `force`, `full` and the head sha, and every later step
     # is gated on its `run` output.
     #
     # Event values reach it ONLY through `env:`. The comment body is free
     # text anyone can type; spliced into a script it is command injection.
-    # Credentials arrive as presence booleans (`!= ''`), never as values.
+    # The removed inputs arrive as presence booleans (`!= ''`), never as
+    # values. The crysk-secrets input cannot: the workflow passes one line per
+    # CRYSK_* name, empty when the secret is unset, so the input is never empty
+    # and presence needs its parse. It is piped on stdin exactly as the setup
+    # step takes it (bun runs with the variable emptied, so no `gh` call sees
+    # it), and the trigger keeps only whether a CRYSK_* credential is there.
     - name: Resolve trigger
       id: trigger
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         # The commenter-permission and PR-head lookups go through `gh`.
         GH_TOKEN: ${{ steps.platform.outputs.github-token || inputs.github-token }}
         EVENT_NAME: ${{ github.event_name }}
@@ -164,29 +199,42 @@ runs:
         PR_NUMBER_INPUT: ${{ inputs.pr-number }}
         FORCE_INPUT: ${{ inputs.force }}
         FULL_INPUT: ${{ inputs.full }}
+        # The inputs the clean break removed (U5): any with a value stops the run
+        # (CRYSK-INPUT-REMOVED). Presence only, never a value.
         HAS_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key != '' }}
         HAS_CLAUDE_TOKEN: ${{ inputs.claude-token != '' }}
         HAS_OPENCODE_AUTH: ${{ inputs.opencode-auth != '' }}
+        HAS_ROUTING: ${{ inputs.routing != '' }}
         # The trigger writes its decision to trigger.json here; the publish
         # step reads it. The run step writes the cli-started marker here too.
         # One path, bound the same way in all three steps (T2b).
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
-        # Presence only, never the routing text: whether the routing names
-        # OpenCode, the same test the OpenCode install step makes. It names the
-        # backend of a no-credential outcome. In platform mode the platform's
-        # routing wins over the input: its output is `true` or `false` when the
-        # platform sent a routing, and empty otherwise (then the input decides).
-        HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode')) }}
+        # Presence only, never the models text: whether the models in effect
+        # name OpenCode. It names the backend of a no-credential outcome. The
+        # platform's person layer wins whole over the models input (D1): its
+        # output is `true` or `false` when the platform sent a non-empty person
+        # layer, models or not, and empty otherwise (then the input decides). The routing input no longer counts: a value there
+        # stops the run (HAS_ROUTING above).
+        HAS_OPENCODE_ROUTING: ${{ steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.models, 'opencode:')) }}
         # The attempt of this run. A re-run keeps the run id, so the record names
         # the attempt, and the publisher orders a re-run's comments by it.
         GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-      run: bun "${{ github.action_path }}/src/ci/trigger.ts"
+        # Piped to trigger.ts on stdin, never left in its environment (above).
+        CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/trigger.ts" --crysk-secrets-stdin
 
     - name: Install dependencies
       if: steps.trigger.outputs.run == 'true'
       shell: bash
       # --omit=optional skips the `bun` npm package (the npx launcher's Bun, about 85 MiB):
       # setup-bun already put Bun on PATH, and the engine's own dependencies are not optional.
+      env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
       run: |
         if [ -f "${{ github.action_path }}/package.json" ]; then
           cd "${{ github.action_path }}" && bun install --frozen-lockfile --omit=optional
@@ -195,6 +243,13 @@ runs:
     - name: Install Claude Code CLI
       if: steps.trigger.outputs.run == 'true'
       shell: bash
+      env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
       run: |
         if ! command -v claude >/dev/null 2>&1; then
           npm install -g @anthropic-ai/claude-code
@@ -205,8 +260,22 @@ runs:
       if: steps.trigger.outputs.run == 'true'
       shell: bash
       env:
-        ROUTING_INPUT: ${{ inputs.routing }}
-        OPENCODE_AUTH_INPUT: ${{ inputs.opencode-auth }}
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
+        # The removed routing and opencode-auth inputs are not bound: the trigger
+        # stops any run that passes a value in them (U5), and setup.ts no longer
+        # reads them (D6).
+        # The models per role and the Claude credential order (D1), bound only
+        # here. setup.ts reads them with the engine's person parser and writes
+        # them as the personal config file, unless the platform sent a person
+        # layer, which wins whole (the inputs are then ignored with a warning).
+        # Not secrets: repository variables, never a value from crysk-secrets.
+        MODELS_INPUT: ${{ inputs.models }}
+        CREDENTIALS_INPUT: ${{ inputs.credentials }}
         # Platform mode only: the file the connect step left (empty in a
         # standalone run, which then changes nothing). The step writes the
         # platform's `person` layer to the personal config file, and its
@@ -217,17 +286,42 @@ runs:
         # no platform configuration still owns the personal config file and
         # drops what an earlier run left in it on a runner whose HOME persists.
         CRYSK_PLATFORM_CONNECTED: ${{ steps.platform.outputs.github-token != '' }}
-        # A malformed routing or auth input leaves setup.json here, so the publish
-        # step names that input instead of reporting "an install step failed".
+        # A refused crysk-secrets input leaves setup.json here, so the publish
+        # step names that secret instead of reporting "an install step failed".
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
-      run: bun "${{ github.action_path }}/src/ci/setup.ts"
+        # The CRYSK_* secrets (S8), bound only in the steps that read them: the
+        # trigger (presence), this step and Run Crysk, never the installers.
+        # The shell pipes them to setup.ts on stdin (printf is a builtin, so no
+        # process sees them in its argv) and runs bun with the variable emptied:
+        # Bun hands a child the environment it started with, so a variable bun
+        # received would reach git on the platform path. setup.ts masks every
+        # value, builds the OpenCode auth file from the CRYSK_OPENCODE_* secrets
+        # the models need, and outputs presence only (crysk-secrets,
+        # claude-credentials, opencode-providers, opencode-auth-file), never a
+        # value and never to GITHUB_ENV.
+        CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
+      run: printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/setup.ts" --crysk-secrets-stdin
 
     # Pin 1.18.30 as its own step so GITHUB_PATH updates later steps only
     # (install ≠ Run Crysk). Never unpinned. Digest verify of the official
     # installer is named, not built.
+    #
+    # Installed when the setup step wrote an OpenCode auth file from the
+    # CRYSK_OPENCODE_* secrets, or when the models in effect name OpenCode
+    # (L28 decision 3): a self-hosted runner's own auth file, or a free model
+    # that needs no credential, still gets the CLI. opencode-models is the setup
+    # step's reading of the models in effect, the platform's or the models
+    # input's (E-f F3).
     - name: Install OpenCode CLI
-      if: ${{ steps.trigger.outputs.run == 'true' && (inputs.opencode-auth != '' || steps.platform.outputs.routing-opencode == 'true' || (steps.platform.outputs.routing-opencode == '' && contains(inputs.routing, 'opencode'))) }}
+      if: ${{ steps.trigger.outputs.run == 'true' && (steps.materialize.outputs.opencode-auth-file == 'true' || steps.materialize.outputs.opencode-models == 'true' || steps.platform.outputs.routing-opencode == 'true') }}
       shell: bash
+      env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
       run: |
         curl -fsSL https://opencode.ai/install | bash -s -- --version 1.18.30
         echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
@@ -237,6 +331,16 @@ runs:
       if: steps.trigger.outputs.run == 'true'
       shell: bash
       env:
+        # The Claude variables, emptied for the whole CLI process (E-f F5, see
+        # Connect to Crysk): a job-level value must not reach git, gh or the
+        # OpenCode server child (OpenCode reads ANTHROPIC_API_KEY for its own
+        # anthropic provider). The Claude CLI child gets the chosen credential
+        # from the run env instead.
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         # Every `${{ inputs.* }}` / `${{ github.* }}` value pr-hero needs is
         # bound here, through `env:`, and referenced below as a QUOTED shell
         # variable — never interpolated directly into the script body. A
@@ -256,8 +360,14 @@ runs:
         # `post`. The run step then leaves `--post` out, because an explicit CLI
         # option outranks the config and the platform's value would never apply.
         POST_FROM_PLATFORM: ${{ steps.materialize.outputs.post-from-platform }}
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-token }}
+        # The CRYSK_* secrets (S8, U5), piped to src/ci/run.ts on stdin by the
+        # last command below and emptied for bun, as in the setup step. run.ts
+        # hands only the Claude values to the review's credential choice
+        # (credentials.claude), never through the environment, so no git, gh or
+        # agent child inherits them; the child gets exactly the chosen one under
+        # the CLI's own variable. A job-level ANTHROPIC_API_KEY or
+        # CLAUDE_CODE_OAUTH_TOKEN is not read either: run.ts drops them.
+        CRYSK_SECRETS_INPUT: ${{ inputs.crysk-secrets }}
         GITHUB_ACTIONS: 'true'
         CI: 'true'
         NO_COLOR: '1'
@@ -316,8 +426,11 @@ runs:
 
         # The CLI is the last command, so the job's result is exactly the CLI's.
         # Nothing here writes a marker after it: the CLI's cli.json is its own
-        # record of the outcome, and the publish step reads it.
-        bun "${{ github.action_path }}/bin/pr-hero.js" "$@"
+        # record of the outcome, and the publish step reads it. src/ci/run.ts
+        # reads the crysk-secrets input on stdin to EOF, then runs the same CLI
+        # bin/pr-hero.js runs, with these arguments; under pipefail the step's
+        # exit is still the CLI's (printf cannot fail on a drained pipe).
+        printf '%s' "$CRYSK_SECRETS_INPUT" | CRYSK_SECRETS_INPUT= bun "${{ github.action_path }}/src/ci/run.ts" "$@"
 
     # Refresh the Crysk token (platform mode only). The installation token from
     # `Connect to Crysk` was minted before the trigger and lives about an hour,
@@ -332,6 +445,12 @@ runs:
       if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
       run: bun "${{ github.action_path }}/src/ci/platform.ts"
 
@@ -350,7 +469,7 @@ runs:
     # workflow cancels a superseded run (`cancel-in-progress`), and a cancelled
     # job still reaches its always() steps, as the Upload step's comment below
     # says. Under always(), a run cancelled before its Run step writes
-    # `cli-started` would publish a false PRH-INSTALL-FAILED on the superseded
+    # `cli-started` would publish a false CRYSK-INSTALL-FAILED on the superseded
     # head.
     #
     # WHY gated on `publish`, not on `run`: `run` is false for every outcome
@@ -372,6 +491,12 @@ runs:
       if: ${{ !cancelled() && steps.trigger.outputs.publish == 'true' }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         GH_TOKEN: ${{ steps.platform-publish.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}
@@ -405,6 +530,12 @@ runs:
       if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' && (steps.trigger.outputs.run == 'true' || steps.trigger.outputs.publish == 'true') && (steps.platform-publish.outputs.run-token != '' || steps.platform.outputs.run-token != '') }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         CRYSK_RUN_TOKEN: ${{ steps.platform-publish.outputs.run-token || steps.platform.outputs.run-token }}
         # From the same exchange as the run token (the refresh after the run
         # when it ran, else the first): the repository's data mode decides
@@ -427,6 +558,12 @@ runs:
       if: ${{ cancelled() && steps.trigger.outputs.run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs['dispatch-id'] != '' }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         CRYSK_DISPATCH_ID: ${{ github.event.inputs['dispatch-id'] }}
       run: bun "${{ github.action_path }}/src/ci/platform.ts"
 
@@ -435,12 +572,18 @@ runs:
     # run kills the CLI before its own signal settle lands, which left the
     # pr-hero status pending forever (sandbox `cancel` probe, SB3). This step
     # runs only on a cancel, and settles only this run's own pending on the head
-    # the CLI locked, as PRH-CANCELLED.
+    # the CLI locked, as CRYSK-CANCELLED.
     - name: Settle a cancelled review
       id: cancel-settle
       if: ${{ cancelled() && steps.trigger.outputs.run == 'true' }}
       shell: bash
       env:
+        # E-f F5: the Claude variables, emptied (see Connect to Crysk).
+        ANTHROPIC_API_KEY: ''
+        CLAUDE_CODE_OAUTH_TOKEN: ''
+        ANTHROPIC_AUTH_TOKEN: ''
+        CRYSK_CLAUDE_OAUTH_TOKEN: ''
+        CRYSK_CLAUDE_API_KEY: ''
         GH_TOKEN: ${{ steps.platform-settle.outputs.github-token || steps.platform.outputs.github-token || inputs.github-token }}
         CRYSK_OUTCOME_DIR: ${{ runner.temp }}/pr-hero-outcome
         GITHUB_REPOSITORY: ${{ github.repository }}

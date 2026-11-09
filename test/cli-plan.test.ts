@@ -10,15 +10,10 @@
 // assertable offline with no TTY anywhere.
 
 import { describe, expect, test } from "bun:test";
-import { aliasCanonical, lookupAlias } from "#model/catalog";
-import {
-  createResolvedRoutePlan,
-  type RoutingConfig,
-  resolveStepRoute,
-} from "#model/routing";
+import { createResolvedRoutePlan, resolveStepRoute } from "#model/routing";
 import type { CliOptions, ConfigSources } from "#review/preflight";
 import type { ParsedAgent } from "#review/prompt-set";
-import { estimateCost, formatModelRoute } from "#review/report";
+import { estimateCost } from "#review/report";
 import type { SizeGateVerdict } from "#review/size-gate";
 import type { ReviewSpec } from "#review/spec";
 import {
@@ -685,8 +680,9 @@ const provenance = (
     default_base: "repo",
     parity_trigger_paths: "repo",
     suspicion_priors: "repo",
-    summary: { enabled: "repo", model: "default" },
-    routing: "default",
+    summary: { enabled: "repo" },
+    models: "default",
+    credentials: "default",
     max_verification_steps: "default",
     max_concurrent_steps: "default",
     max_changed_lines: "default",
@@ -716,7 +712,8 @@ describe("plan card config provenance (C5 O-7)", () => {
             { agentsDirSource: "global", globalPresent: true },
             {
               agents_dir: "global",
-              summary: { enabled: "capped", model: "global" },
+              summary: { enabled: "capped" },
+              models: "global",
               max_verification_steps: "capped",
             },
           ),
@@ -731,7 +728,7 @@ describe("plan card config provenance (C5 O-7)", () => {
     // not merely that a global file existed.
     expect(text).toContain("summary.enabled ← capped");
     expect(text).toContain("max_verification_steps ← capped");
-    expect(text).toContain("summary.model ← global");
+    expect(text).toContain("models ← global");
     // Where to go look, on the card itself.
     expect(text).toContain(GLOBAL_CONFIG_PATH);
   });
@@ -766,7 +763,7 @@ describe("plan card config provenance (C5 O-7)", () => {
               default_base: "default",
               parity_trigger_paths: "default",
               suspicion_priors: "default",
-              summary: { enabled: "default", model: "default" },
+              summary: { enabled: "default" },
               max_verification_steps: "default",
             },
           ),
@@ -791,7 +788,8 @@ describe("plan card config provenance (C5 O-7)", () => {
     const sources: Partial<ConfigSources> = {
       agents_dir: "global",
       default_base: "global",
-      summary: { enabled: "capped", model: "global" },
+      summary: { enabled: "capped" },
+      models: "global",
     };
     const flagged = flat(
       renderPlan(
@@ -812,7 +810,7 @@ describe("plan card config provenance (C5 O-7)", () => {
     expect(flagged).not.toContain("agents_dir ←");
     expect(flagged).not.toContain("default_base ←");
     expect(flagged).not.toContain("summary.enabled ←");
-    expect(flagged).not.toContain("summary.model ←");
+    expect(flagged).not.toContain("models ←");
 
     // Same sources, no flags: now every one of them is named. agents_dir's
     // resolution changes with the flag too — that IS the mechanism, not a
@@ -828,7 +826,7 @@ describe("plan card config provenance (C5 O-7)", () => {
     expect(unflagged).toContain("agents_dir ← global");
     expect(unflagged).toContain("default_base ← global");
     expect(unflagged).toContain("summary.enabled ← capped");
-    expect(unflagged).toContain("summary.model ← global");
+    expect(unflagged).toContain("models ← global");
   });
 
   test("the PR card tags the same way", () => {
@@ -886,7 +884,8 @@ describe("plan card config provenance (C5 O-7)", () => {
         { agentsDirSource: "global", globalPresent: true },
         {
           agents_dir: "global",
-          summary: { enabled: "capped", model: "global" },
+          summary: { enabled: "capped" },
+          models: "global",
           max_verification_steps: "capped",
         },
       ),
@@ -973,7 +972,7 @@ describe("plan card config provenance (C5 O-7)", () => {
           options: options({ summary: true, model: "opus" }),
           configProvenance: provenance(
             { globalPresent: true },
-            { summary: { enabled: "capped", model: "global" } },
+            { summary: { enabled: "capped" }, models: "global" },
           ),
         }),
         false,
@@ -984,7 +983,7 @@ describe("plan card config provenance (C5 O-7)", () => {
     // The suppression itself is unchanged: still no layer named for a key a
     // flag decided (JD-10).
     expect(text).not.toContain("summary.enabled ←");
-    expect(text).not.toContain("summary.model ←");
+    expect(text).not.toContain("models ←");
   });
 
   // With no flag in play the old sentence is exact, and stays: every source is
@@ -1033,66 +1032,25 @@ describe("plan card config provenance (C5 O-7)", () => {
 });
 
 describe("plan card and details route dimensions display", () => {
-  const routingConfig: RoutingConfig = {
-    mappings: [
-      {
-        logical: aliasCanonical("sonnet"),
-        backend: "claude-code",
-        provider: lookupAlias("sonnet").provider,
-        gateway: "direct",
-        modelFamily: "sonnet",
-        modelSnapshot: "sonnet",
-      },
-      {
-        logical: aliasCanonical("haiku"),
-        backend: "claude-code",
-        provider: lookupAlias("haiku").provider,
-        gateway: "direct",
-        modelFamily: "haiku",
-        modelSnapshot: "haiku",
-      },
-      {
-        logical: aliasCanonical("opus"),
-        backend: "claude-code",
-        provider: lookupAlias("opus").provider,
-        gateway: "direct",
-        modelFamily: "opus",
-        modelSnapshot: "opus",
-      },
-      {
-        logical: "openai/o3-mini",
-        backend: "opencode",
-        provider: "openai",
-        gateway: "configured",
-        modelFamily: "o3-mini",
-        modelSnapshot: "o3-mini-2025-01-31",
-      },
-    ],
-  };
-
   const hunter1 = resolveStepRoute({
     stepKey: "hunter-reliability",
     role: "hunter",
     cliModel: "sonnet",
-    routingConfig,
   });
   const hunter2 = resolveStepRoute({
     stepKey: "hunter-parity",
     role: "hunter",
     cliModel: "sonnet",
-    routingConfig,
   });
   const refuter = resolveStepRoute({
     stepKey: "refuter",
     role: "refuter",
-    cliModel: "openai/o3-mini",
-    routingConfig,
+    cliModel: "opencode:openai/o3-mini-2025-01-31",
   });
   const summarizer = resolveStepRoute({
     stepKey: "summarizer",
     role: "summarizer",
     cliModel: "haiku",
-    routingConfig,
   });
 
   const routePlan = createResolvedRoutePlan([
@@ -1102,19 +1060,9 @@ describe("plan card and details route dimensions display", () => {
     summarizer,
   ]);
 
-  const sonnetRouteLabel = `${aliasCanonical("sonnet")} [direct, claude-code]`;
-
-  test("formatModelRoute formats direct and configured routes with dimensions", () => {
-    expect(formatModelRoute(hunter1.route, "sonnet")).toBe(
-      `sonnet -> ${sonnetRouteLabel}`,
-    );
-
-    expect(formatModelRoute(refuter.route, "openai/o3-mini")).toBe(
-      "openai/o3-mini -> openai/o3-mini-2025-01-31 [configured, opencode]",
-    );
-
-    expect(formatModelRoute(hunter1.route)).toBe(sonnetRouteLabel);
-  });
+  // A route shows as the model name it resolved to, which says its backend.
+  const sonnetRouteLabel = "claude:sonnet-latest";
+  const openCodeRouteLabel = "opencode:openai/o3-mini-2025-01-31";
 
   test("planDetails renders route dimensions for each step", () => {
     const lines = planDetails(planContext({ routePlan }), false);
@@ -1122,7 +1070,7 @@ describe("plan card and details route dimensions display", () => {
     expect(text).toContain("route hunter-reliability");
     expect(text).toContain(sonnetRouteLabel);
     expect(text).toContain("route refuter");
-    expect(text).toContain("openai/o3-mini-2025-01-31 [configured, opencode]");
+    expect(text).toContain(openCodeRouteLabel);
   });
 
   test("renderPlan displays resolved route dimensions on agent rows when routePlan is supplied", () => {
@@ -1130,7 +1078,7 @@ describe("plan card and details route dimensions display", () => {
     const text = flat(lines);
     expect(text).toContain("reliability");
     expect(text).toContain(sonnetRouteLabel);
-    expect(text).toContain("openai/o3-mini-2025-01-31 [configured, opencode]");
+    expect(text).toContain(openCodeRouteLabel);
   });
 
   test("prPlanDetails and renderPrPlan render route dimensions", () => {
@@ -1146,6 +1094,52 @@ describe("plan card and details route dimensions display", () => {
 });
 
 // S4: the RUN row's count is the config's suspicion priors, labelled as such, not prior findings.
+// E-c: with `models` set, the summarizer and the scout run what the plan says,
+// not the prompt's default, and their rows must say so.
+describe("the summarizer and scout rows read the route plan", () => {
+  const routePlan = createResolvedRoutePlan([
+    resolveStepRoute({
+      stepKey: "summarizer",
+      role: "summarizer",
+      specModel: "claude:fable-latest",
+    }),
+    resolveStepRoute({
+      stepKey: "scout",
+      role: "scout",
+      specModel: "opencode:openai/gpt-5-mini",
+    }),
+  ]);
+
+  test("both rows show the planned model on every card", () => {
+    const ctx = planContext({
+      routePlan,
+      options: options({ scout: true }),
+    });
+    for (const text of [
+      flat(renderPlan(ctx, false)),
+      flat(planDetails(ctx, false)),
+    ]) {
+      expect(text).toMatch(/summarizer\s+claude:fable-latest/);
+      expect(text).toMatch(/opencode:openai\/gpt-5-mini\s*diff-only/);
+      expect(text).not.toMatch(/summarizer\s+haiku/);
+    }
+    const pr = flat(
+      renderPrPlan(
+        prPlanContext({ routePlan, options: options({ pr: 6, scout: true }) }),
+        false,
+      ),
+    );
+    expect(pr).toMatch(/summarizer\s+claude:fable-latest/);
+  });
+
+  test("with no plan the rows keep their defaults", () => {
+    const text = flat(
+      renderPlan(planContext({ options: options({ scout: true }) }), false),
+    );
+    expect(text).toMatch(/summarizer\s+haiku/);
+  });
+});
+
 describe("renderPlan: the RUN row labels the config suspicion priors (S4)", () => {
   test("the count reads as suspicion priors", () => {
     const text = joined(renderPlan(planContext(), false));

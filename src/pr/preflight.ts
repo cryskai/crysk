@@ -828,7 +828,7 @@ export function settleRequestForCancellation(
   lock: HeldCommitStatusLock | null,
 ): { operatorRoot: string; sha: string; request: CommitStatusRequest } | null {
   if (lock === null) return null;
-  // WHY PRH-CANCELLED and not "review did not finish": a signal is a cancel, and the
+  // WHY CRYSK-CANCELLED and not "review did not finish": a signal is a cancel, and the
   // action's cancel-settle step writes the same text when this settle does not land
   // first (src/ci/publish.ts runCancelSettle). Either writer leaves one coded status.
   return {
